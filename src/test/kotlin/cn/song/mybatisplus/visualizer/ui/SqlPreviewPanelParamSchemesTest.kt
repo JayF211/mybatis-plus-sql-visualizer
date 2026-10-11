@@ -42,7 +42,7 @@ class SqlPreviewPanelParamSchemesTest : BasePlatformTestCase() {
         // R22 T-04：必须清历史缓存——ParamHistoryCache 测试态持久化走静态 fallbackStorage，
         // panel.clear() 不清缓存，激活方案/方案快照会跨测试（乃至跨测试类）泄漏
         runCatching { panel?.paramHistoryCacheForTest()?.clear() }
-        runCatching { panel?.clear() }
+        runCatching { panel?.let { SqlPreviewPanelSqlViewKt.clear(it) } }
         runCatching { PluginSettings.getInstance().state.formatSql = true }
         panel = null
         super.tearDown()
@@ -69,22 +69,38 @@ class SqlPreviewPanelParamSchemesTest : BasePlatformTestCase() {
     /** 语料渲染为 PreviewResult（openPanel 与 O-88 跨重建用例共用）。 */
     private fun buildProbePreviewResult(): PreviewResult {
         val parsed = XmlMapperParser().parse(mapper)
+        // k2j 适配：from 7 参全量位置形态（paramTypes 落末位）
         val model = XmlPreviewModel.from(
             parsed.statements.single(), parsed.errors,
-            paramTypes = mapOf(
-                "statusList" to ParamTypeInfo(ParamKind.COLLECTION, elementKind = ParamKind.NUMBER),
+            emptySet(), emptyMap(), emptyMap(), emptyMap(),
+            mapOf(
+                "statusList" to ParamTypeInfo(ParamKind.COLLECTION, true, ParamKind.NUMBER),
                 "onlyActive" to ParamTypeInfo(ParamKind.UNKNOWN),
             ),
         )
         val rendered = model.renderSql()
+        // k2j 适配：20 参位置构造（xmlModel 第 15 位）；record 组件访问器 property()
         return PreviewResult(
-            sql = rendered.sql,
-            compactSql = rendered.sql.replace(Regex("\\s+"), " ").trim(),
-            unresolvedParams = rendered.mappings.map { it.property },
-            paramTable = ParameterReplacer.buildParamTable(rendered.mappings.map { it.property }),
-            wrapperType = null,
-            tableName = null,
-            xmlModel = model,
+            rendered.sql(),
+            rendered.sql().replace(Regex("\\s+"), " ").trim(),
+            rendered.mappings().map { it.property() },
+            ParameterReplacer.buildParamTable(rendered.mappings().map { it.property() }),
+            null,
+            null,
+            null,
+            emptyList(),
+            emptyMap(),
+            null,
+            null,
+            emptyList(),
+            emptyList(),
+            null,
+            model,
+            emptyMap(),
+            null,
+            null,
+            null,
+            null,
         )
     }
 
@@ -92,7 +108,7 @@ class SqlPreviewPanelParamSchemesTest : BasePlatformTestCase() {
         val p = SqlPreviewPanel(project)
         panel = p
         Disposer.register(testRootDisposable, p)
-        p.showResult(buildProbePreviewResult())
+        SqlPreviewPanelResultViewKt.showResult(p, buildProbePreviewResult())
         com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents() // EDT 排队的参数区构建（勾选框/字段列表）就位
         return p
     }
@@ -260,7 +276,7 @@ class SqlPreviewPanelParamSchemesTest : BasePlatformTestCase() {
         val p = SqlPreviewPanel(project)
         panel = p
         Disposer.register(testRootDisposable, p)
-        p.showResult(buildPlainParamsResult(listOf("alpha")))
+        SqlPreviewPanelResultViewKt.showResult(p, buildPlainParamsResult(listOf("alpha")))
         com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
         val cache = p.paramHistoryCacheForTest()
         val key = p.historyCacheKeyForTest()!!
@@ -353,7 +369,7 @@ class SqlPreviewPanelParamSchemesTest : BasePlatformTestCase() {
         oldFold.setOn(true)
 
         // 切换语句语义：同一面板重新 showResult → rebuildLeftPanel → paramPanel.removeAll + 方案行重建
-        p.showResult(buildProbePreviewResult())
+        SqlPreviewPanelResultViewKt.showResult(p, buildProbePreviewResult())
         com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
 
         val newFold = p.presetFoldForTest()
@@ -381,7 +397,7 @@ class SqlPreviewPanelParamSchemesTest : BasePlatformTestCase() {
         // 直接 dispose 释放 A（不经重建）——面板挂在宿主 disposable 树上，关闭路径级联走 panel.dispose()
         // （clear() 先走 releaseEditor——测试里组件不在容器、removeNotify 不会触发，直接 dispose 会漏编辑器；
         //   clear() 只 paramPanel.removeAll()，不触发 buildSchemeRow 懒惰捕获，序列仍为「直接释放」）
-        a.clear()
+        SqlPreviewPanelSqlViewKt.clear(a)
         Disposer.dispose(a)
         panel = null
         assertFalse("dispose 释放 A 后静态字段应被捕获为展开（dispose 链捕获）", SqlPreviewPanel.presetCollapsedForTest())
@@ -390,7 +406,7 @@ class SqlPreviewPanelParamSchemesTest : BasePlatformTestCase() {
         val b = SqlPreviewPanel(project)
         panel = b
         Disposer.register(testRootDisposable, b)
-        b.showResult(buildProbePreviewResult())
+        SqlPreviewPanelResultViewKt.showResult(b, buildProbePreviewResult())
         com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
 
         assertTrue("新实例 B 初始应继承展开态（跨实例保留）", b.presetFoldForTest()!!.isExpanded)
@@ -405,7 +421,7 @@ class SqlPreviewPanelParamSchemesTest : BasePlatformTestCase() {
     fun testO88_展开态懒惰捕获经重建回写() {
         val a = openPanel()
         a.presetFoldForTest()!!.setOn(true)
-        a.showResult(buildProbePreviewResult())
+        SqlPreviewPanelResultViewKt.showResult(a, buildProbePreviewResult())
         com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
         assertTrue("A 重建后应仍展开（懒惰捕获回写静态字段）", a.presetFoldForTest()!!.isExpanded)
         assertFalse("静态字段应已被 A 回写为展开", SqlPreviewPanel.presetCollapsedForTest())
@@ -419,13 +435,27 @@ class SqlPreviewPanelParamSchemesTest : BasePlatformTestCase() {
         params: List<String>,
         sql: String = "SELECT * FROM t_order WHERE alpha = ? AND beta = ? AND gamma = ?",
     ): PreviewResult = PreviewResult(
-        sql = sql,
-        compactSql = sql,
-        unresolvedParams = params,
-        paramTable = ParameterReplacer.buildParamTable(params),
-        wrapperType = null,
-        tableName = null,
-        xmlModel = null,
+        // k2j 适配：20 参位置构造（无模型槽全取空缺省）
+        sql,
+        sql,
+        params,
+        ParameterReplacer.buildParamTable(params),
+        null,
+        null,
+        null,
+        emptyList(),
+        emptyMap(),
+        null,
+        null,
+        emptyList(),
+        emptyList(),
+        null,
+        null,
+        emptyMap(),
+        null,
+        null,
+        null,
+        null,
     )
 
     /**
@@ -440,7 +470,7 @@ class SqlPreviewPanelParamSchemesTest : BasePlatformTestCase() {
         val sqlA = "SELECT * FROM t_order WHERE alpha = ? AND beta = ? -- method A"
         val sqlB = "SELECT * FROM t_customer WHERE alpha = ? AND beta = ? -- method B"
 
-        p.showResult(buildPlainParamsResult(listOf("alpha", "beta"), sqlA))
+        SqlPreviewPanelResultViewKt.showResult(p, buildPlainParamsResult(listOf("alpha", "beta"), sqlA))
         com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
         val cache = p.paramHistoryCacheForTest()
         val keyA = p.historyCacheKeyForTest()!!
@@ -450,7 +480,7 @@ class SqlPreviewPanelParamSchemesTest : BasePlatformTestCase() {
         assertEquals("A 方法下拉 = 默认 + 自己的预设", 2, p.schemeComboForTest()!!.itemCount)
 
         // 切到 B 方法（不同语句 → 不同缓存键）
-        p.showResult(buildPlainParamsResult(listOf("alpha", "beta"), sqlB))
+        SqlPreviewPanelResultViewKt.showResult(p, buildPlainParamsResult(listOf("alpha", "beta"), sqlB))
         com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
         val keyB = p.historyCacheKeyForTest()!!
         assertFalse("两个方法应是不同缓存键（键=SQL 指纹）", keyA == keyB)
@@ -473,7 +503,7 @@ class SqlPreviewPanelParamSchemesTest : BasePlatformTestCase() {
         assertEquals("B 键下是自己的值", "B1", cache.recallFromScheme("生产参数", keyB)!!["alpha"])
 
         // 切回 A：名单与激活态各归其位
-        p.showResult(buildPlainParamsResult(listOf("alpha", "beta"), sqlA))
+        SqlPreviewPanelResultViewKt.showResult(p, buildPlainParamsResult(listOf("alpha", "beta"), sqlA))
         com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
         assertEquals("切回 A 应恢复其自己的激活预设", "生产参数", p.schemeComboForTest()!!.selectedItem)
         assertEquals("切回 A 名单仍只含自己的预设", 2, p.schemeComboForTest()!!.itemCount)
@@ -491,7 +521,7 @@ class SqlPreviewPanelParamSchemesTest : BasePlatformTestCase() {
         val p = SqlPreviewPanel(project)
         panel = p
         Disposer.register(testRootDisposable, p)
-        p.showResult(buildPlainParamsResult(listOf("alpha", "beta", "gamma")))
+        SqlPreviewPanelResultViewKt.showResult(p, buildPlainParamsResult(listOf("alpha", "beta", "gamma")))
         com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
 
         val cache = p.paramHistoryCacheForTest()

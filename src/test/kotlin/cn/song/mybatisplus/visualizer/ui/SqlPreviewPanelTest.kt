@@ -355,10 +355,16 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
      */
     fun testDiagramModelBuildFailureWithoutProjectClearsLoading() {
         val panel = SqlPreviewPanel(null)
-        SqlPreviewPanelResultViewKt.showResult(panel, 
+        SqlPreviewPanelResultViewKt.showResult(panel,
             joinResult(
-                mainTable = tableInfo().copy(columns = sizeExplodingColumns(tableInfo().columns)),
-                selectColumns = listOf(ColumnRef(tableAlias = "u", columnName = "id")),
+                // k2j 适配：TableInfo.copy 为 7 参位置形态；ColumnRef 2 参位置
+                tableInfo().copy(
+                    tableInfo().entityClassName, tableInfo().tableName,
+                    sizeExplodingColumns(tableInfo().columns),
+                    tableInfo().logicDeleteColumn, tableInfo().versionColumn, tableInfo().comment,
+                    tableInfo().associations,
+                ),
+                listOf(ColumnRef("u", "id")),
             ),
         )
         // 无 project → 同步分支：showResult 返回时该跑的都跑完了，无需排空 EDT 队列
@@ -450,7 +456,7 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         assertTrue("有内容时应复制成功", SqlPreviewPanelSqlViewKt.copySql(panel))
         assertFalse("无 project 弹框跳过，回调不应触发", closed)
         // 链路：点「关闭 SQL 面板」→ onClosePanelRequested?.invoke()
-        panel.onClosePanelRequested?.invoke()
+        panel.onClosePanelRequested?.run()
         assertTrue("注入的回调应可触发", closed)
         SqlPreviewPanelSqlViewKt.clear(panel)
     }
@@ -601,16 +607,29 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         // 日志识别路径：param1 预填 "admin"（String → 引号提示）——初始显示与现状（值内联 'admin'）一致
         val panel = SqlPreviewPanel(project)
         val sql = "SELECT id FROM tbl WHERE username = ?"
-        SqlPreviewPanelResultViewKt.showResult(panel, 
+        // k2j 适配：20 参位置构造（paramHints 第 12 位、initialParamValues 第 16 位）
+        SqlPreviewPanelResultViewKt.showResult(panel,
             PreviewResult(
-                sql = sql,
-                compactSql = sql,
-                unresolvedParams = listOf("param1"),
-                paramTable = null,
-                wrapperType = WrapperType.LAMBDA_QUERY,
-                tableName = "tbl",
-                paramHints = listOf(ParamHint(quote = true)),
-                initialParamValues = mapOf("param1" to "admin"),
+                sql,
+                sql,
+                listOf("param1"),
+                null,
+                WrapperType.LAMBDA_QUERY,
+                "tbl",
+                null,
+                emptyList(),
+                emptyMap(),
+                null,
+                null,
+                listOf(ParamHint(true)),
+                emptyList(),
+                null,
+                null,
+                mapOf("param1" to "admin"),
+                null,
+                null,
+                null,
+                null,
             ),
         )
         assertEquals("参数行应预填日志参数值", "admin", panel.paramFieldForTest(0)!!.text)
@@ -625,16 +644,29 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         // 预填值可编辑：改参数行值 → SQL 实时回填（T-M42 验收：改 admin → 新值同步变化）
         val panel = SqlPreviewPanel(project)
         val sql = "SELECT id FROM tbl WHERE username = ?"
-        SqlPreviewPanelResultViewKt.showResult(panel, 
+        // k2j 适配：20 参位置构造（paramHints 第 12 位、initialParamValues 第 16 位）
+        SqlPreviewPanelResultViewKt.showResult(panel,
             PreviewResult(
-                sql = sql,
-                compactSql = sql,
-                unresolvedParams = listOf("param1"),
-                paramTable = null,
-                wrapperType = WrapperType.LAMBDA_QUERY,
-                tableName = "tbl",
-                paramHints = listOf(ParamHint(quote = true)),
-                initialParamValues = mapOf("param1" to "admin"),
+                sql,
+                sql,
+                listOf("param1"),
+                null,
+                WrapperType.LAMBDA_QUERY,
+                "tbl",
+                null,
+                emptyList(),
+                emptyMap(),
+                null,
+                null,
+                listOf(ParamHint(true)),
+                emptyList(),
+                null,
+                null,
+                mapOf("param1" to "admin"),
+                null,
+                null,
+                null,
+                null,
             ),
         )
         panel.paramFieldForTest(0)!!.text = "zhang"
@@ -650,16 +682,29 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         // 预填表缺失的来源回落空串（参数行初始为空 → 渲染保留 `?`）
         val panel = SqlPreviewPanel(project)
         val sql = "SELECT id FROM tbl WHERE phone = ? AND type = ?"
-        SqlPreviewPanelResultViewKt.showResult(panel, 
+        // k2j 适配：20 参位置构造（paramHints 第 12 位、initialParamValues 第 16 位）
+        SqlPreviewPanelResultViewKt.showResult(panel,
             PreviewResult(
-                sql = sql,
-                compactSql = sql,
-                unresolvedParams = listOf("param1", "param2"),
-                paramTable = null,
-                wrapperType = WrapperType.LAMBDA_QUERY,
-                tableName = "tbl",
-                paramHints = listOf(ParamHint(quote = true), ParamHint(quote = false)),
-                initialParamValues = mapOf("param1" to "admin"),
+                sql,
+                sql,
+                listOf("param1", "param2"),
+                null,
+                WrapperType.LAMBDA_QUERY,
+                "tbl",
+                null,
+                emptyList(),
+                emptyMap(),
+                null,
+                null,
+                listOf(ParamHint(true), ParamHint(false)),
+                emptyList(),
+                null,
+                null,
+                mapOf("param1" to "admin"),
+                null,
+                null,
+                null,
+                null,
             ),
         )
         assertEquals("param1 应预填", "admin", panel.paramFieldForTest(0)!!.text)
@@ -704,12 +749,12 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
     // ------------------------------------------------------------------
 
     private fun tableInfo() = TableInfo(
-        entityClassName = "DeviceInfoEntity",
-        tableName = "car_device_info",
-        columns = listOf(
-            ColumnInfo("id", "id", isId = true, fieldType = "java.lang.Long"),
-            ColumnInfo("stationId", "station_id", fieldType = "java.lang.Long"),
-            ColumnInfo("name", "name", fieldType = "java.lang.String"),
+        "DeviceInfoEntity",
+        "car_device_info",
+        listOf(
+            ColumnInfo("id", "id", true, false, "java.lang.Long"),
+            ColumnInfo("stationId", "station_id", false, false, "java.lang.Long"),
+            ColumnInfo("name", "name", false, false, "java.lang.String"),
         ),
     )
 

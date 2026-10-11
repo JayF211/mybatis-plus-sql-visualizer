@@ -48,27 +48,41 @@ class SqlPreviewPanelBindStateTest : BasePlatformTestCase() {
         // O-96：object 单例静态缝复位（防跨用例串扰）
         DataSourceSelector.rememberedLookupForTest = null
         runCatching { DataSourceSelector.plantLastUsedMemoryForTest(project, null, null) }
-        runCatching { panel?.clear() }
+        runCatching { panel?.let { SqlPreviewPanelSqlViewKt.clear(it) } }
         panel = null
         super.tearDown()
     }
 
     /** 普通参数语料（无 xml/batch 模型 → 走方案行+指示行+参数行主链）。 */
     private fun buildResult(vararg params: String): PreviewResult = PreviewResult(
-        sql = "SELECT * FROM t WHERE id = ?",
-        compactSql = "SELECT * FROM t WHERE id = ?",
-        unresolvedParams = params.toList(),
-        paramTable = ParameterReplacer.buildParamTable(params.toList()),
-        wrapperType = null,
-        tableName = null,
-        xmlModel = null,
+        // k2j 适配：20 参位置构造（无模型槽全取空缺省）
+        "SELECT * FROM t WHERE id = ?",
+        "SELECT * FROM t WHERE id = ?",
+        params.toList(),
+        ParameterReplacer.buildParamTable(params.toList()),
+        null,
+        null,
+        null,
+        emptyList(),
+        emptyMap(),
+        null,
+        null,
+        emptyList(),
+        emptyList(),
+        null,
+        null,
+        emptyMap(),
+        null,
+        null,
+        null,
+        null,
     )
 
     private fun openPanel(vararg params: String): SqlPreviewPanel {
         val p = SqlPreviewPanel(project)
         panel = p
         Disposer.register(testRootDisposable, p)
-        p.showResult(buildResult(*params))
+        SqlPreviewPanelResultViewKt.showResult(p, buildResult(*params))
         UIUtil.dispatchAllInvocationEvents()
         return p
     }
@@ -159,7 +173,13 @@ class SqlPreviewPanelBindStateTest : BasePlatformTestCase() {
 
     /** O-96：在籍数据源缝注入（名单 + UUID→名解析），模拟 Database 插件在籍注册表。 */
     private fun plantRegisteredDataSources(names: List<String>, nameById: (String) -> String?) {
-        DataSourceSelector.rememberedLookupForTest = { names to nameById }
+        // K2J 互操作：Java 静态字段类型是 Function<Project, kotlin.Pair<List, java.util.function.Function>>——
+        // Kotlin 函数类型变量不自动 SAM 转换，须显式 `java.util.function.Function { ... }`；
+        // `to` 产出 kotlin.Pair 照用（字段声明即 kotlin.Pair）。
+        DataSourceSelector.rememberedLookupForTest =
+            java.util.function.Function { _: com.intellij.openapi.project.Project ->
+                names to java.util.function.Function { id: String -> nameById(id) }
+            }
     }
 
     fun test记忆命中显示关联上次使用文案() {

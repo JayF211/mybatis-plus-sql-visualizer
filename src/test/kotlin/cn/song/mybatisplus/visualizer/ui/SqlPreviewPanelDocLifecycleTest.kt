@@ -90,7 +90,7 @@ class SqlPreviewPanelDocLifecycleTest : BasePlatformTestCase() {
 
         val panel = SqlPreviewPanel(project)
         try {
-            panel.showResult(result())
+            SqlPreviewPanelResultViewKt.showResult(panel, result())
             // 模拟控制台就绪且已嵌入本面板（showSql 的 nativeDoc 分支要求 consoleAttachedToMe，
             // SqlPreviewPanelTest T-PreviewConsoleFmt 先例同款驱动）
             panel.embedConsoleForTest(javax.swing.JPanel())
@@ -115,7 +115,7 @@ class SqlPreviewPanelDocLifecycleTest : BasePlatformTestCase() {
                 target.readText().replace("\r\n", "\n"),
             )
         } finally {
-            panel.clear()
+            SqlPreviewPanelSqlViewKt.clear(panel)
         }
     }
 
@@ -123,7 +123,7 @@ class SqlPreviewPanelDocLifecycleTest : BasePlatformTestCase() {
     fun testShowSqlNativeDocOrphanDocumentSkipsPersistGracefully() {
         val panel = SqlPreviewPanel(project)
         try {
-            panel.showResult(result())
+            SqlPreviewPanelResultViewKt.showResult(panel, result())
             panel.embedConsoleForTest(javax.swing.JPanel())
             val orphan = com.intellij.openapi.editor.EditorFactory.getInstance()
                 .createDocument("select  id ,name  from t  where id=1")
@@ -141,7 +141,7 @@ class SqlPreviewPanelDocLifecycleTest : BasePlatformTestCase() {
                 FileDocumentManager.getInstance().isDocumentUnsaved(orphan),
             )
         } finally {
-            panel.clear()
+            SqlPreviewPanelSqlViewKt.clear(panel)
         }
     }
 

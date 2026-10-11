@@ -110,43 +110,43 @@ class XmlPreviewPanelTest : BasePlatformTestCase() {
 
     fun testXmlPreviewRendersSql() {
         val panel = SqlPreviewPanel(project)
-        panel.showResult(xmlResult())
+        SqlPreviewPanelResultViewKt.showResult(panel, xmlResult())
         val editor = panel.editorForTest()
         assertNotNull("应挂载编辑器视图", editor)
         assertEquals(
             "SELECT * FROM t_biz WHERE type = ? AND id IN ( ? , ? ) AND name LIKE '%1%'",
             compact(editor!!.document.text),
         )
-        panel.clear()
+        SqlPreviewPanelSqlViewKt.clear(panel)
     }
 
     fun testXmlToggleCompact() {
         val panel = SqlPreviewPanel(project)
-        panel.showResult(xmlResult())
-        panel.toggleCompact()
+        SqlPreviewPanelResultViewKt.showResult(panel, xmlResult())
+        SqlPreviewPanelSqlViewKt.toggleCompact(panel)
         // T-M25.5：bind 自动求值回填（'%' + name + '%'，mock name="1" → '%1%'）
         assertEquals(
             "SELECT * FROM t_biz WHERE type = ? AND id IN ( ? , ? ) AND name LIKE '%1%'",
             panel.editorForTest()!!.document.text,
         )
-        panel.clear()
+        SqlPreviewPanelSqlViewKt.clear(panel)
     }
 
     fun testXmlConditionCheckboxTogglesSql() {
         val panel = SqlPreviewPanel(project)
-        panel.showResult(xmlResult())
+        SqlPreviewPanelResultViewKt.showResult(panel, xmlResult())
         // 左栏条件复选框（第一个 = type != null，第二个 = ids != null，第三个 = name != null）
         assertNotNull("应构建动态条件复选框", panel.conditionCheckboxForTest(0))
         panel.conditionCheckboxForTest(0)!!.isSelected = false
         panel.conditionCheckboxForTest(0)!!.actionListeners.forEach { it.actionPerformed(null) }
         val sql = compact(panel.editorForTest()!!.document.text)
         assertTrue("关闭 type 条件后 WHERE 消失", sql.startsWith("SELECT * FROM t_biz AND id IN"))
-        panel.clear()
+        SqlPreviewPanelSqlViewKt.clear(panel)
     }
 
     fun testXmlForEachCountField() {
         val panel = SqlPreviewPanel(project)
-        panel.showResult(xmlResult())
+        SqlPreviewPanelResultViewKt.showResult(panel, xmlResult())
         // 把 foreach 外的条件全关，只剩 IN 片段便于断言次数
         deselectAllConditions(panel)
         panel.conditionCheckboxForTest(1)?.let { box ->
@@ -155,13 +155,13 @@ class XmlPreviewPanelTest : BasePlatformTestCase() {
         }
         val sql1 = compact(panel.editorForTest()!!.document.text)
         assertTrue("默认展开两次：IN ( ? , ? )", sql1.contains("IN ( ? , ? )"))
-        panel.clear()
+        SqlPreviewPanelSqlViewKt.clear(panel)
     }
 
     fun testXmlForEachValuesInputBackfills() {
         // T-M25.4（用户实测：在 foreach 次数框输入 2,3 无效）——集合值输入：逗号分隔自动回填 IN (2, 3)
         val panel = SqlPreviewPanel(project)
-        panel.showResult(xmlResult())
+        SqlPreviewPanelResultViewKt.showResult(panel, xmlResult())
         deselectAllConditions(panel)
         panel.conditionCheckboxForTest(1)?.let { box ->
             box.isSelected = true
@@ -175,13 +175,13 @@ class XmlPreviewPanelTest : BasePlatformTestCase() {
         val sql = compact(panel.editorForTest()!!.document.text)
         // T-M29.4：foreach 展开项默认引号（`IN ( '2' , '3' )`，数值隐式转换语义不变）
         assertTrue("输入 2,3 应回填为 IN ( '2' , '3' )：$sql", sql.contains("IN ( '2' , '3' )"))
-        panel.clear()
+        SqlPreviewPanelSqlViewKt.clear(panel)
     }
 
     fun testXmlForEachCountZeroDropsInClause() {
         // 全不选（切换按钮）→ 只剩 foreach 条件开启 → 次数 0 → IN 片段消失
         val panel = SqlPreviewPanel(project)
-        panel.showResult(xmlResult())
+        SqlPreviewPanelResultViewKt.showResult(panel, xmlResult())
         deselectAllConditions(panel)
         panel.conditionCheckboxForTest(1)?.let { box ->
             box.isSelected = true
@@ -189,14 +189,14 @@ class XmlPreviewPanelTest : BasePlatformTestCase() {
         }
         val sql1 = compact(panel.editorForTest()!!.document.text)
         assertTrue("默认展开两次：IN ( ? , ? )", sql1.contains("IN ( ? , ? )"))
-        panel.clear()
+        SqlPreviewPanelSqlViewKt.clear(panel)
     }
 
     fun testXmlBindValuesOnlyInParamSection() {
         // T-M26.4（用户反馈：bind 变量区与参数区重复展示同一组值）——bind 分区已删除：
         // bind 求值结果仅在「参数」区显示（唯一入口：输入覆盖、清空恢复自动值）
         val panel = SqlPreviewPanel(project)
-        panel.showResult(xmlResult())
+        SqlPreviewPanelResultViewKt.showResult(panel, xmlResult())
         // bind 名在参数区有输入行（求值结果回显：'%' + name + '%'，mock name="1" → "%1%"）。
         // T-HibDualCapture：tooltip 现为 `#source = 值`，按前缀匹配定位 bind 行（值随回填动态变化）
         val bindRow = (0 until 20).mapNotNull { panel.paramFieldForTest(it) }
@@ -209,7 +209,7 @@ class XmlPreviewPanelTest : BasePlatformTestCase() {
             "参数输入应覆盖 bind 值：" + compact(panel.editorForTest()!!.document.text),
             compact(panel.editorForTest()!!.document.text).contains("name LIKE 'xx'"),
         )
-        panel.clear()
+        SqlPreviewPanelSqlViewKt.clear(panel)
     }
 
     fun testXmlLikeParamQuotedForPureNumericInput() {
@@ -248,7 +248,7 @@ class XmlPreviewPanelTest : BasePlatformTestCase() {
             null,
         )
         val panel = SqlPreviewPanel(project)
-        panel.showResult(result)
+        SqlPreviewPanelResultViewKt.showResult(panel, result)
         val keywordField = (0 until 20).mapNotNull { panel.paramFieldForTest(it) }
             .firstOrNull { it.toolTipText == "#keyword" }
         assertNotNull("应有关键词参数输入行", keywordField)
@@ -257,7 +257,7 @@ class XmlPreviewPanelTest : BasePlatformTestCase() {
             "LIKE 参数回填应带引号：" + compact(panel.editorForTest()!!.document.text),
             compact(panel.editorForTest()!!.document.text).contains("LIKE CONCAT('%', '111', '%')"),
         )
-        panel.clear()
+        SqlPreviewPanelSqlViewKt.clear(panel)
     }
 
     fun testXmlParamQuotedByDefault() {
@@ -305,7 +305,7 @@ class XmlPreviewPanelTest : BasePlatformTestCase() {
             null,
         )
         val panel = SqlPreviewPanel(project)
-        panel.showResult(result)
+        SqlPreviewPanelResultViewKt.showResult(panel, result)
         val fields = (0 until 20).mapNotNull { panel.paramFieldForTest(it) }
         val dateField = fields.firstOrNull { it.toolTipText == "#p.settlementStartDate" }
         val statusField = fields.firstOrNull { it.toolTipText == "#p.dicCreditStatus" }
@@ -316,7 +316,7 @@ class XmlPreviewPanelTest : BasePlatformTestCase() {
         val sql = compact(panel.editorForTest()!!.document.text)
         assertTrue("日期参数应带引号：$sql", sql.contains("t.settlement_period >= '2025'"))
         assertTrue("数值参数默认也带引号（隐式转换等价）：$sql", sql.contains("t.dic_credit_status = '2'"))
-        panel.clear()
+        SqlPreviewPanelSqlViewKt.clear(panel)
     }
 
     fun testXmlListParamSplitsCommaInputBySignature() {
@@ -324,7 +324,7 @@ class XmlPreviewPanelTest : BasePlatformTestCase() {
         // 形态（无 foreach，左栏为普通参数行）——输入 PI,WP 应按签名拆分多值渲染。
         // 升级前：inList 只看 SQL 形态探测，形态漏判即整串单值 `IN ('PI,WP')`
         val panel = SqlPreviewPanel(project)
-        panel.showResult(
+        SqlPreviewPanelResultViewKt.showResult(panel, 
             xmlResultOf(
                 """
                 <mapper namespace="n">
@@ -347,13 +347,13 @@ class XmlPreviewPanelTest : BasePlatformTestCase() {
         field!!.text = "PI,WP"
         val sql = compact(panel.editorForTest()!!.document.text)
         assertTrue("List<String> 输入 PI,WP 应拆分为 IN ('PI', 'WP')：$sql", sql.contains("task.type IN ('PI', 'WP')"))
-        panel.clear()
+        SqlPreviewPanelSqlViewKt.clear(panel)
     }
 
     fun testXmlListParamNumberElementsRenderBare() {
         // O-81：元素类别 NUMBER（List<Long>）→ 拆分后裸渲染（与 O-78 foreach item 派生同口径）
         val panel = SqlPreviewPanel(project)
-        panel.showResult(
+        SqlPreviewPanelResultViewKt.showResult(panel, 
             xmlResultOf(
                 """
                 <mapper namespace="n">
@@ -373,14 +373,14 @@ class XmlPreviewPanelTest : BasePlatformTestCase() {
         field!!.text = "1,2"
         val sql = compact(panel.editorForTest()!!.document.text)
         assertTrue("List<Long> 输入 1,2 应裸渲染 IN (1, 2)：$sql", sql.contains("t.move_doc_id IN (1, 2)"))
-        panel.clear()
+        SqlPreviewPanelSqlViewKt.clear(panel)
     }
 
     fun testXmlListParamShapeDetectionToleratesNewline() {
         // O-81 R2 端到端：无签名类型信息（接口不可解析/Map 入参）时纯走形态探测——
         // `IN` 与 `(` 之间换行的 mapper 排版不再漏判（升级前整串单值）
         val panel = SqlPreviewPanel(project)
-        panel.showResult(
+        SqlPreviewPanelResultViewKt.showResult(panel, 
             xmlResultOf(
                 """
                 <mapper namespace="n">
@@ -401,7 +401,7 @@ class XmlPreviewPanelTest : BasePlatformTestCase() {
         field!!.text = "PI,WP"
         val sql = compact(panel.editorForTest()!!.document.text)
         assertTrue("IN 与 ( 换行也应拆分：$sql", sql.contains("task.type IN ('PI', 'WP')"))
-        panel.clear()
+        SqlPreviewPanelSqlViewKt.clear(panel)
     }
 
     fun testXmlRenderErrorsShownInMeta() {
@@ -439,10 +439,10 @@ class XmlPreviewPanelTest : BasePlatformTestCase() {
             null,
         )
         val panel = SqlPreviewPanel(project)
-        panel.showResult(result)
+        SqlPreviewPanelResultViewKt.showResult(panel, result)
         assertNotNull("编辑器应正常显示 SQL", panel.editorForTest())
         assertTrue("渲染错误应显示在元信息警示", panel.metaLabelForTest().contains("⚠"))
-        panel.clear()
+        SqlPreviewPanelSqlViewKt.clear(panel)
     }
 
     fun testErrorCopyButtonVisibleWithWarning() {
@@ -480,23 +480,23 @@ class XmlPreviewPanelTest : BasePlatformTestCase() {
             null,
         )
         val panel = SqlPreviewPanel(project)
-        panel.showResult(result)
+        SqlPreviewPanelResultViewKt.showResult(panel, result)
         val button = panel.errorCopyButtonForTest()
         assertNotNull("错误复制按钮应存在", button)
         assertTrue("有警示时按钮应可见", button!!.isVisible)
-        assertTrue("复制错误应成功", panel.copyError())
-        panel.clear()
+        assertTrue("复制错误应成功", SqlPreviewPanelResultViewKt.copyError(panel))
+        SqlPreviewPanelSqlViewKt.clear(panel)
         assertFalse("清空后按钮应隐藏", panel.errorCopyButtonForTest()?.isVisible ?: true)
     }
 
     fun testErrorCopyButtonHiddenWithoutWarning() {
         val panel = SqlPreviewPanel(project)
-        panel.showResult(xmlResult()) // 无警告的预览
+        SqlPreviewPanelResultViewKt.showResult(panel, xmlResult()) // 无警告的预览
         val button = panel.errorCopyButtonForTest()
         assertNotNull(button)
         assertFalse("无警示时按钮应隐藏", button!!.isVisible)
-        assertFalse("无错误时复制返回 false", panel.copyError())
-        panel.clear()
+        assertFalse("无错误时复制返回 false", SqlPreviewPanelResultViewKt.copyError(panel))
+        SqlPreviewPanelSqlViewKt.clear(panel)
     }
 
     /**
@@ -505,7 +505,7 @@ class XmlPreviewPanelTest : BasePlatformTestCase() {
      */
     fun testXmlConditionSupportAnnotation() {
         val panel = SqlPreviewPanel(project)
-        panel.showResult(
+        SqlPreviewPanelResultViewKt.showResult(panel, 
             xmlResultOf(
                 """
                 <mapper namespace="com.example.BizMapper">
@@ -563,7 +563,7 @@ class XmlPreviewPanelTest : BasePlatformTestCase() {
             "SELECT * FROM t AND type = ? AND a = 1 AND b = 2",
             compact(panel.editorForTest()!!.document.text),
         )
-        panel.clear()
+        SqlPreviewPanelSqlViewKt.clear(panel)
     }
 
     /** 条件行内的标注标签（复选框所在行 panel 的 JBLabel 子组件）。 */

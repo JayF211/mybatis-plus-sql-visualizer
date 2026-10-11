@@ -3,10 +3,7 @@ package cn.song.mybatisplus.visualizer.ui.inlay
 
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel
-// T-M53-II D2-5：`showResult`/`clear` 已搬为 ui 包内的同包扩展函数（原 SqlPreviewPanel 成员），
-// 跨包（ui.inlay）调用点需显式导入。
-import cn.song.mybatisplus.visualizer.ui.clear
-import cn.song.mybatisplus.visualizer.ui.showResult
+// K2J 互操作：`showResult`/`clear` 已搬为 ui 包扩展门面（Java 静态），跨包子包调用须类名限定。
 import cn.song.mybatisplus.visualizer.xml.XmlMapperParser
 import cn.song.mybatisplus.visualizer.xml.XmlPreviewModel
 import cn.song.mybatisplus.visualizer.xml.XmlStatementKind
@@ -97,7 +94,7 @@ class InsertColumnInlayPanelWiringTest : BasePlatformTestCase() {
     fun testINSERT预览把语句类型写进编辑器与PSI双载体() {
         val panel = SqlPreviewPanel(project)
         try {
-            panel.showResult(xmlResult(insertMapper))
+            cn.song.mybatisplus.visualizer.ui.SqlPreviewPanelResultViewKt.showResult(panel, xmlResult(insertMapper))
             assertEquals(
                 "面板须把 xmlModel.kind 写进预览编辑器（Editor 优先、PSI 文件兜底）——" +
                     "没写则真机上 inlay 静默不出现（零异常零日志）",
@@ -105,21 +102,21 @@ class InsertColumnInlayPanelWiringTest : BasePlatformTestCase() {
                 panelKind(panel),
             )
         } finally {
-            panel.clear()
+            cn.song.mybatisplus.visualizer.ui.SqlPreviewPanelSqlViewKt.clear(panel)
         }
     }
 
     fun test非INSERT预览不写INSERT载体() {
         val panel = SqlPreviewPanel(project)
         try {
-            panel.showResult(xmlResult(selectMapper))
+            cn.song.mybatisplus.visualizer.ui.SqlPreviewPanelResultViewKt.showResult(panel, xmlResult(selectMapper))
             assertEquals(
                 "非 INSERT 预览的载体不得是 INSERT（否则同一编辑器上会按 INSERT 产提示）",
                 XmlStatementKind.SELECT,
                 panelKind(panel),
             )
         } finally {
-            panel.clear()
+            cn.song.mybatisplus.visualizer.ui.SqlPreviewPanelSqlViewKt.clear(panel)
         }
     }
 
@@ -128,12 +125,12 @@ class InsertColumnInlayPanelWiringTest : BasePlatformTestCase() {
         // 漏写即「INSERT 预览后切 SELECT 预览，旧编辑器仍按 INSERT 产提示」
         val panel = SqlPreviewPanel(project)
         try {
-            panel.showResult(xmlResult(insertMapper))
+            cn.song.mybatisplus.visualizer.ui.SqlPreviewPanelResultViewKt.showResult(panel, xmlResult(insertMapper))
             assertEquals("首次预览（新建编辑器路径）", XmlStatementKind.INSERT, panelKind(panel))
-            panel.showResult(xmlResult(selectMapper))
+            cn.song.mybatisplus.visualizer.ui.SqlPreviewPanelResultViewKt.showResult(panel, xmlResult(selectMapper))
             assertEquals("二次预览（编辑器复用路径）", XmlStatementKind.SELECT, panelKind(panel))
         } finally {
-            panel.clear()
+            cn.song.mybatisplus.visualizer.ui.SqlPreviewPanelSqlViewKt.clear(panel)
         }
     }
 }

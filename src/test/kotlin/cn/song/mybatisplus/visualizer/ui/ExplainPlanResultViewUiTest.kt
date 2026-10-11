@@ -25,12 +25,13 @@ class ExplainPlanResultViewUiTest : BasePlatformTestCase() {
     )
 
     fun testMySQL表格格式_行列保真() {
+        // k2j 适配：具名实参改 7 参位置形态（hints/onBackToConsole 缺省）
         val view = ExplainPlanResultView(
-            dialectName = "MySQL",
-            dataSourceName = "local@db",
-            elapsedMs = 42L,
-            raw = McpExplainFormatter.RawResult(mysqlHeaders, mysqlRows),
-            format = ExplainOutputFormat.TABLE,
+            "MySQL",
+            "local@db",
+            42L,
+            McpExplainFormatter.RawResult(mysqlHeaders, mysqlRows, false),
+            ExplainOutputFormat.TABLE,
         )
         val model = view.tableModelForTest()
         assertNotNull("TABLE 格式应构建表格模型", model)
@@ -43,11 +44,11 @@ class ExplainPlanResultViewUiTest : BasePlatformTestCase() {
     fun testJSON格式_树模型非空且无表格() {
         val json = """[{"Plan": {"Node Type": "Seq Scan", "Relation Name": "t", "Plan Rows": 10000}}]"""
         val view = ExplainPlanResultView(
-            dialectName = "PostgreSQL",
-            dataSourceName = "pg@local",
-            elapsedMs = 12L,
-            raw = McpExplainFormatter.RawResult(listOf("QUERY PLAN"), listOf(listOf(json))),
-            format = ExplainOutputFormat.JSON,
+            "PostgreSQL",
+            "pg@local",
+            12L,
+            McpExplainFormatter.RawResult(listOf("QUERY PLAN"), listOf(listOf(json)), false),
+            ExplainOutputFormat.JSON,
         )
         val treeModel = view.treeModelForTest()
         assertNotNull("JSON 格式应构建树模型", treeModel)
@@ -57,12 +58,12 @@ class ExplainPlanResultViewUiTest : BasePlatformTestCase() {
 
     fun test索引建议_有建议显示_无建议不占位() {
         val withHints = ExplainPlanResultView(
-            dialectName = "MySQL",
-            dataSourceName = null,
-            elapsedMs = 1L,
-            raw = McpExplainFormatter.RawResult(mysqlHeaders, mysqlRows),
-            format = ExplainOutputFormat.TABLE,
-            hints = listOf(
+            "MySQL",
+            null,
+            1L,
+            McpExplainFormatter.RawResult(mysqlHeaders, mysqlRows, false),
+            ExplainOutputFormat.TABLE,
+            listOf(
                 ExplainIndexAdvisor.Hint("FULL_SCAN", "tb_user", "type=ALL full table scan"),
             ),
         )
@@ -72,11 +73,11 @@ class ExplainPlanResultViewUiTest : BasePlatformTestCase() {
         assertTrue("建议条应含目标对象", hintText.contains("tb_user"))
 
         val noHints = ExplainPlanResultView(
-            dialectName = "MySQL",
-            dataSourceName = null,
-            elapsedMs = 1L,
-            raw = McpExplainFormatter.RawResult(mysqlHeaders, mysqlRows),
-            format = ExplainOutputFormat.TABLE,
+            "MySQL",
+            null,
+            1L,
+            McpExplainFormatter.RawResult(mysqlHeaders, mysqlRows, false),
+            ExplainOutputFormat.TABLE,
         )
         assertFalse("无建议不占位", noHints.hintsComponentForTest()?.isVisible ?: false)
     }
@@ -84,12 +85,13 @@ class ExplainPlanResultViewUiTest : BasePlatformTestCase() {
     fun test回到原生控制台入口_显隐与回调() {
         var clicked = 0
         val view = ExplainPlanResultView(
-            dialectName = "MySQL",
-            dataSourceName = null,
-            elapsedMs = 1L,
-            raw = McpExplainFormatter.RawResult(mysqlHeaders, mysqlRows),
-            format = ExplainOutputFormat.TABLE,
-            onBackToConsole = { clicked++ },
+            "MySQL",
+            null,
+            1L,
+            McpExplainFormatter.RawResult(mysqlHeaders, mysqlRows, false),
+            ExplainOutputFormat.TABLE,
+            emptyList(),
+            { clicked++ },
         )
         val button = view.backButtonForTest()
         assertNotNull(button)
@@ -98,11 +100,11 @@ class ExplainPlanResultViewUiTest : BasePlatformTestCase() {
         assertEquals(1, clicked)
 
         val noEntry = ExplainPlanResultView(
-            dialectName = "MySQL",
-            dataSourceName = null,
-            elapsedMs = 1L,
-            raw = McpExplainFormatter.RawResult(mysqlHeaders, mysqlRows),
-            format = ExplainOutputFormat.TABLE,
+            "MySQL",
+            null,
+            1L,
+            McpExplainFormatter.RawResult(mysqlHeaders, mysqlRows, false),
+            ExplainOutputFormat.TABLE,
         )
         val hidden = noEntry.backButtonForTest()
         assertNotNull(hidden)
@@ -111,11 +113,11 @@ class ExplainPlanResultViewUiTest : BasePlatformTestCase() {
 
     fun test头部含方言与数据源() {
         val view = ExplainPlanResultView(
-            dialectName = "MariaDB",
-            dataSourceName = "prod@10.0.0.3",
-            elapsedMs = 88L,
-            raw = McpExplainFormatter.RawResult(mysqlHeaders, mysqlRows),
-            format = ExplainOutputFormat.TABLE,
+            "MariaDB",
+            "prod@10.0.0.3",
+            88L,
+            McpExplainFormatter.RawResult(mysqlHeaders, mysqlRows, false),
+            ExplainOutputFormat.TABLE,
         )
         val header = view.headerTextForTest()
         assertNotNull(header)

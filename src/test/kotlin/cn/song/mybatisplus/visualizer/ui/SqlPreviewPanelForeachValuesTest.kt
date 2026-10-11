@@ -38,7 +38,7 @@ class SqlPreviewPanelForeachValuesTest : BasePlatformTestCase() {
 
     override fun tearDown() {
         DocWriteContext.writeAllowedProbe = null
-        runCatching { panel?.clear() }
+        runCatching { panel?.let { SqlPreviewPanelSqlViewKt.clear(it) } }
         runCatching { PluginSettings.getInstance().state.formatSql = true }
         runCatching { PluginSettings.getInstance().state.emptyParamFill = oldEmptyParamFill }
         panel = null
@@ -71,7 +71,7 @@ class SqlPreviewPanelForeachValuesTest : BasePlatformTestCase() {
         val p = SqlPreviewPanel(project)
         panel = p
         Disposer.register(testRootDisposable, p)
-        p.showResult(
+        SqlPreviewPanelResultViewKt.showResult(p, 
             PreviewResult(
                 // k2j 适配：20 参位置构造
                 rendered.sql(),

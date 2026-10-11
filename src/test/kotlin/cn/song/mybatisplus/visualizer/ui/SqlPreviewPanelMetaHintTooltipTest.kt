@@ -75,7 +75,7 @@ class SqlPreviewPanelMetaHintTooltipTest : BasePlatformTestCase() {
         val panel = SqlPreviewPanel(project)
         try {
             val digest = chain()
-            panel.showResult(makeResult(digest))
+            SqlPreviewPanelResultViewKt.showResult(panel, makeResult(digest))
             waitForEdt()
             val baseTooltip = panel.metaTooltipForTest() ?: ""
             // T-StackHoverUi：基线只含 meta/警示/perf，不含栈文本
@@ -93,14 +93,14 @@ class SqlPreviewPanelMetaHintTooltipTest : BasePlatformTestCase() {
             // 拼接而非覆写：基线完整保留在其后（幂等拼接的实质断言）
             assertTrue("提示态 tooltip 应保留 updateMeta 的完整基线", tooltip.endsWith(baseTooltip))
         } finally {
-            panel.clear()
+            SqlPreviewPanelSqlViewKt.clear(panel)
         }
     }
 
     fun test空剪贴板提示_重复触发不叠加自身() {
         val panel = SqlPreviewPanel(project)
         try {
-            panel.showResult(makeResult(chain()))
+            SqlPreviewPanelResultViewKt.showResult(panel, makeResult(chain()))
             waitForEdt()
             panel.importParamsForTest(emptyMap())
             waitForEdt()
@@ -110,20 +110,20 @@ class SqlPreviewPanelMetaHintTooltipTest : BasePlatformTestCase() {
             waitForEdt()
             assertEquals("重复触发应幂等（基线取自缓存字段，不把上次拼接结果当基线）", once, panel.metaTooltipForTest())
         } finally {
-            panel.clear()
+            SqlPreviewPanelSqlViewKt.clear(panel)
         }
     }
 
     fun test空剪贴板提示后_再次预览恢复纯metaTooltip() {
         val panel = SqlPreviewPanel(project)
         try {
-            panel.showResult(makeResult(chain()))
+            SqlPreviewPanelResultViewKt.showResult(panel, makeResult(chain()))
             waitForEdt()
             panel.importParamsForTest(emptyMap())
             waitForEdt()
             assertTrue("前提：提示态 tooltip 含提示文案", (panel.metaTooltipForTest() ?: "").contains(hint()))
 
-            panel.showResult(makeResult(chain()))
+            SqlPreviewPanelResultViewKt.showResult(panel, makeResult(chain()))
             waitForEdt()
             val tooltip = panel.metaTooltipForTest() ?: ""
             assertFalse("toast 语义：下次 updateMeta 覆盖提示态（可见行同步回纯 meta）", panel.metaLabelForTest().contains(hint()))
@@ -131,7 +131,7 @@ class SqlPreviewPanelMetaHintTooltipTest : BasePlatformTestCase() {
             // T-StackHoverUi：恢复后 tooltip 仍不含栈文本（完整链在悬停弹层）
             assertFalse("恢复后 tooltip 不得含完整调用链", tooltip.contains(chain()))
         } finally {
-            panel.clear()
+            SqlPreviewPanelSqlViewKt.clear(panel)
         }
     }
 
@@ -149,7 +149,7 @@ class SqlPreviewPanelMetaHintTooltipTest : BasePlatformTestCase() {
     fun test提示态_宽度预算重算后不被meta覆盖() {
         val panel = SqlPreviewPanel(project)
         try {
-            panel.showResult(makeResult(chain()))
+            SqlPreviewPanelResultViewKt.showResult(panel, makeResult(chain()))
             waitForEdt()
             panel.importParamsForTest(emptyMap())
             waitForEdt()
@@ -165,7 +165,7 @@ class SqlPreviewPanelMetaHintTooltipTest : BasePlatformTestCase() {
             val tooltip = panel.metaTooltipForTest() ?: ""
             assertTrue("提示态 tooltip 必须仍在（P10：重算不覆写提示拼接）", tooltip.startsWith(hint()))
         } finally {
-            panel.clear()
+            SqlPreviewPanelSqlViewKt.clear(panel)
         }
     }
 }

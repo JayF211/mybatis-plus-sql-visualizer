@@ -37,7 +37,7 @@ class SqlPreviewPanelParamKindTest : BasePlatformTestCase() {
     }
 
     override fun tearDown() {
-        runCatching { panel?.clear() }
+        runCatching { panel?.let { SqlPreviewPanelSqlViewKt.clear(it) } }
         runCatching { PluginSettings.getInstance().state.formatSql = true }
         runCatching { PluginSettings.getInstance().state.emptyParamFill = oldEmptyParamFill }
         panel = null
@@ -102,7 +102,7 @@ class SqlPreviewPanelParamKindTest : BasePlatformTestCase() {
         val p = SqlPreviewPanel(project)
         panel = p
         Disposer.register(testRootDisposable, p)
-        p.showResult(result())
+        SqlPreviewPanelResultViewKt.showResult(p, result())
         return p
     }
 

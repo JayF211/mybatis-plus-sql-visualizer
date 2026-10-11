@@ -44,7 +44,7 @@ class UnknownParamGateTest : BasePlatformTestCase() {
 
     override fun tearDown() {
         panel?.let {
-            runCatching { it.clear() }
+            runCatching { SqlPreviewPanelSqlViewKt.clear(it) }
             runCatching { Disposer.dispose(it) }
         }
         panel = null
@@ -147,10 +147,10 @@ class UnknownParamGateTest : BasePlatformTestCase() {
     fun test含UNKNOWN参数执行_弹确认且NO中止() {
         interceptDialogs(Messages.NO)
         val p = newPanel()
-        p.showResult(unknownResult())
+        SqlPreviewPanelResultViewKt.showResult(p, unknownResult())
         assertEquals("前置：未执行时结果面板为空态", "EMPTY", panelState())
 
-        p.executeSql()
+        SqlPreviewPanelExecutionKt.executeSql(p)
 
         assertEquals("含 UNKNOWN 参数执行前应弹一次确认", 1, dialogMessages.size)
         assertEquals(
@@ -169,13 +169,13 @@ class UnknownParamGateTest : BasePlatformTestCase() {
     fun test含UNKNOWN参数执行_确认放行且本面板不再重复弹() {
         interceptDialogs(Messages.YES)
         val p = newPanel()
-        p.showResult(unknownResult())
+        SqlPreviewPanelResultViewKt.showResult(p, unknownResult())
 
-        p.executeSql()
+        SqlPreviewPanelExecutionKt.executeSql(p)
         assertEquals("首次执行应弹确认", 1, dialogMessages.size)
         assertProceeded("确认后放行")
 
-        p.executeSql()
+        SqlPreviewPanelExecutionKt.executeSql(p)
         assertEquals("会话级记忆：同面板再执行不重复弹（提示只出现一次）", 1, dialogMessages.size)
         assertProceeded("二次执行照常放行（不阻断已确认流程）")
     }
@@ -183,10 +183,10 @@ class UnknownParamGateTest : BasePlatformTestCase() {
     fun test含UNKNOWN参数执行_NO后再执行仍会弹() {
         interceptDialogs(Messages.NO, Messages.NO)
         val p = newPanel()
-        p.showResult(unknownResult())
+        SqlPreviewPanelResultViewKt.showResult(p, unknownResult())
 
-        p.executeSql()
-        p.executeSql()
+        SqlPreviewPanelExecutionKt.executeSql(p)
+        SqlPreviewPanelExecutionKt.executeSql(p)
 
         assertEquals("NO 不写会话记忆，再执行仍弹", 2, dialogMessages.size)
         assertEquals("两次都中止", "EMPTY", panelState())
@@ -195,9 +195,9 @@ class UnknownParamGateTest : BasePlatformTestCase() {
     fun test无UNKNOWN参数_零影响() {
         interceptDialogs(Messages.NO)
         val p = newPanel()
-        p.showResult(unknownResult(withTypes = false))
+        SqlPreviewPanelResultViewKt.showResult(p, unknownResult(withTypes = false))
 
-        p.executeSql()
+        SqlPreviewPanelExecutionKt.executeSql(p)
 
         assertEquals("无类型信息（接口不可解析）不弹——避免每次执行都提示的噪音面", 0, dialogMessages.size)
         assertProceeded("行为逐字节不变（照常执行）")
@@ -210,13 +210,13 @@ class UnknownParamGateTest : BasePlatformTestCase() {
     fun testEXPLAIN含UNKNOWN参数_同门控() {
         interceptDialogs(Messages.NO, Messages.YES)
         val p = newPanel()
-        p.showResult(unknownResult())
+        SqlPreviewPanelResultViewKt.showResult(p, unknownResult())
 
-        p.explainSql()
+        SqlPreviewPanelExecutionKt.explainSql(p)
         assertEquals("EXPLAIN 也真实执行，必须弹门", 1, dialogMessages.size)
         assertEquals("NO 中止（未进入执行）", "EMPTY", panelState())
 
-        p.explainSql()
+        SqlPreviewPanelExecutionKt.explainSql(p)
         assertEquals("EXPLAIN 确认框 NO 不写记忆，再点仍弹", 2, dialogMessages.size)
         assertProceeded("确认后放行")
     }
@@ -224,12 +224,12 @@ class UnknownParamGateTest : BasePlatformTestCase() {
     fun testEXPLAIN确认后_与执行共用一次性记忆() {
         interceptDialogs(Messages.YES)
         val p = newPanel()
-        p.showResult(unknownResult())
+        SqlPreviewPanelResultViewKt.showResult(p, unknownResult())
 
-        p.executeSql()
+        SqlPreviewPanelExecutionKt.executeSql(p)
         assertEquals("执行前弹一次", 1, dialogMessages.size)
 
-        p.explainSql()
+        SqlPreviewPanelExecutionKt.explainSql(p)
         assertEquals("同面板已确认过：EXPLAIN 不再重复弹（同一道门一次性记忆）", 1, dialogMessages.size)
         assertProceeded("EXPLAIN 照常放行")
     }

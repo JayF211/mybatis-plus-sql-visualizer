@@ -39,6 +39,12 @@ public final class ConditionToggle {
         this(id, flagSource, defaultEnabled, label, null, List.of());
     }
 
+    /** Kotlin 默认参数等价重载：{@code valueSources} 缺省空清单（单值来源形态）。 */
+    public ConditionToggle(String id, String flagSource, boolean defaultEnabled, String label,
+                           String valueSource) {
+        this(id, flagSource, defaultEnabled, label, valueSource, List.of());
+    }
+
     public String getId() {
         return id;
     }

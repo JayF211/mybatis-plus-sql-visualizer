@@ -65,29 +65,42 @@ class SqlPreviewPanelDynamicBatchTest: BasePlatformTestCase() {
         views: List<ConditionView>,
         params: List<String> = emptyList(),
     ): PreviewResult {
-        val statement = SelectStatement(table = tableInfo(), conditions = conditions)
-        val model = SqlPreviewModel(statement, MySqlDialect, formatSql = true, conditionViews = views)
+        val statement = SelectStatement(tableInfo(), emptyList(), null, conditions)
+        val model = SqlPreviewModel(statement, MySqlDialect.INSTANCE, true, views)
+        // k2j 适配：具名实参改 20 参位置形态（previewModel 落第 11 位）
         return PreviewResult(
-            sql = "SELECT id, station_id, name\nFROM car_device_info",
-            compactSql = "SELECT id, station_id, name FROM car_device_info",
-            unresolvedParams = params,
-            paramTable = if (params.isEmpty()) null else "-- 参数对照: [${params.joinToString(", ") { "$it=?" }}]",
-            wrapperType = WrapperType.LAMBDA_QUERY,
-            tableName = "car_device_info",
-            columns = listOf("id", "station_id", "name"),
-            previewModel = model,
+            "SELECT id, station_id, name\nFROM car_device_info",
+            "SELECT id, station_id, name FROM car_device_info",
+            params,
+            if (params.isEmpty()) null else "-- 参数对照: [${params.joinToString(", ") { "$it=?" }}]",
+            WrapperType.LAMBDA_QUERY,
+            "car_device_info",
+            null,
+            listOf("id", "station_id", "name"),
+            emptyMap(),
+            null,
+            model,
+            emptyList(),
+            emptyList(),
+            null,
+            null,
+            emptyMap(),
+            null,
+            null,
+            null,
+            null,
         )
     }
 
     fun testDynamicConditionCheckboxTogglesSql() {
         val panel = SqlPreviewPanel(project)
-        panel.showResult(
+        SqlPreviewPanelResultViewKt.showResult(panel,
             dynamicResult(
                 conditions = listOf(
-                    Condition.Simple(ColumnRef(columnName = "id"), "=", SqlValue.Literal("1"),
-                        toggle = ConditionToggle("c0", "true", true, "id = 1")),
-                    Condition.Simple(ColumnRef(columnName = "station_id"), "=", SqlValue.Literal("2"),
-                        toggle = ConditionToggle("c1", "false", false, "station_id = 2")),
+                    Condition.Simple(ColumnRef("id"), "=", SqlValue.Literal("1"),
+                        ConditionToggle("c0", "true", true, "id = 1")),
+                    Condition.Simple(ColumnRef("station_id"), "=", SqlValue.Literal("2"),
+                        ConditionToggle("c1", "false", false, "station_id = 2")),
                 ),
                 views = listOf(
                     ConditionView("c0", "id = 1", "true", true, null),
@@ -108,19 +121,19 @@ class SqlPreviewPanelDynamicBatchTest: BasePlatformTestCase() {
         val sql = panel.editorForTest()!!.document.text
         assertFalse(sql.contains("id = 1"))
         assertTrue(sql.contains("station_id = 2"))
-        panel.clear()
+        SqlPreviewPanelSqlViewKt.clear(panel)
     }
 
     fun testSelectAllNoneTogglesAllConditions() {
         // 全选/全不选（M13.1）：c0 默认勾选、c1 默认不勾选 → 全选两者都在、全不选两者都移除
         val panel = SqlPreviewPanel(project)
-        panel.showResult(
+        SqlPreviewPanelResultViewKt.showResult(panel,
             dynamicResult(
                 conditions = listOf(
-                    Condition.Simple(ColumnRef(columnName = "id"), "=", SqlValue.Literal("1"),
-                        toggle = ConditionToggle("c0", "true", true, "id = 1")),
-                    Condition.Simple(ColumnRef(columnName = "station_id"), "=", SqlValue.Literal("2"),
-                        toggle = ConditionToggle("c1", "false", false, "station_id = 2")),
+                    Condition.Simple(ColumnRef("id"), "=", SqlValue.Literal("1"),
+                        ConditionToggle("c0", "true", true, "id = 1")),
+                    Condition.Simple(ColumnRef("station_id"), "=", SqlValue.Literal("2"),
+                        ConditionToggle("c1", "false", false, "station_id = 2")),
                 ),
                 views = listOf(
                     ConditionView("c0", "id = 1", "true", true, null),
@@ -156,17 +169,17 @@ class SqlPreviewPanelDynamicBatchTest: BasePlatformTestCase() {
         assertTrue(sql.contains("id = 1"))
         assertFalse(sql.contains("station_id = 2"))
         assertEquals("部分勾选应为全选文案", MpSqlVisualizerBundle.message("panel.condition.selectAll"), toggle.text)
-        panel.clear()
+        SqlPreviewPanelSqlViewKt.clear(panel)
     }
 
     fun testToggleSelectLabelFollowsSingleCheckboxClick() {
         // T-SelToggle：文案同步挂在 renderSql 单点收口——单个复选框点选即应翻转切换按钮文案
         val panel = SqlPreviewPanel(project)
-        panel.showResult(
+        SqlPreviewPanelResultViewKt.showResult(panel,
             dynamicResult(
                 conditions = listOf(
-                    Condition.Simple(ColumnRef(columnName = "id"), "=", SqlValue.Literal("1"),
-                        toggle = ConditionToggle("c0", "true", true, "id = 1")),
+                    Condition.Simple(ColumnRef("id"), "=", SqlValue.Literal("1"),
+                        ConditionToggle("c0", "true", true, "id = 1")),
                 ),
                 views = listOf(ConditionView("c0", "id = 1", "true", true, null)),
             ),
@@ -178,19 +191,19 @@ class SqlPreviewPanelDynamicBatchTest: BasePlatformTestCase() {
         assertEquals(MpSqlVisualizerBundle.message("panel.condition.selectAll"), toggle.text)
         panel.conditionCheckboxForTest(0)!!.doClick() // 勾回 → 全勾 → 「全不选」
         assertEquals(MpSqlVisualizerBundle.message("panel.condition.selectNone"), toggle.text)
-        panel.clear()
+        SqlPreviewPanelSqlViewKt.clear(panel)
     }
 
     fun testClearButtonClearsConditionValues() {
         // 清除按钮：填写条件值 → 点击清除 → 输入框清空、勾选态保留、SQL 恢复含 ?
         val panel = SqlPreviewPanel(project)
-        panel.showResult(
+        SqlPreviewPanelResultViewKt.showResult(panel,
             dynamicResult(
                 conditions = listOf(
-                    Condition.Simple(ColumnRef(columnName = "name"), "=", SqlValue.Placeholder("nameVar"),
-                        toggle = ConditionToggle("c0", "StringUtils.isNotBlank(name)", true, "name = ?", "nameVar")),
-                    Condition.Simple(ColumnRef(columnName = "station_id"), "=", SqlValue.Placeholder("stationIdVar"),
-                        toggle = ConditionToggle("c1", "stationId != null", false, "station_id = ?", "stationIdVar")),
+                    Condition.Simple(ColumnRef("name"), "=", SqlValue.Placeholder("nameVar"),
+                        ConditionToggle("c0", "StringUtils.isNotBlank(name)", true, "name = ?", "nameVar")),
+                    Condition.Simple(ColumnRef("station_id"), "=", SqlValue.Placeholder("stationIdVar"),
+                        ConditionToggle("c1", "stationId != null", false, "station_id = ?", "stationIdVar")),
                 ),
                 views = listOf(
                     ConditionView("c0", "name = ?", "StringUtils.isNotBlank(name)", true, "nameVar"),
@@ -218,17 +231,17 @@ class SqlPreviewPanelDynamicBatchTest: BasePlatformTestCase() {
         assertFalse("清除不影响勾选态", panel.conditionCheckboxForTest(1)!!.isSelected)
         // SQL 恢复含 ? 形态
         assertTrue("清除后 SQL 应恢复 ?", panel.editorForTest()!!.document.text.contains("name = ?"))
-        panel.clear()
+        SqlPreviewPanelSqlViewKt.clear(panel)
     }
 
     fun testDynamicConditionValueBlankKeepsChecked() {
         // M13 复选框纯手动：值空不联动勾选态——默认勾选保留 `?`，填写拼接，清空仍勾选，手动取消才排除
         val panel = SqlPreviewPanel(project)
-        panel.showResult(
+        SqlPreviewPanelResultViewKt.showResult(panel,
             dynamicResult(
                 conditions = listOf(
-                    Condition.Simple(ColumnRef(columnName = "name"), "=", SqlValue.Placeholder("nameVar"),
-                        toggle = ConditionToggle("c0", "StringUtils.isNotBlank(name)", true, "name = ?", "nameVar")),
+                    Condition.Simple(ColumnRef("name"), "=", SqlValue.Placeholder("nameVar"),
+                        ConditionToggle("c0", "StringUtils.isNotBlank(name)", true, "name = ?", "nameVar")),
                 ),
                 views = listOf(
                     ConditionView("c0", "name = ?", "StringUtils.isNotBlank(name)", true, "nameVar"),
@@ -251,18 +264,17 @@ class SqlPreviewPanelDynamicBatchTest: BasePlatformTestCase() {
         // 手动取消勾选 → 排除
         panel.conditionCheckboxForTest(0)!!.doClick()
         assertFalse(panel.editorForTest()!!.document.text.contains("WHERE"))
-        panel.clear()
+        SqlPreviewPanelSqlViewKt.clear(panel)
     }
 
     fun testDynamicConditionLikePlaceholderPercentBackfill() {
         // M13：LIKE 占位符回填自动拼百分号（name 为 String 列）→ name LIKE '%张三%'
         val panel = SqlPreviewPanel(project)
-        panel.showResult(
+        SqlPreviewPanelResultViewKt.showResult(panel,
             dynamicResult(
                 conditions = listOf(
-                    Condition.Like(ColumnRef(columnName = "name"), negated = false,
-                        pattern = SqlValue.Placeholder("likeVar"), position = LikePosition.ANYWHERE,
-                        toggle = ConditionToggle("c0", "true", true, "name LIKE ?", "likeVar")),
+                    Condition.Like(ColumnRef("name"), false, SqlValue.Placeholder("likeVar"), LikePosition.ANYWHERE,
+                        ConditionToggle("c0", "true", true, "name LIKE ?", "likeVar")),
                 ),
                 views = listOf(
                     ConditionView("c0", "name LIKE ?", "true", true, "likeVar"),
@@ -271,17 +283,17 @@ class SqlPreviewPanelDynamicBatchTest: BasePlatformTestCase() {
         )
         panel.conditionValueFieldForTest(0)!!.text = "张三"
         assertTrue(panel.editorForTest()!!.document.text.contains("name LIKE '%张三%'"))
-        panel.clear()
+        SqlPreviewPanelSqlViewKt.clear(panel)
     }
 
     fun testDynamicConditionStringColumnNumericValueQuoted() {
         // M13：String 列（java.lang.String）输入数字 → 恒加引号（不再被识别成数值）
         val panel = SqlPreviewPanel(project)
-        panel.showResult(
+        SqlPreviewPanelResultViewKt.showResult(panel,
             dynamicResult(
                 conditions = listOf(
-                    Condition.Simple(ColumnRef(columnName = "name"), "=", SqlValue.Placeholder("nameVar"),
-                        toggle = ConditionToggle("c0", "true", true, "name = ?", "nameVar")),
+                    Condition.Simple(ColumnRef("name"), "=", SqlValue.Placeholder("nameVar"),
+                        ConditionToggle("c0", "true", true, "name = ?", "nameVar")),
                 ),
                 views = listOf(
                     ConditionView("c0", "name = ?", "true", true, "nameVar"),
@@ -290,17 +302,17 @@ class SqlPreviewPanelDynamicBatchTest: BasePlatformTestCase() {
         )
         panel.conditionValueFieldForTest(0)!!.text = "123"
         assertTrue(panel.editorForTest()!!.document.text.contains("name = '123'"))
-        panel.clear()
+        SqlPreviewPanelSqlViewKt.clear(panel)
     }
 
     fun testDynamicConditionNumericColumnValueRaw() {
         // M13：数值列（java.lang.Long）输入数字 → 原样不带引号
         val panel = SqlPreviewPanel(project)
-        panel.showResult(
+        SqlPreviewPanelResultViewKt.showResult(panel,
             dynamicResult(
                 conditions = listOf(
-                    Condition.Simple(ColumnRef(columnName = "station_id"), "=", SqlValue.Placeholder("stationVar"),
-                        toggle = ConditionToggle("c0", "true", true, "station_id = ?", "stationVar")),
+                    Condition.Simple(ColumnRef("station_id"), "=", SqlValue.Placeholder("stationVar"),
+                        ConditionToggle("c0", "true", true, "station_id = ?", "stationVar")),
                 ),
                 views = listOf(
                     ConditionView("c0", "station_id = ?", "true", true, "stationVar"),
@@ -309,43 +321,62 @@ class SqlPreviewPanelDynamicBatchTest: BasePlatformTestCase() {
         )
         panel.conditionValueFieldForTest(0)!!.text = "2"
         assertTrue(panel.editorForTest()!!.document.text.contains("station_id = 2"))
-        panel.clear()
+        SqlPreviewPanelSqlViewKt.clear(panel)
     }
 
     fun testDynamicConditionDateTimeColumnValueQuoted() {
         // T-M23-03（用户实测：LocalDateTime 参数回填不带引号）：除确定的数值类型外其他类型默认带引号——
         // LocalDateTime 列回填 `2024-01-01 00:00:00` → `use_time = '2024-01-01 00:00:00'`（原实现无引号，SQL 无效）
         val statement = SelectStatement(
-            table = tableInfo().copy(
-                columns = tableInfo().columns + ColumnInfo("useTime", "use_time", fieldType = "java.time.LocalDateTime"),
+            // k2j 适配：TableInfo.copy 为 7 参位置形态
+            tableInfo().copy(
+                tableInfo().entityClassName, tableInfo().tableName,
+                tableInfo().columns + ColumnInfo("useTime", "use_time", false, false, "java.time.LocalDateTime"),
+                tableInfo().logicDeleteColumn, tableInfo().versionColumn, tableInfo().comment,
+                tableInfo().associations,
             ),
-            conditions = listOf(
+            emptyList(),
+            null,
+            listOf(
                 Condition.Simple(
-                    ColumnRef(columnName = "use_time"), "=", SqlValue.Placeholder("now"),
-                    toggle = ConditionToggle("c0", "true", true, "use_time = ?", "now"),
+                    ColumnRef("use_time"), "=", SqlValue.Placeholder("now"),
+                    ConditionToggle("c0", "true", true, "use_time = ?", "now"),
                 ),
             ),
         )
         val model = SqlPreviewModel(
-            statement, MySqlDialect, formatSql = true,
-            conditionViews = listOf(ConditionView("c0", "use_time = ?", "true", true, "now")),
+            statement, MySqlDialect.INSTANCE, true,
+            listOf(ConditionView("c0", "use_time = ?", "true", true, "now")),
         )
         val panel = SqlPreviewPanel(project)
-        panel.showResult(
+        SqlPreviewPanelResultViewKt.showResult(panel,
+            // k2j 适配：20 参位置构造（previewModel 第 11 位）
             PreviewResult(
-                sql = "SELECT id, station_id, name, use_time\nFROM car_device_info",
-                compactSql = "SELECT id, station_id, name, use_time FROM car_device_info",
-                unresolvedParams = emptyList(),
-                paramTable = null,
-                wrapperType = WrapperType.LAMBDA_QUERY,
-                tableName = "car_device_info",
-                columns = listOf("id", "station_id", "name", "use_time"),
-                previewModel = model,
+                "SELECT id, station_id, name, use_time\nFROM car_device_info",
+                "SELECT id, station_id, name, use_time FROM car_device_info",
+                emptyList(),
+                null,
+                WrapperType.LAMBDA_QUERY,
+                "car_device_info",
+                null,
+                listOf("id", "station_id", "name", "use_time"),
+                emptyMap(),
+                null,
+                model,
+                emptyList(),
+                emptyList(),
+                null,
+                null,
+                emptyMap(),
+                null,
+                null,
+                null,
+                null,
             ),
         )
         panel.conditionValueFieldForTest(0)!!.text = "2024-01-01 00:00:00"
         assertTrue(panel.editorForTest()!!.document.text.contains("use_time = '2024-01-01 00:00:00'"))
-        panel.clear()
+        SqlPreviewPanelSqlViewKt.clear(panel)
     }
 
     // ------------------------------------------------------------------
@@ -356,51 +387,64 @@ class SqlPreviewPanelDynamicBatchTest: BasePlatformTestCase() {
     private fun batchResult(model: BatchModel): PreviewResult {
         val active = (model.toggleColumns.filter { it.checked }.map { it.columnName } + model.fixedColumns.map { it.columnName }).toSet()
         val sql = model.renderSql(active)
+        // k2j 适配：20 参位置构造（batchModel 第 14 位）；JavaBean 访问器 getTableName()
         return PreviewResult(
-            sql = sql,
-            compactSql = sql,
-            unresolvedParams = model.orderedSources(active),
-            paramTable = null,
-            wrapperType = null,
-            tableName = model.tableName,
-            columns = model.toggleColumns.map { it.columnName },
-            batchModel = model,
+            sql,
+            sql,
+            model.orderedSources(active),
+            null,
+            null,
+            model.tableName,
+            null,
+            model.toggleColumns.map { it.columnName },
+            emptyMap(),
+            null,
+            null,
+            emptyList(),
+            emptyList(),
+            model,
+            null,
+            emptyMap(),
+            null,
+            null,
+            null,
+            null,
         )
     }
 
     fun testBatchModelAutoIdDefaultUncheckedRendersWithoutId() {
         // T-M23-04（用户建议）：save(entity) 自增主键默认不勾选 → 初始 SQL 无 id 列
         val model = BatchModel(
-            kind = BatchKind.INSERT,
-            tableName = "biz_store_coupon",
-            toggleColumns = listOf(
-                BatchColumn("id", "entity.id", quote = false, checked = false),
-                BatchColumn("name", "entity.name", quote = true, checked = true),
-                BatchColumn("dic_status", "entity.dic_status", quote = false, checked = true),
+            BatchKind.INSERT,
+            "biz_store_coupon",
+            listOf(
+                BatchColumn("id", "entity.id", false, false),
+                BatchColumn("name", "entity.name", true, true),
+                BatchColumn("dic_status", "entity.dic_status", false, true),
             ),
         )
         val panel = SqlPreviewPanel(project)
-        panel.showResult(batchResult(model))
+        SqlPreviewPanelResultViewKt.showResult(panel, batchResult(model))
         val sql = panel.editorForTest()!!.document.text
         assertTrue("初始 SQL 应含勾选列", sql.contains("INSERT INTO biz_store_coupon (name, dic_status)"))
         assertFalse("初始 SQL 不应含 id 列", sql.contains("id"))
         assertFalse("id 复选框默认不勾选", panel.batchCheckboxForTest(0)!!.isSelected)
-        panel.clear()
+        SqlPreviewPanelSqlViewKt.clear(panel)
     }
 
     fun testBatchModelCheckboxToggleRebuildsSql() {
         // T-M23-04：勾选 id 复选框 → SQL 列清单恢复 id；取消 name → SET/列清单移除 name
         val model = BatchModel(
-            kind = BatchKind.INSERT,
-            tableName = "biz_store_coupon",
-            toggleColumns = listOf(
-                BatchColumn("id", "entity.id", quote = false, checked = false),
-                BatchColumn("name", "entity.name", quote = true, checked = true),
-                BatchColumn("dic_status", "entity.dic_status", quote = false, checked = true),
+            BatchKind.INSERT,
+            "biz_store_coupon",
+            listOf(
+                BatchColumn("id", "entity.id", false, false),
+                BatchColumn("name", "entity.name", true, true),
+                BatchColumn("dic_status", "entity.dic_status", false, true),
             ),
         )
         val panel = SqlPreviewPanel(project)
-        panel.showResult(batchResult(model))
+        SqlPreviewPanelResultViewKt.showResult(panel, batchResult(model))
         // 勾选 id → INSERT 恢复 id 列
         panel.batchCheckboxForTest(0)!!.doClick()
         assertTrue(panel.batchCheckboxForTest(0)!!.isSelected)
@@ -422,21 +466,21 @@ class SqlPreviewPanelDynamicBatchTest: BasePlatformTestCase() {
         // 重新勾选 name → 值保留、按 String 列类型加引号回填
         panel.batchCheckboxForTest(1)!!.doClick()
         assertTrue(panel.editorForTest()!!.document.text.contains("VALUES (1, '张三', ?)"))
-        panel.clear()
+        SqlPreviewPanelSqlViewKt.clear(panel)
     }
 
     fun testBatchModelFixedColumnHasNoCheckbox() {
         // T-M23-04：UPDATE 的 WHERE 主键为固定列——仅值输入框（无复选框），复选框数 = toggle 列数
         val model = BatchModel(
-            kind = BatchKind.UPDATE,
-            tableName = "device_info",
-            toggleColumns = listOf(
-                BatchColumn("name", "entity.name", quote = true, checked = true),
+            BatchKind.UPDATE,
+            "device_info",
+            listOf(
+                BatchColumn("name", "entity.name", true, true),
             ),
-            fixedColumns = listOf(BatchColumn("id", "entity.id", quote = false, checked = true)),
+            listOf(BatchColumn("id", "entity.id", false, true)),
         )
         val panel = SqlPreviewPanel(project)
-        panel.showResult(batchResult(model))
+        SqlPreviewPanelResultViewKt.showResult(panel, batchResult(model))
         assertNotNull("toggle 列应有复选框", panel.batchCheckboxForTest(0))
         assertNull("fixed 列不应有复选框（复选框仅 toggle 列）", panel.batchCheckboxForTest(1))
         // 值输入框：toggle(name) + fixed(id) 各一个
@@ -444,23 +488,23 @@ class SqlPreviewPanelDynamicBatchTest: BasePlatformTestCase() {
         assertEquals("id 值输入框", "#entity.id", panel.paramFieldForTest(1)!!.toolTipText)
         assertTrue(panel.editorForTest()!!.document.text.contains("SET name = ?"))
         assertTrue(panel.editorForTest()!!.document.text.contains("WHERE id = ?"))
-        panel.clear()
+        SqlPreviewPanelSqlViewKt.clear(panel)
     }
 
     fun testBatchModelSelectAllNoneButtons() {
         // T-M23.2（用户要求：参数可选场景必须有【全选/全不选】按钮）：
         // 全不选 → 全部取消勾选、SQL 空列清单；全选 → 全部勾选、SQL 全列
         val model = BatchModel(
-            kind = BatchKind.INSERT,
-            tableName = "biz_store_coupon",
-            toggleColumns = listOf(
-                BatchColumn("id", "entity.id", quote = false, checked = false),
-                BatchColumn("name", "entity.name", quote = true, checked = true),
-                BatchColumn("dic_status", "entity.dic_status", quote = false, checked = true),
+            BatchKind.INSERT,
+            "biz_store_coupon",
+            listOf(
+                BatchColumn("id", "entity.id", false, false),
+                BatchColumn("name", "entity.name", true, true),
+                BatchColumn("dic_status", "entity.dic_status", false, true),
             ),
         )
         val panel = SqlPreviewPanel(project)
-        panel.showResult(batchResult(model))
+        SqlPreviewPanelResultViewKt.showResult(panel, batchResult(model))
         val toggle = panel.batchToggleSelectButtonForTest()
         assertNotNull("批量区应有全选/全不选切换按钮", toggle)
         // T-SelToggle：初始部分勾选（id 未勾）→ 文案「全选」；点击 → 全列恢复
@@ -480,21 +524,19 @@ class SqlPreviewPanelDynamicBatchTest: BasePlatformTestCase() {
         assertFalse(panel.batchCheckboxForTest(2)!!.isSelected)
         assertEquals(MpSqlVisualizerBundle.message("panel.condition.selectAll"), toggle.text)
         assertTrue(panel.editorForTest()!!.document.text.contains("INSERT INTO biz_store_coupon ()"))
-        panel.clear()
+        SqlPreviewPanelSqlViewKt.clear(panel)
     }
 
     fun testInListMultiValueBackfill() {
         // M19.6（2026-08-13 用户实测）：IN 列表占位符回填按逗号分割多值、每个值独立引号——
         // 输入 `1,2` → IN ('1','2')（原实现拼成 IN ('1,2') 单值；name 为 String 列恒引号）
         val panel = SqlPreviewPanel(project)
-        panel.showResult(
+        SqlPreviewPanelResultViewKt.showResult(panel,
             dynamicResult(
                 conditions = listOf(
                     Condition.In(
-                        ColumnRef(columnName = "name"),
-                        negated = false,
-                        values = listOf(SqlValue.Placeholder("names")),
-                        toggle = ConditionToggle("c0", null, true, "name IN (?)", "names", listOf("names")),
+                        ColumnRef("name"), false, listOf(SqlValue.Placeholder("names")),
+                        ConditionToggle("c0", null, true, "name IN (?)", "names", listOf("names")),
                     ),
                 ),
                 views = listOf(
@@ -507,7 +549,7 @@ class SqlPreviewPanelDynamicBatchTest: BasePlatformTestCase() {
         // 单值输入不受影响（String 列恒引号）
         panel.conditionValueFieldForTest(0)!!.text = "王五"
         assertTrue(panel.editorForTest()!!.document.text.contains("name IN ('王五')"))
-        panel.clear()
+        SqlPreviewPanelSqlViewKt.clear(panel)
     }
 
     // ------------------------------------------------------------------
@@ -518,25 +560,25 @@ class SqlPreviewPanelDynamicBatchTest: BasePlatformTestCase() {
     fun testExecuteSqlWithoutDatabasePluginNoThrow() {
         // 测试沙盒无 Database 插件 → 走 Community 降级提示（headless 下被兜底吞掉），不抛异常
         val panel = SqlPreviewPanel(project)
-        panel.showResult(result(sql = "SELECT id FROM tbl", compact = "SELECT id FROM tbl"))
-        panel.executeSql()
-        panel.clear()
+        SqlPreviewPanelResultViewKt.showResult(panel, result(sql = "SELECT id FROM tbl", compact = "SELECT id FROM tbl"))
+        SqlPreviewPanelExecutionKt.executeSql(panel)
+        SqlPreviewPanelSqlViewKt.clear(panel)
     }
 
     fun testExecuteSqlDisabledWithoutProject() {
         // 无项目面板（纯组件预览）：执行无动作（project null 直接返回），不抛异常
         val panel = SqlPreviewPanel(null)
-        panel.showResult(result())
-        panel.executeSql()
-        panel.clear()
+        SqlPreviewPanelResultViewKt.showResult(panel, result())
+        SqlPreviewPanelExecutionKt.executeSql(panel)
+        SqlPreviewPanelSqlViewKt.clear(panel)
     }
 
     fun testExecuteSqlBlankSqlNoop() {
         // 空 SQL：不触发执行链路，不抛异常
         val panel = SqlPreviewPanel(project)
-        panel.showResult(result(sql = "   ", compact = "   "))
-        panel.executeSql()
-        panel.clear()
+        SqlPreviewPanelResultViewKt.showResult(panel, result(sql = "   ", compact = "   "))
+        SqlPreviewPanelExecutionKt.executeSql(panel)
+        SqlPreviewPanelSqlViewKt.clear(panel)
     }
 
     fun testSplitIsNativeOnePixelSplitter() {
@@ -551,7 +593,7 @@ class SqlPreviewPanelDynamicBatchTest: BasePlatformTestCase() {
         split.doLayout()
         split.proportion = 0.4f
         assertEquals(0.4f, split.proportion, 1e-6f)
-        panel.clear()
+        SqlPreviewPanelSqlViewKt.clear(panel)
     }
 
     fun testSelectAllButtonsOnConditionSectionHeader() {
@@ -567,11 +609,11 @@ class SqlPreviewPanelDynamicBatchTest: BasePlatformTestCase() {
         split.proportion = 0.5f
         split.doLayout()
         (split.firstComponent as JBScrollPane).doLayout() // 布局 viewport bounds（否则宽度为 0，截断上限回落默认值）
-        panel.showResult(
+        SqlPreviewPanelResultViewKt.showResult(panel,
             dynamicResult(
                 conditions = listOf(
-                    Condition.Simple(ColumnRef(columnName = "station_id"), "IN", SqlValue.Placeholder("stationIds"),
-                        toggle = ConditionToggle("c0", "true", true, "station_id IN (?)", "stationIds", listOf("stationIds"))),
+                    Condition.Simple(ColumnRef("station_id"), "IN", SqlValue.Placeholder("stationIds"),
+                        ConditionToggle("c0", "true", true, "station_id IN (?)", "stationIds", listOf("stationIds"))),
                 ),
                 views = listOf(ConditionView("c0", long, "true", true, "stationIds", listOf("stationIds"))),
             ),
@@ -586,7 +628,7 @@ class SqlPreviewPanelDynamicBatchTest: BasePlatformTestCase() {
         layoutTree(scroll)
         val btnLeft = SwingUtilities.convertPoint(button, 0, 0, scroll).x
         assertTrue("按钮应位于视口内", btnLeft < viewport.width)
-        panel.clear()
+        SqlPreviewPanelSqlViewKt.clear(panel)
     }
 
     /** T-ClipboardIso：内存剪贴板（测试全程不碰系统剪贴板——原快照/还原写法在用户复制或
@@ -616,14 +658,27 @@ class SqlPreviewPanelDynamicBatchTest: BasePlatformTestCase() {
         tableName: String? = "tbl",
         candidateTables: List<TableInfo> = emptyList(),
     ) = PreviewResult(
-        sql = sql,
-        compactSql = compact,
-        unresolvedParams = params,
-        paramTable = if (params.isEmpty()) null else "-- 参数对照: [${params.joinToString(", ") { "$it=?" }}]",
-        wrapperType = WrapperType.LAMBDA_QUERY,
-        tableName = tableName,
-        columns = columns,
-        candidateTables = candidateTables,
+        // k2j 适配：具名实参改 20 参位置形态（candidateTables 第 13 位）
+        sql,
+        compact,
+        params,
+        if (params.isEmpty()) null else "-- 参数对照: [${params.joinToString(", ") { "$it=?" }}]",
+        WrapperType.LAMBDA_QUERY,
+        tableName,
+        null,
+        columns,
+        emptyMap(),
+        null,
+        null,
+        emptyList(),
+        candidateTables,
+        null,
+        null,
+        emptyMap(),
+        null,
+        null,
+        null,
+        null,
     )
 
     // ------------------------------------------------------------------
@@ -631,12 +686,12 @@ class SqlPreviewPanelDynamicBatchTest: BasePlatformTestCase() {
     // ------------------------------------------------------------------
 
     private fun tableInfo() = TableInfo(
-        entityClassName = "DeviceInfoEntity",
-        tableName = "car_device_info",
-        columns = listOf(
-            ColumnInfo("id", "id", isId = true, fieldType = "java.lang.Long"),
-            ColumnInfo("stationId", "station_id", fieldType = "java.lang.Long"),
-            ColumnInfo("name", "name", fieldType = "java.lang.String"),
+        "DeviceInfoEntity",
+        "car_device_info",
+        listOf(
+            ColumnInfo("id", "id", true, false, "java.lang.Long"),
+            ColumnInfo("stationId", "station_id", false, false, "java.lang.Long"),
+            ColumnInfo("name", "name", false, false, "java.lang.String"),
         ),
     )
 

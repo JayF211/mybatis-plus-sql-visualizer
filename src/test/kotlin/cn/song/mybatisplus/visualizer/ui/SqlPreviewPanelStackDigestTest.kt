@@ -54,14 +54,30 @@ class SqlPreviewPanelStackDigestTest : BasePlatformTestCase() {
     }
 
     private fun makeResult(stackDigest: String?): PreviewResult = PreviewResult(
-        sql = "SELECT id\nFROM user\nWHERE username = ?",
-        compactSql = "SELECT id FROM user WHERE username = ?",
-        unresolvedParams = listOf("username"),
-        paramTable = null,
-        wrapperType = WrapperType.LAMBDA_QUERY,
-        tableName = "user",
-        columns = listOf("id", "username"),
-        stackDigest = stackDigest,
+        // K2J 互操作：master 侧具名实参 + 缺省值 → k2j Java 23 参主构造器位置实参（stackDigest 第 22 位）。
+        "SELECT id\nFROM user\nWHERE username = ?",
+        "SELECT id FROM user WHERE username = ?",
+        listOf("username"),
+        null,
+        WrapperType.LAMBDA_QUERY,
+        "user",
+        null,
+        listOf("id", "username"),
+        emptyMap(),
+        null,
+        null,
+        emptyList(),
+        emptyList(),
+        null,
+        null,
+        emptyMap(),
+        null,
+        null,
+        null,
+        null,
+        emptyMap(),
+        stackDigest,
+        false,
     )
 
     // ------------------------------------------------------------------

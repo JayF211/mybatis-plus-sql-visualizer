@@ -1,9 +1,8 @@
 package cn.song.mybatisplus.visualizer.ui
 
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
-// T-M53-II：`deliverError` 已搬为 execute 包内的同包扩展函数（原 DataSourceSelector 成员），
-// 跨包调用点需显式导入（下面仍按全限定名书写接收者）。
-import cn.song.mybatisplus.visualizer.execute.deliverError
+// K2J 互操作：`deliverError` 落为 execute 包 DataSourceSelectorResultsKt 门面的 Java 静态（原
+// DataSourceSelector 成员），Kotlin 调 Java 静态须类名限定。
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import com.intellij.ui.components.JBLabel
 import com.intellij.util.ui.UIUtil
@@ -279,7 +278,7 @@ class SqlResultPanelUiTest : BasePlatformTestCase() {
         try {
             val richCalls = java.util.concurrent.atomic.AtomicInteger(0)
             val plainCalls = java.util.concurrent.atomic.AtomicInteger(0)
-            cn.song.mybatisplus.visualizer.execute.DataSourceSelector.deliverError(
+            cn.song.mybatisplus.visualizer.execute.DataSourceSelectorResultsKt.deliverError(
                 // k2j 适配：Java 5 参位置形态（onErrorRich, onError, cause, message, sqlMaxLength）
                 { info ->
                     richCalls.incrementAndGet()
@@ -307,7 +306,7 @@ class SqlResultPanelUiTest : BasePlatformTestCase() {
         val panel1 = SqlResultPanel()
         try {
             val plain = java.util.concurrent.atomic.AtomicInteger(0)
-            cn.song.mybatisplus.visualizer.execute.DataSourceSelector.deliverError(
+            cn.song.mybatisplus.visualizer.execute.DataSourceSelectorResultsKt.deliverError(
                 // k2j 适配：位置形态
                 null,
                 { m ->
@@ -327,7 +326,7 @@ class SqlResultPanelUiTest : BasePlatformTestCase() {
         val panel2 = SqlResultPanel()
         try {
             val plain = java.util.concurrent.atomic.AtomicInteger(0)
-            cn.song.mybatisplus.visualizer.execute.DataSourceSelector.deliverError(
+            cn.song.mybatisplus.visualizer.execute.DataSourceSelectorResultsKt.deliverError(
                 // k2j 适配：位置形态
                 { throw IllegalStateException("rich boom") },
                 { m ->
