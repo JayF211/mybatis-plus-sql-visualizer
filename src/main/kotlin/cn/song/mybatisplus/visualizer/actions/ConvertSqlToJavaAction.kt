@@ -9,6 +9,7 @@ import cn.song.mybatisplus.visualizer.reverse.SqlToJavaConverter
 import cn.song.mybatisplus.visualizer.ui.EntitySelectionDialog
 import cn.song.mybatisplus.visualizer.ui.JavaCodePreviewDialog
 import cn.song.mybatisplus.visualizer.ui.SqlSelectionDialog
+import cn.song.mybatisplus.visualizer.ui.entityCandidateSubtitle
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnAction

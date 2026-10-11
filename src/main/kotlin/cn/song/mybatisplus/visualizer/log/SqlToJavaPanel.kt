@@ -13,6 +13,7 @@ import cn.song.mybatisplus.visualizer.ui.EntitySelectionDialog
 import cn.song.mybatisplus.visualizer.ui.JavaCodeFormatter
 import cn.song.mybatisplus.visualizer.ui.SqlInputEditor
 import cn.song.mybatisplus.visualizer.ui.SqlSelectionDialog
+import cn.song.mybatisplus.visualizer.ui.entityCandidateSubtitle
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.icons.AllIcons
 import com.intellij.ide.util.gotoByName.ChooseByNameModel
