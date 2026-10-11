@@ -47,6 +47,15 @@ import javax.swing.JButton
 import javax.swing.SwingUtilities
 import cn.song.mybatisplus.visualizer.testutil.FakeClipboardManager
 import cn.song.mybatisplus.visualizer.testutil.installFakeClipboard
+import com.intellij.openapi.ide.CopyPasteManager
+import java.awt.datatransfer.DataFlavor
+import java.awt.datatransfer.StringSelection
+import java.awt.event.ActionEvent
+import javax.swing.KeyStroke
+
+// k2j 互操作：master 侧面板扩展函数（showResult/clear/toggleCompact/copySql/refreshView）在
+// k2j 落为同包 Java 门面静态（T-M53-II 拆分），调用点改门面限定形态（receiver 首参）；
+// 同包静态直调无需 import。
 
 /**
  * SqlPreviewPanel 行为测试（M8/M9）：编辑器视图 + 单行多行切换 + 生命周期 + 参数回填。
@@ -63,6 +72,8 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
     // SqlFormatterTest + testRenderAutoFormatsSql 专项覆盖；此处模拟"关闭格式化"场景）
     override fun setUp() {
         super.setUp()
+        // O-97 治理（T-TestPerf15）：进态恢复出厂默认，截断跨类全局设置态泄漏
+        cn.song.mybatisplus.visualizer.testutil.PluginSettingsTestSupport.resetToFactoryDefaults()
         runCatching { cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.formatSql = false }
         clipboard = installFakeClipboard(testRootDisposable)
     }
@@ -105,23 +116,23 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
 
     fun testShowResultCreatesEditorView() {
         val panel = SqlPreviewPanel(project)
-        panel.showResult(result())
+        SqlPreviewPanelResultViewKt.showResult(panel, result())
         val editor = panel.editorForTest()
         assertNotNull("应挂载编辑器视图", editor)
         assertEquals("SELECT id\nFROM tbl", editor!!.document.text)
-        panel.clear()
+        SqlPreviewPanelSqlViewKt.clear(panel)
     }
 
     fun testShowResultReplacesEditor() {
         val panel = SqlPreviewPanel(project)
-        panel.showResult(result(sql = "SELECT 1 FROM t1", compact = "SELECT 1 FROM t1"))
+        SqlPreviewPanelResultViewKt.showResult(panel, result(sql = "SELECT 1 FROM t1", compact = "SELECT 1 FROM t1"))
         val first = panel.editorForTest()
-        panel.showResult(result(sql = "SELECT 2 FROM t2", compact = "SELECT 2 FROM t2"))
+        SqlPreviewPanelResultViewKt.showResult(panel, result(sql = "SELECT 2 FROM t2", compact = "SELECT 2 FROM t2"))
         val second = panel.editorForTest()
         assertNotNull(first)
         assertNotNull(second)
         assertEquals("SELECT 2 FROM t2", second!!.document.text)
-        panel.clear()
+        SqlPreviewPanelSqlViewKt.clear(panel)
     }
 
     /**
@@ -137,7 +148,9 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         selectColumns: List<ColumnRef> = emptyList(),
     ): PreviewResult {
         val statement = SelectStatement(
-            // k2j 适配：SelectStatement 无 (table,selectColumns,tableAlias,joins) 重载，走 16 参全量构造（缺省槽按 Kotlin 默认值）
+            // k2j 适配：16 参全量位置构造（table, selectColumns, tableAlias, joins, distinct,
+            // conditions, groupBy, having, orderBy, limit, rawFirst, rawAround, comment, unions,
+            // fromSubQuery, fillClauses）
             mainTable,
             selectColumns,
             "u",
@@ -170,6 +183,7 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         )
         val sql = "SELECT u.id, u.name FROM car_device_info u " +
             "LEFT JOIN user_address a ON u.id = a.user_id"
+        // k2j 适配：20 参位置构造（previewModel 第 11 位）
         return PreviewResult(
             sql,
             sql,
@@ -219,7 +233,7 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
                     panel.diagramPanelForTest().hasModelForTest()
             }
         }
-        panel.showResult(joinResult())
+        SqlPreviewPanelResultViewKt.showResult(panel, joinResult())
         val deadline = System.currentTimeMillis() + 10_000
         while (events.size < 2 && System.currentTimeMillis() < deadline) {
             UIUtil.dispatchAllInvocationEvents()
@@ -231,7 +245,7 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
                 "native=${panel.hasNativeDiagramForTest()}, rendered=${panel.diagramPanelForTest().hasModelForTest()}）",
             renderedWhenStopped,
         )
-        panel.clear()
+        SqlPreviewPanelSqlViewKt.clear(panel)
         assertFalse("整图卸载后不得卡转圈", panel.diagramPanelForTest().isLoadingForTest())
     }
 
@@ -245,7 +259,7 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
      */
     fun testDiagramTabContentIsHostLoadingPanel() {
         val panel = SqlPreviewPanel(project)
-        panel.showResult(joinResult())
+        SqlPreviewPanelResultViewKt.showResult(panel, joinResult())
         val host = panel.diagramLoadingHostForTest()
         val tabPane = panel.contentTabPaneForTest()
         assertNotNull("JOIN 预览应切到标签页模式（否则没有加载面可挂）", tabPane)
@@ -256,7 +270,7 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
             tabContents.any { it === host },
         )
         assertTrue("加载窗口内宿主层应在转（宿主即真机默认路径下唯一可见的加载面）", host.isLoading)
-        panel.clear()
+        SqlPreviewPanelSqlViewKt.clear(panel)
     }
 
     /**
@@ -268,7 +282,7 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
      */
     fun testDiagramPanelLoadingTargetIsHostLoadingPanel() {
         val panel = SqlPreviewPanel(project)
-        panel.showResult(joinResult())
+        SqlPreviewPanelResultViewKt.showResult(panel, joinResult())
         val host = panel.diagramLoadingHostForTest()
         assertSame(
             "图面板出圈层必须是宿主加载面板（删掉 bindHostLoadingPanel 注入即回落到面板内部层——" +
@@ -280,7 +294,7 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
             "面板加载态 API 必须反映宿主层（isLoadingForTest 断的是委托结果，宿主侧同步为真）",
             host.isLoading && panel.diagramPanelForTest().isLoadingForTest(),
         )
-        panel.clear()
+        SqlPreviewPanelSqlViewKt.clear(panel)
     }
 
     /**
@@ -295,7 +309,7 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
     fun testDiagramRenderFailureClearsLoading() {
         val panel = SqlPreviewPanel(project)
         panel.diagramRenderForTest = { throw IllegalStateException("diagram boom") }
-        panel.showResult(joinResult())
+        SqlPreviewPanelResultViewKt.showResult(panel, joinResult())
         val deadline = System.currentTimeMillis() + 10_000
         while (panel.diagramPanelForTest().isLoadingForTest() && System.currentTimeMillis() < deadline) {
             // 修复前建图异常会从 EDT 拍逃逸到事件泵（转圈卡住的同一根因）；本用例要断的是转圈状态，
@@ -308,7 +322,7 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
             panel.diagramPanelForTest().isLoadingForTest(),
         )
         assertFalse("宿主层同样不得卡转圈", panel.diagramLoadingHostForTest().isLoading)
-        panel.clear()
+        SqlPreviewPanelSqlViewKt.clear(panel)
     }
 
     /**
@@ -341,16 +355,10 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
      */
     fun testDiagramModelBuildFailureWithoutProjectClearsLoading() {
         val panel = SqlPreviewPanel(null)
-        panel.showResult(
+        SqlPreviewPanelResultViewKt.showResult(panel, 
             joinResult(
-                mainTable = tableInfo().copy(
-                    // k2j 适配：TableInfo.copy 为 7 参位置形态（无具名/缺省）
-                    tableInfo().entityClassName, tableInfo().tableName,
-                    sizeExplodingColumns(tableInfo().columns),
-                    tableInfo().logicDeleteColumn, tableInfo().versionColumn, tableInfo().comment,
-                    tableInfo().associations,
-                ),
-                listOf(ColumnRef("u", "id")),
+                mainTable = tableInfo().copy(columns = sizeExplodingColumns(tableInfo().columns)),
+                selectColumns = listOf(ColumnRef(tableAlias = "u", columnName = "id")),
             ),
         )
         // 无 project → 同步分支：showResult 返回时该跑的都跑完了，无需排空 EDT 队列
@@ -360,7 +368,7 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
             panel.diagramPanelForTest().isLoadingForTest(),
         )
         assertFalse("宿主层同样不得卡转圈", panel.diagramLoadingHostForTest().isLoading)
-        panel.clear()
+        SqlPreviewPanelSqlViewKt.clear(panel)
     }
 
     /**
@@ -372,7 +380,7 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
      */
     fun testParamsAreaCarriesPanelBackground() {
         val panel = SqlPreviewPanel(project)
-        panel.showResult(result())
+        SqlPreviewPanelResultViewKt.showResult(panel, result())
 
         val scroll = panel.paramScrollForTest()
         assertTrue("参数滚动区应不透明（否则空区透出祖先容器底色）", scroll.isOpaque)
@@ -388,21 +396,21 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
             com.intellij.util.ui.UIUtil.getPanelBackground(),
             split!!.background,
         )
-        panel.clear()
+        SqlPreviewPanelSqlViewKt.clear(panel)
     }
 
     fun testToggleCompactSwitchesSql() {
         val panel = SqlPreviewPanel(project)
-        panel.showResult(result())
+        SqlPreviewPanelResultViewKt.showResult(panel, result())
         assertEquals("SELECT id\nFROM tbl", panel.editorForTest()!!.document.text)
 
-        assertTrue("toggleCompact 应返回单行模式", panel.toggleCompact())
+        assertTrue("toggleCompact 应返回单行模式", SqlPreviewPanelSqlViewKt.toggleCompact(panel))
         assertTrue(panel.compactForTest())
         assertEquals("SELECT id FROM tbl", panel.editorForTest()!!.document.text)
 
-        panel.toggleCompact()
+        SqlPreviewPanelSqlViewKt.toggleCompact(panel)
         assertEquals("SELECT id\nFROM tbl", panel.editorForTest()!!.document.text)
-        panel.clear()
+        SqlPreviewPanelSqlViewKt.clear(panel)
     }
 
     fun testRefreshResetsModeToSettingsDefault() {
@@ -411,24 +419,24 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         // （setUp 关闭格式化以保持渲染断言——本测试需默认开启语义，显式恢复）
         cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.formatSql = true
         val panel = SqlPreviewPanel(project)
-        panel.showResult(result())
-        panel.toggleCompact()   // 切到单行
+        SqlPreviewPanelResultViewKt.showResult(panel, result())
+        SqlPreviewPanelSqlViewKt.toggleCompact(panel)   // 切到单行
         assertTrue(panel.compactForTest())
         assertEquals("SELECT id FROM tbl", panel.editorForTest()!!.document.text)
 
-        panel.refreshView()
+        SqlPreviewPanelSqlViewKt.refreshView(panel)
         assertFalse("刷新后应恢复默认多行模式", panel.compactForTest())
         // formatSql=true 时刷新渲染自动格式化
         assertEquals("SELECT\n    id\nFROM tbl", panel.editorForTest()!!.document.text)
-        panel.clear()
+        SqlPreviewPanelSqlViewKt.clear(panel)
     }
 
     fun testCopySqlWithContent() {
         // 无 project 时不弹成功提示（测试环境 Messages 对话框会抛异常）
         val panel = SqlPreviewPanel(null)
-        panel.showResult(result())
-        assertTrue("有内容时应复制成功", panel.copySql())
-        panel.clear()
+        SqlPreviewPanelResultViewKt.showResult(panel, result())
+        assertTrue("有内容时应复制成功", SqlPreviewPanelSqlViewKt.copySql(panel))
+        SqlPreviewPanelSqlViewKt.clear(panel)
     }
 
     fun testCopySqlClosePanelCallbackInjectable() {
@@ -438,30 +446,30 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         assertNull("默认无关闭面板回调", panel.onClosePanelRequested)
         var closed = false
         panel.onClosePanelRequested = { closed = true }
-        panel.showResult(result())
-        assertTrue("有内容时应复制成功", panel.copySql())
+        SqlPreviewPanelResultViewKt.showResult(panel, result())
+        assertTrue("有内容时应复制成功", SqlPreviewPanelSqlViewKt.copySql(panel))
         assertFalse("无 project 弹框跳过，回调不应触发", closed)
         // 链路：点「关闭 SQL 面板」→ onClosePanelRequested?.invoke()
-        panel.onClosePanelRequested?.run()
+        panel.onClosePanelRequested?.invoke()
         assertTrue("注入的回调应可触发", closed)
-        panel.clear()
+        SqlPreviewPanelSqlViewKt.clear(panel)
     }
 
     fun testClearReleasesEditor() {
         val panel = SqlPreviewPanel(project)
-        panel.showResult(result())
+        SqlPreviewPanelResultViewKt.showResult(panel, result())
         assertNotNull(panel.editorForTest())
-        panel.clear()
+        SqlPreviewPanelSqlViewKt.clear(panel)
         assertNull("clear 后应释放编辑器", panel.editorForTest())
         assertNull(panel.currentForTest())
     }
 
     fun testShowResultBuildsParamFields() {
         val panel = SqlPreviewPanel(project)
-        panel.showResult(result(params = listOf("dto.getPhone()", "id")))
+        SqlPreviewPanelResultViewKt.showResult(panel, result(params = listOf("dto.getPhone()", "id")))
         assertEquals(2, panel.paramFieldForTest(1)?.let { 2 } ?: 0)
         assertNotNull("应生成参数输入框", panel.paramFieldForTest(0))
-        panel.clear()
+        SqlPreviewPanelSqlViewKt.clear(panel)
     }
 
     fun testParamRowLabelWidthAdaptsAndTooltipForLongNames() {
@@ -472,7 +480,7 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         val short = "id"
         val medium = "productInfo.getDicProtocolType()"   // 用户实测场景：约 200px
         val long = "productInfo.getDicProtocolType().getDeviceName().getStatusName().getDetailInfo()"
-        panel.showResult(result(params = listOf(short, medium, long)))
+        SqlPreviewPanelResultViewKt.showResult(panel, result(params = listOf(short, medium, long)))
         val shortLabel = panel.paramRowLabelForTest(0)!!
         val mediumLabel = panel.paramRowLabelForTest(1)!!
         val longLabel = panel.paramRowLabelForTest(2)!!
@@ -487,7 +495,7 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         assertNotEquals("超长标签应截断显示", "#$long", longLabel.text)
         assertNull("短参数不设 tooltip", shortLabel.toolTipText)
         assertNull("中等长度参数不设 tooltip", mediumLabel.toolTipText)
-        panel.clear()
+        SqlPreviewPanelSqlViewKt.clear(panel)
     }
 
     // ------------------------------------------------------------------
@@ -497,7 +505,7 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
     fun testParamBackfillUpdatesSql() {
         val panel = SqlPreviewPanel(project)
         val sql = "SELECT id FROM tbl WHERE phone = ? AND type = ?"
-        panel.showResult(result(sql = sql, compact = sql, params = listOf("dto.getPhone()", "type")))
+        SqlPreviewPanelResultViewKt.showResult(panel, result(sql = sql, compact = sql, params = listOf("dto.getPhone()", "type")))
         // 输入第一个参数值（字符串）→ SQL 中第一个 ? 加单引号回填
         val field = panel.paramFieldForTest(0)!!
         field.text = "abc"
@@ -511,78 +519,78 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
             "SELECT id FROM tbl WHERE phone = 'abc' AND type = 1",
             panel.editorForTest()!!.document.text,
         )
-        panel.clear()
+        SqlPreviewPanelSqlViewKt.clear(panel)
     }
 
     fun testParamBackfillEmptyKeepsPlaceholder() {
         val panel = SqlPreviewPanel(project)
         val sql = "SELECT id FROM tbl WHERE phone = ?"
-        panel.showResult(result(sql = sql, compact = sql, params = listOf("phone")))
+        SqlPreviewPanelResultViewKt.showResult(panel, result(sql = sql, compact = sql, params = listOf("phone")))
         // 留空 → 保留 ?
         assertEquals(sql, panel.editorForTest()!!.document.text)
-        panel.clear()
+        SqlPreviewPanelSqlViewKt.clear(panel)
     }
 
     // T-PSG（N-33）：面板回填串感知——引号/注释内的 `?` 不是占位符，不参与回填
     fun testParamBackfillIgnoresQuestionMarkInStringLiteral() {
         val panel = SqlPreviewPanel(project)
         val sql = "SELECT id FROM tbl WHERE note = 'a?b' AND phone = ?"
-        panel.showResult(result(sql = sql, compact = sql, params = listOf("phone")))
+        SqlPreviewPanelResultViewKt.showResult(panel, result(sql = sql, compact = sql, params = listOf("phone")))
         panel.paramFieldForTest(0)!!.text = "abc"
         assertEquals(
             "引号内 `?` 应保持原样、真占位符按 phone 回填",
             "SELECT id FROM tbl WHERE note = 'a?b' AND phone = 'abc'",
             panel.editorForTest()!!.document.text,
         )
-        panel.clear()
+        SqlPreviewPanelSqlViewKt.clear(panel)
     }
 
     fun testParamBackfillIgnoresQuestionMarkInComments() {
         val panel = SqlPreviewPanel(project)
         val sql = "SELECT id FROM tbl /* 占?位 */ WHERE phone = ?"
-        panel.showResult(result(sql = sql, compact = sql, params = listOf("phone")))
+        SqlPreviewPanelResultViewKt.showResult(panel, result(sql = sql, compact = sql, params = listOf("phone")))
         panel.paramFieldForTest(0)!!.text = "abc"
         assertEquals(
             "块注释内 `?` 应保持原样",
             "SELECT id FROM tbl /* 占?位 */ WHERE phone = 'abc'",
             panel.editorForTest()!!.document.text,
         )
-        panel.clear()
+        SqlPreviewPanelSqlViewKt.clear(panel)
     }
 
     fun testParamBackfillNormalPathByteIdentical() {
         // T-PSG 验收 1：不含引号/注释内 `?` 的正常 SQL，回填结果与改前逐字节一致（硬编码钉住）
         val panel = SqlPreviewPanel(project)
         val sql = "SELECT id FROM tbl WHERE note = 'hello' AND phone = ? AND age > ?"
-        panel.showResult(result(sql = sql, compact = sql, params = listOf("phone", "age")))
+        SqlPreviewPanelResultViewKt.showResult(panel, result(sql = sql, compact = sql, params = listOf("phone", "age")))
         panel.paramFieldForTest(0)!!.text = "abc"
         panel.paramFieldForTest(1)!!.text = "1"
         assertEquals(
             "SELECT id FROM tbl WHERE note = 'hello' AND phone = 'abc' AND age > 1",
             panel.editorForTest()!!.document.text,
         )
-        panel.clear()
+        SqlPreviewPanelSqlViewKt.clear(panel)
     }
 
     // T-PSG-04：面板回填链的基数对账——位点数与参数条数不等时如实记录（不阻断）
     fun testPlaceholderReconciliationMismatchRecorded() {
         val panel = SqlPreviewPanel(project)
         val sql = "SELECT id FROM tbl WHERE a = ? AND b = ?"
-        panel.showResult(result(sql = sql, compact = sql, params = listOf("a")))
+        SqlPreviewPanelResultViewKt.showResult(panel, result(sql = sql, compact = sql, params = listOf("a")))
         assertEquals(
             "位点数(2) != 参数条数(1) → 应如实记录对账标注",
             "-- placeholder/param count mismatch (2 placeholders vs 1 params)",
             panel.placeholderReconciliationForTest(),
         )
-        panel.clear()
+        SqlPreviewPanelSqlViewKt.clear(panel)
     }
 
     fun testPlaceholderReconciliationEqualNoMarker() {
         val panel = SqlPreviewPanel(project)
         val sql = "SELECT id FROM tbl WHERE phone = ?"
-        panel.showResult(result(sql = sql, compact = sql, params = listOf("phone")))
+        SqlPreviewPanelResultViewKt.showResult(panel, result(sql = sql, compact = sql, params = listOf("phone")))
         assertNull("位点数与参数条数相等 → 无标注", panel.placeholderReconciliationForTest())
-        panel.clear()
+        SqlPreviewPanelSqlViewKt.clear(panel)
     }
 
     // ------------------------------------------------------------------
@@ -593,28 +601,16 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         // 日志识别路径：param1 预填 "admin"（String → 引号提示）——初始显示与现状（值内联 'admin'）一致
         val panel = SqlPreviewPanel(project)
         val sql = "SELECT id FROM tbl WHERE username = ?"
-        panel.showResult(
+        SqlPreviewPanelResultViewKt.showResult(panel, 
             PreviewResult(
-                // k2j 适配：20 参位置构造（下同）
-                sql, sql,
-                listOf("param1"),
-                null,
-                WrapperType.LAMBDA_QUERY,
-                "tbl",
-                null,
-                emptyList(),
-                emptyMap(),
-                null,
-                null,
-                listOf(ParamHint(true)),
-                emptyList(),
-                null,
-                null,
-                mapOf("param1" to "admin"),
-                null,
-                null,
-                null,
-                null,
+                sql = sql,
+                compactSql = sql,
+                unresolvedParams = listOf("param1"),
+                paramTable = null,
+                wrapperType = WrapperType.LAMBDA_QUERY,
+                tableName = "tbl",
+                paramHints = listOf(ParamHint(quote = true)),
+                initialParamValues = mapOf("param1" to "admin"),
             ),
         )
         assertEquals("参数行应预填日志参数值", "admin", panel.paramFieldForTest(0)!!.text)
@@ -622,34 +618,23 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
             "SQL 初始渲染应含值内联 'admin'：" + panel.editorForTest()!!.document.text,
             panel.editorForTest()!!.document.text.contains("username = 'admin'"),
         )
-        panel.clear()
+        SqlPreviewPanelSqlViewKt.clear(panel)
     }
 
     fun testInitialParamValuesEditableAfterPrefill() {
         // 预填值可编辑：改参数行值 → SQL 实时回填（T-M42 验收：改 admin → 新值同步变化）
         val panel = SqlPreviewPanel(project)
         val sql = "SELECT id FROM tbl WHERE username = ?"
-        panel.showResult(
+        SqlPreviewPanelResultViewKt.showResult(panel, 
             PreviewResult(
-                sql, sql,
-                listOf("param1"),
-                null,
-                WrapperType.LAMBDA_QUERY,
-                "tbl",
-                null,
-                emptyList(),
-                emptyMap(),
-                null,
-                null,
-                listOf(ParamHint(true)),
-                emptyList(),
-                null,
-                null,
-                mapOf("param1" to "admin"),
-                null,
-                null,
-                null,
-                null,
+                sql = sql,
+                compactSql = sql,
+                unresolvedParams = listOf("param1"),
+                paramTable = null,
+                wrapperType = WrapperType.LAMBDA_QUERY,
+                tableName = "tbl",
+                paramHints = listOf(ParamHint(quote = true)),
+                initialParamValues = mapOf("param1" to "admin"),
             ),
         )
         panel.paramFieldForTest(0)!!.text = "zhang"
@@ -658,34 +643,23 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
             panel.editorForTest()!!.document.text.contains("username = 'zhang'"),
         )
         assertFalse("原值不应残留", panel.editorForTest()!!.document.text.contains("admin"))
-        panel.clear()
+        SqlPreviewPanelSqlViewKt.clear(panel)
     }
 
     fun testInitialParamValuesMissingSourceFallsBackToEmpty() {
         // 预填表缺失的来源回落空串（参数行初始为空 → 渲染保留 `?`）
         val panel = SqlPreviewPanel(project)
         val sql = "SELECT id FROM tbl WHERE phone = ? AND type = ?"
-        panel.showResult(
+        SqlPreviewPanelResultViewKt.showResult(panel, 
             PreviewResult(
-                sql, sql,
-                listOf("param1", "param2"),
-                null,
-                WrapperType.LAMBDA_QUERY,
-                "tbl",
-                null,
-                emptyList(),
-                emptyMap(),
-                null,
-                null,
-                listOf(ParamHint(true), ParamHint(false)),
-                emptyList(),
-                null,
-                null,
-                mapOf("param1" to "admin"),
-                null,
-                null,
-                null,
-                null,
+                sql = sql,
+                compactSql = sql,
+                unresolvedParams = listOf("param1", "param2"),
+                paramTable = null,
+                wrapperType = WrapperType.LAMBDA_QUERY,
+                tableName = "tbl",
+                paramHints = listOf(ParamHint(quote = true), ParamHint(quote = false)),
+                initialParamValues = mapOf("param1" to "admin"),
             ),
         )
         assertEquals("param1 应预填", "admin", panel.paramFieldForTest(0)!!.text)
@@ -694,20 +668,20 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
             "param2 空值渲染保留 ?：" + panel.editorForTest()!!.document.text,
             panel.editorForTest()!!.document.text.contains("type = ?"),
         )
-        panel.clear()
+        SqlPreviewPanelSqlViewKt.clear(panel)
     }
 
     fun testEditorIsEditable() {
         val panel = SqlPreviewPanel(project)
-        panel.showResult(result())
+        SqlPreviewPanelResultViewKt.showResult(panel, result())
         val editor = panel.editorForTest()!!
         assertFalse("应为可编辑编辑器（非只读 viewer）", editor.isViewer)
-        panel.clear()
+        SqlPreviewPanelSqlViewKt.clear(panel)
     }
 
     fun testCompletionContextAttached() {
         val panel = SqlPreviewPanel(project)
-        panel.showResult(result(columns = listOf("id", "phone")))
+        SqlPreviewPanelResultViewKt.showResult(panel, result(columns = listOf("id", "phone")))
         val psi = panel.psiFileForTest()
         assertNotNull("应创建预览 PSI 文件", psi)
         val ctx = psi!!.getUserData(SqlCompletionContext.KEY)
@@ -722,7 +696,7 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         assertNotNull("Editor 上应挂补全上下文（M16.2）", editorCtx)
         assertEquals("tbl", editorCtx!!.tableName)
         assertEquals(listOf("id", "phone"), editorCtx.columns)
-        panel.clear()
+        SqlPreviewPanelSqlViewKt.clear(panel)
     }
 
     // ------------------------------------------------------------------
@@ -730,1271 +704,18 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
     // ------------------------------------------------------------------
 
     private fun tableInfo() = TableInfo(
-         "DeviceInfoEntity",
-         "car_device_info",
-        listOf(
-            ColumnInfo("id", "id", true, false, "java.lang.Long"),
-            ColumnInfo("stationId", "station_id", false, false, "java.lang.Long"),
-            ColumnInfo("name", "name", false, false, "java.lang.String"),
+        entityClassName = "DeviceInfoEntity",
+        tableName = "car_device_info",
+        columns = listOf(
+            ColumnInfo("id", "id", isId = true, fieldType = "java.lang.Long"),
+            ColumnInfo("stationId", "station_id", fieldType = "java.lang.Long"),
+            ColumnInfo("name", "name", fieldType = "java.lang.String"),
         ),
     )
-
-    /** 构造带动态条件模型的预览结果（面板走模型级重生成路径）。 */
-    private fun dynamicResult(
-        conditions: List<Condition>,
-        views: List<ConditionView>,
-        params: List<String> = emptyList(),
-    ): PreviewResult {
-        val statement = SelectStatement(tableInfo(), emptyList(), null, conditions)
-        val model = SqlPreviewModel(statement, MySqlDialect.INSTANCE, true, views)
-        return PreviewResult(
-            // k2j 适配：20 参位置构造
-            "SELECT id, station_id, name\nFROM car_device_info",
-            "SELECT id, station_id, name FROM car_device_info",
-            params,
-            if (params.isEmpty()) null else "-- 参数对照: [${params.joinToString(", ") { "$it=?" }}]",
-            WrapperType.LAMBDA_QUERY,
-            "car_device_info",
-            null,
-            listOf("id", "station_id", "name"),
-            emptyMap(),
-            null,
-            model,
-            emptyList(),
-            emptyList(),
-            null,
-            null,
-            emptyMap(),
-            null,
-            null,
-            null,
-            null,
-        )
-    }
-
-    fun testDynamicConditionCheckboxTogglesSql() {
-        val panel = SqlPreviewPanel(project)
-        panel.showResult(
-            dynamicResult(
-                listOf(
-                    Condition.Simple(ColumnRef("id"), "=", SqlValue.Literal("1"),
-                        ConditionToggle("c0", "true", true, "id = 1")),
-                    Condition.Simple(ColumnRef("station_id"), "=", SqlValue.Literal("2"),
-                        ConditionToggle("c1", "false", false, "station_id = 2")),
-                ),
-                views = listOf(
-                    ConditionView("c0", "id = 1", "true", true, null),
-                    ConditionView("c1", "station_id = 2", "false", false, null),
-                ),
-            ),
-        )
-        // 默认：eq(true) 保留、eq(false) 排除
-        assertTrue(panel.editorForTest()!!.document.text.contains("WHERE id = 1"))
-        assertFalse(panel.editorForTest()!!.document.text.contains("station_id = 2"))
-
-        // 勾选第二个（eq(false)）→ 拼接 station_id = 2
-        panel.conditionCheckboxForTest(1)!!.doClick()
-        assertTrue(panel.editorForTest()!!.document.text.contains("AND station_id = 2"))
-
-        // 取消第一个（eq(true)）→ 移除 id = 1，station_id 保留
-        panel.conditionCheckboxForTest(0)!!.doClick()
-        val sql = panel.editorForTest()!!.document.text
-        assertFalse(sql.contains("id = 1"))
-        assertTrue(sql.contains("station_id = 2"))
-        panel.clear()
-    }
-
-    fun testSelectAllNoneTogglesAllConditions() {
-        // 全选/全不选（M13.1）：c0 默认勾选、c1 默认不勾选 → 全选两者都在、全不选两者都移除
-        val panel = SqlPreviewPanel(project)
-        panel.showResult(
-            dynamicResult(
-                listOf(
-                    Condition.Simple(ColumnRef("id"), "=", SqlValue.Literal("1"),
-                        ConditionToggle("c0", "true", true, "id = 1")),
-                    Condition.Simple(ColumnRef("station_id"), "=", SqlValue.Literal("2"),
-                        ConditionToggle("c1", "false", false, "station_id = 2")),
-                ),
-                views = listOf(
-                    ConditionView("c0", "id = 1", "true", true, null),
-                    ConditionView("c1", "station_id = 2", "false", false, null),
-                ),
-            ),
-        )
-        // 初始：仅 c0
-        assertTrue(panel.editorForTest()!!.document.text.contains("WHERE id = 1"))
-        assertFalse(panel.editorForTest()!!.document.text.contains("station_id = 2"))
-
-        // T-SelToggle：单个切换按钮——初始非全勾（仅 c0）→ 文案「全选」→ 点击全勾、文案翻「全不选」
-        val toggle = panel.toggleSelectButtonForTest()!!
-        assertEquals("初始非全勾应为全选文案", MpSqlVisualizerBundle.message("panel.condition.selectAll"), toggle.text)
-        toggle.doClick()
-        assertTrue(panel.editorForTest()!!.document.text.contains("AND station_id = 2"))
-        assertTrue(panel.conditionCheckboxForTest(0)!!.isSelected)
-        assertTrue(panel.conditionCheckboxForTest(1)!!.isSelected)
-        assertEquals("全勾后应翻转为全不选文案", MpSqlVisualizerBundle.message("panel.condition.selectNone"), toggle.text)
-
-        // 再点一次 → 动态条件全部移除（无 WHERE），复选框状态同步、文案回「全选」
-        toggle.doClick()
-        assertFalse(panel.editorForTest()!!.document.text.contains("WHERE"))
-        assertFalse(panel.conditionCheckboxForTest(0)!!.isSelected)
-        assertFalse(panel.conditionCheckboxForTest(1)!!.isSelected)
-        assertTrue(panel.enabledIdsForTest().isEmpty())
-        assertEquals("全不选后应回到全选文案", MpSqlVisualizerBundle.message("panel.condition.selectAll"), toggle.text)
-
-        // 全选后再取消单个勾选 → 另一个保留，文案随部分勾选态翻回「全选」
-        toggle.doClick()
-        panel.conditionCheckboxForTest(1)!!.doClick()
-        val sql = panel.editorForTest()!!.document.text
-        assertTrue(sql.contains("id = 1"))
-        assertFalse(sql.contains("station_id = 2"))
-        assertEquals("部分勾选应为全选文案", MpSqlVisualizerBundle.message("panel.condition.selectAll"), toggle.text)
-        panel.clear()
-    }
-
-    fun testToggleSelectLabelFollowsSingleCheckboxClick() {
-        // T-SelToggle：文案同步挂在 renderSql 单点收口——单个复选框点选即应翻转切换按钮文案
-        val panel = SqlPreviewPanel(project)
-        panel.showResult(
-            dynamicResult(
-                listOf(
-                    Condition.Simple(ColumnRef("id"), "=", SqlValue.Literal("1"),
-                        ConditionToggle("c0", "true", true, "id = 1")),
-                ),
-                views = listOf(ConditionView("c0", "id = 1", "true", true, null)),
-            ),
-        )
-        val toggle = panel.toggleSelectButtonForTest()!!
-        // 初始：唯一条件已勾选 → 全勾 → 「全不选」
-        assertEquals(MpSqlVisualizerBundle.message("panel.condition.selectNone"), toggle.text)
-        panel.conditionCheckboxForTest(0)!!.doClick() // 取消唯一勾选 → 空集 → 「全选」
-        assertEquals(MpSqlVisualizerBundle.message("panel.condition.selectAll"), toggle.text)
-        panel.conditionCheckboxForTest(0)!!.doClick() // 勾回 → 全勾 → 「全不选」
-        assertEquals(MpSqlVisualizerBundle.message("panel.condition.selectNone"), toggle.text)
-        panel.clear()
-    }
-
-    fun testClearButtonClearsConditionValues() {
-        // 清除按钮：填写条件值 → 点击清除 → 输入框清空、勾选态保留、SQL 恢复含 ?
-        val panel = SqlPreviewPanel(project)
-        panel.showResult(
-            dynamicResult(
-                listOf(
-                    Condition.Simple(ColumnRef("name"), "=", SqlValue.Placeholder("nameVar"),
-                        ConditionToggle("c0", "StringUtils.isNotBlank(name)", true, "name = ?", "nameVar", emptyList())),
-                    Condition.Simple(ColumnRef("station_id"), "=", SqlValue.Placeholder("stationIdVar"),
-                        ConditionToggle("c1", "stationId != null", false, "station_id = ?", "stationIdVar", emptyList())),
-                ),
-                views = listOf(
-                    ConditionView("c0", "name = ?", "StringUtils.isNotBlank(name)", true, "nameVar"),
-                    ConditionView("c1", "station_id = ?", "stationId != null", false, "stationIdVar"),
-                ),
-            ),
-        )
-        // 清除按钮存在
-        assertNotNull("清除按钮应存在", panel.clearButtonForTest())
-        // 填写条件值
-        panel.conditionValueFieldForTest(0)!!.text = "zhang"
-        panel.conditionValueFieldForTest(1)!!.text = "100"
-        // 值回填到 SQL
-        assertTrue(panel.editorForTest()!!.document.text.contains("name = 'zhang'"))
-        // 点击清除
-        panel.clearButtonForTest()!!.doClick()
-        // 输入框清空
-        assertEquals("清除后输入框应为空", "", panel.conditionValueFieldForTest(0)!!.text)
-        assertEquals("清除后输入框应为空", "", panel.conditionValueFieldForTest(1)!!.text)
-        // paramValues 清空
-        assertEquals("paramValues 应为空字符串", "", panel.paramValuesForTest()["nameVar"])
-        assertEquals("paramValues 应为空字符串", "", panel.paramValuesForTest()["stationIdVar"])
-        // 勾选态保留（c0 默认勾选，c1 默认不勾选）
-        assertTrue("清除不影响勾选态", panel.conditionCheckboxForTest(0)!!.isSelected)
-        assertFalse("清除不影响勾选态", panel.conditionCheckboxForTest(1)!!.isSelected)
-        // SQL 恢复含 ? 形态
-        assertTrue("清除后 SQL 应恢复 ?", panel.editorForTest()!!.document.text.contains("name = ?"))
-        panel.clear()
-    }
-
-    fun testDynamicConditionValueBlankKeepsChecked() {
-        // M13 复选框纯手动：值空不联动勾选态——默认勾选保留 `?`，填写拼接，清空仍勾选，手动取消才排除
-        val panel = SqlPreviewPanel(project)
-        panel.showResult(
-            dynamicResult(
-                listOf(
-                    Condition.Simple(ColumnRef("name"), "=", SqlValue.Placeholder("nameVar"),
-                        ConditionToggle("c0", "StringUtils.isNotBlank(name)", true, "name = ?", "nameVar", emptyList())),
-                ),
-                views = listOf(
-                    ConditionView("c0", "name = ?", "StringUtils.isNotBlank(name)", true, "nameVar"),
-                ),
-            ),
-        )
-        // 初始：值空但默认勾选 → 保留 ?（不再按判空语义自动取消勾选）
-        assertTrue(panel.enabledIdsForTest().contains("c0"))
-        assertTrue(panel.editorForTest()!!.document.text.contains("name = ?"))
-
-        // 填写值 → 拼接实际值
-        panel.conditionValueFieldForTest(0)!!.text = "张三"
-        assertTrue(panel.editorForTest()!!.document.text.contains("name = '张三'"))
-
-        // 清空 → 勾选态不变、保留 ?
-        panel.conditionValueFieldForTest(0)!!.text = ""
-        assertTrue(panel.enabledIdsForTest().contains("c0"))
-        assertTrue(panel.editorForTest()!!.document.text.contains("name = ?"))
-
-        // 手动取消勾选 → 排除
-        panel.conditionCheckboxForTest(0)!!.doClick()
-        assertFalse(panel.editorForTest()!!.document.text.contains("WHERE"))
-        panel.clear()
-    }
-
-    fun testDynamicConditionLikePlaceholderPercentBackfill() {
-        // M13：LIKE 占位符回填自动拼百分号（name 为 String 列）→ name LIKE '%张三%'
-        val panel = SqlPreviewPanel(project)
-        panel.showResult(
-            dynamicResult(
-                listOf(
-                    Condition.Like(ColumnRef("name"), false,
-                        SqlValue.Placeholder("likeVar"), LikePosition.ANYWHERE,
-                        ConditionToggle("c0", "true", true, "name LIKE ?", "likeVar", emptyList())),
-                ),
-                views = listOf(
-                    ConditionView("c0", "name LIKE ?", "true", true, "likeVar"),
-                ),
-            ),
-        )
-        panel.conditionValueFieldForTest(0)!!.text = "张三"
-        assertTrue(panel.editorForTest()!!.document.text.contains("name LIKE '%张三%'"))
-        panel.clear()
-    }
-
-    fun testDynamicConditionStringColumnNumericValueQuoted() {
-        // M13：String 列（java.lang.String）输入数字 → 恒加引号（不再被识别成数值）
-        val panel = SqlPreviewPanel(project)
-        panel.showResult(
-            dynamicResult(
-                listOf(
-                    Condition.Simple(ColumnRef("name"), "=", SqlValue.Placeholder("nameVar"),
-                        ConditionToggle("c0", "true", true, "name = ?", "nameVar", emptyList())),
-                ),
-                views = listOf(
-                    ConditionView("c0", "name = ?", "true", true, "nameVar"),
-                ),
-            ),
-        )
-        panel.conditionValueFieldForTest(0)!!.text = "123"
-        assertTrue(panel.editorForTest()!!.document.text.contains("name = '123'"))
-        panel.clear()
-    }
-
-    fun testDynamicConditionNumericColumnValueRaw() {
-        // M13：数值列（java.lang.Long）输入数字 → 原样不带引号
-        val panel = SqlPreviewPanel(project)
-        panel.showResult(
-            dynamicResult(
-                listOf(
-                    Condition.Simple(ColumnRef("station_id"), "=", SqlValue.Placeholder("stationVar"),
-                        ConditionToggle("c0", "true", true, "station_id = ?", "stationVar", emptyList())),
-                ),
-                views = listOf(
-                    ConditionView("c0", "station_id = ?", "true", true, "stationVar"),
-                ),
-            ),
-        )
-        panel.conditionValueFieldForTest(0)!!.text = "2"
-        assertTrue(panel.editorForTest()!!.document.text.contains("station_id = 2"))
-        panel.clear()
-    }
-
-    fun testDynamicConditionDateTimeColumnValueQuoted() {
-        // T-M23-03（用户实测：LocalDateTime 参数回填不带引号）：除确定的数值类型外其他类型默认带引号——
-        // LocalDateTime 列回填 `2024-01-01 00:00:00` → `use_time = '2024-01-01 00:00:00'`（原实现无引号，SQL 无效）
-        val statement = SelectStatement(
-            // k2j 适配：4 参重载第 4 位是 conditions，selectColumns/tableAlias 按 Kotlin 默认值补位
-            tableInfo().copy(
-                tableInfo().entityClassName, tableInfo().tableName,
-                tableInfo().columns + ColumnInfo("useTime", "use_time", false, false, "java.time.LocalDateTime"),
-                tableInfo().logicDeleteColumn, tableInfo().versionColumn, tableInfo().comment,
-                tableInfo().associations,
-            ),
-            emptyList(),
-            null,
-            listOf(
-                Condition.Simple(
-                    ColumnRef("use_time"), "=", SqlValue.Placeholder("now"),
-                    ConditionToggle("c0", "true", true, "use_time = ?", "now", emptyList()),
-                ),
-            ),
-        )
-        val model = SqlPreviewModel(
-            statement, MySqlDialect.INSTANCE, true,
-            listOf(ConditionView("c0", "use_time = ?", "true", true, "now")),
-        )
-        val panel = SqlPreviewPanel(project)
-        panel.showResult(
-            PreviewResult(
-                // k2j 适配：20 参位置构造
-                "SELECT id, station_id, name, use_time\nFROM car_device_info",
-                "SELECT id, station_id, name, use_time FROM car_device_info",
-                emptyList(),
-                null,
-                WrapperType.LAMBDA_QUERY,
-                "car_device_info",
-                null,
-                listOf("id", "station_id", "name", "use_time"),
-                emptyMap(),
-                null,
-                model,
-                emptyList(),
-                emptyList(),
-                null,
-                null,
-                emptyMap(),
-                null,
-                null,
-                null,
-                null,
-            ),
-        )
-        panel.conditionValueFieldForTest(0)!!.text = "2024-01-01 00:00:00"
-        assertTrue(panel.editorForTest()!!.document.text.contains("use_time = '2024-01-01 00:00:00'"))
-        panel.clear()
-    }
-
-    // ------------------------------------------------------------------
-    // T-M23-04：批量参数列级勾选（BatchModel 复选框 + 勾选重建 SQL）
-    // ------------------------------------------------------------------
-
-    /** 构造带 BatchModel 的批量预览结果（面板走批量勾选重生成路径）。 */
-    private fun batchResult(model: BatchModel): PreviewResult {
-        val active = (model.toggleColumns.filter { it.checked }.map { it.columnName } + model.fixedColumns.map { it.columnName }).toSet()
-        val sql = model.renderSql(active)
-        return PreviewResult(
-            // k2j 适配：20 参位置构造
-            sql,
-            sql,
-            model.orderedSources(active),
-            null,
-            null,
-            model.tableName,
-            null,
-            model.toggleColumns.map { it.columnName },
-            emptyMap(),
-            null,
-            null,
-            emptyList(),
-            emptyList(),
-            model,
-            null,
-            emptyMap(),
-            null,
-            null,
-            null,
-            null,
-        )
-    }
-
-    fun testBatchModelAutoIdDefaultUncheckedRendersWithoutId() {
-        // T-M23-04（用户建议）：save(entity) 自增主键默认不勾选 → 初始 SQL 无 id 列
-        val model = BatchModel(
-            BatchKind.INSERT,
-            "biz_store_coupon",
-            listOf(
-                BatchColumn("id", "entity.id", false, false),
-                BatchColumn("name", "entity.name", true, true),
-                BatchColumn("dic_status", "entity.dic_status", false, true),
-            ),
-        )
-        val panel = SqlPreviewPanel(project)
-        panel.showResult(batchResult(model))
-        val sql = panel.editorForTest()!!.document.text
-        assertTrue("初始 SQL 应含勾选列", sql.contains("INSERT INTO biz_store_coupon (name, dic_status)"))
-        assertFalse("初始 SQL 不应含 id 列", sql.contains("id"))
-        assertFalse("id 复选框默认不勾选", panel.batchCheckboxForTest(0)!!.isSelected)
-        panel.clear()
-    }
-
-    fun testBatchModelCheckboxToggleRebuildsSql() {
-        // T-M23-04：勾选 id 复选框 → SQL 列清单恢复 id；取消 name → SET/列清单移除 name
-        val model = BatchModel(
-            BatchKind.INSERT,
-            "biz_store_coupon",
-            listOf(
-                BatchColumn("id", "entity.id", false, false),
-                BatchColumn("name", "entity.name", true, true),
-                BatchColumn("dic_status", "entity.dic_status", false, true),
-            ),
-        )
-        val panel = SqlPreviewPanel(project)
-        panel.showResult(batchResult(model))
-        // 勾选 id → INSERT 恢复 id 列
-        panel.batchCheckboxForTest(0)!!.doClick()
-        assertTrue(panel.batchCheckboxForTest(0)!!.isSelected)
-        assertTrue(
-            "勾选后 SQL 应含 id",
-            panel.editorForTest()!!.document.text.contains("INSERT INTO biz_store_coupon (id, name, dic_status)"),
-        )
-        // 取消 name → 列清单移除 name
-        panel.batchCheckboxForTest(1)!!.doClick()
-        assertTrue(
-            "取消后 SQL 不应含 name",
-            panel.editorForTest()!!.document.text.contains("INSERT INTO biz_store_coupon (id, dic_status)"),
-        )
-        // 回填值不丢：勾选态变更后重渲染仍按 source 绑定；未勾选列的输入值不进 SQL
-        panel.paramFieldForTest(0)!!.text = "1"
-        panel.paramFieldForTest(1)!!.text = "张三"
-        assertTrue(panel.editorForTest()!!.document.text.contains("VALUES (1, ?)"))
-        assertFalse("未勾选列（name）的输入值不应进入 SQL", panel.editorForTest()!!.document.text.contains("张三"))
-        // 重新勾选 name → 值保留、按 String 列类型加引号回填
-        panel.batchCheckboxForTest(1)!!.doClick()
-        assertTrue(panel.editorForTest()!!.document.text.contains("VALUES (1, '张三', ?)"))
-        panel.clear()
-    }
-
-    fun testBatchModelFixedColumnHasNoCheckbox() {
-        // T-M23-04：UPDATE 的 WHERE 主键为固定列——仅值输入框（无复选框），复选框数 = toggle 列数
-        val model = BatchModel(
-            BatchKind.UPDATE,
-            "device_info",
-            listOf(
-                BatchColumn("name", "entity.name", true, true),
-            ),
-            listOf(BatchColumn("id", "entity.id", false, true)),
-        )
-        val panel = SqlPreviewPanel(project)
-        panel.showResult(batchResult(model))
-        assertNotNull("toggle 列应有复选框", panel.batchCheckboxForTest(0))
-        assertNull("fixed 列不应有复选框（复选框仅 toggle 列）", panel.batchCheckboxForTest(1))
-        // 值输入框：toggle(name) + fixed(id) 各一个
-        assertEquals("name 值输入框", "#entity.name", panel.paramFieldForTest(0)!!.toolTipText)
-        assertEquals("id 值输入框", "#entity.id", panel.paramFieldForTest(1)!!.toolTipText)
-        assertTrue(panel.editorForTest()!!.document.text.contains("SET name = ?"))
-        assertTrue(panel.editorForTest()!!.document.text.contains("WHERE id = ?"))
-        panel.clear()
-    }
-
-    fun testBatchModelSelectAllNoneButtons() {
-        // T-M23.2（用户要求：参数可选场景必须有【全选/全不选】按钮）：
-        // 全不选 → 全部取消勾选、SQL 空列清单；全选 → 全部勾选、SQL 全列
-        val model = BatchModel(
-            BatchKind.INSERT,
-            "biz_store_coupon",
-            listOf(
-                BatchColumn("id", "entity.id", false, false),
-                BatchColumn("name", "entity.name", true, true),
-                BatchColumn("dic_status", "entity.dic_status", false, true),
-            ),
-        )
-        val panel = SqlPreviewPanel(project)
-        panel.showResult(batchResult(model))
-        val toggle = panel.batchToggleSelectButtonForTest()
-        assertNotNull("批量区应有全选/全不选切换按钮", toggle)
-        // T-SelToggle：初始部分勾选（id 未勾）→ 文案「全选」；点击 → 全列恢复
-        assertEquals(MpSqlVisualizerBundle.message("panel.condition.selectAll"), toggle!!.text)
-        toggle.doClick()
-        assertTrue(panel.batchCheckboxForTest(0)!!.isSelected)
-        assertTrue(panel.batchCheckboxForTest(1)!!.isSelected)
-        assertTrue(panel.batchCheckboxForTest(2)!!.isSelected)
-        assertEquals(MpSqlVisualizerBundle.message("panel.condition.selectNone"), toggle.text)
-        assertTrue(
-            panel.editorForTest()!!.document.text.contains("INSERT INTO biz_store_coupon (id, name, dic_status)"),
-        )
-        // 再点 → 全不选 → 空列清单（文档化边界），文案回「全选」
-        toggle.doClick()
-        assertFalse(panel.batchCheckboxForTest(0)!!.isSelected)
-        assertFalse(panel.batchCheckboxForTest(1)!!.isSelected)
-        assertFalse(panel.batchCheckboxForTest(2)!!.isSelected)
-        assertEquals(MpSqlVisualizerBundle.message("panel.condition.selectAll"), toggle.text)
-        assertTrue(panel.editorForTest()!!.document.text.contains("INSERT INTO biz_store_coupon ()"))
-        panel.clear()
-    }
-
-    fun testInListMultiValueBackfill() {
-        // M19.6（2026-08-13 用户实测）：IN 列表占位符回填按逗号分割多值、每个值独立引号——
-        // 输入 `1,2` → IN ('1','2')（原实现拼成 IN ('1,2') 单值；name 为 String 列恒引号）
-        val panel = SqlPreviewPanel(project)
-        panel.showResult(
-            dynamicResult(
-                listOf(
-                    Condition.In(
-                        ColumnRef("name"),
-                        false,
-                        listOf(SqlValue.Placeholder("names")),
-                        ConditionToggle("c0", null, true, "name IN (?)", "names", listOf("names")),
-                    ),
-                ),
-                views = listOf(
-                    ConditionView("c0", "name IN (?)", null, true, "names", listOf("names")),
-                ),
-            ),
-        )
-        panel.conditionValueFieldForTest(0)!!.text = "张三,李四"
-        assertTrue(panel.editorForTest()!!.document.text.contains("name IN ('张三', '李四')"))
-        // 单值输入不受影响（String 列恒引号）
-        panel.conditionValueFieldForTest(0)!!.text = "王五"
-        assertTrue(panel.editorForTest()!!.document.text.contains("name IN ('王五')"))
-        panel.clear()
-    }
-
-    // ------------------------------------------------------------------
-    // M17：执行 SQL（M17.4 起由弹窗底部按钮区调用面板 internal executeSql()；
-    // 测试沙盒无 Database 插件 → Community 降级路径）
-    // ------------------------------------------------------------------
-
-    fun testExecuteSqlWithoutDatabasePluginNoThrow() {
-        // 测试沙盒无 Database 插件 → 走 Community 降级提示（headless 下被兜底吞掉），不抛异常
-        val panel = SqlPreviewPanel(project)
-        panel.showResult(result(sql = "SELECT id FROM tbl", compact = "SELECT id FROM tbl"))
-        panel.executeSql()
-        panel.clear()
-    }
-
-    fun testExecuteSqlDisabledWithoutProject() {
-        // 无项目面板（纯组件预览）：执行无动作（project null 直接返回），不抛异常
-        val panel = SqlPreviewPanel(null)
-        panel.showResult(result())
-        panel.executeSql()
-        panel.clear()
-    }
-
-    fun testExecuteSqlBlankSqlNoop() {
-        // 空 SQL：不触发执行链路，不抛异常
-        val panel = SqlPreviewPanel(project)
-        panel.showResult(result(sql = "   ", compact = "   "))
-        panel.executeSql()
-        panel.clear()
-    }
-
-    fun testSplitIsNativeOnePixelSplitter() {
-        // T-M26.1→T-UiNative P0：左右分栏换平台 OnePixelSplitter——分隔条由平台绘制（原生主题
-        // 融合 + 比例持久化键 mpvs.preview.splitter），替代旧 ThemedSplitPane 覆写 paint 粉刷。
-        // 断言：分栏是平台 Splitter（持久化键就位）且 proportion 契约可用
-        val panel = SqlPreviewPanel(project)
-        val split = panel.splitPaneForTest()
-        assertNotNull("应存在左右分栏", split)
-        assertEquals("mpvs.preview.splitter", split!!.splitterProportionKey)
-        split.setSize(300, 100)
-        split.doLayout()
-        split.proportion = 0.4f
-        assertEquals(0.4f, split.proportion, 1e-6f)
-        panel.clear()
-    }
-
-    fun testSelectAllButtonsOnConditionSectionHeader() {
-        // T-M26.3（方案 A）：全选/全不选回挂「动态条件」分区标题行右侧（IDEA 组操作惯例，
-        // T-M26.2 的固定右上角已拆除）。长 test 表达式标签按视口宽度截断 → 标题行按钮不被推出
-        // 视口：断言按钮在参数面板内、布局后仍可见于视口
-        val long = "stationIds != null and stationIds.size() > 0"
-        val panel = SqlPreviewPanel(project)
-        val split = panel.splitPaneForTest()!!
-        // 先布局再 showResult：截断上限按视口宽度计算（真实 IDE 中 rebuild 发生在面板布局后）
-        split.setSize(500, 120)
-        split.doLayout()
-        split.proportion = 0.5f
-        split.doLayout()
-        (split.firstComponent as JBScrollPane).doLayout() // 布局 viewport bounds（否则宽度为 0，截断上限回落默认值）
-        panel.showResult(
-            dynamicResult(
-                listOf(
-                    Condition.Simple(ColumnRef("station_id"), "IN", SqlValue.Placeholder("stationIds"),
-                        ConditionToggle("c0", "true", true, "station_id IN (?)", "stationIds", listOf("stationIds"))),
-                ),
-                views = listOf(ConditionView("c0", long, "true", true, "stationIds", listOf("stationIds"))),
-            ),
-        )
-        val scroll = split.firstComponent as JBScrollPane
-        val viewport = scroll.viewport
-        val button = panel.toggleSelectButtonForTest()!!
-        // 按钮在参数面板内（回挂分区标题行，随列表滚动——T-M26.2 曾固定视口外）
-        assertTrue("按钮应在参数面板内", SwingUtilities.isDescendingFrom(button, viewport.view))
-        // 布局（doLayout 不递归，逐层布局组件树）后按钮仍可见于视口（长标签按视口截断 → 行宽受限）
-        split.doLayout()
-        layoutTree(scroll)
-        val btnLeft = SwingUtilities.convertPoint(button, 0, 0, scroll).x
-        assertTrue("按钮应位于视口内", btnLeft < viewport.width)
-        panel.clear()
-    }
 
     /** headless 未显示组件 validate() 不布局（peer 为 null）——同步 doLayout 递归布局组件树。 */
     private fun layoutTree(container: java.awt.Container) {
         container.doLayout()
         container.components.filterIsInstance<java.awt.Container>().forEach { layoutTree(it) }
-    }
-
-    fun testReformatShortcutRegistered() {
-        // T-M26.6：格式化快捷键注册——action 实例存在（跟随 IDE keymap 的 Reformat Code，
-        // 兜底 Ctrl+Alt+L），触发走 [SqlPreviewPanel.formatSql]（与「格式化」按钮同逻辑）
-        val panel = SqlPreviewPanel(project)
-        assertNotNull("应注册格式化 action", panel.reformatActionForTest())
-        panel.clear()
-    }
-
-    fun testReformatShortcutFormatsSql() {
-        // T-M26.6：触发格式化 action 后 SQL 被格式化（关键字大写 + 子句换行）
-        val panel = SqlPreviewPanel(project)
-        panel.showResult(result(sql = "select id from tbl", compact = "select id from tbl"))
-        panel.reformatActionForTest().actionPerformed(
-            AnActionEvent.createFromAnAction(panel.reformatActionForTest(), null, "test", DataContext.EMPTY_CONTEXT),
-        )
-        val text = panel.editorForTest()!!.document.text
-        assertTrue("格式化后关键字应大写：" + text, text.contains("SELECT"))
-        assertTrue("格式化后应含换行：" + text, text.contains("\n"))
-        panel.clear()
-    }
-
-    fun testVerticalButtonPresentAndFormatsInsert() {
-        // T-VStack：竖向排列按钮在位（文案取 panel.vertical），formatVertical 对 INSERT 竖排 + 配对标注
-        val panel = SqlPreviewPanel(project)
-        val expectedText = cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message("panel.vertical")
-        val button = com.intellij.util.ui.UIUtil.uiTraverser(panel)
-            .preOrderDfsTraversal()
-            .filterIsInstance<JButton>()
-            .firstOrNull { it.text == expectedText }
-        assertNotNull("工具栏应存在竖向排列按钮", button)
-        panel.showResult(
-            result(
-                sql = "insert into `user` (username, password) values ('zhangsna', '123456')",
-                compact = "insert into `user` (username, password) values ('zhangsna', '123456')",
-            ),
-        )
-        panel.formatVertical()
-        val text = panel.editorForTest()!!.document.text
-        assertEquals(
-            "INSERT 应竖排且值行尾标注列名：$text",
-            """
-            INSERT
-            INTO `user`
-            (
-              username,
-              password
-            )
-            VALUES
-            (
-              'zhangsna', -- username
-              '123456'    -- password
-            )
-            """.trimIndent(),
-            text,
-        )
-        panel.clear()
-    }
-
-    fun testVerticalNonInsertFallsBackToFormat() {
-        // T-VStack·扩面 + InAll：非 INSERT 输入 = format + 横向组展开（多元素 IN 列表一律纵向化，
-        // 与格式化按钮可区分；单元素形态保持同行）
-        val panel = SqlPreviewPanel(project)
-        panel.showResult(
-            result(sql = "select id from tbl where id in (1, 2, 3, 4, 5)", compact = "select id from tbl"),
-        )
-        panel.formatVertical()
-        val text = panel.editorForTest()!!.document.text
-        assertTrue("SELECT 应按 format 全展开：$text", text.contains("SELECT\n") && text.contains("FROM tbl"))
-        assertTrue("长 IN 列表应纵向化：$text", text.contains("IN\n"))
-        panel.clear()
-
-        val panel2 = SqlPreviewPanel(project)
-        panel2.showResult(
-            result(sql = "select id from tbl where id in (1, 2)", compact = "select id from tbl"),
-        )
-        panel2.formatVertical()
-        val short = panel2.editorForTest()!!.document.text
-        assertTrue("2 元素 IN 也应纵向化：$short", short.contains("IN\n"))
-        panel2.clear()
-    }
-
-    fun testVerticalAnnotationFollowsSetting() {
-        // T-VPairAnno：设置关闭 → 竖排保持但行尾无配对标注；恢复开启（默认）→ 标注回来
-        val settings = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state
-        val sql = "insert into `user` (username, password) values ('zhangsna', '123456')"
-        try {
-            settings.verticalPairAnnotation = false
-            val panel = SqlPreviewPanel(project)
-            panel.showResult(result(sql = sql, compact = sql))
-            panel.formatVertical()
-            val off = panel.editorForTest()!!.document.text
-            assertTrue("竖排形态应保持：$off", off.contains("VALUES\n(") && off.contains("'zhangsna',"))
-            assertFalse("行尾不应有配对标注：$off", off.contains("-- username"))
-            panel.clear()
-
-            settings.verticalPairAnnotation = true
-            val panel2 = SqlPreviewPanel(project)
-            panel2.showResult(result(sql = sql, compact = sql))
-            panel2.formatVertical()
-            val on = panel2.editorForTest()!!.document.text
-            assertTrue("恢复开启后应重新标注：$on", on.contains("-- username") && on.contains("-- password"))
-            panel2.clear()
-        } finally {
-            settings.verticalPairAnnotation = true
-        }
-    }
-
-    // ------------------------------------------------------------------
-    // T-PreviewDisplayMode：显示模式在重渲染后保持（用户实测：输入参数后竖排消失）
-    // ------------------------------------------------------------------
-
-    fun testVerticalModeSurvivesParamChange() {
-        // 用户复现路径：点竖向排列 → 左侧填参数 → 形态必须保持（旧实现：文档被重建抹平）
-        val panel = SqlPreviewPanel(project)
-        val sql = "insert into `user` (username, password, age) values ('zhangsna', '123456', ?)"
-        panel.showResult(result(sql = sql, compact = sql, params = listOf("age")))
-        panel.formatVertical()
-        assertEquals(SqlPreviewPanel.PreviewDisplayMode.VERTICAL, panel.displayModeForTest())
-        val vertical = panel.editorForTest()!!.document.text
-        assertTrue("竖排应先生效：$vertical", vertical.contains("-- username") && vertical.contains("VALUES\n("))
-
-        // 模拟用户在参数行输入（DocumentListener → onParamChanged → renderSql 全量重建）
-        panel.paramFieldForTest(0)!!.text = "1"
-
-        val after = panel.editorForTest()!!.document.text
-        assertTrue("参数变更后应仍为竖排：$after", after.contains("-- username") && after.contains("VALUES\n("))
-        assertTrue("参数应已回填：$after", after.contains("1"))
-        panel.clear()
-    }
-
-    fun testKeywordWrapModeSurvivesParamChange() {
-        // 关键字换行同缺陷同修复：参数变更后仍为「子句顶格 + 内容同行」形态（非 format 全展开）
-        val panel = SqlPreviewPanel(project)
-        val sql = "SELECT id FROM tbl WHERE phone = ? AND type = ?"
-        panel.showResult(result(sql = sql, compact = sql, params = listOf("phone", "type")))
-        panel.setDisplayMode(SqlPreviewPanel.PreviewDisplayMode.KEYWORD_WRAP)
-        assertEquals(
-            "SELECT id\nFROM tbl\nWHERE phone = ?  AND type = ?",
-            panel.editorForTest()!!.document.text,
-        )
-
-        panel.paramFieldForTest(0)!!.text = "abc"
-
-        assertEquals(
-            "参数变更后应仍为关键字换行形态",
-            "SELECT id\nFROM tbl\nWHERE phone = 'abc'  AND type = ?",
-            panel.editorForTest()!!.document.text,
-        )
-        panel.clear()
-    }
-
-    fun testFormatModeSurvivesParamChangeWhenSettingOff() {
-        // 条件性丢失分支：设置「SQL 格式化输出」关闭时，点格式化后的形态此前会被参数变更抹平
-        val state = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state
-        val backup = state.formatSql
-        try {
-            state.formatSql = false
-            val panel = SqlPreviewPanel(project)
-            val sql = "SELECT id FROM tbl WHERE phone = ?"
-            panel.showResult(result(sql = sql, compact = sql, params = listOf("phone")))
-            panel.formatSql()
-            assertEquals(SqlPreviewPanel.PreviewDisplayMode.FORMAT, panel.displayModeForTest())
-            val formatted = panel.editorForTest()!!.document.text
-            assertTrue("FORMAT 模式应强制格式化：$formatted", formatted.contains("SELECT\n"))
-
-            panel.paramFieldForTest(0)!!.text = "abc"
-
-            val after = panel.editorForTest()!!.document.text
-            assertTrue("设置关闭时格式化形态也应保持：$after", after.contains("SELECT\n"))
-            assertTrue("参数应已回填：$after", after.contains("'abc'"))
-            panel.clear()
-        } finally {
-            runCatching { state.formatSql = backup }
-        }
-    }
-
-    fun testCompactTakesPrecedenceOverDisplayMode() {
-        // 压缩优先级最高：压缩态下模式不套用（保持单行）；切回多行后既有模式恢复
-        val panel = SqlPreviewPanel(project)
-        val sql = "insert into `user` (username, age) values ('zhangsna', ?)"
-        panel.showResult(result(sql = sql, compact = sql, params = listOf("age")))
-        panel.setDisplayMode(SqlPreviewPanel.PreviewDisplayMode.VERTICAL)
-
-        panel.toggleCompact()
-        val compact = panel.editorForTest()!!.document.text
-        assertFalse("压缩态应为单行：$compact", compact.contains("\n"))
-        assertEquals("压缩不应改变模式状态", SqlPreviewPanel.PreviewDisplayMode.VERTICAL, panel.displayModeForTest())
-
-        panel.toggleCompact()
-        assertTrue("切回多行后竖排应恢复", panel.editorForTest()!!.document.text.contains("-- username"))
-        panel.clear()
-    }
-
-    fun testSetDisplayModeExitsCompact() {
-        // 压缩态点格式族按钮：一并退出压缩（否则模式被短路、点击无可见效果）
-        val panel = SqlPreviewPanel(project)
-        val sql = "insert into `user` (username, age) values ('zhangsna', ?)"
-        panel.showResult(result(sql = sql, compact = sql, params = listOf("age")))
-        panel.toggleCompact()
-        assertTrue("前置：应处于压缩态", panel.compactForTest())
-
-        panel.setDisplayMode(SqlPreviewPanel.PreviewDisplayMode.VERTICAL)
-
-        assertFalse("格式族模式切换应退出压缩", panel.compactForTest())
-        assertTrue("应显示竖排形态", panel.editorForTest()!!.document.text.contains("-- username"))
-        panel.clear()
-    }
-
-    fun testRefreshResetsDisplayMode() {
-        // 刷新 = 回到默认状态（M19.3）：显示模式一并复位为 NORMAL（设置派生形态）
-        val panel = SqlPreviewPanel(project)
-        panel.showResult(
-            result(sql = "select id from tbl where id in (1, 2, 3, 4, 5)", compact = "select id from tbl"),
-        )
-        panel.setDisplayMode(SqlPreviewPanel.PreviewDisplayMode.VERTICAL)
-        assertTrue("前置：应已竖排", panel.editorForTest()!!.document.text.contains("IN\n"))
-
-        panel.refreshView()
-
-        assertEquals(SqlPreviewPanel.PreviewDisplayMode.NORMAL, panel.displayModeForTest())
-        panel.clear()
-    }
-
-    fun testDisplayModeSurvivesConditionToggle() {
-        // 另一重建入口：动态条件勾选（renderSql 直调）同样不应抹掉竖排。
-        // 断言物用 ORDER BY 多字段——竖排把它拆成逐行（format 保持同行），可区分模式是否真在生效
-        val panel = SqlPreviewPanel(project)
-        val statement = SelectStatement(
-            // k2j 适配：16 参全量构造（缺省槽按 Kotlin 默认值）
-            tableInfo(),
-            emptyList(),
-            null,
-            emptyList(),
-            false,
-            listOf(
-                Condition.Simple(ColumnRef("id"), "=", SqlValue.Literal("1"),
-                    ConditionToggle("c0", "true", true, "id = 1")),
-            ),
-            emptyList(),
-            null,
-            listOf(
-                OrderByItem(ColumnRef("id"), true),
-                OrderByItem(ColumnRef("name"), false),
-            ),
-            null,
-            null,
-            null,
-            null,
-            emptyList(),
-            null,
-            null,
-        )
-        val model = SqlPreviewModel(
-            statement, MySqlDialect.INSTANCE, true,
-            listOf(ConditionView("c0", "id = 1", "true", true, null)),
-        )
-        panel.showResult(
-            PreviewResult(
-                // k2j 适配：20 参位置构造
-                "SELECT id, name\nFROM car_device_info",
-                "SELECT id, name FROM car_device_info",
-                emptyList(),
-                null,
-                WrapperType.LAMBDA_QUERY,
-                "car_device_info",
-                null,
-                listOf("id", "name"),
-                emptyMap(),
-                null,
-                model,
-                emptyList(),
-                emptyList(),
-                null,
-                null,
-                emptyMap(),
-                null,
-                null,
-                null,
-                null,
-            ),
-        )
-        panel.setDisplayMode(SqlPreviewPanel.PreviewDisplayMode.VERTICAL)
-        assertTrue("前置：ORDER BY 应已逐行", panel.editorForTest()!!.document.text.contains("ORDER BY\n"))
-
-        panel.conditionCheckboxForTest(0)!!.doClick()
-
-        val after = panel.editorForTest()!!.document.text
-        assertEquals("勾选重建后模式不应丢失", SqlPreviewPanel.PreviewDisplayMode.VERTICAL, panel.displayModeForTest())
-        assertTrue("勾选重建后 ORDER BY 应仍逐行：$after", after.contains("ORDER BY\n"))
-        panel.clear()
-    }
-
-    fun testActionButtonGroupsSwitchByScene() {
-        // T-M26.3：按钮组按场景构建——无内容无按钮、动态条件 → 条件组（标题行右侧）、
-        // 批量 → 批量组、clear 复位（字段置 null）
-        val panel = SqlPreviewPanel(project)
-        // 无参数 → 无按钮
-        panel.showResult(result())
-        assertNull("无内容时应无全选按钮", panel.toggleSelectButtonForTest())
-        assertNull("无内容时应无批量全选按钮", panel.batchToggleSelectButtonForTest())
-        // 动态条件 → 条件组
-        panel.showResult(
-            dynamicResult(
-                listOf(
-                    Condition.Simple(ColumnRef("id"), "=", SqlValue.Literal("1"),
-                        ConditionToggle("c0", "true", true, "id = 1")),
-                ),
-                views = listOf(ConditionView("c0", "id = 1", "true", true, null)),
-            ),
-        )
-        assertNotNull("动态条件场景应有全选按钮", panel.toggleSelectButtonForTest())
-        assertNull("动态条件场景不应有批量全选按钮", panel.batchToggleSelectButtonForTest())
-        // 批量列 → 批量组
-        panel.showResult(
-            batchResult(
-                BatchModel(
-                    BatchKind.INSERT,
-                    "biz_store_coupon",
-                    listOf(
-                        BatchColumn("name", "entity.name", true, true),
-                    ),
-                ),
-            ),
-        )
-        assertNull("批量场景不应有全选按钮", panel.toggleSelectButtonForTest())
-        assertNotNull("批量场景应有批量全选按钮", panel.batchToggleSelectButtonForTest())
-        panel.clear()
-        assertNull("clear 后应无全选按钮", panel.toggleSelectButtonForTest())
-        assertNull("clear 后应无批量全选按钮", panel.batchToggleSelectButtonForTest())
-    }
-
-    // ------------------------------------------------------------------
-    // T-M27.1：SQL 面板补全触发（用户实测：配置数据源后 XML 有补全、面板无补全——
-    // 根因：编辑器组件链无 DataProvider（2025.3 平台编辑器改 UiCompatibleDataProvider，
-    // 传统 getDataContext 沿父链只认 DataProvider）→ Ctrl+Space 的 action 拿不到 EDITOR
-    // 静默失败。修复：挂载时包装 DataProvider 提供 EDITOR）
-    // ------------------------------------------------------------------
-
-    fun testPanelEditorWrapsDataProviderForEditor() {
-        val panel = SqlPreviewPanel(project)
-        panel.showResult(result())
-        val editor = panel.editorForTest()
-        assertNotNull("应挂载编辑器", editor)
-        // 组件树中应存在提供 EDITOR 的 DataProvider（Ctrl+Space action 的 DataContext 来源）
-        val provider = findDataProvider(panel)
-        assertNotNull("编辑器组件链应有 DataProvider 包装", provider)
-        assertEquals("DataProvider 应提供当前编辑器", editor, provider!!.getData(CommonDataKeys.EDITOR.name))
-        panel.clear()
-    }
-
-    fun testPanelEditorCompletionOffersKeywordsAndColumns() {
-        if (Language.findLanguageByID("SQL") == null) return // 测试环境无 SQL 语言（DatabaseTools 未加载），真实 IDE 才执行补全断言
-        val panel = SqlPreviewPanel(project)
-        panel.showResult(result())
-        val editor = panel.editorForTest()!!
-        // 表名位：FROM 后（空格后空前缀 → 全量命中；测试环境 HeadlessDataManager 使 DataContext
-        // 路径不可模拟，直接调平台补全处理器 = 编辑器内 Ctrl+Space 的最终路径）
-        editor.caretModel.moveToOffset(editor.document.text.indexOf("FROM") + 5)
-        val handler = CodeCompletionHandlerBase(CompletionType.BASIC, false, false, true)
-        handler.invokeCompletion(project, editor, 1, false)
-        val lookup = LookupManager.getInstance(project).getActiveLookup()
-        assertNotNull("Ctrl+Space 应弹出补全（实际为 null——补全链路失效）", lookup)
-        val items = lookup!!.items.map { it.lookupString }
-        assertTrue("补全应含关键字 SELECT：$items", items.contains("SELECT"))
-        assertTrue("补全应含关键字 DISTINCT：$items", items.contains("DISTINCT"))
-        assertTrue("FROM 后应含表名 tbl：$items", items.contains("tbl"))
-        LookupManager.getInstance(project).hideActiveLookup()
-        panel.clear()
-
-        // 列名位：WHERE 后（空格后空前缀）
-        val panel2 = SqlPreviewPanel(project)
-        panel2.showResult(result(sql = "SELECT id FROM tbl WHERE ", compact = "SELECT id FROM tbl"))
-        val editor2 = panel2.editorForTest()!!
-        editor2.caretModel.moveToOffset(editor2.document.text.indexOf("WHERE") + 6)
-        CodeCompletionHandlerBase(CompletionType.BASIC, false, false, true).invokeCompletion(project, editor2, 1, false)
-        val lookup2 = LookupManager.getInstance(project).getActiveLookup()
-        assertNotNull("WHERE 后应弹出补全", lookup2)
-        val items2 = lookup2!!.items.map { it.lookupString }
-        assertTrue("WHERE 后应含列名 id：$items2", items2.contains("id"))
-        assertTrue("WHERE 后应含列名 name：$items2", items2.contains("name"))
-        LookupManager.getInstance(project).hideActiveLookup()
-        panel2.clear()
-    }
-
-    /** 沿组件树找 DataProvider（编辑器挂载包装）。 */
-    private fun findDataProvider(component: java.awt.Component): DataProvider? {
-        if (component is DataProvider) return component
-        if (component is java.awt.Container) {
-            for (c in component.components) {
-                findDataProvider(c)?.let { return it }
-            }
-        }
-        return null
-    }
-
-    // ------------------------------------------------------------------
-    // T-M27.2：面板输入自动弹出补全（用户实测：输入字符无自动提示——平台 autopopup 对
-    // 非文件编辑器显示空弹窗且不调度 contributor，面板自建：文档监听 + 手动模式补全处理器）
-    // ------------------------------------------------------------------
-
-    fun testTypingTriggersAutoPopup() {
-        if (Language.findLanguageByID("SQL") == null) return // 测试环境无 SQL 语言（DatabaseTools 未加载），真实 IDE 才执行补全断言
-        val panel = SqlPreviewPanel(project)
-        // SQL 末尾空白处输入（新词起始，前缀 S 命中 SELECT）
-        panel.showResult(result(sql = "SELECT id FROM ", compact = "SELECT id FROM tbl"))
-        val editor = panel.editorForTest()!!
-        // 格式化后 SQL 末尾无空格（format 的 trim）——先补空格再输入（模拟真实输入位置，避免连词）
-        val insertOffset = editor.document.textLength
-        editor.caretModel.moveToOffset(insertOffset)
-        com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(project) {
-            editor.document.insertString(insertOffset, " S")
-        }
-        // 真实输入后 caret 自动在字符后（insertString 不移动 caret，测试手动模拟）
-        editor.caretModel.moveToOffset(insertOffset + 2)
-        var lookup = LookupManager.getInstance(project).getActiveLookup()
-        var round = 0
-        while (lookup == null && round < 30) {
-            UIUtil.dispatchAllInvocationEvents()
-            Thread.sleep(50)
-            lookup = LookupManager.getInstance(project).getActiveLookup()
-            round++
-        }
-        assertNotNull("输入字符后应自动弹出补全（实际为 null——自建 autopopup 失效）", lookup)
-        val items = lookup!!.items.map { it.lookupString }
-        assertTrue("补全应含关键字 SELECT：$items", items.contains("SELECT"))
-        LookupManager.getInstance(project).hideActiveLookup()
-        panel.clear()
-    }
-
-    fun testTypingTriggersAutoPopupXmlScene() {
-        if (Language.findLanguageByID("SQL") == null) return // 测试环境无 SQL 语言（DatabaseTools 未加载），真实 IDE 才执行补全断言
-        // XML 预览场景：tableName/columns 为空（XmlPreviewService 不关联实体）——
-        // 关键字补全应仍弹出（预览补全不依赖实体上下文）
-        val panel = SqlPreviewPanel(project)
-        panel.showResult(result(sql = "SELECT id FROM ", compact = "SELECT id FROM tbl", tableName = null, columns = emptyList()))
-        val editor = panel.editorForTest()!!
-        // 格式化后 SQL 末尾无空格（format 的 trim）——先补空格再输入（模拟真实输入位置，避免连词）
-        val insertOffset = editor.document.textLength
-        editor.caretModel.moveToOffset(insertOffset)
-        com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(project) {
-            editor.document.insertString(insertOffset, " S")
-        }
-        editor.caretModel.moveToOffset(insertOffset + 2)
-        var lookup = LookupManager.getInstance(project).getActiveLookup()
-        var round = 0
-        while (lookup == null && round < 30) {
-            UIUtil.dispatchAllInvocationEvents()
-            Thread.sleep(50)
-            lookup = LookupManager.getInstance(project).getActiveLookup()
-            round++
-        }
-        assertNotNull("XML 场景（无实体上下文）输入字符后也应自动弹出补全", lookup)
-        val items = lookup!!.items.map { it.lookupString }
-        assertTrue("XML 场景应含关键字 SELECT：$items", items.contains("SELECT"))
-        LookupManager.getInstance(project).hideActiveLookup()
-        panel.clear()
-    }
-
-    fun testTypingTriggersAutoPopupXmlSceneWithEntity() {
-        if (Language.findLanguageByID("SQL") == null) return // 测试环境无 SQL 语言（DatabaseTools 未加载），真实 IDE 才执行补全断言
-        // T-M27.3：XML 预览注入实体上下文后——输入应弹**列名**（不止关键字）
-        val panel = SqlPreviewPanel(project)
-        panel.showResult(
-            result(
-                sql = "SELECT i FROM ",
-                compact = "SELECT i FROM tbl",
-                listOf("id", "name"),
-                tableName = null,
-            ),
-        )
-        val editor = panel.editorForTest()!!
-        // 格式化后 SQL 末尾无空格（format 的 trim）——先补空格再输入（模拟真实输入位置，避免连词）
-        val insertOffset = editor.document.textLength
-        editor.caretModel.moveToOffset(insertOffset)
-        com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(project) {
-            editor.document.insertString(insertOffset, " S")
-        }
-        editor.caretModel.moveToOffset(insertOffset + 2)
-        var lookup = LookupManager.getInstance(project).getActiveLookup()
-        var round = 0
-        while (lookup == null && round < 30) {
-            UIUtil.dispatchAllInvocationEvents()
-            Thread.sleep(50)
-            lookup = LookupManager.getInstance(project).getActiveLookup()
-            round++
-        }
-        assertNotNull("XML 预览（注入实体）输入字符后应弹出补全", lookup)
-        val items = lookup!!.items.map { it.lookupString }
-        assertTrue("应含关键字 SELECT：$items", items.contains("SELECT"))
-        LookupManager.getInstance(project).hideActiveLookup()
-        panel.clear()
-    }
-
-    fun testRenderAutoFormatsSql() {
-        // T-M27.4：渲染自动格式化（设置开启）——关键字大写/主子句顶格/列清单换行/空行归一
-        cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.formatSql = true
-        val panel = SqlPreviewPanel(project)
-        panel.showResult(
-            result(
-                sql = "select  id ,name  from t  where id=1",
-                compact = "select id,name from t where id=1",
-            ),
-        )
-        val doc = panel.editorForTest()!!.document.text
-        // T-M29.2：列清单逗号保留（原实现顶层逗号丢失 → 非法 SQL）
-        assertEquals(
-            "SELECT\n    id,\n    name\nFROM t\nWHERE id = 1",
-            doc,
-        )
-        panel.clear()
-        panel.clear()
-    }
-
-    /**
-     * T-PreviewConsoleFmt：控制台文档（= exec 文件文档）持有预览原文（裸单行）时，
-     * 渲染链必须把**格式化文本**回填进该文档——真机日志实证：面板自建编辑器拿到 16 行格式化
-     * 文本（len=274），但控制台挂载读的是文件内容（预热写的预览原文，1 行 len=231），挂载后
-     * 无重渲染 → 用户看到裸单行 SQL。本用例钉死「渲染回填 nativeDoc」这一环（触发点见
-     * prepareDefaultConsole 的 onConsole 回填，真机由 embedConsole 后 invokeLater 执行）。
-     */
-    fun testRenderRepublishesFormattedTextIntoNativeConsoleDoc() {
-        cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.formatSql = true
-        val panel = SqlPreviewPanel(project)
-        panel.showResult(
-            result(
-                sql = "select  id ,name  from t  where id=1",
-                compact = "select id,name from t where id=1",
-            ),
-        )
-        // 模拟控制台就绪且已嵌入本面板（showSql 的 nativeDoc 分支要求 consoleAttachedToMe）
-        panel.embedConsoleForTest(javax.swing.JPanel())
-        assertTrue("前置：控制台应视为已挂到本面板", panel.consoleAttachedToMeForTest())
-        // 控制台文档持有「预览原文」裸单行（挂载时 DBN 读的正是文件内容）
-        val consoleDoc = com.intellij.openapi.editor.EditorFactory.getInstance()
-            .createDocument("select  id ,name  from t  where id=1")
-        panel.markNativeDocForTest(consoleDoc)
-
-        panel.renderSqlForTest() // = 挂载后的回填渲染
-
-        assertEquals(
-            "控制台文档应被回填为格式化文本（否则控制台显示裸单行）",
-            "SELECT\n    id,\n    name\nFROM t\nWHERE id = 1",
-            consoleDoc.text,
-        )
-        panel.clear()
-    }
-
-    fun testTableNameCompletionInWhereClauseWithCandidates() {        if (Language.findLanguageByID("SQL") == null) return // 测试环境无 SQL 语言（DatabaseTools 未加载），真实 IDE 才执行补全断言
-        // T-M27.4：表名全位置提示——WHERE 后输入表名前缀也提示（主表 + 联表候选），
-        // 不再限定 FROM/JOIN 后（输入 me → merchant_entity 命中）
-        val panel = SqlPreviewPanel(project)
-        panel.showResult(
-            result(
-                sql = "SELECT id FROM t WHERE ",
-                compact = "SELECT id FROM t WHERE ",
-                tableName = "t",
-                columns = listOf("id"),
-                candidateTables = listOf(TableInfo("MerchantEntity", "merchant_entity", emptyList())),
-            ),
-        )
-        val editor = panel.editorForTest()!!
-        val insertOffset = editor.document.textLength
-        editor.caretModel.moveToOffset(insertOffset)
-        com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(project) {
-            editor.document.insertString(insertOffset, "me")
-        }
-        editor.caretModel.moveToOffset(insertOffset + 2)
-        var lookup = LookupManager.getInstance(project).getActiveLookup()
-        var round = 0
-        while (lookup == null && round < 30) {
-            UIUtil.dispatchAllInvocationEvents()
-            Thread.sleep(50)
-            lookup = LookupManager.getInstance(project).getActiveLookup()
-            round++
-        }
-        assertNotNull("WHERE 后输入表名前缀应弹出补全", lookup)
-        val items = lookup!!.items.map { it.lookupString }
-        assertTrue("应含联表候选表名 merchant_entity：$items", items.contains("merchant_entity"))
-        LookupManager.getInstance(project).hideActiveLookup()
-        panel.clear()
-    }
-
-    // ---------- T-AutoFold F4-a：showSql 程序性折叠 ----------
-
-    private fun withAutoFold(enabled: Boolean, block: () -> Unit) {
-        val state = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state
-        val oldEnabled = state.autoFoldEnabled
-        val oldThreshold = state.autoFoldFieldThreshold
-        try {
-            state.autoFoldEnabled = enabled
-            state.autoFoldFieldThreshold = 3
-            block()
-        } finally {
-            state.autoFoldEnabled = oldEnabled
-            state.autoFoldFieldThreshold = oldThreshold
-        }
-    }
-
-    private fun ownFoldRegions(editor: com.intellij.openapi.editor.Editor) =
-        editor.foldingModel.allFoldRegions.filter { it.placeholderText.startsWith("…") }
-
-    fun test开启自动折叠后showResult产生折叠区域() {
-        withAutoFold(enabled = true) {
-            val panel = SqlPreviewPanel(project)
-            panel.showResult(
-                result(
-                    sql = "SELECT\n    a1,\n    a2,\n    a3,\n    a4\nFROM t",
-                    compact = "SELECT a1, a2, a3, a4 FROM t",
-                ),
-            )
-            val editor = panel.editorForTest()!!
-            val regions = ownFoldRegions(editor)
-            assertEquals("showSql 后应有本方折叠区域", 1, regions.size)
-            assertFalse("区域应收起", regions[0].isExpanded)
-            panel.clear()
-        }
-    }
-
-    fun test关闭自动折叠后showResult零区域() {
-        withAutoFold(enabled = false) {
-            val panel = SqlPreviewPanel(project)
-            panel.showResult(
-                result(
-                    sql = "SELECT\n    a1,\n    a2,\n    a3,\n    a4\nFROM t",
-                    compact = "SELECT a1, a2, a3, a4 FROM t",
-                ),
-            )
-            assertEquals("关闭态零折叠区域（逐字节不变）", 0, ownFoldRegions(panel.editorForTest()!!).size)
-            panel.clear()
-        }
-    }
-
-    // ---------- T-Perf-04：detectInClauseParams 单趟扫描（与旧 O(L×P) 实现语义一致） ----------
-
-    fun testDetectInClauseParams_InParens多参数命中() {
-        val panel = SqlPreviewPanel(project)
-        try {
-            // 语义与旧实现（对每个 ? 前缀做 endsWith("IN ("/"IN(")）完全一致：
-            // 仅紧贴 "IN (" 的首个 ? 命中（后续 ? 的前缀以 "?," 结尾不命中）。
-            val detected = panel.detectInClauseParams("SELECT * FROM t WHERE id IN ( ?, ?, ? ) AND name = ?")
-            assertEquals(setOf(0), detected)
-        } finally {
-            panel.dispose()
-        }
-    }
-
-    fun testDetectInClauseParams_紧凑形态与大小写() {
-        val panel = SqlPreviewPanel(project)
-        try {
-            assertEquals(setOf(0), panel.detectInClauseParams("select * from t where id in(?)"))
-        } finally {
-            panel.dispose()
-        }
-    }
-
-    fun testDetectInClauseParams_非In问号不命中() {
-        val panel = SqlPreviewPanel(project)
-        try {
-            assertEquals(emptySet<Int>(), panel.detectInClauseParams("SELECT * FROM t WHERE a = ? AND b = ?"))
-        } finally {
-            panel.dispose()
-        }
-    }
-
-    fun testDetectInClauseParams_IN与括号间任意空白命中() {
-        // O-81 T-XmlListParamSplit（R2）：IN 与 ( 之间换行/制表/多空格均命中——
-        // 升级前只容忍恰一个空格，mapper 常见排版 `IN\n(` 漏判 → 集合参数整串单值渲染
-        val panel = SqlPreviewPanel(project)
-        try {
-            assertEquals(setOf(0), panel.detectInClauseParams("SELECT * FROM t WHERE id IN\n(?)"))
-            assertEquals(setOf(0), panel.detectInClauseParams("SELECT * FROM t WHERE id IN\t(?)"))
-            assertEquals(setOf(0), panel.detectInClauseParams("SELECT * FROM t WHERE id IN  (?)"))
-            assertEquals(setOf(1), panel.detectInClauseParams("SELECT * FROM t WHERE a = ? AND b IN (\n?)"))
-        } finally {
-            panel.dispose()
-        }
     }
 }

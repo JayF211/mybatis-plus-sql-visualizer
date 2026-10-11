@@ -445,6 +445,49 @@ class SqlFormatterTest {
         assertEquals("", SqlFormatter.formatClauseLine("   "))
     }
 
+    // ---------- T-DdlLogPreview S2（20261006 第三轮走查）：DDL 排版 ----------
+
+    /**
+     * CREATE TABLE 定义列表：`(` 后换行缩进 4、列定义逐行、闭括号独立成行且表尾选项随行。
+     * 立项现场＝用户实测点「格式化」对 `CREATE TABLE …` 毫无变化（换行关键字集只覆盖 DML）。
+     */
+    @Test
+    fun testDdlCreateTableDefinitionList() {
+        val input = "create table `biz_project_plan` ( `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键', " +
+            "`plan_id` VARCHAR(64) NOT NULL COMMENT '计划编号', primary key (`id`) ) engine=InnoDB default charset=utf8mb4"
+        val out = SqlFormatter.format(input)
+        val lines = out.lines()
+        assertTrue("DDL 应产出多行排版：$out", lines.size >= 5)
+        assertEquals("首行应为 `CREATE TABLE … (`", "CREATE TABLE `biz_project_plan` (", lines.first())
+        assertTrue(
+            "列定义应逐行缩进 4：$out",
+            lines.any { it.startsWith("    `id` BIGINT") && it.contains("COMMENT '主键'") },
+        )
+        assertTrue("第二列定义同样逐行：$out", lines.any { it.startsWith("    `plan_id` VARCHAR(64)") })
+        assertTrue("PRIMARY KEY 子句逐行：$out", lines.any { it.startsWith("    PRIMARY KEY (`id`)") })
+        assertTrue("闭括号应独立成行且表尾选项随行：$out", lines.any { it.startsWith(") ") })
+        assertTrue("VARCHAR(64) 类型尺寸括号不得被插空格：$out", out.contains("VARCHAR(64)") && !out.contains("VARCHAR ("))
+    }
+
+    /** 无定义列表的 DDL（DROP/TRUNCATE）保持单行——与「已是格式化形态」轻提示（S3）配套。 */
+    @Test
+    fun testDdlDropRemainsSingleLine() {
+        val out = SqlFormatter.format("drop table if exists `biz_project_member` ;")
+        assertEquals("无换行点的 DDL 应保持单行：$out", 1, out.lines().size)
+        // 注：`if` 为既有词法形态（FUNCTION_NAMES 成员，不小写改写为关键字），只断言语句首关键字大写
+        assertTrue("语句首关键字应大写：$out", out.startsWith("DROP TABLE"))
+    }
+
+    /** 对照：DML 路径未受 DDL 分派影响（DDL 规则全由首关键字门控）。 */
+    @Test
+    fun testDmlUnaffectedByDdlBranch() {
+        assertEquals(
+            "DML 排版逐字不变",
+            "SELECT\n    id,\n    name\nFROM t\nWHERE id = 1",
+            SqlFormatter.format("select id,name from t where id=1"),
+        )
+    }
+
     // ------------------------------------------------------------------
     // T-VStack：竖向排列（INSERT 列清单/VALUES 逐行竖排 + 值行尾 `-- 列名` 配对标注）
     // ------------------------------------------------------------------
