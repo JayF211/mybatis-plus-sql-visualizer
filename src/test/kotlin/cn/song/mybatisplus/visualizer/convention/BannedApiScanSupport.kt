@@ -39,11 +39,15 @@ abstract class BannedApiScanSupport {
     /** src/main 原文（**不剥注释**——豁免标注要在原文上认；CRLF/缩进原样保留）。T-TestPerf6 起读快照。 */
     internal fun rawMainSources(): List<Pair<String, String>> =
         srcMainKotlinTree
-            .filter { (f, _) -> f.extension == "kt" }
+            .filter { (f, _) -> f.extension == "java" }
             .map { (f, text) -> f.relativeTo(repoRoot()).path.replace('\\', '/') to text }
 
     /**
      * 配平/提取专用文本：注释与字符串、字符字面量的**内容**替换为等长空白，换行与其余字符原样保留。
+     *
+     * C11f-3（k2j 口径）：k2j 生产树是 .java——block 注释按 **Java 语义**（首个 `星号斜杠` 即闭合）而非
+     * Kotlin 嵌套配对（同 BannedApiSourceScanTest 的 nestedBlockComments 口径开关；仓内 11 个 .java
+     * 文件含嵌套块注释字面形态，两语义掩码结果不同，站点计数差 5）。
      *
      * 为什么不复用 [stripComments]：
      *  - **保行**——提取出的行号要回喂 [leadingCommentBlock]（它读原文找 `// write-safe:` 标注），
@@ -70,19 +74,14 @@ abstract class BannedApiScanSupport {
                         i++
                     }
                 }
-                // block 注释（Kotlin 允许嵌套，按深度配对）：涂白，换行保留
+                // block 注释（C11f-3：k2j 生产树 .java——Java 语义，首个 `*/` 即闭合，不嵌套配对）：
+                // 涂白，换行保留
                 c == '/' && source.startsWith("/*", i) -> {
-                    var depth = 0
                     while (i < source.length) {
-                        if (source.startsWith("/*", i)) {
-                            depth++
+                        if (source.startsWith("*/", i)) {
                             out.append("  ")
                             i += 2
-                        } else if (source.startsWith("*/", i)) {
-                            depth--
-                            out.append("  ")
-                            i += 2
-                            if (depth == 0) break
+                            break
                         } else {
                             out.append(if (source[i] == '\n') '\n' else ' ')
                             i++
@@ -270,10 +269,12 @@ abstract class BannedApiScanSupport {
         internal fun repoRoot(): File {
             var dir = File(System.getProperty("user.dir")).absoluteFile
             repeat(6) {
-                if (File(dir, "src/main/kotlin").isDirectory) return dir
+                // C11f-3：k2j 生产树为 src/main/java（master 是 src/main/kotlin，k2j 该树已空——
+                // 沿用 master 定位串会让 repoRoot 解析到上层错误目录或直接 error）。
+                if (File(dir, "src/main/java").isDirectory) return dir
                 dir = dir.parentFile ?: return@repeat
             }
-            error("未定位到仓库根（src/main/kotlin 不存在于 user.dir 及上层）: " + System.getProperty("user.dir"))
+            error("未定位到仓库根（src/main/java 不存在于 user.dir 及上层）: " + System.getProperty("user.dir"))
         }
 
         /** 剥离 block 注释与行注释（字符串字面量中的 // 会被连带截断——只可能产生漏报不产生误报，可接受）。 */
@@ -294,13 +295,23 @@ abstract class BannedApiScanSupport {
                 .map { it to it.readText() }
                 .toList()
 
-        internal val srcMainKotlinTree: List<Pair<File, String>> by lazy { snapshotTree("src/main/kotlin") }
-        internal val srcTestKotlinTree: List<Pair<File, String>> by lazy { snapshotTree("src/test/kotlin") }
+        // C11f-3（k2j 生产树口径，同 BannedApiSourceScanTest 自承载适配）：main 树=src/main/java（.java）、
+        // 测试树=src/test/kotlin 与 src/test/java（.kt/.java 混放）两处并扫、buildSrc 与 master 同为 .kt——
+        // 快照名沿用 master（减少后续轮合并噪声）。
+        internal val srcMainKotlinTree: List<Pair<File, String>> by lazy { snapshotTree("src/main/java") }
+        internal val srcTestKotlinTree: List<Pair<File, String>> by lazy {
+            listOf("src/test/kotlin", "src/test/java")
+                .flatMap { rel ->
+                    File(repoRoot(), rel).takeIf { it.isDirectory }?.walkTopDown()?.toList() ?: emptyList()
+                }
+                .filter { it.isFile }
+                .map { it to it.readText() }
+        }
         internal val buildSrcKotlinTree: List<Pair<File, String>> by lazy { snapshotTree("buildSrc/src/main/kotlin") }
 
         internal val mainSourcesSnapshot: List<Pair<String, String>> by lazy {
             srcMainKotlinTree
-                .filter { (f, _) -> f.extension == "kt" }
+                .filter { (f, _) -> f.extension == "java" }
                 .map { (f, text) -> f.relativeTo(repoRoot()).path.replace('\\', '/') to stripComments(text) }
         }
     }
