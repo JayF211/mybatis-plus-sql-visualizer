@@ -153,7 +153,7 @@ public final class AnnotationSqlPreviewService {
         }
         String sql = String.join(" ", values).trim();
         PsiMethod method = PsiTreeUtil.getParentOfType(annotation, PsiMethod.class);
-        return buildResult(sql, shortName, previewParamTypes(method), warnings, project);
+        return buildResult(sql, shortName, previewParamTypes(method), warnings, project, method);
     }
 
     // ------------------------------------------------------------------
@@ -198,7 +198,7 @@ public final class AnnotationSqlPreviewService {
         if (sql == null) {
             return nullResult(MpSqlVisualizerBundle.message("annotation.provider.notSupported"));
         }
-        return buildResult(sql, shortName, previewParamTypes(mapperMethod), warnings, project);
+        return buildResult(sql, shortName, previewParamTypes(mapperMethod), warnings, project, mapperMethod);
     }
 
     /** Provider type 解析：value/type 属性（PsiClassObjectAccessExpression）→ PsiClass。 */
@@ -345,9 +345,12 @@ public final class AnnotationSqlPreviewService {
     }
 
     /** 模型 → 结果（解析异常兜底 warning；T-M25.2 静态常量引用经 project 解析注入）。
-     *  T-PT-01：paramTypes 为「参数名 → 类型类别」，名字作 mock 键、类别入预览模型（占位提示/mock 分派）。 */
+     *  T-PT-01：paramTypes 为「参数名 → 类型类别」，名字作 mock 键、类别入预览模型（占位提示/mock 分派）。
+     *  R12 T-PaginationSim：method 非 null 且带 Page/IPage 形参 → 分页模拟后处理（LIMIT 追加 + COUNT 包裹）。
+     *  k2j 适配：Java 无默认参——两个调用点都显式传 method（master 第三参默认 null 由调用方保证）。 */
     private PreviewResult buildResult(String sql, String shortName,
-                                      Map<String, ParamTypeInfo> paramTypes, List<String> warnings, @Nullable Project project) {
+                                      Map<String, ParamTypeInfo> paramTypes, List<String> warnings,
+                                      @Nullable Project project, @Nullable PsiMethod method) {
         XmlStatementKind kind;
         switch (shortName.replaceAll("Provider$", "")) {
             case "Select":
@@ -367,7 +370,13 @@ public final class AnnotationSqlPreviewService {
             Map<String, Object> staticValues = XmlPreviewService.INSTANCE.resolveStaticFields(sql, project, warnings);
             XmlPreviewModel model = new AnnotationSqlParser().parse(
                     sql, kind, new ArrayList<>(paramTypes.keySet()), staticValues, paramTypes);
-            return XmlPreviewService.INSTANCE.toResult(model, warnings);
+            return XmlPreviewService.INSTANCE.applyPaginationShared(
+                    XmlPreviewService.INSTANCE.toResult(model, warnings),
+                    project,
+                    XmlPreviewService.paginationSimEnabled()
+                            ? MapperPageParamLocator.fromMethod(method)
+                            : null,
+                    kind);
         } catch (XmlParseException e) {
             return nullResult(e.getMessage() != null ? e.getMessage() : "SQL 解析失败。");
         } catch (XmlScriptException e) {

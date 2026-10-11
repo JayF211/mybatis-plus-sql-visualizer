@@ -84,6 +84,7 @@ import cn.song.mybatisplus.visualizer.sql.SqlGenerator;
 import cn.song.mybatisplus.visualizer.sql.SqlPerfAnalyzer;
 import cn.song.mybatisplus.visualizer.sql.interceptor.DataPermissionPlaceholder;
 import cn.song.mybatisplus.visualizer.sql.interceptor.DynamicTableNameProcessor;
+import cn.song.mybatisplus.visualizer.sql.interceptor.PaginationSimulator;
 import cn.song.mybatisplus.visualizer.sql.interceptor.TenantLineEnhancer;
 import cn.song.mybatisplus.visualizer.sql.perf.PerfWarning;
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
@@ -454,7 +455,10 @@ public final class SqlPreviewService {
             // T-M29-02/03：分页消费（service.page / selectPage / 链式 page()）→ LIMIT 子句
             SqlStatement pagedStatement = (chain.getCountConsumed() || chain.getExistsConsumed())
                     ? dataPermissionStatement : applyPageLimit(dataPermissionStatement, chain.getPageLimit());
-            PreviewResult result = SqlPreviewServiceEnhancementsKt.buildPreviewResult(this, chain.getWrapperType(), table, pagedStatement);
+            // R12 T-PaginationSim：分页 COUNT 包裹预览（D1=A 预览附第二条语句；D2=A 基础包裹形态；
+            // D3=A searchCount=false 跳过；count/exists 消费不产 COUNT——复用 T-M29-02/03 分页消费口径）
+            String countSql = paginationCountSql(chain, pagedStatement);
+            PreviewResult result = SqlPreviewServiceEnhancementsKt.buildPreviewResult(this, chain.getWrapperType(), table, pagedStatement, countSql);
             recordHistory(result, anchor);
             // exists 消费：外层包裹 SELECT EXISTS
             if (chain.getExistsConsumed() && isQueryLike(chain.getWrapperType())) {
@@ -1586,6 +1590,36 @@ public final class SqlPreviewService {
         if (!(statement instanceof SelectStatement)) return null;
         List<PerfWarning> warnings = SqlPerfAnalyzer.analyze(sql);
         return warnings.isEmpty() ? null : warnings;
+    }
+
+    /**
+     * R12 T-PaginationSim：分页 COUNT 包裹预览（D1=A 预览附第二条语句；D2=A 基础包裹形态）。
+     *
+     * <p>由语句模型构建预览结果时透传 {@link cn.song.mybatisplus.visualizer.model.PreviewResult#getCountSql()}
+     * （面板在主 SQL 后并列渲染）。判定链与 master 同形：总开关/COUNT 子开关关、count/exists 消费、
+     * searchCount=false（{@code new Page<>(c, s, false)}）、非 SELECT、无 LIMIT → 均不产出；
+     * 包裹体取 **去掉 LIMIT 的原语句** 紧凑形态（运行时 COUNT 先于 LIMIT 执行）。</p>
+     */
+    private String paginationCountSql(@NotNull cn.song.mybatisplus.visualizer.model.WrapperChain chain,
+                                      @NotNull SqlStatement statement) {
+        // settings?.state?.paginationSimEnabled == false → null（设置服务缺席时按默认开）
+        if (settings != null && settings.getState() != null
+                && !settings.getState().getPaginationSimEnabled()) return null;
+        if (settings != null && settings.getState() != null
+                && !settings.getState().getPaginationCountEnabled()) return null;
+        if (chain.getCountConsumed() || chain.getExistsConsumed()) return null;
+        if (!chain.getPageSearchCount()) return null;
+        if (!(statement instanceof SelectStatement)) return null;
+        SelectStatement select = (SelectStatement) statement;
+        if (select.getLimit() == null) return null;
+        SelectStatement withoutLimit = select.copy(
+                select.getTable(), select.getSelectColumns(), select.getTableAlias(), select.getJoins(),
+                select.isDistinct(), select.getConditions(), select.getGroupBy(), select.getHaving(),
+                select.getOrderBy(), null, select.getRawFirst(), select.getRawAround(),
+                select.getComment(), select.getUnions(), select.getFromSubQuery(),
+                select.getFillClauses());
+        String base = SqlGenerator.generate(withoutLimit, true, currentDialect(), null);
+        return PaginationSimulator.wrapCountSql(base);
     }
 
     /**
