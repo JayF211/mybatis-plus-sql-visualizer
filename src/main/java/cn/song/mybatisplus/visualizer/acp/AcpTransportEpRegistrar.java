@@ -7,6 +7,7 @@ import com.intellij.openapi.extensions.ExtensionPointName;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Proxy;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Supplier;
 
 /**
  * T-AcpMcpTransport 的程序化注册器（master 同文件 {@code object AcpTransportEpRegistrar} 的 Java 承载，
@@ -21,6 +22,45 @@ public final class AcpTransportEpRegistrar {
     private static final Logger LOG = Logger.getInstance(AcpTransportEpRegistrar.class);
 
     private static final AtomicBoolean registered = new AtomicBoolean(false);
+
+    /** 4a（T-PerfSweep8）：SSE 常量缓存——KDoc 既有承诺「首次 getTransport 时解析并缓存」，
+     *  实现此前每次调用重跑 Class.forName+getField（MCP 会话清单刷新级频率）。按计划口径：
+     *  首次解析成功缓存（getField 返回 static final 枚举常量，每类加载器单实例）；解析失败
+     *  <b>不缓存、维持 throw 路径</b>（与原实现语义一致）；getFullId 的 Method 保留现查
+     *  （上游两条发行线 agentId 运行时类可能不同，单槽复杂度不值当）。 */
+    @Volatile private static Object cachedSse = null;
+    @Volatile private static boolean sseResolved = false;
+
+    /** 4a 测试缝（internal）：SSE 解析函数可注入计数实现驱动先红后绿；生产=真反射。 */
+    @Volatile public static Supplier<Object> sseResolver = () -> {
+        try {
+            return Class.forName(TRANSPORT_ENUM_FQN).getField("SSE").get(null);
+        } catch (Throwable t) {
+            // Kotlin 函数类型 () -> Any? 不声明受检异常；Java Supplier.get() 亦不认受检异常，
+            // 故反射异常经 sneakyThrow 原样透传（InvocationHandler.invoke 声明 throws Throwable，
+            // 运行时与 Kotlin 直抛等价）。
+            throw sneakyThrow(t);
+        }
+    };
+
+    private static Object sseConstant() {
+        if (sseResolved) return cachedSse;
+        Object v = sseResolver.get(); // 解析失败抛出——不缓存，维持原 throw 语义（计划口径）
+        cachedSse = v;
+        sseResolved = true;
+        return v;
+    }
+
+    /** 4a 测试缝：handler 消费入口 internal 化（生产链路仍走 registerProxy 私有调用）。 */
+    public static Object sseConstantForTest() {
+        return sseConstant();
+    }
+
+    /** 4a 测试缝：清缓存态（跨用例隔离）。 */
+    public static void resetSseCacheForTest() {
+        cachedSse = null;
+        sseResolved = false;
+    }
 
     /**
      * 与原 impl 的 CLAUDE_ACP_ID 同源：ml-llm 常量池实证（AcpBundledAgentUtils.CLAUDE_ACP_ID）。
@@ -56,15 +96,7 @@ public final class AcpTransportEpRegistrar {
 
     private static void registerProxy(Class<?> iface) {
         ClassLoader loader = AcpTransportEpRegistrar.class.getClassLoader();
-        InvocationHandler handler = AcpTransportRegistrarKt.transportHandler(() -> {
-            try {
-                return Class.forName(TRANSPORT_ENUM_FQN).getField("SSE").get(null);
-            } catch (Throwable t) {
-                // Kotlin `runCatching{...}.getOrElse { throw it }`：解析失败原样透传
-                //（InvocationHandler.invoke 声明 throws Throwable，Java Supplier 不认受检异常，走 sneakyThrow）
-                throw sneakyThrow(t);
-            }
-        });
+        InvocationHandler handler = AcpTransportRegistrarKt.transportHandler(AcpTransportEpRegistrar::sseConstant);
         Object provider = Proxy.newProxyInstance(loader, new Class<?>[] {iface}, handler);
         ExtensionPointName<Object> ep = ExtensionPointName.create(EP_NAME);
         ep.getPoint(null).registerExtension(provider);

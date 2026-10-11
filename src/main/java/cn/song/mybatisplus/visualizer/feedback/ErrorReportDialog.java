@@ -5,6 +5,7 @@ import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
 import cn.song.mybatisplus.visualizer.util.MpvsUiColors;
 import cn.song.mybatisplus.visualizer.util.SafeBrowser;
 import cn.song.mybatisplus.visualizer.util.UiTextClipboard;
+import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.ui.DialogWrapper;
 import com.intellij.openapi.ui.ValidationInfo;
 import com.intellij.ui.components.JBLabel;
@@ -95,6 +96,17 @@ import org.jetbrains.annotations.Nullable;
  *  <li>批次条目清单里的逐条消息随同一开关去留（{@link #composeSubmission}）。</li>
  * </ul>
  * 用户手工改过的标题/描述不被勾选切换覆盖（只回填仍等于上次预填写入值的字段）。
+ *
+ * <p>T-ErrReportSubmitNoOp（2026-10-08 真机 P0）——<b>单条上报点「提交」无反应</b>：
+ * 单条事件不出批次分节（T-FeedbackBatch2）⇒ {@link ReportFormFields#batchList} 0 组件，而
+ * {@link #selectedBatchItemsFor} 仍裸索引 {@code getComponent(0)} ⇒ {@code ArrayIndexOutOfBoundsException}
+ * 从 {@link #doOKAction()} 外溢到 EDT，平台只记 SEVERE 日志、用户零反馈、按钮状态不变。
+ * 两处一并修：
+ * <ul>
+ * <li>{@link #selectedBatchItemsFor} 容器访问改 {@link java.awt.Container#getComponents()} + {@code getOrNull}（带界）；</li>
+ * <li>{@link #doOKAction()} 组装段整体纳入 {@code runCatching}，异常落状态行（{@link #finishSubmitting} 失败态）
+ *     + LOG.warn，补上 T-FeedbackErr「失败必须可见」在组装段的漏网处。</li>
+ * </ul>
  */
 public class ErrorReportDialog extends DialogWrapper {
 
@@ -385,9 +397,22 @@ public class ErrorReportDialog extends DialogWrapper {
         if (isSubmitting) {
             return;
         }
-        FeedbackApi.Submission submission = composeSubmission(
-                new FeedbackApi.Submission(collectRequest(), collectStackAttachment()),
-                selectedBatchItems());
+        // T-ErrReportSubmitNoOp：组装段整体纳入兜底——任一步抛错都必须落到状态行，不许再出现
+        // 「点了没反应」（真机：容器越界异常外溢到 EDT，平台只记 SEVERE 日志，用户零反馈）
+        FeedbackApi.Submission submission;
+        try {
+            submission = composeSubmission(
+                    new FeedbackApi.Submission(collectRequest(), collectStackAttachment()),
+                    selectedBatchItems());
+        } catch (Throwable error) {
+            LOG.warn("报告提交前置组装失败", error);
+            finishSubmitting(new FeedbackApi.SubmissionOutcome(
+                    new FeedbackApi.SubmitResult.Failure(
+                            MpSqlVisualizerBundle.message(
+                                    "error.report.dialog.status.assembleFailed",
+                                    error.getClass().getSimpleName()))));
+            return;
+        }
         beginSubmitting();
         // T-FeedbackErr：不再 super.doOKAction()（那会先关窗）——结果由提交结束回调决定：
         // 成功才关窗，失败留窗可改可重试
@@ -529,6 +554,9 @@ public class ErrorReportDialog extends DialogWrapper {
         }
         return String.join("\n", head);
     }
+
+    /** 组装期异常落 idea.log 的通道（T-ErrReportSubmitNoOp：状态行给用户、日志给排障）。 */
+    private static final Logger LOG = Logger.getInstance(ErrorReportDialog.class);
 
     /** 与需求池 Categories 一致（sql-visualizer-admin constants.ts 顺序）。 */
     public static final String[] CATEGORIES = {
@@ -792,6 +820,12 @@ public class ErrorReportDialog extends DialogWrapper {
      * 按勾选收集参与提交的批次条目（纯函数，T-FeedbackBatch2）：
      * 头部条目（主预填那条）的堆栈开关以主表单「附带异常堆栈」为准——回写条目状态并
      * 同步分节里被禁用的头部复选框显示；其余条目按各自复选框。无条目返回空集。
+     *
+     * <p>T-ErrReportSubmitNoOp：{@link ReportFormFields#batchList} 的组件数<b>不必</b>等于 {@code all}
+     * 的条目数——单条上报按设计不出分节（{@link #applyBatchItemsToFields} 早退），容器此时是 0 组件的
+     * 空容器，索引访问必须带界（真机 {@code ArrayIndexOutOfBoundsException: No such child: 0} 根因；
+     * {@code as?}/{@code instanceof} 判的是类型不是下标，救不了裸索引）。单条因此收集为空集，落到
+     * {@link BatchSubmitter} 文档化的「1 条 = 原样单帖」路径，主表单的堆栈勾选照常生效。</p>
      */
     public static List<BatchSubmitter.BatchItem> selectedBatchItemsFor(List<BatchSubmitter.BatchItem> all,
                                                                        boolean headAttachStack,
