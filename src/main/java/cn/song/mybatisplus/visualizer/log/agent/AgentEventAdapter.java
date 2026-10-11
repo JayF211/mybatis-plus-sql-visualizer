@@ -24,6 +24,26 @@ public final class AgentEventAdapter {
     /** 摘要截断长度（Kotlin data class summary 默认参数口径，对齐 LogSqlEntry）。 */
     private static final int MAX_SUMMARY_LENGTH = 160;
 
+    /**
+     * T-DevAcceptFix2 ⑤（20261006 第二轮验收）：<b>已收事件计数</b>——agent 事件到达并进入适配链的累计。
+     *
+     * <p>口径：<b>收到即计数</b>（含后续被去重/屏蔽/展示链丢弃的）——它回答的是「事件到没到」，
+     * 不是「展示了多少」。面板零产出时：N=0 → 查 agent 侧（织入/门禁/传输）；N&gt;0 → 查消费侧。
+     * 此前两条通道在停采态不打点、收事件也不打点，导致现场无法分流（沙盒日志实证）。
+     */
+    private static final java.util.concurrent.atomic.AtomicLong receivedCount =
+        new java.util.concurrent.atomic.AtomicLong();
+
+    /** 事件到达打点（{@link AgentManager} 适配前调用）。 */
+    public static void markReceived() {
+        receivedCount.incrementAndGet();
+    }
+
+    /** 已收事件数（诊断行取数；测试可读）。 */
+    public static long receivedEvents() {
+        return receivedCount.get();
+    }
+
     public static LogSqlEntry toEntry(AgentEvent event) {
         List<Triple<Integer, String, String>> sorted = new ArrayList<>(event.params());
         sorted.sort(Comparator.comparingInt(Triple::getFirst));
@@ -55,8 +75,9 @@ public final class AgentEventAdapter {
             event.errorText(),
             event.requestTag(),
             event.updateCount(),
-            // T-AgentDialectLoop：连接 URL → 目标库显示名（未知/畸形 URL 为 null，面板不显示角标）
-            JdbcUrlDialects.displayName(event.url()));
+            // R32 弱形态：连接 URL → 目标库标注（方言名 · 库名@host:port url 解析真值；
+            // 凭据在 JdbcUrlDialects.targetOf 解析期剔除；未知/畸形 URL 为 null，面板不显示角标）
+            JdbcUrlDialects.badgeName(event.url()));
     }
 
     /**

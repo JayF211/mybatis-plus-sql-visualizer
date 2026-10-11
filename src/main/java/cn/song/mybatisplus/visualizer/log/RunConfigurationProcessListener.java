@@ -47,6 +47,9 @@ public final class RunConfigurationProcessListener {
     /** 平台 classloader（ExecutionListener 等平台 API 所在；插件 classloader 是其子类）。 */
     private static final ClassLoader PLATFORM_CLASS_LOADER = Project.class.getClassLoader();
 
+    /** 最近一次 scanAndAttach 的补发数（诊断缝；单线程调用面，无需并发容器）。 */
+    private static volatile int lastScanAttachedCount = 0;
+
     private RunConfigurationProcessListener() {
     }
 
@@ -88,92 +91,113 @@ public final class RunConfigurationProcessListener {
      * <p><b>诊断性红线（R3）</b>：每个描述符的跳过原因记 debug、汇总结果记 INFO——「补扫没命中」
      * 必须可观测，禁止再出现「结构性空转零日志」形态。
      *
-     * <p>全链反射（execution 域 API 不在编译 classpath，同 {@link #isModuleBasedLaunch} 口径）；
-     * 任何异常只记 WARN 降级不抛（补扫是补位路径，绝不能影响项目打开）。
-     * 内层 {@code runCatching{}.getOrNull()}（master 形态）按 {@link #isModuleBasedLaunch} 同款
-     * 全吞 try/catch 翻译；fatal 透传只在外层兜底 catch。
+     * <p>20261008 起扫描与补挂实现收敛在 {@link #scanAndAttachRunningProcesses}（设置变更上升沿复用同一入口），
+     * 本函数退化为 backfill 场景包装。
      */
     private static void backfillRunningProcesses(Project project) {
+        scanAndAttachRunningProcesses(project, "backfill");
+    }
+
+    /**
+     * 20261008 验收偏差 #6 修复（D120，拍板 A「补能力」）：扫描本工程在跑的 JVM 进程并逐个补发
+     * onProcessAppeared。此前 attach 只挂 EXECUTION_TOPIC 进程启动钩子（processStarted），用户对
+     * <b>已在跑</b>的应用开启增强捕获开关时无任何入口挂载（真机实测 idea.log 仅记「拒绝冷却已重置」，
+     * 进程零挂载）——验收文档 3.27「attach 后无需重启应用」不可达。现由 AgentManager 设置变更
+     * 上升沿（增强重新开启且已确认/刚同意）调用本方法扫描补挂；attachedPids 幂等表兜底防重复挂载。
+     *
+     * <p>扫描判据与诊断红线沿用 backfill（R3）：JVM 进程 = BaseOSProcessHandler 系实例（HTTP 客户端
+     * handler 不在该继承链，天然排除）；每个描述符跳过原因记 debug、汇总记 INFO（logTag 区分场景）。
+     * 全链反射（execution 域 API 不在编译 classpath）+ 异常只 WARN 不抛（补位路径，绝不影响调用方）。
+     *
+     * @return 补发挂载的进程数（反射链整体失败时 0——失败已记 WARN）。
+     */
+    public static int scanAndAttachRunningProcesses(Project project, String logTag) {
         try {
-            Class<?> rcmClass = Class.forName(
-                    "com.intellij.execution.ui.RunContentManager",
-                    true,
-                    PLATFORM_CLASS_LOADER);
-            Object rcm = rcmClass.getMethod("getInstance", Project.class).invoke(null, project);
-            Object raw;
-            try {
-                raw = rcmClass.getMethod("getAllDescriptors").invoke(rcm);
-            } catch (Throwable t) {
-                raw = null;
-            }
-            Object[] descriptors;
-            if (raw instanceof Object[] array) {
-                descriptors = array;
-            } else if (raw instanceof java.util.Collection<?> collection) {
-                descriptors = collection.toArray();
-            } else {
-                LOG.info("backfill: getAllDescriptors 不可用——跳过补扫（project=" + project.getName() + "）");
-                return;
-            }
-            int noHandler = 0;
-            int dead = 0;
-            int nonJvm = 0;
-            int backfilled = 0;
-            Class<?> jvmHandlerClass;
-            try {
-                jvmHandlerClass = Class.forName(
-                        "com.intellij.execution.process.BaseOSProcessHandler",
-                        true,
-                        PLATFORM_CLASS_LOADER);
-            } catch (Throwable t) {
-                jvmHandlerClass = null;
-            }
-            for (Object descriptor : descriptors) {
-                if (descriptor == null) {
-                    continue;
-                }
-                Object handler;
-                try {
-                    handler = descriptor.getClass().getMethod("getProcessHandler").invoke(descriptor);
-                } catch (Throwable t) {
-                    handler = null;
-                }
-                if (handler == null) {
-                    noHandler++;
-                    LOG.debug("backfill: 描述符 " + descriptor.getClass().getName() + " 无 processHandler——跳过");
-                    continue;
-                }
-                Boolean alive;
-                try {
-                    Object terminated = handler.getClass().getMethod("isProcessTerminated").invoke(handler);
-                    Object terminating = handler.getClass().getMethod("isProcessTerminating").invoke(handler);
-                    alive = Boolean.FALSE.equals(terminated) && Boolean.FALSE.equals(terminating);
-                } catch (Throwable t) {
-                    alive = null;
-                }
-                if (!Boolean.TRUE.equals(alive)) {
-                    dead++;
-                    LOG.debug("backfill: 描述符 " + descriptor.getClass().getName() + " 进程已结束/正在结束——跳过");
-                    continue;
-                }
-                boolean isJvm = jvmHandlerClass != null && jvmHandlerClass.isInstance(handler);
-                if (!isJvm) {
-                    nonJvm++;
-                    LOG.debug("backfill: 描述符 " + descriptor.getClass().getName()
-                            + " handler 非 JVM 进程（" + handler.getClass().getName() + "）——跳过");
-                    continue;
-                }
-                backfilled++;
-                LOG.info("backfill: 发现订阅前已在跑的 JVM 进程（" + handler.getClass().getName() + "）——补发 onProcessAppeared");
-                AgentManager.getInstance(project).onProcessAppeared(handler, true);
-            }
-            LOG.info("backfill: 订阅后补扫完成——描述符 " + descriptors.length + " 个，补发 " + backfilled
-                    + "（无handler " + noHandler + " / 已结束 " + dead + " / 非JVM " + nonJvm
-                    + "，project=" + project.getName() + "）");
+            doScanAndAttach(project, logTag);
         } catch (Throwable t) {
             if (FatalErrors.isFatal(t)) throw (Error) t; // T-FP-02：fatal 透传
-            LOG.warn("backfill: 订阅后在跑进程补扫失败（补位路径，不影响项目打开）", t);
+            LOG.warn(logTag + ": 在跑进程补扫失败（补位路径，不影响调用方）", t);
         }
+        return lastScanAttachedCount;
+    }
+
+    private static void doScanAndAttach(Project project, String logTag) throws Exception {
+        Class<?> rcmClass = Class.forName(
+                "com.intellij.execution.ui.RunContentManager",
+                true,
+                PLATFORM_CLASS_LOADER);
+        Object rcm = rcmClass.getMethod("getInstance", Project.class).invoke(null, project);
+        Object raw;
+        try {
+            raw = rcmClass.getMethod("getAllDescriptors").invoke(rcm);
+        } catch (Throwable t) {
+            raw = null;
+        }
+        Object[] descriptors;
+        if (raw instanceof Object[] array) {
+            descriptors = array;
+        } else if (raw instanceof java.util.Collection<?> collection) {
+            descriptors = collection.toArray();
+        } else {
+            LOG.info(logTag + ": getAllDescriptors 不可用——跳过补扫（project=" + project.getName() + "）");
+            return;
+        }
+        int noHandler = 0;
+        int dead = 0;
+        int nonJvm = 0;
+        int backfilled = 0;
+        Class<?> jvmHandlerClass;
+        try {
+            jvmHandlerClass = Class.forName(
+                    "com.intellij.execution.process.BaseOSProcessHandler",
+                    true,
+                    PLATFORM_CLASS_LOADER);
+        } catch (Throwable t) {
+            jvmHandlerClass = null;
+        }
+        for (Object descriptor : descriptors) {
+            if (descriptor == null) {
+                continue;
+            }
+            Object handler;
+            try {
+                handler = descriptor.getClass().getMethod("getProcessHandler").invoke(descriptor);
+            } catch (Throwable t) {
+                handler = null;
+            }
+            if (handler == null) {
+                noHandler++;
+                LOG.debug(logTag + ": 描述符 " + descriptor.getClass().getName() + " 无 processHandler——跳过");
+                continue;
+            }
+            Boolean alive;
+            try {
+                Object terminated = handler.getClass().getMethod("isProcessTerminated").invoke(handler);
+                Object terminating = handler.getClass().getMethod("isProcessTerminating").invoke(handler);
+                alive = Boolean.FALSE.equals(terminated) && Boolean.FALSE.equals(terminating);
+            } catch (Throwable t) {
+                alive = null;
+            }
+            if (!Boolean.TRUE.equals(alive)) {
+                dead++;
+                LOG.debug(logTag + ": 描述符 " + descriptor.getClass().getName() + " 进程已结束/正在结束——跳过");
+                continue;
+            }
+            boolean isJvm = jvmHandlerClass != null && jvmHandlerClass.isInstance(handler);
+            if (!isJvm) {
+                nonJvm++;
+                LOG.debug(logTag + ": 描述符 " + descriptor.getClass().getName()
+                        + " handler 非 JVM 进程（" + handler.getClass().getName() + "）——跳过");
+                continue;
+            }
+            backfilled++;
+            LOG.info(logTag + ": 发现已在跑的 JVM 进程（" + handler.getClass().getName() + "）——补发 onProcessAppeared");
+            AgentManager.getInstance(project).onProcessAppeared(handler, true);
+        }
+        LOG.info(logTag + ": 在跑进程扫描完成——描述符 " + descriptors.length + " 个，补发 " + backfilled
+                + "（无handler " + noHandler + " / 已结束 " + dead + " / 非JVM " + nonJvm
+                + "，project=" + project.getName() + "）");
+        lastScanAttachedCount = backfilled;
     }
 
     /** 纯判定（测试缝）：profile 是否模块型主配置；反射失败保守按主进程处理（宁清零勿永不归零）。 */

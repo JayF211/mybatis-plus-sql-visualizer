@@ -45,6 +45,15 @@ public final class PremainChannel implements Disposable {
     /** 通道是否已关闭（accept 循环退出判据）。 */
     public volatile boolean closed = false;
 
+    /**
+     * T-PremainReattach S1：暂停待重连态（关开关 {@code AgentManager.shutdownAll} 对 claimed 通道的分流语义）。
+     * 暂停 = accept 循环退出、<b>监听 socket 保留</b>——agent 侧 SenderLoop 重连在内核 backlog 停泊
+     * （不被 accept 也就不计入 agent 侧「连上即被关」的 [放弃端口计数]，暂停期可任意长），重开后
+     * {@code AgentManager.resumePremainChannel} 重建 accept 循环，第一个停泊连接即被取回重建会话，
+     * 跳过注定失败的 loadAgent（agentmain 不重入，新端口送不进去）。
+     */
+    public volatile boolean paused = false;
+
     public PremainChannel(int port, ServerSocket server, long preparedAtMs) {
         this.port = port;
         this.server = server;

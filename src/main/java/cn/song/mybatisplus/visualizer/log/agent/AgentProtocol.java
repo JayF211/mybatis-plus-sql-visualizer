@@ -64,9 +64,19 @@ public final class AgentProtocol {
      */
     public static final long ONLINE_WINDOW_MS = HEARTBEAT_INTERVAL_MS * 3;
 
-    /** loadAgent 参数串（§4.3 k=v 契约，agent 侧 AgentArgs.parse 对应）。 */
+    /**
+     * loadAgent 参数串（§4.3 k=v 契约，agent 侧 AgentArgs.parse 对应）。
+     * T-StackHoverUi：追加 {@code stackFrames}（调用栈快照总帧数；旧 agent 的 AgentArgs.parse 容忍未知键）。
+     * 缺省 24 与 PluginSettings.DEFAULT_ENHANCED_CAPTURE_STACK_MAX_FRAMES 同值
+     * （协议层不反向依赖 config 包；生产调用方一律显式传设置值）。
+     */
+    public static String agentArgs(int port, String logLevel, int stackMaxFrames) {
+        return "port=" + port + ";logLevel=" + logLevel + ";stackFrames=" + stackMaxFrames;
+    }
+
+    /** loadAgent 参数串（stackMaxFrames 缺省 24，Kotlin 默认参数的便捷重载）。 */
     public static String agentArgs(int port, String logLevel) {
-        return "port=" + port + ";logLevel=" + logLevel;
+        return agentArgs(port, logLevel, 24);
     }
 
     /** loadAgent 参数串（logLevel 缺省 warn，Kotlin 默认参数的便捷重载）。 */
@@ -90,13 +100,19 @@ public final class AgentProtocol {
         return configBody(disabled, desensitize, skipPrefixes, java.util.List.of());
     }
 
-    /**
-     * T-ToolSiteBizFrame：CONFIG 帧再追加 JAR 业务帧反向名单
-     * （{@code "bizJarPrefixes":["a.","b."]}；空列表省略键，旧 agent contains 解析天然忽略未知键）。
-     * 语义与 skipPrefixes 相反（名单内包名的帧即使来自 JAR 也按业务帧对待），键彼此独立。
-     */
+    /** 无 stackMaxFrames 的四参形态保留兼容（帧数取协议缺省 24）；生产走五参重载。 */
     public static String configBody(boolean disabled, boolean desensitize,
             java.util.List<String> skipPrefixes, java.util.List<String> bizJarPrefixes) {
+        return configBody(disabled, desensitize, skipPrefixes, bizJarPrefixes, 24);
+    }
+
+    /**
+     * T-StackHoverUi：CONFIG 帧再追加调用栈快照总帧数（{@code "stackFrames":<int>}，恒带键无空格——
+     * agent 侧 SenderLoop 按 {@code "stackFrames":} 定位后扫数字；缺省键=保持现值）。旧 agent contains
+     * 解析天然忽略未知键；CONFIG 回执（CMD_CONFIG_ACK）形态不动——帧数无需生效回执。
+     */
+    public static String configBody(boolean disabled, boolean desensitize,
+            java.util.List<String> skipPrefixes, java.util.List<String> bizJarPrefixes, int stackMaxFrames) {
         java.util.List<String> clean = new java.util.ArrayList<>();
         for (String p : skipPrefixes) {
             String trimmed = p.trim();
@@ -135,6 +151,7 @@ public final class AgentProtocol {
             }
             parts.add("\"bizJarPrefixes\":[" + arr + "]");
         }
+        parts.add("\"stackFrames\":" + stackMaxFrames);
         return "{" + String.join(",", parts) + "}";
     }
 

@@ -80,13 +80,20 @@ public final class PremainInjection {
     }
 
     /**
-     * {@code -javaagent} VM 选项：{@code -javaagent:<jar 绝对路径>=port=<n>;logLevel=warn}。
+     * {@code -javaagent} VM 选项：{@code -javaagent:<jar 绝对路径>=port=<n>;logLevel=warn;stackFrames=<n>}。
      *
-     * args 段直接复用 {@link AgentProtocol#agentArgs(int)}（AgentProtocol.kt:31），与 agent 侧
+     * args 段直接复用 {@link AgentProtocol#agentArgs(int, String, int)}（AgentProtocol.kt:62），与 agent 侧
      * {@code AgentArgs.parse}（AgentArgs.java:20-55）的 {@code k=v} 分号契约逐字对齐——两侧任一侧改动
      * 都会被 {@code AgentProtocolSyncTest} 的常量对齐守卫拦下。
+     * T-StackHoverUi：{@code stackMaxFrames} 由调用方传设置值（本类保持纯函数不依赖 config 包；
+     * 缺省 24 与 PluginSettings 缺省同值）。
      */
+    public static String vmOption(String jarPath, int port, int stackMaxFrames) {
+        return "-javaagent:" + jarPath + "=" + AgentProtocol.agentArgs(port, "warn", stackMaxFrames);
+    }
+
+    /** {@code -javaagent} VM 选项（stackMaxFrames 缺省 24，Kotlin 默认参数的便捷重载）。 */
     public static String vmOption(String jarPath, int port) {
-        return "-javaagent:" + jarPath + "=" + AgentProtocol.agentArgs(port);
+        return vmOption(jarPath, port, 24);
     }
 }
