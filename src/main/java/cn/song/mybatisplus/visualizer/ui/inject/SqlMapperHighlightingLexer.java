@@ -137,10 +137,17 @@ public class SqlMapperHighlightingLexer extends LexerBase {
      */
     private boolean isKeywordAt(int start, int end) {
         int len = end - start;
+        if (buffer instanceof String) {
+            String s = (String) buffer;
+            for (String keyword : SqlMapperLanguage.KEYWORDS) {
+                if (keyword.length() == len && s.regionMatches(true, start, keyword, 0, len)) {
+                    return true;
+                }
+            }
+            return false;
+        }
         for (String keyword : SqlMapperLanguage.KEYWORDS) {
-            if (keyword.length() == len && buffer instanceof String
-                    ? ((String) buffer).regionMatches(true, start, keyword, 0, len)
-                    : keyword.length() == len && regionMatchesIgnoreCase(start, keyword, len)) {
+            if (keyword.length() == len && regionMatchesIgnoreCase(start, keyword, len)) {
                 return true;
             }
         }
