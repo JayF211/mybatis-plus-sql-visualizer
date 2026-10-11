@@ -793,7 +793,16 @@ public final class SqlPreviewPanelEditorLifecycleKt {
             // T-PreviewLineCommentDash O-134：行注释接管的减计数端点（与 assemblePreviewEditor 的
             // install 对称；引用归零即换回平台原动作。幂等，未打标零动作）
             EditorCommentShortcuts.uninstall(ed);
-            EditorFactory.getInstance().releaseEditor(ed);
+            // T-K2JWalk1 KW-1：跨工程切换残留的预览弹窗关闭时，两个面板实例可能先后持有同一编辑器
+            // （showSql 双走 createEditor 后字段被覆盖转移），后到方的 releaseEditor 会被平台
+            // TraceableDisposable 断言为「Double release of editor」SEVERE（DisposalException 是
+            // package-private，不可 catch）——isDisposed 前置判断幂等跳过，首次释放已生效无资源可补
+            if (ed.isDisposed()) {
+                com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel.class)
+                        .warn("[KW-1] editor already disposed, skip release: " + System.identityHashCode(ed));
+            } else {
+                EditorFactory.getInstance().releaseEditor(ed);
+            }
             p.editor = null;
         }
         // T-PrewarmLateRecover F1：编辑器没了，降级文档身份随之失效

@@ -15,12 +15,14 @@ class SampleSelectedTableActionLimitTest : BasePlatformTestCase() {
 
     private fun templateOf(selected: String): String {
         // template 构造参数为 lambda 属性——经子类实例化直接驱动（与生产同一函数对象）
+        // k2j 适配：SelectedTableSqlTemplateAction 为 Java 类，template 字段是
+        // java.util.function.Function<String, String>（master 侧为 Kotlin (String) -> String）
         val action = SampleSelectedTableAction()
         val field = SelectedTableSqlTemplateAction::class.java.getDeclaredField("template")
         field.isAccessible = true
         @Suppress("UNCHECKED_CAST")
-        val template = field.get(action) as (String) -> String
-        return template(selected)
+        val template = field.get(action) as java.util.function.Function<String, String>
+        return template.apply(selected)
     }
 
     private fun withLimit(limit: Int, block: () -> Unit) {
