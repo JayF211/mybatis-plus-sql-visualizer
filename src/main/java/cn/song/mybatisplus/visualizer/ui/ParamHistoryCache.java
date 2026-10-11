@@ -1,20 +1,28 @@
+// T-SyncK2JMaster482 波D2 自 master src/main/kotlin/cn/song/mybatisplus/visualizer/ui/ParamHistoryCache.kt
+// （R22 T-04 命名方案 + T-DevAcceptFix2 ①按键激活指针 + F49/F50 增量同步）
 package cn.song.mybatisplus.visualizer.ui;
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings;
+import cn.song.mybatisplus.visualizer.log.LogSqlModelsKt;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.util.AbstractMap;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Supplier;
 
 /**
  * P-05：参数历史缓存——LRU 淘汰 + 持久化。
  *
- * <p>同一实体类的查询在不同预览间复用上次填的参数值（按 {@code 表名 + SQL 模板指纹} 缓存）。
+ * <p>同一实体类的查询在不同预览间复用上次填的参数值（按 {@code 表名 + SQL 模板指纹} 缓存）。</p>
  * <ul>
  *   <li>内存缓存：{@link LinkedHashMap} accessOrder=true（LRU），运行时快速读写。</li>
  *   <li>持久化：{@link PluginSettings.State#getParamHistoryJson()}（JSON 字符串），IDE 重启后恢复。</li>
@@ -23,11 +31,42 @@ import java.util.Set;
  *
  * <p>序列化/反序列化用自研最小 JSON（避免引入新依赖）；格式：
  * <pre>[{"key":"tbl:abcdef...",{"source1":"val1","source2":"val2"}}]</pre>
+ *
+ * <p>R22 T-04（命名方案，D2 定案）：存储结构从「单方案」升级「多方案」——</p>
+ * <ul>
+ *   <li><b>默认方案</b>（{@link #DEFAULT_SCHEME}）：既有自动召回链路的数据落点，仍持久化到
+ *    {@code PluginSettings.State.paramHistoryJson}（旧字段语义不变——降级兼容 + 存量零迁移）；</li>
+ *   <li><b>命名方案</b>：方案名 → (缓存键 → 快照)，持久化到 {@code paramSchemesJson}；激活方案落
+ *    {@code paramActiveScheme}。</li>
+ * </ul>
+ * <p>旧 {@code paramHistoryJson} 数据在恢复时自动成为默认方案内容（**D2：旧数据自动成为「默认方案」零迁移损失**），
+ * 老用户无感。{@code save}/{@code recall} 按激活方案路由——未触碰方案的调用方（含既有自动保存/召回链）行为逐字节不变。</p>
  */
 public class ParamHistoryCache {
 
     /** 缓存上限（LRU 淘汰）。 */
     public static final int MAX_HISTORY_SIZE = 50;
+
+    /** F49：命名方案个数上限（防方案集无界膨胀；达上限后新建另存被拒，存量操作不受影响）。 */
+    public static final int MAX_SCHEME_COUNT = 20;
+
+    /**
+     * F49 计数缝（测试用）：非空时 {@link #persistToStorage}（全量序列化）每次回调一次。
+     * 「switch 只写指针」守卫=switchScheme 前后计数不变；摘掉修复（switch 回走全量）→ 计数+1 → 红。
+     */
+    public static volatile Runnable persistProbe = null;
+
+    /** R22 T-04：默认方案内部名（空串——用户方案名恒非空不冲突；UI 显示名经 bundle「默认方案」本地化）。 */
+    public static final String DEFAULT_SCHEME = "";
+
+    /** R22 T-04：命名方案持久化 key（IDE：PluginSettings.State.paramSchemesJson；测试：静态存储 key）。 */
+    private static final String SCHEMES_STORAGE_KEY = "paramSchemes";
+
+    /** R22 T-04：激活方案持久化 key（IDE：PluginSettings.State.paramActiveScheme；测试：静态存储 key）。 */
+    private static final String ACTIVE_SCHEME_STORAGE_KEY = "paramActiveScheme";
+
+    /** T-DevAcceptFix2 ①：按键激活指针的测试环境静态存储键（IDE 环境走 PluginSettings 同名字段）。 */
+    private static final String ACTIVE_BY_KEY_STORAGE_KEY = "paramActiveSchemeByKey";
 
     /** 持久化 key（IDE 环境：PluginSettings.State.paramHistoryJson 字段；测试环境：静态存储 key）。 */
     private static final String STORAGE_KEY = "paramHistory";
@@ -39,8 +78,40 @@ public class ParamHistoryCache {
     private static final Map<String, String> fallbackStorage = new HashMap<>();
 
     private final int maxSize;
-    /** LRU 内存缓存（accessOrder=true：访问顺序，最近访问在尾部）。 */
+
+    /** LRU 内存缓存（accessOrder=true：访问顺序，最近访问在尾部）。默认方案（R22 T-04）的数据落点。 */
     private final LinkedHashMap<String, Map<String, String>> cache;
+
+    /**
+     * R22 T-04：命名方案存储——方案名 → (缓存键 → 参数快照)（逐方案 LRU）。
+     *
+     * <p>F50（T-PerfQuick5）：顶层结构 **ConcurrentHashMap 化**——后台 pooled 写回
+     * （{@link #saveForScheme}，SqlPreviewPanel 写回线程）与 EDT 读（{@link #schemeNames}/对话框渲染器）
+     * 此前共用裸 LinkedHashMap 无任何同步保护，结构写与遍历并发即 CME/丢条目面。内层逐方案 LRU（accessOrder）
+     * 维持原样——与默认方案 {@link #cache} 同族既知形态，本轮在案不动。</p>
+     */
+    private final ConcurrentHashMap<String, LinkedHashMap<String, Map<String, String>>> schemes = new ConcurrentHashMap<>();
+
+    /**
+     * F50：命名方案**创建序**索引——CHM 无序，而方案清单的「创建序」是 UI 既有语义
+     * （对话框列表/下拉顺序，ParamHistoryCacheTest 创建序断言在案）。序列化顺序也按本索引
+     * 走（{@link #serializeSchemesToJson}），持久化往返创建序不漂移。复制写清单（读多写少、
+     * 写仅限方案操作与惰性建桶）。
+     */
+    private final CopyOnWriteArrayList<String> schemeOrder = new CopyOnWriteArrayList<>();
+
+    /**
+     * T-DevAcceptFix2 ①（20261006 第二轮验收）：激活方案**按缓存键（=方法/SQL）记录**。
+     *
+     * <p>原实现为全局单值——预设名清单与激活指针全局共享，用户实测「所有的方法都是一套预设」。
+     * 现：本表按缓存键记激活名（键=方法/SQL，与快照同分桶）；{@link #legacyActiveScheme} 承接旧持久化
+     * 字段 {@code paramActiveScheme}（全局单值）作为**未记录键的回落值**，且仅在「该名字在当前键下确有条目」
+     * 时才生效（否则回落默认方案）——迁移安全（V92）。</p>
+     */
+    private final ConcurrentHashMap<String, String> activeSchemeByKey = new ConcurrentHashMap<>();
+
+    /** 旧全局单值激活方案（持久化兼容 + 未记录键的回落；语义见 {@link #activeSchemeFor}）。 */
+    private String legacyActiveScheme = DEFAULT_SCHEME;
 
     public ParamHistoryCache() {
         this(MAX_HISTORY_SIZE);
@@ -54,121 +125,456 @@ public class ParamHistoryCache {
     }
 
     /**
-     * 计算缓存键 = {@code tableName:fingerprint}（无表名返回 null，不缓存）。
+     * 计算缓存键（R22 T-01，D1=A 定案）：有表名 = {@code tableName:fingerprint}（存量兼容）；
+     * **无表名 = {@code sql:} + SQL 文本规范化指纹**（dedupeKey 同源口径——{@code normalizeSqlWhitespace}
+     * + {@code sqlFingerprint}），纯文本/自定义 DAO 预览的调试参数不再丢失。
      *
-     * @param tableName 表名（null 表示纯文本预览，不缓存）
+     * @param tableName 表名（null 表示纯文本预览——R22 起以规范化指纹为键持久化）
      * @param rawSql    原始 SQL（用于计算指纹）
-     * @return 缓存键，或 null（无表名时不缓存）
+     * @return 缓存键（恒非 null——rawSql 空串也有指纹；调用方仍可按需判空）
      */
     public String computeKey(String tableName, String rawSql) {
-        if (tableName == null || tableName.isEmpty()) return null;
-        return tableName + ":" + fingerprint(rawSql);
+        if (tableName != null && !tableName.isEmpty()) return tableName + ":" + fingerprint(rawSql);
+        String normalized = LogSqlModelsKt.normalizeSqlWhitespace(rawSql);
+        return "sql:" + LogSqlModelsKt.sqlFingerprint(normalized);
     }
 
     /**
      * 保存参数值到缓存（LRU 淘汰 + 持久化）。
      *
+     * <p>R22 T-04：按**激活方案**路由（未触碰方案的调用方 = 默认方案，行为不变）。
+     * 线程池延迟落盘场景（快照与写入可能跨方案切换）请用 {@link #saveForScheme} 显式带方案名。</p>
+     *
      * @param key    缓存键（由 {@link #computeKey} 生成）
      * @param params 参数映射（source → value）
      */
     public void save(String key, Map<String, String> params) {
+        saveForScheme(activeSchemeFor(key), key, params);
+    }
+
+    /**
+     * R22 T-04：把快照写入**指定方案**——调用方取快照时的方案名随行落库，
+     * 防止「EDT 取快照 → 线程池写回」窗口内用户切换方案导致的串桶。
+     *
+     * @param scheme 目标方案名（空串 = 默认方案）
+     * @param key    缓存键
+     * @param params 参数映射（source → value）
+     */
+    public void saveForScheme(String scheme, String key, Map<String, String> params) {
         if (params == null || params.isEmpty()) return;
-        cache.put(key, new HashMap<>(params));
-        enforceMaxSize();
+        entriesForScheme(scheme).put(key, params);
+        enforceMaxSize(entriesForScheme(scheme));
         persistToStorage();
     }
 
     /**
-     * 召回历史参数值。
+     * 召回历史参数值（R22 T-04 起按激活方案路由）。
      *
      * @param key 缓存键
      * @return 历史参数映射，未命中返回 null
      */
     public Map<String, String> recall(String key) {
-        Map<String, String> value = cache.get(key);
+        String active = activeSchemeFor(key);
+        LinkedHashMap<String, Map<String, String>> entries =
+                DEFAULT_SCHEME.equals(active) ? cache : schemes.get(active);
+        if (entries == null) return null;
+        Map<String, String> value = entries.get(key);
         if (value != null) {
             // 访问后 LinkedHashMap 自动更新顺序（accessOrder=true），无需手动处理
-            enforceMaxSize();
+            enforceMaxSize(entries);
         }
         return value;
     }
 
-    /** 清空缓存（内存 + 持久化）。 */
+    /** 清空缓存（内存 + 持久化）。R22 T-04：含全部命名方案与激活方案复位（测试隔离边界）。 */
     public void clear() {
         cache.clear();
+        schemes.clear();
+        schemeOrder.clear();
+        activeSchemeByKey.clear();
+        legacyActiveScheme = DEFAULT_SCHEME;
         persistToStorage();
     }
 
-    /** 当前缓存条目数（测试断言用）。 */
+    // ---------------- R22 T-04：命名方案 API（D2 定案——旧数据自动成为默认方案） ----------------
+
+    /**
+     * 命名方案清单（默认方案除外，创建序）——**全量**名单（序列化遍历用）。
+     * F50：创建序由 {@link #schemeOrder} 承载；CHM 直查键拼接在尾部（极窄竞态窗内「已建桶未入序」
+     * 的条目不丢），distinct 去重。
+     */
+    public List<String> schemeNames() {
+        List<String> out = new ArrayList<>(schemeOrder);
+        for (String k : schemes.keySet()) {
+            if (!out.contains(k)) out.add(k);
+        }
+        return out;
+    }
+
+    /**
+     * T-DevAcceptFix2 ①：**指定缓存键（=方法/SQL）可见**的命名方案清单（创建序）——
+     * UI（面板下拉/管理对话框）只列「在本方法下确有条目」的预设，达成「每个方法一套预设、互不干扰」。
+     * key 为 null/空（无预览上下文）→ 空表（只有默认方案）。
+     */
+    public List<String> schemeNamesFor(String key) {
+        if (key == null || key.isEmpty()) return List.of();
+        List<String> out = new ArrayList<>();
+        for (String name : schemeNames()) {
+            LinkedHashMap<String, Map<String, String>> entries = schemes.get(name);
+            if (entries != null && entries.containsKey(key)) out.add(name);
+        }
+        return out;
+    }
+
+    /**
+     * T-DevAcceptFix2 ①：指定缓存键的激活方案名。取值链：按键记录 → 旧全局值回落 → 默认方案；
+     * 回落值仅在「该名字在该键下确有条目」时生效（否则默认方案）——迁移安全（V92）。
+     * key 为 null/空 → 默认方案。
+     */
+    public String activeSchemeFor(String key) {
+        if (key == null || key.isEmpty()) return DEFAULT_SCHEME;
+        String stored = activeSchemeByKey.get(key);
+        if (stored == null) stored = legacyActiveScheme;
+        if (DEFAULT_SCHEME.equals(stored)) return DEFAULT_SCHEME;
+        LinkedHashMap<String, Map<String, String>> entries = schemes.get(stored);
+        return (entries != null && entries.containsKey(key)) ? stored : DEFAULT_SCHEME;
+    }
+
+    /** 是否存在指定命名方案。 */
+    public boolean hasScheme(String name) {
+        return schemes.containsKey(name);
+    }
+
+    /**
+     * 旧全局激活方案名（**回落值视图**，数据模型层测试用）——T-DevAcceptFix2 ① 起 UI 一律走
+     * {@link #activeSchemeFor}（按键）。本视图返回 {@link #legacyActiveScheme}（每次切换/另存都会同步更新，
+     * 语义＝「最近一次激活的方案名」）。生产侧调用点已全部迁移，禁在新代码中使用。
+     */
+    public String activeSchemeName() {
+        return legacyActiveScheme;
+    }
+
+    /**
+     * 单参切换（**无键上下文**，数据模型层测试用）——只更新回落值，不建按键记录。
+     * 生产侧（面板/对话框）一律走两参形态。
+     */
+    public void switchScheme(String name) {
+        switchScheme(name, null);
+    }
+
+    /**
+     * 切换指定缓存键的激活方案（面板下拉驱动）。未知方案名忽略（防脏态）；同名幂等不重复落盘。
+     *
+     * <p>F49（T-PerfQuick5）：切换**只写激活指针**（{@link #persistActiveSchemePointer}），不再走
+     * {@link #persistToStorage} 全量序列化——方案内容未变，重序列化全部命名方案 + 无条件重写
+     * legacy 字段属纯写放大，且发生在 EDT 同步路径。
+     * T-DevAcceptFix2 ①：指针按键记录（key 空 = 无预览上下文，仅更新回落值不建记录）。</p>
+     */
+    public void switchScheme(String name, String key) {
+        if (!DEFAULT_SCHEME.equals(name) && !schemes.containsKey(name)) return;
+        if (key == null || key.isEmpty()) {
+            legacyActiveScheme = name;
+            persistActiveSchemePointer();
+            return;
+        }
+        String current = activeSchemeByKey.get(key);
+        if (current != null && current.equals(name) && legacyActiveScheme.equals(name)) return;
+        activeSchemeByKey.put(key, name);
+        legacyActiveScheme = name;
+        persistActiveSchemePointer();
+    }
+
+    /**
+     * 另存为命名方案：把 {@code params} 作为 {@code key} 的快照写入 {@code name}（该键下已存在同名条目则覆盖），
+     * 并把该键激活切到 {@code name}。默认方案名/空名/空快照返回 {@link SchemeOpResult#INVALID}（调用方
+     * 此前静默守卫的显式化——对话框在更早的输入环节已拦，行为不变）；方案名个数达
+     * {@link #MAX_SCHEME_COUNT} 上限返回 {@link SchemeOpResult#LIMIT_REACHED}（F49）。
+     *
+     * <p>T-DevAcceptFix2 ①：查重口径从「名字全局唯一」改为「**该键下**是否已有同名条目」——
+     * 同名预设可在不同方法下各自存在、各存各值（D71 推荐案；重命名/删除维持名字级）。</p>
+     */
+    public SchemeOpResult saveAsScheme(String name, String key, Map<String, String> params) {
+        if (name == null || name.isBlank() || DEFAULT_SCHEME.equals(name) || params == null || params.isEmpty()) {
+            return SchemeOpResult.INVALID;
+        }
+        if (!schemes.containsKey(name) && schemes.size() >= MAX_SCHEME_COUNT) return SchemeOpResult.LIMIT_REACHED;
+        entriesForScheme(name).put(key, params);
+        enforceMaxSize(schemes.get(name));
+        activeSchemeByKey.put(key, name);
+        legacyActiveScheme = name;
+        persistToStorage();
+        return SchemeOpResult.OK;
+    }
+
+    /** 召回指定方案的 {@code key} 快照（方案不存在/键未命中返回 null）。 */
+    public Map<String, String> recallFromScheme(String name, String key) {
+        LinkedHashMap<String, Map<String, String>> entries = schemes.get(name);
+        return entries != null ? entries.get(key) : null;
+    }
+
+    /** 指定方案当前条目数（缓存键数，测试/对话框摘要用）。 */
+    public int schemeEntryCount(String name) {
+        LinkedHashMap<String, Map<String, String>> entries = schemes.get(name);
+        return entries != null ? entries.size() : 0;
+    }
+
+    /** R22 T-04：方案操作结果（对话框状态行分流）。F49 增 LIMIT_REACHED（个数上限）与 INVALID（入参不合规）。 */
+    public enum SchemeOpResult { OK, DUPLICATE, NOT_FOUND, DEFAULT_PROTECTED, LIMIT_REACHED, INVALID }
+
+    /**
+     * 重命名方案（激活指针随迁）。
+     * F50：CHM 化后不再整表重建——remove+put 保序（创建序由 {@link #schemeOrder} 原位换名承载），
+     * 语义与旧 LinkedHashMap 重建逐值等价（NOT_FOUND/DUPLICATE 判定次序不变）。
+     */
+    public SchemeOpResult renameScheme(String oldName, String newName) {
+        if (DEFAULT_SCHEME.equals(oldName)) return SchemeOpResult.DEFAULT_PROTECTED;
+        LinkedHashMap<String, Map<String, String>> entries = schemes.get(oldName);
+        if (entries == null) return SchemeOpResult.NOT_FOUND;
+        if (newName == null || newName.isBlank() || DEFAULT_SCHEME.equals(newName) || schemes.containsKey(newName)) {
+            return SchemeOpResult.DUPLICATE;
+        }
+        schemes.remove(oldName);
+        schemes.put(newName, entries);
+        int idx = schemeOrder.indexOf(oldName);
+        if (idx >= 0) {
+            schemeOrder.remove(idx);
+            schemeOrder.add(idx, newName);
+        }
+        // T-DevAcceptFix2 ①：重命名维持**名字级**（D71 定案）——按键指针与回落值随迁
+        activeSchemeByKey.entrySet().removeIf(e -> oldName.equals(e.getValue()));
+        for (String k : new ArrayList<>(activeSchemeByKey.keySet())) {
+            if (schemes.get(newName).containsKey(k)) activeSchemeByKey.put(k, newName);
+        }
+        if (legacyActiveScheme.equals(oldName)) legacyActiveScheme = newName;
+        persistToStorage();
+        return SchemeOpResult.OK;
+    }
+
+    /** 删除方案（激活方案被删时归位默认方案）。T-DevAcceptFix2 ①：按键指针与回落值同步摘除。 */
+    public SchemeOpResult deleteScheme(String name) {
+        if (DEFAULT_SCHEME.equals(name)) return SchemeOpResult.DEFAULT_PROTECTED;
+        if (schemes.remove(name) == null) return SchemeOpResult.NOT_FOUND;
+        schemeOrder.remove(name);
+        activeSchemeByKey.entrySet().removeIf(e -> name.equals(e.getValue()));
+        if (legacyActiveScheme.equals(name)) legacyActiveScheme = DEFAULT_SCHEME;
+        persistToStorage();
+        return SchemeOpResult.OK;
+    }
+
+    /** 当前缓存条目数（默认方案；测试断言用）。 */
     public int size() {
         return cache.size();
     }
 
-    /** 是否包含指定键（测试断言用，触发 LRU 顺序更新）。 */
+    /** 是否包含指定键（该键的激活方案；测试断言用，触发 LRU 顺序更新）。 */
     public boolean containsKey(String key) {
-        return cache.containsKey(key);
+        return entriesForScheme(activeSchemeFor(key)).containsKey(key);
     }
 
-    /** LRU 淘汰：超过 maxSize 时移除最久未访问的条目（头部）。 */
-    private void enforceMaxSize() {
-        while (cache.size() > maxSize) {
-            String oldest = cache.keySet().iterator().next();
-            cache.remove(oldest);
+    /**
+     * R22 T-04：指定方案的条目视图（默认方案 = {@link #cache}；命名方案惰性建，同 LRU 语义）。
+     * F50：CHM 原子建桶（computeIfAbsent，原 getOrPut 非原子），建桶同时补创建序（幂等）。
+     */
+    private LinkedHashMap<String, Map<String, String>> entriesForScheme(String scheme) {
+        if (DEFAULT_SCHEME.equals(scheme)) return cache;
+        LinkedHashMap<String, Map<String, String>> entries =
+                schemes.computeIfAbsent(scheme, k -> newSchemeEntries());
+        schemeOrder.addIfAbsent(scheme);
+        return entries;
+    }
+
+    /** R22 T-04：新建方案条目映射（与默认方案同 LRU 形态）。 */
+    private LinkedHashMap<String, Map<String, String>> newSchemeEntries() {
+        return new LinkedHashMap<>(maxSize + 1, 0.75f, true);
+    }
+
+    /** LRU 淘汰：{@code entries} 超过 maxSize 时移除最久未访问的条目（头部）。 */
+    private void enforceMaxSize(LinkedHashMap<String, Map<String, String>> entries) {
+        while (entries.size() > maxSize) {
+            String oldest = entries.keySet().iterator().next();
+            entries.remove(oldest);
         }
     }
 
-    /** 持久化到 PluginSettings.State.paramHistoryJson（IDE 环境）；测试环境回落静态存储。 */
+    /**
+     * 全量持久化到 PluginSettings（IDE 环境）：命名方案 + 激活方案入新字段，默认方案继续写旧字段（降级兼容）；
+     * 测试环境回落静态存储。F49 计数缝：{@link #persistProbe} 非空时回调一次（基准/守卫测试数「全量序列化次数」）。
+     */
     private void persistToStorage() {
-        String json = serializeToJson();
-        boolean written = false;
+        Runnable probe = persistProbe;
+        if (probe != null) probe.run();
+        String schemesJson = serializeSchemesToJson();
+        String active = legacyActiveScheme;
+        String activeByKey = serializeActiveByKey();
+        boolean written;
         try {
-            PluginSettings.getInstance().getState().setParamHistoryJson(json);
+            PluginSettings.State state = PluginSettings.getInstance().getState();
+            state.setParamSchemesJson(schemesJson);
+            state.setParamActiveScheme(active);
+            state.setParamActiveSchemeByKey(activeByKey);
             written = true;
-        } catch (Exception ignored) {
+        } catch (Throwable t) {
             written = false;
         }
         if (!written) {
             // 测试环境（无 IDE 服务）：回落静态存储，保证持久化往返可测
             synchronized (fallbackStorage) {
-                fallbackStorage.put(STORAGE_KEY, json);
+                fallbackStorage.put(SCHEMES_STORAGE_KEY, schemesJson);
+                fallbackStorage.put(ACTIVE_SCHEME_STORAGE_KEY, active);
+                fallbackStorage.put(ACTIVE_BY_KEY_STORAGE_KEY, activeByKey);
             }
         }
-    }
-
-    /** 从 PluginSettings.State.paramHistoryJson 恢复内存缓存（IDE 环境）；测试环境回落静态存储。 */
-    private void restoreFromPersistence() {
-        String json = "";
+        // 旧字段保持既有语义：默认方案快照继续写 paramHistoryJson（旧版构建可读，存量零迁移的另一面）
+        String legacyJson = serializeToJson(cache);
+        boolean legacyWritten;
         try {
-            json = PluginSettings.getInstance().getState().getParamHistoryJson();
-        } catch (Exception ignored) {
-            json = "";
+            PluginSettings.getInstance().getState().setParamHistoryJson(legacyJson);
+            legacyWritten = true;
+        } catch (Throwable t) {
+            legacyWritten = false;
         }
-        if (json == null || json.isBlank()) {
-            // 测试环境：读静态存储
+        if (!legacyWritten) {
             synchronized (fallbackStorage) {
-                String fallback = fallbackStorage.get(STORAGE_KEY);
-                json = fallback != null ? fallback : "";
+                fallbackStorage.put(STORAGE_KEY, legacyJson);
             }
         }
-        if (json.isBlank()) return;
-        try {
-            Map<String, Map<String, String>> restored = deserializeFromJson(json);
-            cache.putAll(restored);
-        } catch (Exception ignored) {
-            // 持久化数据损坏容错
-        }
-        enforceMaxSize();
     }
 
     /**
-     * 自研最小 JSON 序列化（格式：[{@code [{"key":{...params}}]}]）。
-     * 仅处理 String→String 映射，key/value 含特殊字符时转义。
+     * F49：只写激活方案指针——{@code switchScheme} 专用轻量落盘路径，不做方案集/legacy 的
+     * 全量重序列化（内容未变，重写属 EDT 同步路径上的纯写放大）。
      */
-    private String serializeToJson() {
-        if (cache.isEmpty()) return "";
+    private void persistActiveSchemePointer() {
+        String active = legacyActiveScheme;
+        String activeByKey = serializeActiveByKey();
+        boolean written;
+        try {
+            PluginSettings.State state = PluginSettings.getInstance().getState();
+            state.setParamActiveScheme(active);
+            state.setParamActiveSchemeByKey(activeByKey);
+            written = true;
+        } catch (Throwable t) {
+            written = false;
+        }
+        if (!written) {
+            synchronized (fallbackStorage) {
+                fallbackStorage.put(ACTIVE_SCHEME_STORAGE_KEY, active);
+                fallbackStorage.put(ACTIVE_BY_KEY_STORAGE_KEY, activeByKey);
+            }
+        }
+    }
+
+    /**
+     * T-DevAcceptFix2 ①：按键激活指针序列化（{@code {"缓存键":"方案名", ...}}，最小 JSON 形态；
+     * 复用 {@link #escapeJson}/{@link #unescapeJson} 与 {@link #splitTopLevelEntries} 切分工具）。
+     */
+    private String serializeActiveByKey() {
+        if (activeSchemeByKey.isEmpty()) return "";
+        StringBuilder sb = new StringBuilder("{");
+        boolean first = true;
+        // 键排序后遍历（对齐 F50 口径）：CHM 遍历序为哈希序，不排序会使持久化 JSON 序漂移
+        List<String> keys = new ArrayList<>(activeSchemeByKey.keySet());
+        Collections.sort(keys);
+        for (String k : keys) {
+            String v = activeSchemeByKey.get(k);
+            if (v == null) continue;
+            if (!first) sb.append(",");
+            first = false;
+            sb.append("\"").append(escapeJson(k)).append("\":\"").append(escapeJson(v)).append("\"");
+        }
+        sb.append("}");
+        return sb.toString();
+    }
+
+    /** T-DevAcceptFix2 ①：按键激活指针反序列化（损坏/空 → 空表，不崩溃）。 */
+    private Map<String, String> deserializeActiveByKey(String json) {
+        String trimmed = json.trim();
+        if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return Map.of();
+        Map<String, String> result = new LinkedHashMap<>();
+        for (Map.Entry<String, String> e : splitTopLevelEntries(trimmed.substring(1, trimmed.length() - 1))) {
+            String key = unescapeJson(e.getKey());
+            String name = unescapeJson(removeSurrounding(e.getValue(), "\""));
+            if (!key.isEmpty() && !name.isEmpty()) result.put(key, name);
+        }
+        return result;
+    }
+
+    /**
+     * 从持久化恢复内存缓存（IDE 环境）；测试环境回落静态存储。
+     * R22 T-04（D2 定案）：旧 {@code paramHistoryJson} 数据自动成为「默认方案」——零迁移损失，老用户无感。
+     */
+    private void restoreFromPersistence() {
+        // 旧字段 → 默认方案（D2 迁移落点：旧字段只读兼容，数据原样进默认方案）
+        String legacyJson = readPersisted(STORAGE_KEY,
+                () -> PluginSettings.getInstance().getState().getParamHistoryJson());
+        if (legacyJson != null && !legacyJson.isBlank()) {
+            try {
+                for (Map.Entry<String, Map<String, String>> e : deserializeFromJson(legacyJson).entrySet()) {
+                    cache.put(e.getKey(), e.getValue());
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+        // 新字段 → 命名方案 + 激活方案（字段为空/损坏时保持默认方案激活态）
+        String schemesJson = readPersisted(SCHEMES_STORAGE_KEY,
+                () -> PluginSettings.getInstance().getState().getParamSchemesJson());
+        if (schemesJson != null && !schemesJson.isBlank()) {
+            try {
+                for (Map.Entry<String, Map<String, Map<String, String>>> e
+                        : deserializeSchemesFromJson(schemesJson).entrySet()) {
+                    schemes.put(e.getKey(), new LinkedHashMap<>(e.getValue()));
+                    schemeOrder.addIfAbsent(e.getKey()); // F50：JSON 序 = 创建序，恢复时同步入序
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+        String active = readPersisted(ACTIVE_SCHEME_STORAGE_KEY,
+                () -> PluginSettings.getInstance().getState().getParamActiveScheme());
+        if (active == null) active = DEFAULT_SCHEME;
+        if (!DEFAULT_SCHEME.equals(active) && !schemes.containsKey(active)) active = DEFAULT_SCHEME;
+        legacyActiveScheme = active;
+        // T-DevAcceptFix2 ①：按键激活指针恢复（旧字段已作为回落值装载，未记录键自动回落它）
+        String byKeyJson = readPersisted(ACTIVE_BY_KEY_STORAGE_KEY,
+                () -> PluginSettings.getInstance().getState().getParamActiveSchemeByKey());
+        if (byKeyJson != null && !byKeyJson.isBlank()) {
+            try {
+                for (Map.Entry<String, String> e : deserializeActiveByKey(byKeyJson).entrySet()) {
+                    activeSchemeByKey.put(e.getKey(), e.getValue());
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+        // 全方案统一执行上限（含 D2 迁入的默认方案）
+        enforceMaxSize(cache);
+        for (LinkedHashMap<String, Map<String, String>> v : schemes.values()) enforceMaxSize(v);
+    }
+
+    /** 读持久化值（IDE 环境：PluginSettings.State；为空回落测试环境静态存储）。 */
+    private String readPersisted(String storageKey, Supplier<String> fromState) {
+        String fromSettings;
+        try {
+            fromSettings = fromState.get();
+        } catch (Throwable t) {
+            fromSettings = "";
+        }
+        if (fromSettings == null) fromSettings = "";
+        if (!fromSettings.isBlank()) return fromSettings;
+        synchronized (fallbackStorage) {
+            String v = fallbackStorage.get(storageKey);
+            return v != null ? v : "";
+        }
+    }
+
+    /**
+     * 自研最小 JSON 序列化（格式：{@code [{"key":{...params}}]}）。
+     * 仅处理 String→String 映射，key/value 含特殊字符时转义。
+     * R22 T-04：参数化条目源——默认方案与命名方案共用同一数组格式。
+     */
+    private String serializeToJson(Map<String, Map<String, String>> entries) {
+        if (entries.isEmpty()) return "";
         StringBuilder sb = new StringBuilder("[");
         int index = 0;
-        for (Map.Entry<String, Map<String, String>> entry : cache.entrySet()) {
+        for (Map.Entry<String, Map<String, String>> entry : entries.entrySet()) {
             if (index > 0) sb.append(",");
             sb.append("{\"").append(escapeJson(entry.getKey())).append("\":{");
             int pIdx = 0;
@@ -183,6 +589,96 @@ public class ParamHistoryCache {
         }
         sb.append("]");
         return sb.toString();
+    }
+
+    /**
+     * R22 T-04：命名方案序列化——{@code {"方案名":[{key:{...params}}], ...}}。
+     * 每个方案的条目复用旧数组格式（{@link #serializeToJson}）；空方案跳过，全空返回空串（对齐旧字段「无数据=空串」）。
+     * F50：按 {@link #schemeOrder} 创建序遍历（CHM 直查键序为哈希序，直接遍历会使持久化 JSON 序漂移）。
+     */
+    private String serializeSchemesToJson() {
+        List<String> orderedNames = schemeNames();
+        if (orderedNames.isEmpty()) return "";
+        StringBuilder sb = new StringBuilder("{");
+        boolean first = true;
+        for (String name : orderedNames) {
+            LinkedHashMap<String, Map<String, String>> entries = schemes.get(name);
+            if (entries == null) continue;
+            if (entries.isEmpty()) continue;
+            if (!first) sb.append(",");
+            first = false;
+            sb.append("\"").append(escapeJson(name)).append("\":").append(serializeToJson(entries));
+        }
+        sb.append("}");
+        return first ? "" : sb.toString();
+    }
+
+    /**
+     * R22 T-04：命名方案反序列化（解析 {@code {"方案名":[...]}}；失败返回空 map——持久化数据损坏不崩溃）。
+     */
+    private Map<String, Map<String, Map<String, String>>> deserializeSchemesFromJson(String json) {
+        Map<String, Map<String, Map<String, String>>> result = new LinkedHashMap<>();
+        String trimmed = json.trim();
+        if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return Map.of();
+        String content = trimmed.substring(1, trimmed.length() - 1);
+        for (Map.Entry<String, String> e : splitTopLevelEntries(content)) {
+            String valueText = e.getValue();
+            if (!valueText.startsWith("[") || !valueText.endsWith("]")) continue;
+            result.put(unescapeJson(e.getKey()), deserializeFromJson(valueText));
+        }
+        return result;
+    }
+
+    /** R22 T-04：拆顶层 {@code "name":value} 对（考虑嵌套括号与字符串转义；value 可为对象或数组）。 */
+    private List<Map.Entry<String, String>> splitTopLevelEntries(String text) {
+        List<Map.Entry<String, String>> result = new ArrayList<>();
+        int depth = 0;
+        int colonIdx = -1;
+        int entryStart = 0;
+        boolean inString = false;
+        int i = 0;
+        while (i < text.length()) {
+            char c = text.charAt(i);
+            if (inString) {
+                if (c == '\\') i++; // 跳过转义对（如 \" \\）
+                else if (c == '"') inString = false;
+            } else {
+                switch (c) {
+                    case '"':
+                        inString = true;
+                        break;
+                    case '{':
+                    case '[':
+                        depth++;
+                        break;
+                    case '}':
+                    case ']':
+                        depth--;
+                        break;
+                    case ':':
+                        if (depth == 0 && colonIdx < 0) colonIdx = i;
+                        break;
+                    case ',':
+                        if (depth == 0) {
+                            if (entryStart < colonIdx) {
+                                String name = parseJsonString(text, entryStart).str;
+                                result.add(new AbstractMap.SimpleEntry<>(name, text.substring(colonIdx + 1, i).trim()));
+                            }
+                            entryStart = i + 1;
+                            colonIdx = -1;
+                        }
+                        break;
+                    default:
+                        break;
+                }
+            }
+            i++;
+        }
+        if (entryStart < colonIdx) {
+            String name = parseJsonString(text, entryStart).str;
+            result.add(new AbstractMap.SimpleEntry<>(name, text.substring(colonIdx + 1).trim()));
+        }
+        return result;
     }
 
     /**
@@ -324,6 +820,15 @@ public class ParamHistoryCache {
         return sb.toString();
     }
 
+    /** Kotlin {@code String.removeSurrounding(delimiter)} 等价（首尾均为该串时剥除，否则原样）。 */
+    private static String removeSurrounding(String text, String delimiter) {
+        if (text.length() >= delimiter.length() * 2
+                && text.startsWith(delimiter) && text.endsWith(delimiter)) {
+            return text.substring(delimiter.length(), text.length() - delimiter.length());
+        }
+        return text;
+    }
+
     /** (值, 下一个位置) 解析结果载体。 */
     private static final class StrPos {
         final String str;
@@ -336,7 +841,7 @@ public class ParamHistoryCache {
     }
 
     /**
-     * SQL 模板指纹：SHA-256 前 8 字节的 hex 字符串（16 hex 字符）。
+     * SQL 模板指纹：SHA-256 前 16 hex 字符。
      * 相同 SQL → 相同指纹；不同 SQL → 不同指纹（碰撞概率可忽略）。
      */
     public static String fingerprint(String sql) {

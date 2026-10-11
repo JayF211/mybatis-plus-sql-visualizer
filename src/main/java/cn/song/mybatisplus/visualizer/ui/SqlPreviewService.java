@@ -180,12 +180,12 @@ public final class SqlPreviewService {
     }
 
     /** 当前项目（主要用于获取项目级设置）。 */
-    private final Project project;
+    public final Project project;
 
     /**
      * 全局配置（测试环境未注册 service 时为 null，使用默认值）。
      */
-    private final PluginSettings settings = safeGet(PluginSettings::getInstance);
+    public final PluginSettings settings = safeGet(PluginSettings::getInstance);
 
     /**
      * O-5：项目级配置（project-level 轻服务；未启用时回退全局）。
@@ -250,7 +250,7 @@ public final class SqlPreviewService {
     /**
      * O-5：是否格式化输出（项目级优先，回退全局）。
      */
-    private boolean formatSql() {
+    public boolean formatSql() {
         boolean global = (settings != null && settings.getState() != null) ? settings.getState().getFormatSql() : true;
         if (projectSettings != null && projectSettings.isEnabled()) {
             return projectSettings.effectiveFormatSql();
@@ -276,7 +276,7 @@ public final class SqlPreviewService {
 
     /** 有效逻辑删除值（项目级优先，空回退全局）。 */
     @NotNull
-    private String effectiveLogicDeleteValue() {
+    public String effectiveLogicDeleteValue() {
         return effectiveString((settings != null && settings.getState() != null) ? settings.getState().getLogicDeleteValue() : "",
                 projectSettings != null ? projectSettings.effectiveLogicDeleteValue() : null);
     }
@@ -429,12 +429,12 @@ public final class SqlPreviewService {
 
             // T-M15-07：逻辑删除注入（@TableLogic 实体 + 配置开启）
             LogicDeleteState logicDelete = evaluateLogicDeleteState(chain.getCalls());
-            SqlStatement baseStatement = effectiveInjectLogicDelete() ? injectLogicDeleteCondition(table, statement, logicDelete) : statement;
+            SqlStatement baseStatement = effectiveInjectLogicDelete() ? SqlPreviewServiceEnhancementsKt.injectLogicDeleteCondition(this, table, statement, logicDelete) : statement;
             // T-M22-02：乐观锁注入（@Version 实体 UPDATE）
             SqlStatement finalStatement = injectOptimisticLockCondition(table, baseStatement);
             // T-TenantLine：多租户注入
             boolean hasInterceptorIgnore = hasInterceptorIgnoreAnnotation(anchor, "tenantLine");
-            SqlStatement tenantWhereStatement = injectTenantLineCondition(table, finalStatement, hasInterceptorIgnore);
+            SqlStatement tenantWhereStatement = SqlPreviewServiceEnhancementsKt.injectTenantLineCondition(this, table, finalStatement, hasInterceptorIgnore);
             // F-6 Phase A：UPDATE 追加租户列 SET
             SqlStatement tenantStatement;
             if (injectTenantLine() && tenantWhereStatement instanceof UpdateStatement) {
@@ -454,7 +454,7 @@ public final class SqlPreviewService {
             // T-M29-02/03：分页消费（service.page / selectPage / 链式 page()）→ LIMIT 子句
             SqlStatement pagedStatement = (chain.getCountConsumed() || chain.getExistsConsumed())
                     ? dataPermissionStatement : applyPageLimit(dataPermissionStatement, chain.getPageLimit());
-            PreviewResult result = buildPreviewResult(chain.getWrapperType(), table, pagedStatement);
+            PreviewResult result = SqlPreviewServiceEnhancementsKt.buildPreviewResult(this, chain.getWrapperType(), table, pagedStatement);
             recordHistory(result, anchor);
             // exists 消费：外层包裹 SELECT EXISTS
             if (chain.getExistsConsumed() && isQueryLike(chain.getWrapperType())) {
@@ -544,7 +544,7 @@ public final class SqlPreviewService {
             // EQ/DS/QD（M44 其他 ORM 第一批）前置派发：Easy-Query proxy 链 / MyBatis Dynamic SQL /
             // Querydsl——三者均非 MP Wrapper 链（locateWithTable 不命中），按 entry+receiver 启发认领；
             // 不认领返回 null 走后续 JPA CRUD / MP 批量管道（存量行为零变化）
-            PreviewResult ormPreview = convertOtherOrm(batchCall, resolveVariables);
+            PreviewResult ormPreview = SqlPreviewServiceEnhancementsKt.convertOtherOrm(this, batchCall, resolveVariables);
             if (ormPreview != null) {
                 recordHistory(ormPreview, anchor);
                 return ormPreview;
@@ -613,87 +613,6 @@ public final class SqlPreviewService {
                 null);
         recordHistory(result, anchor);
         return result;
-    }
-
-    /**
-     * 其他 ORM 第一批（M44）前置派发：Easy-Query proxy（EQ_PROXY）/ MyBatis Dynamic SQL（MDS）/
-     * Querydsl（QD）。三者按 entry + receiver 启发认领（普通类同名方法不命中，负例守卫），
-     * 不认领返回 null（交回 JPA CRUD / MP 批量管道）。
-     */
-    private PreviewResult convertOtherOrm(PsiMethodCallExpression call, boolean resolveVariables) {
-        EasyQueryConverter.EqPreview eq = EasyQueryConverter.convert(call, resolveVariables);
-        if (eq != null) {
-            return new PreviewResult(
-                    eq.getSql(),
-                    eq.getSql().replaceAll("\\s+", " ").trim(),
-                    eq.getParamSources(),
-                    ParameterReplacer.buildParamTable(eq.getParamSources()),
-                    WrapperType.EQ_PROXY,
-                    eq.getTableName(),
-                    eq.getWarning(),
-                    eq.getColumns(),
-                    Map.of(),
-                    null,
-                    null,
-                    eq.getParamHints(),
-                    List.of(),
-                    eq.getBatchModel(),
-                    null,
-                    Map.of(),
-                    null,
-                    null,
-                    null,
-                    null);
-        }
-        MdsConverter.MdsPreview mds = MdsConverter.convert(call, resolveVariables);
-        if (mds != null) {
-            return new PreviewResult(
-                    mds.getSql(),
-                    mds.getSql().replaceAll("\\s+", " ").trim(),
-                    mds.getParamSources(),
-                    ParameterReplacer.buildParamTable(mds.getParamSources()),
-                    WrapperType.MDS,
-                    mds.getTableName(),
-                    mds.getWarning(),
-                    mds.getColumns(),
-                    Map.of(),
-                    null,
-                    null,
-                    mds.getParamHints(),
-                    List.of(),
-                    null,
-                    null,
-                    Map.of(),
-                    null,
-                    null,
-                    null,
-                    null);
-        }
-        QuerydslConverter.QdPreview qd = QuerydslConverter.convert(call, resolveVariables);
-        if (qd != null) {
-            return new PreviewResult(
-                    qd.getSql(),
-                    qd.getSql().replaceAll("\\s+", " ").trim(),
-                    qd.getParamSources(),
-                    ParameterReplacer.buildParamTable(qd.getParamSources()),
-                    WrapperType.QD,
-                    qd.getTableName(),
-                    qd.getWarning(),
-                    qd.getColumns(),
-                    Map.of(),
-                    null,
-                    null,
-                    qd.getParamHints(),
-                    List.of(),
-                    null,
-                    null,
-                    Map.of(),
-                    null,
-                    null,
-                    null,
-                    null);
-        }
-        return null;
     }
 
     /**
@@ -768,12 +687,12 @@ public final class SqlPreviewService {
         }
         // T-J15/J22：@Lock（FOR UPDATE）/ @QueryHints / @EntityGraph（LEFT JOIN）/ 返回类型 notes；
         // pageNotes：分页/排序分析已在上方完成（含调用点实参求值），透传语义注释、跳过二次分析
-        String enhancedSql = applyJpaMethodEnhancements(
+        String enhancedSql = SqlPreviewServiceEnhancementsKt.applyJpaMethodEnhancements(this, 
                 method, sql, table, false,
                 true,
                 pageSort != null && pageSort.getNotes() != null ? pageSort.getNotes() : List.of(),
                 dialect);
-        return buildJpaPreviewResult(statement, enhancedSql, table.getTableName(), paramNames, method, inClauseParams, dialect);
+        return SqlPreviewServiceEnhancementsKt.buildJpaPreviewResult(this, statement, enhancedSql, table.getTableName(), paramNames, method, inClauseParams, dialect);
     }
 
     /** {@link SelectStatement} 的 Kotlin {@code copy(limit = ...)} Java 等价（显式全参重建）。 */
@@ -792,155 +711,8 @@ public final class SqlPreviewService {
                 sel.getFromSubQuery(), sel.getFillClauses());
     }
 
-    /**
-     * JPA 方法级 SQL 增强（T-J10/J15/J22，文本级后处理，previewDerivedQuery / previewJpql /
-     * previewHql / previewCriteriaQuery 各路径共用）：
-     *
-     * <ul>
-     *  <li><b>T-J10</b>：宿主方法 {@code Pageable}/{@code Page}/{@code Limit} 参数 → LIMIT/OFFSET 占位（方言形态）；
-     *      {@code Sort} 参数静态求值 → ORDER BY（与查询内已有子句并存时降级注释，避免双子句）；</li>
-     *  <li><b>T-J15</b>：{@code @Lock(PESSIMISTIC_WRITE)} → SELECT 尾部 {@code FOR UPDATE}（共享锁形态注释说明方言差异）；
-     *      {@code @QueryHints} 逐条注释；{@code @EntityGraph(attributePaths)} → LEFT JOIN 注入（按关联元数据解析
-     *      真实表/列；解析失败 / 原生 SQL 路径降级注释）；</li>
-     *  <li><b>T-J22</b>：返回类型 notes（Page count 二连 / Slice 多取一条 / Stream / 接口投影）；
-     *      {@code Page} 返回 + {@code @Query.countQuery} 存在时一并展示 count SQL。</li>
-     * </ul>
-     *
-     * <p>注释行以 {@code -- } 前缀追加 SQL 尾部（对齐 JpaCrudOperationConverter notes 惯例）；
-     * 全程无注解/无参数时返回原文（存量字节级行为零变化）。
-     */
-    private String applyJpaMethodEnhancements(
-            @Nullable PsiMethod method,
-            @NotNull String sql,
-            @Nullable TableInfo table,
-            boolean nativeQuery) {
-        return applyJpaMethodEnhancements(method, sql, table, nativeQuery, false, null);
-    }
-
-    /** Kotlin 默认实参形态 {@code applyJpaMethodEnhancements(…, native = x, dialectOverride = d)} 的便捷重载。 */
-    private String applyJpaMethodEnhancements(
-            @Nullable PsiMethod method,
-            @NotNull String sql,
-            @Nullable TableInfo table,
-            boolean nativeQuery,
-            @Nullable Dialect dialectOverride) {
-        return applyJpaMethodEnhancements(method, sql, table, nativeQuery, false, null, dialectOverride);
-    }
-
-    private String applyJpaMethodEnhancements(
-            @Nullable PsiMethod method,
-            @NotNull String sql,
-            @Nullable TableInfo table,
-            boolean nativeQuery,
-            boolean limitAppliedInModel,
-            @Nullable List<String> pageNotes) {
-        return applyJpaMethodEnhancements(method, sql, table, nativeQuery, limitAppliedInModel, pageNotes, null);
-    }
-
-    private String applyJpaMethodEnhancements(
-            @Nullable PsiMethod method,
-            @NotNull String sql,
-            @Nullable TableInfo table,
-            boolean nativeQuery,
-            boolean limitAppliedInModel,
-            @Nullable List<String> pageNotes,
-            @Nullable Dialect dialectOverride) {
-        try {
-            if (method == null) return sql;
-            // T-PS5-03：方言由调用入口求一次后透传（未传则本地求一次，语义不变）——单次预览的
-            // `DialectRegistry.effective` 调用数由「增强/分页/结果构建各一次」收敛为入口一次
-            Dialect dialect = dialectOverride != null ? dialectOverride : currentDialect();
-            List<String> notes = new ArrayList<>();
-            String enhanced = sql;
-
-            // T-J15：@EntityGraph → LEFT JOIN（JPQL/HQL 非原生路径；原生查询运行时不应用实体图）
-            List<String> joinLines = List.of();
-            JpaQueryEnhancer.EntityGraphInfo graph = JpaQueryEnhancer.entityGraph(method);
-            if (graph != null) {
-                if (nativeQuery || table == null) {
-                    notes.add("@EntityGraph(attributePaths)：原生 SQL 查询运行时不应用实体图，预览不追加 JOIN");
-                } else {
-                    JpaQueryEnhancer.GraphJoinResult graphResult =
-                            JpaQueryEnhancer.resolveEntityGraphJoins(graph, table);
-                    notes.addAll(graphResult.getNotes());
-                    String mainAlias = detectMainAlias(enhanced, table);
-                    List<String> rendered = new ArrayList<>();
-                    for (JpaQueryEnhancer.GraphJoin join : graphResult.getJoins()) {
-                        rendered.add(JpaQueryEnhancer.renderJoinLine(join, mainAlias, dialect));
-                    }
-                    joinLines = rendered;
-                    if (!graphResult.getJoins().isEmpty()) {
-                        notes.add("@EntityGraph(attributePaths=" + String.join(", ", graph.getPaths())
-                                + ")：按实体图 LEFT JOIN 抓取（type=" + (graph.getType() != null ? graph.getType() : "LOAD") + "）");
-                    }
-                }
-            }
-
-            // T-J10：Pageable/Limit → LIMIT；Sort → ORDER BY（查询内已有子句时降级注释）。
-            // limitAppliedInModel：派生/Criteria 路径 LIMIT 已在语句模型级挂载（传 true 跳过文本追加，
-            // 避免同语句双 LIMIT）；
-            // pageNotes 非 null：调用方已完成分页/排序分析（含调用点实参求值，T-J9/J10），notes 直接透传、
-            // 跳过本方法内的二次分析（callArgs=null 的重分析会产出与实际内联结果相悖的「静态不可解析」注释）
-            if (pageNotes != null) {
-                notes.addAll(pageNotes);
-            } else {
-                JpaQueryEnhancer.PageSortEval pageSort = JpaQueryEnhancer.evaluatePageSort(method, null, dialect, table);
-                if (pageSort != null) {
-                    notes.addAll(pageSort.getNotes());
-                    if (pageSort.getLimit() != null) {
-                        if (limitAppliedInModel
-                                || JpaQueryEnhancer.containsTopLevelClause(enhanced,
-                                Pattern.compile("(?i)\\b(LIMIT|OFFSET|FETCH)\\b"))) {
-                            if (!limitAppliedInModel) {
-                                notes.add("查询内已含分页子句，方法分页参数以查询内为准（预览不重复追加）");
-                            }
-                        } else {
-                            enhanced = enhanced + "\n" + dialect.renderLimit(pageSort.getLimit());
-                        }
-                    }
-                    if (pageSort.getOrderBy() != null && !pageSort.getOrderBy().isEmpty()) {
-                        if (JpaQueryEnhancer.containsTopLevelClause(enhanced, Pattern.compile("(?i)\\bORDER\\s+BY\\b"))) {
-                            notes.add("查询内已含 ORDER BY，Sort 参数运行时与其合并");
-                        } else {
-                            StringBuilder ob = new StringBuilder();
-                            for (OrderByItem item : pageSort.getOrderBy()) {
-                                if (ob.length() > 0) ob.append(", ");
-                                ob.append(item.getColumn().getQualifiedName()).append(item.isAsc() ? " ASC" : " DESC");
-                            }
-                            enhanced = enhanced + "\nORDER BY " + ob;
-                        }
-                    }
-                }
-            }
-
-            // JOIN 行插入（置于 LIMIT/ORDER BY 之前的顶层位置）
-            enhanced = JpaQueryEnhancer.insertJoinLines(enhanced, joinLines);
-
-            // T-J15：@Lock → FOR UPDATE / 共享锁方言差异注释
-            JpaQueryEnhancer.LockClause lock = JpaQueryEnhancer.lockClause(method);
-            if (lock != null) {
-                notes.add(lock.getNote());
-                if (lock.getClause() != null) enhanced = enhanced + " " + lock.getClause();
-            }
-            // T-J15：@QueryHints 逐条注释
-            notes.addAll(JpaQueryEnhancer.queryHintNotes(method));
-            // T-J22：返回类型 notes + Page 返回时展示 @Query.countQuery 的 count SQL
-            notes.addAll(JpaQueryEnhancer.returnTypeNotes(method));
-            notes.addAll(countQueryNotes(method, table));
-
-            if (notes.isEmpty()) return sql;
-            StringBuilder suffix = new StringBuilder();
-            for (String note : notes) {
-                if (!note.isBlank()) suffix.append("\n-- ").append(note);
-            }
-            return enhanced + suffix;
-        } catch (Throwable t) {
-            return sql;
-        }
-    }
-
     /** T-J22：@Query.countQuery → count SQL 注释行（Page 返回语义；转换失败降级原文注释）。 */
-    private List<String> countQueryNotes(@Nullable PsiMethod method, @Nullable TableInfo table) {
+    public List<String> countQueryNotes(@Nullable PsiMethod method, @Nullable TableInfo table) {
         try {
             String countJpql = JpaQueryEnhancer.countQueryAttribute(method);
             if (countJpql == null) return List.of();
@@ -968,7 +740,7 @@ public final class SqlPreviewService {
      * 从 SQL 文本探测主表别名（EntityGraph JOIN 的 ON 左值用）：
      * {@code FROM t_user u} → {@code u}；无别名/别名是 SQL 关键字 → 表名本名。
      */
-    private String detectMainAlias(@NotNull String sql, @NotNull TableInfo table) {
+    public String detectMainAlias(@NotNull String sql, @NotNull TableInfo table) {
         try {
             java.util.regex.Pattern regex =
                     Pattern.compile("(?i)\\bFROM\\s+[`\"(]*([\\w.]+)[`\"]*)\\s+([a-zA-Z_][\\w$]*)");
@@ -1024,7 +796,7 @@ public final class SqlPreviewService {
                     ? allParamNames.stream().map(n -> new ParamHint(true, null, inParams.contains(n))).toList()
                     : List.of();
             // T-J15：@EntityGraph 对原生查询运行时不生效 → 仅注释说明；LIMIT/@Lock/notes 照常
-            String enhancedSql = applyJpaMethodEnhancements(method, convertedSql, table, true, dialect);
+            String enhancedSql = SqlPreviewServiceEnhancementsKt.applyJpaMethodEnhancements(this, method, convertedSql, table, true, dialect);
             String tableName;
             if (table != null) tableName = table.getTableName();
             else if (info.getEntityClass() != null) tableName = JpaEntityResolver.inferDecoratedTableName(info.getEntityClass().getName(), project);
@@ -1043,8 +815,8 @@ public final class SqlPreviewService {
         // Wave1 第三参 project：激活 PSI 级 JOIN ON（@JoinColumn 真实化）与子查询实体映射
         JpqlConverter.Result result = JpqlConverter.INSTANCE.convert(jpql, table, project);
         // T-J10/J15/J22：方法级增强（LIMIT/ORDER BY/FOR UPDATE/EntityGraph JOIN/notes/count SQL）
-        String enhancedSql = applyJpaMethodEnhancements(method, result.getSql(), table, false, dialect);
-        return buildJpaPreviewResult(result.getStatement(), enhancedSql, table != null ? table.getTableName() : "",
+        String enhancedSql = SqlPreviewServiceEnhancementsKt.applyJpaMethodEnhancements(this, method, result.getSql(), table, false, dialect);
+        return SqlPreviewServiceEnhancementsKt.buildJpaPreviewResult(this, result.getStatement(), enhancedSql, table != null ? table.getTableName() : "",
                 allParamNames, method, result.getInClauseParams(), dialect);
     }
 
@@ -1079,7 +851,7 @@ public final class SqlPreviewService {
      * 保守回退既有语义。{@code ?} 计数用朴素 count（判定用途，非替换位点）。
      */
     @Nullable
-    private List<String> usableNamedPlaceholderSources(@NotNull String sql, @NotNull List<String> namedParamNames) {
+    public List<String> usableNamedPlaceholderSources(@NotNull String sql, @NotNull List<String> namedParamNames) {
         int questionMarks = 0;
         for (int i = 0; i < sql.length(); i++) {
             if (sql.charAt(i) == '?') questionMarks++;
@@ -1218,7 +990,7 @@ public final class SqlPreviewService {
                 ? JpaEntityResolver.inferDecoratedTableName(model.getEntityClassName(), project) : "";
         // T-J10/J15/J22：方法级增强（Sort ORDER BY/锁/hints/返回类型 notes；LIMIT 已在语句模型级挂载，
         // 分页/排序 notes 由上方分析透传）
-        String enhancedSql = applyJpaMethodEnhancements(
+        String enhancedSql = SqlPreviewServiceEnhancementsKt.applyJpaMethodEnhancements(this, 
                 hostMethod, sql, resolvedTable, false,
                 true,
                 pageSort != null && pageSort.getNotes() != null ? pageSort.getNotes() : List.of(),
@@ -1227,7 +999,7 @@ public final class SqlPreviewService {
         if (pageSort != null && pageSort.getExtraParamNames() != null) {
             allParamNames.addAll(pageSort.getExtraParamNames());
         }
-        return buildJpaPreviewResult(statement, enhancedSql, tableName, allParamNames, hostMethod, Set.of(), dialect);
+        return SqlPreviewServiceEnhancementsKt.buildJpaPreviewResult(this, statement, enhancedSql, tableName, allParamNames, hostMethod, Set.of(), dialect);
     }
 
     /**
@@ -1259,14 +1031,14 @@ public final class SqlPreviewService {
                 // T-PS5-03：本分支入口求一次方言
                 Dialect dialect = currentDialect();
                 // T-J10/J15/J22：宿主方法级增强
-                String namedEnhancedSql = applyJpaMethodEnhancements(info.getMethod(), namedResult.getSql(), namedTable, false, dialect);
+                String namedEnhancedSql = SqlPreviewServiceEnhancementsKt.applyJpaMethodEnhancements(this, info.getMethod(), namedResult.getSql(), namedTable, false, dialect);
                 JpaQueryEnhancer.PageSortEval namedPageSort =
                         JpaQueryEnhancer.evaluatePageSort(info.getMethod(), null, dialect, namedTable);
                 List<String> namedExtraParams = (namedPageSort != null && namedPageSort.getExtraParamNames() != null)
                         ? namedPageSort.getExtraParamNames() : List.of();
                 List<String> namedAllParams = new ArrayList<>(namedParams);
                 namedAllParams.addAll(namedExtraParams);
-                return buildJpaPreviewResult(namedResult.getStatement(), namedEnhancedSql,
+                return SqlPreviewServiceEnhancementsKt.buildJpaPreviewResult(this, namedResult.getStatement(), namedEnhancedSql,
                         namedTable != null ? namedTable.getTableName() : "", namedAllParams,
                         info.getMethod(), namedResult.getInClauseParams(), dialect);
             }
@@ -1281,7 +1053,7 @@ public final class SqlPreviewService {
                 return previewHbmNamedQuery(hbmNamed, info.getMethod());
             }
         }
-        TableInfo table = resolveHqlTable(info.getEntityClass(), info.getEntityClassName(), info.getHql());
+        TableInfo table = SqlPreviewServiceEnhancementsKt.resolveHqlTable(this, info.getEntityClass(), info.getEntityClassName(), info.getHql());
         // Wave1 第三参 project：激活 PSI 级 JOIN ON 与子查询实体映射
         // T-HqlInhCols：@Entity(name=...) 实体别名透传，别名形态 HQL 实体名才能被表名替换
         String hqlEntityAlias = null;
@@ -1301,14 +1073,14 @@ public final class SqlPreviewService {
         // T-PS5-03：本分支入口求一次方言
         Dialect dialect = currentDialect();
         // T-J10/J15/J22：宿主方法级增强
-        String enhancedSql = applyJpaMethodEnhancements(info.getMethod(), result.getSql(), table, false, dialect);
+        String enhancedSql = SqlPreviewServiceEnhancementsKt.applyJpaMethodEnhancements(this, info.getMethod(), result.getSql(), table, false, dialect);
         JpaQueryEnhancer.PageSortEval pageSort = JpaQueryEnhancer.evaluatePageSort(info.getMethod(), null, dialect, table);
         List<String> extraParams = (pageSort != null && pageSort.getExtraParamNames() != null)
                 ? pageSort.getExtraParamNames() : List.of();
         List<String> allParamNames = new ArrayList<>(paramNames);
         allParamNames.addAll(extraParams);
         // 关键：使用 HqlConverter 转换后的 SQL 字符串（含 ? 占位符），而非从 statement 重新生成。
-        return buildJpaPreviewResult(result.getStatement(), enhancedSql, table != null ? table.getTableName() : "",
+        return SqlPreviewServiceEnhancementsKt.buildJpaPreviewResult(this, result.getStatement(), enhancedSql, table != null ? table.getTableName() : "",
                 allParamNames, info.getMethod(), result.getInClauseParams(), dialect,
                 result.getPlaceholderParamNames(), info.getDuplicateParamNames(),
                 // T-JpaParamOrder F6：字面量/枚举常量自动预填参数框（变量引用不入表，保持待填）
@@ -1330,7 +1102,7 @@ public final class SqlPreviewService {
         // T-PS5-03：入口求一次方言（方法级增强与分页分析共用）
         Dialect dialect = currentDialect();
         // T-J10/J15/J22：方法级增强（native 路径：EntityGraph 仅注释说明）
-        String enhancedSql = applyJpaMethodEnhancements(info.getMethod(), sql, null, true, dialect);
+        String enhancedSql = SqlPreviewServiceEnhancementsKt.applyJpaMethodEnhancements(this, info.getMethod(), sql, null, true, dialect);
         JpaQueryEnhancer.PageSortEval pageSort = JpaQueryEnhancer.evaluatePageSort(info.getMethod(), null, dialect, null);
         List<String> extraParams = (pageSort != null && pageSort.getExtraParamNames() != null)
                 ? pageSort.getExtraParamNames() : List.of();
@@ -1390,7 +1162,7 @@ public final class SqlPreviewService {
         TableInfo table = new JpaEntityResolver().resolve(cls);
         JpqlConverter.Result result = JpqlConverter.INSTANCE.convert(jpql, table, project);
         List<String> paramNames = extractParamNamesFromHql(jpql);
-        return buildJpaPreviewResult(result.getStatement(), result.getSql(),
+        return SqlPreviewServiceEnhancementsKt.buildJpaPreviewResult(this, result.getStatement(), result.getSql(),
                 table != null ? table.getTableName() : "", paramNames,
                 null, result.getInClauseParams());
     }
@@ -1431,7 +1203,7 @@ public final class SqlPreviewService {
                 TableInfo namedTable = entityClass != null ? new JpaEntityResolver().resolve(entityClass) : null;
                 JpqlConverter.Result namedResult = JpqlConverter.INSTANCE.convert(named.getQuery(), namedTable, project);
                 List<String> namedParams = extractParamNamesFromHql(named.getQuery());
-                return buildJpaPreviewResult(namedResult.getStatement(), namedResult.getSql(),
+                return SqlPreviewServiceEnhancementsKt.buildJpaPreviewResult(this, namedResult.getStatement(), namedResult.getSql(),
                         namedTable != null ? namedTable.getTableName() : "", namedParams,
                         info.getMethod(), namedResult.getInClauseParams());
             }
@@ -1449,7 +1221,7 @@ public final class SqlPreviewService {
             return placeholderPreview(
                     "-- 命名查询 \"" + info.getHql() + "\"：未能回查到 @NamedQuery 定义（跨文件/命名不规范），无法静态解析 JPQL");
         }
-        TableInfo table = resolveHqlTable(null, info.getEntityClassName(), info.getHql());
+        TableInfo table = SqlPreviewServiceEnhancementsKt.resolveHqlTable(this, null, info.getEntityClassName(), info.getHql());
         // Wave1 第三参 project：激活 PSI 级 JOIN ON 与子查询实体映射
         // T-HqlInhCols：别名反查命中时从解析出的 PsiClass 读实体别名透传（此链无 entityClass 入参）
         PsiClass resolvedEntityClass = null;
@@ -1473,7 +1245,7 @@ public final class SqlPreviewService {
         HqlConverter.Result result = HqlConverter.INSTANCE.convert(info.getHql(), table, project, daoEntityAlias);
         List<String> paramNames = extractHqlParamNames(info.getParameters());
         if (paramNames.isEmpty()) paramNames = extractParamNamesFromHql(info.getHql());
-        return buildJpaPreviewResult(result.getStatement(), result.getSql(), table != null ? table.getTableName() : "",
+        return SqlPreviewServiceEnhancementsKt.buildJpaPreviewResult(this, result.getStatement(), result.getSql(), table != null ? table.getTableName() : "",
                 paramNames, info.getMethod(), result.getInClauseParams(),
                 result.getPlaceholderParamNames(),
                 // T-JpaParamOrder F6：自定义 DAO 链同样预填静态常量
@@ -1526,7 +1298,7 @@ public final class SqlPreviewService {
         List<String> paramNames = extractParamNamesFromHql(query.getQueryText());
         if (query.getKind() == HbmXmlMapping.QueryKind.NATIVE) {
             String sql = convertNativeSqlParameters(query.getQueryText());
-            String enhancedSql = applyJpaMethodEnhancements(hostMethod, sql, null, true);
+            String enhancedSql = SqlPreviewServiceEnhancementsKt.applyJpaMethodEnhancements(this, hostMethod, sql, null, true);
             // T-JpaParamOrder F3：native 命名参数名序透传（与 previewNativeSql 同款判定）
             List<String> usableNamedSources = usableNamedPlaceholderSources(enhancedSql, extractNativeParamNames(query.getQueryText()));
             return new PreviewResult(
@@ -1563,13 +1335,13 @@ public final class SqlPreviewService {
         String prefix = dot >= 0 ? namePrefix.substring(0, dot) : "";
         prefix = prefix.trim();
         String entityName = !prefix.isBlank() ? prefix : extractEntityNameFromHql(query.getQueryText());
-                TableInfo table = resolveHqlTable(null, entityName, query.getQueryText());
+                TableInfo table = SqlPreviewServiceEnhancementsKt.resolveHqlTable(this, null, entityName, query.getQueryText());
                 // T-HqlInhCols：hbm 项目实体别名多由 XML <entity-name> 承载，注解读不到即 null，安全
                 HqlConverter.Result result = HqlConverter.INSTANCE.convert(query.getQueryText(), table, project);
         // T-PS5-03：本分支入口求一次方言
         Dialect dialect = currentDialect();
-        String enhancedSql = applyJpaMethodEnhancements(hostMethod, result.getSql(), table, false, dialect);
-        return buildJpaPreviewResult(
+        String enhancedSql = SqlPreviewServiceEnhancementsKt.applyJpaMethodEnhancements(this, hostMethod, result.getSql(), table, false, dialect);
+        return SqlPreviewServiceEnhancementsKt.buildJpaPreviewResult(this, 
                 result.getStatement(),
                 enhancedSql,
                 table != null ? table.getTableName() : "",
@@ -1759,139 +1531,9 @@ public final class SqlPreviewService {
     }
 
     /**
-     * JPA 预览结果构建统一入口（派生查询 / JPQL / CriteriaQuery 共用）。
-     */
-    private PreviewResult buildJpaPreviewResult(
-            @NotNull SqlStatement statement,
-            @NotNull String convertedSql,
-            @NotNull String tableName,
-            @NotNull List<String> paramNames,
-            @Nullable PsiMethod method) {
-        return buildJpaPreviewResult(statement, convertedSql, tableName, paramNames, method, Set.of());
-    }
-
-    /**
-     * JPA 预览结果构建统一入口（带 IN 子句参数集合）。
-     */
-    private PreviewResult buildJpaPreviewResult(
-            @NotNull SqlStatement statement,
-            @NotNull String convertedSql,
-            @NotNull String tableName,
-            @NotNull List<String> paramNames,
-            @Nullable PsiMethod method,
-            @NotNull Set<String> inClauseParams) {
-        return buildJpaPreviewResult(statement, convertedSql, tableName, paramNames, method, inClauseParams, null);
-    }
-
-    /**
-     * JPA 预览结果构建统一入口（带 IN 子句参数集合 + 方言透传）。
-     */
-    private PreviewResult buildJpaPreviewResult(
-            @NotNull SqlStatement statement,
-            @NotNull String convertedSql,
-            @NotNull String tableName,
-            @NotNull List<String> paramNames,
-            @Nullable PsiMethod method,
-            @NotNull Set<String> inClauseParams,
-            @Nullable Dialect dialectOverride) {
-        return buildJpaPreviewResult(statement, convertedSql, tableName, paramNames, method, inClauseParams,
-                dialectOverride, List.of(), Set.of(), Map.of());
-    }
-
-    /**
-     * JPA 预览结果构建统一入口（T-JpaParamOrder：带占位符名序 + 初值预填，方言取本地）。
-     * Kotlin 默认参数 {@code duplicateParamNames = emptySet()} 等价重载。
-     */
-    private PreviewResult buildJpaPreviewResult(
-            @NotNull SqlStatement statement,
-            @NotNull String convertedSql,
-            @NotNull String tableName,
-            @NotNull List<String> paramNames,
-            @Nullable PsiMethod method,
-            @NotNull Set<String> inClauseParams,
-            @NotNull List<String> placeholderParamNames,
-            @NotNull Map<String, String> initialParamValues) {
-        return buildJpaPreviewResult(statement, convertedSql, tableName, paramNames, method, inClauseParams,
-                null, placeholderParamNames, Set.of(), initialParamValues);
-    }
-
-    /**
-     * JPA 预览结果构建统一入口（全量形态，T-JpaParamOrder F3/F5/F6）。
-     *
-     * @param placeholderParamNames JPA 命名参数占位符名序（HQL {@code :name} 首现序）；空 = 按序回填
-     * @param duplicateParamNames   同名命名参数多次 setParameter 的参数名集合；空集 = 无重复
-     * @param initialParamValues    参数行初值预填（静态可求值的字面量/枚举常量）
-     */
-    private PreviewResult buildJpaPreviewResult(
-            @NotNull SqlStatement statement,
-            @NotNull String convertedSql,
-            @NotNull String tableName,
-            @NotNull List<String> paramNames,
-            @Nullable PsiMethod method,
-            @NotNull Set<String> inClauseParams,
-            @Nullable Dialect dialectOverride,
-            @NotNull List<String> placeholderParamNames,
-            @NotNull Set<String> duplicateParamNames,
-            @NotNull Map<String, String> initialParamValues) {
-        // T-PS5-03：方言由调用入口透传（未传则本地求一次）——见 applyJpaMethodEnhancements 同款说明
-        Dialect dialect = dialectOverride != null ? dialectOverride : currentDialect();
-        List<ConditionView> views = collectConditionViews(statement);
-        // T-JpaParamOrder F3：占位符名序可用性判定——convertedSql 可能是增强后形态（LIMIT 等），
-        // 但增强不增删 `?`；全部 `?` 均来自命名参数时启用按名回填，否则置空维持按序
-        List<String> usableNamed = usableNamedPlaceholderSources(convertedSql, placeholderParamNames);
-        List<String> usableNamedSources = usableNamed != null ? usableNamed : List.of();
-        // T-JpaParamOrder F3：回填提示与「渲染实际用的 sources」平行——按名回填启用时随名序，
-        // 否则随面板行序（paramNames），保证 backfillParamsBySource 的第 i 位提示对第 i 位来源
-        List<String> backfillSources = !usableNamedSources.isEmpty() ? usableNamedSources : paramNames;
-        // 参数回填提示：根据方法签名参数类型判定是否需要引号
-        // - IN 子句参数：数值类型不加引号，字符串加引号
-        // - 非 IN 参数：数值类型不加引号，字符串加引号（quote=true）
-        // - 无法判定类型时默认加引号（保守策略）
-        List<ParamHint> paramHints;
-        if (!backfillSources.isEmpty()) {
-            paramHints = new ArrayList<>();
-            for (String name : backfillSources) {
-                boolean inList = inClauseParams.contains(name);
-                boolean isNumeric = isNumericParam(method, name);
-                paramHints.add(new ParamHint(Boolean.valueOf(!isNumeric), null, inList));
-            }
-        } else {
-            paramHints = List.of();
-        }
-        TableInfo stmtTable = (statement.getTable() instanceof TableInfo) ? (TableInfo) statement.getTable() : null;
-        List<String> columns = (stmtTable != null) ? stmtTable.getAllColumnNames() : List.of();
-        return new PreviewResult(
-                convertedSql,
-                convertedSql.replaceAll("\\s+", " ").trim(),
-                paramNames,
-                ParameterReplacer.buildParamTable(paramNames),
-                null,
-                tableName,
-                buildJpaWarning(statement),
-                columns,
-                Map.of(),
-                null,
-                views.isEmpty() ? null : new SqlPreviewModel(statement, dialect, formatSql(), views),
-                paramHints,
-                List.of(),
-                null,
-                null,
-                initialParamValues,
-                null,
-                null,
-                null,
-                null,
-                Map.of(),
-                null,
-                false,
-                usableNamedSources,
-                duplicateParamNames);
-    }
-
-    /**
      * 判断方法参数是否为数值类型（Integer/Long/BigDecimal 等）。
      */
-    private boolean isNumericParam(@Nullable PsiMethod method, @NotNull String paramName) {
+    public boolean isNumericParam(@Nullable PsiMethod method, @NotNull String paramName) {
         if (method == null) return false;
         PsiParameter param = null;
         for (PsiParameter p : method.getParameterList().getParameters()) {
@@ -1925,7 +1567,7 @@ public final class SqlPreviewService {
      * bulk UPDATE 静默（MP 链 buildWarning 两种都报，不对称）；UPDATE 的 conditions 空
      * ⟺ 文本无 WHERE（JpaUpdateParser.parseWhere 对非空 WHERE 必产 Raw 兜底），无错报面。
      */
-    private String buildJpaWarning(@NotNull SqlStatement statement) {
+    public String buildJpaWarning(@NotNull SqlStatement statement) {
         if (statement instanceof UpdateStatement) {
             UpdateStatement upd = (UpdateStatement) statement;
             if (upd.getConditions().isEmpty()) return "⚠ [BlockAttack] 无 WHERE 条件，将更新全表数据！";
@@ -1938,51 +1580,9 @@ public final class SqlPreviewService {
     }
 
     /**
-     * 由语句模型构建预览结果（应用方言与格式化配置）。
-     */
-    private PreviewResult buildPreviewResult(
-            @Nullable WrapperType wrapperType,
-            @NotNull TableInfo table,
-            @NotNull SqlStatement statement) {
-        Dialect dialect = currentDialect();
-        boolean compact = !formatSql();
-        GeneratedSql generated = SqlGenerator.generateWithParams(statement, compact, dialect, null);
-        List<ConditionView> views = collectConditionViews(statement);
-        Map<String, String> columnComments = new HashMap<>();
-        for (ColumnInfo col : table.getColumns()) {
-            if (col.getComment() != null && !col.getComment().isBlank()) {
-                columnComments.put(col.getColumnName(), col.getComment());
-            }
-        }
-        List<FillClause> fillClauses = (statement instanceof SelectStatement)
-                ? ((SelectStatement) statement).getFillClauses() : null;
-        return new PreviewResult(
-                generated.getSql(),
-                SqlGenerator.generate(statement, true, dialect, null),
-                generated.getUnresolvedParams(),
-                ParameterReplacer.buildParamTable(generated.getUnresolvedParams()),
-                wrapperType,
-                table.getTableName(),
-                buildWarning(statement),
-                table.getAllColumnNames(),
-                columnComments,
-                table.getComment(),
-                views.isEmpty() ? null : new SqlPreviewModel(statement, dialect, formatSql(), views),
-                generated.getParamHints(),
-                List.of(),
-                null,
-                null,
-                Map.of(),
-                analyzePerf(generated.getSql(), statement),
-                fillClauses,
-                null,
-                null);
-    }
-
-    /**
      * 性能分析（仅 SELECT）：委托 SqlPerfAnalyzer（F-2）。
      */
-    private List<PerfWarning> analyzePerf(@NotNull String sql, @NotNull SqlStatement statement) {
+    public List<PerfWarning> analyzePerf(@NotNull String sql, @NotNull SqlStatement statement) {
         if (!(statement instanceof SelectStatement)) return null;
         List<PerfWarning> warnings = SqlPerfAnalyzer.analyze(sql);
         return warnings.isEmpty() ? null : warnings;
@@ -1991,7 +1591,7 @@ public final class SqlPreviewService {
     /**
      * 收集语句中的动态条件行（M12）：遍历 WHERE 条件树，扁平化 toggle 元数据（含嵌套 Group 内）。
      */
-    private List<ConditionView> collectConditionViews(@NotNull SqlStatement statement) {
+    public List<ConditionView> collectConditionViews(@NotNull SqlStatement statement) {
         if (statement instanceof SelectStatement) return flatMapConditionViews(((SelectStatement) statement).getConditions());
         if (statement instanceof UpdateStatement) return flatMapConditionViews(((UpdateStatement) statement).getConditions());
         if (statement instanceof DeleteStatement) return flatMapConditionViews(((DeleteStatement) statement).getConditions());
@@ -2002,61 +1602,6 @@ public final class SqlPreviewService {
         List<ConditionView> views = new ArrayList<>();
         for (Condition c : conditions) views.addAll(toConditionViews(c));
         return views;
-    }
-
-    /**
-     * 逻辑删除条件注入（T-M15-07 + T-M20-05 精确化）。
-     */
-    private SqlStatement injectLogicDeleteCondition(
-            @NotNull TableInfo table,
-            @NotNull SqlStatement statement,
-            @NotNull LogicDeleteState state) {
-        // T-M31.18：逻辑删除值可配置（默认 0，用户可调整——对齐 MP logic-delete-value）
-        // T-SettingsTruth P4：项目级 logicDeleteValue 覆盖（空回退全局，再兜底 "0"）
-        String logicDeleteValue = effectiveLogicDeleteValue();
-        if (logicDeleteValue.isBlank()) logicDeleteValue = "0";
-        if (statement instanceof SelectStatement) {
-            SelectStatement sel = (SelectStatement) statement;
-            List<Condition> conditions = new ArrayList<>(sel.getConditions());
-            if (state.mainActive && table.getLogicDeleteColumn() != null) {
-                conditions.add(new Condition.Simple(
-                        new ColumnRef(sel.getTableAlias(), table.getLogicDeleteColumn(), null, null, null, null, null),
-                        "=", new SqlValue.Literal(logicDeleteValue, logicDeleteValue), null));
-            }
-            List<Condition> subWhere = new ArrayList<>();
-            List<JoinClause> joins = new ArrayList<>();
-            for (JoinClause join : sel.getJoins()) {
-                String column = join.getLogicDeleteColumn();
-                if (column == null) { joins.add(join); continue; }
-                if (!state.subActive) { joins.add(join); continue; }
-                Condition cond = new Condition.Simple(
-                        new ColumnRef(join.getAlias(), column, null, null, null, null, null),
-                        "=", new SqlValue.Literal(logicDeleteValue, logicDeleteValue), null);
-                if (state.subToWhere) {
-                    subWhere.add(cond);
-                    joins.add(join);
-                } else {
-                    List<Condition> onConditions = new ArrayList<>(join.getOnConditions());
-                    onConditions.add(cond);
-                    joins.add(new JoinClause(join.getType(), join.getTableName(), join.getAlias(), onConditions,
-                            join.getRawSql(), join.getCustomKeyword(), join.getLogicDeleteColumn(), join.getTableInfo()));
-                }
-            }
-            if (!subWhere.isEmpty()) conditions.addAll(subWhere);
-            return new SelectStatement(sel.getTable(), sel.getSelectColumns(), sel.getTableAlias(), joins, sel.getDistinct(),
-                    conditions, sel.getGroupBy(), sel.getHaving(), sel.getOrderBy(), sel.getLimit(), sel.getRawFirst(),
-                    sel.getRawAround(), sel.getComment(), sel.getUnions(), sel.getFromSubQuery(), sel.getFillClauses());
-        } else if (statement instanceof DeleteStatement) {
-            DeleteStatement del = (DeleteStatement) statement;
-            String column = table.getLogicDeleteColumn();
-            if (column == null || !state.mainActive) return del;
-            List<Condition> conditions = new ArrayList<>(del.getConditions());
-            conditions.add(new Condition.Simple(
-                    new ColumnRef(del.getTableAlias(), column, null, null, null, null, null),
-                    "=", new SqlValue.Literal(logicDeleteValue, logicDeleteValue), null));
-            return new DeleteStatement(del.getTable(), conditions, del.getDeleteTargets(), del.getTableAlias(), del.getJoins());
-        }
-        return statement;
     }
 
     /**
@@ -2081,72 +1626,6 @@ public final class SqlPreviewService {
         conditions.add(new Condition.Simple(
                 new ColumnRef(alias, versionColumn, null, null, null, null, null), "=", new SqlValue.Placeholder("?"), null));
         return new UpdateStatement(update.getTable(), sets, conditions, update.getRawTail(), update.getTableAlias(), update.getJoins());
-    }
-
-    /**
-     * T-TenantLine：多租户条件注入（TenantLineInnerInterceptor 模拟）。
-     */
-    private SqlStatement injectTenantLineCondition(
-            @NotNull TableInfo table,
-            @NotNull SqlStatement statement,
-            boolean hasInterceptorIgnore) {
-        PluginSettings.State s = PluginSettings.getInstance().getState();
-        if (!s.getInjectTenantLine()) {
-            LOG.info("injectTenantLine: SKIP switch=off, stmt=" + statement.getClass().getSimpleName() + ", table=" + table.getTableName());
-            return statement;
-        }
-        if (hasInterceptorIgnore) {
-            LOG.info("injectTenantLine: SKIP @InterceptorIgnore(tenantLine=true), stmt=" + statement.getClass().getSimpleName());
-            return statement;
-        }
-        String tenantColumn = s.getTenantColumnName();
-        if (tenantColumn == null || tenantColumn.isBlank()) tenantColumn = DEFAULT_TENANT_COLUMN;
-        if (statement instanceof SelectStatement) {
-            SelectStatement sel = (SelectStatement) statement;
-            if (conditionReferencesColumn(sel.getConditions(), tenantColumn)) {
-                LOG.info("injectTenantLine: SKIP column already in WHERE, col=" + tenantColumn + ", stmt=SELECT");
-                return statement;
-            }
-            LOG.info("injectTenantLine: INJECT col=" + tenantColumn + ", stmt=SELECT, table=" + table.getTableName());
-            List<Condition> conditions = new ArrayList<>(sel.getConditions());
-            conditions.add(new Condition.Simple(
-                    new ColumnRef(sel.getTableAlias(), tenantColumn, null, null, null, null, null),
-                    "=", new SqlValue.Placeholder(tenantColumn + " (= ?)"), null));
-            return new SelectStatement(sel.getTable(), sel.getSelectColumns(), sel.getTableAlias(), sel.getJoins(), sel.getDistinct(),
-                    conditions, sel.getGroupBy(), sel.getHaving(), sel.getOrderBy(), sel.getLimit(), sel.getRawFirst(),
-                    sel.getRawAround(), sel.getComment(), sel.getUnions(), sel.getFromSubQuery(), sel.getFillClauses());
-        } else if (statement instanceof UpdateStatement) {
-            UpdateStatement upd = (UpdateStatement) statement;
-            for (SetClause set : upd.getSets()) {
-                if (set.getColumn() != null && tenantColumn.equals(set.getColumn().getColumnName())) {
-                    LOG.info("injectTenantLine: SKIP column in SET, col=" + tenantColumn + ", stmt=UPDATE");
-                    return statement;
-                }
-            }
-            if (conditionReferencesColumn(upd.getConditions(), tenantColumn)) {
-                LOG.info("injectTenantLine: SKIP column already in WHERE, col=" + tenantColumn + ", stmt=UPDATE");
-                return statement;
-            }
-            LOG.info("injectTenantLine: INJECT col=" + tenantColumn + ", stmt=UPDATE, table=" + table.getTableName());
-            List<Condition> conditions = new ArrayList<>(upd.getConditions());
-            conditions.add(new Condition.Simple(
-                    new ColumnRef(upd.getTableAlias(), tenantColumn, null, null, null, null, null),
-                    "=", new SqlValue.Placeholder(tenantColumn + " (= ?)"), null));
-            return new UpdateStatement(upd.getTable(), upd.getSets(), conditions, upd.getRawTail(), upd.getTableAlias(), upd.getJoins());
-        } else if (statement instanceof DeleteStatement) {
-            DeleteStatement del = (DeleteStatement) statement;
-            if (conditionReferencesColumn(del.getConditions(), tenantColumn)) {
-                LOG.info("injectTenantLine: SKIP column already in WHERE, col=" + tenantColumn + ", stmt=DELETE");
-                return statement;
-            }
-            LOG.info("injectTenantLine: INJECT col=" + tenantColumn + ", stmt=DELETE, table=" + table.getTableName());
-            List<Condition> conditions = new ArrayList<>(del.getConditions());
-            conditions.add(new Condition.Simple(
-                    new ColumnRef(del.getTableAlias(), tenantColumn, null, null, null, null, null),
-                    "=", new SqlValue.Placeholder(tenantColumn + " (= ?)"), null));
-            return new DeleteStatement(del.getTable(), conditions, del.getDeleteTargets(), del.getTableAlias(), del.getJoins());
-        }
-        return statement;
     }
 
     /**
@@ -2247,7 +1726,7 @@ public final class SqlPreviewService {
     /**
      * T-M22-02：条件树是否已提及指定列。
      */
-    private boolean conditionReferencesColumn(@NotNull List<Condition> conditions, @NotNull String columnName) {
+    public boolean conditionReferencesColumn(@NotNull List<Condition> conditions, @NotNull String columnName) {
         for (Condition condition : conditions) {
             if (condition instanceof Condition.Simple) {
                 if (((Condition.Simple) condition).getColumn().getColumnName().equals(columnName)) return true;
@@ -2368,10 +1847,10 @@ public final class SqlPreviewService {
     /**
      * 逻辑删除注入状态（T-M20-05）：驱动 injectLogicDeleteCondition。
      */
-    private static final class LogicDeleteState {
-        final boolean mainActive;
-        final boolean subActive;
-        final boolean subToWhere;
+    public static final class LogicDeleteState {
+        public final boolean mainActive;
+        public final boolean subActive;
+        public final boolean subToWhere;
 
         LogicDeleteState() {
             this(true, true, false);
@@ -2417,60 +1896,6 @@ public final class SqlPreviewService {
     }
 
     /**
-     * 解析 HQL 对应的实体表信息。
-     *
-     * <p>优先使用 entityClass（PsiClass 直接解析）；
-     * 否则按 entityClassName 查找 @Entity 类（含 {@code @Entity(name=...)} 实体别名反查）；
-     * 最后从 HQL 的 FROM 子句提取类名查找 / hbm 映射兜底。
-     *
-     * <p>T-HqlInhCols：列空结果不再直接短路——JpaEntityResolver 异常路径返回
-     * 非空 TableInfo 但列为空（如继承链解析失败/抽象父类映射异常），若在此短路
-     * 会跳过 hbm 兜底与别名反查，下游展开器必出「列信息未解析」降级注释；
-     * 判据改为「非 null 且列非空」，列空时继续走后续路径。
-     */
-    private TableInfo resolveHqlTable(@Nullable PsiClass entityClass, @Nullable String entityClassName, @NotNull String hql) {
-        JpaEntityResolver resolver = new JpaEntityResolver();
-        // T-Fix-SettingsScope：下方 project 一律取本服务绑定的 project，勿用
-        // openProjects.firstOrNull()——多项目同开时后者取谁取决于 IDE 打开顺序，会在 B 项目里
-        // 按 A 项目的项目级表配置修饰表名，并使 GlobalSearchScope/JavaPsiFacade 落到错误的项目范围。
-        String className = (entityClassName != null) ? entityClassName : extractEntityNameFromHql(hql);
-
-        // 路径 1：有 PsiClass 直接解析（JPA 注解）。列空不短路到「更弱的路径」——
-        // 夹具/局部类场景路径 2/3 反而找不到该类；列空仅在「有更好的候选」时被替换：
-        // 即后续路径找到的表列非空才覆盖，否则保留路径 1 结果（含表名与实体类名，
-        // 展开器照常给「列信息未解析」诊断，不丢 FROM 表名替换）。
-        TableInfo resolved = null;
-        if (entityClass != null) {
-            TableInfo table = resolver.resolve(entityClass);
-            if (table != null && !table.getColumns().isEmpty()) return table;
-            resolved = table;
-        }
-
-        // 路径 2：按类名查找 @Entity 类（JPA 注解）；列空不短路
-        if (className != null) {
-            GlobalSearchScope scope = GlobalSearchScope.allScope(project);
-            PsiClass psiClass = JavaPsiFacade.getInstance(project).findClass(className, scope);
-            if (psiClass == null) psiClass = findClassByShortName(project, className, scope);
-            if (psiClass == null) psiClass = findClassByEntityName(project, className, scope);
-            if (psiClass != null) {
-                TableInfo table = resolver.resolve(psiClass);
-                if (table != null && !table.getColumns().isEmpty()) return table;
-                if (resolved == null) resolved = table;
-            }
-        }
-
-        // 路径 3：Hibernate XML 映射文件（.hbm.xml）
-        if (className != null) {
-            HbmXmlMapping.ClassMapping hbmMapping = HbmXmlEntityResolver.resolve(className, project);
-            if (hbmMapping != null) {
-                return convertHbmMappingToTableInfo(hbmMapping);
-            }
-        }
-
-        return resolved;
-    }
-
-    /**
      * T-HqlInhCols：按 {@code @Entity(name=...)} 实体别名查找实体类。
      *
      * <p>HQL {@code FROM Alias} 的 Alias 可为实体名（JPA 语义）而非类名——
@@ -2480,7 +1905,7 @@ public final class SqlPreviewService {
      * {@code @TableName} 反查同款缓存惯例；未命中也入缓存防重复全量扫描）。
      */
     @Nullable
-    private PsiClass findClassByEntityName(@NotNull Project project, @NotNull String entityName, @NotNull GlobalSearchScope scope) {
+    public PsiClass findClassByEntityName(@NotNull Project project, @NotNull String entityName, @NotNull GlobalSearchScope scope) {
         if (entityName.isBlank()) return null;
         long current = com.intellij.psi.util.PsiModificationTracker.getInstance(project).getModificationCount();
         EntityNameLookupCache existing = project.getUserData(ENTITY_NAME_CACHE_KEY);
@@ -2553,14 +1978,14 @@ public final class SqlPreviewService {
      * 适用于 createQuery(HQL) 单参数场景（无 Entity.class 二参）；
      * 语句头优先口径——UPDATE/DELETE 头同样命中，不再只认 FROM 子句。
      */
-    private String extractEntityNameFromHql(@NotNull String hql) {
+    public String extractEntityNameFromHql(@NotNull String hql) {
         return HqlEntityNameExtractor.extract(hql);
     }
 
     /**
      * 将 HBM XML 映射转换为 TableInfo。
      */
-    private TableInfo convertHbmMappingToTableInfo(@NotNull HbmXmlMapping.ClassMapping mapping) {
+    public TableInfo convertHbmMappingToTableInfo(@NotNull HbmXmlMapping.ClassMapping mapping) {
         List<ColumnInfo> columns = new ArrayList<>();
         for (HbmXmlMapping.PropertyMapping prop : mapping.getProperties()) {
             columns.add(new ColumnInfo(prop.getFieldName(), prop.getColumnName(), prop.isId(), false, null, null, null, ColumnRole.BUSINESS));
@@ -2577,7 +2002,7 @@ public final class SqlPreviewService {
     /**
      * 按短类名查找 PsiClass。
      */
-    private PsiClass findClassByShortName(@NotNull Project project, @NotNull String shortName, @NotNull GlobalSearchScope scope) {
+    public PsiClass findClassByShortName(@NotNull Project project, @NotNull String shortName, @NotNull GlobalSearchScope scope) {
         PsiClass[] classes = PsiShortNamesCache.getInstance(project).getClassesByName(shortName, scope);
         return (classes.length > 0) ? classes[0] : null;
     }
@@ -2676,7 +2101,7 @@ public final class SqlPreviewService {
     /**
      * 风险警示（F-09/F-10 + F-6 Phase C BlockAttack 增强 + DataPermission 占位提示）。
      */
-    private String buildWarning(@NotNull SqlStatement statement) {
+    public String buildWarning(@NotNull SqlStatement statement) {
         String baseWarning = null;
         if (statement instanceof UpdateStatement) {
             if (((UpdateStatement) statement).getConditions().isEmpty()) {
@@ -2700,7 +2125,7 @@ public final class SqlPreviewService {
     // 伴侣对象（companion object）等价静态成员
     // ------------------------------------------------------------------
 
-    private static final Logger LOG = Logger.getInstance(SqlPreviewService.class);
+    public static final Logger LOG = Logger.getInstance(SqlPreviewService.class);
 
     /**
      * T-PreviewFast P7：最近一次预览请求的起始时刻（点击/快捷键入口记时）。三段耗时的锚点：
@@ -2721,7 +2146,7 @@ public final class SqlPreviewService {
     private static final String METHOD_LOGIC_DEL_TO_WHERE = "logicDelToWhere";
 
     /** 默认租户列名（T-TenantLine）：tenantColumnName 空白时回退此值。 */
-    private static final String DEFAULT_TENANT_COLUMN = "tenant_id";
+    public static final String DEFAULT_TENANT_COLUMN = "tenant_id";
 
     /** SQL 子句关键字（detectMainAlias 探测主表别名时排除的关键字形态）。 */
     private static final Set<String> SQL_CLAUSE_KEYWORDS = Set.of(
