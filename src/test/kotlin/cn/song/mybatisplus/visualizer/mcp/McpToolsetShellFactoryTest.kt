@@ -64,9 +64,9 @@ class McpToolsetShellFactoryTest {
             FakeToolset::class.java,
             shellName,
         )
-        McpToolsetDynamicRegistrar.ShellClassLoader.define(shellName, bytes)
+        McpToolsetDynamicRegistrar.ShellClassLoader.INSTANCE.define(shellName, bytes)
         try {
-            McpToolsetDynamicRegistrar.ShellClassLoader.define(shellName, bytes)
+            McpToolsetDynamicRegistrar.ShellClassLoader.INSTANCE.define(shellName, bytes)
             fail("同 FQN 二次 define 应抛 LinkageError——该形态即 F29 台账要防的重试炸点")
         } catch (expected: LinkageError) {
             // 预期

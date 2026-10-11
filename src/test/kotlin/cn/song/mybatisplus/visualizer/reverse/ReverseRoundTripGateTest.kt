@@ -26,7 +26,7 @@ class ReverseRoundTripGateTest {
         val failures = mutableListOf<String>()
         for (case in corpus.filter { it.expectation == RoundTripExpectation.ROUND_TRIP }) {
             try {
-                val result = SqlReverseParser.parse(case.sql)
+                val result = SqlReverseParser.INSTANCE.parse(case.sql)
                 case.assertResult(result)
                 val sql2 = when (result.kind) {
                     ReverseStatementKind.INSERT -> renderInsertSql(result)
@@ -52,7 +52,7 @@ class ReverseRoundTripGateTest {
         val failures = mutableListOf<String>()
         for (case in corpus.filter { it.expectation == RoundTripExpectation.PARSE_OK }) {
             try {
-                val result = SqlReverseParser.parse(case.sql)
+                val result = SqlReverseParser.INSTANCE.parse(case.sql)
                 case.assertResult(result)
             } catch (e: Throwable) {
                 failures += "${case.name}：反解失败 ${e.message}"
@@ -66,7 +66,7 @@ class ReverseRoundTripGateTest {
         val failures = mutableListOf<String>()
         for (case in corpus.filter { it.expectation == RoundTripExpectation.RAW_DEGRADE }) {
             try {
-                val result = SqlReverseParser.parse(case.sql)
+                val result = SqlReverseParser.INSTANCE.parse(case.sql)
                 if (result.warnings.isEmpty()) {
                     failures += "${case.name}：未发生降级（warnings 为空）"
                 }
@@ -83,7 +83,7 @@ class ReverseRoundTripGateTest {
         val failures = mutableListOf<String>()
         for (case in corpus.filter { it.expectation == RoundTripExpectation.PARSE_ERROR }) {
             try {
-                SqlReverseParser.parse(case.sql)
+                SqlReverseParser.INSTANCE.parse(case.sql)
                 failures += "${case.name}：应报错但解析成功（缺口已修复？升档）"
             } catch (e: SqlReverseException) {
                 // 预期：当前报错
@@ -120,10 +120,10 @@ class ReverseRoundTripGateTest {
         val failures = mutableListOf<String>()
         for (case in corpus.filter { it.expectation != RoundTripExpectation.PARSE_ERROR }) {
             try {
-                val result = SqlReverseParser.parse(case.sql)
+                val result = SqlReverseParser.INSTANCE.parse(case.sql)
                 // 多表删除需实体类上下文（deleteTargets 非空时无实体 QUERY 形态本就不适用）——设计内限制，豁免
                 if (result.kind == ReverseStatementKind.DELETE && result.deleteTargets.isNotEmpty()) continue
-                val code = JavaCodeGenerator.generate(result, null, GeneratedWrapper.QUERY)
+                val code = JavaCodeGenerator.generate(result, null, GeneratedWrapper.QUERY, null)
                 if (code.isBlank()) {
                     failures += "${case.name}: 生成代码为空"
                 }

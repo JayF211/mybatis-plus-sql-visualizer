@@ -81,6 +81,12 @@ public final class McpToolsetDynamicRegistrar {
         SqlVisualizerHistorySearchTool.class
     );
 
+    /** K2J 互操作：master 侧 {@code TOOL_CLASSES} 为 Kotlin {@code internal}，同模块测试树可读——
+     * Java 无 internal 语义，以只读 ForTest 访问器等价承载（守卫测试 McpToolGateTest 对账用）。 */
+    public static List<Class<?>> toolClassesForTest() {
+        return TOOL_CLASSES;
+    }
+
     /** 探测＋全量注册；已注册或探测失败（无 mcpServer 新形态）时零操作。
      *  F29（D1=A 按工具粒度记账）：{@link #definedShells} 缓存已 define 壳类（define 不可逆——
      *  部分失败重试撞同 FQN LinkageError 的根治）、{@link #epRegistered} 记账已注册到 EP 的 FQN

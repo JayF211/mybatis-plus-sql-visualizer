@@ -103,9 +103,9 @@ class McpToolGateTest : BasePlatformTestCase() {
         assertEquals(
             "TOOL_CLASSES 与 TOOL_NAMES 数量对齐",
             McpToolGate.TOOL_NAMES.size,
-            McpToolsetDynamicRegistrar.TOOL_CLASSES.size,
+            McpToolsetDynamicRegistrar.toolClassesForTest().size,
         )
-        McpToolsetDynamicRegistrar.TOOL_CLASSES.forEachIndexed { index, cls ->
+        McpToolsetDynamicRegistrar.toolClassesForTest().forEachIndexed { index, cls ->
             val tail = cls.simpleName.removePrefix("SqlVisualizer").removeSuffix("Tool")
             assertTrue("工具类必须按 SqlVisualizer<Xxx>Tool 命名：${cls.simpleName}", tail.isNotEmpty())
             val snake = tail.replace(Regex("([a-z0-9])([A-Z])"), "$1_$2").lowercase()

@@ -389,8 +389,8 @@ class ErrorReportDialogLayoutTest {
         val items = listOf(item(0))
         val selected = ErrorReportDialog.selectedBatchItemsFor(
             items,
-            headAttachStack = true,
-            batchList = javax.swing.JPanel(), // 单条不出分节 ⇒ 生产里就是 0 组件容器
+            true,
+            javax.swing.JPanel(), // 单条不出分节 ⇒ 生产里就是 0 组件容器
         )
         assertEquals("单条（无分节）收集为空集 → 原样单帖", 0, selected.size)
         assertTrue("头部堆栈开关仍按主表单回写", items[0].attachStack)

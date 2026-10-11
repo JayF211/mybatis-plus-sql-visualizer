@@ -46,11 +46,10 @@ class PreviewLineCommentWiringTest : BasePlatformTestCase() {
     private fun previewResult() = PreviewResult(
         "SELECT id, name\nFROM user\nWHERE age > 1",
         "SELECT id, name FROM user WHERE age > 1",
-        emptyList(),
+        emptyList<String>(),
         null,
         null,
         "user",
-        null,
         emptyList(),
     )
 

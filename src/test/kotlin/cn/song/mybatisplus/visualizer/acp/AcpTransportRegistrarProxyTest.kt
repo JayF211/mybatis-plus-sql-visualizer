@@ -95,9 +95,9 @@ class AcpTransportRegistrarProxyTest {
         AcpTransportEpRegistrar.sseResolver = { count++; Any() }
         try {
             val m = FakeAgentTransport::class.java.methods.first { it.name == "getTransport" }
-            val h = transportHandler { AcpTransportEpRegistrar.sseConstantForTest() }
-            h.invoke(ANY_PROXY, m, arrayOf(FakeAgent("acp.registry.claude-acp")))
-            h.invoke(ANY_PROXY, m, arrayOf(FakeAgent("acp.registry.claude-acp")))
+            val h = AcpTransportRegistrarKt.transportHandler { AcpTransportEpRegistrar.sseConstantForTest() }
+            h.invoke(ANY_PROXY, m, arrayOf<Any?>(FakeAgent("acp.registry.claude-acp")))
+            h.invoke(ANY_PROXY, m, arrayOf<Any?>(FakeAgent("acp.registry.claude-acp")))
             assertEquals("SSE 解析应命中缓存只跑一次", 1, count)
         } finally {
             AcpTransportEpRegistrar.sseResolver = old
