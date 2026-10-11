@@ -115,6 +115,14 @@ val verifyGate = tasks.register<JavaExec>("verifyGate") {
     // Gradle script object references"），故在配置期捕获为普通值（startParameter 与属性值在配置期已确定）。
     val invokedTaskNames = gradle.startParameter.taskNames
     val verifyIdesProperty = providers.gradleProperty("verifyIdes").orNull
+    // T-ReleasePerf7 N1（20261007）：verifyGate 时间性错峰延迟。缺省逻辑：releaseGate 编排内
+    // 自动 285000ms（R1 探针校准的 marketplace 高占用段时长——错峰后 B 组均值 672.5s vs 浮动
+    // 754s = −10.8%，parity 全绿）；verifyGate 冒烟/其他场景 0（行为不变）。
+    // 显式 -PgateStaggerMs=0 可强制关。分片叶子侧同款=mpv-testing 的 testStaggerMs。
+    // 配置缓存约束：必须在 register 块内捕获为普通 Long（脚本顶层 val 经 lambda 引用=持有脚本
+    // 对象引用不可序列化，T-ReleasePerf-05 同款坑，S2 round2 实测 5 problems storing）。
+    val gateStaggerMs = providers.gradleProperty("gateStaggerMs").orNull?.toLongOrNull()
+        ?: if (invokedTaskNames.contains("releaseGate")) 285_000L else 0L
     classpath(
         gradleUserHome.resolve("caches/modules-2/files-2.1/org.jetbrains.intellij.plugins/verifier-cli")
             .walkTopDown().maxDepth(4)
@@ -167,6 +175,13 @@ val verifyGate = tasks.register<JavaExec>("verifyGate") {
                 "-PverifyOnly=true 需要已存在的发行包：$zipFile 不存在。" +
                     "先跑 ./gradlew buildPlugin 产出，或去掉 -PverifyOnly 走完整链路。",
             )
+        }
+        // T-ReleasePerf7 N1（20261007）：时间性错峰开关（缺省 0=关）。语义与分片叶子同款
+        //（mpv-testing testStaggerMs）：把 verifyGate 真实起点推后 N 毫秒，嵌入 verifyMarketplace
+        // 高占用解析段之后的低占用等待窗。仅延迟启动，验证口径零变化。
+        if (gateStaggerMs > 0) {
+            logger.lifecycle("verifyGate stagger ${gateStaggerMs}ms")
+            Thread.sleep(gateStaggerMs)
         }
         logger.lifecycle("verifyGate START ${System.currentTimeMillis()} plugin=$zipFile")
     }
@@ -295,5 +310,10 @@ tasks {
             "发版链路一命令：buildPlugin → verifyGate（三目标兼容门禁）→ verifyMarketplace（Marketplace 同口径）" +
                 " → testShards（全量测试）→ e2eFakeIde（真机级端到端探针，需本机 MySQL + demo 工程）"
         dependsOn("buildPlugin", "verifyGate", "verifyMarketplace", "testShards", "e2eFakeIde")
+        // T-ReleasePerf6 S1：整链起止毫秒锚点——与 verifyGate/testShardN/verifyMarketplace 各自
+        // 的锚点配合，一次 releaseGate 日志即可对出各环节分解耗时（此前只有各环节零散锚点，
+        // 总墙钟要从 daemon 日志或表纪实测）。动作内零脚本对象引用，配置缓存兼容。
+        doFirst { logger.lifecycle("releaseGate START ${System.currentTimeMillis()}") }
+        doLast { logger.lifecycle("releaseGate END ${System.currentTimeMillis()}") }
     }
 }

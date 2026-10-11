@@ -27,6 +27,10 @@ sourceSets {
 }
 dependencies {
     "childappImplementation"("com.h2database:h2:2.3.232")
+    // T-AttachPoolWarm：真机复现（MySQL 8 + 存量池连接复用）子进程驱动——子 JVM classpath 须挂真 jar
+    "childappImplementation"("com.mysql:mysql-connector-j:8.0.33")
+    // 四格 A2：HikariCP 4.0.3（Spring Boot 2.6.3 管理版）——child 侧 HikariDataSource 真实池
+    "childappImplementation"("com.zaxxer:HikariCP:4.0.3")
 }
 
 // reloc 源集（构建期工具：fat jar 打包 + ASM 自 relocate）
@@ -48,6 +52,13 @@ val h2jdk8 by configurations.creating {
     isCanBeResolved = true
 }
 
+// T-AttachPoolWarm 四格：Hikari/驱动换代子进程的**显式** classpath（HikariCP 4.0.3 = Spring Boot
+// 2.6.3 管理版；其运行时需 javassist + slf4j-api；带两个 MySQL 驱动版本供 A2/A3 按文件名各取一）。
+val attachPoolChild by configurations.creating {
+    isCanBeConsumed = false
+    isCanBeResolved = true
+}
+
 dependencies {
     // 织入工具（§4.2 #2：ASM AdviceAdapter 手织；被打进 fat jar 前由 relocate 任务改名）
     compileOnly("org.ow2.asm:asm:$asmVersion")
@@ -64,13 +75,53 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     // attach 门禁测试的「用户应用」驱动：H2（与根项目方言验证同版本）
     testImplementation("com.h2database:h2:2.3.232")
+    // T-AttachPoolWarm：真机复现（MySQL 8 + 存量池连接复用）——测试 classpath 提供真 driver jar，
+    // 供子 JVM 拼 classpath（locateMysqlJar 从 java.class.path 提取）与模式断言
+    testImplementation("com.mysql:mysql-connector-j:8.0.33")
 
     // JDK8 目标门禁专用：H2 1.4.200（2.x 是 Java 11 字节码，JDK8 加载不了）——
     // 以独立配置解析出 jar 绝对路径，经系统属性下发给测试
     "h2jdk8"("com.h2database:h2:1.4.200")
+    // 四格 A2/A3：Hikari 子进程 classpath——排除 micrometer（JDBC 路径无关，避免拉一串监控依赖）
+    // 与 MySQL 驱动的 X DevAPI 依赖（protobuf/oci，JDBC 路径不加载，本机 .m2 亦无）；
+    // javassist 被 Hikari 4.0.3 要 3.27.0-GA（本机 .m2 无），下方 force 到在位版本。
+    // 两个 MySQL 驱动版本同挂，测试侧按文件名各取一（A2 8.0.33 / A3·B2 8.0.28）。
+    add("attachPoolChild", "com.zaxxer:HikariCP:4.0.3") { exclude(group = "io.micrometer") }
+    add("attachPoolChild", "com.mysql:mysql-connector-j:8.0.33") {
+        exclude(group = "com.google.protobuf")
+        exclude(group = "com.oracle.oci.sdk")
+    }
+    add("attachPoolChild", "mysql:mysql-connector-java:8.0.28") {
+        exclude(group = "com.google.protobuf")
+        exclude(group = "com.oracle.oci.sdk")
+    }
+    // 达梦语句面 E2E：DM 驱动进子进程 classpath（demo pom 声明版 8.1.3.140）
+    "attachPoolChild"("com.dameng:DmJdbcDriver18:8.1.3.140")
     // 织入产物校验测试需要 ASM 明文命名空间（仅测试 classpath）
     testImplementation("org.ow2.asm:asm:$asmVersion")
     testImplementation("org.ow2.asm:asm-commons:$asmVersion")
+
+    // T-PgWeave：语句面/prepare 面登记名单的驱动夹具——真实驱动类字节进**测试 classpath**（生产
+    // 依赖图不变），供 StatementWeaverVendorCoverageTest 直读 class 字节织入 + JVM 校验（supertype
+    // 可解析才能 define）。版本对齐根 catalog/驱动实测：postgresql 42.7.x / mssql-jdbc 12.x /
+    // ojdbc 23.x。织入形态与版本无关——守卫钉形态不锁版本，漂移按「织不上降级」契约。
+    // 达梦（DmJdbcDriver18）未登记：addBatch 出口 chop_frame 触发织入器帧-局部变量局限（见
+    // StatementWeaver 类注释），故不进测试 classpath。
+    testImplementation("org.postgresql:postgresql:42.7.1")
+    testImplementation("com.microsoft.sqlserver:mssql-jdbc:12.4.2.jre11")
+    testImplementation("com.oracle.database.jdbc:ojdbc11:23.3.0.23.09")
+    // T-DmWeave：达梦语句面/prepare 面登记（本机 demo 声明版 DmJdbcDriver18 8.1.3.140）——
+    // 真实驱动类字节进**测试 classpath**，供覆盖率守卫做字节层织入 + JVM 校验探针。
+    testImplementation("com.dameng:DmJdbcDriver18:8.1.3.140")
+}
+
+// 四格：Hikari 子进程 classpath 版本钉到本机 .m2 在位版本（Hikari 4.0.3 自身要 javassist 3.27.0-GA，
+// 本机无；3.25.0-GA 与 slf4j 1.7.36 均在位、且为 Java 8 字节码——JDK8 目标格同样可加载）。
+configurations.named("attachPoolChild") {
+    resolutionStrategy.force(
+        "org.javassist:javassist:3.25.0-GA",
+        "org.slf4j:slf4j-api:1.7.36",
+    )
 }
 
 tasks.withType<JavaCompile>().configureEach {
@@ -92,6 +143,12 @@ tasks.test {
     dependsOn(agentFatJar)
     dependsOn(tasks.named("childappClasses"))
     systemProperty("sqlvis.h2jdk8", h2jdk8.singleFile.absolutePath)
+    // 四格：Hikari 子进程 classpath（HikariCP + javassist + slf4j + 两版 MySQL 驱动）整串下发
+    systemProperty("sqlvis.attachPoolChild", attachPoolChild.asPath)
+    // ZeroLoadClassWriterWeaveTest 以 findLoadedClass 反射探查夹具预载态（织入零加载判别的
+    // 鉴别力前提）——JDK17 模块封装默认拒开 java.lang，测试 JVM 显式放开（仅测试进程，
+    // 不影响 agent 产物）。
+    jvmArgs("--add-opens", "java.base/java.lang=ALL-UNNAMED")
     useJUnit()
     // 根项目 `test --tests <IDE 测试>` 触发本任务时无匹配用例——不视为失败
     filter {

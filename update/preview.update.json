@@ -1,7 +1,7 @@
 {
-  "version": "2026.10.7",
-  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.10.7/mybatis-plus-sql-visualizer-2026.10.7.zip",
-  "changeNotes": "JPA 链式 setParameter 参数预览错位修复，参数按名回填与书写顺序解耦\n参数字面量与枚举常量自动预填参数框\nSQL 日志工具栏新增滚动到底部动作与尾部跟随\n并发 SQL 日志监听与历史加载性能优化\n参数占位启发式复合词误报修复\n帮助页与 Marketplace 自定义页文案精简",
-  "publishDate": "2026-10-07",
+  "version": "2026.10.13",
+  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.10.13/mybatis-plus-sql-visualizer-2026.10.13.zip",
+  "changeNotes": "mapper XML 语法高亮与列名补全\nSQL 历史工作流，条目钉住、正则检索、多格式导出与版本对比\n预览参数预设，按语句隔离并可折叠\n分页拦截器模拟，LIMIT 与 COUNT 可分别控制\nEXPLAIN 结构化渲染，新增 Oracle 与 SQL Server 模板\nMCP 新增本地 SQL 历史检索工具\n增强捕获支持 PostgreSQL / Oracle / SQL Server / 达梦运行中应用\n原生 MyBatis 拦截器自动注入\n数据源上下文角标，可切换仅显示数据库类型\n动态 SQL 条件求值结果标注与 N+1 同模板计数徽章\nCRUD 与回滚 SQL 可移植导出，日志转 SQL 支持从剪贴板读取\n设置落地页能力矩阵与引导通知试用按钮\n空态与引导链接点击定位设置项",
+  "publishDate": "2026-10-13",
   "sinceBuild": "243"
 }

@@ -2,25 +2,31 @@ package cn.song.mybatisplus.sqlvis.agent;
 
 /**
  * loadAgent 参数契约（§4.3 端口前置协商）：k=v 逗号分隔——
- * {@code port=53210;logLevel=warn;disable=0}。外部配置文件兜底不实现（优先级低于 args，
+ * {@code port=53210;logLevel=warn;disable=0;stackFrames=24}。外部配置文件兜底不实现（优先级低于 args，
  * 一期由 IDE 独占下发，杜绝多方写配置的竞争面）。
+ *
+ * <p>T-StackHoverUi：新增可选键 {@code stackFrames}（调用栈快照总帧数，钳位见
+ * [AgentState#setStackMaxFrames]；缺省 24）。旧 IDE 不下发该键 → 缺省值兜底；未知键继续容忍。
  */
 public final class AgentArgs {
 
     private final int port;
     private final String logLevel;
     private final boolean startDisabled;
+    private final int stackMaxFrames;
 
-    private AgentArgs(int port, String logLevel, boolean startDisabled) {
+    private AgentArgs(int port, String logLevel, boolean startDisabled, int stackMaxFrames) {
         this.port = port;
         this.logLevel = logLevel;
         this.startDisabled = startDisabled;
+        this.stackMaxFrames = stackMaxFrames;
     }
 
     public static AgentArgs parse(String raw) {
         int port = 0;
         String logLevel = "warn";
         boolean startDisabled = false;
+        int stackMaxFrames = 24;
         if (raw != null && !raw.isEmpty()) {
             // loadAgent 的 args 按 Agentmain（或 -javaagent）原样传入：分号/逗号都容忍
             String[] pairs = raw.replace(';', ',').split(",");
@@ -48,10 +54,16 @@ public final class AgentArgs {
                     logLevel = v.isEmpty() ? "warn" : v;
                 } else if ("disable".equals(k)) {
                     startDisabled = "1".equals(v) || "true".equalsIgnoreCase(v);
+                } else if ("stackFrames".equals(k)) {
+                    try {
+                        stackMaxFrames = Integer.parseInt(v);
+                    } catch (NumberFormatException ignore) {
+                        // 非法值留缺省——AgentState 写入口会再钳位
+                    }
                 }
             }
         }
-        return new AgentArgs(port, logLevel, startDisabled);
+        return new AgentArgs(port, logLevel, startDisabled, stackMaxFrames);
     }
 
     public int getPort() {
@@ -64,5 +76,9 @@ public final class AgentArgs {
 
     public boolean isStartDisabled() {
         return startDisabled;
+    }
+
+    public int getStackMaxFrames() {
+        return stackMaxFrames;
     }
 }

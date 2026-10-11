@@ -58,15 +58,29 @@ public class SourceJumpFunnelTest {
         assertEquals("com.app.XxxService#getXxxId:36<-com.app.XxxController#load:48", s);
     }
 
+    /**
+     * T-StackHoverUi 契约换代（原「上限于十六帧加省略号」改写）：缺省预算 24 下 20 帧链全链保留；
+     * 超预算链走两端采样——省略标记在场且段数有界（栈顶 B-8 + 标记 + 栈底 8）。
+     */
     @Test
-    public void 栈快照_上限于十六帧加省略号() {
-        StackTraceElement[] stack = new StackTraceElement[20];
+    public void 栈快照_缺省预算内全链_超预算两端采样() {
+        // 20 帧 ≤ 缺省 24：全链保留、无标记
+        StackTraceElement[] shortChain = new StackTraceElement[20];
         for (int i = 0; i < 20; i++) {
-            stack[i] = new StackTraceElement("com.app.C" + i, "m" + i, "C" + i + ".java", i);
+            shortChain[i] = new StackTraceElement("com.app.C" + i, "m" + i, "C" + i + ".java", i);
         }
-        String s = StackDigest.build(stack);
-        assertTrue(s.contains("…"));
-        assertTrue("帧数应截断到 16", s.split("<-").length <= 16);
+        String full = StackDigest.build(shortChain);
+        assertTrue("预算内不得出省略标记", !full.contains("…"));
+        assertEquals(20, full.split("<-").length);
+
+        // 40 帧 > 缺省 24：两端采样，标记在场，段数 = 栈顶 16 + 标记 + 栈底 8 = 25
+        StackTraceElement[] longChain = new StackTraceElement[40];
+        for (int i = 0; i < 40; i++) {
+            longChain[i] = new StackTraceElement("com.app.C" + i, "m" + i, "C" + i + ".java", i);
+        }
+        String sampled = StackDigest.build(longChain);
+        assertTrue("超预算应出省略标记", sampled.contains("中间省略"));
+        assertEquals(25, sampled.split("<-").length);
     }
 
     @Test

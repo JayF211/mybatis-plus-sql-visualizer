@@ -24,6 +24,19 @@ import java.util.concurrent.ConcurrentHashMap;
  *       禁止「过滤到空导致跳转能力消失」的劣化。</li>
  * </ol>
  *
+ * <p>T-SrcGenFrame（字节码生成类帧过滤，2026-10 真机 `<code>[&lt;generated&gt;]</code>` 报障定谳）：
+ * CGLIB 增强类（{@code $$EnhancerBySpringCGLIB$$}/​{@code $$FastClassBySpringCGLIB$$} 族）的
+ * SourceFile 属性是 Enhancer 字节码里 ldc 硬编码的 {@code <generated>}（spring-core 5.1.19
+ * {@code Enhancer.generate → ClassEmitter.begin_class} 第 6 参 javap 实证），行号恒 -1。此类帧
+ * <b>类名前缀即业务包名</b>、codeSource 亦随宿主类落业务目录/JAR——L1 来源判据天然放行；且 Spring
+ * 代理调用经<b>跳过包内真实方法体</b>（典型=MP {@code ServiceImpl} 继承方法经代理触发）时，生成类帧
+ * 就是<b>最深非框架帧</b>（池首），旧逻辑选中它 → 事件 sf=「业务包/&lt;generated&gt;」→ 面板渲染
+ * {@code [<generated>]}。真机混合形态实证：同批条目直接调 mapper 接口的拿到真实业务行，经代理调
+ * Service 继承方法的全部落到 <code>[&lt;generated&gt;]</code>。对策：<b>主位置选择（L1/上顶收敛/
+ * 缓存命中深帧探测/候选列）一律要求真实源文件</b>，生成类帧让位给池中更深扫描到的真实业务帧（=
+ * 触发本次调用的调用方行）；仅当池内<b>无任何</b>真实源文件帧（真无主：调度器直发/懒加载回调等）
+ * 才由安全网原样采用，<code>[&lt;generated&gt;]</code> 标注保留作真无主信号。
+ *
  * <p>T-SourceJumpFunnel（自研框架汇聚门面适配）：公司内自研数据访问框架（不经 MyBatis）的引擎全链帧
  * 不在 L2 名单、且可能来自目录（同工程多模块）——L1 会把「最深引擎帧」选成主位置，且所有业务调用共用
  * 同一个汇聚帧。对策：
@@ -112,8 +125,30 @@ public final class StackLocator {
     /** 候选帧上限（IDE 侧解析回退用；过深无意义且加长事件体）。T-SourceJumpFunnel：3→8——汇聚门面下深层业务帧须可见。 */
     private static final int MAX_CANDIDATES = 8;
 
+    /**
+     * T-SrcGenFrame：CGLIB 增强类 SourceFile 属性的字面值（Enhancer 字节码 ldc 实证，非猜测）。
+     * {@code toRelativePath} 产出形如「业务包/.../&lt;generated&gt;」的伪路径、行号恒 0——
+     * IDE 面板渲染成 {@code [<generated>]}（无行号段）。
+     */
+    static final String GENERATED_SOURCE_NAME = "<generated>";
+
+    /** T-SrcGenFrame：帧是否来自字节码生成类（源文件为 {@code <generated>} 占位——无真实 .java 可解析）。 */
+    static boolean isGeneratedSourceFrame(String file) {
+        return file != null
+                && (file.equals(GENERATED_SOURCE_NAME) || file.endsWith("/" + GENERATED_SOURCE_NAME));
+    }
+
     /** 判定缓存上限（溢出整体清空——既有粗粒度策略）。 */
     private static final int CACHE_MAX = 512;
+
+    /** F30 类来源记忆化（loader 作用域 + className → loadedFromJar 结果；Optional 承载 null「未知」负缓存——CHM 禁 null 值；同 CACHE_MAX 界）。
+     *  键含 loader 身份：同名类在不同 loader 下 codeSource 可不同（测试夹具动态 define 形态），纯 className 键会跨 loader 污染。 */
+    private static final java.util.concurrent.ConcurrentHashMap<String, java.util.Optional<Boolean>> ORIGIN_MEMO =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    private static String originMemoKey(String className, ClassLoader loader) {
+        return Integer.toHexString(System.identityHashCode(loader)) + "#" + className;
+    }
 
     /**
      * 定位「判定」缓存（T-AgentSourceLocateStale T-01 起 L1 与安全网<b>合并为一条</b>）：
@@ -251,25 +286,31 @@ public final class StackLocator {
         String via = "SAFETY";
 
         // L1 来源过滤：优先取「非 JAR 来源」帧（开发态用户业务类在目录）；
-        // T-ToolSiteBizFrame（机制 A）：反向名单登记的包名前缀，其帧即使来自 JAR 也按业务帧对待
+        // T-ToolSiteBizFrame（机制 A）：反向名单登记的包名前缀，其帧即使来自 JAR 也按业务帧对待；
+        // T-SrcGenFrame：字节码生成类帧（SourceFile=<generated>）不算数——类名/codeSource 都像业务帧，
+        // 但无真实源文件，选中即产出现场可见的 [<generated>] 标注，让位给池中真实业务帧（调用方行）
         for (int i = 0; i < pool.size(); i++) {
-            if (isBusinessOrigin(pool.get(i)[2], loader)) {
+            final String[] c = pool.get(i);
+            if (isSelectableBusinessFrame(c[0], c[2], loader)) {
                 primaryAt = i;
                 via = "L1";
                 break;
             }
         }
         // P0-4 上顶收敛：L1 无命中 → 优先取首个「带调试信息」的非框架帧（安全网不劣化、
-        // 且无调试信息的帧不可作为定位——旧逻辑会拿 null-file 帧再从候选上顶，可达汇聚门面）
+        // 且无调试信息的帧不可作为定位——旧逻辑会拿 null-file 帧再从候选上顶，可达汇聚门面）；
+        // T-SrcGenFrame：<generated> 占位虽有「文件名」但解析不出任何 .java，同按无调试信息处理
         if (primaryAt < 0) {
             for (int i = 0; i < pool.size(); i++) {
-                if (pool.get(i)[0] != null) {
+                if (pool.get(i)[0] != null && !isGeneratedSourceFrame(pool.get(i)[0])) {
                     primaryAt = i;
                     break;
                 }
             }
         }
-        // 全无调试信息 → 原样取首个非框架帧（file 为 null，本次不产出位置）
+        // 全无调试信息 → 原样取首个非框架帧（file 为 null，本次不产出位置）；
+        // T-SrcGenFrame：池内只剩生成类帧（真无主：调度器直发/框架回调等）时同落此处——
+        // <generated> 标注保留，作为「连业务帧都没有」的显式信号（修复后它只出现在真无主形态）
         if (primaryAt < 0) {
             primaryAt = 0;
         }
@@ -301,10 +342,16 @@ public final class StackLocator {
      * {@code pool[0..bound-1]}（比缓存身份<b>更深</b>的调用链段）中首个「业务来源帧」的下标，
      * 无则 -1。T-ToolSiteBizFrame（机制 B′）：缓存身份是祖先浅帧而本执行经业务工具类下钻时，
      * 真执行点就在这一段里——全量路径 L1 本会选中它，命中路径须对齐。
+     *
+     * <p>T-SrcGenFrame：判据升级为 [isSelectableBusinessFrame]（业务来源<b>且</b>带真实源文件）——
+     * 生成类帧的 origin 判据天然放行（类名带业务包名 + 宿主 codeSource），不挡会把命中路径的
+     * 深帧探测拖回「选中 CGLIB 代理帧」的老坑（共享代理方法键下，这正是真机 <code>[&lt;generated&gt;]</code>
+     * 现场的另一半通路：全量路径修对了、命中路径再选回去）。
      */
     private static int firstBusinessFrameBefore(List<String[]> pool, ClassLoader loader, int bound) {
         for (int i = 0; i < bound; i++) {
-            if (isBusinessOrigin(pool.get(i)[2], loader)) {
+            final String[] c = pool.get(i);
+            if (isSelectableBusinessFrame(c[0], c[2], loader)) {
                 return i;
             }
         }
@@ -327,6 +374,21 @@ public final class StackLocator {
     }
 
     /**
+     * T-SrcGenFrame：可作<b>主位置</b>的业务帧判据（L1 全量路径与命中路径深帧探测共用）——
+     * [isBusinessOrigin] 命中<b>且</b>带真实源文件。
+     *
+     * <p>为什么 origin 判据不够：CGLIB 增强帧类名前缀即业务包名、codeSource 随宿主类落业务
+     * 目录/业务 JAR（反向名单登记业务包时同样命中），来源维度上它与真实业务帧不可区分；
+     * 唯一稳定信号是 SourceFile 占位 {@code <generated>}（{@link #isGeneratedSourceFrame}）。
+     * 真机实证（2026-10）：经 Spring 代理调 MP {@code ServiceImpl} 继承方法（真实方法体所在类
+     * 被 {@code com.baomidou.} 前缀跳过）时，池内生成类帧之外的真实帧只剩<b>调用方</b>——本判据
+     * 让位后 L1 恰好落到调用方行，即「真实调用点」。
+     */
+    private static boolean isSelectableBusinessFrame(String file, String className, ClassLoader loader) {
+        return !isGeneratedSourceFrame(file) && isBusinessOrigin(className, loader);
+    }
+
+    /**
      * 由<b>当前 pool</b> 的第 {@code primaryAt} 条构造结果帧（T-AgentSourceLocateStale T-01：行号与
      * 候选列每执行重建，禁整帧缓存）。主位置无调试信息（file 为 null）时返回 null = 本次不产出位置。
      */
@@ -337,7 +399,8 @@ public final class StackLocator {
         }
         final List<String[]> candidates = new ArrayList<String[]>(MAX_CANDIDATES);
         for (String[] c : pool) {
-            if (c[0] == null || c[0].equals(primary[0])) {
+            // T-SrcGenFrame：生成类帧不进候选列——IDE 侧按路径解析必 404，白占候选预算
+            if (c[0] == null || c[0].equals(primary[0]) || isGeneratedSourceFrame(c[0])) {
                 continue;
             }
             // T-SourceJumpFunnel P0-2：候选增厚为 [file, line, className, method] 四列
@@ -500,28 +563,45 @@ public final class StackLocator {
         return defaultLoadedFromJar(className, loader);
     }
 
-    /** 默认来源判定（codeSource 路径形态；注入口非 null 时被替代）。 */
+    /** 默认来源判定（codeSource 路径形态；注入口非 null 时被替代）。
+     *  F30：per-class 记忆化（含 null 负缓存）——「缓存身份=祖先浅帧 + 更深段全为名单外 JAR 帧」
+     *  形态下同一类每事件重付 at 次 Class.forName + CodeSource 解析（无记忆化），B′ 深帧探测
+     *  的唯一实质重付点；类的 codeSource 在同一 JVM 内不变，记忆化语义安全。EXTRA_BIZ_PREFIXES
+     *  仍每事件活读（名单 volatile 整组替换，缓存化会读旧名单）。 */
     static Boolean defaultLoadedFromJar(String className, ClassLoader loader) {
         if (className == null) {
             return null;
+        }
+        Boolean result = null;
+        final String memoKey = originMemoKey(className, loader);
+        final java.util.Optional<Boolean> memo = ORIGIN_MEMO.get(memoKey);
+        if (memo != null) {
+            return memo.orElse(null);
         }
         try {
             final Class<?> c = Class.forName(className, false, loader);
             final CodeSource cs = c.getProtectionDomain().getCodeSource();
             if (cs == null || cs.getLocation() == null) {
-                return null;
+                result = null;
+            } else {
+                final String loc = cs.getLocation().toString();
+                result = loc.endsWith(".jar") || loc.contains(".jar!") || loc.contains(".jar/");
             }
-            final String loc = cs.getLocation().toString();
-            return loc.endsWith(".jar") || loc.contains(".jar!") || loc.contains(".jar/");
         } catch (Throwable t) {
-            return null;
+            result = null;
         }
+        if (ORIGIN_MEMO.size() >= CACHE_MAX) {
+            ORIGIN_MEMO.clear();
+        }
+        ORIGIN_MEMO.put(memoKey, java.util.Optional.ofNullable(result));
+        return result;
     }
 
     /** 仅供同包测试清场（判定缓存/一次性摘要去重集合为全局静态，跨用例隔离用）；产线勿调。 */
     static void clearLocatorCachesForTest() {
         DECISIONS.clear();
         ENTRY_MISMATCH_REPORTED.clear();
+        ORIGIN_MEMO.clear();
     }
 
     private static ClassLoader resolveLoader(ClassLoader hint) {

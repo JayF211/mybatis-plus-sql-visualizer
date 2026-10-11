@@ -2,7 +2,7 @@
 
 > **服务未启，SQL 先知**
 
-MyBatis-Plus / MyBatis-Plus-Join / JPA / Hibernate / JdbcTemplate 的 SQL 调试利器——IntelliJ IDEA 插件：Wrapper 链、XML/注解动态 SQL 实时预览（含 MPJ 联表 JOIN），SQL 日志一键还原，SQL 反向转 Java 代码。告别翻日志、手拼参数。支持 IDEA 2024.3 及以上版本，[功能矩阵与在线文档](https://sql-visualizer.jvtools.cn)见官网。
+MyBatis-Plus / MyBatis-Plus-Join / JPA / Hibernate / JdbcTemplate 的 SQL 调试利器——IntelliJ IDEA 插件：写代码时就看见最终 SQL（Wrapper 链、XML/注解/HQL 动态 SQL，含 MPJ 联表 JOIN）；跑起来后真实参数与耗时自动捕获，慢查询标红、EXPLAIN 看计划、一键跳回源码；SQL 也能反向转成 Java 代码。不启服务、不翻日志、不手拼参数。支持 IDEA 2024.3 及以上版本，[功能矩阵与在线文档](https://sql-visualizer.jvtools.cn)见官网。
 > **别的插件给你文本，我们给你可执行的 SQL。**
 > 支持 IntelliJ IDEA 2024.3~2026.x 全版本（含 2025.1–2025.3）。
 > 四条理由：Wrapper 链静态生成 SQL 预览（无需运行代码，市场上唯一）；JPA/Hibernate 全家桶支持（派生查询 / JPQL / Criteria / HQL / NamedQuery / Specification / QBE）；预览即可一键执行验证（内嵌 IDEA 原生数据库控制台）；支持达梦/人大金仓/OceanBase/openGauss 等 11 种数据库方言（含信创场景）。
@@ -11,9 +11,9 @@ MyBatis-Plus / MyBatis-Plus-Join / JPA / Hibernate / JdbcTemplate 的 SQL 调试
 
 **编码期（写代码时，静态预览）**：Wrapper 链（Lambda / Query / Update / Delete / MPJ 联表 / 服务链）、XML 动态 SQL（if/foreach/OGNL，自研框架自定义标签内嵌 SQL 兜底识别）、注解 SQL、JPA 派生方法 / JPQL / Criteria、HQL —— gutter 图标一键预览最终 SQL（含逻辑删除、乐观锁、多租户拦截器模拟渲染），并支持 SQL 反向转 Java 代码、实体类 / 数据库表右键生成 CRUD SQL。
 
-**运行期（跑起来后，动态还原）**：控制台 SQL 日志自动捕获，`?` 占位符参数填充为可执行 SQL（MyBatis / Hibernate / JdbcTemplate 三族日志，并发多线程交错按线程分桶还原）；字节码增强捕获为默认通道，无需应用开启 SQL 日志，即得真实参数、执行耗时、影响行数与真实源码位置；日志条目与源码双向跳转（自研框架、JAR 形态业务工具库的调用自动定位到业务代码行），保活心跳类刷屏 SQL 一键屏蔽，历史 SQL 全量落盘与两级导航。
+**运行期（跑起来后，动态捕获）**：字节码增强捕获为默认通道——无需应用开启 SQL 日志，即得真实参数、执行耗时、影响行数与执行报错，慢查询标红并给出静态性能建议；日志条目与源码双向跳转（自研框架、JAR 形态业务工具库的调用自动定位到业务代码行），预览面板的调用栈可悬停展开、逐帧跳转；控制台日志（MyBatis / Hibernate / JdbcTemplate 三族，并发多线程交错按线程分桶还原）作为不改工程的回落通道；保活心跳类刷屏 SQL 一键屏蔽，历史 SQL 全量落盘与两级导航。
 
-**验证（随时）**：预览结果内嵌原生数据库控制台一键执行，EXPLAIN 执行计划（9 种方言，8 种真机 / 引擎实证、OceanBase 文档级验证），SQL 性能规则引擎与静态标注对照，JOIN 关系图可视化；执行前有 `${}` 注入确认与无界写发现清单两道闸、执行超时护栏兜底，UPDATE / DELETE 预览可一键生成回滚 SQL。
+**验证（随时）**：预览结果内嵌原生数据库控制台一键执行，EXPLAIN 执行计划覆盖 11 种方言（9 种真机 / 引擎级实证、OceanBase 文档级验证、SQL Server 按官方文法落地待真机），SQL 性能规则引擎与静态标注对照，JOIN 关系图可视化；执行前有 `${}` 注入确认与无界写发现清单两道闸、执行超时护栏兜底，UPDATE / DELETE 预览可一键生成回滚 SQL。
 
 本插件原名为 MyBatis-Plus SQL Visualizer，现更名 SQL Visualizer——仍全面支持 MyBatis-Plus / MyBatis-Plus-Join / JPA / Hibernate，插件 ID 与升级链路不变。
 
@@ -92,6 +92,7 @@ MyBatis-Plus / MyBatis-Plus-Join / JPA / Hibernate / JdbcTemplate 的 SQL 调试
 
 - Spring Data JPA 派生方法（`findByXxx`）、Repository CRUD 方法（`save` / `findById` / `deleteById` 等直接解析出 SQL）、`@Query`（JPQL / 原生 SQL）、`@NamedQuery`、CriteriaBuilder 调用链、HQL（含自定义 DAO）均可一键预览为 SQL
 - `JpaSpecificationExecutor` 的 Specification 调用链与 `QueryByExampleExecutor`（`Example.of`）按实体映射解析为 WHERE 条件；Hibernate `.hbm.xml` 映射实体及其 `<query>` / `<sql-query>` 命名查询同样支持
+- 写前静态预览与运行期调试互补：IDEA 2026.3 起官方提供 Hibernate Debugger（debugger 会话内查看运行期语句）；本插件管写代码时——不启动应用、不连数据库即可预览与 EXPLAIN，两者分工不同、互不替代
 - 嵌入值对象（`@Embedded` / `@Embeddable` / `@EmbeddedId`）字段按宿主表列展平参与预览：嵌套嵌入的 `@AttributeOverride` 支持 `name="zipcode.zip"` 点路径覆写（JPA 规范强制形态）；Spring Data 形态的裸 `@Embedded` 按 `prefix` 列名前缀展平，`@Embedded.Nullable` / `@Embedded.Empty` 捷径注解正确识别；派生查询方法名里的嵌入段驼峰路径（`findByUpdateInfoCreatedTime` 这类）解析到真实展平列，WHERE / ORDER BY（含 `Sort.by`）不产出 `update_info_created_time` 这类伪列；混合注解实体（MyBatis-Plus `@TableName` 与 jakarta 嵌入注解共存）在 Wrapper 预览、批量模板与 CRUD 生成里同样展平为宿主表列
 - 实体解析支持 `@Entity` / `@Table` / `@Column` / `@ManyToOne` 注解；HQL 的 `SELECT u` 自动展开为实体列清单，无别名 HQL 的 WHERE 裸属性（如 `stationCode`）同样转成真实列名（`STATION_CODE`），嵌入段限定形态（如 `updateInfo.BE_DELETE = 0`）也落到真实裸列名（`BE_DELETE = 0`）而不再残留属性名
 
@@ -122,7 +123,7 @@ MyBatis-Plus / MyBatis-Plus-Join / JPA / Hibernate / JdbcTemplate 的 SQL 调试
 
 **MCP：给 AI agent 的确定性 SQL 工具**
 
-- 向 IDEA 内置的 MCP Server 注册十个只读工具（IDEA 2025.2+，未装 MCP Server 插件的环境零影响）：渲染三件套 `sqlv_render_sql`（源码定位直接渲染可执行 SQL，含真实参数）/ `sqlv_schema_context`（表列结构紧凑上下文，输出首行披露实际命中的数据源、未指名时标注 auto-resolved）/ `sqlv_explain`（九方言执行计划），工作流四件套 `sqlv_render_logs`（MyBatis/Hibernate/JdbcTemplate 日志还原可执行 SQL）/ `sqlv_check_sql`（静态写风险与类型核查）/ `sqlv_rollback_plan`（回滚预案，不执行）/ `sqlv_perf_advice`（20 条规则性能建议），生成与核查三件套 `sqlv_crud_sql`（实体生成 CRUD）/ `sqlv_reverse_sql`（SQL 转 MyBatis-Plus 代码）/ `sqlv_mapper_check`（mapper 契约 + 渲染产物风险核查）——Claude Code / Cursor / AI Assistant 等 agent 可直接调用。带 `filePath` 的三个工具统一接受项目相对路径或项目内绝对路径（项目外路径与 `..` 上跳拒绝）；`sqlv_schema_context` / `sqlv_explain` 可选指定 `dataSource`（配置了多个数据源时建议显式指名），`sqlv_explain` 的 `dialect` 可省略、按数据源 URL 自动识别
+- 向 IDEA 内置的 MCP Server 注册十一个只读工具（IDEA 2025.2+，未装 MCP Server 插件的环境零影响）：渲染三件套 `sqlv_render_sql`（源码定位直接渲染可执行 SQL，含真实参数）/ `sqlv_schema_context`（表列结构紧凑上下文，输出首行披露实际命中的数据源、未指名时标注 auto-resolved）/ `sqlv_explain`（九方言执行计划），工作流四件套 `sqlv_render_logs`（MyBatis/Hibernate/JdbcTemplate 日志还原可执行 SQL）/ `sqlv_check_sql`（静态写风险与类型核查）/ `sqlv_rollback_plan`（回滚预案，不执行）/ `sqlv_perf_advice`（20 条规则性能建议），生成与核查三件套 `sqlv_crud_sql`（实体生成 CRUD）/ `sqlv_reverse_sql`（SQL 转 MyBatis-Plus 代码）/ `sqlv_mapper_check`（mapper 契约 + 渲染产物风险核查），历史检索一件 `sqlv_history_search`（渲染历史多维检索：关键字/正则/时间界/源文件过滤，只读不执行）——Claude Code / Cursor / AI Assistant 等 agent 可直接调用。带 `filePath` 的三个工具统一接受项目相对路径或项目内绝对路径（项目外路径与 `..` 上跳拒绝）；`sqlv_schema_context` / `sqlv_explain` 可选指定 `dataSource`（配置了多个数据源时建议显式指名），`sqlv_explain` 的 `dialect` 可省略、按数据源 URL 自动识别
 - 设置页「MCP 工具」子页可整体开关插件 MCP 功能、逐工具启用/禁用——插件开关与 IDE「工具 → MCP 服务器」的平台总开关相互独立，经平台工具过滤扩展在下一次工具列表刷新或新会话即时生效；与校验类工具的位差一句话：校验器给的是置信度评分，这里给的是确定性证据——静态校验器产不出的渲染产物实证。能力全景与 agent 侧接入说明（Claude Code / Cursor / AI Assistant）见[官网 MCP 专页](https://sql-visualizer.jvtools.cn/features/mcp)
 
 **检查更新（Gitee 抢先体验通道）**
@@ -184,7 +185,7 @@ LambdaQueryWrapper<DeviceInfoEntity> wrapper = new LambdaQueryWrapper<DeviceInfo
 SELECT id, station_id, share_scheme_id
 FROM device_info_entity
 WHERE id = 1001
-    AND share_scheme_id IS NOT NULL
+    AND station_id IS NOT NULL
 ```
 
 ```java
@@ -294,6 +295,24 @@ ORDER BY t1.create_time DESC
 ### SQL 预览弹窗
 
 弹窗默认尺寸按屏幕比例自适应（宽 62% / 高 65%，下限 900×600），可手动拉伸并记忆尺寸；左侧动态条件复选框 + 参数输入（参数按签名给类型占位提示——数字 / 日期 / 集合 / 对象，形态不符给淡色警示；未填写的参数默认保留 `?` 待填，「空参数填充策略」可切 NULL / 空字符串），右侧 SQL 可编辑（多 tab：SQL / 联表关系图 / 列信息）。工具栏提供格式化、关键字换行、竖向排列、执行计划（仅对只读查询包装 EXPLAIN，DML / DDL 明确拒绝并提示）、刷新等操作，「更多」菜单收纳低频动作（回滚 SQL、导入参数、差异对比、分享）；回滚 SQL 对当前 INSERT 推导可执行逆向语句（整行等值谓词 DELETE），UPDATE / DELETE 因缺 before-image 不自动生成，改走快照查询 + 粘贴回填的人工恢复路径（SQL Server / 达梦的回填 INSERT 同样自动带 `SET IDENTITY_INSERT` 包装，取不到自增列时显式告警不再静默产出必失败的语句）。执行走 Ultimate 原生控制台内嵌；含 `${}` 直替的预览显示注入提示横幅，执行 / EXPLAIN 前弹一次确认；UPDATE 预览 SET 各项带 `(new)` 行尾标注、INSERT 预览在各 VALUES 项旁标出目标列名（列-值错位一眼可见）；执行报错时给出 SQLState / 驱动错误码与出错位置，可一键定位到出错语句。
+
+## 兼容矩阵
+
+| JetBrains IDE | 兼容性（verifyGate 实测） | 说明 |
+|---|---|---|
+| IDEA / IU 2024.3（243） | Compatible | since-build 243 起步 |
+| IDEA / IU 2025.1~2025.3（253） | Compatible | |
+| IDEA / IU 2026.1~2026.2（262） | Compatible | 含 MCP 动态化与增强捕获全链 |
+
+- 三目标读数随每次发行由 `verifyGate` 门禁（构建校验 + 插件验证器离线三目标）实测产出，
+  读数随批次落 `docs/验收文档/`，本表随发行同步更新。
+- Community 版可用（部分 Ultimate 专属能力如内嵌执行控制台自动降级，功能主体不受影响）。
+- 数据库方言：MySQL / PostgreSQL / Oracle / SQL Server / H2 / SQLite / MariaDB / 达梦（DM） /
+  人大金仓（KingBase）/ OceanBase / openGauss 共 11 种（信创场景含达梦与金仓真机验证）。
+- 对比参考（竞品兼容区间为截至 2026-09-30 的 Marketplace 读数）：同域主流插件新版兼容线多已收缩——
+  MyBatisX 251–263、MyBatis Log Free 262+、MybatisLogFormat 233–262、Mybatis-Flex-Helper 261–262；
+  本插件自 2024.3 起全线可装，老版本 IDEA 用户无需先升级 IDE。
+
 
 ## 安装常见问题
 

@@ -155,14 +155,14 @@
 <h1>SQL Visualizer</h1>
 <p class="tagline">服务未启，SQL 先知</p>
 <p class="section-desc">在 IntelliJ IDEA 内将 MyBatis-Plus Wrapper 链、XML mapper、注解 SQL、JPA/Hibernate 查询与
-JdbcTemplate 字符串 SQL 渲染为可读可执行的真实 SQL，参数值自动回填；控制台日志一键还原，SQL 一键反向转 Java。</p>
+JdbcTemplate 字符串 SQL 渲染为可读可执行的真实 SQL，参数值自动回填；跑起来后真实参数与耗时自动捕获（慢查询标红、静态性能建议），一键跳回源码；SQL 一键反向转 Java。</p>
 
 <h3>为什么选它</h3>
 <ul class="hl">
   <li><b>SQL 来源全覆盖</b>：Wrapper 链与服务链、MPJ 联表、XML 动态标签、<code>@Select</code> 注解 SQL、Spring Data 派生查询、HQL / <code>@Query</code>、JdbcTemplate 与自研 DAO 字符串 SQL</li>
   <li><b>真实参数一键回填</b>：<code>?</code> 占位符替换为实际值，LIKE 自动拼百分号、按字段类型加引号</li>
-  <li><b>控制台 SQL 日志实时捕获</b>：MyBatis / Hibernate / JdbcTemplate 三种格式，精确跳转源码</li>
-  <li><b>增强捕获默认开启</b>：挂载轻量 agent 直接采集真实执行，不依赖日志格式</li>
+  <li><b>运行期捕获（默认开启）</b>：挂载轻量 agent 直接采集真实执行，不依赖日志格式——真实参数、毫秒级耗时、影响行数、执行报错与真实源码位置；慢查询标红并给出静态性能建议，调用栈悬停弹层可逐帧跳转</li>
+  <li><b>控制台日志（回落通道）</b>：MyBatis / Hibernate / JdbcTemplate 三种格式自动还原，按线程分桶，精确跳转源码</li>
   <li><b>SQL 反向转 Java</b>：一键生成可直接编译的四种 Wrapper 形态代码</li>
   <li><b>JOIN 关系图与执行</b>：IDE 原生 ER 图渲染（PNG / SVG 导出）；内嵌原生 Database 控制台直接执行 SQL（Ultimate）</li>
   <li><b>CRUD SQL 一步直出</b>：实体类 / 数据库表右键生成，乐观锁与逻辑删除自动适配</li>
@@ -171,7 +171,7 @@ JdbcTemplate 字符串 SQL 渲染为可读可执行的真实 SQL，参数值自�
 <!-- ========== TAGLINE ========== -->
 <div style="margin-bottom:24px;padding:14px 18px;border-radius:8px;background:#f0f6ff;border:1px solid #d0e3ff;">
   <div style="font-size:16px;font-weight:700;">别的插件给你文本，我们给你可执行的 SQL。</div>
-  <div style="font-size:13px;color:#555;margin-top:4px;">编码期静态预览（Wrapper / XML / 注解 / JPA / HQL，无需运行代码）+ 运行期日志还原 + EXPLAIN 执行计划对照，达梦 / 人大金仓 / OceanBase / openGauss 等 11 种数据库方言</div>
+  <div style="font-size:13px;color:#555;margin-top:4px;">编码期静态预览（Wrapper / XML / 注解 / JPA / HQL，无需运行代码）+ 运行期捕获真实参数与耗时 + EXPLAIN 执行计划对照，达梦 / 人大金仓 / OceanBase / openGauss 等 11 种数据库方言</div>
 </div>
 
 <img class="demo" src="https://sql-visualizer.jvtools.cn/demo/wrapper-preview.gif" alt="Wrapper 链静态预览演示" loading="lazy">
@@ -226,9 +226,24 @@ JdbcTemplate 字符串 SQL 渲染为可读可执行的真实 SQL，参数值自�
       <td>超长列清单 / VALUES / SET 折叠为「... N columns」，点击展开</td>
     </tr>
     <tr>
+      <td>mapper XML 语法高亮 <span class="tag tag-new">New</span></td>
+      <td>自动生效</td>
+      <td>mapper XML 语句内 SQL 关键字 / 字符串 / 注释着色，<code>#{}</code> / <code>${}</code> 参数占位底色，<code>test</code> / <code>value</code> 属性表达式着色；<code>#</code> / <code>$</code> 敲键自动闭合 <code>{}</code>，resultMap <code>column</code> 补全列名</td>
+    </tr>
+    <tr>
+      <td>参数预设 <span class="tag tag-new">New</span></td>
+      <td>面板参数区「预设」行</td>
+      <td>参数整组另存 / 切换 / 管理（含 OGNL 勾选态与 foreach 权威值）；按语句隔离、快照语义；预设行可折叠</td>
+    </tr>
+    <tr>
+      <td>分页拦截器模拟 <span class="tag tag-new">New</span></td>
+      <td>设置页开关（默认开）</td>
+      <td>带 <code>IPage</code> 形参的查询按方言追 LIMIT 并并列产出 COUNT 包裹语句；LIMIT 与 COUNT 可分别控制</td>
+    </tr>
+    <tr>
       <td>执行计划 EXPLAIN <span class="tag tag-ultimate">Ultimate</span><span class="tag tag-new">New</span></td>
       <td>弹窗内「执行计划」按钮</td>
-      <td>按方言提交原生控制台，真实计划与静态性能标注同屏对照</td>
+      <td>按方言提交原生控制台，真实计划与静态性能标注同屏对照；覆盖 11 种方言（含 Oracle / SQL Server 模板），可选结构化渲染（表格 / 可折叠树 + 索引建议）</td>
     </tr>
     <tr>
       <td>执行 SQL <span class="tag tag-ultimate">Ultimate</span></td>
@@ -239,6 +254,11 @@ JdbcTemplate 字符串 SQL 渲染为可读可执行的真实 SQL，参数值自�
       <td>JOIN 关系图</td>
       <td>弹窗内「JOIN 图」tab</td>
       <td>IDEA 原生 Diagrams 渲染（Community 降级自绘）；PNG / SVG 导出</td>
+    </tr>
+    <tr>
+      <td>调用栈悬停 <span class="tag tag-new">New</span></td>
+      <td>悬停预览面板调用栈区域</td>
+      <td>调试器风格弹层，结构化解析帧、跳过尾部基础设施帧、锚定最深业务帧；帧数可配置（默认 24，范围 12~64）</td>
     </tr>
   </tbody>
 </table>
@@ -282,12 +302,17 @@ JdbcTemplate 字符串 SQL 渲染为可读可执行的真实 SQL，参数值自�
     <tr>
       <td>历史与源码定位 <span class="tag tag-new">New</span></td>
       <td>侧边栏「SQL 历史」tab / 双击条目</td>
-      <td>历史自动保存、两级导航；精确跳到触发 SQL 的源码行</td>
+      <td>历史标签页常驻，未开启自动保存也可进入；历史自动保存、两级导航；保存目录可自定义且读写同源；条目可钉住、支持正则检索与大小写开关、导出 CSV / TSV / 纯文本 / 可执行 SQL 脚本、两条历史版本对比；精确跳到触发 SQL 的源码行</td>
     </tr>
     <tr>
       <td>去重 / 过滤</td>
       <td>工具栏</td>
       <td>SQL 类型多选筛选；<code>Ctrl+F</code> 搜索；去重 <code>⨉N</code> 徽章即时显示</td>
+    </tr>
+    <tr>
+      <td>最近执行记录 <span class="tag tag-new">New</span></td>
+      <td>gutter 图标右键菜单</td>
+      <td>弹框浏览最近 SQL 执行记录，复用日志列表渲染器；右键菜单六件（复制时间戳/屏蔽/送页签/跳转源码）；支持 Ctrl / Shift 多选与批量复制；右侧编辑器默认格式化 SQL、可临时改动后复制</td>
     </tr>
   </tbody>
 </table>
@@ -306,7 +331,7 @@ JdbcTemplate 字符串 SQL 渲染为可读可执行的真实 SQL，参数值自�
     </tr>
     <tr>
       <td>SQL → Java <span style="font-weight:normal">（<code>Alt+Shift+J</code> / 右键）</span></td>
-      <td>QueryWrapper / LambdaQueryWrapper / Wrappers / MPJLambdaWrapper 四形态；SELECT / UPDATE / DELETE / INSERT / 多表 JOIN；生成代码可直接编译</td>
+      <td>QueryWrapper / LambdaQueryWrapper / Wrappers / MPJLambdaWrapper 四形态；SELECT / UPDATE / DELETE / INSERT / 多表 JOIN；GROUP BY / HAVING / DISTINCT / FOR UPDATE / UNION 子句；聚合/函数列原文回落；方言宽容（双引号标识符/十六进制/ANSI 类型字面量）；返回类型自由输入（Map/Objs/VO 类名）；生成代码可直接编译</td>
     </tr>
     <tr>
       <td>SQL 代码补全</td>
@@ -318,7 +343,7 @@ JdbcTemplate 字符串 SQL 渲染为可读可执行的真实 SQL，参数值自�
     </tr>
     <tr>
       <td>MCP 工具（AI agent）<span class="tag tag-new">New</span></td>
-      <td>内置 MCP Server 十个只读工具（IDEA 2025.2+）：渲染 SQL / 表结构 / EXPLAIN / 日志还原 / 回滚预案等；Claude Code / Cursor / AI Assistant 可直接调用，设置页逐工具门控</td>
+      <td>内置 MCP Server 十一个只读工具（IDEA 2025.2+）：渲染 SQL / 表结构 / EXPLAIN / 日志还原 / 历史检索 / 回滚预案等；Claude Code / Cursor / AI Assistant 可直接调用，设置页逐工具门控</td>
     </tr>
     <tr>
       <td>一键回滚 SQL <span class="tag tag-new">New</span></td>

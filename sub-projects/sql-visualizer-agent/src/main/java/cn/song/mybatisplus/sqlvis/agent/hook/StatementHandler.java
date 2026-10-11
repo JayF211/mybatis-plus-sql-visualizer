@@ -96,12 +96,16 @@ final class StatementHandler implements InvocationHandler {
         final long startMillis = System.currentTimeMillis();
         Object result = null;
         Throwable failure = null;
+        // T-StatementWeave 双通道去重门（WeaveGate）：invoke 到的 raw 方法体已被语句面织入——
+        // 不设门，织入通道会对同一条 SQL 再产出一条事件。置位期间织入入口钩子短路（token=0）。
+        WeaveGate.enterProxy();
         try {
             result = method.invoke(raw, args);
         } catch (java.lang.reflect.InvocationTargetException e) {
             failure = e.getCause() != null ? e.getCause() : e;
             throw failure;
         } finally {
+            WeaveGate.exitProxy();
             final long durationNanos = System.nanoTime() - startNanos;
             try {
                 emitEvent(name, sql, result, failure, durationNanos, startMillis);

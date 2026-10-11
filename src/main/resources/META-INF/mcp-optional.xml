@@ -14,8 +14,9 @@
   动态 toolset 注册＋O-68 外部会话过滤 EP 注册，二者独立探测独立降级）。
 
   T-McpToolNaming：toolset 注册实例的类 simpleName 决定平台「暴露工具」页分组名——动态壳类
-  名 = 业务类名 + "Gen"（如 SqlVisualizerCheckSqlToolGen），SqlVisualizer 前缀与字典序相邻
-  性保持；工具名统一 `sqlv_` 前缀（@McpTool name 与门控设置键同源）。
+  simpleName 与业务类逐字节一致（如 SqlVisualizerCheckSqlTool），落 `mcp.gen` 子包
+  （McpToolsetDynamicRegistrar 命名约定），SqlVisualizer 前缀与字典序相邻性保持；工具名统一
+  `sqlv_` 前缀（@McpTool name 与门控设置键同源）。
 -->
 <idea-plugin>
     <extensions defaultExtensionNs="com.intellij">

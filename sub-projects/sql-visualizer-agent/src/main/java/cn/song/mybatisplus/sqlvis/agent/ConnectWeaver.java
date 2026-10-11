@@ -21,9 +21,19 @@ import org.objectweb.asm.tree.VarInsnNode;
  * classloader 契约（§4.2 #6）的实现方式：**织入期判定可见性**——transform 回调里先以
  * 定义类 loader 试解析回调类，不可见（驱动 loader 隐藏 agent 类 / bootstrap 定义）则
  * 整类不织入（安全降级为无钩子），可见则注入「零分支直线」的 invokestatic。
- * 因此注入块不含 try/catch、不含分支——零帧合并点，COMPUTE_FRAMES 恒可计算；
- * 回调内部（SqlHookCallbacks.onConnection）自吞一切 Throwable，NCDFE 类失败面收口在
- * 织入期而非运行期（对比：反射内联方案的 NoClassDefFoundError 运行期吞吃——DebugTools 式）。
+ * 因此注入块不含 try/catch、不含分支——零帧合并点，COMPUTE_MAXS 足矣（COMPUTE_FRAMES
+ * 禁用，见红线）；回调内部（SqlHookCallbacks.onConnection）自吞一切 Throwable，NCDFE
+ * 类失败面收口在织入期而非运行期（对比：反射内联方案的 NoClassDefFoundError 运行期
+ * 吞吃——DebugTools 式）。
+ *
+ * <p>COMPUTE_FRAMES 禁用（红线，20261006 dev 验收⑥ P0）：帧合并的 getCommonSuperClass
+ * 按 Class.forName 解析类型层级，而 transform 回调运行于被织类自身 defineClass1 进行中
+ * （ClassFileLoadHook 时点）——同线程重入 loadClass 时 findLoadedClass 返回 null、
+ * findClass 二次 defineClass，宿主启动即炸 {@code LinkageError: attempted duplicate
+ * class definition}（mysql 8.0.28 ConnectionImpl 实录）。本类固定
+ * {@code new ZeroLoadClassWriter(COMPUTE_MAXS)}：只重算 maxs，原方法 StackMapTable 原样
+ * 保留（注入块零分支直线无新帧合并点，ClassNode 下帧挂 Label 随插桩自动平移）；
+ * [ZeroLoadClassWriter] 仅作防误挂 COMPUTE_FRAMES 的零类加载兜底。
  *
  * 只改方法体（新局部槽占 maxLocals，COMPUTE_MAXS 重算），不增删方法字段——retransform 合规。
  * 空值短路 / 幂等（不二次包装）/ 禁用开关全在回调首部完成，注入序列保持最短。
@@ -64,7 +74,7 @@ public final class ConnectWeaver implements Opcodes {
         if (!changed) {
             return classfileBuffer;
         }
-        final ClassWriter writer = new ClassWriter(ClassWriter.COMPUTE_FRAMES | ClassWriter.COMPUTE_MAXS);
+        final ClassWriter writer = new ZeroLoadClassWriter(ClassWriter.COMPUTE_MAXS);
         node.accept(writer);
         return writer.toByteArray();
     }
