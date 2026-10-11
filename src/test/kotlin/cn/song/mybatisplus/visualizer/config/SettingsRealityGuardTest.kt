@@ -187,12 +187,14 @@ class SettingsRealityGuardTest {
         // 全匹配（matches）与 `l == "    }"` 会双双失配（20260918 合并到 master 后实证）。
         val lines = panelSrc.split('\n').map { it.trimEnd('\r') }
 
-        // 控件字段（Java 形态）：`private final JBCheckBox replaceParamsCheck = new JBCheckBox(…);`
-        // / `private final JComboBox<CrudColorStyleOption> crudColorStyleCombo = new ComboBox<>();`
+        // 控件字段（Java 形态）：`public final JBCheckBox replaceParamsCheck = new JBCheckBox(…);`
+        // / `public final JComboBox<CrudColorStyleOption> crudColorStyleCombo = new ComboBox<>();`
         // 泛型在声明类型上（Kotlin 在初始化表达式上）——取声明类型的裸类名与 master 的控件类型集对齐。
+        // T-M53-II D2（2026-10-11）：分区构建搬出到 PluginSettingsPanelSections.java 后，控件字段
+        // 可见性由 private 放宽为 public（Kotlin internal → Java public），正则同时接受两种修饰符。
         val widgetTypes = setOf("JBCheckBox", "JBTextField", "JBTextArea", "JComboBox", "ComboBox", "ColorPanel", "JBLabel", "JButton")
         val fields = lines.mapNotNull { l ->
-            val m = Regex("""\s*private\s+(?:final\s+)?(?:static\s+)?([\w.]+)(?:<[^>]*>)?\s+(\w+)\s*=""")
+            val m = Regex("""\s*(?:private|public)\s+(?:final\s+)?(?:static\s+)?([\w.]+)(?:<[^>]*>)?\s+(\w+)\s*=""")
                 .find(l) ?: return@mapNotNull null
             val base = m.groupValues[1].substringAfterLast('.')
             if (base in widgetTypes) m.groupValues[2] else null

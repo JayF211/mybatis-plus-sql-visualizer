@@ -36,6 +36,8 @@ public final class SqlHistoryEntry {
     private List<String> tags = new ArrayList<>();
     /** 执行耗时（毫秒）；null 表示无耗时信息。 */
     private Long executionTimeMs = null;
+    /** R15（W3 历史工作流包）：钉住——非收藏分区裁剪跳过钉住条目（防翻找丢失）；上限由 manager 把关。 */
+    private boolean pinned = false;
 
     public SqlHistoryEntry() {
     }
@@ -134,6 +136,15 @@ public final class SqlHistoryEntry {
         this.executionTimeMs = executionTimeMs;
     }
 
+    /** R15：钉住态（钉住条目在非收藏分区裁剪时跳过；上限由 SqlHistoryManager.MAX_PINNED 把关）。 */
+    public boolean isPinned() {
+        return pinned;
+    }
+
+    public void setPinned(boolean pinned) {
+        this.pinned = pinned;
+    }
+
     /** 分配唯一 id（仅当当前为空白时）。 */
     public void ensureId() {
         if (getId().isBlank()) {
@@ -170,6 +181,7 @@ public final class SqlHistoryEntry {
         }
         SqlHistoryEntry that = (SqlHistoryEntry) o;
         return timestamp == that.timestamp && sourceLine == that.sourceLine && favorite == that.favorite
+                && pinned == that.pinned
                 && Objects.equals(id, that.id) && Objects.equals(sql, that.sql)
                 && Objects.equals(compactSql, that.compactSql) && Objects.equals(sourceFile, that.sourceFile)
                 && Objects.equals(tableName, that.tableName) && Objects.equals(tags, that.tags)
@@ -178,13 +190,14 @@ public final class SqlHistoryEntry {
 
     @Override
     public int hashCode() {
-        return Objects.hash(id, sql, compactSql, timestamp, sourceFile, sourceLine, tableName, favorite, tags, executionTimeMs);
+        return Objects.hash(id, sql, compactSql, timestamp, sourceFile, sourceLine, tableName, favorite, tags, executionTimeMs, pinned);
     }
 
     @Override
     public String toString() {
         return "SqlHistoryEntry(id=" + id + ", sql=" + sql + ", compactSql=" + compactSql
                 + ", timestamp=" + timestamp + ", sourceFile=" + sourceFile + ", sourceLine=" + sourceLine
-                + ", tableName=" + tableName + ", favorite=" + favorite + ", tags=" + tags + ", executionTimeMs=" + executionTimeMs + ")";
+                + ", tableName=" + tableName + ", favorite=" + favorite + ", tags=" + tags + ", executionTimeMs=" + executionTimeMs
+                + ", pinned=" + pinned + ")";
     }
 }

@@ -44,6 +44,11 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
     @Override
     public void loadState(State state) {
         this.state = state;
+        // F47（T-PerfQuick5）：注入器喂入税消解的快照刷新漏斗——设置页 apply（面板末尾恒
+        // loadState(s.copy())）与 JSON 导入（fromJson）均汇入本点，XmlSynHiGate 每元素
+        // 服务查找（85ns/元素，V38 基准）由此降为快照直读（14ns/元素）。
+        cn.song.mybatisplus.visualizer.ui.inject.XmlSynHiGate
+                .refreshXmlSynHiEnabledSnapshot(state.xmlSynHiEnabled);
     }
 
     /** 当前 SQL 列表显示模式（T-ListMode；旧配置残留非法值时回退默认关键字换行）。 */
@@ -56,9 +61,18 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         }
     }
 
+    /**
+     * F47（V38 基准计数缝）：非空时每次调用 {@link #getInstance()} 回调一次——注入器喂入税基准
+     * 测试用它数「每高亮 pass 的 app 级服务查找次数」（喂入面=每 XmlText/XmlAttributeValue 一次）。
+     * null（常态）零开销。（Kotlin internal var → public 静态字段，Kotlin 测试直读属性语法。）
+     */
+    public static volatile Runnable getInstanceProbe = null;
+
     /** 获取全局配置实例。 */
     @NotNull
     public static PluginSettings getInstance() {
+        Runnable probe = getInstanceProbe;
+        if (probe != null) probe.run();
         return ApplicationManager.getApplication().getService(PluginSettings.class);
     }
 
@@ -135,6 +149,28 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
          * 关闭后 gutter 与 Alt+Shift+Q 兜底均不生效（mapper/pages/hbm 三套白名单不受影响）。
          */
         private boolean xmlInlineSqlEnabled = true;
+
+        /**
+         * R5（T-PerfSweep910 同期小件）：快捷模板「抽样」的 LIMIT 行数（默认 10，现值硬编码于
+         * SampleSelectedTableAction）。范围钳制 1..10000（防误输入全表扫）；仅影响抽样语句。
+         */
+        private int sampleLimit = 10;
+
+        /**
+         * T-XmlSynHi（D4，默认开）：mapper XML 语法高亮注入（关键字着色 + #{} / ${} 参数占位底色
+         * + test/value 属性表达式着色）。与 Ultimate 平台注入或 CodeHelperPro 共存时自动让位
+         * （决策 1-A 双让位）；关闭后本插件对 mapper XML 零注入（反向验证）。
+         */
+        private boolean xmlSynHiEnabled = true;
+
+        // R2（gutter 按来源分组显隐）：各来源组独立开关（默认全开=现行为不变）。
+        // 组口径与 15 个 provider 对应：mapperXml / annotation / jpaHql / jdbc / customDao / other。
+        private boolean gutterGroupMapperXml = true;
+        private boolean gutterGroupAnnotation = true;
+        private boolean gutterGroupJpaHql = true;
+        private boolean gutterGroupJdbc = true;
+        private boolean gutterGroupOther = true;
+        private boolean gutterGroupInlineFallback = true;
 
         /**
          * JOIN 图渲染方式（T-Dgm-04）：true=IDE 原生图框架（Ultimate 的 Diagrams 插件，类图观感，
@@ -234,6 +270,19 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
          */
         private boolean showDurationInLogList = true;
 
+        /**
+         * 数据源角标显示完整上下文（T-DataSourceBadgeMode O-133，<b>默认关</b>＝仅显示数据库类型）。
+         * false 时日志/历史两页的目标库角标只取「方言显示名」段（如 {@code [MySQL]}）；true 时显示
+         * 全量「方言 · 连接事实」（如 {@code [MySQL · jpa_demo@localhost:3306]}）。
+         *
+         * <p><b>默认克制的口径</b>：角标生产链（agent 捕获→落盘→历史读回→MCP 检索）恒写全量串，
+         * 本开关只做<b>显示侧门控</b>（唯一消费点 formatDatabaseFragment）——切换即时生效（含已
+         * 读回的历史条目），落盘与检索语义零变化，后开开关不丢任何信息。
+         * 边界：无 {@code  ·  } 分隔符的串（方言解析失败仅存连接事实 / MCP 数据源自定义名）关闭态
+         * 原样保留——辨不出方言时保留最后上下文优于显示空白。</p>
+         */
+        private boolean dataSourceBadgeDetail = false;
+
         // ---------- T-CrudColor：SQL 列表 CRUD 类型颜色标记 ----------
         /**
          * CRUD 颜色标记形态：`bar`=左侧色条（默认）/ `background`=整行淡背景（选中态走描边）/
@@ -261,10 +310,39 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         private String logListSqlDisplayMode = DEFAULT_LOG_LIST_DISPLAY_MODE;
 
         private String paramHistoryJson = "";
+
+        /**
+         * 参数命名方案（R22 T-04）：{@code {"方案名":[{"key":{...params}}], ...}}——每个方案的条目复用
+         * {@link #paramHistoryJson} 的旧数组格式；默认方案不进本字段（仍走 {@link #paramHistoryJson}）。
+         * 空字符串表示无命名方案。消费方 = {@code cn.song.mybatisplus.visualizer.ui.ParamHistoryCache}。
+         */
+        private String paramSchemesJson = "";
+
+        /** R22 T-04：激活方案名（空串 = 默认方案；面板下拉切换后随持久化落盘）。
+         *  T-DevAcceptFix2 ①：预设已按方法/SQL 隔离，本字段降级为「未记录键的回落值」（迁移兼容）。 */
+        private String paramActiveScheme = "";
+
+        /**
+         * T-DevAcceptFix2 ①（20261006 第二轮验收）：<b>按键激活指针</b> {@code {"缓存键":"方案名", ...}}
+         * ——预设按方法/SQL 隔离（每个方法各自记住自己激活的预设；快照本就按缓存键分桶）。
+         * 空字符串 = 无按键记录（回落 {@link #paramActiveScheme}）。
+         */
+        private String paramActiveSchemeByKey = "";
+
         private boolean logHibernateEnabled = true;
         private String logHibernateSqlPrefix = DEFAULT_LOG_HIBERNATE_SQL_PREFIX;
         private String logHibernateParamPrefix = DEFAULT_LOG_HIBERNATE_PARAM_PREFIX;
         private boolean logJdbcEnabled = true;
+
+        // ---------- ShardingSphere 双段日志捕获（R10 T-ShardingSphereCompat） ----------
+
+        /**
+         * 启用 ShardingSphere 日志解析（R10 D3=A 默认开，与 logHibernateEnabled 同款口径）：
+         * {@code Logic SQL:} 主条目 + {@code Actual SQL:} 折叠附注（5.x sql-show 形态）。
+         * 骨架按公开文档形态实现，真实语料未采样（V36）——语料驱动的行为细节见
+         * ShardingSphereLogParser TODO 与计划 §实施记录登记。
+         */
+        private boolean logShardingSphereEnabled = true;
 
         // ---------- JDBC 模板 SQL 字符串预览 ----------
 
@@ -282,6 +360,35 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         private List<TableNameRule> dynamicTableNameRules = new ArrayList<>();
         private boolean dataPermissionHint = false;
         private String dataPermissionMockCondition = "";
+
+        /**
+         * 分页拦截器模拟（R12 T-PaginationSim）：mapper 方法/XML/注解语句路径的 Page/IPage 参数
+         * 按 MP PaginationInnerInterceptor 语义模拟——COUNT 包裹预览（D1=A 第二条语句；
+         * searchCount=false 跳过，D3=A）。默认开（对齐 injectLogicDelete 预览保真增强默认开口径；
+         * MP 运行时 Page 默认 searchCount=true 恒执行 COUNT，反编译实证）。
+         */
+        private boolean paginationSimEnabled = true;
+
+        /**
+         * 分页 COUNT 查询预览子开关（T-CountSimToggle，D129）：分页拦截器模拟产出中的 COUNT 包裹
+         * 预览（{@code SELECT COUNT(*) FROM (原SQL) TOTAL}）独立控制——关=分页模拟只追加 LIMIT，
+         * 不再生成 COUNT 语句。<b>仅在 {@link #paginationSimEnabled} 开启时生效（父开关优先）</b>：
+         * 父开关关闭时 LIMIT 与 COUNT 全无，本项不生效。默认 true 保持既有行为（老用户零感知）。
+         */
+        private boolean paginationCountEnabled = true;
+
+        /**
+         * R33：EXPLAIN 结构化渲染开关（面板执行计划按钮的双通道增量，核实报告 V41 定案的
+         * 自建执行链路线）——开=MySQL 家族表格行/PG 家族 JSON 计划在面板内结构化渲染＋索引
+         * 建议条；其余方言（TEXT/XML 不硬解析）与判定/执行/渲染任一失败路径一律 fail-closed
+         * 回退原生控制台直送通道（双通道并存不替换）。
+         *
+         * <p>T-DevAcceptFix ②（20261006 验收，计划 D67 采 B 案）：<b>默认关</b>——EXPLAIN 默认走原生
+         * 数据库控制台执行与呈现（用户实测表格形态交互不如原生控制台）；结构化通道整体保留
+         * 一个版本周期（设置项显式开启即恢复），下版再定摘除。存量用户已显式开启的值不受影响。</p>
+         */
+        private boolean explainStructuredRender = false;
+
         private int historyMaxSize = DEFAULT_HISTORY_MAX_SIZE;
 
         // ---------- F-44-7 SqlSourceInterceptor 自动注入 ----------
@@ -348,6 +455,14 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
          */
         private boolean enhancedCaptureDesensitize = false;
 
+        /**
+         * T-StackHoverUi：调用栈快照总帧数（用户可配，面板侧钳位 [12,64]，默认 24）。agent 侧
+         * StackDigest 两端采样——栈顶取 B-8 帧（引擎/门面侧）、栈底固定保留 8 帧（业务/Controller
+         * 侧，JdbcTemplate 深封装链下旧 16 帧顶格预算够不着 controller）。随 attach 参数与
+         * CONFIG 帧（sendConfig 热下发）双通道到达 agent，设置改动无需重附。
+         */
+        private int enhancedCaptureStackMaxFrames = DEFAULT_ENHANCED_CAPTURE_STACK_MAX_FRAMES;
+
         // ---------- T-UxOnboard T-UX-01 首用锚点引导 ----------
 
         /**
@@ -406,6 +521,32 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         /** 通用 XML 内嵌 SQL 检测开关（O-72 T-XmlInlineSql，默认开）。 */
         public boolean getXmlInlineSqlEnabled() { return xmlInlineSqlEnabled; }
         public void setXmlInlineSqlEnabled(boolean xmlInlineSqlEnabled) { this.xmlInlineSqlEnabled = xmlInlineSqlEnabled; }
+
+        /** 快捷模板「抽样」的 LIMIT 行数（R5，默认 10；范围钳制 1..10000）。 */
+        public int getSampleLimit() { return sampleLimit; }
+        public void setSampleLimit(int sampleLimit) { this.sampleLimit = sampleLimit; }
+
+        /** mapper XML 语法高亮注入开关（T-XmlSynHi，默认开）。 */
+        public boolean getXmlSynHiEnabled() { return xmlSynHiEnabled; }
+        public void setXmlSynHiEnabled(boolean xmlSynHiEnabled) { this.xmlSynHiEnabled = xmlSynHiEnabled; }
+
+        public boolean getGutterGroupMapperXml() { return gutterGroupMapperXml; }
+        public void setGutterGroupMapperXml(boolean gutterGroupMapperXml) { this.gutterGroupMapperXml = gutterGroupMapperXml; }
+
+        public boolean getGutterGroupAnnotation() { return gutterGroupAnnotation; }
+        public void setGutterGroupAnnotation(boolean gutterGroupAnnotation) { this.gutterGroupAnnotation = gutterGroupAnnotation; }
+
+        public boolean getGutterGroupJpaHql() { return gutterGroupJpaHql; }
+        public void setGutterGroupJpaHql(boolean gutterGroupJpaHql) { this.gutterGroupJpaHql = gutterGroupJpaHql; }
+
+        public boolean getGutterGroupJdbc() { return gutterGroupJdbc; }
+        public void setGutterGroupJdbc(boolean gutterGroupJdbc) { this.gutterGroupJdbc = gutterGroupJdbc; }
+
+        public boolean getGutterGroupOther() { return gutterGroupOther; }
+        public void setGutterGroupOther(boolean gutterGroupOther) { this.gutterGroupOther = gutterGroupOther; }
+
+        public boolean getGutterGroupInlineFallback() { return gutterGroupInlineFallback; }
+        public void setGutterGroupInlineFallback(boolean gutterGroupInlineFallback) { this.gutterGroupInlineFallback = gutterGroupInlineFallback; }
 
         public boolean getJoinDiagramNative() { return joinDiagramNative; }
         public void setJoinDiagramNative(boolean joinDiagramNative) { this.joinDiagramNative = joinDiagramNative; }
@@ -537,6 +678,10 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         public boolean getShowDurationInLogList() { return showDurationInLogList; }
         public void setShowDurationInLogList(boolean showDurationInLogList) { this.showDurationInLogList = showDurationInLogList; }
 
+        /** 数据源角标显示完整上下文（T-DataSourceBadgeMode O-133，默认关＝仅显示数据库类型）。 */
+        public boolean getDataSourceBadgeDetail() { return dataSourceBadgeDetail; }
+        public void setDataSourceBadgeDetail(boolean dataSourceBadgeDetail) { this.dataSourceBadgeDetail = dataSourceBadgeDetail; }
+
         public String getCrudColorStyle() { return crudColorStyle; }
         public void setCrudColorStyle(String crudColorStyle) { this.crudColorStyle = crudColorStyle; }
 
@@ -558,6 +703,15 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         public String getParamHistoryJson() { return paramHistoryJson; }
         public void setParamHistoryJson(String paramHistoryJson) { this.paramHistoryJson = paramHistoryJson; }
 
+        public String getParamSchemesJson() { return paramSchemesJson; }
+        public void setParamSchemesJson(String paramSchemesJson) { this.paramSchemesJson = paramSchemesJson; }
+
+        public String getParamActiveScheme() { return paramActiveScheme; }
+        public void setParamActiveScheme(String paramActiveScheme) { this.paramActiveScheme = paramActiveScheme; }
+
+        public String getParamActiveSchemeByKey() { return paramActiveSchemeByKey; }
+        public void setParamActiveSchemeByKey(String paramActiveSchemeByKey) { this.paramActiveSchemeByKey = paramActiveSchemeByKey; }
+
         public boolean getLogHibernateEnabled() { return logHibernateEnabled; }
         public void setLogHibernateEnabled(boolean logHibernateEnabled) { this.logHibernateEnabled = logHibernateEnabled; }
 
@@ -569,6 +723,11 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
 
         public boolean getLogJdbcEnabled() { return logJdbcEnabled; }
         public void setLogJdbcEnabled(boolean logJdbcEnabled) { this.logJdbcEnabled = logJdbcEnabled; }
+
+        /** ShardingSphere 双段日志捕获开关（R10 T-ShardingSphereCompat，默认开）。 */
+        public boolean getLogShardingSphereEnabled() { return logShardingSphereEnabled; }
+        public void setLogShardingSphereEnabled(boolean logShardingSphereEnabled) { this.logShardingSphereEnabled = logShardingSphereEnabled; }
+
         public boolean getJdbcSqlPreviewEnabled() { return jdbcSqlPreviewEnabled; }
         public void setJdbcSqlPreviewEnabled(boolean jdbcSqlPreviewEnabled) { this.jdbcSqlPreviewEnabled = jdbcSqlPreviewEnabled; }
 
@@ -583,6 +742,15 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
 
         public String getDataPermissionMockCondition() { return dataPermissionMockCondition; }
         public void setDataPermissionMockCondition(String dataPermissionMockCondition) { this.dataPermissionMockCondition = dataPermissionMockCondition; }
+
+        public boolean getPaginationSimEnabled() { return paginationSimEnabled; }
+        public void setPaginationSimEnabled(boolean paginationSimEnabled) { this.paginationSimEnabled = paginationSimEnabled; }
+
+        public boolean getPaginationCountEnabled() { return paginationCountEnabled; }
+        public void setPaginationCountEnabled(boolean paginationCountEnabled) { this.paginationCountEnabled = paginationCountEnabled; }
+
+        public boolean getExplainStructuredRender() { return explainStructuredRender; }
+        public void setExplainStructuredRender(boolean explainStructuredRender) { this.explainStructuredRender = explainStructuredRender; }
 
         public int getHistoryMaxSize() { return historyMaxSize; }
         public void setHistoryMaxSize(int historyMaxSize) { this.historyMaxSize = historyMaxSize; }
@@ -611,6 +779,10 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         public boolean getEnhancedCaptureDesensitize() { return enhancedCaptureDesensitize; }
         public void setEnhancedCaptureDesensitize(boolean enhancedCaptureDesensitize) { this.enhancedCaptureDesensitize = enhancedCaptureDesensitize; }
 
+        /** 调用栈快照总帧数（T-StackHoverUi，默认 24；面板侧钳位 [12,64]）。 */
+        public int getEnhancedCaptureStackMaxFrames() { return enhancedCaptureStackMaxFrames; }
+        public void setEnhancedCaptureStackMaxFrames(int enhancedCaptureStackMaxFrames) { this.enhancedCaptureStackMaxFrames = enhancedCaptureStackMaxFrames; }
+
         public boolean getOnboardingAnchorTipEnabled() { return onboardingAnchorTipEnabled; }
         public void setOnboardingAnchorTipEnabled(boolean onboardingAnchorTipEnabled) { this.onboardingAnchorTipEnabled = onboardingAnchorTipEnabled; }
 
@@ -637,6 +809,14 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
             c.autoFoldFieldThreshold = autoFoldFieldThreshold;
             c.showGutterIcon = showGutterIcon;
             c.xmlInlineSqlEnabled = xmlInlineSqlEnabled;
+            c.sampleLimit = sampleLimit;
+            c.xmlSynHiEnabled = xmlSynHiEnabled;
+            c.gutterGroupMapperXml = gutterGroupMapperXml;
+            c.gutterGroupAnnotation = gutterGroupAnnotation;
+            c.gutterGroupJpaHql = gutterGroupJpaHql;
+            c.gutterGroupJdbc = gutterGroupJdbc;
+            c.gutterGroupOther = gutterGroupOther;
+            c.gutterGroupInlineFallback = gutterGroupInlineFallback;
             c.editorShowWhitespaces = editorShowWhitespaces;
             c.language = language;
             c.injectLogicDelete = injectLogicDelete;
@@ -679,6 +859,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
             c.logTimePrefix = logTimePrefix;
             c.slowQueryThresholdMs = slowQueryThresholdMs;
             c.showDurationInLogList = showDurationInLogList;
+            c.dataSourceBadgeDetail = dataSourceBadgeDetail;
             c.crudColorStyle = crudColorStyle;
             c.crudColorSelect = crudColorSelect;
             c.crudColorInsert = crudColorInsert;
@@ -686,15 +867,22 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
             c.crudColorDelete = crudColorDelete;
             c.logListSqlDisplayMode = logListSqlDisplayMode;
             c.paramHistoryJson = paramHistoryJson;
+            c.paramSchemesJson = paramSchemesJson;
+            c.paramActiveScheme = paramActiveScheme;
+            c.paramActiveSchemeByKey = paramActiveSchemeByKey;
             c.logHibernateEnabled = logHibernateEnabled;
             c.logHibernateSqlPrefix = logHibernateSqlPrefix;
             c.logHibernateParamPrefix = logHibernateParamPrefix;
             c.logJdbcEnabled = logJdbcEnabled;
+            c.logShardingSphereEnabled = logShardingSphereEnabled;
             c.jdbcSqlPreviewEnabled = jdbcSqlPreviewEnabled;
             c.executionTimeoutSeconds = executionTimeoutSeconds;
             c.dynamicTableNameRules = dynamicTableNameRules;
             c.dataPermissionHint = dataPermissionHint;
             c.dataPermissionMockCondition = dataPermissionMockCondition;
+            c.paginationSimEnabled = paginationSimEnabled;
+            c.paginationCountEnabled = paginationCountEnabled;
+            c.explainStructuredRender = explainStructuredRender;
             c.historyMaxSize = historyMaxSize;
             c.reportSubmitterName = reportSubmitterName;
             c.reportSubmitterEmail = reportSubmitterEmail;
@@ -704,6 +892,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
             c.enhancedCaptureConfirmed = enhancedCaptureConfirmed;
             c.enhancedCaptureRejectedAtMs = enhancedCaptureRejectedAtMs;
             c.enhancedCaptureDesensitize = enhancedCaptureDesensitize;
+            c.enhancedCaptureStackMaxFrames = enhancedCaptureStackMaxFrames;
             c.onboardingAnchorTipEnabled = onboardingAnchorTipEnabled;
             c.onboardingAnchorTipShown = onboardingAnchorTipShown;
             c.sourceFrameSkipPrefixes = sourceFrameSkipPrefixes;
@@ -723,6 +912,14 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
                     && autoFoldEnabled == that.autoFoldEnabled
                     && showGutterIcon == that.showGutterIcon
                     && xmlInlineSqlEnabled == that.xmlInlineSqlEnabled
+                    && sampleLimit == that.sampleLimit
+                    && xmlSynHiEnabled == that.xmlSynHiEnabled
+                    && gutterGroupMapperXml == that.gutterGroupMapperXml
+                    && gutterGroupAnnotation == that.gutterGroupAnnotation
+                    && gutterGroupJpaHql == that.gutterGroupJpaHql
+                    && gutterGroupJdbc == that.gutterGroupJdbc
+                    && gutterGroupOther == that.gutterGroupOther
+                    && gutterGroupInlineFallback == that.gutterGroupInlineFallback
                     && editorShowWhitespaces == that.editorShowWhitespaces
                     && injectLogicDelete == that.injectLogicDelete
                     && injectTenantLine == that.injectTenantLine
@@ -739,6 +936,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
                     && logAutoSaveEnabled == that.logAutoSaveEnabled
                     && logHibernateEnabled == that.logHibernateEnabled
                     && logJdbcEnabled == that.logJdbcEnabled
+                    && logShardingSphereEnabled == that.logShardingSphereEnabled
                     && jdbcSqlPreviewEnabled == that.jdbcSqlPreviewEnabled
                     && executionTimeoutSeconds == that.executionTimeoutSeconds
                     && dataPermissionHint == that.dataPermissionHint
@@ -748,8 +946,12 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
                     && slowQueryThresholdMs == that.slowQueryThresholdMs
                     && logAutoSaveMaxFiles == that.logAutoSaveMaxFiles
                     && showDurationInLogList == that.showDurationInLogList
+                    && dataSourceBadgeDetail == that.dataSourceBadgeDetail
                     && historyMaxSize == that.historyMaxSize
                     && autoFoldFieldThreshold == that.autoFoldFieldThreshold
+                    && paginationSimEnabled == that.paginationSimEnabled
+                    && paginationCountEnabled == that.paginationCountEnabled
+                    && explainStructuredRender == that.explainStructuredRender
                     && mcpToolsEnabled == that.mcpToolsEnabled
                     && onboardingAnchorTipEnabled == that.onboardingAnchorTipEnabled
                     && onboardingAnchorTipShown == that.onboardingAnchorTipShown
@@ -757,6 +959,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
                     && enhancedCaptureConfirmed == that.enhancedCaptureConfirmed
                     && enhancedCaptureRejectedAtMs == that.enhancedCaptureRejectedAtMs
                     && enhancedCaptureDesensitize == that.enhancedCaptureDesensitize
+                    && enhancedCaptureStackMaxFrames == that.enhancedCaptureStackMaxFrames
                     && Objects.equals(dialect, that.dialect)
                     && Objects.equals(emptyParamFill, that.emptyParamFill)
                     && Objects.equals(language, that.language)
@@ -782,6 +985,9 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
                     && Objects.equals(logAutoSaveFileNamePattern, that.logAutoSaveFileNamePattern)
                     && Objects.equals(logTimePrefix, that.logTimePrefix)
                     && Objects.equals(paramHistoryJson, that.paramHistoryJson)
+                    && Objects.equals(paramSchemesJson, that.paramSchemesJson)
+                    && Objects.equals(paramActiveScheme, that.paramActiveScheme)
+                    && Objects.equals(paramActiveSchemeByKey, that.paramActiveSchemeByKey)
                     && Objects.equals(crudColorStyle, that.crudColorStyle)
                     && Objects.equals(crudColorSelect, that.crudColorSelect)
                     && Objects.equals(crudColorInsert, that.crudColorInsert)
@@ -804,6 +1010,9 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
             return Objects.hash(
                     dialectAuto, dialect, replaceParams, formatSql, emptyParamFill, verticalPairAnnotation, autoFoldEnabled, autoFoldFieldThreshold,
                     showGutterIcon, xmlInlineSqlEnabled, editorShowWhitespaces, language, injectLogicDelete,
+                    sampleLimit, xmlSynHiEnabled,
+                    gutterGroupMapperXml, gutterGroupAnnotation, gutterGroupJpaHql, gutterGroupJdbc,
+                    gutterGroupOther, gutterGroupInlineFallback,
                     logicDeleteValue, injectTenantLine, tenantColumnName, tenantColumnDefault, injectTenantOnInsert,
                     tablePrefix, tableSuffix, tableNameInference, ignoredFields, removeTablePrefix, removeTableSuffix,
                     columnCalibrationEnabled,
@@ -812,12 +1021,16 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
                     logStopOnToolWindowClose, logAutoOpenOnCapture, logTimestampEnabled, logTimestampFormat, logTimestampSource,
                     logFormatSql, literalParamRecovery, logFilterKeywords, logDedupeWindowMs, logMaxParseLength, logMaxCount,
                     logAutoSaveEnabled, logAutoSavePath, logAutoSaveFileNamePattern, logAutoSaveMaxFiles, logTimePrefix, slowQueryThresholdMs, showDurationInLogList,
+                    dataSourceBadgeDetail,
                     crudColorStyle, crudColorSelect, crudColorInsert, crudColorUpdate, crudColorDelete, logListSqlDisplayMode,
-                    paramHistoryJson, logHibernateEnabled, logHibernateSqlPrefix, logHibernateParamPrefix, logJdbcEnabled,
+                    paramHistoryJson, paramSchemesJson, paramActiveScheme, paramActiveSchemeByKey,
+                    logHibernateEnabled, logHibernateSqlPrefix, logHibernateParamPrefix, logJdbcEnabled, logShardingSphereEnabled,
                     jdbcSqlPreviewEnabled, executionTimeoutSeconds,
                     dynamicTableNameRules, dataPermissionHint, dataPermissionMockCondition, historyMaxSize,
+                    paginationSimEnabled, paginationCountEnabled, explainStructuredRender,
                     reportSubmitterName, reportSubmitterEmail, mcpToolsEnabled, mcpDisabledTools,
                     enhancedCaptureEnabled, enhancedCaptureConfirmed, enhancedCaptureRejectedAtMs, enhancedCaptureDesensitize,
+                    enhancedCaptureStackMaxFrames,
                     onboardingAnchorTipEnabled, onboardingAnchorTipShown, sourceFrameSkipPrefixes, sourceFrameBizJarPrefixes);
         }
 
@@ -884,6 +1097,11 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
     public static final long DEFAULT_LOG_DEDUPE_WINDOW_MS = 60000L;
     public static final int DEFAULT_LOG_MAX_PARSE_LENGTH = 20000;
     public static final int DEFAULT_LOG_MAX_COUNT = 200;
+
+    /** 调用栈快照总帧数缺省（T-StackHoverUi）：栈顶 B-8 帧＋栈底固定 8 帧；agent 侧钳位 [12,64]。 */
+    public static final int DEFAULT_ENHANCED_CAPTURE_STACK_MAX_FRAMES = 24;
+    public static final int MIN_ENHANCED_CAPTURE_STACK_MAX_FRAMES = 12;
+    public static final int MAX_ENHANCED_CAPTURE_STACK_MAX_FRAMES = 64;
 
     /** 自动保存历史 SQL 默认文件名模板（F-43）。 */
     public static final String DEFAULT_LOG_AUTO_SAVE_FILE_NAME_PATTERN = "sql-history-$yyyy-MM-dd$.sql";

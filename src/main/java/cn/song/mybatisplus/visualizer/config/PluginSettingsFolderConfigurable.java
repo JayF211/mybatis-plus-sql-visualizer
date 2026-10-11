@@ -72,6 +72,7 @@ public class PluginSettingsFolderConfigurable implements Configurable {
     @Override
     public JComponent createComponent() {
         rebuildList("");
+        schedulePendingFocus();
 
         list.setCellRenderer(new SearchItemRenderer());
         list.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
@@ -114,9 +115,19 @@ public class PluginSettingsFolderConfigurable implements Configurable {
         JBScrollPane scrollPane = new JBScrollPane(list);
         scrollPane.setBorder(JBUI.Borders.empty());
 
+        // R20（W3 可发现性修缮包）：落地页价值展示——三行能力矩阵 + 官网链接
+        // （原页=搜索框+子页列表，用户不知道插件能干什么；「设置两层深」的兜底从搜索变一眼）
+        JPanel valuePanel = new JPanel(new GridLayout(0, 1));
+        valuePanel.setBorder(JBUI.Borders.empty(10, 16, 10, 16));
+        valuePanel.add(new JBLabel("<html><b>增强捕获</b>：运行即采集真实参数、耗时、影响行数与目标库</html>"));
+        valuePanel.add(new JBLabel("<html><b>免库预览</b>：Wrapper / mapper XML / JPA·HQL / 注解 SQL 写前静态还原</html>"));
+        valuePanel.add(new JBLabel("<html><b>MCP 十工具</b>：AI agent 直连渲染 / 审计 / 执行计划（Ultimate）</html>"));
+        valuePanel.add(new JBLabel("<html>兼容矩阵与文档：<a href=\"https://sql-visualizer.jvtools.cn\">sql-visualizer.jvtools.cn</a></html>"));
+
         JPanel root = new JPanel(new BorderLayout());
         root.add(searchPanel, BorderLayout.NORTH);
         root.add(scrollPane, BorderLayout.CENTER);
+        root.add(valuePanel, BorderLayout.SOUTH);
         return root;
     }
 
@@ -180,6 +191,25 @@ public class PluginSettingsFolderConfigurable implements Configurable {
      * 按 id 查时 {@code ConfigurableWrapper.getId()} 对声明了 id 的 EP 直接返回 {@code myEp.id}（不实例化），
      * 只有目标页会被创建。</p>
      */
+    /**
+     * 消费外部预置的待定位目标（T-SettingsFocusFromLink）：页面构建后双跳 invokeLater——
+     * 确保设置对话框已完成装配、{@code Settings.KEY} 经 searchField DataContext 可达（P1 前提）。
+     * 未置目标 → 零成本（双跳前先查，避免无谓调度）；消费即清（防重复定位）。
+     */
+    private void schedulePendingFocus() {
+        if (pendingFocus == null) return;
+        SwingUtilities.invokeLater(() -> SwingUtilities.invokeLater(() -> {
+            PendingFocus pending = consumePendingFocus();
+            if (pending == null) return;
+            for (SubPageDesc page : SUB_PAGES) {
+                if (page.ref.id().equals(pending.pageId())) {
+                    navigateToPage(page.ref, pending.hint());
+                    break;
+                }
+            }
+        }));
+    }
+
     private void navigateToPage(SubPageRef ref, String focusHint) {
         Settings settings = currentSettings();
         if (settings == null) {
@@ -565,6 +595,42 @@ public class PluginSettingsFolderConfigurable implements Configurable {
     private static final String ID_PREVIEW = "cn.song.mybatisplus.visualizer.settings.preview";
     private static final String ID_TABLE_MAPPING = "cn.song.mybatisplus.visualizer.settings.tableMapping";
     private static final String ID_SQL_LOG = "cn.song.mybatisplus.visualizer.settings.sqlLog";
+
+    /**
+     * 外部（面板空态/引导链接，T-SettingsFocusFromLink）预置的待定位目标。
+     *
+     * <p>链接从<b>对话框外</b>发起——拿不到本 Configurable 实例（{@code navigateToPage} 需要
+     * Settings/实例），故单槽预置、本页 {@code createComponent} 后消费一次。后到覆盖
+     * （点击是显式用户动作，无需排队）。</p>
+     */
+    @Volatile
+    private static PendingFocus pendingFocus = null;
+
+    /** 待定位目标（页 id + hint；hint=null 只切页不聚焦行）。 */
+    public record PendingFocus(String pageId, String hint) {
+    }
+
+    /**
+     * 打开插件主设置页并定位到 SQL 日志页（hint=null 只切页）。
+     * 面板引导链接统一入口——定位高亮复用既有 {@code navigateToPage → focusTarget}（滚动+黄闪+橙框）。
+     */
+    public static void openSqlLogSettingsFocused(Project project, String hint) {
+        pendingFocus = new PendingFocus(ID_SQL_LOG, hint);
+        ShowSettingsUtil.getInstance()
+                .showSettingsDialog(project, PluginSettingsFolderConfigurable.class);
+    }
+
+    /** 消费待定位目标（取走即清；生产调度与测试缝单源共用，防两处漂移）。 */
+    public static PendingFocus consumePendingFocus() {
+        PendingFocus p = pendingFocus;
+        pendingFocus = null;
+        return p;
+    }
+
+    public static void requestFocusOnOpenForTest(String pageId, String hint) {
+        pendingFocus = new PendingFocus(pageId, hint);
+    }
+
     private static final String ID_SHORTCUTS = "cn.song.mybatisplus.visualizer.settings.shortcuts";
     private static final String ID_MCP = "cn.song.mybatisplus.visualizer.settings.mcp";
     private static final String ID_ABOUT = "cn.song.mybatisplus.visualizer.settings.about";

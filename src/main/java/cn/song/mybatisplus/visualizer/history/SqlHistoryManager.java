@@ -126,12 +126,43 @@ public final class SqlHistoryManager implements PersistentStateComponent<SqlHist
         }
     }
 
-    /** 超出上限时淘汰最旧的非收藏条目（队尾）。 */
+    /**
+     * 超出上限时淘汰最旧的非收藏条目（队尾）。R15：钉住条目跳过（防翻找丢失）——
+     * 从队尾向前找首个非钉住条目移除；全为钉住则不淘汰（钉住总量由 MAX_PINNED 把关）。
+     */
     private void evictIfNeeded() {
         while (state.getEntries().size() > maxSize) {
-            int last = state.getEntries().size() - 1;
-            state.getEntries().remove(last);
+            int idx = -1;
+            for (int i = state.getEntries().size() - 1; i >= 0; i--) {
+                if (!state.getEntries().get(i).isPinned()) {
+                    idx = i;
+                    break;
+                }
+            }
+            if (idx < 0) return; // 全为钉住：不再淘汰（钉住上限由 togglePin 把关）
+            state.getEntries().remove(idx);
         }
+    }
+
+    /** R15：钉住上限（防钉住分区无限膨胀挤占淘汰机制）。 */
+    private static final int MAX_PINNED = 50;
+
+    /** R15：切换钉住态；钉住数达 {@link #MAX_PINNED} 上限时拒绝并返回 false。 */
+    public boolean togglePin(String id) {
+        SqlHistoryEntry entry = findById(id);
+        if (entry == null) return false;
+        if (!entry.isPinned()) {
+            int pinnedCount = 0;
+            for (SqlHistoryEntry e : state.getEntries()) {
+                if (e.isPinned()) pinnedCount++;
+            }
+            for (SqlHistoryEntry e : state.getFavoriteEntries()) {
+                if (e.isPinned()) pinnedCount++;
+            }
+            if (pinnedCount >= MAX_PINNED) return false;
+        }
+        entry.setPinned(!entry.isPinned());
+        return true;
     }
 
     /** 全部条目（含收藏与非收藏，按时间倒序合并）。 */

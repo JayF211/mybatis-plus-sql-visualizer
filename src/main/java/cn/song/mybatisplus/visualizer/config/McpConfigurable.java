@@ -14,6 +14,7 @@ import com.intellij.util.ui.JBUI;
 
 import java.awt.BorderLayout;
 import java.awt.FlowLayout;
+import java.awt.GridLayout;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import javax.swing.JButton;
@@ -33,8 +34,8 @@ import javax.swing.JPanel;
  *
  * T-McpGateDynamicFilter（O-68）订正与增补：getEnabledToolsets 过滤只覆盖 ReflectionToolsProvider
  * 路径，agent 真正看到的外部会话清单走 getMcpToolsFiltered 过滤层——本页门控经
- * SqlVisualizerToolGateFilterProvider（mcpServer.mcpToolFilterProvider EP，mcp-filter-optional.xml
- * 注册、since-build="262" 门控）同步驱动外部路径，两条路径均出自 McpToolGate 单一真相源。
+ * SqlVisualizerToolGateFilterProvider（mcpServer.mcpToolFilterProvider EP，经 McpGateFilterRegistrar
+ * 程序化注册，平台 mcpServer 类可达性门控）同步驱动外部路径，两条路径均出自 McpToolGate 单一真相源。
  */
 public class McpConfigurable implements Configurable {
 
@@ -48,6 +49,12 @@ public class McpConfigurable implements Configurable {
 
     /** 全部启用/全部禁用状态切换单按钮（全勾→「全部禁用」点击清空，否则「全部启用」补满）。 */
     private JButton toggleAllButton = null;
+
+    /** P1-3：就绪横幅标题行（静态渲染快照，测试断言用）。 */
+    private JBLabel bannerHeadline = null;
+
+    /** P1-3：就绪横幅门控现状行（静态渲染快照，测试断言用）。 */
+    private JBLabel bannerGateLine = null;
 
     @Override
     public String getDisplayName() {
@@ -86,6 +93,26 @@ public class McpConfigurable implements Configurable {
         } catch (Throwable ignored) {
             // 服务未注册 → 保持 null
         }
+
+        // P1-3（批次9 波次2）：页内就绪横幅——差异化最强的功能面此前在页内零自我陈述（第十轮
+        // 摩擦 #2「MCP 工具可发现性黑洞」，锚点 :62-73 仅 jumpRow、:92-99 复选框循环、:146 才有
+        // warning）。形态照抄 R20 落地页零监听器定例：**静态构建时按门控现状渲染，不做动态刷新
+        // 监听**（工具数动态取 McpToolGate.TOOL_NAMES 的 size，不写死数字——R14 十工具升十一
+        // 工具时旧写死文案即过期）。横幅是页内静态提示不是弹窗，不触 BannedApiSourceScanTest
+        // 弹窗白名单（弹窗克制红线：文案只指向下方开关，不弹任何对话框）。
+        bannerHeadline = new JBLabel(
+            MpSqlVisualizerBundle.message(
+                "settings.mcp.banner.ready",
+                String.valueOf(McpToolGate.TOOL_NAMES.size())
+            )
+        );
+        bannerGateLine = new JBLabel(bannerGateHint(state));
+        bannerGateLine.setForeground(JBUI.CurrentTheme.ContextHelp.FOREGROUND);
+        JPanel banner = new JPanel(new GridLayout(0, 1));
+        banner.setBorder(JBUI.Borders.emptyBottom(10));
+        banner.add(bannerHeadline);
+        banner.add(bannerGateLine);
+
         masterCheckBox = new JBCheckBox(
             MpSqlVisualizerBundle.message("settings.mcp.enable.master"),
             state != null ? state.getMcpToolsEnabled() : true
@@ -93,6 +120,7 @@ public class McpConfigurable implements Configurable {
         masterCheckBox.setToolTipText(MpSqlVisualizerBundle.message("settings.mcp.enable.master.desc"));
 
         FormBuilder builder = FormBuilder.createFormBuilder()
+            .addComponent(banner)
             .addComponent(jumpRow)
             .addComponent(masterCheckBox);
         for (String toolName : McpToolGate.TOOL_NAMES) {
@@ -110,6 +138,15 @@ public class McpConfigurable implements Configurable {
         builder.addComponent(toggleRow, 10);
         syncToggleAllLabel();
 
+        // 20261008 dev-bak 验收（缺陷 #2）：横幅按 R20 落地页「零监听器」定例构建后不再更新——
+        // 勾掉工具 / 关总开关乃至 Apply，横幅在同会话内恒显构建时快照（重开整个设置对话框才刷新）。
+        // 验收文档 3.21 预期「横幅切到部分禁用/总开关关闭态」。门控复选框是页内唯一写入方，
+        // 对它们挂 ActionListener 即时重算门控行（读复选框现状而非持久化 state，三态口径与
+        // bannerGateHint 同源；headline 的就绪文案保持静态——工具注册数不随开关变化）。
+        Runnable bannerRefresher = this::refreshBannerGateLine;
+        if (masterCheckBox != null) masterCheckBox.addActionListener(event -> bannerRefresher.run());
+        toolCheckBoxes.values().forEach(cb -> cb.addActionListener(event -> bannerRefresher.run()));
+
         JPanel root = new JPanel(new BorderLayout());
         root.setBorder(JBUI.Borders.empty(8, 10));
         root.add(builder.addComponentFillVertically(new JPanel(), 0).getPanel(), BorderLayout.NORTH);
@@ -123,9 +160,48 @@ public class McpConfigurable implements Configurable {
         return toolName + " — " + MpSqlVisualizerBundle.message(descKey);
     }
 
+    /**
+     * P1-3：就绪横幅门控现状行（纯函数，三态与 {@link #isToolListedInState} 同一真相源）——
+     * 总开关关 &gt; 工具级有禁用 &gt; 全启用。state=null（测试环境服务未注册）按全启用兜底，
+     * 与门控默认口径一致。
+     */
+    private String bannerGateHint(PluginSettings.State state) {
+        if (state != null && !state.getMcpToolsEnabled()) {
+            return MpSqlVisualizerBundle.message("settings.mcp.banner.masterOff");
+        }
+        int disabledCount = 0;
+        for (String toolName : McpToolGate.TOOL_NAMES) {
+            if (!isToolListedInState(state, toolName)) disabledCount++;
+        }
+        if (disabledCount == 0) {
+            return MpSqlVisualizerBundle.message("settings.mcp.banner.allEnabled");
+        }
+        return MpSqlVisualizerBundle.message("settings.mcp.banner.someDisabled", String.valueOf(disabledCount));
+    }
+
+    /**
+     * 20261008 验收缺陷 #2 修复：横幅门控行按复选框**现状**即时重算（总开关关 &gt; 工具级有禁用 &gt;
+     * 全启用，与 {@link #bannerGateHint} 三态同源——数据源从持久化 state 换成页内复选框）。
+     */
+    private void refreshBannerGateLine() {
+        JBLabel gate = bannerGateLine;
+        if (gate == null) return;
+        boolean masterOn = masterCheckBox == null || masterCheckBox.isSelected();
+        int disabledCount = 0;
+        for (JBCheckBox checkBox : toolCheckBoxes.values()) {
+            if (!checkBox.isSelected()) disabledCount++;
+        }
+        if (!masterOn) {
+            gate.setText(MpSqlVisualizerBundle.message("settings.mcp.banner.masterOff"));
+        } else if (disabledCount == 0) {
+            gate.setText(MpSqlVisualizerBundle.message("settings.mcp.banner.allEnabled"));
+        } else {
+            gate.setText(MpSqlVisualizerBundle.message("settings.mcp.banner.someDisabled", String.valueOf(disabledCount)));
+        }
+    }
+
     /** 工具级禁用判定（仅禁用清单，不含总开关——总开关是独立维度）。 */
-    private static boolean isToolListedInState(PluginSettings.State state, String toolName) {
-        if (state == null) {
+    private static boolean isToolListedInState(PluginSettings.State state, String toolName) {        if (state == null) {
             return true;
         }
         for (String disabled : state.getMcpDisabledTools()) {
@@ -268,6 +344,8 @@ public class McpConfigurable implements Configurable {
         panel = null;
         masterCheckBox = null;
         toggleAllButton = null;
+        bannerHeadline = null;
+        bannerGateLine = null;
         toolCheckBoxes.clear();
     }
 
@@ -285,5 +363,15 @@ public class McpConfigurable implements Configurable {
 
     public JButton toggleAllButtonForTest() {
         return toggleAllButton;
+    }
+
+    /** P1-3：就绪横幅标题行文案（null = 横幅未构建/已释放）。 */
+    public String bannerHeadlineForTest() {
+        return bannerHeadline != null ? bannerHeadline.getText() : null;
+    }
+
+    /** P1-3：就绪横幅门控现状行文案。 */
+    public String bannerGateLineForTest() {
+        return bannerGateLine != null ? bannerGateLine.getText() : null;
     }
 }

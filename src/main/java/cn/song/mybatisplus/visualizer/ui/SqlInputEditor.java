@@ -2,6 +2,8 @@
 package cn.song.mybatisplus.visualizer.ui;
 
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlCompletionContext;
+import cn.song.mybatisplus.visualizer.util.EditorCopyShortcuts;
+import cn.song.mybatisplus.visualizer.util.UiTextClipboard;
 import com.intellij.codeInsight.completion.CodeCompletionHandlerBase;
 import com.intellij.codeInsight.completion.CompletionType;
 import com.intellij.codeInsight.lookup.Lookup;
@@ -87,6 +89,9 @@ public class SqlInputEditor implements Disposable {
             if (doc == null) doc = EditorFactory.getInstance().createDocument(sql);
             created = EditorFactory.getInstance().createEditor(doc, project, sqlFileType, false);
         }
+        // T-SqlCopyShortcuts O-122：无选中 Ctrl+C 复制全文、有选中只复制片段
+        //（层位与理由见 EditorCopyShortcuts 的 KDoc；本处此前无任何键盘复制绑定）
+        EditorCopyShortcuts.install(created, UiTextClipboard::copy);
         EditorEx createdEx = (EditorEx) created;
         createdEx.getSettings().setLineNumbersShown(true);
         createdEx.getSettings().setFoldingOutlineShown(true);
