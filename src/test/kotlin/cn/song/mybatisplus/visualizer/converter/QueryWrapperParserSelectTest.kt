@@ -3,7 +3,6 @@ package cn.song.mybatisplus.visualizer.converter
 import cn.song.mybatisplus.visualizer.model.ColumnInfo
 import cn.song.mybatisplus.visualizer.model.ColumnRef
 import cn.song.mybatisplus.visualizer.model.Condition
-import cn.song.mybatisplus.visualizer.model.Connector
 import cn.song.mybatisplus.visualizer.model.LikePosition
 import cn.song.mybatisplus.visualizer.model.LimitClause
 import cn.song.mybatisplus.visualizer.model.SqlValue
@@ -14,7 +13,6 @@ import cn.song.mybatisplus.visualizer.model.WrapperChain
 import cn.song.mybatisplus.visualizer.model.WrapperType
 import cn.song.mybatisplus.visualizer.sql.SqlGenerator
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -22,6 +20,7 @@ import org.junit.Test
 /**
  * QueryWrapperParser 的 SELECT 列/字符串列名/eqOrIsNull/allEq/setEntity 行为单元测试（自 QueryWrapperParserTest 拆分）。
  * （T-M53-II 2026-10-10：逐字符原样搬运，零逻辑改动。）
+ * （T-SyncK2JMaster482 C9b-1：Kotlin 调 Java 生产类，具名实参改位置实参。）
  */
 class QueryWrapperParserSelectTest {
 
@@ -37,7 +36,7 @@ class QueryWrapperParserSelectTest {
             WrapperType.LAMBDA_QUERY, "DeviceInfoEntity",
             listOf(
                 WrapperCall("eqOrIsNull", listOf(
-                    WrapperArg.ColumnArg(ColumnRef(columnName = "station_id")),
+                    WrapperArg.ColumnArg(ColumnRef("station_id")),
                     WrapperArg.ValueArg(SqlValue.Literal("NULL")),
                 )),
             ),
@@ -64,7 +63,7 @@ class QueryWrapperParserSelectTest {
             WrapperType.LAMBDA_QUERY, "DeviceInfoEntity",
             listOf(
                 WrapperCall("eqOrIsNull", listOf(
-                    WrapperArg.ColumnArg(ColumnRef(columnName = "station_id")),
+                    WrapperArg.ColumnArg(ColumnRef("station_id")),
                     WrapperArg.ValueArg(SqlValue.Literal("101")),
                 )),
             ),
@@ -79,7 +78,7 @@ class QueryWrapperParserSelectTest {
             WrapperType.LAMBDA_QUERY, "DeviceInfoEntity",
             listOf(
                 WrapperCall("eqOrIsNull", listOf(
-                    WrapperArg.ColumnArg(ColumnRef(columnName = "station_id")),
+                    WrapperArg.ColumnArg(ColumnRef("station_id")),
                     WrapperArg.ValueArg(SqlValue.Placeholder("stationId")),
                 )),
             ),
@@ -103,12 +102,12 @@ class QueryWrapperParserSelectTest {
             listOf(
                 WrapperCall("eqOrIsNull", listOf(
                     WrapperArg.ValueArg(SqlValue.Literal("true")),
-                    WrapperArg.ColumnArg(ColumnRef(columnName = "station_id")),
+                    WrapperArg.ColumnArg(ColumnRef("station_id")),
                     WrapperArg.ValueArg(SqlValue.Literal("NULL")),
                 )),
                 WrapperCall("eqOrIsNull", listOf(
                     WrapperArg.ValueArg(SqlValue.Literal("false")),
-                    WrapperArg.ColumnArg(ColumnRef(columnName = "share_scheme_id")),
+                    WrapperArg.ColumnArg(ColumnRef("share_scheme_id")),
                     WrapperArg.ValueArg(SqlValue.Literal("NULL")),
                 )),
             ),
@@ -179,11 +178,11 @@ class QueryWrapperParserSelectTest {
             listOf(
                 WrapperCall("allEq", listOf(
                     WrapperArg.MapArg(
-                        entries = listOf(
-                            ColumnRef(columnName = "name") to SqlValue.Literal("'device'"),
-                            ColumnRef(columnName = "station_id") to SqlValue.Literal("1001"),
+                        listOf(
+                            kotlin.Pair(ColumnRef("name"), SqlValue.Literal("'device'")),
+                            kotlin.Pair(ColumnRef("station_id"), SqlValue.Literal("1001")),
                         ),
-                        null2IsNull = false,
+                        false,
                     ),
                 )),
             ),
@@ -207,11 +206,11 @@ class QueryWrapperParserSelectTest {
             listOf(
                 WrapperCall("allEq", listOf(
                     WrapperArg.MapArg(
-                        entries = listOf(
-                            ColumnRef(columnName = "share_scheme_id") to SqlValue.Literal("NULL"),
-                            ColumnRef(columnName = "station_id") to SqlValue.Literal("1001"),
+                        listOf(
+                            kotlin.Pair(ColumnRef("share_scheme_id"), SqlValue.Literal("NULL")),
+                            kotlin.Pair(ColumnRef("station_id"), SqlValue.Literal("1001")),
                         ),
-                        null2IsNull = true,
+                        true,
                     ),
                 )),
             ),
@@ -234,7 +233,7 @@ class QueryWrapperParserSelectTest {
             WrapperType.LAMBDA_QUERY, "DeviceInfoEntity",
             listOf(
                 WrapperCall("allEq", listOf(
-                    WrapperArg.MapArg(entries = emptyList(), null2IsNull = false),
+                    WrapperArg.MapArg(emptyList(), false),
                 )),
             ),
         )
@@ -258,15 +257,15 @@ class QueryWrapperParserSelectTest {
                 WrapperCall("allEq", listOf(
                     WrapperArg.ValueArg(SqlValue.Literal("true")),
                     WrapperArg.MapArg(
-                        entries = listOf(ColumnRef(columnName = "id") to SqlValue.Literal("1")),
-                        null2IsNull = false,
+                        listOf(kotlin.Pair(ColumnRef("id"), SqlValue.Literal("1"))),
+                        false,
                     ),
                 )),
                 WrapperCall("allEq", listOf(
                     WrapperArg.ValueArg(SqlValue.Literal("false")),
                     WrapperArg.MapArg(
-                        entries = listOf(ColumnRef(columnName = "station_id") to SqlValue.Literal("2")),
-                        null2IsNull = false,
+                        listOf(kotlin.Pair(ColumnRef("station_id"), SqlValue.Literal("2"))),
+                        false,
                     ),
                 )),
             ),
@@ -322,7 +321,7 @@ class QueryWrapperParserSelectTest {
             listOf(
                 WrapperCall("selectFilter", listOf(
                     WrapperArg.EntityRefArg(table),
-                    WrapperArg.PredicateArg(include = emptyList(), exclude = listOf("share_scheme_id", "name")),
+                    WrapperArg.PredicateArg(emptyList(), listOf("share_scheme_id", "name")),
                 )),
             ),
         )
@@ -346,7 +345,7 @@ class QueryWrapperParserSelectTest {
             listOf(
                 WrapperCall("selectFilter", listOf(
                     WrapperArg.EntityRefArg(table),
-                    WrapperArg.PredicateArg(include = listOf("id", "name"), exclude = emptyList()),
+                    WrapperArg.PredicateArg(listOf("id", "name"), emptyList()),
                 )),
             ),
         )
@@ -370,7 +369,7 @@ class QueryWrapperParserSelectTest {
             listOf(
                 WrapperCall("selectFilter", listOf(
                     WrapperArg.EntityRefArg(table),
-                    WrapperArg.PredicateArg(include = emptyList(), exclude = emptyList()),
+                    WrapperArg.PredicateArg(emptyList(), emptyList()),
                 )),
             ),
         )
@@ -392,7 +391,7 @@ class QueryWrapperParserSelectTest {
             listOf(
                 WrapperCall("select", listOf(
                     WrapperArg.EntityRefArg(table),
-                    WrapperArg.PredicateArg(include = listOf("station_id"), exclude = emptyList()),
+                    WrapperArg.PredicateArg(listOf("station_id"), emptyList()),
                 )),
             ),
         )
@@ -421,7 +420,7 @@ class QueryWrapperParserSelectTest {
             listOf(
                 WrapperCall("selectFunc", listOf(
                     WrapperArg.ValueArg(SqlValue.Placeholder("DefaultFuncEnum.SUM")),
-                    WrapperArg.FuncArg(columns = listOf(ColumnRef(columnName = "id")), values = emptyList()),
+                    WrapperArg.FuncArg(listOf(ColumnRef("id")), emptyList()),
                     WrapperArg.ValueArg(SqlValue.Literal("totalCount")),
                 )),
             ),
@@ -444,7 +443,7 @@ class QueryWrapperParserSelectTest {
             listOf(
                 WrapperCall("selectFunc", listOf(
                     WrapperArg.ValueArg(SqlValue.Placeholder("DefaultFuncEnum.SUM")),
-                    WrapperArg.FuncArg(columns = listOf(ColumnRef(columnName = "table")), values = emptyList()),
+                    WrapperArg.FuncArg(listOf(ColumnRef("table")), emptyList()),
                     WrapperArg.ValueArg(SqlValue.Literal("totalCount")),
                 )),
             ),
@@ -467,12 +466,12 @@ class QueryWrapperParserSelectTest {
             listOf(
                 WrapperCall("selectFunc", listOf(
                     WrapperArg.ValueArg(SqlValue.Placeholder("DefaultFuncEnum.UNKNOWN_FUNC")),
-                    WrapperArg.FuncArg(columns = listOf(ColumnRef(columnName = "id")), values = emptyList()),
+                    WrapperArg.FuncArg(listOf(ColumnRef("id")), emptyList()),
                     WrapperArg.ValueArg(SqlValue.Literal("x")),
                 )),
                 WrapperCall("selectFunc", listOf(
                     WrapperArg.ValueArg(SqlValue.Placeholder("LEN")),
-                    WrapperArg.FuncArg(columns = listOf(ColumnRef(columnName = "name")), values = emptyList()),
+                    WrapperArg.FuncArg(listOf(ColumnRef("name")), emptyList()),
                     WrapperArg.ValueArg(SqlValue.Literal("nameLen")),
                 )),
             ),
@@ -498,12 +497,12 @@ class QueryWrapperParserSelectTest {
             WrapperType.LAMBDA_QUERY, "DeviceInfoEntity",
             listOf(
                 WrapperCall("inIfNotEmpty", listOf(
-                    WrapperArg.ColumnArg(ColumnRef(columnName = "id")),
+                    WrapperArg.ColumnArg(ColumnRef("id")),
                     WrapperArg.ValueArg(SqlValue.Literal("1")),
                     WrapperArg.ValueArg(SqlValue.Literal("2")),
                 )),
                 WrapperCall("notInIfNotEmpty", listOf(
-                    WrapperArg.ColumnArg(ColumnRef(columnName = "station_id")),
+                    WrapperArg.ColumnArg(ColumnRef("station_id")),
                     WrapperArg.ValueArg(SqlValue.Literal("3")),
                 )),
             ),
@@ -521,10 +520,10 @@ class QueryWrapperParserSelectTest {
     }
 
     private val table = TableInfo(
-        entityClassName = "DeviceInfoEntity",
-        tableName = "car_device_info",
-        columns = listOf(
-            ColumnInfo("id", "id", isId = true),
+        "DeviceInfoEntity",
+        "car_device_info",
+        listOf(
+            ColumnInfo("id", "id", true),
             ColumnInfo("stationId", "station_id"),
             ColumnInfo("shareSchemeId", "share_scheme_id"),
             ColumnInfo("name", "name"),
