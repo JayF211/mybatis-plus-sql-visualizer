@@ -288,7 +288,11 @@ class DialogWrapperInitOrderGuardTest {
                 // T-M53-II（master 侧同区语义）：归属类名——构造期内被调用、方法体在同包门面类静态
                 // 方法的查找键（master 用 ownerClassAt 顶格回溯；k2j 类体扫描已按 classRanges 归属，
                 // 类名直接取自声明行）。供下方 CALL 内联段的门面方法体并读使用。
-                val ownerClass = CLASS_DEF.find(lines[cstart])?.groupValues?.get(1)
+                // C11f-3 订正：CLASS_DEF 的 group(1) 是**前导缩进**、group(2) 才是类名——取错组使
+                // ownerClass 恒为缩进串，extBodies[(类名, 方法名)] 查找全部落空，跨文件门面内联
+                // （SqlPreviewPanel toolbar → modeButton 先写后读豁免）整条失效（实测 exemptByWrittenFirst
+                // 缺 modeButton；errorCopyButton 等同门面字段因同文件先写后读豁免路径仍绿，掩盖了本错）。
+                val ownerClass = CLASS_DEF.find(lines[cstart])?.groupValues?.get(2)
                 scopes.forEach { (idx, kind, shadow0) ->
                     if (kind == "init") initBlocks++ else constructors++
                     val end = blockEnd(lines, dep, idx)
@@ -349,7 +353,10 @@ class DialogWrapperInitOrderGuardTest {
                                 } else if (name !in visited) {
                                     // T-M53-II：构造期被调用、方法体在同包门面类静态方法（master 侧为
                                     // 同包扩展函数）——并入解析面，否则先写后读豁免对拆分后形态失明。
-                                    val fb = ownerClass?.let { oc -> extBodies[oc to name] }
+                                    // C11f-3 订正②：extBodies 建键 = (方法名, 首参类型)（见 FACADE_STATIC_DEF
+                                    // 收组），查找键须同名序 (name to ownerClass)——原 (oc to name) 与建键
+                                    // 倒序，Pair 分量不等值 → 查找恒落空（与订正①的取组错位互相掩盖）。
+                                    val fb = ownerClass?.let { oc -> extBodies[name to oc] }
                                     if (fb != null) {
                                         visited += name
                                         processTextRef?.invoke(fb, name, depth + 1)
@@ -366,9 +373,12 @@ class DialogWrapperInitOrderGuardTest {
                         val bodyLines = bodyText.split('\n')
                         val bDep = depths(bodyLines)
                         val (bLambda, bPrefix) = lambdaLines(bodyLines, bDep)
+                        // C11f-3 订正③：跳过面只收「嵌套方法体」——从 i=1 起扫（i=0 是门面方法
+                        // 声明行自身，其 blockEnd 覆盖整个门面体，从 0 起扫会把整段 body 全数
+                        // 跳过 → 门面内联退化成空转，modeButton 的先写后读豁免永不可达）。
                         val skip = run {
                             val st = mutableSetOf<Int>()
-                            for (i in bodyLines.indices) {
+                            for (i in 1 until bodyLines.size) {
                                 if (FUN_DEF.find(bodyLines[i])?.range?.first == 0) {
                                     (i until blockEnd(bodyLines, bDep, i)).forEach { st += it }
                                 }
@@ -393,7 +403,8 @@ class DialogWrapperInitOrderGuardTest {
                                     val (s2, e2, p2) = methods.getValue(name2)
                                     process(s2, e2, name2, depth + 1, p2)
                                 } else if (name2 !in visited) {
-                                    val fb2 = ownerClass?.let { oc -> extBodies[oc to name2] }
+                                    // C11f-3 订正②（同上）：查找键与建键同名序 (name to ownerClass)。
+                                    val fb2 = ownerClass?.let { oc -> extBodies[name2 to oc] }
                                     if (fb2 != null) {
                                         visited += name2
                                         processText(fb2, name2, depth + 1)
