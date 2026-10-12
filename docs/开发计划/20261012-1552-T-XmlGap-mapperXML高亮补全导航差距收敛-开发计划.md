@@ -320,7 +320,7 @@
 | 属性值补全 / live template `cd`·`co` 展开 / `#{}` 成对删 / 颜色页可调 | ❓ 未取到：本轮 GUI 驱动（pyautogui + 中文输入法切换 + 窗口置前）单步成本高、落点漂移，四项各需多轮点击；**代码 + 单测已覆盖，视觉确认待用户侧 2 分钟核对** | — |
 
 **沙盒清理核验**：`Alt+F4` → `Confirm Exit` → Enter 后 `runIde` 任务正常结束（exit 0）；`Get-CimInstance` 按 `MPSV-GifFresh` 过滤 **零残留**。
-**走查工具坑（本轮实录，供后续复用）**：①沙盒 IDE 被 Chrome/WPS 覆盖时 `pygetwindow.activate()` 与 `SetForegroundWindow` 均被 Windows 拦（仓内 `record/force_front.py` 的 AttachThreadInput 也没抢到）——**正解是先把浏览器窗口 `minimize()`** 再点进 IDE；②沙盒内**中文输入法默认激活**，`typewrite` 会被拼音截走（表现＝乱码 + 候选条），**先按 Shift 切英文**；③IDE 的 Go to File 需**两次 Enter**（首次只选中、二次打开）；④每次点击前必须重新截图定位（视图会自行滚动）。
+**走查工具坑（本轮实录，供后续复用）**：①沙盒 IDE 被 Chrome/WPS 覆盖时 `pygetwindow.activate()` 与 `SetForegroundWindow` 均被 Windows 拦（仓内 `record/force_front.py` 的 AttachThreadInput 也没抢到）——**正解是先把浏览器窗口 `minimize()`** 再点进 IDE；②沙盒内**中文输入法默认激活**，`typewrite` 会被拼音截走（表现＝乱码 + 候选条），**先按 Shift 切英文**；③IDE 的 Go to File 需**两次 Enter**（首次只选中、二次打开）；④每次点击前必须重新截图定位（视图会自行滚动）；⑤**折叠键位是 NumPad 专用**（`Ctrl+NumPad-` / `Ctrl+Shift+NumPad-`，普通 `-` 无效）——无小键盘或键位被占时改走 Find Action（`Ctrl+Shift+A`）；⑥**`press enter` 会落进编辑器**：Find Action 弹窗若已因故关闭，那次 Enter 会在光标处插入空行（本轮实录：`easy-code-demo` 的 mapper 文件被插了一个**首行空行**，走查后已逐字还原）——**GUI 走查结束后必须对目标文件跑一次 `git diff` 核对**，别假定「只点没改」。
 
 ### W8 走查（三）：**着色不生效**根因定位（用户 2026-10-12 报「SQL 文本整段白」）
 
@@ -402,12 +402,57 @@
 | 门禁告警 | `testShards WARN: 临界片失衡 +19%（shard1 125.2s vs 均值 105.2s）——权重失准/新类缺权嫌疑`：属权重画像过期提示（新类零权重插值），非失败；如需消警跑 `dev-support/weight-refresh.ps1` |
 | 未跑项 | `verifyGate`/`verifyPlugin` 本轮**未重跑**——理由：本轮无新增 EP 面（同一 EP 仅改正名字），且已实证 Plugin Verifier **不覆盖** EP 名可解析性（见「为什么三道既有门禁都没拦住」），重跑对本 bug 类零判别力 |
 
+### W4/W5 四项补测读数（收口第二轮，`XmlSqlCompletionW4W5CrossFileTest`，7 例 0 失败）
+
+原登记「受 Light 沙箱索引限制未单测」的四项，逐项给判据与读数。**「环境受限」这个前提被实测推翻**——`FileTypeIndex` 在 Light 沙箱可用（但**读的时机**敏感：`addFileToProject` 后**立即**读为 0，走一次 `configureByText` 后即就绪，见 `test05` 的双读数），故四项全部可在单测内取证，不必交真机。
+
+| 项 | 用例 | 读数 |
+|---|---|---|
+| 跨文件 `refid` | `test01` | ✅ 另一 mapper 的 `<sql id="otherFrag">` 以 `com.example.OtherMapper.otherFrag`（`namespace.id`）形态进入候选，本文件 `localFrag` 同时在场 |
+| `<properties>` key 聚合 | `test02` + `test06` | ⚠️ **首跑红 → 修后绿**：`propertyKeysOf` 取的是**子标签名**（恒为 `property`）而非 `name` 属性值 ⇒ 该能力对真实配置文件**完全无效**。已按 MyBatis 实现改正（`XMLConfigBuilder.propertiesElement` → `XNode.getChildrenAsProperties()`，mybatis **3.5.19 sources 实读**：key 取子标签 `name` 属性且要求 `value` 在场） |
+| foreach item 元素字段 | `test03` | ✅ `#{it.` 给 `List<DeviceInfoEntity>` 的**元素类型**字段（`id`/`name`），非主实体兜底 |
+| `@类@静态成员` | `test04` | ✅ `@com.example.Consts@` 给静态字段与方法（候选是**完整表达式** `@类@成员`），类可解析时不再只给语法骨架 |
+
+**同一函数上顺带修掉的结构性缺陷**：`configPropertyKeys` 的缓存原先是**进程级 `@Volatile stamp/value` + 比当前 project 的 modificationCount**——多项目 IDE 里两个 project 的计数撞上会互相读到对方的缓存值。已改为**挂在 project 上**（`Key<Long>`/`Key<List<String>>` user data），随 project 回收、无泄漏。
+**反向验证**：`test06` 就是该缺陷的反向位——把实现改回 `props.subTags.mapNotNull { it.name }` 必红（且 `test02` 同红）。
+
+### 折叠优先级的结构取证（`SqlMapperFoldingPriorityTest`，3 例 0 失败）
+
+原遗留项问「我方 `select#id` 占位与平台标签折叠谁胜出」。三条事实全部落在平台源码 + 实测上：
+
+1. **顺序**：XML 语言的折叠 builder 由 `LanguageFolding.allForLanguageOrAny(XML)` 汇总；实测顺序 = `[SqlMapperFoldingBuilder（我方）, com.intellij.lang.xml.XmlFoldingBuilder（平台）, spring XmlPropertyPlaceholderFoldingBuilder, liquibase …]` ⇒ `order="first"` 生效。
+2. **合并规则**：`CompositeFoldingBuilder.buildFoldRegions` 用 `Set<TextRange> rangesCoveredByDescriptors` 做**同范围先到先得**（`intellij.platform.core.jar` 反编译实读）——所以「我方区会不会被平台吞掉」只取决于范围是否**逐字相同**。
+3. **范围**：实测我方 = **整个 `<select>` 标签**（`tag.textRange`，占位 `select#findById`）；平台 `XmlFoldingBuilder` = **内容区**（`[21..109]`＝`<mapper>` 内容、`[46..99]`＝`<select>` 内容，占位 `...`）——**范围不同 ⇒ 不互相吞，三个区共存**。
+4. 故「谁胜出」是**渲染层**问题（光标在标签体内按 `Ctrl+Minus` 命中最内层区；gutter 上 `<select>` 那一行的标记对应我方整标签区）。Light 沙箱里编辑器 folding model 恒为空（实测 `allFoldRegions` = 0），单测观察不到渲染结果 ⇒ 交真机读数（下节）。
+
+**反向验证（两次读数）**：把 `plugin.xml` 的 `order="first"` 去掉 → `排第一` 用例**红**，实测顺序变为 `[XmlFoldingBuilder, spring…, liquibase…, SqlMapperFoldingBuilder]`（我方落到**最后**）；恢复后绿。同一次反向跑里还顺手复验了高亮器链路（见下）。
+
+### 着色链路的单测级取证（`SqlMapperHighlighterDispatchTest`，2 例 0 失败）
+
+此前「我方高亮器是否真的被平台取用」只有真机截图作证。本轮补成单测：`SyntaxHighlighterFactory.getSyntaxHighlighter(SqlMapperLanguage, …)` 走的正是注入时算 token 的同一条路（`getLanguageFactory().forLanguage(language)`，按语言 ID 查 EP），断言它返回**我方** `SqlMapperSyntaxHighlighter`（而非平台默认 `PlainSyntaxHighlighter`），并钉住 `KEYWORD`/`IDENTIFIER` 映射到自有键。
+**顺带推翻一条仓内旧认知**：此前多处 KDoc 写「Light 测试环境不加载 plugin.xml 的 EP」——本轮实测**会加载**（`LanguageFolding.allForLanguageOrAny(XML)` 里能看到我方 builder；高亮器工厂按 EP 名解析成功）。故 EP 接线其实可在单测里直接断言，不必只靠「读 plugin.xml 文本 + 正则」的间接守卫（既有守卫保留，两者互补）。
+**反向验证**：把 EP 名改回裸 `<syntaxHighlighterFactory>` → 两例**双红**，实际读数 `PlainSyntaxHighlighter` / 键 `[TEXT]`（即用户看到的「整段白」形态）；恢复后绿。
+
+### 沙盒走查（五）：折叠占位真机读数（IU-2024.3.7.1，收口第二轮）
+
+环境同走查（四）：默认 243 沙盒 + `easy-code-demo` 的 `src/main/resources/mapper/UserMapper.xml`（含多行 `<select id="selectAllByUsernameLikeAndPasswordOrderById">`）。
+
+| 动作 | 读数 | 截图（`mpsv-walk/`，不进仓） |
+|---|---|---|
+| **Collapse All**（经 Find Action 调用） | 整文件折叠成 4 行，`<mapper>` 行显示**平台占位 `...`**——最外层区＝平台 `<mapper>` 内容区，其内嵌套区不渲染 | `fold-06-collapsed.png` |
+| 光标置于 `<select>` 开标签内 + **Collapse**（`Ctrl+NumPad-`） | 第 19 行显示 **`select#selectAllByUsernameLikeAndPasswordOrderById`** ⇒ **我方占位胜出** | `fold-11-collapseregion.png`、`fold-12-ourplaceholder.png`（3× 放大） |
+| Expand All 还原 | 回到未折叠态；文档内容零改动（`git diff` 与走查前逐字一致） | `fold-13-restored.png` |
+
+**结论（回答原遗留项）**：**「谁胜出」这个提法本身不成立**——两区范围不同（我方＝整个标签，平台＝内容区），在折叠模型里**共存**；用户折叠语句标签时看到的是**我方 `select#id`**（该区在外层），平台 `...` 只出现在折叠 `<mapper>` 这类**我方不建区**的标签上。故 **W6 折叠占位能力对用户可见**，原备选方案（改折语句体文本以避让平台）**不需要**。
+
+**顺带记两个工具/环境事实（供后续走查复用）**：①折叠键位是 **NumPad 专用**——`Collapse` = `Ctrl+NumPad-`、`Collapse All` = `Ctrl+Shift+NumPad-`，普通 `-` 无效（Find Action 列表里的键位提示即证），无小键盘的机器须走 Find Action；②**243 New UI 的折叠标记在 gutter 里不常驻显示**（逐行放大实证：`<select>` 行只有我方两枚 gutter 图标，`<mapper>` 行什么都没有），故「点 gutter 标记折叠」这条常规路在本环境走不通，须用 Find Action 驱动。
+
 ### 遗留与待真机项（W8 收口）
 
 1. **颜色页**：✅ 已补（见上节）。
-2. **真机走查**：**两站均已做**——①runIde **243**（最低支持版，见前节）；②**IU 2026.2.1 Ultimate + CHP 已激活 + zMyBatis 共存沙盒**（见上节，W1 前提 1 现场实证「未被让位」+ Ctrl+B 跳转实证）。**剩余 4 项视觉确认待用户侧**（各约 30 秒，代码与单测均已覆盖）：`#{}` 与 `${}` 是否**互相**一眼可分、属性值补全候选、live template `cd`/`co` 展开、`#{}` 成对删、颜色页（Settings → Editor → Color Scheme → MyBatis Mapper SQL）可调；**折叠占位 `select#id` 与平台标签折叠谁胜出**亦属待答（本轮 `Ctrl+Minus` 落点未命中语句标签）。
-3. **折叠占位文本**（`select#id`）未隔离观察：与平台标签折叠范围相同，需真机确认谁胜出；若平台恒胜，则本项能力「有代码有测试但用户看不到」，届时应评估是否改为折叠**语句体文本**区间以避开与平台同范围（已留判据）。
-3. **W4/W5 子代理登记的未单测项**（受 Light 沙箱索引限制）：跨文件 `refid`、`<properties>` key 聚合、foreach item 元素字段、`@类@静态成员`——由 W8 收口时评估补测或真机复核。
-4. **W2/W3 登记的两处待评审取舍**：布尔是否单独配色（现与关键字同色）；方言并集过度着色是否要 per-file 方言收敛。
-5. **全量门禁**：一次（收口阶段，只读收口代理执行）；因新增平台 API 面（`RestartableLexer`）与 7 个新 EP，附加 `verifyPlugin` 三目标。
-6. **编辑器内着色**：✅ **已修并端到端取证**（收口轮，见「着色真根因定位与修复」+「沙盒走查（四）」）——此前「对外承诺不成立」的结论作废；守卫 `config/PluginXmlExtensionPointResolutionTest` 已把 EP 名可解析性纳入自动复核。权威全量门禁**已跑**（见「收口轮（EP 名修复）门禁读数」：6985 例 0 失败）。
+2. **真机走查**：**三站均已做**——①runIde **243**（最低支持版，见前节）；②**IU 2026.2.1 Ultimate + CHP 已激活 + zMyBatis 共存沙盒**（见上节，W1 前提 1 现场实证「未被让位」+ Ctrl+B 跳转实证）；③**收口第二轮**：同 243 沙盒补做「着色端到端」（走查四）与「折叠占位」（走查五）。**剩余 4 项视觉确认待用户侧**（各约 30 秒，代码与单测均已覆盖）：`#{}` 与 `${}` 是否**互相**一眼可分、属性值补全候选、live template `cd`/`co` 展开、`#{}` 成对删、颜色页（Settings → Editor → Color Scheme → MyBatis Mapper SQL）可调。
+3. **折叠占位文本**（`select#id`）：✅ **已隔离观察 + 真机取证**（见「折叠优先级的结构取证」+「沙盒走查（五）」）——两区范围不同、模型里共存，**用户折叠语句标签时看到的是我方 `select#id`**；原备选方案（改折语句体文本）**不需要**。
+4. **W4/W5 四项未单测项**：✅ **已补测，四项全绿**（见「W4/W5 四项补测读数」）；「受 Light 沙箱索引限制」的前提**被实测推翻**，且补测中**抓出一个真实缺陷**（`<properties>` key 取值口径错，已修）。
+5. **W2/W3 两处待评审取舍**（仍待评审，非缺陷）：布尔是否单独配色（现与关键字同色）；方言并集过度着色是否要 per-file 方言收敛。
+6. **编辑器内着色**：✅ **已修 + 单测级取证 + 沙盒取证**（见「着色真根因定位与修复」+「着色链路的单测级取证」+「沙盒走查（四）」）——此前「对外承诺不成立」的结论作废；`config/PluginXmlExtensionPointResolutionTest` 与 `SqlMapperHighlighterDispatchTest` 双守卫。
+7. **全量门禁**：已跑两次——W1~W7 那轮 6959 例、EP 名修复那轮 6985 例（读数见前节）。**本轮改了生产代码**（`XmlCompletionSymbols` 的 `propertyKeysOf` 与缓存归属）⇒ 收口须**再跑一次**权威全量（读数见下节）。

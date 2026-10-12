@@ -4,6 +4,7 @@ import cn.song.mybatisplus.visualizer.ui.SourceSqlContext
 import com.intellij.ide.highlighter.XmlFileType
 import com.intellij.openapi.project.DumbService
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.util.Key
 import com.intellij.psi.JavaPsiFacade
 import com.intellij.psi.PsiClass
 import com.intellij.psi.PsiClassType
@@ -271,23 +272,36 @@ internal object XmlCompletionSymbols {
     // mybatis-config.xml `<properties>` key（W5-4，全项目聚合 + 缓存）
     // ------------------------------------------------------------------
 
-    @Volatile
-    private var propsCacheStamp: Long = Long.MIN_VALUE
+    /**
+     * 缓存**挂在 project 上**（不是进程级单例字段）：原先用「进程级 `@Volatile stamp/value` +
+     * 比当前 project 的 modificationCount」，多项目 IDE 里两个 project 的计数撞上时会互相读到
+     * 对方的缓存值（本轮补测发现的结构性缺陷，已改）。挂 project 后随 project 一起回收，无泄漏。
+     */
+    private val PROPS_CACHE_STAMP: Key<Long> = Key.create("MPSV_CONFIG_PROPERTIES_CACHE_STAMP")
 
-    @Volatile
-    private var propsCacheValue: List<String> = emptyList()
+    private val PROPS_CACHE_VALUE: Key<List<String>> = Key.create("MPSV_CONFIG_PROPERTIES_CACHE_VALUE")
 
     /**
      * 全项目 mybatis-config.xml `<properties>` 的 key 聚合（**带缓存**：按
-     * `PsiModificationTracker.modificationCount` 失效）。
+     * `PsiModificationTracker.modificationCount` 失效，缓存挂 project）。
      *
-     * 来源：`<configuration><properties>` 下的每个子标签名即 key（MyBatis config 语义）。
+     * key 口径**以 MyBatis 实现为准**（`XMLConfigBuilder.propertiesElement` →
+     * `XNode.getChildrenAsProperties()`，mybatis 3.5.19 sources 实读）：`<properties>` 的子标签
+     * **标签名被忽略**，key 取子标签的 `name` 属性值（且要求 `value` 属性在场）。
+     * 例：`<property name="schemaName" value="app"/>` → key = `schemaName`。
+     * 本轮补测前这里取的是**子标签名**（恒为 `"property"`），等于该能力对真实配置文件无效。
+     *
+     * 已知边界（不覆盖）：`<properties resource="…"/>`/`url="…"` 指向的外部 .properties 文件里的
+     * key 不可见（需读文件内容，本轮不做）；`<settings>` 的 `name` 属性是设置项、不是变量，不入集。
+     *
      * dumb 态/索引不可用 → 空。单文件纯函数 [propertyKeysOf] 供测试直测。
      */
     fun configPropertyKeys(project: Project): List<String> = runCatching {
         if (DumbService.isDumb(project)) return emptyList()
         val stamp = PsiModificationTracker.getInstance(project).modificationCount
-        if (stamp == propsCacheStamp) return propsCacheValue
+        if (project.getUserData(PROPS_CACHE_STAMP) == stamp) {
+            return project.getUserData(PROPS_CACHE_VALUE) ?: emptyList()
+        }
         val psiManager = PsiManager.getInstance(project)
         val value = FileTypeIndex.getFiles(XmlFileType.INSTANCE, GlobalSearchScope.projectScope(project))
             .asSequence()
@@ -297,17 +311,21 @@ internal object XmlCompletionSymbols {
             .distinct()
             .take(CAP)
             .toList()
-        propsCacheStamp = stamp
-        propsCacheValue = value
+        project.putUserData(PROPS_CACHE_STAMP, stamp)
+        project.putUserData(PROPS_CACHE_VALUE, value)
         value
     }.getOrElse { emptyList() }
 
-    /** 单文件纯函数：`<configuration><properties>` 下子标签名（key）。 */
+    /**
+     * 单文件纯函数：`<configuration><properties>` 下各 `<property name="X">` 的 **`name` 属性值**
+     * （key 口径见 [configPropertyKeys] KDoc，MyBatis `getChildrenAsProperties` 实证）。
+     */
     fun propertyKeysOf(xmlFile: XmlFile): List<String> = runCatching {
         val root = xmlFile.rootTag ?: return emptyList()
         if (root.name != "configuration") return emptyList()
         root.findSubTags("properties")
-            .flatMap { props -> props.subTags.mapNotNull { it.name?.takeIf { n -> n.isNotBlank() } } }
+            .flatMap { props -> props.findSubTags("property").asList() }
+            .mapNotNull { it.getAttributeValue("name")?.takeIf { n -> n.isNotBlank() } }
             .distinct()
     }.getOrElse { emptyList() }
 
