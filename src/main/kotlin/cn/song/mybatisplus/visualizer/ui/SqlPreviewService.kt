@@ -1270,7 +1270,8 @@ class SqlPreviewService(internal val project: Project) {
      */
     internal fun analyzePerf(sql: String, statement: SqlStatement): List<PerfWarning>? {
         if (statement !is SelectStatement) return null
-        val warnings = SqlPerfAnalyzer.analyze(sql)
+        // T-DialectQuoteWarn：带方言分析（dialect_quote_mismatch 等方言感知规则需要）
+        val warnings = SqlPerfAnalyzer.analyze(sql, currentDialect())
         return warnings.ifEmpty { null }
     }
 

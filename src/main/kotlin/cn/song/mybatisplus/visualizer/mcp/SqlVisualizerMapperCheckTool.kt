@@ -1,6 +1,8 @@
 package cn.song.mybatisplus.visualizer.mcp
 
 import cn.song.mybatisplus.visualizer.execute.UnboundedWriteDetector
+import cn.song.mybatisplus.visualizer.sql.Dialect
+import cn.song.mybatisplus.visualizer.sql.DialectRegistry
 import cn.song.mybatisplus.visualizer.sql.SqlPerfAnalyzer
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.xml.XmlMapperParser
@@ -10,6 +12,7 @@ import com.intellij.mcpserver.annotations.McpTool
 import com.intellij.mcpserver.annotations.McpToolHintValue
 import com.intellij.mcpserver.annotations.McpToolHints
 import com.intellij.openapi.application.ReadAction
+import kotlin.coroutines.coroutineContext
 
 /**
  * sqlv_mapper_check 工具（T-McpToolset2 / T-MTS2-03，R2）：mapper XML 静态契约核查。
@@ -65,11 +68,24 @@ open class SqlVisualizerMapperCheckTool : McpToolsetSupport("sqlv_mapper_check")
                 McpToolErrors.code(McpToolErrors.INVALID_ARGUMENT, "provide xmlSnippet or filePath."),
             )
         }
-        mapperCheck(text, simulate)
+        mapperCheck(text, simulate, resolveDialectOrNull(coroutineContext))
     }
 
-    /** 纯函数核心（文本已在手的契约+渲染分析；XmlMapperParser/渲染链零 IDE fixture 依赖）。 */
-    internal fun mapperCheck(text: String, simulate: Boolean): String {
+    /**
+     * 解析当前 MCP 调用绑定项目的方言（T-DialectQuoteWarn）；无项目上下文 → null（方言感知规则
+     * 自动不判，**不**硬编码 MySQL）。`currentProjectOrNull` 为非挂起函数，不引入新的挂起点。
+     */
+    private fun resolveDialectOrNull(context: kotlin.coroutines.CoroutineContext): Dialect? {
+        val project = runCatching { McpExpectedBridge.currentProjectOrNull(context) }.getOrNull() ?: return null
+        return runCatching { DialectRegistry.effective(project) }.getOrNull()
+    }
+
+    /**
+     * 纯函数核心（文本已在手的契约+渲染分析；XmlMapperParser/渲染链零 IDE fixture 依赖）。
+     *
+     * @param dialect 当前项目方言（T-DialectQuoteWarn）；null 时方言感知规则不判（默认 null 保持既有测试可编译）。
+     */
+    internal fun mapperCheck(text: String, simulate: Boolean, dialect: Dialect? = null): String {
         if (text.isBlank()) {
             throwExpected(McpToolErrors.code(McpToolErrors.INVALID_ARGUMENT, "xmlSnippet/filePath is empty."))
         }
@@ -129,7 +145,7 @@ open class SqlVisualizerMapperCheckTool : McpToolsetSupport("sqlv_mapper_check")
                             .filter { it.kind == UnboundedWriteDetector.FindingKind.PARSE_FAILED }
                             .filter { it.detail.isNotBlank() }
                             .forEach { append("    simulate risk note: ").append(it.detail).append('\n') }
-                        val perf = SqlPerfAnalyzer.analyze(rendered.sql)
+                        val perf = SqlPerfAnalyzer.analyze(rendered.sql, dialect)
                         if (perf.isNotEmpty()) {
                             append("    simulate perf:\n")
                             perf.forEach { warning ->

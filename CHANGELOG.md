@@ -4,6 +4,9 @@
 
 ## [Unreleased]
 
+### Added
+- **方言引号不匹配静态告警（T-DialectQuoteWarn，静态规则第 21 条 `dialect_quote_mismatch`）**：SQL 里的标识符用了当前方言不接受的引号字符时给出 ERROR 级告警（如 MySQL 方言下出现 `FROM "user" t`）。`@TableName("\"user\"")` 这类达梦风格双引号在 MySQL 真机会报 `[42000][1064]`，插件此前只是如实画出。**只报告不改写**：渲染的仍是 MyBatis-Plus 真实发出的 SQL（改写会让预览偏离真机、把用户代码里的真 bug 静默抹平）。告警同时流到预览面板静态规则区与 MCP `sqlv_perf_advice`；方言从项目设置解析，取不到时不判定（不硬编码 MySQL）。判据按各方言实际宽容度定：SQL Server 的 `QUOTED_IDENTIFIER` 默认 ON（双引号合法）、SQLite/H2 收多种引号，避免误报
+
 ### Fixed
 - 调用栈悬停弹层视口按全量帧数放开（JList 默认 8 行把链尾业务帧折叠进滚动区，「默认锚定最深业务帧、一眼看到 Controller → Service」落空）
 - 调用栈弹层锚点跟随悬停落点（原只在 mouseEntered 赋值边缘穿越点，弹层位置随进入方向漂移）
