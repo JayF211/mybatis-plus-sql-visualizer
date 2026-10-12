@@ -389,6 +389,8 @@
              注入的语句文本，不触碰 XML 全局拼写行为 -->
         <spellchecker.support language="MpSqlMapper"
                               implementationClass="cn.song.mybatisplus.visualizer.ui.inject.SqlMapperSpellcheckingStrategy"/>
+        <!-- T-XmlGap W6：注入语言的颜色设置页（14 键可调；此前颜色只借平台语义槽，用户只能改全局主题） -->
+        <colorSettingsPage implementation="cn.song.mybatisplus.visualizer.ui.inject.SqlMapperColorSettingsPage"/>
     </extensions>
 
     <!-- T-M53：Kotlin plugin mode 声明——本插件只用 Kotlin PSI（gutter 标记），不涉及 Analysis API，

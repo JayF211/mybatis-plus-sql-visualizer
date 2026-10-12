@@ -217,9 +217,36 @@
 - 红线守法：**全部 soft 引用**（目标缺失零报红）+ 零 inspection/annotator（有专门守卫用例扫本包源码禁词）。
 - 复用：mapper 文件清单单槽 TTL 缓存沿用 `log/MapperXmlLocator` 的成熟模式（禁引监听器）。
 
+### W2+W3 高亮粒度与覆盖面（子代理 A1，`75491fd`）
+
+- 交付：`PARAM` 拆为 `PARAM_HASH`/`PARAM_DOLLAR`；`#{}` 参数规格与 `${}` OGNL 双子状态机（含花括号深度、未闭合容错、`\#` 转义）；实现 `RestartableLexer` 支持增量续扫；`IDENTIFIER`/`OPERATOR`/标点族（`PAREN`/`BRACKET`/`BRACE`/`COMMA`/`DOT`）接平台语义槽；关键字集 **41 → 589 词**（原 41 ∪ `SqlLexer.KEYWORDS` ∪ 十一方言 `reservedWords`，只增不删）；新增 `BOOLEAN`、`STATIC_REF` token。
+- **键位取舍（主控评审接受）**：计划 §四 决策 2-A 的三句参考取向互斥（一个 token 只能落一组属性），子代理按「分色优先」裁决并写明 KDoc——`#{`/`}` → `KEYWORD`、`${`/`}` → `INSTANCE_FIELD`；**代价＝原「`#{}` 整段淡底」不再存在**。颜色页（见下）已把 14 键全部暴露为可调项，用户可自行调回偏好配色。
+- **反向验证（子代理自证，两次读数在案）**：关键字集临时改回 41 词平集 → 守卫 4 例红，含与调研报告 §0.9 逐词吻合的「差 25 词」**真实差集**（`TABLE/CREATE/DROP/…/COUNT/SUM/…`）；还原后 7+36 例绿。
+- **主控补验（新增平台 API 面的兼容性）**：`com.intellij.lexer.RestartableLexer` 在 **243**（`ideaIU-2024.3.7.1-win/lib/util-8.jar`）与 **253**（`idea-2025.3.5-win/lib/util-8.jar`）签名**逐字一致**（`getStartState`/`isRestartableState`/5 参 `start`），262 亦在（`intellij.platform.core.jar`）→ 无最低版本兼容问题；因属「新平台 API 面」，收口仍加 `verifyPlugin` 三目标。
+- 子代理登记的 8 条未做/不确定项中，最需用户知情的三条：布尔当前与关键字同色（颜色页可拆）；OGNL 关键字集只取 `Ognl.kt` 实际支持的 `and/or/not/in/null`（`eq/neq/lt/gt` 等该求值器无实现）；方言并集有**已知过度着色面**（顶层裸用 `key`/`size` 等保留字会着关键字色，精确收敛需 per-file 方言链，列为后续）。
+
+### W4+W5 补全扩面（子代理 A2，`f8474b1`）
+
+- 交付：`#{}` 结构属性（7 键 + 41 jdbcType + mode 三值，逗号后切换）、属性值逐属性分流（`id`/`keyProperty`/`refid`/`resultMap`/`extends`/`parameterMap`/`resultType` 族/`property`/`jdbcType`/`column` 族）、语句标签与 resultMap 族属性名（MyBatis DTD 逐条抄录）、OGNL 变量来源（`<bind>`/foreach item·index/include property/config properties/`_databaseId`·`_parameter`）、OGNL 智能片段与运算符、select 投影按 resultType、反引号列名、SQL 函数表、单字母捷径、resultMap「引用它的 select」列来源。
+- 硬编码表全部实读（`javap` + `unzip -p … mybatis-3-mapper.dtd`）：7 键与调研报告 §3.2 逐项一致；jdbcType 按前提 8 用 **41 项全枚举**（非报告里的 16 项）。
+- **未单测项（受 Light 沙箱索引限制，如实登记）**：跨文件 `refid`、`<properties>` key 聚合、foreach item 元素字段、`@类@静态成员`——由 W8 收口评估补测或真机复核。
+- 口径差异（已登记）：计划 §六「空候选属性给布尔/枚举」与派活「`timeout` 等数值属性不产候选」冲突，按后者实现（数值属性无枚举语义）。
+
+### 颜色设置页（W6 收尾，主控）
+
+- `ui/inject/SqlMapperColorSettingsPage.kt` + `<colorSettingsPage>` EP：暴露 W2/W3 的 **14 个键**（关键字/标识符/字符串/注释/数字/运算符/括号族/逗号/点/静态引用/`#{}`/`${}`）；预览样例覆盖全部键；带「描述符覆盖全部高亮键」守卫（反射枚举 `SqlMapperTT` 字段——未来新增键漏描述符必红）。
+
+### W1 反向验证读数（仓库纪律：两次读数）
+
+| 轮次 | 操作 | 读数 |
+|---|---|---|
+| **红** | 把 `shouldYield` 改回「占用非空即让位」、注入器改回宿主级 `return`（`RED PROBE` 留痕） | `XmlSynHiGateRangeTest` 10 例 **1 红**（`testW1_部分占用_不让位`）；`SqlMapperInjectorWiringTest` 7 例 **1 红**（`testW1_外来只占参数区间_我方仍注入余下区间`）；其余 15 例仍绿 ⇒ 探针**精准**（非成片失败） |
+| **绿** | `git checkout` 还原两文件（`grep "RED PROBE"` 命中 0） | 两类 **17 例 0 失败**（`EXIT=0`） |
+
 ### 遗留与待真机项（W8 收口）
 
-1. **颜色页**：待 A1 合并后补。
-2. **真机走查**（用户 IU 2026.2，装 CHP 已激活 + zMyBatis）：语句含 `#{}` 时 SQL 关键字着色可见；`#{}`/`${}` 分色；属性值补全；Ctrl+B 九类跳转；live template `cd`/`co` 展开；成对删；拼写不再误标。
+1. **颜色页**：✅ 已补（见上节）。
+2. **真机走查**（用户 IU 2026.2，装 CHP 已激活 + zMyBatis）：语句含 `#{}` 时 SQL 关键字着色可见；`#{}`/`${}` 分色；属性值补全；Ctrl+B 九类跳转；live template `cd`/`co` 展开；成对删；拼写不再误标；颜色页可调。
 3. **W4/W5 子代理登记的未单测项**（受 Light 沙箱索引限制）：跨文件 `refid`、`<properties>` key 聚合、foreach item 元素字段、`@类@静态成员`——由 W8 收口时评估补测或真机复核。
-4. **全量门禁**：一次（收口阶段，只读收口代理执行）。
+4. **W2/W3 登记的两处待评审取舍**：布尔是否单独配色（现与关键字同色）；方言并集过度着色是否要 per-file 方言收敛。
+5. **全量门禁**：一次（收口阶段，只读收口代理执行）；因新增平台 API 面（`RestartableLexer`）与 7 个新 EP，附加 `verifyPlugin` 三目标。
