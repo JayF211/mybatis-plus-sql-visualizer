@@ -125,3 +125,45 @@ SQL」是本插件不可让渡的承诺；更糟的是会把用户代码里的�
   本任务落地后应变 **21 条**（另一仓 `mybatis-plus-sql-visualizer-docs`，按「断言须对源码核实」的规矩同改）。
 - 插件 README 的能力描述若提到规则数，按 README 同步轮一并核。
 - demo 侧 `@TableName` 的跨库取舍仍待用户定夺。
+
+## 十、实施记录（2026-10-12）
+
+### 待验证前提的证伪结果
+
+1. **JSqlParser 是否保留原始引号——保留**。对 `FROM "user" t` / `` FROM `user` t `` / `FROM [user] t` 实测
+   `Table.getName()` 分别返回 `"user"` / `` `user` `` / `[user]`；`Column.getColumnName()` 对 `t."station_id"`
+   返回 `"station_id"`；`TablesNamesFinder.getTables()` 亦保留引号（JSqlParser 5.3 实测）。
+   → **AST 路径成立**，规则以 AST 为主路径、正则仅作降级（§四·2 的「若不保留只能走正则」未触发）。
+2. **三个调用点都拿得到方言**。`SqlPreviewService` 有 `currentDialect()`（第 1460 行）直接传；两个 MCP
+   工具经 `McpExpectedBridge.currentProjectOrNull(coroutineContext)`（**非挂起**）取项目，取到才
+   `DialectRegistry.effective(project)`，取不到传 `null`（规则自动不判，未硬编码 MySQL）。
+3. **`PerfSeverity.ERROR` 渲染与既有 ERROR 规则一致**。`SqlPreviewPanelResultView.buildPerfSegments` 对
+   ERROR/WARN 同给红色 `⚠` 前缀（`MpvsUiColors.PERF_ERROR_TEXT`），未新造视觉。
+4. **无测试依赖 `ruleCount()`**。全仓 grep 只有 `PerfRuleEngine.ruleCount()` 定义与
+   `SqlSuppressManagerDialog.ruleCountForTest()`（无关），无「规则数=20」断言，无需同步。
+5. **基类 `quoteIdentifier` 原样返回**（`Dialect.kt:40`）——已按 §四·2 新增 `identifierQuotes` 属性，
+   未用 `quoteIdentifier("x").first()` 反推。
+
+### 落地与提交（master，未 push）
+
+- `e0fd930` 步骤 1：`Dialect.identifierQuotes`（基类空集 + 11 方言覆盖）+ `PerfRulesBatch4Test` 引号集合断言。
+- `a3f587e` 步骤 2+3：`DialectAwarePerfRule` 子接口、`PerfRuleEngine.apply` 方言参、
+  `PerfRulesBatch4.dialect_quote_mismatch`（AST 优先 + 正则降级）与 `PerfRulesBatch4Test`（18 例）。
+- `0e71c64` 步骤 4：`SqlPerfAnalyzer` 注册 Batch4 + 缓存键带方言 + `SqlPerfAnalyzerTest` 补 2 例。
+- `72564e8` 步骤 5+6+7：三调用点传方言、中英 bundle 文案、CHANGELOG `[Unreleased]` 增 Added。
+
+### 定向测试读数
+
+`./gradlew test --tests "…sql.perf.*" --tests "…sql.SqlPerfAnalyzerTest" -Pkotlin.compiler.execution.strategy=in-process`：
+
+- 改动后（绿）：PerfRulesBatch1Test 26、PerfRulesBatch2AstTest 19、PerfRulesBatch4Test 18、
+  SqlPerfAnalyzerTest 12，**0 失败**。
+- 反向验证（临时把 `checkWithDialect` 短路为恒返回空列表）：30 例中 **6 例失败**，恰为全部正例——
+  AST 与正则两条真实形态、MySQL 双引号列名、MySQL 方括号、PG 反引号、缓存不串味用例；反例全绿。
+  还原后重跑恢复全绿。合成样本之外，正例含 A11 现场原文，证明规则看得见**真实形态**。
+
+### 未做/存疑
+
+- 站点侧（另一仓 `mybatis-plus-sql-visualizer-docs`）「20 条→21 条」同步按 §九 属后续独立任务，未动。
+- 插件内 MCP 工具描述与「No performance findings」文案的 20→21 计数已顺带更新（属本仓调用点文件）。
+- 未跑全量测试/构建校验（按任务约定）；未部署、未 push。
