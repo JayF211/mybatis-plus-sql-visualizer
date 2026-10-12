@@ -7,9 +7,13 @@ v1~v4 的返工各自暴露一个坑，全部已固化进 locate/verify 标准�
   ③ `window_rect(pid=None)` 会匹配到**别人的同尺寸窗口**（撞上 ZCode 的 ZCodeTpsFooter）→ 限定沙盒 PID；
   ④ **IDE 不在前台 → 键盘快捷键送不到**（开文件无反应、预览不出，且不报错）→ `ensure_foreground` 置顶+取焦+校验。
 
-素材：`UserServiceImpl#selectJoinList`（mpjdemo，`user` LEFT JOIN `user_address` RIGHT JOIN `area`）。
-它正是当初报 `[42000][1064] near '"user"'` 的那条——IDE 数据源补上 ANSI_QUOTES 后应能跑通，
-**这张片子本身就是那个修复的验证**。
+素材：`DeviceInfoServiceImpl#joinListEntity`（mpjdemo，`car_device_info` LEFT JOIN `station_info`）。
+**2026-10-12 换目标**：原素材 `UserServiceImpl#selectJoinList` 执行报
+`[42S22][1054] Unknown column 't.area_id' in 'on clause'`——那是**插件缺陷 ★A47**（MPJ 三参 join 的
+ON 右侧列别名被硬编码成主表别名；MPJ 真实行为是按字段自己的实体类解析）。本素材的链
+`leftJoin(StationInfoEntity.class, StationInfoEntity::getStationId, DeviceInfoEntity::getStationId)`
+右侧列**正是主表字段**，插件那条硬编码在这里成立，渲染与真实执行一致（A11 已用同一素材跑通 EXPLAIN）。
+★A47 另行登记待修，别用「ON 右侧列属于先前 join 的表」的链出片。
 """
 import os
 import sys
@@ -19,22 +23,28 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from gifkit import Recorder                                              # noqa: E402
-from locate import (bright_band_x, bright_band_y, ensure_foreground,     # noqa: E402
-                    grab as locate_grab, pid_by_cmdline, window_rect, windows)
+from locate import (bright_band_x, bright_band_y, close_preview,         # noqa: E402
+                    ensure_foreground, grab as locate_grab, sandbox_pid,
+                    window_rect, windows)
 from nav import force_en_us, goto_col, trigger_preview                   # noqa: E402
 from verify import Guard                                                 # noqa: E402
 
 REGION = (277, 25, 1370, 984)
 OUT = "perf/a13_execute_sql.mp4"
 
-FILE_QUERY = "mpjdemo/UserServiceImpl.java"
-FILE_TITLE_KEY = "UserServiceImpl"
-CHAIN_LINE, CHAIN_COL = 49, 18          # .like(AddressDO::getTel, "1")
+FILE_QUERY = "mpjdemo/DeviceInfoServiceImpl.java"
+FILE_TITLE_KEY = "DeviceInfoServiceImpl"
+CHAIN_LINE, CHAIN_COL = 110, 18         # .eq(DeviceInfoEntity::getShareSchemeId, 1)
 
-POP_CANCEL = (1489, 781)
-ROW_X = 777                    # 结果行点击的 x（弹窗左半，落在首条结果文字上）
-ROW_TEXT_X = (290, 560)        # 首条结果文字所在列带（剖面判据用）
-ROW_Y_RANGE = (290, 420)       # 结果列表所在行带（查询框下方）
+ROW_X = 600                    # Go-to-File 首条结果行的点击 x：**必须落在行左半的路径文字上**。
+# ⚠️ 别点行右半：结果行右半会被一个白色浮层 chip（`1 mpjdemo/UserServiceImpl.java`）盖住，
+# 点在它边缘会**穿透到后面的编辑器**（弹窗还开着、编辑器却选中了一行），实测 x=777 就是这样
+# 失效的；x=600 落在 chip 左侧的路径文字上，稳定命中。
+# 首条结果行的 y：**实测 341**。候选从行内往上留一点开始、再向下兜底，覆盖 ±20px 的弹窗位置漂移；
+# 落在搜索框或弹窗外都无害（不关弹窗），首个命中即开文件。
+# ⚠️ 键盘路径（`↓` + Return）在本平台**无效**：实测 Down 连选中行都不动、Return 也不开文件
+# （弹窗仍在、标题不变），别再用它。
+FILE_ROW_YS = (341, 333, 349, 357)
 MAVEN_HIDE = (1622, 103)       # Maven 工具窗面板头部的「—」
 
 OVERLAY_WATCH = (1290, 520, 60, 200)    # 预览右缘深色边距（浅底浮层盖上来会明显变亮）
@@ -59,7 +69,7 @@ def main():
     g = Guard()
 
     # ---- 前置：沙盒 PID + 前台（键盘输入的前提）----
-    ide_pid = pid_by_cmdline("MPSV-GifFresh")
+    ide_pid = sandbox_pid()
     if ide_pid is None:
         raise RuntimeError("未找到沙盒 IDE 进程（命令行应含 MPSV-GifFresh）")
     hwnd, title0 = ide_hwnd_and_title(ide_pid)
@@ -69,7 +79,7 @@ def main():
 
     # ---- prep（不入镜）----
     pyautogui.keyDown('esc'); pyautogui.keyUp('esc'); time.sleep(0.8)
-    pyautogui.click(*POP_CANCEL); time.sleep(1.0)
+    print("关旧预览弹窗:", "已关闭" if close_preview(ide_pid) else "!! 没关掉")
     pyautogui.keyDown('esc'); pyautogui.keyUp('esc'); time.sleep(0.5)
     pyautogui.click(*MAVEN_HIDE); time.sleep(1.2)      # 收起 Maven 工具窗，恢复录制版式
     pyautogui.click(600, 500); time.sleep(0.5)
@@ -78,17 +88,19 @@ def main():
     pyautogui.hotkey("ctrl", "a"); time.sleep(0.5)
     force_en_us()
     pyautogui.typewrite(FILE_QUERY, interval=0.05); time.sleep(1.8)
-    # **键盘路径开文件**（放弃点结果行）：`↓` 把选中落到结果列表首行 → Return。
-    # 坐标这条路我调了三轮（行带剖面 / 连点两次 / 落点上移）都不稳：Go-to-File 弹窗位置随会话变，
-    # 且剖面会把查询框与首条结果并成一段，落点差几像素就擦空。键盘路径与坐标无关；
-    # 本轮首条结果正是目标文件（抓帧确认过）。Return 用 keyDown/keyUp——JBR 会吞 press('enter')（坑表 7）。
-    pyautogui.press("down"); time.sleep(0.6)
-    pyautogui.keyDown("return"); pyautogui.keyUp("return"); time.sleep(2.6)
-    # 用窗口标题核对目标文件真的打开了（标题形如 '… – UserServiceImpl.java [module]'）
+    # **点首条结果行**开文件（扫掠几个候选 y，首个命中即开）。
+    # 键盘路径实测无效（Down 不动选中、Return 不开文件），坐标路径在本平台可靠。
+    for y in FILE_ROW_YS:
+        pyautogui.click(ROW_X, y); time.sleep(1.4)
+        _, t = ide_hwnd_and_title(ide_pid)
+        if FILE_TITLE_KEY in t and "UserWrite" not in t:
+            print("开文件命中：点 y=%d → %s" % (y, t[:60]))
+            break
+    time.sleep(1.6)
     _, title1 = ide_hwnd_and_title(ide_pid)
-    if FILE_TITLE_KEY not in title1:
-        raise RuntimeError("目标文件未打开（标题仍是 %s）——开文件这一步没生效" % title1[:70])
-    print("目标文件已打开：", title1[:70])
+    if not (FILE_TITLE_KEY in title1 and "UserWrite" not in title1):
+        raise RuntimeError("开文件失败：标题仍为 %s（期望命中 %s）" % (title1[:70], FILE_TITLE_KEY))
+    print("开文件后标题 = %s（命中目标）" % title1[:66])
 
     pyautogui.moveTo(300, 300, duration=0.3); time.sleep(0.5)
     pyautogui.keyDown('esc'); pyautogui.keyUp('esc'); time.sleep(0.8)
@@ -110,17 +122,19 @@ def main():
     pw, ph = popup[2] - popup[0], popup[3] - popup[1]
     img = locate_grab((popup[0], popup[1], pw, ph))
     rx0 = int(pw * 0.45)
-    band = bright_band_y(img, rx0, pw, 0, ph, thr=45.0)
-    if band is None:
-        raise RuntimeError("按钮行未找到（右半幅无亮行带）")
-    row0, row1 = band
-    clusters = bright_band_x(img, max(0, row0 - 4), min(ph, row1 + 5), rx0, pw,
+    # 按钮行 y 用**几何标定**（底边 − 39，与 plan/BASELINE 的实测一致），不用 `bright_band_y`：
+    # 底部这带的**行**均值只有 40~43（面板底色本身 26，但按钮是描边样式、文字稀疏），
+    # 行向阈值法分不出来（实测 thr=45 全幅无亮带）；而**列**均值能把按钮文字聚成亮簇。
+    # ⚠️ 弹窗必须处于**新建态（SQL 视图）**：停在结果态时按钮行会整体上移（实测偏 40px），
+    # 底边−39 就落到按钮下方空白处——所以 prep 里的「关旧窗 + 重开」不是可选项。
+    row_y = ph - 39
+    clusters = bright_band_x(img, max(0, row_y - 14), min(ph, row_y + 14), rx0, pw,
                              thr=45.0, min_gap=14, min_w=8)
     if not clusters:
-        raise RuntimeError("按钮行上未找到亮簇")
-    btn = (popup[0] + (clusters[0][0] + clusters[0][1]) // 2, popup[1] + (row0 + row1) // 2)
-    print("预览弹窗=%s(%dx%d) 按钮行相对 y=%s 亮簇=%s → 点最左簇=%s"
-          % (popup, pw, ph, (row0, row1), clusters[:4], btn))
+        raise RuntimeError("按钮行上未找到亮簇（弹窗可能不在新建态）")
+    btn = (popup[0] + (clusters[0][0] + clusters[0][1]) // 2, popup[1] + row_y)
+    print("预览弹窗=%s(%dx%d) 按钮行 popup y=%d 亮簇=%s → 点最左簇=%s"
+          % (popup, pw, ph, row_y, [(popup[0] + a, popup[0] + b) for a, b in clusters[:4]], btn))
 
     # ---- 录制 ----
     r = Recorder(REGION, OUT)
