@@ -162,3 +162,64 @@
 |---|---|
 | 2026-10-12 | **六项决策点定案（用户「可以按照推荐 A」）**：决策 1 让位区间化＝A（探针记录 `addPlace` range，我方只注入未占用区间；W1 受前提 1 真机读数约束）、决策 2 着色粒度＝A（词法级细着色，不新建第二语言）、决策 3 覆盖面＝A（关键字集统一为 `SqlLexer.KEYWORDS` 超集 + `Dialect` 方言扩展 + IDENTIFIER/OPERATOR 着色）、决策 4 补全批次＝A（一批全做）、决策 5 引用导航＝A（本轮纳入跳转与查找用法，不做报红与重命名）、决策 6 编辑辅助＝A（颜色页/折叠/live template `cd`·`co`/拼写豁免/脏区放大/成对删六项全做）。实施启动=用户另令。 |
 | 2026-10-12 | 立项：O-144 / T-XmlGap 计划生成，依据同日调研报告（第二轮，样本 CHP 3.6.7）；六项决策点待用户定案，未动码 |
+
+## §十 实施记录
+
+### 实施组织（用户 2026-10-12 明令：合并由主控做、减少全量测试次数）
+
+| 项 | 落法 |
+|---|---|
+| 工作树/分支 | `xmlgap`（主控自持：W1/W6/W7）、`xmlgap-hl`（子代理 A1：W2/W3）、`xmlgap-cmpl`（子代理 A2：W4/W5），三者均自 master `c9518e8` 派生 |
+| 内部仓读取 | 按用户指定方式——**绝对路径直读主树** `…/mybatis-plus-sql-visualizer/docs/内部/…`（新工作树不含该嵌套私有仓） |
+| 合并 | 主控执行；A2 一支并入 `4dcb2ef`（**零冲突**，写集不相交） |
+| 测试次数控制 | 各波次只跑定向 `--tests`；全量门禁**全流程只跑一次**（收口阶段）；合并点只做 `compileTestKotlin` 校验，不重复跑测试 |
+
+### 前提 1 结论（W1 解锁依据，静态证据闭环，未打扰用户 IDE）
+
+| 注入器 | 喂入类型 | 用户 IU Ultimate 上活跃？ | 触发我方让位？ |
+|---|---|---|---|
+| 竞品 `P/g` 属性 OGNL | `XmlAttributeValueImpl` | 否（`Profile.getValid()` + `!i.b.c()` 双门） | 否 |
+| 竞品 `P/c` `${}` | `XmlText` | 否（同上双门） | 否 |
+| 竞品 `ak/f` `#{}` | `XmlTextImpl` | 否（`!i.b.c()` 平台门） | 否 |
+| 竞品 `ak/e` 平台轨整标签 | **`XmlTag`**（`Arrays.asList(XmlTag.class)` 实测） | 可能 | **否**（宿主不在我方探测面） |
+| zMyBatis（用户真机同在装） | **无注入器**（右键执行插件，plugin.xml 实测无 multiHostInjector） | — | 否 |
+| 平台 SQL 注入器 | SQL PSI | — | 否 |
+
+竞品社区轨自让位链：`plugin.xml:484` `<depends optional="true" config-file="plugin_database.xml">com.intellij.database</depends>` ⇒ IU 自带 Database 插件 ⇒ `plugin_database.xml:110` 注册 `ultimateVersionChecker` ⇒ `i.b.c()` 为真 ⇒ 三个社区轨注入器整段跳过。
+
+**结论**：用户真机上我方**未被让位**；W1 的价值面是 **Community 版（社区轨注入器活跃）+ 任何未来第三方注入器**，不是当前症状修复。
+
+### W1 让位区间化（主控）
+
+- 新增 `ui/inject/InjectRangePlan.kt`（纯逻辑）：占用区间归一（裁剪 → 扩张到 `#{...}`/`${...}` 整段 → 合并）+ 互补区间计算；扩张是为了不让切割点落在参数定界符中间（竞品 `${}` 注入器只报 `${` 之后到 `}` 之前的区间）。
+- `XmlSynHiGate`：探针 registrar 换成记录 `addPlace` 区间的 `RangeRegistrar`；新增生产入口 `occupiedRanges`（设置开关线 + 布尔缝兼容 + 异常 fail-safe 全覆盖哨兵）；`shouldYield(project, host)` 语义修订为「**整宿主**被占」。
+- `SqlMapperInjector`：按未占用区间注入（单会话多 place），不再整宿主放弃。
+- 顺带订正 `ParamBraceTypedHandler` KDoc（旧述「双让位」与实现不符，实现只查设置开关线）。
+- **自测抓出的设计缺陷（留痕）**：首版 `shouldYield` 判「占用区间非空即让位」——区间形态下这会把「对方只占一个 `#{}`」也判成让位，正好抵消互补收益；由 `XmlSynHiGateRangeTest.testW1_部分占用_不让位` 抓出后修订。第二次由接线用例抓出「布尔缝被 setUp 钉成 false 会短路区间缝」，区间用例补清空布尔缝。
+
+**读数**：`ui.inject + ui.highlight + ui.ref` 定向 **347 例 0 失败 0 错误**（`GRADLE_EXIT=0`）。反向验证位：`testW1_部分占用_不让位`（旧宿主级形态必红）、`testW1_外来占满整宿主_语句文本零着色`（保守线不回归）、`InjectRangePlanTest` 16 例纯逻辑判别位。
+
+### W6 配置文件补全与编辑辅助（主控）
+
+| 件 | 落点 | 硬编码表来源（全部实读 jar，禁凭记忆） |
+|---|---|---|
+| mybatis-config 补全 | `ui/highlight/MybatisConfigCompletionContributor.kt`（独立文件，不改 W4/W5 正在改的主贡献器） | 29 项 `<setting name>`（`XMLConfigBuilder` 常量池；`multipleResultSetsEnabled` 在 3.5.19 **已不存在**）、布尔 13 项、枚举 5 组（`javap` 枚举常量）、`jdbcTypeForNull` 41 项（`JdbcType` 常量）、配置子标签表 |
+| live template | `ui/inject/MybatisSqlTemplateContextType.kt` + `resources/templates/mybatis-sql.xml` | 只做 `cd`（CDATA 骨架）/`co`（foreach 骨架）两个纯骨架；**不含**竞品引导注释类模板 |
+| 编辑脏区放大 | `ui/inject/SqlMapperChangeLocalityDetector.kt` | 收窄到**所属语句标签**（竞品放大到整文件；取舍见 KDoc，防大 mapper 无谓重算） |
+| `#{}`/`${}` 成对删 | `ui/inject/SqlMapperBackspaceHandler.kt` | `charDeleted` 阶段补删（不改平台原有删除语义，回归面最小） |
+| 注入片段拼写豁免 | `ui/inject/SqlMapperSpellcheckingStrategy.kt` | **按注入语言注册**（非 XML 级）——XML 级注册会与平台既有 XML 拼写策略同台竞争，选错优先级即污染所有 XML |
+| 颜色可配置 | **未做**（依赖 W2/W3 的键表） | 待 A1 合并后按新键表补 `colorSettingsPage` |
+| XML 折叠 | **有意不做** | 平台 XML 折叠已覆盖标签折叠，自研 builder 只会与平台抢同一 fold 区、收益为零；若确需竞品式「`select#id` 折叠占位」需先做真机实验 |
+
+### W7 引用导航（主控）
+
+- 新增 `ui/ref/MybatisXmlReferenceContributor.kt` + `ui/ref/MybatisXmlTargets.kt`：九类属性引用——`refid`→`<sql id>`（含跨文件 `ns.id`）、`resultMap`/`extends`/`parameterMap`→对应 id、`namespace`→接口、statement `id`→接口方法、`resultType` 族→`PsiClass`、`jdbcType`→MyBatis `JdbcType` 常量（**按类名运行时解析**，生产依赖图零 mybatis——build.gradle.kts 红线）、`property`→实体字段链。
+- 红线守法：**全部 soft 引用**（目标缺失零报红）+ 零 inspection/annotator（有专门守卫用例扫本包源码禁词）。
+- 复用：mapper 文件清单单槽 TTL 缓存沿用 `log/MapperXmlLocator` 的成熟模式（禁引监听器）。
+
+### 遗留与待真机项（W8 收口）
+
+1. **颜色页**：待 A1 合并后补。
+2. **真机走查**（用户 IU 2026.2，装 CHP 已激活 + zMyBatis）：语句含 `#{}` 时 SQL 关键字着色可见；`#{}`/`${}` 分色；属性值补全；Ctrl+B 九类跳转；live template `cd`/`co` 展开；成对删；拼写不再误标。
+3. **W4/W5 子代理登记的未单测项**（受 Light 沙箱索引限制）：跨文件 `refid`、`<properties>` key 聚合、foreach item 元素字段、`@类@静态成员`——由 W8 收口时评估补测或真机复核。
+4. **全量门禁**：一次（收口阶段，只读收口代理执行）。
