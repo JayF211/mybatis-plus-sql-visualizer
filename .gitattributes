@@ -11,14 +11,11 @@
 *.sh text eol=lf
 *.bash text eol=lf
 
-<<<<<<< HEAD
-=======
 # 必须保持 LF：env 文件（由 `set -a; . file; set +a` 加载，CRLF 会让每个赋值尾部带 \r，
 # 污染值——端口会变成 "7890\r"、路径同理，且报错难定位）。T-LocalEnvOverride 2026-10-10。
 *.env text eol=lf
 *.env.example text eol=lf
 
->>>>>>> master
 # 二进制：不做行尾转换（内容探测之外再显式钉死，避免误判）
 *.jar binary
 *.zip binary
