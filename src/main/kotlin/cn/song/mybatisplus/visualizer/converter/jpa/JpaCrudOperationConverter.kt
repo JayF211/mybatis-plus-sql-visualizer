@@ -20,6 +20,7 @@ import com.intellij.psi.PsiClass
 import com.intellij.psi.PsiClassObjectAccessExpression
 import com.intellij.psi.PsiClassType
 import com.intellij.psi.PsiExpression
+import com.intellij.psi.PsiMethod
 import com.intellij.psi.PsiMethodCallExpression
 import com.intellij.psi.PsiReferenceExpression
 import com.intellij.psi.PsiVariable
@@ -202,6 +203,34 @@ object JpaCrudOperationConverter {
         convertInternal(call, resolveVariables)
     }.getOrNull()
 
+    /**
+     * F-1 修复：**声明行**入口——光标落在 Repository 接口方法声明上时预览（无调用表达式，
+     * [convert] 永不认领）。
+     *
+     * 缺口形态（2026-10-12 演示录制中发现，诊断报告 `docs/调研报告/20261012-0900-*`）：
+     * `deleteAllInBatch()` 这类 bulk 形态在派生查询线（不含 `By`、`*All` 词干白名单不放行 `InBatch`）
+     * 与 CRUD 转换线（只收 PsiMethodCallExpression）**双缝隙**下零可达——而模板在转换层是完整的。
+     *
+     * 语义：声明行无实参可静态求值，一律按 `?` 占位呈现（与 `resolveVariables=false` 同口径）；
+     * 非 Repository 接口 / 方法名不在本线 / 实体不可解析时返回 null（负例守卫，交回既有回落链）。
+     */
+    fun convertRepositoryDeclaration(method: PsiMethod, resolveVariables: Boolean = true): JpaCrudPreview? =
+        runCatching {
+            val iface = method.containingClass ?: return@runCatching null
+            if (!iface.isInterface) return@runCatching null
+            val methodName = method.name
+            if (methodName !in REPOSITORY_METHODS) return@runCatching null
+            val entityClass = resolveRepositoryEntityFromClass(iface) ?: return@runCatching null
+            val table = JpaEntityResolver().resolve(entityClass)
+            if (table.entityClassName.isBlank()) return@runCatching null
+            val dialect = currentDialect()
+            val idColumn = table.columns.firstOrNull { it.isId }
+            val build = buildRepositoryMethod(
+                methodName, table, idColumn, emptyArray(), "", dialect, resolveVariables,
+            ) ?: return@runCatching null
+            previewOf(methodName, table, build)
+        }.getOrNull()
+
     // ------------------------------------------------------------------
     // 派发（receiver 家族 → 各语义线）
     // ------------------------------------------------------------------
@@ -261,7 +290,18 @@ object JpaCrudOperationConverter {
      */
     private fun resolveRepositoryEntity(call: PsiMethodCallExpression): PsiClass? {
         val varType = receiverClassType(call.methodExpression.qualifierExpression ?: return null) ?: return null
-        val clazz = varType.resolve()
+        return resolveRepositoryEntityFromClass(varType.resolve(), varType)
+    }
+
+    /**
+     * F-1 修复：从 **PsiClass** 解析 Repository 实体（声明行入口复用）。
+     *
+     * 与调用点同一条严格判定：沿 superType 找 Spring Data 基类（[REPOSITORY_BASE_TYPES] /
+     * [REPOSITORY_BASE_SIMPLE_NAMES]）的第一个类型参数；[fallbackType] 非空时再回退其自身
+     * 第一个泛型参数（变量形态）。**非 Repository 接口返回 null**——声明行入口据此做负例守卫，
+     * 不会把普通接口方法（如 `stream.count()`）误认成 CRUD。
+     */
+    private fun resolveRepositoryEntityFromClass(clazz: PsiClass?, fallbackType: PsiClassType? = null): PsiClass? {
         if (clazz != null) {
             for (superType in clazz.superTypes) {
                 val canonical = superType.canonicalText ?: continue
@@ -272,8 +312,8 @@ object JpaCrudOperationConverter {
                 }
             }
         }
-        // 兜底：变量类型自身第一个泛型参数（UserRepository<User> 变量形态 / 基类不可解析场景）
-        return (varType.parameters.firstOrNull() as? PsiClassType)?.resolve()
+        // 兜底：类型自身第一个泛型参数（UserRepository<User> 变量形态 / 基类不可解析场景）
+        return (fallbackType?.parameters?.firstOrNull() as? PsiClassType)?.resolve()
     }
 
     // ------------------------------------------------------------------
@@ -293,8 +333,31 @@ object JpaCrudOperationConverter {
         val idColumn = table.columns.firstOrNull { it.isId }
         val args = call.argumentList.expressions
         val prefix = columnParamPrefix(call)
+        val build = buildRepositoryMethod(methodName, table, idColumn, args, prefix, dialect, resolveVariables)
+            ?: return null
+        return previewOf(methodName, table, build)
+    }
 
-        val build: Build = when (methodName) {
+    /**
+     * F-1 修复：Repository 方法名 → 模板主体（调用点与**声明行**共用同一条语义线）。
+     *
+     * 抽出原因：声明行没有 `PsiMethodCallExpression`，[convert] 与调用点回落都永不认领
+     * （`deleteAllInBatch` 这类 bulk 形态因此在声明行零可达）。本函数只依赖
+     * 「方法名 + 表 + 主键列 + 实参 + 前缀」，两条入口都能构造。
+     *
+     * @param args 实参数组；声明行入口传 emptyArray（静态不可得，一律 `?` 占位）
+     * @param prefix 列参数前缀；声明行入口传空串
+     * @return 模板主体；方法名不在本线或缺少必要上下文时 null
+     */
+    private fun buildRepositoryMethod(
+        methodName: String,
+        table: TableInfo,
+        idColumn: ColumnInfo?,
+        args: Array<PsiExpression>,
+        prefix: String,
+        dialect: Dialect,
+        resolveVariables: Boolean,
+    ): Build? = when (methodName) {
             "save" -> insertBuild(table, prefix, dialect).let {
                 it.copy(notes = it.notes + "save：isNew 判定——新实体 INSERT / 已存在 UPDATE（静态统一按 INSERT 呈现）")
             }
@@ -420,10 +483,8 @@ object JpaCrudOperationConverter {
                 sql = "",
                 notes = listOf("flush()：无独立 SQL——脏检查批量刷写，将挂起的 INSERT/UPDATE/DELETE 一次性落库"),
             )
-            else -> return null
+            else -> null
         }
-        return previewOf(methodName, table, build)
-    }
 
     // ------------------------------------------------------------------
     // T-J6：EntityManager 写/单查

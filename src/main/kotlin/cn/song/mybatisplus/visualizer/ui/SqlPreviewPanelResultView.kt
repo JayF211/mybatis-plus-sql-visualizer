@@ -194,7 +194,9 @@ internal fun SqlPreviewPanel.showResult(result: PreviewResult) {
  */
 
 internal fun SqlPreviewPanel.updateDiagramTab(result: PreviewResult) {
-    val statement = result.previewModel?.statement
+    // F-1 修复：previewModel 仅在「有动态条件」时才构造（无条件联表链为 null），故图判据先看它、
+    // 缺失时回落到独立的 diagramStatement 载体——否则无条件的 JOIN 链拿不到「JOIN 图」标签页。
+    val statement = result.previewModel?.statement ?: result.diagramStatement
     val hasJoins = statement is SelectStatement && statement.joins.isNotEmpty()
     if (hasJoins) {
         // 确保内容区已切换为标签页模式

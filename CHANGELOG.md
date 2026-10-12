@@ -9,6 +9,9 @@
 - 调用栈弹层锚点跟随悬停落点（原只在 mouseEntered 赋值边缘穿越点，弹层位置随进入方向漂移）
 - 实体选择弹窗（SQL→Java / CRUD 预览的「选择要预览的 SQL」）候选副标题改为完整限定类名——原先只显示文件名，不同包/模块的同名实体（如多模块工程的两处 User.java）无法区分
 - 「未在光标处找到可预览 SQL 源」提示文案动态化——旧文案只提 MyBatis-Plus Wrapper/IService，未覆盖插件现已支持的 mapper XML / 注解 SQL / MPJ / JPA / Hibernate / JdbcTemplate 等类型面，指引失真
+- JOIN 图标签页在**无动态条件的联表链**上不出现（MPJ `selectAll + leftJoin + fill` 这类链没有 `eq/like`，`previewModel` 为 null 而图判据原先只认它——预览出 SQL 却没有「JOIN 图」页签；带条件的同结构链才有）——新增 `PreviewResult.diagramStatement` 独立载体，图判据与「是否走模型级重渲染」解耦，旧渲染路径零改动（JPA 联表派生查询同款缺口一并覆盖）
+- 参数回填在**切换逻辑删除 / 多租户注入开关**后丢失（历史缓存键原为 `表名:SHA-256(SQL 全文)`，拦截器模拟会改写 SQL 文本——键一变召回 miss，已回填的实值退回占位符，防抖后新键还会以空值覆盖落库）——新增 `PreviewResult.historyFingerprintSeed` 承载**注入前**语句文本，面板算键优先用它
+- `deleteAllInBatch()` 这类 bulk 写路径在 **Repository 接口声明行**光标下无法预览（方法名不含 `By` 且 `*All` 词干白名单不放行 `InBatch` 结尾 → 派生查询线不认；无 `PsiMethodCallExpression` → CRUD 转换线不认；模板本身是完整的，只是两条通道都够不着）——新增声明行入口 `JpaCrudOperationConverter.convertRepositoryDeclaration` + `SqlPreviewService.previewRepositoryDeclaration`，动作回落链补第 5 步
 - JOIN 图主表节点字段没带数据库 COMMENT（多数据源下跨库同名表：`@TableName("\"user\"")` 的主表被注册序在前的 `jpa_demo.user` 撞上——那张同名表 9 列且注释全空，而副表只有本库有、解析正常）——整图富化改为**句内同来源**批量取数：先逐表按名解析，再按「各来源持有本句表的数量」投票选主来源，少数来源持有的表若主来源也有则改判给主来源（主来源没有的表仍逐表回落，跨库联接不受影响）
 
 

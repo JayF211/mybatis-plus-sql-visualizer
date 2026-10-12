@@ -206,6 +206,36 @@ class SqlPreviewService(internal val project: Project) {
      * @param anchor 光标处 / 悬停处的 PSI 元素
      * @return 预览结果；两者均未命中时返回 null
      */
+    /**
+     * F-1 修复：Repository **接口方法声明行**预览（无调用表达式，[preview] 的批量/JPA 管线永不认领）。
+     *
+     * 缺口形态（2026-10-12 演示录制中发现，诊断报告 `docs/调研报告/20261012-0900-*`）：
+     * `deleteAllInBatch()` 这类 bulk 形态既不在派生查询线（不含 `By`、`*All` 词干白名单不放行
+     * `InBatch`），也没有调用表达式给 CRUD 转换线——声明行光标下零可达，而模板在转换层完整存在。
+     *
+     * 语义与调用点 CRUD 线一致（同一 `buildRepositoryMethod` 模板），差别只有：声明行无实参可静态
+     * 求值，一律 `?` 占位。非 Repository 接口 / 方法名不在名单 / 实体不可解析 → null（交回回落链）。
+     */
+    fun previewRepositoryDeclaration(method: PsiMethod): PreviewResult? {
+        val jpaCrud = JpaCrudOperationConverter.convertRepositoryDeclaration(
+            method,
+            resolveVariables = effectiveReplaceParams(),
+        ) ?: return null
+        val result = PreviewResult(
+            sql = jpaCrud.sql,
+            compactSql = jpaCrud.sql,
+            unresolvedParams = jpaCrud.paramSources,
+            paramTable = jpaCrud.paramGroups,
+            wrapperType = null,
+            tableName = jpaCrud.tableName,
+            warning = jpaCrud.warning,
+            paramHints = jpaCrud.paramHints,
+            batchModel = jpaCrud.batchModel,
+        )
+        recordHistory(result, method)
+        return result
+    }
+
     fun preview(anchor: PsiElement): PreviewResult? {
         // JDBC 模板 SQL 字符串预览（正向）：queryForList/update 等方法的字符串 SQL 实参 → 预览
         // 放在最前：JDBC 分支不写 Wrapper 缓存、不依赖实体解析，与既有路径完全隔离
@@ -306,6 +336,10 @@ class SqlPreviewService(internal val project: Project) {
                 // T-FS-04：显式传本服务绑定的 project（converter 内类名兜底推断的项目级表配置口径）
                 else -> ConverterRegistry.convert(located.chain, table, project) ?: return null
             }
+            // 缺陷②修复：参数历史键指纹取「注入前」语句文本——下面这一串注入（逻辑删除 / 乐观锁 /
+            // 多租户 / 数据权限 / 分页 LIMIT）都会改写 SQL 文本，而历史键原先是 SHA-256(SQL 全文)，
+            // 用户一开这些开关键就变 → 已回填参数召回 miss 退回占位符（且防抖后新键以空值覆盖落库）。
+            val historyFingerprintSeed = SqlGenerator.generate(statement, compact = true, dialect = currentDialect())
             // T-M15-07：逻辑删除注入（@TableLogic 实体 + 配置开启）——查询/计数/exists/删除自动追加 `AND deleted = 0`
             // （对齐 MyBatis-Plus 全局 logic-delete-field 配置；UPDATE 不注入——更新可能修改 deleted 本身）
             // T-M20-05（P1-01 语义修正）：MPJ 六方法按源码顺序求值——主表/副表逻辑删除独立开关，
@@ -350,7 +384,10 @@ class SqlPreviewService(internal val project: Project) {
             // R12 T-PaginationSim：分页 COUNT 包裹预览（D1=A 预览附第二条语句；D2=A 基础包裹形态；
             // D3=A searchCount=false 跳过；count/exists 消费不产 COUNT——复用 T-M29-02/03 分页消费口径）
             val countSql = paginationCountSql(located.chain, pagedStatement)
-            val result = buildPreviewResult(located.chain.wrapperType, table, pagedStatement, countSql)
+            val result = buildPreviewResult(
+                located.chain.wrapperType, table, pagedStatement, countSql,
+                historyFingerprintSeed = historyFingerprintSeed,
+            )
             recordHistory(result, anchor)
             // exists 消费：外层包裹 SELECT EXISTS（对齐 MP 3.5.15 BaseMapper.exists 语义）
             return if (located.chain.existsConsumed && located.chain.wrapperType.isQueryLike()) {
