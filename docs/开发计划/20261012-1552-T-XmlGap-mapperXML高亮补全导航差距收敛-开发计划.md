@@ -209,7 +209,7 @@
 | `#{}`/`${}` 成对删 | `ui/inject/SqlMapperBackspaceHandler.kt` | `charDeleted` 阶段补删（不改平台原有删除语义，回归面最小） |
 | 注入片段拼写豁免 | `ui/inject/SqlMapperSpellcheckingStrategy.kt` | **按注入语言注册**（非 XML 级）——XML 级注册会与平台既有 XML 拼写策略同台竞争，选错优先级即污染所有 XML |
 | 颜色可配置 | **未做**（依赖 W2/W3 的键表） | 待 A1 合并后按新键表补 `colorSettingsPage` |
-| XML 折叠 | **有意不做** | 平台 XML 折叠已覆盖标签折叠，自研 builder 只会与平台抢同一 fold 区、收益为零；若确需竞品式「`select#id` 折叠占位」需先做真机实验 |
+| XML 折叠 | **已做**（`ui/inject/SqlMapperFoldingBuilder.kt` + `<lang.foldingBuilder language="XML" order="first">`） | 平台自带 `XmlFoldingBuilder`（基类 `XmlCodeFoldingBuilder`）**已**为 XML 标签建 fold 区、占位为标签名本身（javap 实证；`isCollapseXmlTags` 只控制默认折叠与否）。故本类的增量＝**把占位换成 `标签名#id`**（`select#findById`，长 mapper 折叠后一眼认出是哪个语句），作用面刻意收窄到：仅 mapper 文件、仅语句标签与带 id 的 `<sql>`、仅跨多行标签、不自带默认折叠。与平台区同范围时的占位优先级属渲染期行为 → 列入真机走查项 |
 
 ### W7 引用导航（主控）
 
@@ -243,6 +243,12 @@
 |---|---|---|
 | **红** | 把 `shouldYield` 改回「占用非空即让位」、注入器改回宿主级 `return`（`RED PROBE` 留痕） | `XmlSynHiGateRangeTest` 10 例 **1 红**（`testW1_部分占用_不让位`）；`SqlMapperInjectorWiringTest` 7 例 **1 红**（`testW1_外来只占参数区间_我方仍注入余下区间`）；其余 15 例仍绿 ⇒ 探针**精准**（非成片失败） |
 | **绿** | `git checkout` 还原两文件（`grep "RED PROBE"` 命中 0） | 两类 **17 例 0 失败**（`EXIT=0`） |
+
+### 折叠 builder（W6 补齐，主控）
+
+- `ui/inject/SqlMapperFoldingBuilder.kt` + `<lang.foldingBuilder language="XML" order="first">` EP；测试 `SqlMapperFoldingBuilderTest` 8 例 0 失败（多行语句建区且占位 `select#findById`、单行/无 id/非 mapper/resultMap 族零区、不自动折叠、EP 接线守卫）。
+- 设计前提已写进类 KDoc：平台 `XmlCodeFoldingBuilder` **已**为 XML 标签建 fold 区（占位＝标签名），本类的增量是**带 id 的占位**，不是「让标签可折叠」；作用面收窄以免与平台抢 fold 区。
+- 首跑编译红一次：`FoldingBuilder.getPlaceholderText(ASTNode)` 是接口抽象成员（`FoldingBuilderEx` 只提供二参重载）→ 补实现后绿。
 
 ### 全量门禁与兼容校验读数（收口）
 

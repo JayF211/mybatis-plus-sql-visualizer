@@ -391,6 +391,10 @@
                               implementationClass="cn.song.mybatisplus.visualizer.ui.inject.SqlMapperSpellcheckingStrategy"/>
         <!-- T-XmlGap W6：注入语言的颜色设置页（14 键可调；此前颜色只借平台语义槽，用户只能改全局主题） -->
         <colorSettingsPage implementation="cn.song.mybatisplus.visualizer.ui.inject.SqlMapperColorSettingsPage"/>
+        <!-- T-XmlGap W6：mapper 语句标签的带 id 折叠（平台已为 XML 标签建区、占位为标签名本身；
+             本类只把占位换成 `select#id`，作用面收窄到 mapper 文件的语句标签/<sql> 且跨多行） -->
+        <lang.foldingBuilder language="XML" order="first"
+                             implementationClass="cn.song.mybatisplus.visualizer.ui.inject.SqlMapperFoldingBuilder"/>
     </extensions>
 
     <!-- T-M53：Kotlin plugin mode 声明——本插件只用 Kotlin PSI（gutter 标记），不涉及 Analysis API，
