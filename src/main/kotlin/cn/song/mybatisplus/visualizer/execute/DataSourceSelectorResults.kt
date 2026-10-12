@@ -851,6 +851,43 @@ internal fun DataSourceSelector.afterSubmitted(
         }
     }, com.intellij.openapi.application.ModalityState.any())
 }
+/**
+ * ★A48：结果换入判定（纯函数，[refreshResultsComponent] 每拍调用）——在既有三条判据
+ * （强制首换 / 组件实例变化 / 结果页签名称集合变化）之外补**第四判据：已换入组件被 DBN 挂回原生宿主**。
+ *
+ * 根因（M36.5.43 沙盒实证，见 [swapResultIntoPersistentConsole] KDoc）：DBN 结果区组件的
+ * 「长期老家」是 `ServiceViewComponentWrapper`，DBN 在**本次提交新建结果页签**时会把它重新
+ * 挂回该宿主（同一实例，仅 parent 变）。原判据只比较**组件身份**（`live !== lastLiveResultSwapped`）
+ * 与**页签名称集合**——re-parent 两者都不变，判据恒 false，SplitPane 底部因此滞留空组件，
+ * 结果只落在 IDE 底部原生控制台（用户实证「同一会话第一次点执行预览窗内看不到结果，再点一次
+ * 才有」）。复用旧页签路径不新建内容、不触发挂父，故不中招——与两次执行日志对照一致
+ * （newTab=true 坏 / newTab=false 好）。M36.5.43 声称的「被 DBN 抢走则下拍换回」正是该判据，
+ * 但身份去重把它短路成了**一次性换入**。
+ *
+ * @param host        持久整控台 SplitPane（换入目标；非分栏形态传 null）
+ * @param hostBottom  [host] 当前底部组件
+ * @param live        本拍从 `ui.getComponent()` 取到的结果组件
+ * @param lastSwapped 上一次换入的组件（去重基线）
+ * @return true = 本拍需要（重新）换入
+ */
+internal fun DataSourceSelector.resultSwapNeeded(
+    host: java.awt.Component?,
+    hostBottom: java.awt.Component?,
+    live: java.awt.Component?,
+    lastSwapped: java.awt.Component?,
+    namesChanged: Boolean,
+    forceSwapIn: Boolean,
+    alreadySwapped: Boolean,
+): Boolean {
+    if (live == null) return false
+    if (forceSwapIn && !alreadySwapped) return true
+    if (live !== lastSwapped) return true
+    if (namesChanged) return true
+    // 第四判据：身份/名称都未变，但组件已不在本 SplitPane 底部（被 DBN 挂回原生宿主）——
+    // 身份去重看不见 re-parent，须按「仍在位」判定，幂等重挂回底部。
+    return host != null && (hostBottom !== live || live.parent !== host)
+}
+
 /** 读取 RunnerLayoutUi 当前全部结果内容（排除 Output/输出）。 */
 
 internal fun DataSourceSelector.refreshResultsComponent(ui: Any, LOG: com.intellij.openapi.diagnostic.Logger, forceSwapIn: Boolean = false, generation: Int = swapGeneration, onError: ((String) -> Unit)? = null, onErrorRich: ((ExecutionErrorInfo) -> Unit)? = null, sqlText: String? = null) {
@@ -904,7 +941,20 @@ internal fun DataSourceSelector.refreshResultsComponent(ui: Any, LOG: com.intell
             val live = runCatching {
                 ui.javaClass.getMethod("getComponent").invoke(ui) as? javax.swing.JComponent
             }.getOrNull()
-            val shouldSwap = live != null && (forceSwapIn && !swapped || live !== lastLiveResultSwapped || namesChanged)
+            // ★A48：第四判据（re-parent 回收）参与换入决策——详见 resultSwapNeeded KDoc。
+            val host = sharedFullComponent
+            val instanceChanged = live !== lastLiveResultSwapped
+            val shouldSwap = resultSwapNeeded(
+                host = host,
+                hostBottom = (host as? javax.swing.JSplitPane)?.bottomComponent,
+                live = live,
+                lastSwapped = lastLiveResultSwapped,
+                namesChanged = namesChanged,
+                forceSwapIn = forceSwapIn,
+                alreadySwapped = swapped,
+            )
+            // 仅第四判据为真 = 身份与名称都没变、组件被 DBN 挂回原生宿主 → 本拍是「回收重挂」
+            val reclaimed = shouldSwap && !(forceSwapIn && !swapped) && !instanceChanged && !namesChanged
             if (shouldSwap && live != null) {
                 // M36.5.41-A4：持久整控台原位换底（不重建 SplitPane，身份稳定）；
                 // M36.5.43：swap 助手不再返回 null（强制换入），持久容器缺失时回退
@@ -920,7 +970,7 @@ internal fun DataSourceSelector.refreshResultsComponent(ui: Any, LOG: com.intell
                     // Timer 回调已在 EDT，直接换入（模态 pump 中 Timer 照常 fire）
                     cb.invoke(full)
                 }
-                LOG.info("[M36] results refreshed (tick=$ticks, forced=$forceSwapIn, instanceChanged=$changed, namesChanged=$namesChanged, gen=$generation)")
+                LOG.info("[M36] results refreshed (tick=$ticks, forced=$forceSwapIn, instanceChanged=$changed, namesChanged=$namesChanged, reclaimed=$reclaimed, gen=$generation)")
             }
             if (ticks >= 8) {
                 timer.stop()
@@ -1397,6 +1447,10 @@ internal fun DataSourceSelector.swapResultIntoPersistentConsole(
     }
     // 强制换入：从 DBN 宿主（ServiceView 等）摘出，挂回本 SplitPane 底部。
     if (current != null) sp.remove(current)
+    // ★A48：显式从**外部宿主**摘出——DBN 在新建结果页签时会把结果组件重新挂回
+    // ServiceViewComponentWrapper（同一实例、仅 parent 变），不摘会让组件继续留在原生宿主
+    // （预览窗内空白、结果只出现在 IDE 底部原生控制台）。parent 为 sp/无父时本行 no-op。
+    (liveResult.parent)?.takeIf { it !== sp }?.remove(liveResult)
     sp.bottomComponent = liveResult
     // M36.5.64：换入路径也设 bottom 最小高度——防 JSplitPane 重排时把结果区压回 preferred。
     liveResult.minimumSize = java.awt.Dimension(

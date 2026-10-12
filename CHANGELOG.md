@@ -8,6 +8,7 @@
 - **方言引号不匹配静态告警（T-DialectQuoteWarn，静态规则第 21 条 `dialect_quote_mismatch`）**：SQL 里的标识符用了当前方言不接受的引号字符时给出告警（如 MySQL 方言下出现 `FROM "user" t`）。`@TableName("\"user\"")` 这类达梦风格双引号在 MySQL 真机会报 `[42000][1064]`，插件此前只是如实画出。**只报告不改写**：渲染的仍是 MyBatis-Plus 真实发出的 SQL（改写会让预览偏离真机、把用户代码里的真 bug 静默抹平）。告警同时流到预览面板静态规则区与 MCP `sqlv_perf_advice`；方言从项目设置解析，取不到时不判定（不硬编码 MySQL）。判据按各方言实际宽容度定：SQL Server 的 `QUOTED_IDENTIFIER` 默认 ON（双引号合法）、SQLite/H2 收多种引号，避免误报。**（T-DialectQuoteWarn §十二 调整）**「MySQL 家族（MySQL/MariaDB/OceanBase）+ 双引号」这一档不再一律报 ERROR——双引号是否为标识符取决于连接 `sql_mode` 是否含 `ANSI_QUOTES`，而数据源 URL **只能证明「合法」不能证明「非法」**（URL 未声明该项时服务端全局仍可能开着）：预览按绑定数据源（活控制台 > last-used 记忆）的 URL 取该三态，确知声明了才不报，已知未声明或未知都降级为**带前提的 WARN**（缓存键含该三态，避免串味）；PG/Oracle/DM/KingBase/openGauss 遇反引号、非 SQL Server 遇方括号等无歧义档仍报 ERROR
 
 ### Fixed
+- **同一会话首次点「执行 SQL」时预览窗内看不到结果、再点一次才有（★A48）**：DBN 新建结果页签时会把结果区组件重新挂回原生宿主 `ServiceViewComponentWrapper`，同一实例、仅 parent 变；而结果换入去重只比较组件身份与页签名称集合，re-parent 两者都不变，判据恒 false，SplitPane 底部滞留空组件，结果只落到 IDE 底部原生控制台。复用旧页签路径不新建内容、不触发挂父，这正是「第一次坏、第二次好」的成因。修法：换入判定补第四判据「组件已不在本 SplitPane 底部」，每拍按仍在位做幂等回收重挂，强制换入时并从外部宿主显式摘出而不再依赖 Swing 隐式改父；既有三条判据、错误上报、dumb 宽窗口与 swapGeneration 语义均不变
 - 调用栈悬停弹层视口按全量帧数放开（JList 默认 8 行把链尾业务帧折叠进滚动区，「默认锚定最深业务帧、一眼看到 Controller → Service」落空）
 - 调用栈弹层锚点跟随悬停落点（原只在 mouseEntered 赋值边缘穿越点，弹层位置随进入方向漂移）
 - 实体选择弹窗（SQL→Java / CRUD 预览的「选择要预览的 SQL」）候选副标题改为完整限定类名——原先只显示文件名，不同包/模块的同名实体（如多模块工程的两处 User.java）无法区分
