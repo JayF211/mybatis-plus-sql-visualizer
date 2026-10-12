@@ -167,3 +167,27 @@ SQL」是本插件不可让渡的承诺；更糟的是会把用户代码里的�
 - 站点侧（另一仓 `mybatis-plus-sql-visualizer-docs`）「20 条→21 条」同步按 §九 属后续独立任务，未动。
 - 插件内 MCP 工具描述与「No performance findings」文案的 20→21 计数已顺带更新（属本仓调用点文件）。
 - 未跑全量测试/构建校验（按任务约定）；未部署、未 push。
+
+## 十一、勘正（2026-10-12，实施后复核发现——§一 有一条结论是错的）
+
+**§一 写「demo 这条查询在真机上本来就跑不通」，不成立。** 事实是：
+
+- 应用侧 `mybatis-plus-join-demo/src/main/resources/application.yml` 的 MySQL URL **带** `sessionVariables=sql_mode=ANSI_QUOTES`；
+- `UserDO` 的注释写明了这是**刻意设计**：「user 在达梦是保留字，统一带双引号引用；MySQL 侧由 jdbc url 的 sql_mode=ANSI_QUOTES 保证双引号同样按标识符解析」。
+
+即**应用连接下这条 SQL 合法、跑得通**。我遇到的 1064 来自 **IDE 数据源那一侧**：`.idea/dataSources.xml` 里
+`mpj_demo@localhost` 的 URL **没有** `sessionVariables=sql_mode=ANSI_QUOTES`，与应用 URL 不一致（`.idea/` 在本仓
+gitignore，属本机 IDE 状态，非仓库内容）。**上一轮据此得出的「插件忠实反映了一个真 bug」这个判断也需要一起收回**：
+准确说法是「插件忠实反映了**某条连接的**解析结果」，而连接选项（sql_mode）会改变同一段 SQL 的合法性。
+
+**对规则设计的影响（重要，待定夺）**：`dialect_quote_mismatch` 把「MySQL + 双引号」判为 ERROR，但插件在预览阶段
+**无法确知目标连接的 sql_mode**；开了 `ANSI_QUOTES` 时这是合法写法——**本项目的 demo 恰好就是这种写法**，
+故当前规则会在这种场景误报 ERROR。可选处置（三选一，未实施）：
+
+1. **文案补前提 + 降级为 WARN**：「若目标连接未开 `ANSI_QUOTES` 则会报语法错」——最省，且不假装知道连接选项；
+2. **读数据源 URL 判断 sql_mode**：预览面板已有「数据源（上次使用）」上下文，确知未开才报 ERROR——更准，但要接线；
+3. **只保留无歧义档**：PG/Oracle/DM/KingBase/openGauss 遇反引号、非 SQL Server 遇方括号这类一定报错的档，
+   去掉「MySQL + 双引号」这一档。
+
+**另**：§一 表里三行取证本身没错（MP/MPJ 确实原样拼接、MySQL 默认 sql_mode 下确实报 1064），错的是**由此推出
+「demo 坏了」的那一步**——缺了「连接选项会改变结论」这个变量。
