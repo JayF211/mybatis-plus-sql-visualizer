@@ -231,6 +231,7 @@
 - 硬编码表全部实读（`javap` + `unzip -p … mybatis-3-mapper.dtd`）：7 键与调研报告 §3.2 逐项一致；jdbcType 按前提 8 用 **41 项全枚举**（非报告里的 16 项）。
 - **未单测项（受 Light 沙箱索引限制，如实登记）**：跨文件 `refid`、`<properties>` key 聚合、foreach item 元素字段、`@类@静态成员`——由 W8 收口评估补测或真机复核。
 - 口径差异（已登记）：计划 §六「空候选属性给布尔/枚举」与派活「`timeout` 等数值属性不产候选」冲突，按后者实现（数值属性无枚举语义）。
+- **主控复核「既有断言是否被削弱」**（仓库红线）：`XmlSqlCompletionContributorTest` 两处随扩面更新——`collection` 那条仍以 `take(8)` **精确钉住**新增变量后的前八项顺序（未削弱，反而把新顺序写进了契约）；`test` 那条由「全量等于 3 项」放宽为「前 3 项 + 含 `_databaseId`」，**尾部不再钉全量**属轻微放宽，已由新增 `XmlSqlCompletionW4W5Test`（29 例）覆盖全量面，接受。
 
 ### 颜色设置页（W6 收尾，主控）
 
@@ -242,6 +243,22 @@
 |---|---|---|
 | **红** | 把 `shouldYield` 改回「占用非空即让位」、注入器改回宿主级 `return`（`RED PROBE` 留痕） | `XmlSynHiGateRangeTest` 10 例 **1 红**（`testW1_部分占用_不让位`）；`SqlMapperInjectorWiringTest` 7 例 **1 红**（`testW1_外来只占参数区间_我方仍注入余下区间`）；其余 15 例仍绿 ⇒ 探针**精准**（非成片失败） |
 | **绿** | `git checkout` 还原两文件（`grep "RED PROBE"` 命中 0） | 两类 **17 例 0 失败**（`EXIT=0`） |
+
+### 全量门禁与兼容校验读数（收口）
+
+| 项 | 读数 |
+|---|---|
+| `testShards` 首轮（只读收口代理，未清测试产物） | **FAILED 5m 2s**；5 片 1439/1585/1225/1401/1297 = **6947 例 / 2 失败 / 0 错误 / 8 skipped / 629 类** |
+| ├ 失败 1（shard2，**真红**） | `GuardSelfTestCoverageMetaGuardTest.磁盘守卫类必须全部登记_防新守卫类整体脱离扫描面`：W3 新增 `ui/inject/SqlMapperKeywordCoverageGuardTest.kt` 未登记进 `GUARD_CLASSES`（整体脱离自证覆盖率扫描面）→ **已修 `7a97a77`**（按登记表口径补登，判定内核内联于用例故 `decisionFns` 留空 + 写明依据与灵敏度实测） |
+| └ 失败 2（shard4，**陈旧测试字节码**） | `SqlTextAnalysisTest.strip后where内裸列补全产出主表列` → `NoSuchMethodError`（旧 3 参 `sqlCompletions` 重载）：W4/W5 给该公开方法加了 2 个默认参数，旧 3 参 JVM 重载随之消失，而 `compileTestKotlin` 判 UP-TO-DATE 未重编 → 测试类停在旧 ABI。**主控独立复核**：源码侧 3 参调用对新签名合法（`SqlTextAnalysisTest.kt:266`），属本仓已登记的假失败形态（改带默认参数后旧测试类 NoSuchMethodError） |
+| `testShards` 复跑（清 `build/classes/kotlin/test` 强制重编，**非 `clean`**） | **BUILD SUCCESSFUL 5m 15s，EXIT=0**；5 片 1520/1272/1392/1364/1399 = **6947 例 0 失败 0 错误 8 skipped** |
+| `verifyPlugin`（IPGP，收口代理） | 任务非零退出，但三目标 verdict 逐字 `Compatible.`（243：4 removal/29 deprecated/98 experimental；253：5/36/96；262：7/97/96）。非零退出源自项目既有 `failureLevel` 口径（`FailureLevel.entries - COMPATIBILITY_PROBLEMS`，把 DEPRECATED/EXPERIMENTAL/MISSING_DEPENDENCIES 也算失败），**非兼容性问题**；`MISSING_DEPENDENCIES` 两条（`com.intellij.ml.llm`/`com.intellij.mcpServer`）均为既有 `depends optional` |
+| `verifyGate`（**权威**兼容门禁：直驱 verifier-cli，`-offline` + `-ignored-problems`，判定只看退出码） | **BUILD SUCCESSFUL 2m 8s，EXIT=0**；三目标 verdict 同上（主控**独立读 `build/reports/pluginVerifierGate/` 产物**复核，非采信自述） |
+| 本批次新增 API 面 | `com.intellij.lexer.RestartableLexer`（2 处覆写）在三目标均记 **EXPERIMENTAL 使用提示**、verdict 仍 `Compatible`；全文无 `override-only`、无未知 EP 告警 |
+| 喂入税性能守卫 | `XmlSynHiGateYieldCostTest`（900+ 喂入元素、断言整 pass 零 app 级服务查找 + 反向验证位）在定向批次内绿 ⇒ W1 的区间探针**未破坏**喂入税纪律（设置快照仍在最前短路） |
+| W8 熔断阈值测试（本轮补齐） | 新增 `ui/inject/XmlSynHiFuseTest`（4 例 0 失败）：语句文本 100_000 边界两侧（恰等放行 / 超一熔断）、属性值 4096 边界、非 mapper 根守卫（语句侧经 `allowStatementText`、属性值侧经 `inMapperFile`——`allowAttributeValue` 本身不含文件上下文，测试首跑抓出该判据归属写错并已修正） |
+
+**门禁时效性说明**：`testShards` 复跑与 `verifyGate` 的读数对应提交 `7a97a77`；其后仅新增**测试类** `XmlSynHiFuseTest`（零生产代码改动），已定向验证绿——如需严格同树对账，下次门禁即覆盖。
 
 ### 遗留与待真机项（W8 收口）
 
