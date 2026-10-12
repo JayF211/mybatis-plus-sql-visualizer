@@ -290,6 +290,18 @@
 
 **沙盒清理核验**：两轮走查均以 `Alt+F4` 逐级关闭（模态 → 项目信任框 → 欢迎页 → Confirm Exit）后 `runIde` 任务正常结束（exit 0）；`Get-CimInstance` 按命令行过滤 `xmlgap`/`idea-sandbox`/`MPSV` **零残留**（记忆里「强停 gradle 不带走进程 ⇒ 下次 runIde 目录锁失败」的坑两轮均避开）。
 
+### 收口发现的覆盖缺口：配置缓存 × 分片清单（**空绿**形态，已处置）
+
+**现象**：本轮先后跑了两轮全量，各片计数**逐字相同**（shard1 1520 / shard2 1272 / shard3 1392 / shard4 1364 / shard5 1399 = 6947），但两轮之间本批次**新增了 12 个用例**（`SqlMapperFoldingBuilderTest` 8 + `XmlSynHiFuseTest` 4，另 `SqlMapperXmlSpellcheckingStrategyTest` 5 加后回退）——总数应当变化却没变。
+
+**根因（读 `buildSrc/src/main/kotlin/mpv-testing.gradle.kts` 定位）**：`testShards` 的分片清单在**配置期**由 `testFileEntries` 源码扫描算出（`discoveredTestClasses`），而本仓开启 `org.gradle.configuration-cache=true` ⇒ **新增测试类不会进入旧的分片清单**，全量门禁静默漏跑它们。权重表（`dev-support/test-shard-weights.tsv`）只影响均衡，不决定清单——所以「补权重」也救不了这个缺口。
+
+**影响面判定**：本批次**全部**新增测试类都不在清单内（逐类核对 `SqlMapperKeywordCoverageGuardTest`/`InjectRangePlanTest`/`XmlSynHiGateRangeTest`/`XmlGapEditingAssistTest`/`SqlMapperColorSettingsPageTest`/`SqlMapperFoldingBuilderTest`/`XmlSynHiFuseTest`/`MybatisConfigCompletionContributorTest`/`MybatisXmlReferenceTest`/`XmlSqlCompletionW4W5Test`/`MyBatisXmlCompletionDataTest`/`ResultMapColumnsGapTest` 等 14 个 = 权重表命中 0）。即：**不带处置的全量绿不构成本批次测试的覆盖证据**。
+
+**处置**：收口门禁带 `--no-configuration-cache` 重跑（清单重算，新增类入场）；此后读数才是本批次的有效全量证据。
+**处置后读数（最终树，`b9a472b`）**：`testShards --no-configuration-cache` → **6959 例 / 0 失败 / 0 错误 / 8 skipped**，5 片 1378/1386/1467/1413/1315（= 原 6947 **+ 本轮净增 12 例**，逐类核对 `SqlMapperFoldingBuilderTest`/`XmlSynHiFuseTest`/`InjectRangePlanTest`/`MybatisXmlReferenceTest`/`XmlSqlCompletionW4W5Test`/`SqlMapperKeywordCoverageGuardTest` 等结果文件均已在各片产出）；`verifyGate --no-configuration-cache` → **BUILD SUCCESSFUL 1m54s，EXIT=0**，三目标 verdict 仍全 `Compatible.`。
+**给后人的判据**：见到「新增测试类后全量各片计数不变」即为本缺口形态；`testShards` 读数与「新增用例数」对不上账时，先查 configuration cache。
+
 ### 遗留与待真机项（W8 收口）
 
 1. **颜色页**：✅ 已补（见上节）。
