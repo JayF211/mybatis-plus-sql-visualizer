@@ -7,9 +7,7 @@ import com.intellij.codeInsight.completion.CompletionSorter
 import com.intellij.codeInsight.completion.CompletionType
 import com.intellij.codeInsight.completion.PrefixMatcher
 import com.intellij.codeInsight.lookup.LookupElement
-import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.DumbService
-import com.intellij.openapi.project.DumbServiceImpl
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -145,8 +143,8 @@ class XmlSqlCompletionW4W5CrossFileTest : BasePlatformTestCase() {
     // ------------------------------------------------------------------
 
     /**
-     * `mybatis-config.xml` 的 `<properties>` 子标签名（key）须聚合进 `${}`/OGNL 候选
-     * （`includeConfigProperties=true` 的位置）。
+     * `mybatis-config.xml` 里各 `<property name="X">` 的 **`name` 属性值**（key，MyBatis
+     * `getChildrenAsProperties` 口径）须聚合进 OGNL 候选（`includeConfigProperties=true` 的位置）。
      */
     fun test02_properties聚合_跨文件config的key进入OGNL候选() {
         myFixture.addFileToProject(

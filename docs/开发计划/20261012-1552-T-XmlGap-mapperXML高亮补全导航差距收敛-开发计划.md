@@ -161,6 +161,7 @@
 | 日期 | 记录 |
 |---|---|
 | 2026-10-12 | **六项决策点定案（用户「可以按照推荐 A」）**：决策 1 让位区间化＝A（探针记录 `addPlace` range，我方只注入未占用区间；W1 受前提 1 真机读数约束）、决策 2 着色粒度＝A（词法级细着色，不新建第二语言）、决策 3 覆盖面＝A（关键字集统一为 `SqlLexer.KEYWORDS` 超集 + `Dialect` 方言扩展 + IDENTIFIER/OPERATOR 着色）、决策 4 补全批次＝A（一批全做）、决策 5 引用导航＝A（本轮纳入跳转与查找用法，不做报红与重命名）、决策 6 编辑辅助＝A（颜色页/折叠/live template `cd`·`co`/拼写豁免/脏区放大/成对删六项全做）。实施启动=用户另令。 |
+| 2026-10-12 | **收口两轮**（用户报「mapper XML 高亮是白的」后追加，非原计划范围）：①**着色真根因**——`plugin.xml` 把高亮器工厂注册成裸 `<syntaxHighlighterFactory>`（平台真名 `lang.syntaxHighlighterFactory`），注册被静默忽略 ⇒ 高亮器从未实例化；修复 + 新增 `PluginXmlExtensionPointResolutionTest` 守卫；②**遗留项收口**——W4/W5 四项补测（推翻「Light 沙箱索引受限」前提，抓出并修 `<properties>` key 取值口径错）、折叠优先级隔离观察、着色链路单测级取证。读数见 §十对应各节 |
 | 2026-10-12 | 立项：O-144 / T-XmlGap 计划生成，依据同日调研报告（第二轮，样本 CHP 3.6.7）；六项决策点待用户定案，未动码 |
 
 ## §十 实施记录
@@ -229,7 +230,7 @@
 
 - 交付：`#{}` 结构属性（7 键 + 41 jdbcType + mode 三值，逗号后切换）、属性值逐属性分流（`id`/`keyProperty`/`refid`/`resultMap`/`extends`/`parameterMap`/`resultType` 族/`property`/`jdbcType`/`column` 族）、语句标签与 resultMap 族属性名（MyBatis DTD 逐条抄录）、OGNL 变量来源（`<bind>`/foreach item·index/include property/config properties/`_databaseId`·`_parameter`）、OGNL 智能片段与运算符、select 投影按 resultType、反引号列名、SQL 函数表、单字母捷径、resultMap「引用它的 select」列来源。
 - 硬编码表全部实读（`javap` + `unzip -p … mybatis-3-mapper.dtd`）：7 键与调研报告 §3.2 逐项一致；jdbcType 按前提 8 用 **41 项全枚举**（非报告里的 16 项）。
-- **未单测项（受 Light 沙箱索引限制，如实登记）**：跨文件 `refid`、`<properties>` key 聚合、foreach item 元素字段、`@类@静态成员`——由 W8 收口评估补测或真机复核。
+- **未单测项（受 Light 沙箱索引限制，如实登记）**：跨文件 `refid`、`<properties>` key 聚合、foreach item 元素字段、`@类@静态成员`——由 W8 收口评估补测或真机复核。**（⚠️ 收口第二轮已处置：四项全部补测完成，「受 Light 沙箱索引限制」的前提被实测推翻；见「W4/W5 四项补测读数」）**
 - 口径差异（已登记）：计划 §六「空候选属性给布尔/枚举」与派活「`timeout` 等数值属性不产候选」冲突，按后者实现（数值属性无枚举语义）。
 - **主控复核「既有断言是否被削弱」**（仓库红线）：`XmlSqlCompletionContributorTest` 两处随扩面更新——`collection` 那条仍以 `take(8)` **精确钉住**新增变量后的前八项顺序（未削弱，反而把新顺序写进了契约）；`test` 那条由「全量等于 3 项」放宽为「前 3 项 + 含 `_databaseId`」，**尾部不再钉全量**属轻微放宽，已由新增 `XmlSqlCompletionW4W5Test`（29 例）覆盖全量面，接受。
 
@@ -281,6 +282,7 @@
 | **我方注入在场**（判别性证据） | ✅ `Alt+Enter` 意图列表含 **`Edit MpSqlMapper Fragment`**——该意图只对**注入片段**生成，且语言名正是本插件的 `MpSqlMapper` ⇒ 我方注入未被让位 | `xmlgap-31-altenter-zoom.png` |
 | **拼写豁免** | ✅ **无缺陷**（勘误，见下）：SQL 文本上的波浪线经 tooltip 实证为**平台 SQL 方言弱警告**，与拼写检查无关 | `xmlgap-33-tooltip-zoom.png` |
 | 折叠**占位文本**（`select#id`） | ❓ 未隔离观察到：平台标签折叠与我方区**范围相同**，`Ctrl+Shift+Minus` 折叠呈现的是平台区（`....>` 形态）；我方占位优先级属渲染期行为，如实留作未证 | `xmlgap-35/39-*.png` |
+| ⚠️ 上条**判据已勘误**（收口第二轮） | 「范围相同」是误判：实测我方＝**整个标签**、平台 `XmlFoldingBuilder`＝**内容区**，两者不重合故共存；折叠语句标签显示的是**我方 `select#id`**。见「折叠优先级的结构取证」+「沙盒走查（五）」 | `fold-11/12-*.png` |
 
 **一次误诊与勘误（留痕，勿重犯）**：走查首轮看到 SQL 文本上的波浪线，我按「绿/黄波浪＝typo」的经验判为拼写检查未豁免，并据此新增了 `SqlMapperXmlSpellcheckingStrategy`（XML 级注册、继承平台策略）。复验时悬停取到 **tooltip 原文：「SQL dialect is not configured.」**——波浪线实为**平台 SQL 方言弱警告**（IU 下平台给 mapper XML 语句文本挂了 SQL 方言语义），与拼写检查无关。
 **处置**：该误诊方案（类 + EP + 用例）**已整批回退**（`plugin.xml` 保留一条勘误注记防重犯）；`spellchecker.support language="MpSqlMapper"` 按计划原样保留。
@@ -423,7 +425,7 @@
 1. **顺序**：XML 语言的折叠 builder 由 `LanguageFolding.allForLanguageOrAny(XML)` 汇总；实测顺序 = `[SqlMapperFoldingBuilder（我方）, com.intellij.lang.xml.XmlFoldingBuilder（平台）, spring XmlPropertyPlaceholderFoldingBuilder, liquibase …]` ⇒ `order="first"` 生效。
 2. **合并规则**：`CompositeFoldingBuilder.buildFoldRegions` 用 `Set<TextRange> rangesCoveredByDescriptors` 做**同范围先到先得**（`intellij.platform.core.jar` 反编译实读）——所以「我方区会不会被平台吞掉」只取决于范围是否**逐字相同**。
 3. **范围**：实测我方 = **整个 `<select>` 标签**（`tag.textRange`，占位 `select#findById`）；平台 `XmlFoldingBuilder` = **内容区**（`[21..109]`＝`<mapper>` 内容、`[46..99]`＝`<select>` 内容，占位 `...`）——**范围不同 ⇒ 不互相吞，三个区共存**。
-4. 故「谁胜出」是**渲染层**问题（光标在标签体内按 `Ctrl+Minus` 命中最内层区；gutter 上 `<select>` 那一行的标记对应我方整标签区）。Light 沙箱里编辑器 folding model 恒为空（实测 `allFoldRegions` = 0），单测观察不到渲染结果 ⇒ 交真机读数（下节）。
+4. 故「谁胜出」是**渲染层**问题（光标在标签体内按 `Ctrl+NumPad-` 命中最内层区；gutter 上 `<select>` 那一行的标记对应我方整标签区）。Light 沙箱里编辑器 folding model 恒为空（实测 `allFoldRegions` = 0），单测观察不到渲染结果 ⇒ 交真机读数（下节）。
 
 **反向验证（两次读数）**：把 `plugin.xml` 的 `order="first"` 去掉 → `排第一` 用例**红**，实测顺序变为 `[XmlFoldingBuilder, spring…, liquibase…, SqlMapperFoldingBuilder]`（我方落到**最后**）；恢复后绿。同一次反向跑里还顺手复验了高亮器链路（见下）。
 
@@ -446,6 +448,16 @@
 **结论（回答原遗留项）**：**「谁胜出」这个提法本身不成立**——两区范围不同（我方＝整个标签，平台＝内容区），在折叠模型里**共存**；用户折叠语句标签时看到的是**我方 `select#id`**（该区在外层），平台 `...` 只出现在折叠 `<mapper>` 这类**我方不建区**的标签上。故 **W6 折叠占位能力对用户可见**，原备选方案（改折语句体文本以避让平台）**不需要**。
 
 **顺带记两个工具/环境事实（供后续走查复用）**：①折叠键位是 **NumPad 专用**——`Collapse` = `Ctrl+NumPad-`、`Collapse All` = `Ctrl+Shift+NumPad-`，普通 `-` 无效（Find Action 列表里的键位提示即证），无小键盘的机器须走 Find Action；②**243 New UI 的折叠标记在 gutter 里不常驻显示**（逐行放大实证：`<select>` 行只有我方两枚 gutter 图标，`<mapper>` 行什么都没有），故「点 gutter 标记折叠」这条常规路在本环境走不通，须用 Find Action 驱动。
+
+### 收口第二轮门禁读数（2026-10-12，对应提交 `e711dd7`）
+
+| 项 | 读数 |
+|---|---|
+| `testShards --no-configuration-cache` | **BUILD SUCCESSFUL 11m 17s，EXIT=0**；5 片 **1253/1392/1533/1502/1293 = 6997 例 / 0 失败 / 0 错误 / 9 skipped**（另 `testExternal` 24 例 1 skipped）；`parity: 计划类全集 635 个均有结果 XML` ✓ |
+| 计数对账（**逐项闭合，无空绿**） | 上一轮 6985 例 / 632 类 → 本轮 **6997 例 / 635 类**：**+12 例恰好等于本轮新增三个测试类的用例数之和**（`XmlSqlCompletionW4W5CrossFileTest` 7 + `SqlMapperFoldingPriorityTest` 3 + `SqlMapperHighlighterDispatchTest` 2），**+3 类**同源——差额完全归因，排除「新类未进分片清单」形态（该形态见前节「配置缓存 × 分片清单」） |
+| 门禁告警 | `临界片超预期 +11%`：权重画像对新类零插值所致（非失败）；消警跑 `dev-support/weight-refresh.ps1` |
+| 未跑项 | `verifyGate`/`verifyPlugin` 本轮**未重跑**——本轮无新增 EP 面（只改了一个函数实现 + 新增测试），且已实证 Plugin Verifier **不覆盖** EP 名可解析性（见「为什么三道既有门禁都没拦住」），重跑对本 bug 类零判别力 |
+| 读数时效 | 本轮门禁跑在提交 `e711dd7` 上；其后仅两处**非行为**改动（测试文件删 2 个未用 import、测试 KDoc 订正措辞 + 文档回填），不影响该读数 |
 
 ### 遗留与待真机项（W8 收口）
 
