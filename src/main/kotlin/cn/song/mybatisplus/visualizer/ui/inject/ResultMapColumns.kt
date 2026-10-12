@@ -20,18 +20,54 @@ object ResultMapColumns {
     private val SELECT_PROJECTION = Regex("(?is)\\bselect\\b(.*?)(?:\\bfrom\\b|\$)")
     private val COLUMN_IDENT = Regex("[\\w*]+")
 
+    // T-XmlGap W5-10：`<select … resultMap="X" …>…</select>` 逐条匹配（属性段 + 标签体）
+    private val SELECT_STATEMENT = Regex("(?is)<select\\b([^>]*)>(.*?)</select>")
+    private val RESULT_MAP_ATTR = Regex("""(?i)\bresultMap\s*=\s*"([^"]*)"""")
+
     /** 从 mapper 全文中提取 SELECT 投影列名（去重保序）。 */
     fun extractColumns(mapperText: String): List<String> {
         val out = LinkedHashSet<String>()
         SELECT_PROJECTION.findAll(mapperText).forEach { m ->
-            val proj = m.groupValues[1]
-            proj.split(",").forEach { seg ->
-                val col = seg.trim()
-                    .split(' ').last { it.isNotBlank() } // 末 token：AS 别名或列本身（取别名语义）
-                    .substringAfterLast('.')             // `t.col` → `col`
-                    .trim()
-                if (col.isNotEmpty() && col.matches(COLUMN_IDENT) && col != "*") out += col
+            out += projectionColumns(m.groupValues[1])
+        }
+        return out.toList()
+    }
+
+    /**
+     * T-XmlGap W5-10：**只**解析「引用了指定 resultMap 的那些 `<select>` 语句」的投影列
+     * （候选来源修正：原实现取 mapper 全文 SELECT，会混入与该 resultMap 无关的列）。
+     *
+     * 引用判定：`<select … resultMap="X">` 中 `X` 精确等于 [resultMapId]，或为其 `namespace.X`
+     * 尾段形态（跨 namespace 引用时 XML 里写全限定 `ns.id`）。
+     * 无任何 `<select>` 引用该 resultMap → 空（不再回退全文，避免无关列污染）。
+     */
+    fun extractColumnsForResultMap(mapperText: String, resultMapId: String): List<String> {
+        if (resultMapId.isBlank()) return emptyList()
+        val out = LinkedHashSet<String>()
+        SELECT_STATEMENT.findAll(mapperText).forEach { m ->
+            val ref = RESULT_MAP_ATTR.find(m.groupValues[1])?.groupValues?.get(1)?.trim()
+            if (ref != null && refMatches(ref, resultMapId)) {
+                // 语句体先按 SELECT…FROM 截出投影段（否则 `FROM t` 的 `t` 会被当列名）
+                val projection = SELECT_PROJECTION.find(m.groupValues[2])?.groupValues?.get(1).orEmpty()
+                out += projectionColumns(projection)
             }
+        }
+        return out.toList()
+    }
+
+    /** resultMap 引用匹配：精确 / `ns.id` 尾段（`.` 分隔段的完整尾匹配）。 */
+    private fun refMatches(reference: String, resultMapId: String): Boolean =
+        reference == resultMapId || reference.endsWith(".$resultMapId")
+
+    /** 投影段 → 列名（逗号分段取末 token 的末段标识符；`*` 跳过）。 */
+    private fun projectionColumns(projection: String): List<String> {
+        val out = LinkedHashSet<String>()
+        projection.split(",").forEach { seg ->
+            val col = seg.trim()
+                .split(' ').last { it.isNotBlank() } // 末 token：AS 别名或列本身（取别名语义）
+                .substringAfterLast('.')             // `t.col` → `col`
+                .trim()
+            if (col.isNotEmpty() && col.matches(COLUMN_IDENT) && col != "*") out += col
         }
         return out.toList()
     }

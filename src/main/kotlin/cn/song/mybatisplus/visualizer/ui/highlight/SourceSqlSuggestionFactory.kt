@@ -59,6 +59,33 @@ object SourceSqlSuggestionFactory {
     fun xmlAttribute(name: String): LookupElementBuilder = LookupElementBuilder.create(name)
 
     /**
+     * 属性值/枚举值补全项（T-XmlGap W4）。
+     *
+     * 与 [param] 的区别仅在 KDoc 语义（插入串都是纯文本）；单列是为了让调用点自解释、
+     * 也便于后续单独调整值类候选的展示样式。
+     */
+    fun literalValue(value: String): LookupElementBuilder = LookupElementBuilder.create(value)
+
+    /**
+     * OGNL 智能片段补全项（T-XmlGap W5）：插入串是**整段表达式**（含空格，如 `x != null`）。
+     *
+     * 平台 `PrefixMatcher` 按「已输入的变量名是片段的前缀」命中（`prefixMatches("x != null")`
+     * 对前缀 `x` 为真），插入时以整段替换已输入的变量名。附加 lookupString 去掉变量名前缀后的
+     * 片段（`!= null`），让用户在变量名后继续输入 `!`/`.s` 时也能命中同一片段。
+     */
+    fun ognlSnippet(text: String, variable: String): LookupElementBuilder {
+        val tail = if (variable.isNotEmpty() && text.startsWith(variable)) text.substring(variable.length).trim() else ""
+        val builder = LookupElementBuilder.create(text)
+        return if (tail.isNotEmpty()) builder.withLookupString(tail) else builder
+    }
+
+    /**
+     * 反引号列名补全项（T-XmlGap W5-8）：插入串**带反引号**（`` `col` ``）——用户已敲前导反引号
+     * 时，平台的进行中前缀是 `` `col ``，只有带反引号的主串才能被前缀匹配命中，且插入后引号成对。
+     */
+    fun quotedIdentifier(name: String): LookupElementBuilder = LookupElementBuilder.create("`$name`")
+
+    /**
      * 光标左侧 `别名.[进行中前缀]`（T-XmlCmpl3 二段）：group(1)=点后进行中段（可为空串）。
      * 点前缀场景贡献器据此把 PrefixMatcher 切到该段（prefixedColumn 插入串为裸列名，
      * 默认 matcher 按含别名全段匹配会全滤）。
@@ -104,6 +131,32 @@ object SourceSqlSuggestionFactory {
 
     /** OGNL `param.` 前缀（第二段字段名补全）。 */
     val OGNL_PREFIX_PATTERN: Regex = Regex("""[\w$]+\.\w*$""")
+
+    /**
+     * 光标处的 OGNL 变量 token（W5-5 智能片段的变量名来源）：点分标识符，锚定光标。
+     * `user` / `entity.name` 形态。
+     */
+    val OGNL_TOKEN_AT_CARET: Regex = Regex("""[\w$]+(?:\.[\w$]+)*$""")
+
+    /**
+     * 光标处的 `@类@静态成员` token（W5-6）：`@Foo` / `@java.lang.Math@abs` 形态，锚定光标。
+     */
+    val OGNL_AT_TOKEN_AT_CARET: Regex = Regex("""@[\w.$]*@?[\w]*$""")
+
+    /**
+     * 光标是否处于未闭合 `#{` 占位内（W4-1）：左侧最后一个 `#{` 位于最后一个 `}` 之后。
+     * 与 [SourceSqlCompleter] 的 `#{}` 参数判定同口径（此处提前用于结构属性分流）。
+     */
+    fun isInsideHashBrace(beforeCaret: String): Boolean {
+        val open = beforeCaret.lastIndexOf("#{")
+        return open >= 0 && open > beforeCaret.lastIndexOf("}")
+    }
+
+    /** 光标是否处于未闭合 `${` 占位内（W5）——OGNL 补全位置。 */
+    fun isInsideDollarBrace(beforeCaret: String): Boolean {
+        val open = beforeCaret.lastIndexOf("\${")
+        return open >= 0 && open > beforeCaret.lastIndexOf("}")
+    }
 
     /** 注解 `<script>` OGNL 属性值内（test/collection 引号内光标）。 */
     val OGNL_ATTRIBUTE_PATTERN: Regex = Regex("""<\w+\s+(test|collection)\s*=\s*"[^"]*"?>?$""")
