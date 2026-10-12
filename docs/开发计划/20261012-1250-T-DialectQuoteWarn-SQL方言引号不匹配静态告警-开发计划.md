@@ -214,3 +214,42 @@ gitignore，属本机 IDE 状态，非仓库内容）。**上一轮据此得出�
 **对规则的影响（现在更确定）**：修完数据源后，这条 demo SQL 在 IDE 连接下**也合法**了，
 而插件只看方言、看不到连接 sql_mode，故新规则会在本项目的 demo 上**确定性误报 ERROR**。
 §十一 列的三种处置仍未选，建议尽快定（我倾向第 2 条：读绑定数据源的 URL 判 sql_mode，确知未开才报错）。
+
+## 十二、调整规格（2026-10-12 用户定夺＝按第 2 条；本段是实施依据）
+
+**目标**：把「MySQL 家族 + 双引号标识符」这一档从「一律 ERROR」改成「能证明合法就不报、否则降级为带前提的 WARN」。
+
+**先看这条关键认识，别照 §十一 的直觉做**：数据源 URL **只能证明「合法」，不能证明「非法」**——
+生效 `sql_mode` = 服务端全局 + 会话覆盖，URL 里的 `sessionVariables` 只是会话覆盖；URL 未声明
+`ANSI_QUOTES` 时，服务端全局仍可能开着。故**这一档不能用 ERROR**，只能用 WARN + 前提说明。
+
+**语义表**（方言属 MySQL / MariaDB / OceanBase，且 SQL 里出现双引号标识符）：
+
+| 绑定数据源的 URL | 严重度 | 说明 |
+|---|---|---|
+| 声明了 `ANSI_QUOTES` | **不报** | 已确知合法 |
+| 已知但未声明 | WARN | 文案须含前提：该连接 URL 未声明 ANSI_QUOTES，若服务端全局也未开则会报语法错 |
+| 未知（无绑定数据源 / 探测失败） | WARN | 同义措辞，可略 |
+
+**其它档不变**：PG / Oracle / DM / KingBase / openGauss 遇反引号、非 SQL Server 遇方括号 → 仍 **ERROR**（无歧义）。
+
+**接口形态（命名可优化，语义照此）**
+- 把 `DialectAwarePerfRule.checkWithDialect(sql, ast, dialect)` 升级为上下文对象
+  `PerfContext(sql, ast, dialect, ansiQuotes: Boolean?)`（`null`＝未知），避免参数继续膨胀。
+- `PerfRuleEngine.apply(ctx)`；`SqlPerfAnalyzer.analyze(sql, dialect, ansiQuotes)`；
+  **缓存键必须同时含方言与 `ansiQuotes` 三态**（否则串味）。
+- 取 URL：`DataSourceUrlProbe` 现只有 `firstUrl(project)`（项目内**首个**数据源），**不够用**——
+  预览绑定的是「上次使用 / 已绑定」那一个（面板 `bindstate.associated`，见
+  `ui/SqlPreviewPanelParamPanel.kt:289`、`ui/SqlPreviewPanelExecution.kt:917`）。
+  需按名取 URL（同一反射链扩一个 `urlByName`），取不到就 `null`（→ WARN）。
+  **不要**拿 `firstUrl` 当绑定源：首个数据源与绑定源不同时会给出错误结论（例如首个是 jpa_demo、
+  绑定的是 mpj_demo，两者 ANSI_QUOTES 状态相反）。
+- MCP 两个调用点无预览面板 → 传 `null`（→ WARN）。
+
+**测试要求**
+- 三态各一例：URL 声明 `ANSI_QUOTES` → 无警告；已知未声明 → WARN；未知 → WARN；且断言 messageKey 与前提措辞在场。
+- 既有「MySQL + 双引号 → ERROR」用例**必须改**（改 WARN），并在测试注释里写明降级原因（本段的关键认识）。
+- 缓存键三态不串味：同 SQL × {方言, ansiQuotes 三态} 不得互相命中。
+- 反向验证：把「不报」分支短路 → 对应正例变红。
+
+**文案**：中英各一条 WARN 文案，自解释且面向 agent（会流到 `sqlv_perf_advice`）。
