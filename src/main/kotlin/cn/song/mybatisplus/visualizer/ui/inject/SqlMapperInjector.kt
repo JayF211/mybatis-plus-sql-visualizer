@@ -17,8 +17,9 @@ import com.intellij.psi.xml.XmlText
  *    标签名/属性不被注入）；
  *  - D3 属性 OGNL：`test`/`value`/`collection`/`item` 等 [XmlSynHiGate.allowAttributeValue]
  *    白名单属性值注入同语言（属性位无 SQL 文本，独立注入位；决策 1-A 注）；
- *  - 守卫：[XmlSynHiGate] 双让位（设置/平台 per-host/三方插件）+ 根 mapper（[XmlSynHiGate.inMapperFile]）
- *    + 文本长度熔断（[XmlSynHiGate.allowStatementText]）；让位命中 → 零注入（反向验证）。
+ *  - 守卫：[XmlSynHiGate] 设置开关线 + **W1 区间级互补**（[InjectRangePlan]：只注入外来注入器
+ *    未占用的余下区间；未占用则整段注入）+ 根 mapper（[XmlSynHiGate.inMapperFile]）
+ *    + 文本长度熔断（[XmlSynHiGate.allowStatementText]）；占用覆盖整段 → 零注入（反向验证）。
  *
  * T-PerfSweep16 F37（D1=B 案落地）：喂入契约按**元素级**——243 平台源码 jar 实证：
  *  - `MultiHostInjector.elementsToInjectIn` 契约=「PSI element types to feed」；
@@ -39,8 +40,8 @@ class SqlMapperInjector : MultiHostInjector, com.intellij.openapi.project.DumbAw
         // 发行物均不存在，且用户真机实证平台并不给 mapper XML 语句文本着色，详见 XmlSynHiGate）。
         val host = context as? PsiLanguageInjectionHost ?: return
         if (context !is XmlText && context !is XmlAttributeValue) return
-        if (XmlSynHiGate.shouldYield(context.project, host)) return
-        val rangeInsideHost: TextRange = when (context) {
+        if (XmlSynHiGate.shouldYield(context.project)) return
+        val ourRange: TextRange = when (context) {
             // D2 语句文本：直属文本经语句文本守卫（祖先链 mapper + 长度熔断），段内去首尾空白
             is XmlText -> {
                 val tag = context.parent as? XmlTag ?: return
@@ -61,9 +62,21 @@ class SqlMapperInjector : MultiHostInjector, com.intellij.openapi.project.DumbAw
             }
             else -> return
         }
+        // T-XmlGap W1 区间级互补（取代原「命中即整宿主让位」）：外来注入器只占 `#{}`/`${}` 区间时，
+        // 我方仍为**余下区间**着色——原形态下「语句里有一个 `#{}`」会让整条语句的关键字/注释/字符串
+        // 全无色（Community 版 + 装竞品即中招；见 XmlSynHiGate/InjectRangePlan KDoc）。
+        // 设置开关线已在上面短路；occupiedRanges 自带 fail-safe（探测失败 → 全覆盖哨兵 → 零注入）。
+        val fragments = InjectRangePlan.plan(
+            context.text,
+            ourRange,
+            XmlSynHiGate.occupiedRanges(context.project, host),
+        )
+        if (fragments.isEmpty()) return
         ensureParserDefinitionRegistered()
-        registrar.startInjecting(SqlMapperLanguage)
-        registrar.addPlace(null, null, host, rangeInsideHost)
+        // 一个注入会话内多 place（同一宿主）：注入文本为各片段拼接，注入侧偏移经 DocumentWindow
+        // 映射回宿主——补全贡献器的宿主坐标还原链（T-XmlCmplDispatch）按 window 取值，不受影响。
+        val session = registrar.startInjecting(SqlMapperLanguage)
+        for (fragment in fragments) session.addPlace(null, null, host, fragment)
         registrar.doneInjecting()
     }
 

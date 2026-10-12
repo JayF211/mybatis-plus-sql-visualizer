@@ -367,6 +367,28 @@
         <typedHandler implementation="cn.song.mybatisplus.visualizer.ui.inject.ParamBraceTypedHandler"/>
         <syntaxHighlighterFactory language="MpSqlMapper"
                                   implementationClass="cn.song.mybatisplus.visualizer.ui.inject.SqlMapperSyntaxHighlighterFactory"/>
+        <!-- T-XmlGap W7：mapper XML 引用（跳转/查找用法）——只产 soft 引用，不注册任何
+             inspection/annotator（红线：不做校验器形态）；无目标时零报红 -->
+        <psi.referenceContributor language="XML"
+                                  implementation="cn.song.mybatisplus.visualizer.ui.ref.MybatisXmlReferenceContributor"/>
+        <!-- T-XmlGap W6：mybatis-config.xml 补全（<setting name>/value、配置子标签名）。
+             独立于 mapper 补全贡献器（后者根守卫是 mapper，配置文件整类落在它之外） -->
+        <completion.contributor language="XML"
+                                implementationClass="cn.song.mybatisplus.visualizer.ui.highlight.MybatisConfigCompletionContributor"/>
+        <!-- T-XmlGap W6：编辑辅助三件（声明式 EP）——
+             live template（cd/co 两个骨架 + 自定义上下文，只含纯骨架、不含竞品引导注释模板）；
+             语句内编辑放大重算脏区（收窄到所属语句标签，非整文件）；
+             `#{}`/`${}` 成对删除（charDeleted 阶段补删，不改平台原有删除语义） -->
+        <defaultLiveTemplates file="/templates/mybatis-sql"/>
+        <liveTemplateContext implementation="cn.song.mybatisplus.visualizer.ui.inject.MybatisSqlTemplateContextType"/>
+        <daemon.changeLocalityDetector
+                implementation="cn.song.mybatisplus.visualizer.ui.inject.SqlMapperChangeLocalityDetector"/>
+        <backspaceHandlerDelegate
+                implementation="cn.song.mybatisplus.visualizer.ui.inject.SqlMapperBackspaceHandler"/>
+        <!-- T-XmlGap W6：注入片段拼写豁免——按**注入语言**注册（非 XML 级），作用面只限本插件
+             注入的语句文本，不触碰 XML 全局拼写行为 -->
+        <spellchecker.support language="MpSqlMapper"
+                              implementationClass="cn.song.mybatisplus.visualizer.ui.inject.SqlMapperSpellcheckingStrategy"/>
     </extensions>
 
     <!-- T-M53：Kotlin plugin mode 声明——本插件只用 Kotlin PSI（gutter 标记），不涉及 Analysis API，
