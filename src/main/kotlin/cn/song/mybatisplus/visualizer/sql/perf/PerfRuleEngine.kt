@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.sql.perf
 
+import cn.song.mybatisplus.visualizer.sql.Dialect
 import net.sf.jsqlparser.statement.Statement
 
 /**
@@ -36,13 +37,19 @@ object PerfRuleEngine {
      *
      * @param sql 原始 SQL 文本
      * @param ast JSqlParser 解析后的语句树；可为 null（降级模式）
+     * @param dialect 当前数据库方言；可为 null（无上下文）。仅传给实现 [DialectAwarePerfRule] 的规则，
+     *                其余规则一律按 [PerfRule.check] 调用——**加带默认值的第三参**，既有调用点不改也能编译。
      * @return 所有规则的警告列表（按规则注册顺序）
      */
-    fun apply(sql: String, ast: Statement?): List<PerfWarning> {
+    fun apply(sql: String, ast: Statement?, dialect: Dialect? = null): List<PerfWarning> {
         val warnings = mutableListOf<PerfWarning>()
         for (rule in rules) {
             try {
-                val result = rule.check(sql, ast)
+                val result = if (rule is DialectAwarePerfRule) {
+                    rule.checkWithDialect(sql, ast, dialect)
+                } else {
+                    rule.check(sql, ast)
+                }
                 if (result.isNotEmpty()) warnings.addAll(result)
             } catch (e: Exception) {
                 // 规则隔离：单规则异常不阻塞其他规则
