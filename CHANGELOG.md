@@ -5,7 +5,7 @@
 ## [Unreleased]
 
 ### Added
-- **方言引号不匹配静态告警（T-DialectQuoteWarn，静态规则第 21 条 `dialect_quote_mismatch`）**：SQL 里的标识符用了当前方言不接受的引号字符时给出 ERROR 级告警（如 MySQL 方言下出现 `FROM "user" t`）。`@TableName("\"user\"")` 这类达梦风格双引号在 MySQL 真机会报 `[42000][1064]`，插件此前只是如实画出。**只报告不改写**：渲染的仍是 MyBatis-Plus 真实发出的 SQL（改写会让预览偏离真机、把用户代码里的真 bug 静默抹平）。告警同时流到预览面板静态规则区与 MCP `sqlv_perf_advice`；方言从项目设置解析，取不到时不判定（不硬编码 MySQL）。判据按各方言实际宽容度定：SQL Server 的 `QUOTED_IDENTIFIER` 默认 ON（双引号合法）、SQLite/H2 收多种引号，避免误报
+- **方言引号不匹配静态告警（T-DialectQuoteWarn，静态规则第 21 条 `dialect_quote_mismatch`）**：SQL 里的标识符用了当前方言不接受的引号字符时给出告警（如 MySQL 方言下出现 `FROM "user" t`）。`@TableName("\"user\"")` 这类达梦风格双引号在 MySQL 真机会报 `[42000][1064]`，插件此前只是如实画出。**只报告不改写**：渲染的仍是 MyBatis-Plus 真实发出的 SQL（改写会让预览偏离真机、把用户代码里的真 bug 静默抹平）。告警同时流到预览面板静态规则区与 MCP `sqlv_perf_advice`；方言从项目设置解析，取不到时不判定（不硬编码 MySQL）。判据按各方言实际宽容度定：SQL Server 的 `QUOTED_IDENTIFIER` 默认 ON（双引号合法）、SQLite/H2 收多种引号，避免误报。**（T-DialectQuoteWarn §十二 调整）**「MySQL 家族（MySQL/MariaDB/OceanBase）+ 双引号」这一档不再一律报 ERROR——双引号是否为标识符取决于连接 `sql_mode` 是否含 `ANSI_QUOTES`，而数据源 URL **只能证明「合法」不能证明「非法」**（URL 未声明该项时服务端全局仍可能开着）：预览按绑定数据源（活控制台 > last-used 记忆）的 URL 取该三态，确知声明了才不报，已知未声明或未知都降级为**带前提的 WARN**（缓存键含该三态，避免串味）；PG/Oracle/DM/KingBase/openGauss 遇反引号、非 SQL Server 遇方括号等无歧义档仍报 ERROR
 
 ### Fixed
 - 调用栈悬停弹层视口按全量帧数放开（JList 默认 8 行把链尾业务帧折叠进滚动区，「默认锚定最深业务帧、一眼看到 Controller → Service」落空）
