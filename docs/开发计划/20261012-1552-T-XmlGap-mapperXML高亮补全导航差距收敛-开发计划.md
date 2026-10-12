@@ -384,7 +384,7 @@
 | **`returning x`（临时键入后已撤销）** | **`returning` 呈 KEYWORD 橙** | **决定性**：`RETURNING` 是我方「全方言超集」才收的词（`SqlMapperLanguage` KDoc 自己登记过这个多着色副作用），MySQL 方言的平台高亮器**不认**它 |
 | 状态栏面包屑 | 显示 **`<Injected MpSqlMapper file>`** | 光标确在我方注入片段内（该位即注入生效的编辑上下文） |
 
-**结论**：修复后我方高亮器**确实被实例化并参与渲染**（`returning` 一条已排除「颜色全来自平台」的可能）。走查用的临时键入（`returning x` 一行）已 Ctrl+Z 撤销，磁盘文件与该轮开始前**逐字一致**（`git diff` 只剩该仓既有的、非本轮的 `<select>` 块改动）；沙盒 `Alt+F4` → `Confirm Exit` → Enter 正常退出，`runIde` 任务 exit 0，按沙盒名过滤进程**零残留**。
+**结论**：修复后我方高亮器**确实被实例化并参与渲染**（`returning` 一条已排除「颜色全来自平台」的可能）。走查用的临时键入（`returning x` 一行）已 Ctrl+Z 撤销，磁盘文件与该轮开始前**逐字一致**（`git diff` 只剩该仓既有的、非本轮的 `<select>` 块改动）；沙盒 `Alt+F4` → `Confirm Exit` → Enter 正常退出，`runIde` 任务 exit 0，按沙盒名过滤进程**零残留**。截图存外层 `mpsv-walk/epfix-*.png`（不进仓）：`epfix-04-opened`（全窗）、`epfix-05-sqlzoom`（语句体 3×）、`epfix-06-sqlfrag`（`<sql>` 片段体 4×）、`epfix-09-hash`（`#{…}` 定界符/内容分色 8×）、`epfix-10-returning`（决定性判据 + 面包屑）、`epfix-12-exit`（退出确认）。
 
 **✅ 用户修法已实测验证（2026-10-12 当轮）**：在 **项目级** `.idea/sqldialects.xml` 加一条 `<file url="PROJECT" dialect="MySQL" />`（等价于 Settings → Languages & Frameworks → SQL Dialects → 把项目/mapper 目录指到 MySQL）后重启 IDE，**mapper XML 语句体的 SQL 文本立刻上色**（实测 5× 原像素：`select`/`from`/`and`/`like`/`concat` 橙＝KEYWORD、`user`/`username` 浅蓝＝IDENTIFIER、`'%'` 绿＝STRING、`#{username}` 定界符有色）✓ —— 即：**用户真机的「整段白」根因是 mapper 文件没有 SQL 方言映射，配上即好**。
 **关键坑（本轮踩到）**：`SqlDialectMappings` 是 **`projectSettings`**（Database 插件 plugin.xml 实证），存在**项目** `.idea/sqldialects.xml`，**不是**应用级 `options/sqlDialects.xml`——写错位置会静默无效（本轮先踩了这个坑）。
