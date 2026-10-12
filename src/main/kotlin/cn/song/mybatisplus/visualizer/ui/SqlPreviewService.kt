@@ -63,6 +63,7 @@ import cn.song.mybatisplus.visualizer.sql.Dialect
 import cn.song.mybatisplus.visualizer.sql.DialectRegistry
 import cn.song.mybatisplus.visualizer.sql.ParameterReplacer
 import cn.song.mybatisplus.visualizer.sql.SqlGenerator
+import cn.song.mybatisplus.visualizer.sql.DataSourceUrlProbe
 import cn.song.mybatisplus.visualizer.sql.SqlPerfAnalyzer
 import cn.song.mybatisplus.visualizer.sql.perf.PerfWarning
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
@@ -1267,12 +1268,39 @@ class SqlPreviewService(internal val project: Project) {
     /**
      * 性能分析（仅 SELECT）：委托 [SqlPerfAnalyzer]（F-2）。
      * UPDATE/DELETE 走既有 buildWarning 路径，不重复分析。
+     *
+     * T-DialectQuoteWarn §十二：带方言 + 绑定数据源的 ANSI_QUOTES 三态分析——「MySQL 家族 + 双引号
+     * 标识符」这一档只有在**确知连接声明了** `ANSI_QUOTES` 时才不报，否则降级 WARN（见
+     * [boundAnsiQuotesOrNull]）。
      */
     internal fun analyzePerf(sql: String, statement: SqlStatement): List<PerfWarning>? {
         if (statement !is SelectStatement) return null
-        // T-DialectQuoteWarn：带方言分析（dialect_quote_mismatch 等方言感知规则需要）
-        val warnings = SqlPerfAnalyzer.analyze(sql, currentDialect())
+        val warnings = SqlPerfAnalyzer.analyze(sql, currentDialect(), boundAnsiQuotesOrNull())
         return warnings.ifEmpty { null }
+    }
+
+    /**
+     * T-DialectQuoteWarn §十二：绑定数据源是否**已声明** `sql_mode` 含 `ANSI_QUOTES`（三态：
+     * `true`/`false`/`null`＝未知）。
+     *
+     * 绑定源与预览面板指示行**同源同优先级**（[cn.song.mybatisplus.visualizer.ui.boundDataSourceNameForDisplay]
+     * 的链）：活控制台绑定 [DataSourceSelector.boundConsoleDataSourceName] > last-used 记忆
+     * [DataSourceSelector.rememberedDataSourceName]（面板 `bindstate.associated`）> 未绑定（null）。
+     * 拿到名字后按名取 URL（[DataSourceUrlProbe.urlByName]），**不用** [DataSourceUrlProbe.firstUrl]
+     * ——首个数据源与绑定源可以不同且 `ANSI_QUOTES` 状态相反（本项目 demo：首个 jpa_demo、绑定 mpj_demo），
+     * 拿首个当绑定源会给出错误结论。
+     *
+     * 取不到名字/URL/无法判定 → null（未知），规则据此降级 WARN（不假装知道连接选项）。
+     * 全程 runCatching：无项目/无 Database 插件/反射失败一律回落 null，绝不影响预览主流程。
+     */
+    private fun boundAnsiQuotesOrNull(): Boolean? {
+        val name = runCatching {
+            cn.song.mybatisplus.visualizer.execute.DataSourceSelector.boundConsoleDataSourceName()
+        }.getOrNull() ?: runCatching {
+            cn.song.mybatisplus.visualizer.execute.DataSourceSelector.rememberedDataSourceName(project)
+        }.getOrNull() ?: return null
+        val url = runCatching { DataSourceUrlProbe.urlByName(project, name) }.getOrNull() ?: return null
+        return runCatching { DataSourceUrlProbe.ansiQuotesFromUrl(url) }.getOrNull()
     }
 
     /** 收集语句中的动态条件行（M12）：遍历 WHERE 条件树，扁平化 toggle 元数据（含嵌套 Group 内）。 */

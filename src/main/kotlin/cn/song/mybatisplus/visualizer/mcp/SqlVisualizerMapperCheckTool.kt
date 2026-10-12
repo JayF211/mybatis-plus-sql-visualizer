@@ -145,7 +145,9 @@ open class SqlVisualizerMapperCheckTool : McpToolsetSupport("sqlv_mapper_check")
                             .filter { it.kind == UnboundedWriteDetector.FindingKind.PARSE_FAILED }
                             .filter { it.detail.isNotBlank() }
                             .forEach { append("    simulate risk note: ").append(it.detail).append('\n') }
-                        val perf = SqlPerfAnalyzer.analyze(rendered.sql, dialect)
+                        // T-DialectQuoteWarn §十二：MCP 调用点无预览面板（无绑定数据源上下文），
+                        // ANSI_QUOTES 传 null ＝未知 → 「MySQL 家族 + 双引号」这一档降级 WARN。
+                        val perf = SqlPerfAnalyzer.analyze(rendered.sql, dialect, ansiQuotes = null)
                         if (perf.isNotEmpty()) {
                             append("    simulate perf:\n")
                             perf.forEach { warning ->

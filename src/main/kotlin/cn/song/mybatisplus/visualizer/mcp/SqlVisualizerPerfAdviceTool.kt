@@ -66,7 +66,9 @@ open class SqlVisualizerPerfAdviceTool : McpToolsetSupport("sqlv_perf_advice") {
         if (sql.isBlank()) {
             throwExpected(McpToolErrors.code(McpToolErrors.INVALID_ARGUMENT, "sql is empty."))
         }
-        return renderFindings(SqlPerfAnalyzer.analyze(sql, dialect))
+        // T-DialectQuoteWarn §十二：MCP 调用点无预览面板（无绑定数据源上下文），ANSI_QUOTES 传 null
+        // ＝未知 → 「MySQL 家族 + 双引号」这一档降级 WARN（不假装知道连接 sql_mode）。
+        return renderFindings(SqlPerfAnalyzer.analyze(sql, dialect, ansiQuotes = null))
     }
 
     /**
