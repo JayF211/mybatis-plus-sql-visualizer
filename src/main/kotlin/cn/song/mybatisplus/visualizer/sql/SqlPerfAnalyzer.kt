@@ -7,6 +7,7 @@ import cn.song.mybatisplus.visualizer.sql.perf.PerfWarning
 import cn.song.mybatisplus.visualizer.sql.perf.rules.PerfRulesBatch1
 import cn.song.mybatisplus.visualizer.sql.perf.rules.PerfRulesBatch2
 import cn.song.mybatisplus.visualizer.sql.perf.rules.PerfRulesBatch3
+import cn.song.mybatisplus.visualizer.sql.perf.rules.PerfRulesBatch4
 import net.sf.jsqlparser.statement.Statement
 
 /**
@@ -16,12 +17,12 @@ import net.sf.jsqlparser.statement.Statement
  * 零 PSI / 零 IDE 依赖（仅 JSqlParser），可用普通 JUnit 直接覆盖。
  *
  * 分析流程：
- *  1. 查缓存（同 SQL 文本不重复分析）；
+ *  1. 查缓存（同 SQL 文本 + 同方言不重复分析）；
  *  2. JSqlParser 解析为 Statement AST（失败降级到纯正则规则）；
  *  3. [PerfRuleEngine] 应用所有已注册规则；
  *  4. 返回 [PerfWarning] 列表（最多 10 条）。
  *
- * 规则注册在 init 块中完成（三批共 20 条规则）。
+ * 规则注册在 init 块中完成（四批共 21 条规则）。
  *
  * 性能约束：
  *  - 典型 SQL（< 1000 字符）分析耗时 < 50ms；
@@ -36,35 +37,49 @@ object SqlPerfAnalyzer {
     /** 警告数量上限。 */
     private const val MAX_WARNINGS = 10
 
-    /** SQL → 警告列表的缓存（ LinkedHashMap 实现 LRU）。 */
+    /** SQL + 方言 → 警告列表的缓存（ LinkedHashMap 实现 LRU）。键见 [cacheKey]。 */
     private val cache = object : LinkedHashMap<String, List<PerfWarning>>(128, 0.75f, true) {
         override fun removeEldestEntry(eldest: Map.Entry<String, List<PerfWarning>>): Boolean = size > CACHE_LIMIT
     }
 
     init {
-        // 注册三批规则（共 20 条）
+        // 注册四批规则（共 21 条）
         PerfRuleEngine.registerAll(PerfRulesBatch1.all)
         PerfRuleEngine.registerAll(PerfRulesBatch2.all)
         PerfRuleEngine.registerAll(PerfRulesBatch3.all)
+        PerfRuleEngine.registerAll(PerfRulesBatch4.all)
     }
 
     /**
      * 分析 SQL，返回性能警告列表。
      *
      * @param sql 完整 SQL 文本（多行或单行）
+     * @param dialect 当前数据库方言；可为 null（无上下文，方言感知规则自动不判）。默认 null 保持
+     *                既有调用点逐字节行为不变。
      * @return 警告列表（按规则注册顺序，最多 [MAX_WARNINGS] 条）；无问题返回空列表，不返回 null
      */
-    fun analyze(sql: String): List<PerfWarning> {
+    fun analyze(sql: String, dialect: Dialect? = null): List<PerfWarning> {
         if (sql.isBlank()) return emptyList()
+        val key = cacheKey(sql, dialect)
         synchronized(cache) {
-            cache[sql]?.let { return it }
+            cache[key]?.let { return it }
         }
-        val warnings = analyzeInternal(sql)
+        val warnings = analyzeInternal(sql, dialect)
         synchronized(cache) {
-            cache[sql] = warnings
+            cache[key] = warnings
         }
         return warnings
     }
+
+    /**
+     * 缓存键：`sql + '\u0000' + 方言名`（T-DialectQuoteWarn 四·3）。
+     *
+     * **必须带方言**：同一条 SQL 在 MySQL（`FROM "user"` 报引号告警）与 PostgreSQL（不报）下结论相反，
+     * 不带方言会让后一次分析命中前一次的缓存返回错结果（串味）。`'\u0000'` 是不会出现在 SQL 文本
+     * 里的分隔符，避免 `sql="a"+方言名` 与 `sql="a<方言名>"` 撞键。
+     */
+    private fun cacheKey(sql: String, dialect: Dialect?): String =
+        sql + '\u0000' + (dialect?.name ?: "")
 
     /**
      * 清空分析缓存。
@@ -82,9 +97,9 @@ object SqlPerfAnalyzer {
     // 内部实现
     // ------------------------------------------------------------------
 
-    private fun analyzeInternal(sql: String): List<PerfWarning> {
+    private fun analyzeInternal(sql: String, dialect: Dialect?): List<PerfWarning> {
         val ast = parseSql(sql)
-        val warnings = PerfRuleEngine.apply(sql, ast)
+        val warnings = PerfRuleEngine.apply(sql, ast, dialect)
         return if (warnings.size > MAX_WARNINGS) warnings.take(MAX_WARNINGS) else warnings
     }
 

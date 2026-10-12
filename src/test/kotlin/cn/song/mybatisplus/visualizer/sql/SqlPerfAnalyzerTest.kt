@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.sql
 
 import cn.song.mybatisplus.visualizer.sql.perf.PerfSeverity
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -92,6 +93,33 @@ class SqlPerfAnalyzerTest {
         SqlPerfAnalyzer.analyze("SELECT * FROM user")
         SqlPerfAnalyzer.clearCache()
         assertEquals(0, SqlPerfAnalyzer.cacheSize())
+    }
+
+    @Test
+    fun `analyze_同SQL不同方言不串味（T-DialectQuoteWarn）`() {
+        // 同一 SQL：MySQL 下双引号表名不合法（应命中），PostgreSQL 下合法（不应命中）。
+        // 缓存键不带方言时，第二次分析会命中第一次的缓存返回错结果（串味）。
+        val sql = "SELECT t.id FROM \"user\" t WHERE t.id = 1"
+        val mysql = SqlPerfAnalyzer.analyze(sql, MySqlDialect)
+        assertTrue(
+            "MySQL 应命中 dialect_quote_mismatch，实际: $mysql",
+            mysql.any { it.ruleId == "dialect_quote_mismatch" },
+        )
+        val pg = SqlPerfAnalyzer.analyze(sql, PostgreSQLDialect)
+        assertFalse(
+            "PostgreSQL 不应命中（缓存不得串味），实际: $pg",
+            pg.any { it.ruleId == "dialect_quote_mismatch" },
+        )
+    }
+
+    @Test
+    fun `analyze_无方言上下文时方言规则不判（T-DialectQuoteWarn）`() {
+        val sql = "SELECT t.id FROM \"user\" t WHERE t.id = 1"
+        val warnings = SqlPerfAnalyzer.analyze(sql)
+        assertFalse(
+            "无方言上下文不得判定引号方言（不硬编码 MySQL），实际: $warnings",
+            warnings.any { it.ruleId == "dialect_quote_mismatch" },
+        )
     }
 
     @Test
