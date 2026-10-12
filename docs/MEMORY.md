@@ -132,6 +132,7 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 
 | 文档 | 用途 |
 |------|------|
+| [20261012-1552-CodeHelperPro-XML高亮与补全再深挖-调研报告.md](./调研报告/20261012-1552-CodeHelperPro-XML高亮与补全再深挖-调研报告.md) | （占位指针，全文含竞品逆向细节在内部资料库）第二轮 XML 高亮/补全差距再深挖，样本 CHP 3.6.7：真差距是**粒度与覆盖面**（`#{}` 与 `${}` 同 token 同色、表达式内部零分色、表名列名运算符无色、高亮 41 词 vs 补全 66 词、属性值补全只覆盖 test/collection、无引用导航/颜色页/折叠/live template）；勘误两处上轮口径（3.6.x 前瞻项系注释死声明、`view.c.e` 的 jdbcType 分支已死改走 DOM）；并推翻自己最初的头条（竞品社区轨注入器在 Ultimate 自我让位，我方大概率未被让位） |
 | [20261011-0653-全分支功能全景审计与长期演进-第十八轮调研报告.md](./调研报告/20261011-0653-全分支功能全景审计与长期演进-第十八轮调研报告.md) | 全分支功能全景审计与长期演进 第十八轮调研报告——回流批一实质完成+拓扑质变（dev-bak 回流≠dev 分支，R 系十件 73 笔在支线连续两版零上车）；巨石拆分完成方反转到 master（7 件全<2000，dev SqlPreviewPanel 6300 新高）；downloads 355→414（×4.6）首次流量响应+关键词三升一进；R90~R94 新候选+勘误四条 |
 | [20260911-1700-DebugTools-agent字节码增强-调研报告.md](./调研报告/20260911-1700-DebugTools-agent字节码增强-调研报告.md) | 首个真落地 attach+agentmain 竞品源码分析；agentmain 只起 server 不注册 SQL transformer 是反面教材（M56 须 addTransformer+retransform）；动态代理包装 Driver.connect + 9 类驱动分库适配等四手法可照搬（M56 输入） |
 | [20260911-1617-CoolRequest-agent字节码增强-调研报告.md](./调研报告/20260911-1617-CoolRequest-agent字节码增强-调研报告.md) | 竞品实为 premain 非 attach（agentmain 声明缺失是坑）；SQL 用「驱动自拼 SQL」绕 setXxx 还原；ByteBuddy RETRANSFORMATION 实证已加载驱动可插桩；relocate/多 JDK 三件套/端口自报/异步上报四工程化手法（M56 输入） |
