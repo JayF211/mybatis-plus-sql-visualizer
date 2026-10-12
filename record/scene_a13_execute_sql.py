@@ -8,12 +8,16 @@ v1~v4 的返工各自暴露一个坑，全部已固化进 locate/verify 标准�
   ④ **IDE 不在前台 → 键盘快捷键送不到**（开文件无反应、预览不出，且不报错）→ `ensure_foreground` 置顶+取焦+校验。
 
 素材：`DeviceInfoServiceImpl#joinListEntity`（mpjdemo，`car_device_info` LEFT JOIN `station_info`）。
-**2026-10-12 换目标**：原素材 `UserServiceImpl#selectJoinList` 执行报
-`[42S22][1054] Unknown column 't.area_id' in 'on clause'`——那是**插件缺陷 ★A47**（MPJ 三参 join 的
-ON 右侧列别名被硬编码成主表别名；MPJ 真实行为是按字段自己的实体类解析）。本素材的链
-`leftJoin(StationInfoEntity.class, StationInfoEntity::getStationId, DeviceInfoEntity::getStationId)`
-右侧列**正是主表字段**，插件那条硬编码在这里成立，渲染与真实执行一致（A11 已用同一素材跑通 EXPLAIN）。
-★A47 另行登记待修，别用「ON 右侧列属于先前 join 的表」的链出片。
+**为什么最终选它**：本张要的是「执行 SQL 有结果」——
+① 曾经的目标 `UserServiceImpl#selectJoinList` 执行**必然 0 行**：链里写死 `.eq(UserDO::getId, 1)`，
+   而 demo 库里 `user` 只有一行且 **id = 2**（2026-10-12 直连 MySQL 只读清点：user 1 行 / user_address 2 行 /
+   area 3 行 / station_info 3 行 / car_device_info 4 行）——造数与条件不匹配，属 demo 侧数据问题，不改 demo。
+② 本素材 `eq(shareSchemeId, 1)` 命中 2 行（car_device_info 的 share_scheme_id 为 1,1,2,3），结果网格非空。
+③ 其链 `leftJoin(StationInfoEntity.class, StationInfoEntity::getStationId, DeviceInfoEntity::getStationId)`
+   的 ON 右侧列**正是主表字段**，不涉及插件缺陷 ★A47，画面即标准形态。
+
+★A47 的现场读数另存为 `perf/a13_a47_evidence.png`（用 UserServiceImpl 链录的那版帧：修复后渲染
+`RIGHT JOIN area areaDO ON areaDO.id = addressDO.area_id`，执行不再报 1054）。
 """
 import os
 import sys
@@ -58,6 +62,34 @@ def ide_hwnd_and_title(pid):
         if p == pid and (r[2] - r[0]) > 1200:
             return h, t
     return None, ""
+
+
+def find_exec_button(ide_pid):
+    """定位预览弹窗底部「执行 SQL」按钮 → 屏幕坐标；弹窗不在新建态时抛错。
+
+    y 用**几何标定**（底边 − 39，与 plan/BASELINE 实测一致），不用 `bright_band_y`：
+    底部这带的**行**均值只有 40~43（面板底色 26、按钮是描边样式文字稀疏），行向阈值分不出来
+    （实测 thr=45 全幅无亮带）；而**列**均值能把按钮文字聚成亮簇。实测三簇恰为
+    执行 SQL / 复制 SQL / 取消，最左簇＝执行 SQL。
+    ⚠️ 弹窗必须处于**新建态（SQL 视图）**：停在结果态时按钮行整体上移约 40px，
+    底边−39 会落到按钮下方空白处。
+    """
+    main_rect = window_rect(pid=ide_pid, pick="largest")
+    popup = window_rect(pid=ide_pid, pick="smallest", min_size=(600, 400))
+    if popup is None or popup == main_rect:
+        raise RuntimeError("预览弹窗未打开（限定 PID 后只匹配到主窗口 %s）" % (main_rect,))
+    pw, ph = popup[2] - popup[0], popup[3] - popup[1]
+    img = locate_grab((popup[0], popup[1], pw, ph))
+    rx0 = int(pw * 0.45)
+    row_y = ph - 39
+    clusters = bright_band_x(img, max(0, row_y - 14), min(ph, row_y + 14), rx0, pw,
+                             thr=45.0, min_gap=14, min_w=8)
+    if not clusters:
+        raise RuntimeError("按钮行上未找到亮簇（弹窗可能不在新建态）")
+    btn = (popup[0] + (clusters[0][0] + clusters[0][1]) // 2, popup[1] + row_y)
+    print("预览弹窗=%s(%dx%d) 按钮行 popup y=%d 亮簇=%s → 点最左簇=%s"
+          % (popup, pw, ph, row_y, [(popup[0] + a, popup[0] + b) for a, b in clusters[:4]], btn))
+    return btn
 
 
 def main():
@@ -108,33 +140,29 @@ def main():
     trigger_preview()
     pyautogui.moveTo(*PARK, duration=0.4); time.sleep(1.0)
 
+    # ---- 预热控制台（不入镜）：先执行一次，把控制台与结果页签建起来 ----
+    # 冷启动的控制台下，插件把控制台嵌进预览弹窗时**结果页签还没建立**，弹窗下半部会是**空的**
+    # （用户 2026-10-12 当场指出「sql 预览窗口怎么没结果」，我先前那版成片就是这个问题）。
+    # 先跑一次把控制台+结果页签建好，再关掉弹窗重开，正式 take 的「执行 SQL」复用的就是
+    # 这个已带结果的结果页签（**同一段 SQL，所以复用到的数据是对的**）。
+    warm = find_exec_button(ide_pid)
+    if warm:
+        print("预热执行：点 %s" % (warm,))
+        pyautogui.click(*warm)
+        time.sleep(9.0)
+    close_preview(ide_pid)
+    pyautogui.click(600, 500); time.sleep(0.4)
+    goto_col(CHAIN_LINE, CHAIN_COL)
+    trigger_preview()
+    pyautogui.moveTo(*PARK, duration=0.4); time.sleep(1.0)
+
     # ---- 开录前自检：预览右缘必须是深色（浅底文档浮层盖上来会变亮）----
     mean = float(locate_grab(OVERLAY_WATCH).mean())
     print("预览右缘灰度均值 = %.1f（干净态 ~26）" % mean)
     if mean > 60:
         raise AssertionError("开录前画面不干净：预览右缘变亮（%.1f）——文档浮层可能盖住了预览" % mean)
 
-    # ---- 定位按钮：y 用剖面找按钮行，x 取该行最左亮簇 ----
-    main_rect = window_rect(pid=ide_pid, pick="largest")
-    popup = window_rect(pid=ide_pid, pick="smallest", min_size=(600, 400))
-    if popup is None or popup == main_rect:
-        raise RuntimeError("预览弹窗未打开（限定 PID 后只匹配到主窗口 %s）" % (main_rect,))
-    pw, ph = popup[2] - popup[0], popup[3] - popup[1]
-    img = locate_grab((popup[0], popup[1], pw, ph))
-    rx0 = int(pw * 0.45)
-    # 按钮行 y 用**几何标定**（底边 − 39，与 plan/BASELINE 的实测一致），不用 `bright_band_y`：
-    # 底部这带的**行**均值只有 40~43（面板底色本身 26，但按钮是描边样式、文字稀疏），
-    # 行向阈值法分不出来（实测 thr=45 全幅无亮带）；而**列**均值能把按钮文字聚成亮簇。
-    # ⚠️ 弹窗必须处于**新建态（SQL 视图）**：停在结果态时按钮行会整体上移（实测偏 40px），
-    # 底边−39 就落到按钮下方空白处——所以 prep 里的「关旧窗 + 重开」不是可选项。
-    row_y = ph - 39
-    clusters = bright_band_x(img, max(0, row_y - 14), min(ph, row_y + 14), rx0, pw,
-                             thr=45.0, min_gap=14, min_w=8)
-    if not clusters:
-        raise RuntimeError("按钮行上未找到亮簇（弹窗可能不在新建态）")
-    btn = (popup[0] + (clusters[0][0] + clusters[0][1]) // 2, popup[1] + row_y)
-    print("预览弹窗=%s(%dx%d) 按钮行 popup y=%d 亮簇=%s → 点最左簇=%s"
-          % (popup, pw, ph, row_y, [(popup[0] + a, popup[0] + b) for a, b in clusters[:4]], btn))
+    btn = find_exec_button(ide_pid)
 
     # ---- 录制 ----
     r = Recorder(REGION, OUT)
