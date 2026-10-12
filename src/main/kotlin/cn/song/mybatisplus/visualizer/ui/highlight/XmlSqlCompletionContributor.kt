@@ -164,6 +164,17 @@ class XmlSqlCompletionContributor : CompletionContributor(), DumbAware {
                     val sqlContext = resolveContext(enclosingTag)
                     val projectionProperties = projectionProperties(enclosingTag, sqlContext)
                     val quotedCandidates = quotedIdentifierCandidates(enclosingTag)
+                    // 大小写口径（T-XmlGap 收口第三轮真机实测）：候选词表多为**大写**关键字/函数
+                    // （`SELECT`/`WHERE`/`CONCAT`…），而编辑器给的前缀匹配器**区分大小写** ⇒ 小写键入
+                    // `wh` 时 `WHERE` 一个都不出（沙盒对照读数：`wh` 无候选、`WH` 出 `WHEN`/`WHERE`），
+                    // 用户观感就是「补全不灵」。SQL 关键字/函数与未加引号的标识符在语义上都大小写
+                    // 不敏感（MySQL/PG/Oracle 的未引号标识符均折叠大小写），故本分支在平台匹配之外
+                    // 再补一次**忽略大小写**的匹配；其余分支（参数名/实体字段等 Java 侧标识符）保持
+                    // 平台原语义不变。
+                    val typedPrefix = prefix.prefix
+                    fun sqlMatches(candidate: String): Boolean =
+                        prefix.prefixMatches(candidate) ||
+                            (typedPrefix.isNotEmpty() && candidate.startsWith(typedPrefix, ignoreCase = true))
                     SourceSqlCompleter.sqlCompletions(
                         stripped,
                         caretInStatement,
@@ -171,7 +182,7 @@ class XmlSqlCompletionContributor : CompletionContributor(), DumbAware {
                         projectionProperties,
                         quotedCandidates,
                     ).forEach { item ->
-                        if (item.allLookupStrings.any { prefix.prefixMatches(it) }) result.addElement(item)
+                        if (item.allLookupStrings.any { sqlMatches(it) }) result.addElement(item)
                     }
                 }
             },

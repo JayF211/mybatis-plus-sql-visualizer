@@ -435,6 +435,14 @@
 **顺带推翻一条仓内旧认知**：此前多处 KDoc 写「Light 测试环境不加载 plugin.xml 的 EP」——本轮实测**会加载**（`LanguageFolding.allForLanguageOrAny(XML)` 里能看到我方 builder；高亮器工厂按 EP 名解析成功）。故 EP 接线其实可在单测里直接断言，不必只靠「读 plugin.xml 文本 + 正则」的间接守卫（既有守卫保留，两者互补）。
 **反向验证**：把 EP 名改回裸 `<syntaxHighlighterFactory>` → 两例**双红**，实际读数 `PlainSyntaxHighlighter` / 键 `[TEXT]`（即用户看到的「整段白」形态）；恢复后绿。
 
+### 补全分派的单测级取证（`SqlMapperCompletionDispatchTest`，2 例 0 失败）
+
+收口第三轮沙盒走查里，在注入片段内（面包屑确为 `<Injected MpSqlMapper file>`）键入 `wh` **没弹出任何候选**，故把「贡献器是否真的挂到本语言上」也变成单测判据（同高亮器那招）：
+
+- `CompletionContributor.forLanguage(SqlMapperLanguage)` **含** `XmlSqlCompletionContributor` ⇒ `plugin.xml` 的 `<completion.contributor language="MpSqlMapper">` 生效（**接线正确**）；
+- `Language.findLanguageByID("MpSqlMapper")` **解析到本语言实例** ⇒ 按语言 ID 解析的 EP 都能挂上。**勘误**：此前多处 KDoc/记录写「注入语言无 `<language>` EP 注册 ⇒ 按 ID 查不到」，实测**不成立**——平台能按 ID 解析到代码里创建的语言实例。
+- 「键入 `wh` 不弹」的原因**不在接线**：候选词表是大写（`WHERE`），真实编辑器的前缀匹配器**区分大小写** ⇒ 小写前缀匹配不到；而单测用的是 `ALWAYS_TRUE` 前缀器，覆盖不到这个差异。**真机复核见「沙盒走查（六）」**。
+
 ### 沙盒走查（五）：折叠占位真机读数（IU-2024.3.7.1，收口第二轮）
 
 环境同走查（四）：默认 243 沙盒 + `easy-code-demo` 的 `src/main/resources/mapper/UserMapper.xml`（含多行 `<select id="selectAllByUsernameLikeAndPasswordOrderById">`）。
@@ -459,10 +467,27 @@
 | 未跑项 | `verifyGate`/`verifyPlugin` 本轮**未重跑**——本轮无新增 EP 面（只改了一个函数实现 + 新增测试），且已实证 Plugin Verifier **不覆盖** EP 名可解析性（见「为什么三道既有门禁都没拦住」），重跑对本 bug 类零判别力 |
 | 读数时效 | 本轮门禁跑在提交 `e711dd7` 上；其后仅两处**非行为**改动（测试文件删 2 个未用 import、测试 KDoc 订正措辞 + 文档回填），不影响该读数 |
 
+### 沙盒走查（六）：剩余视觉项与补全大小写口径（IU-2024.3.7.1，收口第三轮）
+
+| 项 | 读数 | 截图（`mpsv-walk/`） |
+|---|---|---|
+| **颜色页可调**（W6 验收） | ✅ `Settings → Editor → Color Scheme → MyBatis Mapper SQL` 在场：左侧列 14 个键（关键字/圆括号/字符串/**字符串替换占位 `${}`**/数字/方括号/标识符（表名/列名/别名）/注释/点号/花括号…），下方为着色预览 | `vis-01-settings.png`、`vis-02-search.png` |
+| **`#{}` 与 `${}` 一眼可分**（W2 验收） | ✅ 同一预览里：`#{keyword}` 呈**定界符橙 + 内容蓝**，`${tenantid}` 呈**紫色**（INSTANCE_FIELD）——色相明显不同 | `vis-03-preview-zoom.png`（3× 放大） |
+| **属性值补全候选** | ✅ `refid` 值位显式触发补全出 `Base_Column_List`；`test` 值位出平台的 `username`（该位平台亦有注入，候选共存） | `vis-09-completion5.png`、`vis-10-sqlcompletion.png` |
+| **SQL 体补全候选** | ⚠️ 小写前缀 `wh` **零候选**、大写 `WH` 出 `WHEN`/`WHERE` ⇒ 见下「大小写口径」 | `vis-14-whpopup.png`、`vis-21-WHpopup.png` |
+| 自动弹出（autopopup） | ❌ 本轮沙盒里**键入字母不自动弹**（须显式触发）——疑似沙盒设置（Show suggestions as you type）所致，**未深究**；不影响「显式触发有候选」的结论 | — |
+| live template `cd`/`co`、`#{}` 成对删 | ❓ 本轮**未取到**：GUI 步进成本高且每步都可能误触（见下「工具坑」）；两者均有单测（`XmlGapEditingAssistTest` 覆盖成对删、模板文件与 EP 在册） | — |
+
+**大小写口径（本轮真机抓出的新缺口，已修）**：候选词表是大写关键字/函数（`WHERE`/`SUBSTR`…），而编辑器给的前缀匹配器**区分大小写** ⇒ 小写键入 `wh` 时 `WHERE` 一个都不出，用户观感就是「补全不灵」。已在 SQL 文本分支补一次**忽略大小写**的匹配（其余分支保持平台原语义），守卫 `XmlSqlCompletionCaseInsensitiveTest`（4 例，含「`CamelHumpMatcher("wh").prefixMatches("WHERE")` 为 false」的**前提自证**——平台若改成不区分大小写，该例会红并提示重估）。
+**反向验证（两次读数，探针精准）**：临时摘掉忽略大小写分支（`RED PROBE` 留痕）→ `test01`/`test03` **双红且候选为空列表**（`wh`→`[]`、`sub`→`[]`，与沙盒观察逐字一致），`test00`（前提自证）/`test02`（大写前缀）仍绿 ⇒ 只打中该分支；还原后 **4 例全绿**。
+**顺带一条观察（未改）**：函数表 19 项里**没有 `CONCAT`**（而 demo mapper 里就在用 `CONCAT`）——表内容按计划口径「自整理、不照抄竞品」定案，本轮只登记不改表。
+
+**工具坑（本轮实录，已并入前节清单）**：①本机 **`Ctrl+Space` 被中文输入法占用**（切换输入法），沙盒里触发补全须走 Find Action；②**Find Action 弹窗关闭后再按 Enter 会落进编辑器插入换行**（本轮两次踩到，均已 Ctrl+Z 撤销 + `git diff` 核对还原）；③Find Action 的 `Basic` 需**两次 Enter**（首次给搜索框自身的补全）。
+
 ### 遗留与待真机项（W8 收口）
 
 1. **颜色页**：✅ 已补（见上节）。
-2. **真机走查**：**三站均已做**——①runIde **243**（最低支持版，见前节）；②**IU 2026.2.1 Ultimate + CHP 已激活 + zMyBatis 共存沙盒**（见上节，W1 前提 1 现场实证「未被让位」+ Ctrl+B 跳转实证）；③**收口第二轮**：同 243 沙盒补做「着色端到端」（走查四）与「折叠占位」（走查五）。**剩余 4 项视觉确认待用户侧**（各约 30 秒，代码与单测均已覆盖）：`#{}` 与 `${}` 是否**互相**一眼可分、属性值补全候选、live template `cd`/`co` 展开、`#{}` 成对删、颜色页（Settings → Editor → Color Scheme → MyBatis Mapper SQL）可调。
+2. **真机走查**：**四站均已做**——①runIde **243**（最低支持版，见前节）；②**IU 2026.2.1 Ultimate + CHP 已激活 + zMyBatis 共存沙盒**（W1 前提 1 现场实证「未被让位」+ Ctrl+B 跳转实证）；③**收口第二轮**：同 243 沙盒补做「着色端到端」（走查四）与「折叠占位」（走查五）；④**收口第三轮**：同沙盒补做「颜色页 + `#{}`/`${}` 分色 + 补全候选」（走查六）。**原 5 项待用户侧核对中 3 项已由走查六关闭**（颜色页可调、`#{}`/`${}` 一眼可分、属性值补全候选）；**剩 2 项仍待用户侧**（各约 30 秒，代码与单测均已覆盖）：live template `cd`/`co` 展开、`#{}` 成对删。
 3. **折叠占位文本**（`select#id`）：✅ **已隔离观察 + 真机取证**（见「折叠优先级的结构取证」+「沙盒走查（五）」）——两区范围不同、模型里共存，**用户折叠语句标签时看到的是我方 `select#id`**；原备选方案（改折语句体文本）**不需要**。
 4. **W4/W5 四项未单测项**：✅ **已补测，四项全绿**（见「W4/W5 四项补测读数」）；「受 Light 沙箱索引限制」的前提**被实测推翻**，且补测中**抓出一个真实缺陷**（`<properties>` key 取值口径错，已修）。
 5. **W2/W3 两处待评审取舍**（仍待评审，非缺陷）：布尔是否单独配色（现与关键字同色）；方言并集过度着色是否要 per-file 方言收敛。
