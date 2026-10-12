@@ -346,7 +346,9 @@
 
 **待定（下一步，需真机/平台侧再挖）**：为何平台不为该注入片段取 `SyntaxHighlighterFactory`（两版皆然）。候选方向：①平台 Database 插件对 mapper XML 的同区间 SQL 注入抢占渲染；②注入片段的语言在高亮 pass 侧未被识别为可着色语言。**在查清之前，本计划「编辑器内着色」这一项的对外承诺不成立**——W2/W3 的键表与词法成果仍在（单测绿），但用户看不到。
 
-**用户可立即自测的对照**：在 IDE 里给 mapper XML 配 SQL 方言（Settings → Languages & Frameworks → SQL Dialects，把项目或 mapper 目录指到 MySQL）后看语句体是否上色——若上色即证实「平台着色需方言」，但那是平台能力、非本插件成果。
+**✅ 用户修法已实测验证（2026-10-12 当轮）**：在 **项目级** `.idea/sqldialects.xml` 加一条 `<file url="PROJECT" dialect="MySQL" />`（等价于 Settings → Languages & Frameworks → SQL Dialects → 把项目/mapper 目录指到 MySQL）后重启 IDE，**mapper XML 语句体的 SQL 文本立刻上色**（实测 5× 原像素：`select`/`from`/`and`/`like`/`concat` 橙＝KEYWORD、`user`/`username` 浅蓝＝IDENTIFIER、`'%'` 绿＝STRING、`#{username}` 定界符有色）✓ —— 即：**用户真机的「整段白」根因是 mapper 文件没有 SQL 方言映射，配上即好**。
+**关键坑（本轮踩到）**：`SqlDialectMappings` 是 **`projectSettings`**（Database 插件 plugin.xml 实证），存在**项目** `.idea/sqldialects.xml`，**不是**应用级 `options/sqlDialects.xml`——写错位置会静默无效（本轮先踩了这个坑）。
+**残留缺口（本插件侧，非平台可解）**：`<sql id=...>` 片段体这类**非语句标签**平台不覆盖，配上方言也不上色；本应由此处由我方注入着色，但我方高亮器不被调用（上表）⇒ 该处仍是白。**故「编辑器内着色」这项的对外承诺应改写为**：Ultimate 下语句体着色由**平台 SQL 注入**承担（需用户配 SQL 方言）；我方 W2/W3 的着色只在平台不注入的场景（如 Community）才可能显现，而该场景本轮未取得可运行环境（构建基准为 IU）。
 
 ### 遗留与待真机项（W8 收口）
 
