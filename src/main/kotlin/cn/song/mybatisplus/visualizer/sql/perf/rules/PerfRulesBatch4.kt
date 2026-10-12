@@ -1,7 +1,11 @@
 package cn.song.mybatisplus.visualizer.sql.perf.rules
 
 import cn.song.mybatisplus.visualizer.sql.Dialect
+import cn.song.mybatisplus.visualizer.sql.MariaDbDialect
+import cn.song.mybatisplus.visualizer.sql.MySqlDialect
+import cn.song.mybatisplus.visualizer.sql.OceanBaseDialect
 import cn.song.mybatisplus.visualizer.sql.perf.DialectAwarePerfRule
+import cn.song.mybatisplus.visualizer.sql.perf.PerfContext
 import cn.song.mybatisplus.visualizer.sql.perf.PerfRule
 import cn.song.mybatisplus.visualizer.sql.perf.PerfSeverity
 import cn.song.mybatisplus.visualizer.sql.perf.PerfWarning
@@ -15,7 +19,7 @@ import net.sf.jsqlparser.util.TablesNamesFinder
  *
  * 与前三批的差别：本批规则的正确性依赖当前数据库方言，实现 [DialectAwarePerfRule]，
  * 由 [cn.song.mybatisplus.visualizer.sql.perf.PerfRuleEngine.apply] 在拿到方言时改调
- * [DialectAwarePerfRule.checkWithDialect]。
+ * [DialectAwarePerfRule.check]。
  *
  * 规则清单：
  *  - `dialect_quote_mismatch`：标识符用了当前方言不接受的引号字符（如 MySQL 方言下出现 `FROM "user" t`）。
@@ -41,8 +45,20 @@ object PerfRulesBatch4 {
      *    实测），且字符串字面量里的引号（`'say "hi"'`）不是标识符节点，**天然不误伤**；
      *  - AST 为 null（降级）：正则扫描 SQL 文本，**先剥离单引号字符串字面量与注释**，再找引号包裹的标识符。
      *
+     * 严重度分两档（T-DialectQuoteWarn §十二）：
+     *  - **无歧义档 → ERROR**：PG / Oracle / DM / KingBase / openGauss 遇反引号、非 SQL Server 遇方括号
+     *    等——这些引号字符在对应方言下**一定**不是标识符引号，报语法错无例外；
+     *  - **MySQL 家族（MySQL / MariaDB / OceanBase）+ 双引号 → 至多 WARN**：双引号是否是标识符取决于
+     *    连接的 `sql_mode` 是否含 `ANSI_QUOTES`。**URL 只能证明「合法」，不能证明「非法」**——生效
+     *    `sql_mode` = 服务端全局 + 会话覆盖，URL 里的 `sessionVariables` 只是会话覆盖，未声明时服务端
+     *    全局仍可能开着。故：
+     *    - [PerfContext.ansiQuotes] `== true`（URL 明示声明）→ **不报**（已确知合法）；
+     *    - `== false`（已知但未声明）或 `== null`（未知）→ WARN，文案带前提（若实际未开启则报语法错）。
+     *    缓存键含该三态，见 [cn.song.mybatisplus.visualizer.sql.SqlPerfAnalyzer]。
+     *
      * 无方言上下文（`dialect == null`）或方言未声明引号集合（基类兜底空集）→ 返回空列表（宁可不报）。
-     * 命中时**至多一条**告警（取第一个不被接受的引号字符）。
+     * 命中时**至多一条**告警：优先报无歧义档（MySQL 家族下同时出现 `"x"` 与 `[y]` 时，`[y]` 的 ERROR
+     * 不被双引号的 WARN 掩盖）。
      */
     object DialectQuoteMismatchRule : DialectAwarePerfRule {
 
@@ -51,33 +67,57 @@ object PerfRulesBatch4 {
         /** 无方言上下文的降级：不做判定（[DialectAwarePerfRule] 契约要求实现，语义即「不报」）。 */
         override fun check(sql: String, ast: Statement?): List<PerfWarning> = emptyList()
 
-        override fun checkWithDialect(sql: String, ast: Statement?, dialect: Dialect?): List<PerfWarning> {
-            if (dialect == null) return emptyList()
+        override fun check(ctx: PerfContext): List<PerfWarning> {
+            val dialect = ctx.dialect ?: return emptyList()
             val accepted = dialect.identifierQuotes
             // 空集 = 基类兜底「不判」（无方言上下文时宁可不报也不误报）
             if (accepted.isEmpty()) return emptyList()
 
-            val identifiers = if (ast != null) collectIdentifiersFromAst(ast) else collectIdentifiersFromText(sql)
+            val identifiers = if (ctx.ast != null) collectIdentifiersFromAst(ctx.ast) else collectIdentifiersFromText(ctx.sql)
 
             val offending = identifiers.asSequence()
                 .mapNotNull { quoteCharOf(it) }
-                .firstOrNull { it !in accepted }
-                ?: return emptyList()
+                .filter { it !in accepted }
+                .distinct()
+                .toList()
+            if (offending.isEmpty()) return emptyList()
 
+            // 无歧义档优先：MySQL 家族之外的引号不匹配（或 MySQL 家族下的方括号等）一定报语法错 → ERROR
+            val unambiguous = offending.firstOrNull { !isAmbiguousMysqlDoubleQuote(dialect, it) }
+            if (unambiguous != null) {
+                return listOf(
+                    PerfWarning(
+                        ruleId = ruleId,
+                        severity = PerfSeverity.ERROR,
+                        messageKey = "perf.dialect_quote_mismatch",
+                        messageArgs = listOf(quoteDisplay(unambiguous), dialect.name, acceptedDisplay(accepted)),
+                    ),
+                )
+            }
+
+            // 只剩「MySQL 家族 + 双引号」这一档：URL 只能证明合法、不能证明非法（§十二），故至多 WARN。
+            // 已确知连接声明了 ANSI_QUOTES → 不报。
+            if (ctx.ansiQuotes == true) return emptyList()
             return listOf(
                 PerfWarning(
                     ruleId = ruleId,
-                    severity = PerfSeverity.ERROR,
-                    messageKey = "perf.dialect_quote_mismatch",
-                    messageArgs = listOf(
-                        quoteDisplay(offending),
-                        dialect.name,
-                        acceptedDisplay(accepted),
-                    ),
+                    severity = PerfSeverity.WARN,
+                    messageKey = "perf.dialect_quote_mismatch_ansi_quotes",
+                    messageArgs = listOf(quoteDisplay(offending.first()), dialect.name, acceptedDisplay(accepted)),
                 ),
             )
         }
     }
+
+    /** MySQL 家族（双引号是否为标识符取决于连接 `sql_mode` 是否含 `ANSI_QUOTES`）。 */
+    private val MYSQL_FAMILY: Set<Dialect> = setOf(MySqlDialect, MariaDbDialect, OceanBaseDialect)
+
+    /**
+     * 「MySQL 家族 + 双引号」＝判定**有歧义**的档：URL 只能证明合法、不能证明非法，故不得用 ERROR。
+     * 其余组合（PG 族遇反引号、非 SQL Server 遇方括号等）引号字符一定不是标识符引号 → 无歧义。
+     */
+    private fun isAmbiguousMysqlDoubleQuote(dialect: Dialect, quote: Char): Boolean =
+        quote == '"' && dialect in MYSQL_FAMILY
 
     // ------------------------------------------------------------------
     // 标识符收集
