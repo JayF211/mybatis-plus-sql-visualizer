@@ -363,6 +363,8 @@
 - 把 plugin.xml 临时改回裸名：**红**，报 `plugin.xml: <syntaxHighlighterFactory> → com.intellij.syntaxHighlighterFactory`；
 - 还原修复态后再跑：绿。（同一守卫在首次试跑时还抓出并核实了一处**假阳性**：`database-optional.xml` 的 `com.intellij.database.modelRelationProvider` 是 `database-plugin.jar` 真实声明的 EP，仅测试沙盒未加载 Database 插件——已按「逐条注明来源」的口径列入豁免表。）
 
+**为什么三道既有门禁都没拦住（值得记住）**：这条死注册穿过了 ①定向单测、②`testShards` 全量分片、③`verifyGate` 三目标（243/253/262）——①②的扫描面是 Kotlin 逻辑与行为，EP 名可解析性不在其中；③的 Plugin Verifier 读的是 API/类引用与兼容性，**不校验 `plugin.xml` 里 EP 名能否解析**（该裸名自 T-XmlSynHi D1 起就在册，本仓历轮 `verifyGate` 均 `Compatible.`、且明记「无未知 EP 告警」即证）。故本轮新增的 `config/PluginXmlExtensionPointResolutionTest` 是这条链上**唯一**能自动复核的护栏——**同族坑第二次踩到才补上机器判据**，这也说明「EP 名对不对」此前完全靠人眼。
+
 **影响面与结论改写**：本条与「平台 Database 插件抢占」无关，也**不是**方言配置问题——上一节「用户修法」实测到的上色是**平台 SQL 注入**画的（Ultimate 下平台本就给 mapper 语句体注入 SQL，但需配 SQL 方言），与我方链路互不相干；我方链路此前从未通过。故：
 - **「编辑器内着色」的对外承诺成立**（此前记的「承诺不成立」作废），且**不依赖用户配 SQL 方言**；
 - 上一节「残留缺口：`<sql id=…>` 片段体平台不覆盖」**仍然成立，但成因变了**：我方注入器的作用面是「mapper 文件内任意标签的直属文本」（`XmlSynHiGate.allowStatementText` 只查 mapper 根与长度熔断，**不按标签名收窄**），故 `<sql>`/`<if>`/`<foreach>` 体内的文本**本就由我方注入**——修复后这些位也会着色，不再需要平台覆盖；
@@ -389,6 +391,17 @@
 **⚠️ 本条结论已按上节修正（留原文防误导）**：配 SQL 方言上色**只能证明平台 SQL 注入链路是通的**，不能证明「用户『整段白』的根因是没配方言」——我方链路的真因是 EP 名写错（上节），且**不需要**用户配方言。两条链路互相独立，谁在渲染取决于环境（平台注入在位时会盖在我方之上，观感一致，故不能用「配了方言就上色」反推我方是否生效）。
 **残留缺口（原判）**：`<sql id=...>` 片段体这类**非语句标签**平台不覆盖，配上方言也不上色；本应由此处由我方注入着色，但我方高亮器不被调用（上表）⇒ 该处仍是白。**⚠️ 该判据随上节修复作废**：我方注入器按「mapper 文件内任意标签的直属文本」注入（不按标签名收窄），修复后 `<sql>`/`<if>`/`<foreach>` 体内同样着色——原先「非平台可解」的表述不成立。
 
+### 收口轮（EP 名修复）门禁读数（2026-10-12，对应提交 `8cd794a`）
+
+| 项 | 读数 |
+|---|---|
+| 定向（`ui.inject.*` + `ui.highlight.Xml*` + `ui.highlight.Mybatis*` + `config.PluginXml*` + `convention.GuardSelfTestCoverageMetaGuardTest`） | **28 类 / 250 例 / 0 失败 / 0 错误** |
+| `testShards` 首轮 | **FAILED 3m 24s**；5 片 1248/1510/1429/1384/1390 = 6961 例 / **1 失败**——失败＝`SqlTextAnalysisTest` 的 `NoSuchMethodError`（旧 3 参 `sqlCompletions` 重载）＝本仓**已登记**的「陈旧测试字节码」假失败形态（W4/W5 加默认参数改了 JVM 签名，`compileTestKotlin` 判 UP-TO-DATE 未重编） |
+| `testShards` 复跑（清 `build/classes/kotlin/test` 强制重编，**非 `clean`**；带 `--no-configuration-cache`） | **BUILD SUCCESSFUL 11m 11s，EXIT=0**；5 片 **1228/1525/1491/1227/1490 = 6985 例 / 0 失败 / 0 错误 / 9 skipped**（+ `testExternal` 24 例 1 skipped）；`parity: 计划类全集 632 个均有结果 XML` ✓；本轮新增的 `PluginXmlExtensionPointResolutionTest` 落在 shard3（2 例 0 失败，结果 XML 已产出） |
+| 计数对账 | 上一轮权威读数（`b9a472b`）为 6959 例 / 629 类；本轮 6985 例 / 632 类（+26 例 / +3 类）——**差额未逐类归因**（分片清单在 `--no-configuration-cache` 下重算，且其间 master 有合并提交），仅确认本轮新增类**确在**清单内（parity 632 全覆盖 + shard3 结果 XML 在场）。如后续需严格对账，按「各片计数 vs 新增用例数」逐类核 |
+| 门禁告警 | `testShards WARN: 临界片失衡 +19%（shard1 125.2s vs 均值 105.2s）——权重失准/新类缺权嫌疑`：属权重画像过期提示（新类零权重插值），非失败；如需消警跑 `dev-support/weight-refresh.ps1` |
+| 未跑项 | `verifyGate`/`verifyPlugin` 本轮**未重跑**——理由：本轮无新增 EP 面（同一 EP 仅改正名字），且已实证 Plugin Verifier **不覆盖** EP 名可解析性（见「为什么三道既有门禁都没拦住」），重跑对本 bug 类零判别力 |
+
 ### 遗留与待真机项（W8 收口）
 
 1. **颜色页**：✅ 已补（见上节）。
@@ -397,4 +410,4 @@
 3. **W4/W5 子代理登记的未单测项**（受 Light 沙箱索引限制）：跨文件 `refid`、`<properties>` key 聚合、foreach item 元素字段、`@类@静态成员`——由 W8 收口时评估补测或真机复核。
 4. **W2/W3 登记的两处待评审取舍**：布尔是否单独配色（现与关键字同色）；方言并集过度着色是否要 per-file 方言收敛。
 5. **全量门禁**：一次（收口阶段，只读收口代理执行）；因新增平台 API 面（`RestartableLexer`）与 7 个新 EP，附加 `verifyPlugin` 三目标。
-6. **编辑器内着色**：✅ **已修并端到端取证**（收口轮，见「着色真根因定位与修复」+「沙盒走查（四）」）——此前「对外承诺不成立」的结论作废；守卫 `config/PluginXmlExtensionPointResolutionTest` 已把 EP 名可解析性纳入自动复核。**收口轮未跑全量门禁**（本轮改动＝1 行 EP 名 + 1 个新测试类 + 文档；定向套件另跑，见提交信息）。
+6. **编辑器内着色**：✅ **已修并端到端取证**（收口轮，见「着色真根因定位与修复」+「沙盒走查（四）」）——此前「对外承诺不成立」的结论作废；守卫 `config/PluginXmlExtensionPointResolutionTest` 已把 EP 名可解析性纳入自动复核。权威全量门禁**已跑**（见「收口轮（EP 名修复）门禁读数」：6985 例 0 失败）。
