@@ -389,6 +389,11 @@
              注入的语句文本，不触碰 XML 全局拼写行为 -->
         <spellchecker.support language="MpSqlMapper"
                               implementationClass="cn.song.mybatisplus.visualizer.ui.inject.SqlMapperSpellcheckingStrategy"/>
+        <!-- T-XmlGap W6 修订（沙盒走查抓出）：拼写检查发生在**宿主 XmlText** 上，注入语言层的豁免
+             管不到它（平台 XmlSpellcheckingStrategy 对非「支持方言」的注入回落检查原文）。
+             本类继承平台 XML 策略、只对 mapper 语句文本返回空 tokenizer，其余元素原样委托 -->
+        <spellchecker.support language="XML"
+                              implementationClass="cn.song.mybatisplus.visualizer.ui.inject.SqlMapperXmlSpellcheckingStrategy"/>
         <!-- T-XmlGap W6：注入语言的颜色设置页（14 键可调；此前颜色只借平台语义槽，用户只能改全局主题） -->
         <colorSettingsPage implementation="cn.song.mybatisplus.visualizer.ui.inject.SqlMapperColorSettingsPage"/>
         <!-- T-XmlGap W6：mapper 语句标签的带 id 折叠（平台已为 XML 标签建区、占位为标签名本身；

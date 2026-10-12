@@ -266,6 +266,26 @@
 
 **门禁时效性说明**：`testShards` 复跑与 `verifyGate` 的读数对应提交 `7a97a77`；其后仅新增**测试类** `XmlSynHiFuseTest`（零生产代码改动），已定向验证绿——如需严格同树对账，下次门禁即覆盖。
 
+### W8 沙盒走查读数（IU-2024.3.7.1 = 243，最低支持版本）
+
+环境：`./gradlew runIde --args="<demo 项目>" -Pkotlin.compiler.execution.strategy=in-process`；沙盒为 **IU-2024.3.7.1**（正好是最低支持版，比默认 262 更有说服力）；pyautogui 驱动，截图存外层 `mpsv-walk/xmlgap-*.png`（不进仓）。
+目标文件：`mybatis-plus-demo/src/main/resources/mapper/OrderMapper.xml`（同文件含 4 个 `#{}` 与 4 个 `${}`）。
+
+| 走查项 | 读数 | 证据 |
+|---|---|---|
+| 插件在 243 沙盒加载并工作 | ✅ 预览面板正常渲染、`执行 SQL` 真跑出 2 行结果（面板显示 `2 rows`） | `xmlgap-06/13-*.png` |
+| **SQL 关键字着色** | ✅ `SELECT`/`FROM`/`LEFT JOIN`/`ON` 呈 KEYWORD 橙，与正文明显区分 | `xmlgap-07-zoom-sql.png`（放大 2×） |
+| **标识符着色**（W3 新增能力） | ✅ 列名/表名（`o.id`/`t_order`/`user`/`u.id`）呈 IDENTIFIER 浅蓝，肉眼可辨 | 同上 |
+| **`${}` 着色**（W2 分色） | ✅ 定界符 `${`/`}` 呈 KEYWORD 橙、内部标识符另色——与 `#{}` 一眼可分的设计目标达成 | 同上 |
+| 语句标签折叠标记 | ✅ 第 6/11/17 行（含 id 的语句标签）gutter 有折叠标记 | `xmlgap-06-editor-clean2.png` |
+| **拼写豁免** | ❌→已修：SQL 文本上仍有绿色 typo 波浪线 | 见下 |
+| 折叠**占位文本**（`select#id`） | ❓ 未直接观察到——折叠操作被插件自身预览弹窗打断（模态抢交互），标记在场已证 | `xmlgap-10/12-*.png` |
+
+**走查抓出的缺陷与修法（这是本轮走查的最大价值）**：拼写豁免原先只挂在**注入语言** `MpSqlMapper` 上，而 mapper 语句文本的拼写检查发生在**宿主 XmlText** 上——平台 `XmlSpellcheckingStrategy`（`extends SuppressibleSpellcheckingStrategy`）经 `hasForeignLanguageChildren`/`hasOnlySupportedDialects` 判定是否回落检查原文（javap 实证），我方自研语言不在其「支持方言」集合内 ⇒ 回落 ⇒ 波浪线照旧。
+修法：新增 `SqlMapperXmlSpellcheckingStrategy`（**继承平台 XML 策略**，只对「mapper 语句标签下的 XmlText」返回空 tokenizer，其余元素 `super` 原样委托，非目标 XML 拼写行为与平台逐字一致）+ `<spellchecker.support language="XML">` 注册；用例 `SqlMapperXmlSpellcheckingStrategyTest` 钉「语句文本豁免 / 非 mapper 文本与属性值原样委托」四条边界。
+
+**沙盒清理核验**：`Alt+F4` 逐级关闭（模态 → 项目信任框 → 欢迎页）后 `runIde` 任务正常结束（exit 0）；`Get-CimInstance` 按命令行过滤 `xmlgap`/`idea-sandbox`/`MPSV` **零残留**（记忆里「强停 gradle 不带走进程 ⇒ 下次 runIde 目录锁失败」的坑已避开）。
+
 ### 遗留与待真机项（W8 收口）
 
 1. **颜色页**：✅ 已补（见上节）。
