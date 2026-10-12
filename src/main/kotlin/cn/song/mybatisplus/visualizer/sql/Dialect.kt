@@ -40,6 +40,23 @@ interface Dialect {
     fun quoteIdentifier(identifier: String): String = identifier
 
     /**
+     * 本方言**可接受的标识符引号字符**集合（T-DialectQuoteWarn，`dialect_quote_mismatch` 判定用）。
+     *
+     * 存**开引号字符**：反引号 `` ` `` / 双引号 `"` / 方括号 `[`（方括号的闭引号 `]` 不单列）。
+     * 空集 = **不做引号方言判定**（基类兜底：无方言上下文时宁可不报也不误报）。
+     *
+     * 各方言按**实际宽容度**给集合，不按「品牌印象」一刀切：
+     *  - MySQL / MariaDB / OceanBase：仅反引号（双引号默认是字符串字面量，`ANSI_QUOTES` 下才成标识符）；
+     *  - PostgreSQL / Oracle / DM / KingBase / openGauss：仅双引号；
+     *  - SQL Server：方括号 + 双引号（`QUOTED_IDENTIFIER` **默认 ON**，双引号合法，判错即误报）；
+     *  - SQLite / H2：双引号 + 反引号 + 方括号（两者都收多种引号）。
+     *
+     * **不要**用 `quoteIdentifier("x").first()` 反推——基类 `quoteIdentifier` 原样返回，
+     * 反推会得到字母 `x`（而非引号）。本属性是引号方言判定的唯一事实源。
+     */
+    val identifierQuotes: Set<Char> get() = emptySet()
+
+    /**
      * 本方言保留字集合（T-M23.4，小写；[quoteIfKeyword] 判定用）——
      * 按方言判定：MySQL 只判 MySQL 保留字（如 `number` 是 Oracle 保留字但 MySQL 合法：MySQL 不包）。
      */
@@ -372,6 +389,8 @@ object MySqlDialect : Dialect {
 
     override fun quoteIdentifier(identifier: String): String = "`$identifier`"
 
+    override val identifierQuotes: Set<Char> = setOf('`')
+
     override val reservedWords: Set<String> = MYSQL_RESERVED
 
     override fun renderUpsert(
@@ -395,6 +414,8 @@ object PostgreSQLDialect : Dialect {
     override fun renderLimit(limit: LimitClause): String = renderPgStyleLimit(limit)
 
     override fun quoteIdentifier(identifier: String): String = "\"$identifier\""
+
+    override val identifierQuotes: Set<Char> = setOf('"')
 
     /**
      * O-51：PG 裸标识符**折叠为小写**，故目录来源（字典真实名字）按「含大写字母即加引号」判定
@@ -433,6 +454,8 @@ object OracleDialect : Dialect {
 
     override fun quoteIdentifier(identifier: String): String = "\"$identifier\""
 
+    override val identifierQuotes: Set<Char> = setOf('"')
+
     /**
      * O-42 的「含小写字母即加引号」规则自 O-51 起由基类按族实现（[Dialect.quoteIfNeeded]），
      * 本类**不再覆写**该方法——只声明族归属，判据落在 `IdentifierFolding.UPPER` 分支。
@@ -462,6 +485,9 @@ object SqlServerDialect : Dialect {
         "OFFSET ${renderLimitValue(limit.offset ?: SqlValue.Literal("0"))} ROWS FETCH NEXT ${renderLimitValue(limit.count)} ROWS ONLY"
 
     override fun quoteIdentifier(identifier: String): String = "[$identifier]"
+
+    /** T-DialectQuoteWarn：`QUOTED_IDENTIFIER` 默认 ON → 方括号与双引号都合法（判双引号错即误报）。 */
+    override val identifierQuotes: Set<Char> = setOf('[', '"')
 
     override val reservedWords: Set<String> = SQLSERVER_RESERVED
 
@@ -527,6 +553,9 @@ object H2Dialect : Dialect {
 
     override fun quoteIdentifier(identifier: String): String = "\"$identifier\""
 
+    /** T-DialectQuoteWarn：H2 收双引号 / 反引号 / 方括号三种标识符引号（引擎宽容）。 */
+    override val identifierQuotes: Set<Char> = setOf('"', '`', '[')
+
     /**
      * O-51：H2 裸标识符**折叠为大写**（与 Oracle 同族）→ UPPER 族，目录来源的字典名
      * 「含小写字母即加引号」。
@@ -565,6 +594,9 @@ object SqliteDialect : Dialect {
 
     override fun quoteIdentifier(identifier: String): String = "\"$identifier\""
 
+    /** T-DialectQuoteWarn：SQLite 收双引号 / 反引号 / 方括号三种标识符引号（官方文法宽容）。 */
+    override val identifierQuotes: Set<Char> = setOf('"', '`', '[')
+
     override val reservedWords: Set<String> = SQLITE_RESERVED
 
     override fun renderUpsert(
@@ -592,6 +624,8 @@ object MariaDbDialect : Dialect {
     override val supportsDeleteLimit: Boolean = true
 
     override fun quoteIdentifier(identifier: String): String = "`$identifier`"
+
+    override val identifierQuotes: Set<Char> = setOf('`')
 
     override val reservedWords: Set<String> = MARIA_RESERVED
 
@@ -623,6 +657,8 @@ object DmDialect : Dialect {
     override val supportsDeleteLimit: Boolean = true
 
     override fun quoteIdentifier(identifier: String): String = "\"$identifier\""
+
+    override val identifierQuotes: Set<Char> = setOf('"')
 
     /**
      * **DM8 需要 identity 包装（2026-09-23 真机实测新增，原默认「不包装」是缺陷）**。
@@ -665,6 +701,8 @@ object KingBaseDialect : Dialect {
     override fun renderLimit(limit: LimitClause): String = renderPgStyleLimit(limit)
 
     override fun quoteIdentifier(identifier: String): String = "\"$identifier\""
+
+    override val identifierQuotes: Set<Char> = setOf('"')
 
     /**
      * O-51：金仓与 PG 同折叠方向（裸标识符折叠为小写）→ LOWER 族。
@@ -712,6 +750,8 @@ object OceanBaseDialect : Dialect {
 
     override fun quoteIdentifier(identifier: String): String = "`$identifier`"
 
+    override val identifierQuotes: Set<Char> = setOf('`')
+
     override val reservedWords: Set<String> = MYSQL_RESERVED
 
     override fun renderUpsert(
@@ -752,6 +792,8 @@ object OpenGaussDialect : Dialect {
     override fun renderLimit(limit: LimitClause): String = renderPgStyleLimit(limit)
 
     override fun quoteIdentifier(identifier: String): String = "\"$identifier\""
+
+    override val identifierQuotes: Set<Char> = setOf('"')
 
     /**
      * 折叠方向 LOWER：openGauss 5.0.0 真机实测（2026-09-23，DBX 只读通道），与 PG/KingBase 同族
