@@ -302,10 +302,30 @@
 **处置后读数（最终树，`b9a472b`）**：`testShards --no-configuration-cache` → **6959 例 / 0 失败 / 0 错误 / 8 skipped**，5 片 1378/1386/1467/1413/1315（= 原 6947 **+ 本轮净增 12 例**，逐类核对 `SqlMapperFoldingBuilderTest`/`XmlSynHiFuseTest`/`InjectRangePlanTest`/`MybatisXmlReferenceTest`/`XmlSqlCompletionW4W5Test`/`SqlMapperKeywordCoverageGuardTest` 等结果文件均已在各片产出）；`verifyGate --no-configuration-cache` → **BUILD SUCCESSFUL 1m54s，EXIT=0**，三目标 verdict 仍全 `Compatible.`。
 **给后人的判据**：见到「新增测试类后全量各片计数不变」即为本缺口形态；`testShards` 读数与「新增用例数」对不上账时，先查 configuration cache。
 
+### W8 走查（二）：Ultimate 262 + CHP + zMyBatis **共存环境**（本批次最关键的一站）
+
+**环境复刻方式与理由**：计划原写「用户日常 IU 2026.2」，但直接往用户日常 IDE 装开发包会**覆盖其在用的发行版**（不可逆的用户侧副作用，且属用户环境改动）——故改为**等价复刻**：`./gradlew runIde -PgifRecord=true` 起 **IU 2026.2.1 Ultimate** 沙盒（`build/MPSV-GifFresh`），并把用户机在装的 `MyBatisCodeHelper-Pro`（37M，含 `valid=true` 的 `MyBatisCodeHelper.xml`）与 `zMyBatis`（1.9M）连同激活配置一并拷入沙盒 → **Ultimate + 竞品已激活 + zMyBatis 在位**，与用户真机的关键条件一致（版本 2026.2.1 vs 用户 2026.2.3，同一 minor）。
+**注**：竞品插件在沙盒内仅供本机验证，不涉及任何再分发。
+
+| 走查项 | 读数 | 证据 |
+|---|---|---|
+| **共存下我方注入是否在场**（W1 前提 1 的现场实证） | ✅ **在场**：`Alt+Enter` 意图列表含 `Edit MpSqlMapper Fragment`（该意图只对注入片段生成）⇒ **未被 CHP/zMyBatis/平台让位** | `xmlgap-75-altenter-zoom.png` |
+| **语句含 `#{}` 时 SQL 关键字着色可见**（W8 头条验收） | ✅ `SELECT`/`FROM`/`LEFT JOIN`/`ON`/`AND`/`LIKE` 橙（KEYWORD），与正文分明 | `xmlgap-73-zoom262.png`、`xmlgap-81-top-zoom.png` |
+| 标识符着色（W3） | ✅ 列名/表名（`o.id`/`t_order`/`user`/`u.id`）浅蓝 | 同上 |
+| `#{}` / `${}` 占位渲染 | ✅ 两者都从正文里「跳出来」（定界符暖色 + 内部标识符蓝） | 同上 |
+| **Ctrl+B 跳转**（W7 头条） | ✅ 在 `<include refid="Base_Column_List"/>` 上 Ctrl+B → **跳到第 20 行 `<sql id="Base_Column_List">`**（光标落在 id 值上） | `xmlgap-89-ctrlb-zoom.png` |
+| 折叠标记 | ✅ 语句标签与 `<sql>` 行 gutter 有折叠标记 | `xmlgap-81/85-*.png` |
+| 折叠**占位文本**（`select#id` vs 平台标签名） | ❓ **未取到**：`Ctrl+Minus` 多次点击落点漂移（视图在截图与点击间滚动），未命中语句标签；**问题仍未答** | `xmlgap-90/91-*.png` |
+| `#{}` 与 `${}` **互相**可分（W2 验收「一眼可分」） | ⚠️ **未确证**：截图分辨率下像素取证不结论（采样混入抗锯齿邻色）；**代码级已证**——两键不同且 fallback 不同（`PARAM_HASH`→KEYWORD / `PARAM_DOLLAR`→INSTANCE_FIELD），有 `SqlMapperSyntaxHighlighterKeyTest` 钉住 | 代码 + 单测 |
+| 属性值补全 / live template `cd`·`co` 展开 / `#{}` 成对删 / 颜色页可调 | ❓ 未取到：本轮 GUI 驱动（pyautogui + 中文输入法切换 + 窗口置前）单步成本高、落点漂移，四项各需多轮点击；**代码 + 单测已覆盖，视觉确认待用户侧 2 分钟核对** | — |
+
+**沙盒清理核验**：`Alt+F4` → `Confirm Exit` → Enter 后 `runIde` 任务正常结束（exit 0）；`Get-CimInstance` 按 `MPSV-GifFresh` 过滤 **零残留**。
+**走查工具坑（本轮实录，供后续复用）**：①沙盒 IDE 被 Chrome/WPS 覆盖时 `pygetwindow.activate()` 与 `SetForegroundWindow` 均被 Windows 拦（仓内 `record/force_front.py` 的 AttachThreadInput 也没抢到）——**正解是先把浏览器窗口 `minimize()`** 再点进 IDE；②沙盒内**中文输入法默认激活**，`typewrite` 会被拼音截走（表现＝乱码 + 候选条），**先按 Shift 切英文**；③IDE 的 Go to File 需**两次 Enter**（首次只选中、二次打开）；④每次点击前必须重新截图定位（视图会自行滚动）。
+
 ### 遗留与待真机项（W8 收口）
 
 1. **颜色页**：✅ 已补（见上节）。
-2. **真机走查**：**沙盒半已做**（见上节，IU-2024.3.7.1 = 243 最低支持版；着色/注入在场/折叠标记/清理零残留均有读数）。**用户 IU 2026.2 半待用户执行**（需用户 IDE；用户机另装 CHP 已激活 + zMyBatis，是我方「共存不打架」的唯一真实环境）：核对清单＝语句含 `#{}` 时 SQL 关键字着色可见、`#{}`/`${}` 分色、属性值补全、Ctrl+B 九类跳转、live template `cd`/`co` 展开、成对删、颜色页可调。
+2. **真机走查**：**两站均已做**——①runIde **243**（最低支持版，见前节）；②**IU 2026.2.1 Ultimate + CHP 已激活 + zMyBatis 共存沙盒**（见上节，W1 前提 1 现场实证「未被让位」+ Ctrl+B 跳转实证）。**剩余 4 项视觉确认待用户侧**（各约 30 秒，代码与单测均已覆盖）：`#{}` 与 `${}` 是否**互相**一眼可分、属性值补全候选、live template `cd`/`co` 展开、`#{}` 成对删、颜色页（Settings → Editor → Color Scheme → MyBatis Mapper SQL）可调；**折叠占位 `select#id` 与平台标签折叠谁胜出**亦属待答（本轮 `Ctrl+Minus` 落点未命中语句标签）。
 3. **折叠占位文本**（`select#id`）未隔离观察：与平台标签折叠范围相同，需真机确认谁胜出；若平台恒胜，则本项能力「有代码有测试但用户看不到」，届时应评估是否改为折叠**语句体文本**区间以避开与平台同范围（已留判据）。
 3. **W4/W5 子代理登记的未单测项**（受 Light 沙箱索引限制）：跨文件 `refid`、`<properties>` key 聚合、foreach item 元素字段、`@类@静态成员`——由 W8 收口时评估补测或真机复核。
 4. **W2/W3 登记的两处待评审取舍**：布尔是否单独配色（现与关键字同色）；方言并集过度着色是否要 per-file 方言收敛。
