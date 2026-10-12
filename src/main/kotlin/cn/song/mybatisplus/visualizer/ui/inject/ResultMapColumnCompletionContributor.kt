@@ -5,8 +5,13 @@ import com.intellij.codeInsight.completion.CompletionParameters
 import com.intellij.codeInsight.completion.CompletionProvider
 import com.intellij.codeInsight.completion.CompletionResultSet
 import com.intellij.codeInsight.completion.CompletionType
+import com.intellij.codeInsight.lookup.LookupElementBuilder
 import com.intellij.patterns.PlatformPatterns
+import com.intellij.psi.JavaPsiFacade
+import com.intellij.psi.PsiClass
 import com.intellij.psi.PsiElement
+import com.intellij.psi.search.GlobalSearchScope
+import com.intellij.psi.search.PsiShortNamesCache
 import com.intellij.psi.xml.XmlAttribute
 import com.intellij.psi.xml.XmlAttributeValue
 import com.intellij.psi.xml.XmlFile
@@ -14,15 +19,17 @@ import com.intellij.psi.xml.XmlTag
 import com.intellij.util.ProcessingContext
 
 /**
- * T-XmlSynHi D5 后半：resultMap `column` 属性值补全（ResultMapColumns 接线）。
+ * T-XmlSynHi D5 后半 + T-XmlGap W5-10：resultMap 属性值补全。
  *
- * 触发位：`<result|id … column="…">` 属性值（resultMap 上下文）。
- * 候选 = mapper 全文 SELECT 投影列名（[ResultMapColumnCompletionMemo.columnsFor]），
- * 按已输入前缀过滤/排序（[ResultMapColumns.suggest]：前缀精确 > 下划线驼峰近邻 > Levenshtein）。
+ * 触发位：`<result|id … column="…"|property="…">` 属性值（resultMap 上下文）。
+ *  - `column` 候选 = **引用了该 resultMap 的 `<select>` 语句**的投影列
+ *    （T-XmlGap W5-10 修正：原为 mapper 全文 SELECT 投影列，会混入无关列），
+ *    按已输入前缀过滤/排序（[ResultMapColumns.suggest]）。
+ *  - `property` 候选 = 该 resultMap `<resultMap type="X">` 的类字段（新增，W5-10「property 建议」）。
  * 非结果映射上下文零候选（反向验证）。
  *
- * T-PerfSweep16 F40：补全链接让位门（[XmlSynHiGate.shouldYield]，与 typedHandler 口径对齐）
- * + 全文重扫单槽 memo（键=文件 url + modificationStamp，stamp 变化即失效）。
+ * T-PerfSweep16 F40：补全链接让位门（[XmlSynHiGate.shouldYield]）+ 全文重扫 memo
+ * （键=文件 url + modificationStamp [+ resultMapId]）。
  */
 class ResultMapColumnCompletionContributor : CompletionContributor() {
 
@@ -39,19 +46,22 @@ class ResultMapColumnCompletionContributor : CompletionContributor() {
                     val position = parameters.position
                     val attrValue = position.parent as? XmlAttributeValue ?: return
                     val attr = attrValue.parent as? XmlAttribute ?: return
-                    if (attr.name != "column") return
+                    if (attr.name != "column" && attr.name != "property") return
                     val tag = attr.parent as? XmlTag ?: return
                     if (tag.name != "result" && tag.name != "id") return
-                    if (!inResultMap(tag)) return
+                    val resultMapTag = enclosingResultMap(tag) ?: return
                     // T-PerfSweep16 F40：让位门（设置关/平台注入器/三方插件在场 → 零候选）
                     if (XmlSynHiGate.shouldYield(position.project)) return
-                    val file = tag.containingFile as? XmlFile ?: return
-                    val columns = ResultMapColumnCompletionMemo.columnsFor(file)
+                    val file = resultMapTag.containingFile as? XmlFile ?: return
                     val typed = currentTyped(attrValue, parameters)
-                    ResultMapColumns.suggest(columns, typed).forEach { candidate ->
-                        result.addElement(
-                            com.intellij.codeInsight.lookup.LookupElementBuilder.create(candidate),
-                        )
+                    val candidates = if (attr.name == "column") {
+                        val resultMapId = resultMapTag.getAttributeValue("id").orEmpty()
+                        ResultMapColumnCompletionMemo.columnsForResultMap(file, resultMapId)
+                    } else {
+                        resultMapTypeFields(resultMapTag)
+                    }
+                    ResultMapColumns.suggest(candidates, typed).forEach { candidate ->
+                        result.addElement(LookupElementBuilder.create(candidate))
                     }
                 }
             },
@@ -68,34 +78,61 @@ class ResultMapColumnCompletionContributor : CompletionContributor() {
     }
 
     /** 祖先链存在 resultMap 标签（result/id 行属于结果映射上下文）。 */
-    private fun inResultMap(tag: XmlTag): Boolean {
+    private fun enclosingResultMap(tag: XmlTag): XmlTag? {
         var cur: XmlTag? = tag.parentTag
         while (cur != null) {
-            if (cur.name == "resultMap") return true
+            if (cur.name == "resultMap") return cur
             cur = cur.parentTag
         }
-        return false
+        return null
     }
+
+    /** `<resultMap type="X">` 的类字段（不可解析 → 空）。 */
+    private fun resultMapTypeFields(resultMapTag: XmlTag): List<String> = runCatching {
+        val typeName = resultMapTag.getAttributeValue("type")?.trim()?.takeIf { it.isNotBlank() }
+            ?: return emptyList()
+        val project = resultMapTag.project
+        val scope = GlobalSearchScope.allScope(project)
+        val clazz: PsiClass? = if (typeName.contains('.')) {
+            JavaPsiFacade.getInstance(project).findClass(typeName, scope)
+        } else {
+            PsiShortNamesCache.getInstance(project).getClassesByName(typeName, scope).firstOrNull()
+        }
+        clazz?.allFields?.mapNotNull { it.name?.takeIf { n -> n.isNotBlank() } }?.distinct().orEmpty()
+    }.getOrElse { emptyList() }
 }
 
 /**
- * T-PerfSweep16 F40：`extractColumns` 全文重扫的单槽 memo（进程内一份，补全触发高频）。
+ * T-PerfSweep16 F40 + T-XmlGap W5-10：`extractColumns` 全文重扫的单槽 memo（进程内一份，补全触发高频）。
  *
  * 键 = 文件 url + modificationStamp + 文本长度（指纹组合）：stamp 变化即失效；**长度是
  * 实测补上的第二键**——测试夹具与部分内存态文件的 LightVirtualFile 在文档变更后
  * modificationStamp 不动（ResultMapColumnCompletionMemoTest 真红实证），单靠 stamp 会
  * 返回陈旧候选。编辑后自然回源重扫。
- * [extractor] 为 internal 缝——测试注入计数 lambda 断言「二次补全零重扫」。
+ *
+ * T-XmlGap W5-10 增加第二条轨：[columnsForResultMap]（键额外含 resultMapId，多槽 map），
+ * 与既有 [columnsFor]（整文件全量，签名保持不变——既有测试与注解链复用）互不干扰。
+ *
+ * `extractor` / `resultMapExtractor` 为 internal 缝——测试注入计数 lambda 断言「二次补全零重扫」。
  */
 internal object ResultMapColumnCompletionMemo {
 
     /** 提取函数缝（默认=纯函数本体；测试可注入计数 lambda）。 */
     internal var extractor: (String) -> List<String> = { text -> ResultMapColumns.extractColumns(text) }
 
+    /** W5-10 提取函数缝（文本 + resultMapId → 候选）。 */
+    internal var resultMapExtractor: (String, String) -> List<String> =
+        { text, resultMapId -> ResultMapColumns.extractColumnsForResultMap(text, resultMapId) }
+
     @Volatile private var memoUrl: String? = null
     @Volatile private var memoStamp: Long = Long.MIN_VALUE
     @Volatile private var memoLen: Int = -1
     @Volatile private var memoValue: List<String> = emptyList()
+
+    @Volatile private var rmMemoUrl: String? = null
+    @Volatile private var rmMemoStamp: Long = Long.MIN_VALUE
+    @Volatile private var rmMemoLen: Int = -1
+    @Volatile private var rmMemoValue: Map<String, List<String>> = emptyMap()
 
     /** 命中 memo 直接返回缓存（零重扫）；键不匹配才全文提取并回填。 */
     internal fun columnsFor(file: XmlFile): List<String> {
@@ -112,11 +149,37 @@ internal object ResultMapColumnCompletionMemo {
         return value
     }
 
+    /**
+     * W5-10：指定 resultMap 的候选（引用该 resultMap 的 `<select>` 投影列）。
+     * 同一文件内多 resultMap 复用一份解析结果（按 resultMapId 分槽）。
+     */
+    internal fun columnsForResultMap(file: XmlFile, resultMapId: String): List<String> {
+        val vf = file.virtualFile
+        val url = vf?.url
+        val stamp = vf?.modificationStamp ?: file.modificationStamp
+        val len = file.textLength
+        if (url != rmMemoUrl || stamp != rmMemoStamp || len != rmMemoLen) {
+            rmMemoUrl = url
+            rmMemoStamp = stamp
+            rmMemoLen = len
+            rmMemoValue = emptyMap()
+        }
+        rmMemoValue[resultMapId]?.let { return it }
+        // 一次全文扫描解析该 resultMap 的候选（同文件多 resultMap：每 id 一次，file.text O(n)）
+        val value = resultMapExtractor(file.text, resultMapId)
+        rmMemoValue = rmMemoValue + (resultMapId to value)
+        return value
+    }
+
     /** 测试缝：清空 memo，保证断言从冷态起算。 */
     internal fun resetForTest() {
         memoUrl = null
         memoStamp = Long.MIN_VALUE
         memoLen = -1
         memoValue = emptyList()
+        rmMemoUrl = null
+        rmMemoStamp = Long.MIN_VALUE
+        rmMemoLen = -1
+        rmMemoValue = emptyMap()
     }
 }

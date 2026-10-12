@@ -2,8 +2,11 @@ package cn.song.mybatisplus.visualizer.ui.highlight
 
 import cn.song.mybatisplus.visualizer.sql.stripXmlTags
 import cn.song.mybatisplus.visualizer.ui.SourceSqlContext
+import cn.song.mybatisplus.visualizer.ui.XmlParamTypeResolver
 import cn.song.mybatisplus.visualizer.ui.XmlSqlCompletionContextResolver
 import cn.song.mybatisplus.visualizer.ui.gutter.XmlSqlGutterLineMarkerProvider
+import cn.song.mybatisplus.visualizer.ui.inject.ResultMapColumnCompletionMemo
+import cn.song.mybatisplus.visualizer.xml.ParamKind
 import com.intellij.codeInsight.completion.CompletionContributor
 import com.intellij.codeInsight.completion.CompletionParameters
 import com.intellij.codeInsight.completion.CompletionProvider
@@ -13,63 +16,42 @@ import com.intellij.injected.editor.DocumentWindow
 import com.intellij.injected.editor.VirtualFileWindow
 import com.intellij.lang.injection.InjectedLanguageManager
 import com.intellij.openapi.project.DumbAware
+import com.intellij.openapi.project.Project
 import com.intellij.patterns.PlatformPatterns
+import com.intellij.psi.PsiClass
 import com.intellij.psi.PsiElement
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.psi.xml.XmlAttribute
 import com.intellij.psi.xml.XmlAttributeValue
+import com.intellij.psi.xml.XmlFile
 import com.intellij.psi.xml.XmlTag
 import com.intellij.util.ProcessingContext
 
 /**
- * Mapper XML 源码 SQL 补全贡献器（T-M27-03 + T-M27-04）。
+ * Mapper XML 源码补全贡献器（T-M27-03/04；T-XmlGap W4/W5 扩面）。
  *
- * 背景：为 `<select|insert|update|delete>` 语句提供四类补全，全部基于**纯文本**分析
- * （[stripXmlTags] 等长剥离 + [SourceSqlCompleter]），零 PSI 语义分析：
- *  a. **动态标签补全（T-M27-04）**：光标前非空白字符是 `<`（语句文本内左侧 `[^\s]*<\s*$`）
- *     → 补 `<if|foreach|where|set|trim|choose|when|otherwise|bind|sql|include>` 标签名；
- *  b. **属性补全**：光标位于标签内属性名位置（`<\w+\s+[\w-]*$` 或 position.parent 是
- *     XmlAttribute）→ 按标签名补属性（if:test；foreach:collection,item,separator,open,close；
- *     bind:name,value；include:refid；trim:prefix,suffix,prefixOverrides,suffixOverrides；
- *     choose:无；when:test；sql:id；where/set:无）；
- *  c. **OGNL 值内补全（T-M27-04）**：position 在 XmlAttributeValue 内且属性名是 test/collection
- *     → 补方法参数名（[SourceSqlContext.paramNames]）+ 主实体 Java 字段名（fieldName——
- *     OGNL 用 Java 字段名而非 DB 列名）；`param.` 前缀（光标前 `[\w$]+\.\w*$`）时只补第二段字段名；
- *     **T-FCA-03**：`collection` 属性额外追加 foreach 集合快捷名 `list`/`collection`/`array`
- *     （排在参数名/字段名之后；`test` 属性不追加——两个属性共用本分支，故按属性名收窄）；
- *  d. **SQL 补全**：其余文本位置 → 语句标签 textRange 内文本 → [stripXmlTags]（等长，偏移 1:1）
- *     → [XmlSqlCompletionContextResolver.resolveXml]（异常降级空上下文，只补关键字）
- *     → [SourceSqlCompleter.sqlCompletions] → prefixMatches 过滤 + addElement。
+ * 背景：为 `<select|insert|update|delete>` 语句与 `<sql>` 片段提供补全，全部基于**纯文本**分析
+ * （[stripXmlTags] 等长剥离 + [SourceSqlCompleter]）或**有界 PSI**（[XmlCompletionSymbols]）：
  *
- * **守卫（性能红线，O(1) 语法判定，零 resolve）**：position 祖先链上的**最近语句标签**
- * （select/insert/update/delete；中间可隔动态标签——`<if>` 内的 OGNL 补全是 T-M27-04 核心场景）
+ *  a. **动态标签补全**：光标前非空白字符是 `<` → 补 [SourceSqlSuggestionFactory.DYNAMIC_TAGS]；
+ *  b. **属性名补全（T-XmlGap W4-3）**：标签内属性名位置 → [MyBatisXmlCompletionData.tagAttributes]，
+ *     含 `<select|insert|update|delete|selectKey>` 与 `<resultMap|id|result|collection|association|…>`（DTD 逐条）；
+ *  c. **属性值补全（T-XmlGap W4-2：按属性名分流）**：见 [addAttributeValueCompletions]；
+ *  d. **`#{}` 结构属性（T-XmlGap W4-1）**：`#{…,` 后切属性键，`key=` 后给枚举值；
+ *  e. **`${}` OGNL（T-XmlGap W5-4/5/6）**：变量来源 + 智能片段 + 运算符 + `@类@静态成员`；
+ *  f. **SQL 补全（T-XmlGap W5-7/8/9）**：关键字 + 函数表 + 单字母捷径 + 表/列/别名列 +
+ *     select 投影位（resultType 类属性）+ 反引号内列名。
+ *
+ * **守卫（性能红线，O(1) 语法判定，零 resolve）**：position 祖先链上的**最近语句标签或 `<sql>` 片段**
  * 且根标签名 == "mapper"，否则直接 return。所有补全项 addElement 前经
- * `result.prefixMatcher.prefixMatches(lookupString)` 过滤（参数/标签同理按项名匹配）。
+ * `result.prefixMatcher.prefixMatches(...)` 过滤。
  *
- * 设计决策：
- *  - **双语言注册 + 注入片段 caret 宿主还原**（T-PerfSweep16 修复 + T-XmlCmplDispatch 二轮修正）：
- *    243 平台按 position 所在文件光标偏移处的语言派发贡献器（CompletionContributor.forParameters，
- *    javap 实证）——注入开启（默认）时语句文本/OGNL 属性值位于 [cn.song.mybatisplus.visualizer.ui.inject.SqlMapperLanguage]
- *    注入片段内，故本类以 language="XML" 与 language="MpSqlMapper" 双 EP 注册（plugin.xml），
- *    分别接住宿主形态与注入形态；注入形态下 position/offset 已被 toInjectedIfAny 换成注入侧
- *    坐标，入口先从注入文件自身 DocumentWindow 还原宿主坐标再走原解析链（三形态详见入口注释——
- *    旧「仅取 editor.document 的 window」形态在生产链拿不到映射：getTopLevelEditor 已解包）；
- *  - 语句文本取 `statementTag.textRange` 内**原文**（含子标签原文），光标偏移用
- *    `parameters.offset`（真实光标，比 position 起点精确——光标位于词中时 position.startOffset 会少算已输入部分）；
- *  - 动态标签/属性名位置判定基于语句文本而非 position 所在文本节点（对 XmlToken/文本节点/补全
- *    复制文件 dummy 标识符三种 position 形态统一健壮）；
- *  - 属性值内非 test/collection 属性（如 `include refid=""`）不产出补全（无合理候选，不落入 SQL）。
+ * 设计决策（保留）：双语言注册 + 注入片段 caret 宿主还原（T-PerfSweep16/T-XmlCmplDispatch）。
  *
- * 注册见 plugin.xml `<completion.contributor language="XML" .../>`（主控统一注册，本类不声明扩展）。
+ * 注册见 plugin.xml `<completion.contributor language="XML" .../>` + `language="MpSqlMapper"`（主控统一注册）。
  *
- * **实现 [DumbAware]（T-XmlCmpl2 补齐）**：平台派发链 `CompletionContributor.forParameters` →
- * `forLanguageHonorDumbness` → `DumbService.filterByDumbAwareness` **在 dumb 态丢弃一切非
- * DumbAware 贡献器**（243 app-client.jar 源码实证）——本类原缺该接口，故索引期（数据库方言 push、
- * DbSrc 变更、项目初扫等 dumb 窗口）按补全**整体零响应**；与同包同解析链的
- * [AnnotationSqlCompletionContributor] 及 [cn.song.mybatisplus.visualizer.ui.completion.WrapperCompletionContributor]
- * 两兄弟贡献器的既有口径不一致。补齐后 dumb 态照常被咨询：语法门控/动态标签/属性/关键字全可用，
- * 上下文解析（实体索引）失败由入口 runCatching + 平台 `DumbModeAccessType.RELIABLE_DATA_ONLY`
- * 兜底降级为「只补关键字」，不给索引访问引入硬抛。
+ * 实现 [DumbAware]（T-XmlCmpl2）：dumb 态照常被咨询；触索引的来源（跨文件 sql id / config properties）
+ * 在 dumb 态返回空（见 [XmlCompletionSymbols]）。
  */
 class XmlSqlCompletionContributor : CompletionContributor(), DumbAware {
 
@@ -83,19 +65,7 @@ class XmlSqlCompletionContributor : CompletionContributor(), DumbAware {
                     context: ProcessingContext,
                     result: CompletionResultSet,
                 ) {
-                    // 宿主还原（T-PerfSweep16 修复 + T-XmlCmplDispatch 二轮修正）：mapper XML 注入活代码化
-                    // （T-PerfSweep16 F37）后，光标落在本插件注入片段内时 243 平台按 **MpSqlMapper 语言**
-                    // 派发本贡献器（CompletionContributor.forParameters → position 所在文件光标偏移处语言，
-                    // javap 实证），且 position/offset 已被 toInjectedIfAny 换成注入侧坐标。
-                    // 宿主偏移还原按三形态取（优先级降序）：
-                    //  ① 注入文件自身的 DocumentWindow——**生产形态**：CodeCompletionHandlerBase 建参前
-                    //     已 toInjectedIfAny（offset=注入侧）而 editor 经 invokeCompletionWithTracing 的
-                    //     getTopLevelEditor 解包为宿主编辑器（文档非 window）——243 app-client.jar 字节码
-                    //     实证；旧取法（②）在此形态拿不到映射、注入偏移直接当宿主偏移用 → 沙盒补全全灭
-                    //     第二层根因；
-                    //  ② editor.document 的 window 形态——fixture 形态（EditorTestFixture.getCompletionEditor
-                    //     包 EditorWindow），T-PerfSweep16 原实现恰在此形态验证（fixture 绿真机断即两形态差）；
-                    //  ③ 都拿不到 → 原样（宿主形态 no-op：position/offset 本就是宿主坐标）。
+                    // 宿主还原（T-PerfSweep16 修复 + T-XmlCmplDispatch 二轮修正）：见原实现注释（三形态）
                     val injectedFile = parameters.position.containingFile
                     val injectionHost = injectedFile
                         ?.let { InjectedLanguageManager.getInstance(it.project).getInjectionHost(it) }
@@ -114,14 +84,14 @@ class XmlSqlCompletionContributor : CompletionContributor(), DumbAware {
                         offset = parameters.offset
                     }
 
-                    // 守卫：祖先链最近语句标签 + 根 <mapper>（O(1) 语法判定）
-                    val statementTag = findStatementTag(position) ?: return
-                    if (rootTag(statementTag).name != "mapper") return
+                    // 守卫：祖先链最近语句标签或 `<sql>` 片段 + 根 <mapper>（O(1) 语法判定）
+                    val enclosingTag = findEnclosingStatementTag(position) ?: return
+                    if (rootTag(enclosingTag).name != "mapper") return
 
                     val prefix = result.prefixMatcher
                     val fileText = position.containingFile?.text ?: return
-                    val statementStart = statementTag.textRange.startOffset
-                    val statementText = fileText.substring(statementStart, statementTag.textRange.endOffset)
+                    val statementStart = enclosingTag.textRange.startOffset
+                    val statementText = fileText.substring(statementStart, enclosingTag.textRange.endOffset)
                     val caretInStatement = (offset - statementStart).coerceIn(0, statementText.length)
                     val beforeCaret = statementText.substring(0, caretInStatement)
 
@@ -133,25 +103,25 @@ class XmlSqlCompletionContributor : CompletionContributor(), DumbAware {
                         return
                     }
 
-                    // c. OGNL：position 在 test/collection 属性值内（含自身为 XmlAttributeValue 的形态）
+                    // b. 属性值位置（position 在 XmlAttributeValue 内）→ 按属性名分流（W4-2）
                     val attributeValue = PsiTreeUtil.getParentOfType(position, XmlAttributeValue::class.java, false)
                     if (attributeValue != null) {
-                        val attributeName = (attributeValue.parent as? XmlAttribute)?.name
-                        if (attributeName == "test" || attributeName == "collection") {
-                            // T-FCA-03：本分支被 test 与 collection 共用，集合快捷别名**只对 collection 开放**
-                            // （test 里补 list/collection/array 会污染既有候选面）
-                            addOgnlCompletions(
-                                statementTag,
-                                beforeCaret,
-                                result,
-                                collectionAliases = attributeName == "collection",
+                        val attribute = attributeValue.parent as? XmlAttribute
+                        val ownerTag = attribute?.parent as? XmlTag
+                        if (attribute?.name != null && ownerTag != null) {
+                            addAttributeValueCompletions(
+                                attributeName = attribute.name,
+                                ownerTag = ownerTag,
+                                enclosingTag = enclosingTag,
+                                caretElement = position,
+                                beforeCaret = beforeCaret,
+                                result = result,
                             )
                         }
-                        // 其他属性值（refid/name 等）无合理候选：不产出（不落入 SQL）
                         return
                     }
 
-                    // b. 属性名位置：position 在 XmlAttribute 上（属性名 token 内）或语句文本
+                    // c. 属性名位置：position 在 XmlAttribute 上（属性名 token 内）或语句文本
                     //    光标前匹配 `<tagName  `（标签内属性名位）
                     val nearestTag = PsiTreeUtil.getParentOfType(position, XmlTag::class.java)
                     val attributeNamePosition = nearestTag != null && (
@@ -159,45 +129,247 @@ class XmlSqlCompletionContributor : CompletionContributor(), DumbAware {
                             SourceSqlSuggestionFactory.ATTRIBUTE_POSITION_PATTERN.containsMatchIn(beforeCaret)
                         )
                     if (attributeNamePosition) {
-                        SourceSqlSuggestionFactory.DYNAMIC_TAG_ATTRIBUTES[nearestTag.name].orEmpty().forEach { attribute ->
+                        MyBatisXmlCompletionData.tagAttributes(nearestTag.name).forEach { attribute ->
                             if (prefix.prefixMatches(attribute)) result.addElement(SourceSqlSuggestionFactory.xmlAttribute(attribute))
                         }
                         return
                     }
 
-                    // d. SQL 补全：语句文本等长剥离标签 → 纯文本分析 → prefixMatches 过滤
-                    // T-XmlCmpl3 二段：过滤按**任一 lookup string**（prefixedColumn 的附加串
-                    // `别名.列名` 命中已敲的 `o.user_i`，而插入用主串裸列名——防别名重复）
-                    val stripped = stripXmlTags(statementText)
-                    val sqlContext = resolveContext(statementTag)
-                    SourceSqlCompleter.sqlCompletions(stripped, caretInStatement, sqlContext)
-                        .forEach { item ->
-                            if (item.allLookupStrings.any { prefix.prefixMatches(it) }) result.addElement(item)
+                    // d. `${…}` 未闭合 → OGNL 变量 + 智能片段 + 运算符 + @类@静态成员（W5-4/5/6）
+                    if (SourceSqlSuggestionFactory.isInsideDollarBrace(beforeCaret)) {
+                        addOgnlCompletions(
+                            enclosingTag = enclosingTag,
+                            caretElement = position,
+                            beforeCaret = beforeCaret,
+                            result = result,
+                            collectionAliases = false,
+                            includeConfigProperties = true,
+                        )
+                        return
+                    }
+
+                    // e. `#{…}` 未闭合 → 逗号后结构属性（W4-1）/ 否则参数名（含 foreach item·index、bind）
+                    if (SourceSqlSuggestionFactory.isInsideHashBrace(beforeCaret)) {
+                        val inside = beforeCaret.substring(beforeCaret.lastIndexOf("#{") + 2)
+                        if (inside.contains(',')) {
+                            addParamStructureCompletions(inside, result)
+                        } else {
+                            addHashParamCompletions(inside, enclosingTag, position, result)
                         }
+                        return
+                    }
+
+                    // f. SQL 补全：语句文本等长剥离标签 → 纯文本分析 → prefixMatches 过滤
+                    val stripped = stripXmlTags(statementText)
+                    val sqlContext = resolveContext(enclosingTag)
+                    val projectionProperties = projectionProperties(enclosingTag, sqlContext)
+                    val quotedCandidates = quotedIdentifierCandidates(enclosingTag)
+                    SourceSqlCompleter.sqlCompletions(
+                        stripped,
+                        caretInStatement,
+                        sqlContext,
+                        projectionProperties,
+                        quotedCandidates,
+                    ).forEach { item ->
+                        if (item.allLookupStrings.any { prefix.prefixMatches(it) }) result.addElement(item)
+                    }
                 }
             },
         )
     }
 
     // ------------------------------------------------------------------
-    // 分支实现
+    // b. 属性值分流（T-XmlGap W4-2）
     // ------------------------------------------------------------------
 
     /**
-     * OGNL 值内补全（T-M27-04）：方法参数名 + 主实体 Java 字段名（fieldName）。
-     * 光标前有 `param.` 前缀（`[\w$]+\.\w*$`）→ 只补第二段字段名；否则参数名 + 字段名都补。
+     * 属性值补全按**属性名**分流（W4-2）。每条：
+     *  - `test`/`value`/`collection` → OGNL（变量 + 片段 + 运算符；`collection` 追加集合快捷别名）
+     *  - `id`（语句标签）→ namespace 接口方法名；`keyProperty` → 方法参数名 + 实体字段名
+     *  - `refid` → 本文件 `<sql id>` + 跨文件 `namespace.id`
+     *  - `resultMap`/`extends` → 本文件 `<resultMap id>`；`parameterMap` → 本文件 `<parameterMap id>`
+     *  - `resultType`/`type`/`ofType`/`parameterType`/`typeHandler`/`javaType` → 有界类名
+     *  - `property`（及 `<arg name>`）→ 实体字段名（resultMap 上下文取 `<resultMap type>` 类字段）
+     *  - `column`/`keyColumn`/`columnPrefix` → 列名（resultMap 的 `result`/`id` 交由
+     *    [cn.song.mybatisplus.visualizer.ui.inject.ResultMapColumnCompletionContributor] 独占，
+     *    避免重复候选）
+     *  - `jdbcType`/`mode`/`statementType`/`resultSetType`/`fetchType`/`order` → 枚举值
+     *  - 布尔属性（useGeneratedKeys/flushCache/…）→ true/false
+     *  - `select` → 本文件语句 id（arg/association/collection 指向的 statement）
+     *  - `timeout`/`fetchSize`/`numericScale`/`resultSets`/… → 无合理候选，明确不产
      *
-     * T-FCA-03：@param collectionAliases 为真（`collection` 属性）时在既有候选**之后**追加 foreach
-     * 集合快捷名 [COLLECTION_ALIAS_NAMES]——排在参数名/字段名之后，既有顺序与内容不变。
+     * 其余属性值 → 不产出（不落入 SQL 分支，避免噪声）。
+     */
+    private fun addAttributeValueCompletions(
+        attributeName: String,
+        ownerTag: XmlTag,
+        enclosingTag: XmlTag,
+        caretElement: PsiElement,
+        beforeCaret: String,
+        result: CompletionResultSet,
+    ) {
+        val prefix = result.prefixMatcher
+        val project = ownerTag.project
+        val tagName = ownerTag.name
+        val inResultMap = ancestorResultMapTag(ownerTag) != null
+
+        fun emitAll(values: List<String>) {
+            values.forEach { value ->
+                if (value.isNotBlank() && prefix.prefixMatches(value)) {
+                    result.addElement(SourceSqlSuggestionFactory.literalValue(value))
+                }
+            }
+        }
+
+        when {
+            attributeName == "test" || attributeName == "collection" || attributeName == "value" -> {
+                addOgnlCompletions(
+                    enclosingTag = enclosingTag,
+                    caretElement = caretElement,
+                    beforeCaret = beforeCaret,
+                    result = result,
+                    collectionAliases = attributeName == "collection",
+                    includeConfigProperties = true,
+                )
+            }
+
+            attributeName == "id" && tagName in MyBatisXmlCompletionData.STATEMENT_TAGS ->
+                emitAll(XmlCompletionSymbols.mapperMethodNames(project, enclosingTag))
+
+            attributeName == "keyProperty" -> {
+                val context = resolveContext(enclosingTag)
+                emitAll(context.paramNames + XmlCompletionSymbols.entityFieldNames(context))
+            }
+
+            attributeName == "refid" -> {
+                val sameFile = XmlCompletionSymbols.localIds(enclosingTag, "sql")
+                val crossFile = XmlCompletionSymbols.crossFileSqlIds(project, enclosingTag.containingFile as? XmlFile)
+                emitAll(sameFile + crossFile)
+            }
+
+            attributeName == "resultMap" || attributeName == "extends" ->
+                emitAll(XmlCompletionSymbols.localIds(enclosingTag, "resultMap"))
+
+            attributeName == "parameterMap" ->
+                emitAll(XmlCompletionSymbols.localIds(enclosingTag, "parameterMap"))
+
+            attributeName in MyBatisXmlCompletionData.CLASS_NAME_ATTRIBUTES -> {
+                val context = resolveContext(enclosingTag)
+                emitAll(XmlCompletionSymbols.classCandidates(project, enclosingTag, context))
+            }
+
+            attributeName == "property" -> {
+                val fields = if (inResultMap) {
+                    XmlCompletionSymbols.resultMapTypeFields(ownerTag)
+                } else {
+                    XmlCompletionSymbols.classPropertyNames(project, ownerTag, XmlCompletionSymbols.entityFieldNames(resolveContext(enclosingTag)))
+                }
+                emitAll(fields)
+            }
+
+            attributeName == "name" && (tagName == "arg" || tagName == "idArg") ->
+                emitAll(XmlCompletionSymbols.entityFieldNames(resolveContext(enclosingTag)))
+
+            attributeName == "column" -> {
+                // resultMap 的 result/id：由 ResultMapColumnCompletionContributor 独占（防重复候选）
+                if (inResultMap && (tagName == "result" || tagName == "id")) return
+                emitAll(resultMapReferencedColumns(ownerTag) ?: XmlCompletionSymbols.entityColumnNames(resolveContext(enclosingTag)))
+            }
+
+            attributeName == "columnPrefix" || attributeName == "keyColumn" ->
+                emitAll(resultMapReferencedColumns(ownerTag) ?: XmlCompletionSymbols.entityColumnNames(resolveContext(enclosingTag)))
+
+            attributeName == "jdbcType" -> emitAll(MyBatisXmlCompletionData.JDBC_TYPE_VALUES)
+            attributeName == "mode" -> emitAll(MyBatisXmlCompletionData.PARAM_MODE_VALUES)
+            attributeName == "statementType" -> emitAll(MyBatisXmlCompletionData.STATEMENT_TYPE_VALUES)
+            attributeName == "resultSetType" -> emitAll(MyBatisXmlCompletionData.RESULT_SET_TYPE_VALUES)
+            attributeName == "fetchType" -> emitAll(MyBatisXmlCompletionData.FETCH_TYPE_VALUES)
+            attributeName == "order" && tagName == "selectKey" -> emitAll(MyBatisXmlCompletionData.ORDER_VALUES)
+            attributeName in MyBatisXmlCompletionData.BOOLEAN_ATTRIBUTES -> emitAll(MyBatisXmlCompletionData.BOOLEAN_VALUES)
+            attributeName == "select" -> emitAll(XmlCompletionSymbols.localStatementIds(enclosingTag))
+            // timeout/fetchSize/numericScale/resultSets/scale/databaseId/lang/name(bind)/… → 无合理候选，不产
+        }
+    }
+
+    /**
+     * resultMap 上下文（`result`/`id` 之外）的列候选：解析引用该 resultMap 的 `<select>` 投影列
+     * （T-XmlGap W5-10 的同一来源）；非 resultMap 上下文 → null（调用方回退实体列）。
+     */
+    private fun resultMapReferencedColumns(ownerTag: XmlTag): List<String>? {
+        val resultMapTag = ancestorResultMapTag(ownerTag) ?: return null
+        val id = resultMapTag.getAttributeValue("id")?.takeIf { it.isNotBlank() } ?: return null
+        val file = ownerTag.containingFile as? XmlFile ?: return null
+        return ResultMapColumnCompletionMemo.columnsForResultMap(file, id)
+    }
+
+    // ------------------------------------------------------------------
+    // c. `#{…}` 结构属性与参数名（T-XmlGap W4-1）
+    // ------------------------------------------------------------------
+
+    /** `#{…,` 逗号后：`key=` 形态给对应枚举值；否则给 7 项属性键（`key=` 形态，便于直接续敲）。 */
+    private fun addParamStructureCompletions(inside: String, result: CompletionResultSet) {
+        val prefix = result.prefixMatcher
+        val afterComma = inside.substringAfterLast(',')
+        val eqIndex = afterComma.indexOf('=')
+        if (eqIndex >= 0) {
+            val key = afterComma.substring(0, eqIndex).trim()
+            MyBatisXmlCompletionData.paramAttributeValues(key).forEach { value ->
+                if (prefix.prefixMatches(value)) result.addElement(SourceSqlSuggestionFactory.literalValue(value))
+            }
+        } else {
+            MyBatisXmlCompletionData.paramAttributeKeyHints().forEach { hint ->
+                if (prefix.prefixMatches(hint)) result.addElement(SourceSqlSuggestionFactory.literalValue(hint))
+            }
+        }
+    }
+
+    /** `#{…` 无逗号：参数名（@Param/形参/paramN）+ OGNL 结构性变量（bind / foreach item·index）；
+     *  第二段（`x.`）时给 foreach item 元素字段或主实体字段名。 */
+    private fun addHashParamCompletions(
+        inside: String,
+        enclosingTag: XmlTag,
+        caretElement: PsiElement,
+        result: CompletionResultSet,
+    ) {
+        val prefix = result.prefixMatcher
+        val context = resolveContext(enclosingTag)
+        val secondSegment = SourceSqlSuggestionFactory.OGNL_PREFIX_PATTERN.containsMatchIn(inside)
+        if (secondSegment) {
+            val owner = inside.substringBeforeLast('.').substringAfterLast(',').trim()
+            val itemFields = XmlCompletionSymbols.foreachItemFields(enclosingTag, caretElement, owner)
+            val fields = if (itemFields.isNotEmpty()) itemFields else mainEntityFieldNames(context)
+            fields.forEach { name -> if (prefix.prefixMatches(name)) result.addElement(SourceSqlSuggestionFactory.param(name)) }
+            return
+        }
+        context.paramNames.forEach { name ->
+            if (prefix.prefixMatches(name)) result.addElement(SourceSqlSuggestionFactory.param(name))
+        }
+        OgnlVariableSources.collect(caretElement, enclosingTag, enclosingTag.project, includeConfigProperties = false)
+            .forEach { name ->
+                if (prefix.prefixMatches(name)) result.addElement(SourceSqlSuggestionFactory.param(name))
+            }
+    }
+
+    // ------------------------------------------------------------------
+    // d. OGNL（T-XmlGap W5-4/5/6）
+    // ------------------------------------------------------------------
+
+    /**
+     * OGNL 值内补全：方法参数名 + 主实体 Java 字段名（fieldName）+ **变量来源**
+     * （`<bind>` / foreach item·index / include property / `<properties>` key / `_databaseId`·`_parameter`）
+     * + **智能片段**（按类型）+ **运算符** + `@类@静态成员`。
+     * 光标前有 `param.` 前缀时只补第二段（既有语义保留）。
      */
     private fun addOgnlCompletions(
-        statementTag: XmlTag,
+        enclosingTag: XmlTag,
+        caretElement: PsiElement,
         beforeCaret: String,
         result: CompletionResultSet,
         collectionAliases: Boolean,
+        includeConfigProperties: Boolean,
     ) {
-        val context = resolveContext(statementTag)
         val prefix = result.prefixMatcher
+        val context = resolveContext(enclosingTag)
         val fieldNames = mainEntityFieldNames(context)
         val secondSegment = SourceSqlSuggestionFactory.OGNL_PREFIX_PATTERN.containsMatchIn(beforeCaret)
         if (secondSegment) {
@@ -211,26 +383,110 @@ class XmlSqlCompletionContributor : CompletionContributor(), DumbAware {
             fieldNames.forEach { name ->
                 if (prefix.prefixMatches(name)) result.addElement(SourceSqlSuggestionFactory.param(name))
             }
+            OgnlVariableSources.collect(caretElement, enclosingTag, enclosingTag.project, includeConfigProperties)
+                .forEach { name ->
+                    if (prefix.prefixMatches(name)) result.addElement(SourceSqlSuggestionFactory.param(name))
+                }
             if (collectionAliases) {
                 COLLECTION_ALIAS_NAMES.forEach { name ->
                     if (prefix.prefixMatches(name)) result.addElement(SourceSqlSuggestionFactory.param(name))
                 }
             }
         }
+        // W5-5 智能片段（按可推断类型；已输入变量名 token 为空则不产）
+        val variableToken = SourceSqlSuggestionFactory.OGNL_TOKEN_AT_CARET.find(beforeCaret)?.value.orEmpty()
+        if (variableToken.isNotEmpty() && !variableToken.endsWith(".")) {
+            val kind = variableKind(enclosingTag, variableToken)
+            MyBatisXmlCompletionData.ognlSnippets(variableToken, kind).forEach { snippet ->
+                if (prefix.prefixMatches(snippet)) {
+                    result.addElement(SourceSqlSuggestionFactory.ognlSnippet(snippet, variableToken))
+                }
+            }
+        }
+        // W5-6 运算符
+        MyBatisXmlCompletionData.OGNL_OPERATORS.forEach { op ->
+            if (prefix.prefixMatches(op)) result.addElement(SourceSqlSuggestionFactory.param(op))
+        }
+        // W5-6 `@类@静态成员`
+        addAtMemberCompletions(enclosingTag.project, beforeCaret, result)
     }
 
-    /** 主实体 Java 字段名（OGNL 用 fieldName）：candidates 中 tableName == main.tableName 的 TableInfo 的列字段名。 */
-    private fun mainEntityFieldNames(context: SourceSqlContext): List<String> {
-        val mainTableName = context.main?.tableName ?: return emptyList()
-        return context.candidates
-            .firstOrNull { it.tableName == mainTableName }
-            ?.columns?.map { it.fieldName }
-            ?: emptyList()
+    /** `@类@静态成员`（W5-6）：能解析则给静态成员，解析不到或代价大只给语法骨架（不做无界搜索）。 */
+    private fun addAtMemberCompletions(project: Project, beforeCaret: String, result: CompletionResultSet) {
+        val atToken = SourceSqlSuggestionFactory.OGNL_AT_TOKEN_AT_CARET.find(beforeCaret)?.value ?: return
+        val prefix = result.prefixMatcher
+        val closed = AT_CLOSED.find(atToken)
+        if (closed != null) {
+            val className = closed.groupValues[1]
+            val clazz: PsiClass? = XmlCompletionSymbols.resolveClass(project, className)
+            if (clazz != null) {
+                staticMembersOf(clazz).forEach { member ->
+                    val text = "@$className@$member"
+                    if (prefix.prefixMatches(text)) result.addElement(SourceSqlSuggestionFactory.param(text))
+                }
+            } else {
+                // 类不可解析 → 只给语法骨架（不做无界类搜索）
+                val skeleton = atToken + "成员"
+                if (prefix.prefixMatches(skeleton)) result.addElement(SourceSqlSuggestionFactory.param(skeleton))
+            }
+        } else {
+            // 只敲了 `@…`：给语法骨架
+            val skeleton = "@类@静态成员"
+            if (prefix.prefixMatches(skeleton)) result.addElement(SourceSqlSuggestionFactory.param(skeleton))
+        }
     }
 
-    /** 补全上下文解析（实体索引/注解解析仅在补全触发时执行一次；异常 → 空上下文，只补关键字）。 */
-    private fun resolveContext(statementTag: XmlTag): SourceSqlContext =
-        runCatching { XmlSqlCompletionContextResolver.resolveXml(statementTag.project, statementTag) }
+    /** PsiClass 的静态方法与静态字段名（有界：单类成员）。 */
+    private fun staticMembersOf(clazz: PsiClass): List<String> = runCatching {
+        val methods = clazz.methods.filter { it.hasModifierProperty(com.intellij.psi.PsiModifier.STATIC) }
+            .mapNotNull { it.name }
+        val fields = clazz.fields.filter { it.hasModifierProperty(com.intellij.psi.PsiModifier.STATIC) }
+            .mapNotNull { it.name }
+        (methods + fields).distinct()
+    }.getOrElse { emptyList() }
+
+    /** 变量 token → 类型类别（[XmlParamTypeResolver] 推断；推不出 → null → 通用片段）。 */
+    private fun variableKind(enclosingTag: XmlTag, token: String): ParamKind? = runCatching {
+        val project = enclosingTag.project
+        val namespace = XmlCompletionSymbols.mapperNamespace(enclosingTag) ?: return null
+        val statementId = enclosingTag.getAttributeValue("id") ?: return null
+        XmlParamTypeResolver.resolveTypes(project, namespace, statementId)[token]?.kind
+    }.getOrNull()
+
+    /** 主实体 Java 字段名（OGNL 用 fieldName）。 */
+    private fun mainEntityFieldNames(context: SourceSqlContext): List<String> =
+        XmlCompletionSymbols.entityFieldNames(context)
+
+    // ------------------------------------------------------------------
+    // e/f. select 投影位与反引号候选（T-XmlGap W5-7/8）
+    // ------------------------------------------------------------------
+
+    /** select 投影位候选：语句 `resultType` 类字段（解析不到回退主实体字段名）。 */
+    private fun projectionProperties(enclosingTag: XmlTag, context: SourceSqlContext): List<String> {
+        if (enclosingTag.name != "select") return emptyList()
+        val resultType = enclosingTag.getAttributeValue("resultType")?.takeIf { it.isNotBlank() } ?: return emptyList()
+        val fields = XmlCompletionSymbols.fieldsOfClass(enclosingTag.project, resultType)
+        return if (fields.isNotEmpty()) fields else mainEntityFieldNames(context)
+    }
+
+    /** 反引号内候选：本文件全部 `<resultMap>` 的 `column` + `property` 属性值（W5-8）。 */
+    private fun quotedIdentifierCandidates(enclosingTag: XmlTag): List<String> = runCatching {
+        val root = rootTag(enclosingTag)
+        val out = LinkedHashSet<String>()
+        root.findSubTags("resultMap").forEach { resultMap ->
+            PsiTreeUtil.findChildrenOfType(resultMap, XmlTag::class.java).forEach { child ->
+                if (child.name == "result" || child.name == "id") {
+                    child.getAttributeValue("column")?.takeIf { it.isNotBlank() }?.let { out += it }
+                    child.getAttributeValue("property")?.takeIf { it.isNotBlank() }?.let { out += it }
+                }
+            }
+        }
+        out.toList()
+    }.getOrElse { emptyList() }
+
+    /** 补全上下文解析（异常 → 空上下文，只补关键字）。 */
+    private fun resolveContext(enclosingTag: XmlTag): SourceSqlContext =
+        runCatching { XmlSqlCompletionContextResolver.resolveXml(enclosingTag.project, enclosingTag) }
             .getOrElse { EMPTY_SOURCE_SQL_CONTEXT }
 
     // ------------------------------------------------------------------
@@ -238,50 +494,64 @@ class XmlSqlCompletionContributor : CompletionContributor(), DumbAware {
     // ------------------------------------------------------------------
 
     /**
-     * 祖先链上**最近语句标签**（select/insert/update/delete）：
+     * 祖先链上**最近的补全宿主标签**：语句标签（select/insert/update/delete）、`<sql>` 片段、
+     * `<resultMap>`、`<parameterMap>`。
+     *
+     * T-XmlGap 扩展：原仅认语句标签（`<sql>`/`<resultMap>` 内零补全），现纳入——
+     *  - `<sql>` 片段是 include 的复用体，含 SQL 与 `${}`（W5-4 include property 可见域）；
+     *  - `<resultMap>`/`<parameterMap>` 的属性值（property/jdbcType/javaType/typeHandler/column…，
+     *    W4-2 分流目标）都在其中，原守卫下不可达。
      * 从 position 向上爬（strict=false 兼容 position 自身即 XmlTag 的补全复制文件形态），
-     * 跳过中间动态标签（`<if>`/`<foreach>` 内的补全是 T-M27-04 核心场景）——纯语法判定，零 resolve。
+     * 跳过中间动态标签——纯语法判定，零 resolve。
      */
-    private fun findStatementTag(position: PsiElement): XmlTag? {
+    private fun findEnclosingStatementTag(position: PsiElement): XmlTag? {
         var element: PsiElement? = position
         while (element != null) {
-            if (element is XmlTag && element.name in XmlSqlGutterLineMarkerProvider.STATEMENT_TAGS) return element
+            if (element is XmlTag) {
+                val name = element.name
+                if (name in XmlSqlGutterLineMarkerProvider.STATEMENT_TAGS ||
+                    name == "sql" || name == "resultMap" || name == "parameterMap"
+                ) {
+                    return element
+                }
+            }
             element = element.parent
         }
         return null
     }
 
+    /** 最近的 `<resultMap>` 祖先标签（result/id 等属性值分流用）。 */
+    private fun ancestorResultMapTag(tag: XmlTag): XmlTag? {
+        var cur: XmlTag? = tag
+        while (cur != null) {
+            if (cur.name == "resultMap") return cur
+            cur = cur.parentTag
+        }
+        return null
+    }
+
     /** 沿 parentTag 链取根标签（`<mapper>` 判定用）。 */
-    private fun rootTag(statementTag: XmlTag): XmlTag {
-        var tag = statementTag
-        while (tag.parentTag != null) tag = tag.parentTag!!
-        return tag
+    private fun rootTag(tag: XmlTag): XmlTag {
+        var cur = tag
+        while (cur.parentTag != null) cur = cur.parentTag!!
+        return cur
     }
 
     // ------------------------------------------------------------------
     // 静态数据
     // ------------------------------------------------------------------
 
-    /** 动态标签补全清单（T-M27-04：MyBatis 动态 SQL 全部标签）。 */
-    private val DYNAMIC_TAGS = listOf(
-        "if", "foreach", "where", "set", "trim", "choose", "when", "otherwise", "bind", "sql", "include",
-    )
-
     /**
      * foreach `collection` 属性专属快捷名（T-FCA-03）：MyBatis 把「单集合参数且无 `@Param`」包装成
-     * `ParamMap` 后的别名键（`ParamNameResolver.wrapToMapIfCollection`）——`list` / `collection` 来自
-     * `List` 与 `Collection` 参数，`array` 来自数组参数。规则来源标注：
-     * `mybatis-3.5.19-param-name-resolver-wrap-to-map-if-collection`。
-     *
-     * 三个名字**无条件列出**（本贡献器不做 PSI 签名解析：拿不到「是否单参数、是否集合、哪种集合」），
-     * 用户按自己的参数形态挑用；每个形态的**确切**键集与门槛由
-     * `ui/XmlParamTypeResolver.collectionAliasTypes` 与真引擎对照用例（`RealEngineFidelityTest`
-     * 的「别名键集钉」）钉住。只对 `collection` 属性开放（`test` 属性不列）。
+     * `ParamMap` 后的别名键（`list` / `collection` / `array`）。只对 `collection` 属性开放。
      */
     private val COLLECTION_ALIAS_NAMES = listOf("list", "collection", "array")
 
-    // T-M27.5：标签名/属性/模式正则提取至 SourceSqlSuggestionFactory（XML 与注解 <script> 共用）
-
     /** resolve 失败降级上下文（只补关键字/动态标签，不阻塞补全）。 */
     private val EMPTY_SOURCE_SQL_CONTEXT = SourceSqlContext(null, emptyList(), emptyList())
+
+    private companion object {
+        /** `@…@…`（已闭合第二段）token。 */
+        val AT_CLOSED = Regex("""^@([\w.$]+)@([\w]*)$""")
+    }
 }

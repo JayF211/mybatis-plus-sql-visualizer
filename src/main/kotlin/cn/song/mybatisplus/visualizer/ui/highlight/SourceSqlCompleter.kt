@@ -36,16 +36,22 @@ import com.intellij.codeInsight.lookup.LookupElementBuilder
 object SourceSqlCompleter {
 
     /**
-     * 返回未过滤前缀的补全项（关键字/表名/列名/别名列/`#{}` 参数名）。
+     * 返回未过滤前缀的补全项（关键字/函数/表名/列名/别名列/`#{}` 参数名/投影属性/反引号列名）。
      *
      * @param text    语句文本（已 stripXmlTags 等长 / 注解常量求值文本）
      * @param offset  光标在 text 中的偏移（0..text.length，越界 clamp）
      * @param context 补全上下文（主表 + 联表候选 + 参数名；[XmlSqlCompletionContextResolver] 产物）
+     * @param projectionProperties   T-XmlGap W5-7：SELECT 投影位的额外候选（resultType 类属性，
+     *                               由贡献器按 PSI 解析后传入；空=不产）。纯文本层不感知 PSI。
+     * @param quotedIdentifierCandidates T-XmlGap W5-8：反引号内的额外候选（本文件 resultMap 的
+     *                               column+property，由贡献器传入；空=不产）。
      */
     fun sqlCompletions(
         text: String,
         offset: Int,
         context: SourceSqlContext,
+        projectionProperties: List<String> = emptyList(),
+        quotedIdentifierCandidates: List<String> = emptyList(),
     ): List<LookupElementBuilder> = runCatching {
         val safeOffset = offset.coerceIn(0, text.length)
         val before = text.substring(0, safeOffset)
@@ -53,13 +59,28 @@ object SourceSqlCompleter {
         val aliasMap = bindAliases(parseTableAliases(text), context)
 
         val result = mutableListOf<LookupElementBuilder>()
+        val seen = mutableSetOf<String>()
 
         // 关键字：无前缀（光标前无进行中的词）时过滤已在文本中出现的关键字（避免重复建议）
         val typedPrefix = PREFIX_AT_CARET.find(before)?.value.orEmpty()
         val upperText = text.uppercase()
         SqlLexer.KEYWORDS
             .filter { keyword -> typedPrefix.isNotEmpty() || !upperText.contains(keyword) }
-            .forEach { result += SourceSqlSuggestionFactory.keyword(it) }
+            .forEach { keyword ->
+                if (seen.add(keyword)) result += SourceSqlSuggestionFactory.keyword(keyword)
+            }
+
+        // T-XmlGap W5-9：SQL 函数表（独立于关键字；与 KEYWORDS 混排的九个函数名由 seen 去重）
+        MyBatisXmlCompletionData.SQL_FUNCTIONS
+            .filter { fn -> typedPrefix.isNotEmpty() || !upperText.contains(fn) }
+            .forEach { fn ->
+                if (seen.add(fn)) result += SourceSqlSuggestionFactory.keyword(fn)
+            }
+
+        // T-XmlGap W5-9：单字母关键字捷径（已输入恰好 1 个字符时按表补候选；已出现者去重）
+        MyBatisXmlCompletionData.singleLetterShortcuts(typedPrefix).forEach { keyword ->
+            if (seen.add(keyword)) result += SourceSqlSuggestionFactory.keyword(keyword)
+        }
 
         // `别名.` 前缀：命中绑定别名 → 该实体列；未命中 → 跳过列补全（不产出无前缀列）
         val aliasPrefix = ALIAS_PREFIX_AT_CARET.find(before)?.value?.dropLast(1)
@@ -84,16 +105,30 @@ object SourceSqlCompleter {
             }
         }
 
+        // T-XmlGap W5-7：SELECT 投影位（SELECT 与 FROM 之间）额外产出 resultType 类属性
+        if (clause == SqlClause.SELECT_COLUMN && projectionProperties.isNotEmpty()) {
+            projectionProperties.forEach { prop ->
+                if (seen.add(prop)) result += SourceSqlSuggestionFactory.param(prop)
+            }
+        }
+
         // 表名：FROM/JOIN 后——主表（表注释）+ candidates 其余表（去重，全给）
         if (clause == SqlClause.TABLE) {
-            val seen = mutableSetOf<String>()
+            val tableSeen = mutableSetOf<String>()
             context.main?.let { main ->
                 main.tableName?.let { mainName ->
-                    if (seen.add(mainName)) result += SourceSqlSuggestionFactory.table(mainName, main.tableComment)
+                    if (tableSeen.add(mainName)) result += SourceSqlSuggestionFactory.table(mainName, main.tableComment)
                 }
             }
             context.candidates.forEach { table ->
-                if (seen.add(table.tableName)) result += SourceSqlSuggestionFactory.table(table.tableName, table.comment)
+                if (tableSeen.add(table.tableName)) result += SourceSqlSuggestionFactory.table(table.tableName, table.comment)
+            }
+        }
+
+        // T-XmlGap W5-8：反引号内（`` `xxx ``）——产出额外候选（插入串带反引号，成对）
+        if (QUOTED_IDENTIFIER_AT_CARET.containsMatchIn(before)) {
+            quotedIdentifierCandidates.forEach { name ->
+                result += SourceSqlSuggestionFactory.quotedIdentifier(name)
             }
         }
 
@@ -127,4 +162,7 @@ object SourceSqlCompleter {
 
     /** 光标左侧最近 `别名.` 片段（必须紧贴光标，如 `SELECT u.<caret>`）；dropLast(1) 得别名。 */
     private val ALIAS_PREFIX_AT_CARET = Regex("""[\w$]+\.$""")
+
+    /** T-XmlGap W5-8：光标处于未闭合反引号内（`` `xxx ``；行内恰有一个前导反引号）。 */
+    private val QUOTED_IDENTIFIER_AT_CARET = Regex("""`[\w$]*$""")
 }

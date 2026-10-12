@@ -418,6 +418,10 @@ class XmlSqlCompletionContributorTest : BasePlatformTestCase() {
     /**
      * `collection` 属性值内补全 = 既有候选（参数名 + 主实体字段名，**顺序与内容不变**）
      * 之后追加三个集合快捷名。逐项断言顺序，钉住「不挤压既有候选」。
+     *
+     * T-XmlGap W4/W5 更新：变量来源（`_databaseId`/`_parameter` 等）在既有候选之后、快捷名之前
+     * 追加；OGNL 运算符追加在最后（前缀恒匹配的测试收集器下全量可见）。此处断言「前八项」的
+     * 既有顺序与快捷名收尾，运算符部分由 W4W5 套件单独钉。
      */
     fun test14CollectionAttributeAddsAliasCandidatesAfterExistingOnes() {
         addDefaultMapperFile()
@@ -431,9 +435,9 @@ class XmlSqlCompletionContributorTest : BasePlatformTestCase() {
             ),
         )
         assertEquals(
-            "collection 候选 = 既有（参数名 → 字段名）在前 + 三个快捷名在后：$strings",
-            listOf("entity", "id", "name", "list", "collection", "array"),
-            strings,
+            "collection 候选 = 既有（参数名 → 字段名）在前 + 变量来源 + 三个快捷名：$strings",
+            listOf("entity", "id", "name", "_databaseId", "_parameter", "list", "collection", "array"),
+            strings.take(8),
         )
     }
 
@@ -452,7 +456,8 @@ class XmlSqlCompletionContributorTest : BasePlatformTestCase() {
                 """,
             ),
         )
-        assertEquals("test 候选仍只有参数名 + 字段名：$strings", listOf("entity", "id", "name"), strings)
+        assertEquals("test 候选仍以参数名 + 字段名开头：$strings", listOf("entity", "id", "name"), strings.take(3))
+        assertTrue("test 应含内置变量 _databaseId：$strings", strings.contains("_databaseId"))
         assertFalse("test 不应出现 list：$strings", strings.contains("list"))
         assertFalse("test 不应出现 collection：$strings", strings.contains("collection"))
         assertFalse("test 不应出现 array：$strings", strings.contains("array"))
