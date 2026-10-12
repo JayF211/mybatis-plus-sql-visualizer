@@ -17,6 +17,7 @@
 - 参数回填在**切换逻辑删除 / 多租户注入开关**后丢失（历史缓存键原为 `表名:SHA-256(SQL 全文)`，拦截器模拟会改写 SQL 文本——键一变召回 miss，已回填的实值退回占位符，防抖后新键还会以空值覆盖落库）——新增 `PreviewResult.historyFingerprintSeed` 承载**注入前**语句文本，面板算键优先用它
 - `deleteAllInBatch()` 这类 bulk 写路径在 **Repository 接口声明行**光标下无法预览（方法名不含 `By` 且 `*All` 词干白名单不放行 `InBatch` 结尾 → 派生查询线不认；无 `PsiMethodCallExpression` → CRUD 转换线不认；模板本身是完整的，只是两条通道都够不着）——新增声明行入口 `JpaCrudOperationConverter.convertRepositoryDeclaration` + `SqlPreviewService.previewRepositoryDeclaration`，动作回落链补第 5 步
 - JOIN 图主表节点字段没带数据库 COMMENT（多数据源下跨库同名表：`@TableName("\"user\"")` 的主表被注册序在前的 `jpa_demo.user` 撞上——那张同名表 9 列且注释全空，而副表只有本库有、解析正常）——整图富化改为**句内同来源**批量取数：先逐表按名解析，再按「各来源持有本句表的数量」投票选主来源，少数来源持有的表若主来源也有则改判给主来源（主来源没有的表仍逐表回落，跨库联接不受影响）
+- **MPJ 联表 ON 两侧列的别名改为按列自己的实体类解析（★A47）**：`rightJoin(AreaDO.class, AreaDO::getId, AddressDO::getAreaId)` 此前渲染成 `ON areaDO.id = t.area_id`（右侧列一律当主表），而 MyBatis-Plus-Join 真机发出的是 `ON areaDO.id = addressDO.area_id`——**预览 SQL 与真实执行的 SQL 不一致**，该句在真库上还直接报 `[42S22][1054] Unknown column 't.area_id' in 'on clause'`（录制演示动图时实测）。已对齐 MPJ 1.5.8 语义（`JoinAbstractLambdaWrapper.columnToString` 先取 `LambdaUtils.getEntityClass(column)` 再按该类查前缀，与「是不是主表」无关）：三参 / ext / 别名+ext / 子表 MConsumer / `on(col1, col2)` / lambda ON 六种形态的 ON 两侧列统一按列自身实体类在链内别名表中解析，**识别不出接收者实体时逐字节回落到原行为**，故常见写法（ON 右侧列就是主表字段）渲染结果不变；显式右别名 `leftJoin(Class, 左列, "右别名", 右列)` 仍以显式值为准
 
 
 

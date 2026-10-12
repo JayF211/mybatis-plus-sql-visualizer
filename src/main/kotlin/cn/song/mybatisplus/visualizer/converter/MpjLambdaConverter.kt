@@ -116,10 +116,10 @@ object MpjLambdaConverter : WrapperConverter {
                 in JOIN_METHODS -> {
                     // T-1800：先按类名比较去重（可靠），再 fallback 到表名比较（兼容旧逻辑）
                     if (collectionChildClasses.any { cls -> joinEntityClassName(call) == cls }) continue
-                    val join = parseJoin(call, mainAlias, project) ?: continue
+                    val join = parseJoin(call, mainAlias, project, classToAlias) ?: continue
                     joins += join
                 }
-                SELECT_COLLECTION -> parseCollection(call, joinCalls, mainAlias, project)?.let { joins += it }
+                SELECT_COLLECTION -> parseCollection(call, joinCalls, mainAlias, project, classToAlias)?.let { joins += it }
             }
         }
 
@@ -440,11 +440,42 @@ object MpjLambdaConverter : WrapperConverter {
      *  5. 字符串 SQL join `leftJoin("address t1 on t1.user_id = t.id"[, args])` → 原样透传（{i} 参数替换）
      *  6. 自定义关键字 `join("FULL JOIN", condition, "sql"[, args])` → 关键字 + 原样透传
      *
+     * ⚠️ T-A47（2026-10-12）：上面写的「关联表字段 / 主表字段」只是**常见写法**，不是 MPJ 语义——
+     * MPJ 对 ON 两侧的列**各自按列自己的实体类**定别名。凡能识别出去重实体类的列，别名一律经
+     * [onColumnAlias] 解析（查不到才回落下面的默认值）。显式右别名（形态 2 的 `"rel"`）不受影响。
+     *
      * 关联表信息：优先 psi 层解析的 [WrapperArg.EntityRefArg]（F-13 注解），否则按类名 snake_case 兜底。
      * T-M20-05：EntityRefArg 形态额外携带关联表逻辑删除列（@TableLogic，见 [JoinClause.logicDeleteColumn]），
      * 供 SqlPreviewService 注入副表 deleted 条件；类名兜底 / 字符串 join 无 TableInfo → null（不注入）。
      */
-    private fun parseJoin(call: WrapperCall, mainAlias: String, project: Project?): JoinClause? {
+    /**
+     * T-A47：ON 条件里列的表别名——**优先按列自己的实体类**在链内别名表里查，查不到再回落 [fallback]。
+     *
+     * 对齐 MPJ 真实行为（1.5.8 `JoinAbstractLambdaWrapper.columnToString`）：先
+     * `LambdaUtils.getEntityClass(column)`，再按该类查前缀（`tableList.getPrefix(index, clazz, false)`）——
+     * **与「是不是主表」无关**。
+     *
+     * 修复前的写法把 ON 右侧列一律按主表别名渲染，于是
+     * `rightJoin(AreaDO.class, AreaDO::getId, AddressDO::getAreaId)` 渲染成 `areaDO.id = t.area_id`，
+     * 而 MPJ 真实执行的是 `areaDO.id = addressDO.area_id`——预览 SQL 与执行 SQL 不一致，该句还直接报
+     * `[42S22][1054] Unknown column 't.area_id' in 'on clause'`（2026-10-12 录制 A13 时实测）。
+     *
+     * 兼容性：[ColumnRef.entityClass] 为空（PSI 未解析出接收者，例如手工构造的链）时逐字节回落到
+     * 修复前行为；实体类就是主实体（不在 join 别名表内）时同样回落 [fallback]，故常见写法结果不变。
+     * 该值可能是简单类名或全限定名，两种形状都查一遍。
+     */
+    private fun onColumnAlias(column: ColumnRef, classToAlias: Map<String, String>, fallback: String): String {
+        val raw = column.entityClass?.trim().orEmpty()
+        if (raw.isEmpty()) return fallback
+        return classToAlias[raw] ?: classToAlias[raw.substringAfterLast('.')] ?: fallback
+    }
+
+    private fun parseJoin(
+        call: WrapperCall,
+        mainAlias: String,
+        project: Project?,
+        classToAlias: Map<String, String>,
+    ): JoinClause? {
         val type = when (call.methodName) {
             "leftJoin" -> JoinType.LEFT
             "innerJoin" -> JoinType.INNER
@@ -531,20 +562,24 @@ object MpjLambdaConverter : WrapperConverter {
             args.size == 4 && args[1] is WrapperArg.ColumnArg && args[2] is WrapperArg.ColumnArg &&
                 args[3] is WrapperArg.NestedArg -> {
                 onConditions += Condition.ColumnComparison(
-                    left = (args[1] as WrapperArg.ColumnArg).column.withTableAlias(alias),
-                    right = (args[2] as WrapperArg.ColumnArg).column.withTableAlias(mainAlias),
+                    left = (args[1] as WrapperArg.ColumnArg).column
+                        .withTableAlias(onColumnAlias((args[1] as WrapperArg.ColumnArg).column, classToAlias, alias)),
+                    right = (args[2] as WrapperArg.ColumnArg).column
+                        .withTableAlias(onColumnAlias((args[2] as WrapperArg.ColumnArg).column, classToAlias, mainAlias)),
                 )
-                onConditions += parseOnLambda((args[3] as WrapperArg.NestedArg).chain, alias, mainAlias)
+                onConditions += parseOnLambda((args[3] as WrapperArg.NestedArg).chain, alias, mainAlias, classToAlias)
             }
             // 别名 + ext：leftJoin(Class, "别名", 左列, 右列, ext -> ...)（QueryJoin 重载族补齐）
             args.size == 5 && args[1] is WrapperArg.ValueArg && args[2] is WrapperArg.ColumnArg &&
                 args[3] is WrapperArg.ColumnArg && args[4] is WrapperArg.NestedArg -> {
                 alias = (args[1].asValue() as? SqlValue.Literal)?.unquoted ?: alias
                 onConditions += Condition.ColumnComparison(
-                    left = (args[2] as WrapperArg.ColumnArg).column.withTableAlias(alias),
-                    right = (args[3] as WrapperArg.ColumnArg).column.withTableAlias(mainAlias),
+                    left = (args[2] as WrapperArg.ColumnArg).column
+                        .withTableAlias(onColumnAlias((args[2] as WrapperArg.ColumnArg).column, classToAlias, alias)),
+                    right = (args[3] as WrapperArg.ColumnArg).column
+                        .withTableAlias(onColumnAlias((args[3] as WrapperArg.ColumnArg).column, classToAlias, mainAlias)),
                 )
-                onConditions += parseOnLambda((args[4] as WrapperArg.NestedArg).chain, alias, mainAlias)
+                onConditions += parseOnLambda((args[4] as WrapperArg.NestedArg).chain, alias, mainAlias, classToAlias)
             }
             // 子表 MConsumer：leftJoin(Class, t -> t.setAlias("tt").selectAll().ge(...), 左列, 右列)
             // → LEFT JOIN (SELECT ... FROM 子表 tt WHERE ...) 子别名 ON 子别名.左列 = 主别名.右列
@@ -564,13 +599,14 @@ object MpjLambdaConverter : WrapperConverter {
                 logicDelete = null
                 onConditions += Condition.ColumnComparison(
                     left = (args[2] as WrapperArg.ColumnArg).column.withTableAlias(subAlias),
-                    right = (args[3] as WrapperArg.ColumnArg).column.withTableAlias(mainAlias),
+                    right = (args[3] as WrapperArg.ColumnArg).column
+                        .withTableAlias(onColumnAlias((args[3] as WrapperArg.ColumnArg).column, classToAlias, mainAlias)),
                 )
             }
             // ================= 既有形态（保持原分派） =================
             // 4. lambda ON：leftJoin(Class, on -> on.eq(...).eq(...))
             firstRest is WrapperArg.NestedArg ->
-                onConditions += parseOnLambda(firstRest.chain, alias, mainAlias)
+                onConditions += parseOnLambda(firstRest.chain, alias, mainAlias, classToAlias)
 
             else -> {
                 var index = 0
@@ -586,14 +622,14 @@ object MpjLambdaConverter : WrapperConverter {
                 when {
                     // 4b. 四参别名 + lambda ON：leftJoin(Class, "t1", on -> ...)（2026-08-13 用户实测）
                     aliasNext is WrapperArg.NestedArg ->
-                        onConditions += parseOnLambda(aliasNext.chain, alias, mainAlias)
+                        onConditions += parseOnLambda(aliasNext.chain, alias, mainAlias, classToAlias)
                     // 3. on(col1, col2)：left 主表列、right 关联表列
                     aliasNext is WrapperArg.OnConditionArg ->
                         onConditions += rest.drop(index).mapNotNull { arg ->
                             (arg as? WrapperArg.OnConditionArg)?.let { oc ->
                                 Condition.ColumnComparison(
-                                    left = oc.left.withTableAlias(mainAlias),
-                                    right = oc.right.withTableAlias(alias),
+                                    left = oc.left.withTableAlias(onColumnAlias(oc.left, classToAlias, mainAlias)),
+                                    right = oc.right.withTableAlias(onColumnAlias(oc.right, classToAlias, alias)),
                                 )
                             }
                         }
@@ -603,8 +639,8 @@ object MpjLambdaConverter : WrapperConverter {
                         val right = rest.getOrNull(index + 1) as? WrapperArg.ColumnArg
                         if (left != null && right != null) {
                             onConditions += Condition.ColumnComparison(
-                                left = left.column.withTableAlias(alias),
-                                right = right.column.withTableAlias(mainAlias),
+                                left = left.column.withTableAlias(onColumnAlias(left.column, classToAlias, alias)),
+                                right = right.column.withTableAlias(onColumnAlias(right.column, classToAlias, mainAlias)),
                             )
                         }
                     }
@@ -657,13 +693,21 @@ object MpjLambdaConverter : WrapperConverter {
      *    生成列对列比较（不能加引号当值）；否则为字符串值（`eq("t2.script_status", "1")` → `= '1'`）；
      *  - `apply(sql)`：Raw 条件原样透传（含子查询，如 `t1.version = (SELECT MAX(version) ...)`）。
      */
-    private fun parseOnLambda(chain: WrapperChain, alias: String, mainAlias: String): List<Condition> =
+    private fun parseOnLambda(
+        chain: WrapperChain,
+        alias: String,
+        mainAlias: String,
+        classToAlias: Map<String, String>,
+    ): List<Condition> =
         chain.calls.mapNotNull { call ->
             when (call.methodName) {
                 "eq", "ne" -> {
                     val left = call.args.getOrNull(0)
                     val leftCol = when (left) {
-                        is WrapperArg.ColumnArg -> left.column.withTableAlias(alias)
+                        // T-A47：ON 内的列一律**按列自己的实体类**定别名（MPJ 真实行为），
+                        // 查不到才回落关联表别名 / 主表别名
+                        is WrapperArg.ColumnArg ->
+                            left.column.withTableAlias(onColumnAlias(left.column, classToAlias, alias))
                         is WrapperArg.ValueArg ->
                             (left.value as? SqlValue.Literal)?.let { ColumnRef(columnName = it.unquoted) }
                         else -> null
@@ -673,7 +717,7 @@ object MpjLambdaConverter : WrapperConverter {
                         is WrapperArg.ColumnArg ->
                             Condition.ColumnComparison(
                                 left = leftCol,
-                                right = right.column.withTableAlias(mainAlias),
+                                right = right.column.withTableAlias(onColumnAlias(right.column, classToAlias, mainAlias)),
                             )
                         is WrapperArg.ValueArg -> {
                             val literal = right.value as? SqlValue.Literal
@@ -851,6 +895,7 @@ object MpjLambdaConverter : WrapperConverter {
         joinCalls: List<WrapperCall>,
         mainAlias: String,
         project: Project?,
+        classToAlias: Map<String, String>,
     ): JoinClause? {
         // T-M21-03：prefix 形态判定——第 2 参为类参（EntityRefArg 或类名字面量）
         // T-1800：兼容 EntityRefArg 形态（isPrefixForm 内部处理）
@@ -899,7 +944,7 @@ object MpjLambdaConverter : WrapperConverter {
                 }
             }
             .flatMap { joinCall ->
-                val joinClause = parseJoin(joinCall, mainAlias, project) ?: return@flatMap emptyList<Condition>()
+                val joinClause = parseJoin(joinCall, mainAlias, project, classToAlias) ?: return@flatMap emptyList<Condition>()
                 val joinAlias = joinClause.alias  // leftJoin 的默认别名（如 addressDO）
                 joinClause.onConditions.map { cond ->
                     (cond as? Condition.ColumnComparison)?.let { cc ->
