@@ -1920,8 +1920,11 @@ class SqlLogPanel(
         /** T-M39：帮助文档 URL（降级系统浏览器打开）。
          *  2026-08-31 改为自建站点 jvtools.cn（可自主接入国内 CDN；
          *  当前实测：直连不通，需走系统/IDE 代理才可达，与 plugins.jetbrains.com 同）。 */
+        // 2026-10-12：改用 canonical 域名 + 无后缀路径。旧写法
+        // `mybatis-plus-sql-visualizer.jvtools.cn/features/wrapper-preview.html` 实测要走
+        // 两次跳转（旧域名 301 → 新域名，`.html` 308 → 无后缀），canonical 地址直接 200。
         private const val HELP_DOCUMENTATION_URL =
-            "https://mybatis-plus-sql-visualizer.jvtools.cn/features/wrapper-preview.html"
+            "https://sql-visualizer.jvtools.cn/features/wrapper-preview"
         /** T-M39：帮助标签页标题。 */
         private const val HELP_TAB_TITLE = "SQL Visualizer - Help"
 
