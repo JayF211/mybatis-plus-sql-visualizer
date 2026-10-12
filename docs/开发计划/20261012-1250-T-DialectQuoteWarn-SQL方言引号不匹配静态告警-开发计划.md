@@ -253,3 +253,69 @@ gitignore，属本机 IDE 状态，非仓库内容）。**上一轮据此得出�
 - 反向验证：把「不报」分支短路 → 对应正例变红。
 
 **文案**：中英各一条 WARN 文案，自解释且面向 agent（会流到 `sqlv_perf_advice`）。
+
+## 十三、实施记录（2026-10-12，§十二 调整阶段）
+
+### 落地与提交（master，未 push）
+
+- `318e9c5` 步骤 1+2：`PerfContext(sql, ast, dialect, ansiQuotes)` 上下文对象、`DialectAwarePerfRule.check(ctx)`、
+  `PerfRuleEngine.apply(ctx)`、`SqlPerfAnalyzer.analyze(sql, dialect, ansiQuotes)`（缓存键含方言 + ANSI_QUOTES 三态）；
+  `dialect_quote_mismatch` 三态判定 + 测试改造。
+- `41ed9f3` 步骤 3：`DataSourceUrlProbe.urlByName` / `ansiQuotesFromUrl`；`SqlPreviewService.analyzePerf` 接线；
+  两个 MCP 工具传 `null`。
+- `9805817` 步骤 4：中英 WARN 文案 + CHANGELOG。
+- 本段：计划回填。
+
+### 三态实际行为（方言属 MySQL / MariaDB / OceanBase，且 SQL 里出现双引号标识符）
+
+| 绑定数据源的 URL | 严重度 | 覆盖用例 |
+|---|---|---|
+| 声明了 `ANSI_QUOTES` | **不报** | `三态_URL声明ANSI_QUOTES_不报_AST路径` / `_正则降级路径` |
+| 已知但未声明 | WARN（`perf.dialect_quote_mismatch_ansi_quotes`） | `三态_已知未声明ANSI_QUOTES_降级WARN_真实形态_AST路径` |
+| 未知（无绑定源/探测失败） | WARN | `三态_未知ANSI_QUOTES_降级WARN_AST路径` / `_正则降级路径` |
+
+其它档不变：无歧义档仍 ERROR（`无歧义_MySQL遇方括号表名仍报ERROR`、`无歧义_PostgreSQL遇反引号仍报ERROR`），
+且**优先于** WARN（`无歧义_MySQL同时出现双引号与方括号_优先报方括号ERROR不被WARN掩盖`）。
+MariaDB / OceanBase 同族同判（`三态_MariaDB与OceanBase同属MySQL家族_双引号也降级WARN`）；
+WARN 文案前提在场（`三态_WARN文案含前提_ANSI_QUOTES与sql_mode措辞在场`）。
+
+### 取 URL 的落点
+
+- **按名取**：`DataSourceUrlProbe.urlByName(project, name)`——与 `firstUrl` 同一反射链
+  （`DataSourceManager.getManagers` → `getDataSources()` → `getName()` 匹配 → `getConnectionConfig().getUrl()`），
+  独立单槽 TTL 缓存（键＝项目身份 + 数据源名），`invalidate` / `invalidateAllForTest` 一并清。
+- **绑定源从哪来**：`SqlPreviewService.boundAnsiQuotesOrNull()` 按**与面板指示行同源同优先级**取名——
+  活控制台 `DataSourceSelector.boundConsoleDataSourceName()`（`execute/DataSourceSelector.kt:210`）>
+  last-used 记忆 `DataSourceSelector.rememberedDataSourceName(project)`（`execute/DataSourceSelector.kt:237`，
+  即面板 `panel.bindstate.associated`，见 `ui/SqlPreviewPanelParamPanel.kt:289`/`:299`）> 未绑定（null）。
+- **「首个数据源 ≠ 绑定源」的处理**：**不用** `firstUrl`；名字取不到、URL 取不到、解析不出，一律 `null`
+  → 规则降级 WARN。demo 里首个 jpa_demo 与绑定 mpj_demo 的 ANSI_QUOTES 状态相反，拿首个会给出错误结论。
+- **URL → 三态**：`DataSourceUrlProbe.ansiQuotesFromUrl`（先 URL-decode，再定位 `sql_mode=` 赋值，
+  按 `,`/空白分词后不区分大小写比对 `ANSI_QUOTES`）。**只做「声明了」的正向证明**：未声明只表达
+  「URL 未声明」，不等于连接未开（服务端全局仍可能开着），故 `false` 也只能 WARN。
+
+### 定向测试读数
+
+`./gradlew test --tests "…sql.perf.*" --tests "…sql.SqlPerfAnalyzerTest" -Pkotlin.compiler.execution.strategy=in-process`：
+
+- 改动后（绿）：PerfRulesBatch1Test 26、PerfRulesBatch2AstTest 19、PerfRulesBatch4Test 24、
+  SqlPerfAnalyzerTest 15，**合计 84 例 0 失败**（`sql.perf` 下无 Batch3 测试类）。
+
+### 反向验证（短路「URL 声明 ANSI_QUOTES → 不报」）
+
+- 改前（绿）：84 例 0 失败。
+- 临时移除 `if (ctx.ansiQuotes == true) return emptyList()` 后（红）：Batch4 24 例中 **2 例失败**、
+  SqlPerfAnalyzer 15 例中 **1 例失败**，恰为三条正例——
+  `三态_URL声明ANSI_QUOTES_不报_AST路径`、`三态_URL声明ANSI_QUOTES_不报_正则降级路径`、
+  `analyze_同SQL不同ANSI_QUOTES三态不串味（T-DialectQuoteWarn §十二）`；其余全绿。
+- 还原后重跑恢复 **84 例 0 失败**。
+
+### 未做/存疑
+
+- 未跑全量测试 / 构建校验（按任务约定）；未部署、未 push。
+- 站点侧（另一仓）「20 条→21 条」计数与 §九 同属后续，未动。
+- `urlByName` 走 `getName()` 精确匹配：数据源重命名后旧记忆名取不到 URL → 回落 WARN（保守，
+  不误判为「已声明」）；本项目未做重命名场景真机验证。
+- WARN 文案对「已知未声明」与「未知」共用一条（§十二 表「同义措辞，可略」）；两态在
+  `PerfContext` 与缓存键上仍严格区分，未合并。
+
