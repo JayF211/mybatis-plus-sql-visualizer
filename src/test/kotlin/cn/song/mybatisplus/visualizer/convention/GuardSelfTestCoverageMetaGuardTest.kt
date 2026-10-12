@@ -662,6 +662,15 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "无独立「返回违规点集合」的具名判定函数，故 decisionFns 留空；" +
                     "灵敏度=探针（临时插入真调用）必红已实测于实施轮。",
             ),
+            GuardEntry(
+                "ui/inject/SqlMapperKeywordCoverageGuardTest.kt",
+                emptyList(),
+                "mapper 注入语言关键字集一致性守卫（T-XmlGap W3）：判定内核内联于用例——断言 " +
+                    "SqlLexer.KEYWORDS（补全链）⊆ SqlMapperLanguage.KEYWORDS（高亮链）、方言保留字在集内，" +
+                    "并用内部调研报告 §0.9 的**真实差集**（25 词 + 9 个函数名）作判别位（非合成样本）。" +
+                    "无独立「返回违规点集合」的具名判定函数（差集在用例内联计算），故 decisionFns 留空；" +
+                    "灵敏度=把 KEYWORDS 改回旧 41 词平集必红，已实测于实施轮（4 例红，含逐词差集原文）。",
+            ),
             // ---- 判定内核类（有可注入合成样本的判定函数） ----
             GuardEntry(
                 "convention/BannedApiScanSupport.kt",
