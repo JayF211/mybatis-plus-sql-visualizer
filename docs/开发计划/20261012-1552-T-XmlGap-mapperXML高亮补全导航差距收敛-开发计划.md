@@ -344,11 +344,50 @@
 - ② 临时停用 `RestartableLexer`（A1 登记的风险项）→ 无效（探针仍 0）。
 两次都只改了「高亮器被调用之后」的环节，而问题在**平台根本不来取我们的高亮器**，故均无法生效；两者都是未被证实的改动，已整批回退（工作树回到 `be7d222`）。
 
-**待定（下一步，需真机/平台侧再挖）**：为何平台不为该注入片段取 `SyntaxHighlighterFactory`（两版皆然）。候选方向：①平台 Database 插件对 mapper XML 的同区间 SQL 注入抢占渲染；②注入片段的语言在高亮 pass 侧未被识别为可着色语言。**在查清之前，本计划「编辑器内着色」这一项的对外承诺不成立**——W2/W3 的键表与词法成果仍在（单测绿），但用户看不到。
+**原待定问题**：为何平台不为该注入片段取 `SyntaxHighlighterFactory`（两版皆然）。候选方向（①平台 Database 插件同区间注入抢占渲染；②注入片段语言在高亮 pass 侧未被识别为可着色语言）**两个都错**——真因见下节。
+
+### 着色真根因定位与修复（收口，20261012 当轮闭环）
+
+**真根因：`plugin.xml` 把高亮器工厂的 EP 名写成了裸 `<syntaxHighlighterFactory>`，而平台声明的名字是 `lang.syntaxHighlighterFactory`（限定名 `com.intellij.lang.syntaxHighlighterFactory`）。** 裸名解析到不存在的 `com.intellij.syntaxHighlighterFactory`，被平台**静默忽略**（不报错、不阻断加载）⇒ 该注册段是死代码 ⇒ `SyntaxHighlighterFactory.getSyntaxHighlighter(…)` 走 `SyntaxHighlighterFactoryEP` 的默认实现 `PlainSyntaxHighlighterFactory` ⇒ 注入片段**整段无色**。
+
+**三重交叉核实（平台源码 + 描述符 + 反编译，逐条给判据）**：
+1. **平台声明处**：`intellij.platform.ide.impl.jar` 内 `META-INF/PlatformExtensionPoints.xml` 的 `<extensionPoint name="lang.syntaxHighlighterFactory" beanClass="…SyntaxHighlighterFactoryEP" dynamic="true">`（本机 IU 安装目录逐 jar 扫描，全平台 1243 个 EP 名里 `syntaxHighlighterFactory` 仅此一条、**无裸名形态**；`intellij.idea.ultimate.customization.jar` 内重复声明同名）。
+2. **我方描述符**：`plugin.xml` 写的是裸名 → 限定名 `com.intellij.syntaxHighlighterFactory`，**不在**平台声明集内。同批 23 个 EP 标签里只有这一个解析不到（`runConfigurationExtension` 等经 `qualifiedName=` 形态核实均正常）。
+3. **反编译链路**（`InjectionRegistrarImpl` 与 `SyntaxHighlighterFactory`，FernFlower + JBR 25 实产）：注入时 `parseFile` 末尾 `obtainHighlightTokensFromLexer` 第 966 行 ——
+   `LanguageFileType fileType = language.getAssociatedFileType();`（我方语言无关联 FileType → null，已核 `Language.getAssociatedFileType()` = `FileTypeRegistry.findFileTypeByLanguage`）→ `provider = null` → 回退分支 `new LexerEditorHighlighter(SyntaxHighlighterFactory.getSyntaxHighlighter(language, project, file), scheme)`；而 `SyntaxHighlighterFactory.getSyntaxHighlighter` = `getLanguageFactory().forLanguage(language)`，`forLanguage` 按 `keyToString(key)=key.getID()`（即 `"MpSqlMapper"`）查 EP，查不到即返回默认实现 `PlainSyntaxHighlighterFactory`。**四步全部对上探针读数**（注入器被调、片段存在、工厂与构造器双 0）。
+
+**修复**：`plugin.xml` 改为 `<lang.syntaxHighlighterFactory language="MpSqlMapper" implementationClass="…SqlMapperSyntaxHighlighterFactory"/>`（一行），并在注册处与 `SqlMapperSyntaxHighlighterFactory` KDoc 写明「必须用限定名」及其后果。修复后链路即通：EP 命中我方工厂 → `SqlMapperSyntaxHighlighter`（`SyntaxHighlighterBase`，`getTokenHighlights` 已全表映射）→ 15 个 token 全有 `TextAttributesKey`，且键都以 `createTextAttributesKey(id, 平台键)` 建、**自带平台 fallback**，未配颜色方案也能借主题色渲染。
+
+**反向验证（仓库纪律：摘掉修复必红，两次读数）**：新建守卫 `config/PluginXmlExtensionPointResolutionTest`（解析每份描述文件 `<extensions>` 的 `defaultExtensionNs` + 子标签还原限定名，要求落在平台声明 EP 全集内；全集两路并集＝classpath 扫描 + `PluginManagerCore` 反射，附合成样本自证）：
+- 修复态：**绿**（`tests=2 failures=0`）；
+- 把 plugin.xml 临时改回裸名：**红**，报 `plugin.xml: <syntaxHighlighterFactory> → com.intellij.syntaxHighlighterFactory`；
+- 还原修复态后再跑：绿。（同一守卫在首次试跑时还抓出并核实了一处**假阳性**：`database-optional.xml` 的 `com.intellij.database.modelRelationProvider` 是 `database-plugin.jar` 真实声明的 EP，仅测试沙盒未加载 Database 插件——已按「逐条注明来源」的口径列入豁免表。）
+
+**影响面与结论改写**：本条与「平台 Database 插件抢占」无关，也**不是**方言配置问题——上一节「用户修法」实测到的上色是**平台 SQL 注入**画的（Ultimate 下平台本就给 mapper 语句体注入 SQL，但需配 SQL 方言），与我方链路互不相干；我方链路此前从未通过。故：
+- **「编辑器内着色」的对外承诺成立**（此前记的「承诺不成立」作废），且**不依赖用户配 SQL 方言**；
+- 上一节「残留缺口：`<sql id=…>` 片段体平台不覆盖」**仍然成立，但成因变了**：我方注入器的作用面是「mapper 文件内任意标签的直属文本」（`XmlSynHiGate.allowStatementText` 只查 mapper 根与长度熔断，**不按标签名收窄**），故 `<sql>`/`<if>`/`<foreach>` 体内的文本**本就由我方注入**——修复后这些位也会着色，不再需要平台覆盖；
+- 同族坑在本仓是**第二次**（第一次＝`typedHandlerDelegate` 应为 `typedHandler`，已在 plugin.xml 注释留痕）——现由上述守卫把「EP 名可解析性」变成可自动复核的红线。
+
+### 沙盒走查（四）：修复后端到端取证（IU-2024.3.7.1，2026-10-12 收口轮）
+
+环境＝`./gradlew runIde`（默认 243 沙盒）+ 沙盒上次打开的 `easy-code-demo` 项目 + `src/main/resources/mapper/UserMapper.xml`（该项目的 `.idea/sqldialects.xml` 里有 `<file url="PROJECT" dialect="MySQL"/>`，即平台 SQL 注入**同时在场**，故单看「有颜色」不足以归属）。
+
+| 观察点 | 读数 | 归属判据 |
+|---|---|---|
+| 语句体 `select` / `from` / `order by` / `like` / `concat` | 橙＝KEYWORD | 平台与我方都会画，**不可单独归因** |
+| `user` / `username` / `id` | 浅蓝＝IDENTIFIER | 同上 |
+| `'%'` | 绿＝STRING | 同上 |
+| `#{likeUsername}` | **`#{` 与 `}` 橙、中间 `likeUsername` 浅蓝**（定界符与内容分色） | 我方 lexer 的 `PARAM_HASH` 只吃定界符、内容另判 IDENTIFIER——平台把 `#{…}` 当整体参数，**不会**产生这种分裂 |
+| `test="likeUsername != null and likeUsername != ''"` 属性值 | 有 OGNL 分色 | 我方属性白名单注入位 |
+| **`returning x`（临时键入后已撤销）** | **`returning` 呈 KEYWORD 橙** | **决定性**：`RETURNING` 是我方「全方言超集」才收的词（`SqlMapperLanguage` KDoc 自己登记过这个多着色副作用），MySQL 方言的平台高亮器**不认**它 |
+| 状态栏面包屑 | 显示 **`<Injected MpSqlMapper file>`** | 光标确在我方注入片段内（该位即注入生效的编辑上下文） |
+
+**结论**：修复后我方高亮器**确实被实例化并参与渲染**（`returning` 一条已排除「颜色全来自平台」的可能）。走查用的临时键入（`returning x` 一行）已 Ctrl+Z 撤销，磁盘文件与该轮开始前**逐字一致**（`git diff` 只剩该仓既有的、非本轮的 `<select>` 块改动）；沙盒 `Alt+F4` → `Confirm Exit` → Enter 正常退出，`runIde` 任务 exit 0，按沙盒名过滤进程**零残留**。
 
 **✅ 用户修法已实测验证（2026-10-12 当轮）**：在 **项目级** `.idea/sqldialects.xml` 加一条 `<file url="PROJECT" dialect="MySQL" />`（等价于 Settings → Languages & Frameworks → SQL Dialects → 把项目/mapper 目录指到 MySQL）后重启 IDE，**mapper XML 语句体的 SQL 文本立刻上色**（实测 5× 原像素：`select`/`from`/`and`/`like`/`concat` 橙＝KEYWORD、`user`/`username` 浅蓝＝IDENTIFIER、`'%'` 绿＝STRING、`#{username}` 定界符有色）✓ —— 即：**用户真机的「整段白」根因是 mapper 文件没有 SQL 方言映射，配上即好**。
 **关键坑（本轮踩到）**：`SqlDialectMappings` 是 **`projectSettings`**（Database 插件 plugin.xml 实证），存在**项目** `.idea/sqldialects.xml`，**不是**应用级 `options/sqlDialects.xml`——写错位置会静默无效（本轮先踩了这个坑）。
-**残留缺口（本插件侧，非平台可解）**：`<sql id=...>` 片段体这类**非语句标签**平台不覆盖，配上方言也不上色；本应由此处由我方注入着色，但我方高亮器不被调用（上表）⇒ 该处仍是白。**故「编辑器内着色」这项的对外承诺应改写为**：Ultimate 下语句体着色由**平台 SQL 注入**承担（需用户配 SQL 方言）；我方 W2/W3 的着色只在平台不注入的场景（如 Community）才可能显现，而该场景本轮未取得可运行环境（构建基准为 IU）。
+**⚠️ 本条结论已按上节修正（留原文防误导）**：配 SQL 方言上色**只能证明平台 SQL 注入链路是通的**，不能证明「用户『整段白』的根因是没配方言」——我方链路的真因是 EP 名写错（上节），且**不需要**用户配方言。两条链路互相独立，谁在渲染取决于环境（平台注入在位时会盖在我方之上，观感一致，故不能用「配了方言就上色」反推我方是否生效）。
+**残留缺口（原判）**：`<sql id=...>` 片段体这类**非语句标签**平台不覆盖，配上方言也不上色；本应由此处由我方注入着色，但我方高亮器不被调用（上表）⇒ 该处仍是白。**⚠️ 该判据随上节修复作废**：我方注入器按「mapper 文件内任意标签的直属文本」注入（不按标签名收窄），修复后 `<sql>`/`<if>`/`<foreach>` 体内同样着色——原先「非平台可解」的表述不成立。
 
 ### 遗留与待真机项（W8 收口）
 
@@ -358,3 +397,4 @@
 3. **W4/W5 子代理登记的未单测项**（受 Light 沙箱索引限制）：跨文件 `refid`、`<properties>` key 聚合、foreach item 元素字段、`@类@静态成员`——由 W8 收口时评估补测或真机复核。
 4. **W2/W3 登记的两处待评审取舍**：布尔是否单独配色（现与关键字同色）；方言并集过度着色是否要 per-file 方言收敛。
 5. **全量门禁**：一次（收口阶段，只读收口代理执行）；因新增平台 API 面（`RestartableLexer`）与 7 个新 EP，附加 `verifyPlugin` 三目标。
+6. **编辑器内着色**：✅ **已修并端到端取证**（收口轮，见「着色真根因定位与修复」+「沙盒走查（四）」）——此前「对外承诺不成立」的结论作废；守卫 `config/PluginXmlExtensionPointResolutionTest` 已把 EP 名可解析性纳入自动复核。**收口轮未跑全量门禁**（本轮改动＝1 行 EP 名 + 1 个新测试类 + 文档；定向套件另跑，见提交信息）。

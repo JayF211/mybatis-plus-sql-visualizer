@@ -354,7 +354,8 @@
              T-UN-12（T-UiNative）：独立历史 ToolWindow 工厂类已删除 -->
         <!-- T-XmlSynHi（D1/D2/D3）：mapper XML 语句文本与属性表达式注入（lexer-only 自研语言
              SqlMapperLanguage；双让位门控见 XmlSynHiGate——Ultimate 平台注入 / CodeHelperPro
-             在位 / 设置关闭时全族让位零注入）。语言注册走 multiHostInjector + syntaxHighlighterFactory，
+             在位 / 设置关闭时全族让位零注入）。语言注册走 multiHostInjector +
+             lang.syntaxHighlighterFactory（注意限定名，见下方注），
              无独立 FileType（注入语言不挂编辑器文件类型）。 -->
         <multiHostInjector implementation="cn.song.mybatisplus.visualizer.ui.inject.SqlMapperInjector"/>
         <!-- T-XmlSynHi D5 后半：resultMap column 属性值补全（ResultMapColumns 提取/排序纯函数接线；
@@ -365,8 +366,15 @@
              EP 名=typedHandler（TypedHandlerDelegate.EP_NAME 实际常量，243/253/262 三版 javap 实测一致；
              历史误写 typedHandlerDelegate 会被平台按未知 EP 静默忽略——handler 永不触发） -->
         <typedHandler implementation="cn.song.mybatisplus.visualizer.ui.inject.ParamBraceTypedHandler"/>
-        <syntaxHighlighterFactory language="MpSqlMapper"
-                                  implementationClass="cn.song.mybatisplus.visualizer.ui.inject.SqlMapperSyntaxHighlighterFactory"/>
+        <!-- T-XmlGap 收口修：EP 名必须是 lang.syntaxHighlighterFactory（限定名
+             com.intellij.lang.syntaxHighlighterFactory）——平台在 intellij.platform.ide.impl.jar
+             的 PlatformExtensionPoints.xml 里就这么声明的（243/262 两版实测同名）。
+             历史误写裸 <syntaxHighlighterFactory>（= com.intellij.syntaxHighlighterFactory）被平台
+             按未知 EP 静默忽略，故 SyntaxHighlighterFactory.getSyntaxHighlighter 落到
+             PlainSyntaxHighlighterFactory 默认实现 → mapper 语句文本整段无色（用户报「SQL 文本整段
+             白」的真根因；同族坑见上方 typedHandler 注）。勿再改回裸名。 -->
+        <lang.syntaxHighlighterFactory language="MpSqlMapper"
+                                       implementationClass="cn.song.mybatisplus.visualizer.ui.inject.SqlMapperSyntaxHighlighterFactory"/>
         <!-- T-XmlGap W7：mapper XML 引用（跳转/查找用法）——只产 soft 引用，不注册任何
              inspection/annotator（红线：不做校验器形态）；无目标时零报红 -->
         <psi.referenceContributor language="XML"
