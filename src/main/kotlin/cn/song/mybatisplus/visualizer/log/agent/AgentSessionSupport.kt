@@ -516,6 +516,7 @@ internal class AgentSession(
                     // 宿主有、IDE 无=传输；两侧都有而面板空=消费链（去重/屏蔽/过滤/暂停）。
                     if (AgentEventAdapter.receivedEvents() == 1L) {
                         LOG.info("增强通道首条事件已到达并进入消费链（pid=$pid）——若面板仍零产出，查消费链（去重窗口/屏蔽/过滤），不再疑 agent 侧")
+                    }
                     // R53：用户暂停闸门（在收到计数**之后**——暂停中「已收事件 N」照常增长，
                     // 状态栏据此显示「暂停中且通道活着」而非「通道断了」）。只丢入列表，
                     // 连接/心跳/CONFIG ACK 链一概不动（暂停≠关闭，V80② 自洽）。
@@ -528,7 +529,6 @@ internal class AgentSession(
                             )
                         }
                         return
-                    }
                     }
                     // T-AgentDialectLoop / T-AgentLogTime：接管期间控制台嗅探暂存的「日志行原始时间」
                     // 按 [logTimeKey]（占位符版 SQL 指纹）取回，参数值序列作次级判别（[stampLogTime]）。

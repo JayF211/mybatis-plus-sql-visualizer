@@ -210,8 +210,17 @@ class SqlPreviewPanelHistorySnapshotFallbackTest : BasePlatformTestCase() {
         )
     }
 
-    private fun sqlPreviewPanelSource(): String =
-        File(repoRoot(), "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanel.kt").readText()
+    /**
+     * 面板源文件并集（T-M53-II D2-5 拆分后读取面：EXPLAIN/参数面板/执行链等成员已逐字符搬出到
+     * 同包协作文件，只读主文件会在成员搬走后变成空扫描——断言假红或假绿的同一根因）。
+     */
+    private fun sqlPreviewPanelSource(): String {
+        val dir = File(repoRoot(), "src/main/kotlin/cn/song/mybatisplus/visualizer/ui")
+        return dir.listFiles { f -> f.name.startsWith("SqlPreviewPanel") && f.name.endsWith(".kt") }
+            ?.sortedBy { it.name }
+            ?.joinToString("\n") { it.readText() }
+            ?: error("未找到面板源文件（SqlPreviewPanel*.kt）")
+    }
 
     private fun repoRoot(): File {
         var dir: File? = File(System.getProperty("user.dir")).absoluteFile

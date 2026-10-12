@@ -389,6 +389,42 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
 
     /** R51 测试缝：参数快照回写 sink——flush 链同步进历史条目的落点观察（null = 单测态禁用真服务）。 */
     internal var historySnapshotSink: ((String, Map<String, String>) -> Unit)? = null
+    /**
+     * R51（O-105 余半·主体）：参数快照回落——ParamHistoryCache 未命中（LRU 淘汰 / 清缓存 /
+     * 命名方案桶不含本键）时，按同一缓存键从 [SqlHistoryManager] 最新历史条目的
+     * [SqlHistoryEntry.paramSnapshot] 回落。缓存 50 条 LRU 对历史 200 条，「历史条目→面板
+     * 参数态」的桥（十五轮 R51 定义）；快照格式与缓存同源（[buildHistorySnapshot]），
+     * 下游应用逻辑（普通值 + `__chk__`/`__fnull__`/`__fev__`）零分叉。
+     *
+     * 单测态默认禁用真服务（SqlHistoryManager 为 APP 级服务，跨用例残留会串扰既有
+     * recall 断言）——测试经 [historySnapshotFallbackSource] 注入替代源；生产链走真服务
+     * （接线由 ExplainPanelWiringGuard 同款源码扫描守卫钉住，防测试缝默认化成死代码）。
+     */
+    internal fun SqlPreviewPanel.historySnapshotFallback(key: String): Map<String, String>? {
+        historySnapshotFallbackSource?.let { return it(key) }
+        if (ApplicationManager.getApplication().isUnitTestMode) return null
+        return runCatching {
+            SqlHistoryManager.getInstance().newestParamSnapshot { entrySnapshotKey(it) == key }
+        }.getOrNull()
+    }
+
+    /** R51：历史条目 → 缓存键（与 [historyCacheKey] 同口径——tableName 空串与 null 同走
+     *  `sql:` 指纹路径，recordHistory 落表 `result.tableName ?: ""`，故空串回 null 复算一致）。 */
+    internal fun SqlPreviewPanel.entrySnapshotKey(entry: SqlHistoryEntry): String? =
+        paramHistoryCache.computeKey(entry.tableName.ifEmpty { null }, entry.sql)
+
+    /** R51：参数快照回写——面板参数编辑防抖落库时同步进最新匹配历史条目（会话内闭环：
+     *  编辑→flush→历史条目快照；单测态走 [historySnapshotSink] seam，真服务同上禁用）。 */
+    internal fun SqlPreviewPanel.updateHistoryEntrySnapshot(key: String, snapshot: Map<String, String>) {
+        historySnapshotSink?.invoke(key, snapshot)
+        if (ApplicationManager.getApplication().isUnitTestMode) return
+        runCatching {
+            SqlHistoryManager.getInstance().updateNewestParamSnapshot(
+                { entrySnapshotKey(it) == key },
+                snapshot,
+            )
+        }
+    }
 
     /**
      * M36.5.39-A2：持久包装容器——console 组件统一嵌入此容器、容器整体挂入 editorHolder。

@@ -87,6 +87,7 @@ import javax.swing.border.Border
 import javax.swing.border.EmptyBorder
 import javax.swing.event.DocumentEvent
 import javax.swing.event.DocumentListener
+import cn.song.mybatisplus.visualizer.util.DisplayMasker
 
 // SQL 日志条目的单元格渲染片段与列表渲染器
 // （T-M53-II 2026-10-10：由 SqlLogPanel.kt 原样搬出，同包同可见性，零行为改动。）
@@ -446,17 +447,22 @@ internal class LogEntryListCellRenderer : JPanel(BorderLayout()), javax.swing.Li
      * 多行模式走条目级缓存（键含模式自动失效）——可变行高布局逐条测量免重复分词。
      */
     private fun sqlLineFragmentsFor(entry: LogSqlEntry): List<List<SqlTextFragment>> {
-        val sql = withTerminator(entry.summary)
+        // R60（T-LaneB D96）：日志列表链脱敏——displayMaskEnabled 开时**展示文本**先经
+        // [DisplayMasker.maskDisplay] 打码（数据层 entry 不动）；缓存键**加脱敏位**——设置翻转后
+        // 旧缓存（打码/未打码形态）自动失效重渲染（V112.3 回放发现的附带发现，防脏缓存）。
+        val maskOn = PluginSettings.getInstance().state.displayMaskEnabled
+        val sql = withTerminator(DisplayMasker.maskDisplay(entry.summary, maskOn))
         val mode = PluginSettings.getInstance().sqlListDisplayMode()
         if (mode == SqlListDisplayMode.SINGLE_LINE) {
             return listOf(SqlListFragmentRenderer.renderFragments(sql))
         }
         entry.cachedListLineFragments
-            ?.takeIf { entry.cachedListLineFragmentsMode == mode }
+            ?.takeIf { entry.cachedListLineFragmentsMode == mode && entry.cachedListLineFragmentsMasked == maskOn }
             ?.let { return it }
         return SqlListFragmentRenderer.renderLineFragments(sql, mode).also {
             entry.cachedListLineFragments = it
             entry.cachedListLineFragmentsMode = mode
+            entry.cachedListLineFragmentsMasked = maskOn
         }
     }
 }

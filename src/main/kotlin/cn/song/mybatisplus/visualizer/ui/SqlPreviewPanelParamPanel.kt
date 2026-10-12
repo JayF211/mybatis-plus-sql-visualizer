@@ -1257,42 +1257,6 @@ internal fun SqlPreviewPanel.historyCacheKey(): String? {
  */
 
 
-    /**
-     * R51（O-105 余半·主体）：参数快照回落——ParamHistoryCache 未命中（LRU 淘汰 / 清缓存 /
-     * 命名方案桶不含本键）时，按同一缓存键从 [SqlHistoryManager] 最新历史条目的
-     * [SqlHistoryEntry.paramSnapshot] 回落。缓存 50 条 LRU 对历史 200 条，「历史条目→面板
-     * 参数态」的桥（十五轮 R51 定义）；快照格式与缓存同源（[buildHistorySnapshot]），
-     * 下游应用逻辑（普通值 + `__chk__`/`__fnull__`/`__fev__`）零分叉。
-     *
-     * 单测态默认禁用真服务（SqlHistoryManager 为 APP 级服务，跨用例残留会串扰既有
-     * recall 断言）——测试经 [historySnapshotFallbackSource] 注入替代源；生产链走真服务
-     * （接线由 ExplainPanelWiringGuard 同款源码扫描守卫钉住，防测试缝默认化成死代码）。
-     */
-    private fun SqlPreviewPanel.historySnapshotFallback(key: String): Map<String, String>? {
-        historySnapshotFallbackSource?.let { return it(key) }
-        if (ApplicationManager.getApplication().isUnitTestMode) return null
-        return runCatching {
-            SqlHistoryManager.getInstance().newestParamSnapshot { entrySnapshotKey(it) == key }
-        }.getOrNull()
-    }
-
-    /** R51：历史条目 → 缓存键（与 [historyCacheKey] 同口径——tableName 空串与 null 同走
-     *  `sql:` 指纹路径，recordHistory 落表 `result.tableName ?: ""`，故空串回 null 复算一致）。 */
-    private fun SqlPreviewPanel.entrySnapshotKey(entry: SqlHistoryEntry): String? =
-        paramHistoryCache.computeKey(entry.tableName.ifEmpty { null }, entry.sql)
-
-    /** R51：参数快照回写——面板参数编辑防抖落库时同步进最新匹配历史条目（会话内闭环：
-     *  编辑→flush→历史条目快照；单测态走 [historySnapshotSink] seam，真服务同上禁用）。 */
-    private fun SqlPreviewPanel.updateHistoryEntrySnapshot(key: String, snapshot: Map<String, String>) {
-        historySnapshotSink?.invoke(key, snapshot)
-        if (ApplicationManager.getApplication().isUnitTestMode) return
-        runCatching {
-            SqlHistoryManager.getInstance().updateNewestParamSnapshot(
-                { entrySnapshotKey(it) == key },
-                snapshot,
-            )
-        }
-    }
 
 internal fun SqlPreviewPanel.recallFromHistory() {
     val key = historyCacheKey() ?: return

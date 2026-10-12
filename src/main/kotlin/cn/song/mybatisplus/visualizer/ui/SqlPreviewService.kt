@@ -585,8 +585,7 @@ class SqlPreviewService(internal val project: Project) {
      * `FROM t_user u` → `u`；无别名/别名是 SQL 关键字 → 表名本名。
      */
     internal fun detectMainAlias(sql: String, table: TableInfo): String = runCatching {
-        val regex = Regex("(?i)\\bFROM\\s+[`\"(]*([\\w.]+)[`\"]*)\\s+([a-zA-Z_][\\w$]*)")
-        val match = regex.find(sql)
+        val match = FROM_TABLE_ALIAS.find(sql)
         val alias = match?.groupValues?.get(2)
         if (alias == null || SQL_CLAUSE_KEYWORDS.any { alias.equals(it, ignoreCase = true) }) {
             table.tableName
