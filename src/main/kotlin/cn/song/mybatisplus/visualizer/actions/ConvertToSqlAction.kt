@@ -271,7 +271,30 @@ class ConvertToSqlAction : AnAction() {
         }
         // 4. JPA 回落（T-J9 调用点锚点）：service/controller 中调用 Repository 派生/@Query/@Procedure 方法处
         if (tryRepositoryCallSiteFallback(service, project, element, sourceLocation)) return true
+        // 5. JPA 回落（F-1 修复）：Repository **接口方法声明行**——`deleteAllInBatch()` 这类 bulk 形态
+        //    既不在派生查询线（无 `By`、`*All` 词干白名单不放行 `InBatch`）也无调用表达式，
+        //    声明行光标下零可达；此处按接口泛型解析实体后走同一条 CRUD 模板线。
+        if (tryRepositoryDeclarationFallback(service, project, method, sourceLocation)) return true
         return false
+    }
+
+    /**
+     * F-1 修复：Repository 接口**声明行**回落（[tryJpaFallback] 第 5 步）。
+     *
+     * 只认接口声明（实现类方法由既有路径覆盖），实体解析走 `resolveRepositoryEntityFromClass` 的
+     * 严格基类判定——非 Repository 接口返回 null，不会误亮普通接口方法。
+     */
+    private fun tryRepositoryDeclarationFallback(
+        service: SqlPreviewService,
+        project: Project,
+        method: PsiMethod?,
+        sourceLocation: String?,
+    ): Boolean {
+        val iface = method?.containingClass ?: return false
+        if (!iface.isInterface) return false
+        val preview = service.previewRepositoryDeclaration(method) ?: return false
+        SqlPreviewService.showResult(project, preview, sourceLocation)
+        return true
     }
 
     /**

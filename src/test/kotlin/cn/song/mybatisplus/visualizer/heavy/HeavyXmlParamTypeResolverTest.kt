@@ -1,6 +1,10 @@
 package cn.song.mybatisplus.visualizer.heavy
 
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel
+// T-M53-II D2-5：`showResult`/`clear` 已搬为 ui 包内的同包扩展函数（原 SqlPreviewPanel 成员），
+// 跨包调用点需显式导入。
+import cn.song.mybatisplus.visualizer.ui.clear
+import cn.song.mybatisplus.visualizer.ui.showResult
 import cn.song.mybatisplus.visualizer.ui.XmlParamTypeResolver
 import cn.song.mybatisplus.visualizer.ui.XmlPreviewService
 import cn.song.mybatisplus.visualizer.xml.ParamKind

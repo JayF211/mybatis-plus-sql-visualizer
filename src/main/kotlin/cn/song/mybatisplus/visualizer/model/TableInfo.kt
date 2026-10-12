@@ -113,19 +113,26 @@ data class TableInfo(
     fun columnByField(fieldName: String): ColumnInfo? = columns.firstOrNull { it.fieldName == fieldName }
 
     /**
-     * T-Embedded：按「嵌入字段名 + 内部字段名」的驼峰拼接路径查展平列。
+     * T-Embedded：按嵌入段驼峰路径查展平列。
      *
      * Spring Data 派生查询把 `updateInfo.createdTime` 穿透 @Embedded 的属性路径整体解析成单个
-     * 驼峰名 `updateInfoCreatedTime`（无点号；**内层字段首字母大写**——`UpdateInfo` + `CreatedTime`
+     * 驼峰名 `updateInfoCreatedTime`（无点号；**每段首字母大写**——`UpdateInfo` + `CreatedTime`
      * 驼峰化的产物），`columnByField` 查不中（它不是任何字段的裸名），消费方据此 snake 兜底会产出
-     * `update_info_created_time` 伪列。拼接匹配展平列（`embeddedParent + 首字母大写的 fieldName ==
-     * path`）即可还原真实列名 `created_time`。
+     * `update_info_created_time` 伪列。
+     *
+     * 匹配按两条轨（G2 修复：两级嵌入链）：
+     *  - **[ColumnInfo.embeddedPath] 全路径等值**——展平时逐段落盘（`address.zipcode.zip` →
+     *    `addressZipcodeZip`），两级以上嵌入链（address + zipcode + zip）由此命中覆写列
+     *    `cust_zip`，不再因「只认一层拼接」落 snake 兜底产出 `address_zipcode_zip` 伪列；
+     *  - 既有单层拼接兜底（`embeddedParent + 首字母大写的 fieldName == path`）——手搓 TableInfo
+     *    夹具 / 类型不可解析的降级单列形态仍按此命中，行为不回归。
      */
     fun columnByEmbeddedPath(path: String): ColumnInfo? =
-        columns.firstOrNull {
-            it.embedded && it.embeddedParent != null &&
-                it.embeddedParent + it.fieldName.replaceFirstChar { c -> c.uppercaseChar() } == path
-        }
+        columns.firstOrNull { it.embedded && it.embeddedPath == path }
+            ?: columns.firstOrNull {
+                it.embedded && it.embeddedParent != null &&
+                    it.embeddedParent + it.fieldName.replaceFirstChar { c -> c.uppercaseChar() } == path
+            }
 
     /** 全部列名（用于 SELECT * 展开）。 */
     val allColumnNames: List<String> get() = columns.map { it.columnName }
@@ -189,4 +196,13 @@ data class ColumnInfo(
      * 而不是靠「中间段不是本表字段就丢掉」这种猜测（后者会误删别的合法中间段）。
      */
     val embeddedParent: String? = null,
+    /**
+     * 展平本列的**完整嵌入段驼峰路径**（实体根起算，各级嵌入字段名首字母大写，如
+     * `address.zipcode.zip` → `addressZipcodeZip`；非嵌入列为 null）。
+     *
+     * 与 [embeddedParent] 的区别：后者只记最外层嵌入字段名，只够一层拼接
+     * （`updateInfoCreatedTime`）；两级以上嵌入链（`findByAddressZipcodeZip` 形态）
+     * 需要中间段才能还原（见 [TableInfo.columnByEmbeddedPath]）。
+     */
+    val embeddedPath: String? = null,
 )

@@ -62,6 +62,7 @@
 
 ## demo 工程
 
-`F:/code/Java/Gitee/SongRenShuo/mybatis-plus-sql-visualizer-demo/mybatis-plus-demo`
+`$MPSV_DEMO_ROOT/mybatis-plus-demo`（demo 根由环境变量 `MPSV_DEMO_ROOT` 提供，见
+`.local/local.env.example`；2026-10-10 T-LocalEnvOverride 起不再写死本机路径）
 （Spring Boot 8081；MySQL localhost:3306/mp_demo root/root；GET /user/list 触发 SQL；
 mapper DEBUG 已开——控制台通道素材 `<== Row:` 在应用输出）。

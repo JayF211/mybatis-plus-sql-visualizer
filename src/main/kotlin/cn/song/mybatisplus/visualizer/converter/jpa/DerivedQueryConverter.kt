@@ -427,9 +427,10 @@ object DerivedQueryConverter {
          *
          * 规则：
          *  - 先从 TableInfo 的列映射按实体字段名查找（驼峰形式）
-         *  - T-Embedded：嵌入段驼峰拼接路径（`updateInfoCreatedTime` = 嵌入字段名 + 展平列字段名，
-         *    PartTree 穿透 @Embedded 的解析形态）按展平列匹配，命中即用真实列名——否则 snake 兜底
-         *    会产出 `update_info_created_time` 伪列（demo 真机实测缺陷）
+         *  - T-Embedded：嵌入段驼峰路径按展平列匹配（`updateInfoCreatedTime` = 嵌入字段名 + 展平列
+         *    字段名，PartTree 穿透 @Embedded 的解析形态；两级以上链如 `addressZipcodeZip` 由
+         *    [TableInfo.columnByEmbeddedPath] 的全路径轨命中）——命中即用真实列名，否则 snake 兜底
+         *    会产出 `update_info_created_time` / `address_zipcode_zip` 伪列（demo 真机实测缺陷）
          *  - 找不到则使用驼峰转下划线作为列名
          *
          * 注意：PartTreeParser 输出的 propertyPath 是驼峰形式（如 "lastName"）。

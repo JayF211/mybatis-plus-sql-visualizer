@@ -1,7 +1,5 @@
 package cn.song.mybatisplus.visualizer.sql.perf
 
-import net.sf.jsqlparser.statement.Statement
-
 /**
  * 性能规则引擎（F-2 SQL 性能分析）。
  *
@@ -34,15 +32,20 @@ object PerfRuleEngine {
     /**
      * 应用所有规则到 SQL。
      *
-     * @param sql 原始 SQL 文本
-     * @param ast JSqlParser 解析后的语句树；可为 null（降级模式）
+     * @param ctx 执行上下文（SQL 文本 / AST / 方言 / ANSI_QUOTES 三态）；AST 可为 null（降级模式），
+     *            方言可为 null（无上下文）。仅实现 [DialectAwarePerfRule] 的规则收到整个 [PerfContext]，
+     *            其余规则一律按 [PerfRule.check] 调用（只取 `ctx.sql` / `ctx.ast`）。
      * @return 所有规则的警告列表（按规则注册顺序）
      */
-    fun apply(sql: String, ast: Statement?): List<PerfWarning> {
+    fun apply(ctx: PerfContext): List<PerfWarning> {
         val warnings = mutableListOf<PerfWarning>()
         for (rule in rules) {
             try {
-                val result = rule.check(sql, ast)
+                val result = if (rule is DialectAwarePerfRule) {
+                    rule.check(ctx)
+                } else {
+                    rule.check(ctx.sql, ctx.ast)
+                }
                 if (result.isNotEmpty()) warnings.addAll(result)
             } catch (e: Exception) {
                 // 规则隔离：单规则异常不阻塞其他规则

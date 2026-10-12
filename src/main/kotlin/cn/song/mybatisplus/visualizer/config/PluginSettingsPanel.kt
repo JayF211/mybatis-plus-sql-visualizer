@@ -73,8 +73,8 @@ import javax.swing.event.DocumentListener
  *  - 「表前缀」「表后缀」文本输入行（可添加/清除）——统一修饰预览 SQL 中的表名（全局语义）。
  */
 class PluginSettingsPanel @JvmOverloads constructor(
-    private val settings: PluginSettings,
-    private val sections: Set<String> = SECTION_ALL,
+    internal val settings: PluginSettings,
+    internal val sections: Set<String> = SECTION_ALL,
 ) : com.intellij.openapi.Disposable {
     companion object {
         const val SECTION_PREVIEW = "preview"
@@ -96,11 +96,11 @@ class PluginSettingsPanel @JvmOverloads constructor(
      * 原无 equals 覆写（身份判等）时 `reset()`/写穿入口传入的新实例全部匹配失败——选中显示与
      * 写穿监听一并失效。
      */
-    private data class LanguageOption(val value: String, val label: String) {
+    internal data class LanguageOption(val value: String, val label: String) {
         override fun toString(): String = label
     }
 
-    private fun languageOptions(): Array<LanguageOption> = arrayOf(
+    internal fun languageOptions(): Array<LanguageOption> = arrayOf(
         LanguageOption("zh", MpSqlVisualizerBundle.message("settings.language.zh")),
         LanguageOption("en", MpSqlVisualizerBundle.message("settings.language.en")),
         LanguageOption("AUTO", MpSqlVisualizerBundle.message("settings.language.auto")),
@@ -110,11 +110,11 @@ class PluginSettingsPanel @JvmOverloads constructor(
      * 表名推断策略选项（值 + 当前语言下的显示文案；rebuild 时按新语言重建）。
      * 与 [LanguageOption] 同理必须为 data class（JDK17 `JComboBox.setSelectedItem` 按 equals 匹配）。
      */
-    private data class InferenceOption(val value: String, val label: String) {
+    internal data class InferenceOption(val value: String, val label: String) {
         override fun toString(): String = label
     }
 
-    private fun inferenceOptions(): Array<InferenceOption> = arrayOf(
+    internal fun inferenceOptions(): Array<InferenceOption> = arrayOf(
         InferenceOption(PluginSettings.INFERENCE_SNAKE, MpSqlVisualizerBundle.message("settings.tableNameInference.snake")),
         InferenceOption(PluginSettings.INFERENCE_CAMEL, MpSqlVisualizerBundle.message("settings.tableNameInference.camel")),
     )
@@ -123,16 +123,16 @@ class PluginSettingsPanel @JvmOverloads constructor(
      * 反向转换 Wrapper 形态选项（T-M36.3）：值 + 当前语言下的显示文案。
      * 与 [LanguageOption] 同理必须为 data class（JDK17 `JComboBox.setSelectedItem` 按 equals 匹配）。
      */
-    private data class ReverseFormatOption(val value: String, val label: String) {
+    internal data class ReverseFormatOption(val value: String, val label: String) {
         override fun toString(): String = label
     }
 
     /** T-CrudColor：CRUD 颜色标记形态下拉项。 */
-    private data class CrudColorStyleOption(val value: String, val label: String) {
+    internal data class CrudColorStyleOption(val value: String, val label: String) {
         override fun toString(): String = label
     }
 
-    private fun crudColorStyleOptions(): Array<CrudColorStyleOption> = arrayOf(
+    internal fun crudColorStyleOptions(): Array<CrudColorStyleOption> = arrayOf(
         CrudColorStyleOption(PluginSettings.CRUD_COLOR_STYLE_BAR, MpSqlVisualizerBundle.message("settings.log.crudColor.style.bar")),
         CrudColorStyleOption(PluginSettings.CRUD_COLOR_STYLE_BACKGROUND, MpSqlVisualizerBundle.message("settings.log.crudColor.style.background")),
         CrudColorStyleOption(PluginSettings.CRUD_COLOR_STYLE_OFF, MpSqlVisualizerBundle.message("settings.log.crudColor.style.off")),
@@ -160,14 +160,14 @@ class PluginSettingsPanel @JvmOverloads constructor(
     }
 
     /** `#RRGGBB` → Color（非法回退默认色，不抛）。 */
-    private fun colorOf(hex: String): Color = SqlListTypeColor.parseHex(hex, Color(0x4A86E8))
+    internal fun colorOf(hex: String): Color = SqlListTypeColor.parseHex(hex, Color(0x4A86E8))
 
     /** T-DisplayModeToSettings：SQL 列表显示模式下拉项（value=SqlListDisplayMode.name）。 */
-    private data class ListDisplayModeOption(val value: String, val label: String) {
+    internal data class ListDisplayModeOption(val value: String, val label: String) {
         override fun toString(): String = label
     }
 
-    private fun listDisplayModeOptions(): Array<ListDisplayModeOption> = arrayOf(
+    internal fun listDisplayModeOptions(): Array<ListDisplayModeOption> = arrayOf(
         ListDisplayModeOption(cn.song.mybatisplus.visualizer.log.SqlListDisplayMode.SINGLE_LINE.name, MpSqlVisualizerBundle.message("log.list.displayMode.single")),
         ListDisplayModeOption(cn.song.mybatisplus.visualizer.log.SqlListDisplayMode.KEYWORD_WRAP.name, MpSqlVisualizerBundle.message("log.list.displayMode.keywordWrap")),
         ListDisplayModeOption(cn.song.mybatisplus.visualizer.log.SqlListDisplayMode.FORMATTED.name, MpSqlVisualizerBundle.message("log.list.displayMode.formatted")),
@@ -178,7 +178,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
         (logDisplayModeCombo.selectedItem as? ListDisplayModeOption)?.value
             ?: PluginSettings.DEFAULT_LOG_LIST_DISPLAY_MODE
 
-    private fun reverseFormatOptions(): Array<ReverseFormatOption> = arrayOf(
+    internal fun reverseFormatOptions(): Array<ReverseFormatOption> = arrayOf(
         ReverseFormatOption(PluginSettings.REVERSE_AUTO, MpSqlVisualizerBundle.message("settings.reverseWrapperFormat.auto")),
         ReverseFormatOption(PluginSettings.REVERSE_QUERY, MpSqlVisualizerBundle.message("settings.reverseWrapperFormat.query")),
         ReverseFormatOption(PluginSettings.REVERSE_LAMBDA, MpSqlVisualizerBundle.message("settings.reverseWrapperFormat.lambda")),
@@ -194,50 +194,50 @@ class PluginSettingsPanel @JvmOverloads constructor(
     // ------------------------------------------------------------------
 
     /** 方言下拉（选项来自方言注册表；T-DialectAutoInfer 首项为「智能推断」）。 */
-    private val dialectCombo = JComboBox(
+    internal val dialectCombo = JComboBox(
         (listOf(MpSqlVisualizerBundle.message("settings.dialect.auto")) + DialectRegistry.dialects.map { it.name }).toTypedArray(),
     )
 
     /** T-DialectAutoInfer：「智能推断」哨兵项（显示文案随语言变化，写入 state 前须甄别）。 */
-    private val autoDialectItem: String = MpSqlVisualizerBundle.message("settings.dialect.auto")
+    internal val autoDialectItem: String = MpSqlVisualizerBundle.message("settings.dialect.auto")
 
     /** T-DialectAutoInfer：推断状态只读行（当前推断结果/依据，或手动指定值）。 */
-    private val dialectInferredLabel = javax.swing.JLabel()
+    internal val dialectInferredLabel = javax.swing.JLabel()
 
     /** 参数替换开关。 */
-    private val replaceParamsCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.replaceParams"))
+    internal val replaceParamsCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.replaceParams"))
 
     /** 格式化开关。 */
-    private val formatCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.formatSql"))
+    internal val formatCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.formatSql"))
 
     /** 竖向排列 VALUES 行尾配对列名标注开关（T-VPairAnno，默认开）。 */
-    private val verticalPairAnnotationCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.verticalPairAnnotation"))
+    internal val verticalPairAnnotationCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.verticalPairAnnotation"))
 
     /** SQL 预览字段较多时自动折叠开关（T-AutoFold，默认关）。 */
-    private val autoFoldCheck = JBCheckBox()
+    internal val autoFoldCheck = JBCheckBox()
 
     /** 自动折叠字段数阈值输入框（T-AutoFold）：开关勾选才启用编辑（对齐自动保存联动范式）。 */
-    private val autoFoldThresholdField = JBTextField(6)
+    internal val autoFoldThresholdField = JBTextField(6)
 
     /** 字面量参数恢复开关（T-HistParam，默认开）：无 `?` 占位符的日志 SQL 把字符串字面量识别为参数。 */
-    private val literalParamRecoveryCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.literalParamRecovery"))
+    internal val literalParamRecoveryCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.literalParamRecovery"))
 
     // ---------- M56 T-M56-08：增强捕获（agent 字节码通道；对用户不出现 agent 字样） ----------
 
     /** 增强捕获开关（默认关）：开启时弹注入确认对话框（JEP 451 预告 + 数据留本机说明）。 */
-    private val enhancedCaptureCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.enhancedCapture"))
+    internal val enhancedCaptureCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.enhancedCapture"))
 
     /** 脱敏开关（默认开）：对疑似敏感形态打码，agent 采集层执行。 */
-    private val enhancedDesensitizeCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.enhancedCapture.desensitize"))
+    internal val enhancedDesensitizeCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.enhancedCapture.desensitize"))
 
     /** R60（T-LaneB D96）：展示/导出链脱敏（日志列表/预览浮层/导出文本打码；默认关）。 */
-    private val displayMaskCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.display.mask"))
+    internal val displayMaskCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.display.mask"))
 
     /** T-StackHoverUi：调用栈快照总帧数（agent 两端采样预算；CONFIG 帧热下发）。 */
-    private val stackMaxFramesField = JBTextField(6)
+    internal val stackMaxFramesField = JBTextField(6)
 
     /** 增强捕获状态行：已挂载 pid=x / 未授权注入 / 已回落控制台捕获（T-CaptureTruth T-CT-01 五态）。 */
-    private val enhancedStatusLabel = JBLabel(" ")
+    internal val enhancedStatusLabel = JBLabel(" ")
 
     /**
      * T-CaptureTruth T-CT-02：重新授权按钮——仅在「开关开着但未授权」时露出（拒绝冷却期的恢复入口）。
@@ -245,7 +245,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
      * 监听器在字段初始化时挂一次：本面板 [rebuild]（语言切换）会重跑 buildSections，若在 addRow
      * 处挂监听会随重建叠加重复回调。
      */
-    private val enhancedReauthButton = JButton(MpSqlVisualizerBundle.message("settings.enhancedCapture.reauth")).apply {
+    internal val enhancedReauthButton = JButton(MpSqlVisualizerBundle.message("settings.enhancedCapture.reauth")).apply {
         toolTipText = MpSqlVisualizerBundle.message("settings.enhancedCapture.reauth.tip")
         isVisible = false
         addActionListener { onReauthorizeClicked() }
@@ -313,7 +313,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
         addActionListener { onPrefixAutoFixClicked() }
     }
 
-    private val prefixValidationRow = JPanel(java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 8, 0)).apply {
+    internal val prefixValidationRow = JPanel(java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 8, 0)).apply {
         isOpaque = false
         add(prefixValidationLabel)
         add(prefixFixButton)
@@ -365,7 +365,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
      * T-SourceJumpFunnel P1-3：源码捕获帧过滤前缀（一行一个前缀，如 `com.corp.engine.`）。
      * Apply 后经 CONFIG 热下发 agent（即时生效，无需重启应用），IDE 侧候选解析同步过滤。
      */
-    private val frameSkipPrefixesField = com.intellij.ui.components.JBTextArea(5, 40).apply {
+    internal val frameSkipPrefixesField = com.intellij.ui.components.JBTextArea(5, 40).apply {
         // T-SourceJumpFunnel：空态灰色占位提示（悬停 tooltip 之外的第一眼引导）
         emptyText.text = MpSqlVisualizerBundle.message("settings.sourceFrameSkipPrefixes.placeholder")
         lineWrap = true
@@ -391,21 +391,21 @@ class PluginSettingsPanel @JvmOverloads constructor(
     }
 
     /** gutter 预览 SQL 图标开关（M10）。 */
-    private val gutterIconCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.showGutterIcon"))
+    internal val gutterIconCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.showGutterIcon"))
     // R2（gutter 按来源分组显隐）：六组开关（默认全开=现行为不变）
-    private val gutterGroupMapperXmlCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.gutterGroup.mapperXml"))
-    private val gutterGroupAnnotationCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.gutterGroup.annotation"))
-    private val gutterGroupJpaHqlCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.gutterGroup.jpaHql"))
-    private val gutterGroupJdbcCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.gutterGroup.jdbc"))
-    private val gutterGroupInlineFallbackCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.gutterGroup.inlineFallback"))
-    private val gutterGroupOtherCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.gutterGroup.other"))
+    internal val gutterGroupMapperXmlCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.gutterGroup.mapperXml"))
+    internal val gutterGroupAnnotationCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.gutterGroup.annotation"))
+    internal val gutterGroupJpaHqlCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.gutterGroup.jpaHql"))
+    internal val gutterGroupJdbcCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.gutterGroup.jdbc"))
+    internal val gutterGroupInlineFallbackCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.gutterGroup.inlineFallback"))
+    internal val gutterGroupOtherCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.gutterGroup.other"))
 
     /**
      * T-ToolSiteBizFrame：JAR 业务帧反向名单（一行一个前缀，如 `com.corp.shared.util.`）。
      * 语义与 [frameSkipPrefixesField] 相反——名单内包名的帧即使来自 JAR 也按业务帧对待；
      * Apply 后随 CONFIG 热下发 agent。
      */
-    private val bizJarPrefixesField = com.intellij.ui.components.JBTextArea(5, 40).apply {
+    internal val bizJarPrefixesField = com.intellij.ui.components.JBTextArea(5, 40).apply {
         emptyText.text = MpSqlVisualizerBundle.message("settings.sourceFrameBizJarPrefixes.placeholder")
         lineWrap = true
         wrapStyleWord = true
@@ -430,7 +430,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
      * 确认：互相腾挪、总高固定），比例经 proportionKey 记忆跨重启（同款形态见 SqlPreviewPanel 预览分栏）。
      * 每格 = 标签（左、顶对齐，两格标签同宽对齐）+ 文本框（占满余宽）；rebuild 重建新实例时按同键自动加载记忆比例。
      */
-    private fun buildFramePrefixesSplitter(): com.intellij.ui.OnePixelSplitter {
+    internal fun buildFramePrefixesSplitter(): com.intellij.ui.OnePixelSplitter {
         val skipLabel = JBLabel(MpSqlVisualizerBundle.message("settings.sourceFrameSkipPrefixes"))
         val bizLabel = JBLabel(MpSqlVisualizerBundle.message("settings.sourceFrameBizJarPrefixes"))
         val labelWidth = maxOf(skipLabel.preferredSize.width, bizLabel.preferredSize.width)
@@ -455,160 +455,160 @@ class PluginSettingsPanel @JvmOverloads constructor(
         }
     }
 
-    private val joinDiagramNativeCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.joinDiagramNative"))
+    internal val joinDiagramNativeCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.joinDiagramNative"))
 
     /** 通用 XML 内嵌 SQL 检测开关（O-72 T-XmlInlineSql，默认开）。 */
-    private val xmlInlineSqlCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.xmlInlineSql"))
+    internal val xmlInlineSqlCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.xmlInlineSql"))
 
     /** mapper XML 语法高亮注入开关（T-XmlSynHi D4=T-PerfSweep16 F46 补 UI）：State.xmlSynHiEnabled 字段原有，此前无面板入口。 */
-    private val xmlSynHiCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.xmlSynHi"))
+    internal val xmlSynHiCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.xmlSynHi"))
 
     /** 首用锚点引导通知开关（T-UxOnboard T-UX-01，默认开）：关闭后首用引导全程静默。 */
-    private val onboardingAnchorTipCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.onboardingAnchorTip"))
+    internal val onboardingAnchorTipCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.onboardingAnchorTip"))
 
     /** 空白符可视化开关（T-PreviewWhitespaceToggle O-44a，默认关=不设置该属性、继承 IDE 全局）。 */
-    private val editorShowWhitespacesCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.editorShowWhitespaces"))
+    internal val editorShowWhitespacesCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.editorShowWhitespaces"))
 
     /** 逻辑删除注入开关（T-M15-07）：@TableLogic 实体查询/删除自动追加 `AND deleted = 0`。 */
-    private val injectLogicDeleteCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.injectLogicDelete"))
-    private val logicDeleteValueField = JBTextField(6)
+    internal val injectLogicDeleteCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.injectLogicDelete"))
+    internal val logicDeleteValueField = JBTextField(6)
 
     /** 多租户注入开关（T-TenantLine）：SELECT/UPDATE/DELETE 自动追加 `AND tenant_id = ?`、INSERT 列清单追加租户列。 */
-    private val injectTenantLineCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.injectTenantLine"))
+    internal val injectTenantLineCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.injectTenantLine"))
 
     /** 租户列名输入框（T-TenantLine）：默认 tenant_id；可按业务调整，如 org_id / shop_id。 */
-    private val tenantColumnNameField = JBTextField(10)
+    internal val tenantColumnNameField = JBTextField(10)
 
     /** 租户列默认值输入框（F-6 Phase A）：UPDATE SET / INSERT 追加租户列时的字面量默认值。 */
-    private val tenantColumnDefaultField = JBTextField(6)
+    internal val tenantColumnDefaultField = JBTextField(6)
 
     /** INSERT 也追加租户列开关（F-6 Phase A）：INSERT 列清单追加租户列。 */
-    private val injectTenantOnInsertCheck = JBCheckBox()
+    internal val injectTenantOnInsertCheck = JBCheckBox()
 
     /** 数据权限占位提示开关（F-6 Phase C）：显示 DataPermissionInterceptor 运行时差异提示。 */
-    private val dataPermissionHintCheck = JBCheckBox()
+    internal val dataPermissionHintCheck = JBCheckBox()
 
     /** 数据权限模拟条件输入框（F-6 Phase C）：用户手动填写的 WHERE 片段。 */
-    private val dataPermissionMockConditionField = JBTextField(20)
+    internal val dataPermissionMockConditionField = JBTextField(20)
 
     /** 分页拦截器模拟开关（R12 T-PaginationSim）：COUNT 包裹预览第二语句产出（默认开）。 */
-    private val paginationSimCheck = JBCheckBox()
+    internal val paginationSimCheck = JBCheckBox()
 
     /** 分页 COUNT 查询预览子开关（T-CountSimToggle）：仅控制 COUNT 产出、不影响 LIMIT（父开关优先，默认开）。 */
-    private val paginationCountCheck = JBCheckBox()
+    internal val paginationCountCheck = JBCheckBox()
 
     /** JDBC 模板 SQL 字符串预览开关：queryForList/update 等方法的字符串 SQL 实参显示预览图标。 */
-    private val jdbcSqlPreviewCheck = JBCheckBox()
+    internal val jdbcSqlPreviewCheck = JBCheckBox()
 
     /** EXPLAIN 结构化渲染开关（R33）：面板执行计划按钮的结构化通道（默认开，失败自动回退原生控制台）。 */
-    private val explainStructuredCheck = JBCheckBox()
+    internal val explainStructuredCheck = JBCheckBox()
 
     /** T-ExecTimeoutGuard：执行超时（秒，0=不限）——JBIntSlider 过重，JBTextField + 数字容错。 */
-    private val executionTimeoutField = JBTextField(8)
+    internal val executionTimeoutField = JBTextField(8)
 
     /** 表前缀输入框（T-M16.2-03）：统一加在所有表名前，全局语义（@TableName 显式表名同样生效）。 */
-    private val tablePrefixField = JBTextField(12)
+    internal val tablePrefixField = JBTextField(12)
 
     /** 表后缀输入框（T-M16.2-03）：统一加在所有表名后，全局语义；清空即恢复原样。T-M19.4：多值 `;` 分隔。 */
-    private val tableSuffixField = JBTextField(12)
+    internal val tableSuffixField = JBTextField(12)
 
     /** 表名推断策略下拉（T-M19.4）：无 @TableName 时类名→表名的推断方式（SNAKE 默认 / CAMEL 保留驼峰）。 */
-    private val inferenceCombo = JComboBox<InferenceOption>()
+    internal val inferenceCombo = JComboBox<InferenceOption>()
 
     /** 忽略字段名输入框（T-M19.4）：`;` 分隔的 Java 字段名——命中字段不进 SQL（SELECT 展开/补全/参数对照）。 */
-    private val ignoredFieldsField = JBTextField(12)
+    internal val ignoredFieldsField = JBTextField(12)
 
     /** 移除表名前缀输入框（T-M19.4）：`;` 分隔，最终表名以哪个开头就移除哪个（首个匹配）。 */
-    private val removeTablePrefixField = JBTextField(12)
+    internal val removeTablePrefixField = JBTextField(12)
 
     /** 移除表名后缀输入框（T-M19.4）：`;` 分隔，最终表名以哪个结尾就移除哪个（首个匹配）。 */
-    private val removeTableSuffixField = JBTextField(12)
+    internal val removeTableSuffixField = JBTextField(12)
 
     /** 列名数据源校正开关（O-58）：实体字段名与库真实列名不一致时用数据源真值纠正列名。 */
-    private val columnCalibrationCheck = JBCheckBox()
+    internal val columnCalibrationCheck = JBCheckBox()
 
     /** 界面语言下拉（M14：默认简体中文；跟随系统 / English 可选）。 */
-    private val languageCombo = JComboBox<LanguageOption>()
+    internal val languageCombo = JComboBox<LanguageOption>()
 
     /** T-PT-04 / O-79：空参数填充策略单选（`?` 占位符 / NULL 字面量 / 空字符串，占位档为默认）。 */
-    private val emptyParamFillPlaceholderRadio = JBRadioButton()
-    private val emptyParamFillNullRadio = JBRadioButton()
-    private val emptyParamFillEmptyRadio = JBRadioButton()
-    private val emptyParamFillGroup = ButtonGroup()
+    internal val emptyParamFillPlaceholderRadio = JBRadioButton()
+    internal val emptyParamFillNullRadio = JBRadioButton()
+    internal val emptyParamFillEmptyRadio = JBRadioButton()
+    internal val emptyParamFillGroup = ButtonGroup()
 
     /** 反向转换 Wrapper 形态下拉（T-M36.3：AUTO/QUERY/LAMBDA/MPJ_LAMBDA）。 */
-    private val reverseFormatCombo = JComboBox<ReverseFormatOption>()
+    internal val reverseFormatCombo = JComboBox<ReverseFormatOption>()
 
     /** 反向转换手动选择实体类开关（自动推断未命中/多表 JOIN 时弹实体选择弹窗）。 */
-    private val manualEntityCheck = JBCheckBox()
+    internal val manualEntityCheck = JBCheckBox()
 
     /** 插件缓存信息（统一条目总数——所有打开项目汇总；不细分缓存类型）。 */
-    private val cacheInfoLabel = JBLabel(" ")
+    internal val cacheInfoLabel = JBLabel(" ")
 
     /** 设置导入/导出结果反馈（20260907：行内提示替代模态弹窗——原弹窗叠在 Settings 对话框下，须关设置才可见）。 */
-    private val statusLabel = JBLabel(" ")
+    internal val statusLabel = JBLabel(" ")
 
     /** 插件缓存统一清除按钮（清全部缓存，下次使用自动重建）。 */
-    private val clearCacheButton = JButton(MpSqlVisualizerBundle.message("settings.cache.clear"))
+    internal val clearCacheButton = JButton(MpSqlVisualizerBundle.message("settings.cache.clear"))
 
     // ---------- T-M31.14 SQL 日志配置（参考 MybatisCodeHelper-Pro「MyBatis Log Setting」） ----------
-    private val logSqlPrefixField = JBTextField(12)
-    private val logParamPrefixField = JBTextField(12)
-    private val logMixedPrefixCheck = JBCheckBox()
-    private val logAutoCaptureCheck = JBCheckBox()
-    private val logAutoOpenCheck = JBCheckBox()
-    private val logStopOnToolWindowCloseCheck = JBCheckBox()
-    private val logTimestampCheck = JBCheckBox()
-    private val logTimestampFormatField = JBTextField(12)
-    private val logTimestampSourceLogRadio = JBRadioButton()
-    private val logTimestampSourceCaptureRadio = JBRadioButton()
-    private val logTimestampSourceGroup = ButtonGroup()
-    private val logFormatSqlCheck = JBCheckBox()
-    private val logFilterKeywordsField = JBTextField(12)
-    private val logDedupeField = JBTextField(12)
-    private val logMaxParseField = JBTextField(12)
-    private val logMaxCountField = JBTextField(12)
-    private val logHibernateEnabledCheck = JBCheckBox()
-    private val logHibernateSqlPrefixField = JBTextField(12)
-    private val logHibernateParamPrefixField = JBTextField(12)
-    private val logJdbcEnabledCheck = JBCheckBox()
+    internal val logSqlPrefixField = JBTextField(12)
+    internal val logParamPrefixField = JBTextField(12)
+    internal val logMixedPrefixCheck = JBCheckBox()
+    internal val logAutoCaptureCheck = JBCheckBox()
+    internal val logAutoOpenCheck = JBCheckBox()
+    internal val logStopOnToolWindowCloseCheck = JBCheckBox()
+    internal val logTimestampCheck = JBCheckBox()
+    internal val logTimestampFormatField = JBTextField(12)
+    internal val logTimestampSourceLogRadio = JBRadioButton()
+    internal val logTimestampSourceCaptureRadio = JBRadioButton()
+    internal val logTimestampSourceGroup = ButtonGroup()
+    internal val logFormatSqlCheck = JBCheckBox()
+    internal val logFilterKeywordsField = JBTextField(12)
+    internal val logDedupeField = JBTextField(12)
+    internal val logMaxParseField = JBTextField(12)
+    internal val logMaxCountField = JBTextField(12)
+    internal val logHibernateEnabledCheck = JBCheckBox()
+    internal val logHibernateSqlPrefixField = JBTextField(12)
+    internal val logHibernateParamPrefixField = JBTextField(12)
+    internal val logJdbcEnabledCheck = JBCheckBox()
 
     // R10 T-ShardingSphereCompat：ShardingSphere 双段日志捕获开关（照抄 Hibernate/Jdbc 开关形态）
-    private val logShardingSphereEnabledCheck = JBCheckBox()
+    internal val logShardingSphereEnabledCheck = JBCheckBox()
 
     // ---------- F-43 自动保存历史 SQL ----------
-    private val logAutoSaveCheck = JBCheckBox()
-    private val logAutoSavePathField = JBTextField(20)
-    private val logAutoSaveBrowseButton = JButton("...")
-    private val logAutoSavePatternField = JBTextField(20)
-    private val logAutoSavePatternPreview = JBLabel(" ")
+    internal val logAutoSaveCheck = JBCheckBox()
+    internal val logAutoSavePathField = JBTextField(20)
+    internal val logAutoSaveBrowseButton = JButton("...")
+    internal val logAutoSavePatternField = JBTextField(20)
+    internal val logAutoSavePatternPreview = JBLabel(" ")
     /** T-HistoryFileRetention：历史文件保留上限（0 = 不限/全量）。 */
-    private val logAutoSaveMaxFilesField = JBTextField(12)
+    internal val logAutoSaveMaxFilesField = JBTextField(12)
 
     // ---------- F-44-7 SqlSourceInterceptor 自动注入 ----------
-    private val autoInjectInterceptorCheck = JBCheckBox()
+    internal val autoInjectInterceptorCheck = JBCheckBox()
 
     // ---------- O-1 日志窗口差异化（执行耗时 / 慢查询） ----------
-    private val logTimePrefixField = JBTextField(12)
-    private val slowQueryThresholdField = JBTextField(12)
-    private val logShowDurationCheck = JBCheckBox()
+    internal val logTimePrefixField = JBTextField(12)
+    internal val slowQueryThresholdField = JBTextField(12)
+    internal val logShowDurationCheck = JBCheckBox()
 
     // T-DataSourceBadgeMode：数据源角标显示完整上下文（默认关＝仅显示数据库类型）
-    private val dataSourceBadgeDetailCheck = JBCheckBox()
+    internal val dataSourceBadgeDetailCheck = JBCheckBox()
 
     // ---------- T-CrudColor：SQL 列表 CRUD 类型颜色标记 ----------
     /** 标记形态下拉（色条 / 整行淡背景 / 关闭）。 */
-    private val crudColorStyleCombo = ComboBox<CrudColorStyleOption>()
+    internal val crudColorStyleCombo = ComboBox<CrudColorStyleOption>()
 
     /** T-DisplayModeToSettings：SQL 列表显示模式（SQL 日志 + SQL 历史两列表共享一键）。 */
-    private val logDisplayModeCombo = ComboBox<ListDisplayModeOption>()
+    internal val logDisplayModeCombo = ComboBox<ListDisplayModeOption>()
     /** 四类型色板（平台原生 ColorPanel，点击弹出取色器）。 */
-    private val crudColorSelectPanel = ColorPanel()
-    private val crudColorInsertPanel = ColorPanel()
-    private val crudColorUpdatePanel = ColorPanel()
-    private val crudColorDeletePanel = ColorPanel()
+    internal val crudColorSelectPanel = ColorPanel()
+    internal val crudColorInsertPanel = ColorPanel()
+    internal val crudColorUpdatePanel = ColorPanel()
+    internal val crudColorDeletePanel = ColorPanel()
     /** 一键恢复四色默认值。 */
-    private val crudColorResetButton = JButton()
+    internal val crudColorResetButton = JButton()
 
     /**
      * M19.1：语言写穿后「待应用」标记——语言已实时写入配置，但用户尚未点击「应用/确定」。
@@ -618,18 +618,18 @@ class PluginSettingsPanel @JvmOverloads constructor(
     private var languagePending = false
 
     /** 快捷键内嵌编辑（M14.1：录制式修改 Convert to SQL 的 KeyboardShortcut，保存写入 Keymap）。 */
-    private val shortcutEditor = ShortcutEditor(ConvertToSqlAction.ACTION_ID)
+    internal val shortcutEditor = ShortcutEditor(ConvertToSqlAction.ACTION_ID)
 
     /** T-M41：SQL→Java 快捷键内嵌编辑（同款录制式，目标 action = ConvertSqlToJava）。 */
-    private val reverseShortcutEditor = ShortcutEditor(ConvertSqlToJavaAction.ACTION_ID)
+    internal val reverseShortcutEditor = ShortcutEditor(ConvertSqlToJavaAction.ACTION_ID)
 
     /** T-ShortcutSettings：${table} 快捷模板三动作快捷键内嵌编辑（Explain / Count / Sample）。 */
-    private val explainShortcutEditor = ShortcutEditor(ExplainSelectedTableAction.ACTION_ID)
-    private val countShortcutEditor = ShortcutEditor(CountSelectedTableAction.ACTION_ID)
-    private val sampleShortcutEditor = ShortcutEditor(SampleSelectedTableAction.ACTION_ID)
+    internal val explainShortcutEditor = ShortcutEditor(ExplainSelectedTableAction.ACTION_ID)
+    internal val countShortcutEditor = ShortcutEditor(CountSelectedTableAction.ACTION_ID)
+    internal val sampleShortcutEditor = ShortcutEditor(SampleSelectedTableAction.ACTION_ID)
 
     /** 更新分区（M28：检查更新/下载安装/重启提示/启动自动检查开关）。 */
-    private val updateSection = UpdateSection(settings)
+    internal val updateSection = UpdateSection(settings)
 
     // 搜索框已移至主设置页面（PluginSettingsFolderConfigurable）
 
@@ -684,584 +684,8 @@ class PluginSettingsPanel @JvmOverloads constructor(
      * 构建表单布局（T-M31.8：分组 + TitledSeparator 分隔线，对齐 SQL 预览面板左侧分区样式）。
      * 高频组在上、低频组在下、同类相聚；rebuild 时重新调用（语言切换后组标题与文案刷新）。
      */
-    private fun buildSections(panel: JPanel) {
-        val gbc = GridBagConstraints().apply {
-            gridx = 0
-            gridy = 0
-            anchor = GridBagConstraints.WEST
-            insets = Insets(4, 6, 4, 6)
-        }
-
-        fun addRow(panel: JPanel, gbc: GridBagConstraints, label: String, component: JComponent, fill: Int = GridBagConstraints.NONE) {
-            gbc.gridx = 0
-            gbc.weightx = 0.0
-            panel.add(JBLabel(label), gbc)
-            gbc.gridx = 1
-            gbc.weightx = 1.0
-            gbc.fill = fill
-            panel.add(component, gbc)
-            gbc.fill = GridBagConstraints.NONE
-            gbc.gridy++
-        }
-
-        /** 分隔线 + 内容面板（无边框、无折叠）。 */
-        fun sectionGroup(
-            titleKey: String,
-            content: (JPanel, GridBagConstraints) -> Unit,
-        ) {
-            val contentPanel = JPanel(GridBagLayout())
-            val inner = GridBagConstraints().apply {
-                gridx = 0; gridy = 0; anchor = GridBagConstraints.WEST; insets = Insets(2, 6, 2, 6)
-            }
-            content(contentPanel, inner)
-
-            // 计算内容区标签最大宽度，统一列宽
-            val layout = contentPanel.layout as GridBagLayout
-            var maxLabelWidth = 0
-            for (comp in contentPanel.components) {
-                if (comp is JBLabel) {
-                    maxLabelWidth = maxOf(maxLabelWidth, comp.preferredSize.width)
-                }
-            }
-            if (maxLabelWidth > 0) {
-                layout.columnWidths = intArrayOf(maxLabelWidth + 8, 0)
-            }
-
-            // 分隔线（仅横线，无边框）
-            gbc.gridx = 0; gbc.gridwidth = 1; gbc.weightx = 1.0
-            gbc.fill = GridBagConstraints.HORIZONTAL
-            panel.add(TitledSeparator(MpSqlVisualizerBundle.message(titleKey)), gbc)
-            gbc.gridy++
-
-            // 内容面板
-            gbc.gridx = 0; gbc.gridwidth = 1; gbc.weightx = 1.0
-            gbc.fill = GridBagConstraints.HORIZONTAL
-            panel.add(contentPanel, gbc)
-            gbc.gridy++
-        }
-
-        // 组 1：SQL 预览（默认展开）
-        if (SECTION_PREVIEW in sections) {
-            sectionGroup("settings.section.preview") { p, g ->
-                addRow(p, g, MpSqlVisualizerBundle.message("settings.dialect"), dialectCombo)
-                addRow(p, g, "", dialectInferredLabel)
-                // T-DialectAutoInfer：切回哨兵项时刷新推断状态行（仅此一处需要联动；
-                // 非「只为置 modified 标志位」的监听器——T-RA-04 删除的是后者）
-                dialectCombo.addActionListener {
-                    if (dialectCombo.selectedItem == autoDialectItem) refreshInferredLabel()
-                }
-                addRow(p, g, "", replaceParamsCheck.apply { text = MpSqlVisualizerBundle.message("settings.replaceParams") })
-                // T-PT-04 / O-79：空参数填充策略（参数值为空时保留 ? 占位，还是回填 NULL/空字符串）
-                emptyParamFillPlaceholderRadio.apply {
-                    text = MpSqlVisualizerBundle.message("settings.emptyParamFill.placeholder")
-                    toolTipText = MpSqlVisualizerBundle.message("settings.emptyParamFill.placeholder.tip")
-                }
-                emptyParamFillNullRadio.apply {
-                    text = MpSqlVisualizerBundle.message("settings.emptyParamFill.null")
-                    toolTipText = MpSqlVisualizerBundle.message("settings.emptyParamFill.null.tip")
-                }
-                emptyParamFillEmptyRadio.apply {
-                    text = MpSqlVisualizerBundle.message("settings.emptyParamFill.empty")
-                    toolTipText = MpSqlVisualizerBundle.message("settings.emptyParamFill.empty.tip")
-                }
-                emptyParamFillGroup.add(emptyParamFillPlaceholderRadio)
-                emptyParamFillGroup.add(emptyParamFillNullRadio)
-                emptyParamFillGroup.add(emptyParamFillEmptyRadio)
-                addRow(p, g, MpSqlVisualizerBundle.message("settings.emptyParamFill"), JPanel().apply {
-                    add(emptyParamFillPlaceholderRadio)
-                    add(emptyParamFillNullRadio)
-                    add(emptyParamFillEmptyRadio)
-                })
-                addRow(p, g, "", formatCheck.apply { text = MpSqlVisualizerBundle.message("settings.formatSql") })
-                addRow(p, g, "", verticalPairAnnotationCheck.apply { text = MpSqlVisualizerBundle.message("settings.verticalPairAnnotation") })
-                addRow(p, g, "", autoFoldCheck.apply {
-                    text = MpSqlVisualizerBundle.message("settings.autoFold.enabled")
-                    toolTipText = MpSqlVisualizerBundle.message("settings.autoFold.enabled.tip")
-                    addActionListener { autoFoldThresholdField.isEnabled = isSelected }
-                })
-                addRow(p, g, MpSqlVisualizerBundle.message("settings.autoFold.threshold"), autoFoldThresholdField.apply {
-                    toolTipText = MpSqlVisualizerBundle.message("settings.autoFold.threshold.tip")
-                })
-                addRow(p, g, "", literalParamRecoveryCheck.apply { text = MpSqlVisualizerBundle.message("settings.literalParamRecovery") })
-                addRow(p, g, "", injectLogicDeleteCheck.apply { text = MpSqlVisualizerBundle.message("settings.injectLogicDelete") })
-                addRow(p, g, MpSqlVisualizerBundle.message("settings.logicDeleteValue"), logicDeleteValueField.apply {
-                    toolTipText = MpSqlVisualizerBundle.message("settings.logicDeleteValue.tip")
-                })
-                addRow(p, g, "", injectTenantLineCheck.apply { text = MpSqlVisualizerBundle.message("settings.injectTenantLine") })
-                addRow(p, g, MpSqlVisualizerBundle.message("settings.tenantColumnName"), tenantColumnNameField.apply {
-                    toolTipText = MpSqlVisualizerBundle.message("settings.tenantColumnName.tip")
-                })
-                addRow(p, g, MpSqlVisualizerBundle.message("settings.tenantColumnDefault"), tenantColumnDefaultField.apply {
-                    toolTipText = MpSqlVisualizerBundle.message("settings.tenantColumnDefault.tip")
-                })
-                addRow(p, g, "", injectTenantOnInsertCheck.apply {
-                    text = MpSqlVisualizerBundle.message("settings.injectTenantOnInsert")
-                    toolTipText = MpSqlVisualizerBundle.message("settings.injectTenantOnInsert.tip")
-                })
-                addRow(p, g, "", dataPermissionHintCheck.apply {
-                    text = MpSqlVisualizerBundle.message("settings.dataPermissionHint")
-                    toolTipText = MpSqlVisualizerBundle.message("settings.dataPermissionHint.tip")
-                })
-                addRow(p, g, MpSqlVisualizerBundle.message("settings.dataPermissionMockCondition"), dataPermissionMockConditionField.apply {
-                    toolTipText = MpSqlVisualizerBundle.message("settings.dataPermissionMockCondition.tip")
-                })
-                addRow(p, g, "", paginationSimCheck.apply {
-                    text = MpSqlVisualizerBundle.message("settings.paginationSim")
-                    toolTipText = MpSqlVisualizerBundle.message("settings.paginationSim.tip")
-                })
-                addRow(p, g, "", paginationCountCheck.apply {
-                    text = MpSqlVisualizerBundle.message("settings.paginationCount")
-                    toolTipText = MpSqlVisualizerBundle.message("settings.paginationCount.tip")
-                })
-                addRow(p, g, "", jdbcSqlPreviewCheck.apply {
-                    text = MpSqlVisualizerBundle.message("settings.preview.jdbc")
-                    toolTipText = MpSqlVisualizerBundle.message("settings.preview.jdbc.tip")
-                })
-                addRow(p, g, "", explainStructuredCheck.apply {
-                    text = MpSqlVisualizerBundle.message("settings.explain.structured")
-                    toolTipText = MpSqlVisualizerBundle.message("settings.explain.structured.tip")
-                })
-                addRow(p, g, MpSqlVisualizerBundle.message("settings.preview.executionTimeout"), executionTimeoutField.apply {
-                    toolTipText = MpSqlVisualizerBundle.message("settings.preview.executionTimeout.tip")
-                })
-            }
-        }
-
-        // 组 2：表名映射（默认折叠）
-        if (SECTION_TABLE_MAPPING in sections) {
-            sectionGroup("settings.section.tableMapping") { p, g ->
-                addRow(p, g, MpSqlVisualizerBundle.message("settings.tablePrefix"), tablePrefixField.apply {
-                    toolTipText = MpSqlVisualizerBundle.message("settings.tablePrefix.tip")
-                })
-                addRow(p, g, MpSqlVisualizerBundle.message("settings.tableSuffix"), tableSuffixField.apply {
-                    toolTipText = MpSqlVisualizerBundle.message("settings.tableSuffix.tip")
-                })
-                addRow(p, g, MpSqlVisualizerBundle.message("settings.removeTablePrefix"), removeTablePrefixField.apply {
-                    toolTipText = MpSqlVisualizerBundle.message("settings.removeTablePrefix.tip")
-                    emptyText.text = MpSqlVisualizerBundle.message("settings.separatorHint")
-                })
-                addRow(p, g, MpSqlVisualizerBundle.message("settings.removeTableSuffix"), removeTableSuffixField.apply {
-                    toolTipText = MpSqlVisualizerBundle.message("settings.removeTableSuffix.tip")
-                    emptyText.text = MpSqlVisualizerBundle.message("settings.separatorHint")
-                })
-                addRow(p, g, MpSqlVisualizerBundle.message("settings.ignoredFields"), ignoredFieldsField.apply {
-                    toolTipText = MpSqlVisualizerBundle.message("settings.ignoredFields.tip")
-                    emptyText.text = MpSqlVisualizerBundle.message("settings.separatorHint")
-                })
-                addRow(p, g, MpSqlVisualizerBundle.message("settings.tableNameInference"), inferenceCombo.apply {
-                    model = DefaultComboBoxModel(inferenceOptions())
-                    toolTipText = MpSqlVisualizerBundle.message("settings.tableNameInference.tip")
-                    selectedItem = inferenceOptions().firstOrNull { it.value == settings.state.tableNameInference }
-                        ?: inferenceOptions().first()
-                })
-                addRow(p, g, "", columnCalibrationCheck.apply {
-                    text = MpSqlVisualizerBundle.message("settings.columnCalibration")
-                    toolTipText = MpSqlVisualizerBundle.message("settings.columnCalibration.tip")
-                })
-            }
-        }
-
-        // 组 3：代码生成（默认折叠）
-        if (SECTION_CODE_GEN in sections) {
-            sectionGroup("settings.section.codeGen") { p, g ->
-                addRow(p, g, MpSqlVisualizerBundle.message("settings.reverseWrapperFormat"), reverseFormatCombo.apply {
-                    model = DefaultComboBoxModel(reverseFormatOptions())
-                    toolTipText = MpSqlVisualizerBundle.message("settings.reverseWrapperFormat.tip")
-                    selectedItem = reverseFormatOptions().firstOrNull { it.value == settings.state.reverseWrapperFormat }
-                        ?: reverseFormatOptions().first()
-                })
-                addRow(p, g, "", manualEntityCheck.apply {
-                    text = MpSqlVisualizerBundle.message("settings.reverseManualEntitySelection")
-                    toolTipText = MpSqlVisualizerBundle.message("settings.reverseManualEntitySelection.tip")
-                })
-            }
-        }
-
-        // 组 4：SQL 日志（分割线分隔 3 个子分组）
-        if (SECTION_SQL_LOG in sections) {
-            sectionGroup("settings.log.tab.mybatis") { p, g ->
-                // P1-4 摩擦 #3（批次9 波次2）：帧过滤前缀入口指向说明——设置项本体留在页末
-                // 「源码捕获」组（与 JAR 业务帧反向名单同域成对、SearchableField 已按域索引，
-                // 搬动即拆散配对语义），按任务定案取侵入最小形态：本页首组顶加一行零交互指向
-                // 说明（R20 落地页提示形态，零监听器），让从上往下扫的用户在第一屏即得知该
-                // 能力在场。说明行跨两列直挂（不经 addRow 的首列标签位），且 JBLabel 必须包一
-                // 层面板——sectionGroup 的 maxLabelWidth 列宽计算扫描全部直接 JBLabel 子件，
-                // 长说明行入列会把组内首列撑到整行宽、其余行字段列被挤没。
-                g.gridx = 0
-                g.gridwidth = 2
-                g.weightx = 1.0
-                g.fill = GridBagConstraints.HORIZONTAL
-                p.add(
-                    JPanel(BorderLayout()).apply {
-                        isOpaque = false
-                        add(
-                            JBLabel(
-                                "<html>" + MpSqlVisualizerBundle.message("settings.sourceFrameSkipPrefixes.hint") + "</html>",
-                            ).apply { foreground = JBUI.CurrentTheme.ContextHelp.FOREGROUND },
-                            BorderLayout.CENTER,
-                        )
-                    },
-                    g,
-                )
-                g.gridwidth = 1
-                g.gridy++
-                addRow(p, g, MpSqlVisualizerBundle.message("settings.log.sqlPrefix"), logSqlPrefixField.apply {
-                    toolTipText = MpSqlVisualizerBundle.message("settings.log.sqlPrefix.tip")
-                })
-                addRow(p, g, MpSqlVisualizerBundle.message("settings.log.paramPrefix"), logParamPrefixField.apply {
-                    toolTipText = MpSqlVisualizerBundle.message("settings.log.paramPrefix.tip")
-                })
-                addRow(p, g, "", logMixedPrefixCheck.apply {
-                    text = MpSqlVisualizerBundle.message("settings.log.mixedPrefix")
-                    toolTipText = MpSqlVisualizerBundle.message("settings.log.mixedPrefix.tip")
-                })
-                addRow(p, g, "", logAutoCaptureCheck.apply { text = MpSqlVisualizerBundle.message("settings.log.autoCapture") })
-                addRow(p, g, "", logAutoOpenCheck.apply { text = MpSqlVisualizerBundle.message("settings.log.autoOpen") })
-                addRow(p, g, "", logStopOnToolWindowCloseCheck.apply { text = MpSqlVisualizerBundle.message("settings.log.stopOnToolWindowClose") })
-                addRow(p, g, "", logTimestampCheck.apply { text = MpSqlVisualizerBundle.message("settings.log.timestamp") })
-                addRow(p, g, MpSqlVisualizerBundle.message("settings.log.timestampFormat"), logTimestampFormatField.apply {
-                    toolTipText = MpSqlVisualizerBundle.message("settings.log.timestampFormat.tip")
-                })
-                // 时间来源单选组（日志时间 / 捕获时间）
-                logTimestampSourceLogRadio.apply {
-                    text = MpSqlVisualizerBundle.message("settings.log.timestampSource.log")
-                    toolTipText = MpSqlVisualizerBundle.message("settings.log.timestampSource.log.tip")
-                }
-                logTimestampSourceCaptureRadio.apply {
-                    text = MpSqlVisualizerBundle.message("settings.log.timestampSource.capture")
-                    toolTipText = MpSqlVisualizerBundle.message("settings.log.timestampSource.capture.tip")
-                }
-                logTimestampSourceGroup.add(logTimestampSourceLogRadio)
-                logTimestampSourceGroup.add(logTimestampSourceCaptureRadio)
-                addRow(p, g, MpSqlVisualizerBundle.message("settings.log.timestampSource"), JPanel().apply {
-                    add(logTimestampSourceLogRadio)
-                    add(logTimestampSourceCaptureRadio)
-                })
-                addRow(p, g, "", logFormatSqlCheck.apply { text = MpSqlVisualizerBundle.message("settings.log.formatSql") })
-                addRow(p, g, MpSqlVisualizerBundle.message("settings.log.filterKeywords"), logFilterKeywordsField.apply {
-                    toolTipText = MpSqlVisualizerBundle.message("settings.log.filterKeywords.tip")
-                    emptyText.text = MpSqlVisualizerBundle.message("settings.separatorHint")
-                })
-                addRow(p, g, MpSqlVisualizerBundle.message("settings.log.dedupeWindow"), logDedupeField.apply {
-                    toolTipText = MpSqlVisualizerBundle.message("settings.log.dedupeWindow.tip")
-                })
-                addRow(p, g, MpSqlVisualizerBundle.message("settings.log.maxParseLength"), logMaxParseField.apply {
-                    toolTipText = MpSqlVisualizerBundle.message("settings.log.maxParseLength.tip")
-                })
-                addRow(p, g, MpSqlVisualizerBundle.message("settings.log.maxCount"), logMaxCountField.apply {
-                    toolTipText = MpSqlVisualizerBundle.message("settings.log.maxCount.tip")
-                })
-                addRow(p, g, MpSqlVisualizerBundle.message("settings.log.timePrefix"), logTimePrefixField.apply {
-                    toolTipText = MpSqlVisualizerBundle.message("settings.log.timePrefix.tip")
-                })
-                addRow(p, g, MpSqlVisualizerBundle.message("settings.log.slowQueryThreshold"), slowQueryThresholdField.apply {
-                    toolTipText = MpSqlVisualizerBundle.message("settings.log.slowQueryThreshold.tip")
-                })
-                addRow(p, g, "", logShowDurationCheck.apply {
-                    text = MpSqlVisualizerBundle.message("settings.log.showDuration")
-                    toolTipText = MpSqlVisualizerBundle.message("settings.log.showDuration.tip")
-                })
-                // T-DataSourceBadgeMode：数据源角标显示粒度（默认仅数据库类型，打开后带连接事实）
-                addRow(p, g, "", dataSourceBadgeDetailCheck.apply {
-                    text = MpSqlVisualizerBundle.message("settings.log.dataSourceBadgeDetail")
-                    toolTipText = MpSqlVisualizerBundle.message("settings.log.dataSourceBadgeDetail.tip")
-                })
-            }
-
-            // T-DisplayModeToSettings：SQL 列表显示模式（SQL 日志 + SQL 历史 两列表共享一键，设置页唯一入口）
-            sectionGroup("settings.log.tab.list") { p, g ->
-                addRow(p, g, MpSqlVisualizerBundle.message("log.list.displayMode"), logDisplayModeCombo.apply {
-                    model = DefaultComboBoxModel(listDisplayModeOptions())
-                    toolTipText = MpSqlVisualizerBundle.message("log.list.displayMode.tip")
-                })
-            }
-
-            // T-CrudColor：SQL 列表 CRUD 类型颜色标记（样式 + 四色；不新增复选框，保持复选框台账不变）
-            sectionGroup("settings.log.tab.crudColor") { p, g ->
-                addRow(p, g, MpSqlVisualizerBundle.message("settings.log.crudColor.style"), crudColorStyleCombo.apply {
-                    model = DefaultComboBoxModel(crudColorStyleOptions())
-                    toolTipText = MpSqlVisualizerBundle.message("settings.log.crudColor.style.tip")
-                })
-                addRow(p, g, MpSqlVisualizerBundle.message("settings.log.crudColor.select"), crudColorSelectPanel)
-                addRow(p, g, MpSqlVisualizerBundle.message("settings.log.crudColor.insert"), crudColorInsertPanel)
-                addRow(p, g, MpSqlVisualizerBundle.message("settings.log.crudColor.update"), crudColorUpdatePanel)
-                addRow(p, g, MpSqlVisualizerBundle.message("settings.log.crudColor.delete"), crudColorDeletePanel)
-                addRow(p, g, "", crudColorResetButton.apply {
-                    text = MpSqlVisualizerBundle.message("settings.log.crudColor.reset")
-                    toolTipText = MpSqlVisualizerBundle.message("settings.log.crudColor.reset.tip")
-                    addActionListener {
-                        crudColorSelectPanel.selectedColor = colorOf(PluginSettings.CRUD_COLOR_DEFAULT_SELECT)
-                        crudColorInsertPanel.selectedColor = colorOf(PluginSettings.CRUD_COLOR_DEFAULT_INSERT)
-                        crudColorUpdatePanel.selectedColor = colorOf(PluginSettings.CRUD_COLOR_DEFAULT_UPDATE)
-                        crudColorDeletePanel.selectedColor = colorOf(PluginSettings.CRUD_COLOR_DEFAULT_DELETE)
-                    }
-                })
-            }
-
-            sectionGroup("settings.log.tab.orm") { p, g ->
-                addRow(p, g, "", logHibernateEnabledCheck.apply {
-                    text = MpSqlVisualizerBundle.message("settings.log.hibernate.enabled")
-                    toolTipText = MpSqlVisualizerBundle.message("settings.log.hibernate.enabled.tip")
-                })
-                addRow(p, g, MpSqlVisualizerBundle.message("settings.log.hibernate.sqlPrefix"), logHibernateSqlPrefixField.apply {
-                    toolTipText = MpSqlVisualizerBundle.message("settings.log.hibernate.sqlPrefix.tip")
-                })
-                addRow(p, g, MpSqlVisualizerBundle.message("settings.log.hibernate.paramPrefix"), logHibernateParamPrefixField.apply {
-                    toolTipText = MpSqlVisualizerBundle.message("settings.log.hibernate.paramPrefix.tip")
-                })
-                addRow(p, g, "", logJdbcEnabledCheck.apply {
-                    text = MpSqlVisualizerBundle.message("settings.log.jdbc")
-                    toolTipText = MpSqlVisualizerBundle.message("settings.log.jdbc.tip")
-                })
-                // R10：ShardingSphere 双段日志捕获（Logic 主条目 + Actual 折叠附注；默认开）
-                addRow(p, g, "", logShardingSphereEnabledCheck.apply {
-                    text = MpSqlVisualizerBundle.message("settings.log.shardingsphere.enabled")
-                    toolTipText = MpSqlVisualizerBundle.message("settings.log.shardingsphere.enabled.tip")
-                })
-            }
-
-            sectionGroup("settings.log.tab.autoSave") { p, g ->
-                addRow(p, g, "", logAutoSaveCheck.apply {
-                    text = MpSqlVisualizerBundle.message("settings.log.autoSave")
-                    toolTipText = MpSqlVisualizerBundle.message("settings.log.autoSave.tip")
-                    addActionListener {
-                        val enabled = isSelected
-                        logAutoSavePathField.isEnabled = enabled
-                        logAutoSaveBrowseButton.isEnabled = enabled
-                        logAutoSavePatternField.isEnabled = enabled
-                        logAutoSaveMaxFilesField.isEnabled = enabled // T-HistoryFileRetention
-                        updateAutoSavePreview()
-                    }
-                })
-                addRow(p, g, MpSqlVisualizerBundle.message("settings.log.autoSave.path"),
-                    JPanel(BorderLayout(4, 0)).apply {
-                        isOpaque = false
-                        add(logAutoSavePathField.apply {
-                            toolTipText = MpSqlVisualizerBundle.message("settings.log.autoSave.path.tip")
-                            emptyText.text = MpSqlVisualizerBundle.message("settings.log.autoSave.path.empty")
-                        }, BorderLayout.CENTER)
-                        add(logAutoSaveBrowseButton.apply {
-                            toolTipText = MpSqlVisualizerBundle.message("settings.log.autoSave.browse.tip")
-                            addActionListener { browseAutoSavePath() }
-                        }, BorderLayout.EAST)
-                    }
-                )
-                addRow(p, g, MpSqlVisualizerBundle.message("settings.log.autoSave.pattern"),
-                    JPanel(BorderLayout(4, 0)).apply {
-                        isOpaque = false
-                        add(logAutoSavePatternField.apply {
-                            toolTipText = MpSqlVisualizerBundle.message("settings.log.autoSave.pattern.tip")
-                            emptyText.text = PluginSettings.DEFAULT_LOG_AUTO_SAVE_FILE_NAME_PATTERN
-                            document.addDocumentListener(object : javax.swing.event.DocumentListener {
-                                override fun insertUpdate(e: javax.swing.event.DocumentEvent) = updateAutoSavePreview()
-                                override fun removeUpdate(e: javax.swing.event.DocumentEvent) = updateAutoSavePreview()
-                                override fun changedUpdate(e: javax.swing.event.DocumentEvent) = updateAutoSavePreview()
-                            })
-                        }, BorderLayout.CENTER)
-                        add(JButton(MpSqlVisualizerBundle.message("settings.log.autoSave.pattern.reset")).apply {
-                            toolTipText = MpSqlVisualizerBundle.message("settings.log.autoSave.pattern.reset.tip")
-                            addActionListener { logAutoSavePatternField.text = PluginSettings.DEFAULT_LOG_AUTO_SAVE_FILE_NAME_PATTERN }
-                        }, BorderLayout.EAST)
-                    }
-                )
-                addRow(p, g, "", logAutoSavePatternPreview.apply {
-                    toolTipText = MpSqlVisualizerBundle.message("settings.log.autoSave.pattern.preview.tip")
-                })
-                // T-HistoryFileRetention：历史文件保留上限（防磁盘爆炸；0 = 全量保留）
-                addRow(p, g, MpSqlVisualizerBundle.message("settings.log.autoSave.maxFiles"),
-                    logAutoSaveMaxFilesField.apply {
-                        toolTipText = MpSqlVisualizerBundle.message("settings.log.autoSave.maxFiles.tip")
-                        emptyText.text = PluginSettings.DEFAULT_LOG_AUTO_SAVE_MAX_FILES.toString()
-                    }
-                )
-            }
-
-            // F-44-7：SqlSourceInterceptor 自动注入（源码位置捕获）
-            sectionGroup("settings.log.tab.sourceCapture") { p, g ->
-                addRow(p, g, "", autoInjectInterceptorCheck.apply {
-                    text = MpSqlVisualizerBundle.message("settings.log.autoInjectInterceptor")
-                    toolTipText = MpSqlVisualizerBundle.message("settings.log.autoInjectInterceptor.tip")
-                    addActionListener {
-                        if (isSelected) {
-                            // 触发注入
-                            triggerInterceptorInjection()
-                        }
-                    }
-                })
-                // M56 T-M56-08：增强捕获设置（捕获通道类设置与源码位置捕获同组）
-                addRow(p, g, "", enhancedCaptureCheck.apply {
-                    text = MpSqlVisualizerBundle.message("settings.enhancedCapture")
-                    addActionListener {
-                        if (isSelected && !PluginSettings.getInstance().state.enhancedCaptureConfirmed) {
-                            // T-M56-08：首次启用弹注入确认（确认记忆持久化，重开不弹）
-                            if (EnhancedCaptureConfirmDialog.confirm(null)) {
-                                PluginSettings.getInstance().state.enhancedCaptureConfirmed = true
-                            } else {
-                                isSelected = false
-                            }
-                            // T-ConsentTruth T-CN-03：确认结果直接写全局 state，不经过 AgentManager 的
-                            // 状态广播——不在这里补一次刷新的话，五态状态行会停在旧文案（如仍显示
-                            // 「未授权注入——下次启动主配置时会询问」），直到下一次 attach/掉线才纠正。
-                            refreshEnhancedStatusLabel()
-                        }
-                    }
-                })
-                addRow(p, g, "", enhancedDesensitizeCheck.apply { text = MpSqlVisualizerBundle.message("settings.enhancedCapture.desensitize") })
-                // R60（T-LaneB D96）：展示/导出链脱敏（与采集开关解耦——管「文本怎么出去」）
-                addRow(p, g, "", displayMaskCheck.apply {
-                    text = MpSqlVisualizerBundle.message("settings.display.mask")
-                    toolTipText = MpSqlVisualizerBundle.message("settings.display.mask.tip")
-                })
-                // T-StackHoverUi：调用栈快照总帧数（栈顶 B-8 帧＋栈底固定 8 帧；CONFIG 帧热下发 agent）
-                addRow(p, g, MpSqlVisualizerBundle.message("settings.enhancedCapture.stackMaxFrames"), stackMaxFramesField.apply {
-                    toolTipText = MpSqlVisualizerBundle.message("settings.enhancedCapture.stackMaxFrames.tip")
-                })
-                addRow(p, g, "", enhancedStatusLabel)
-                // T-CaptureTruth T-CT-02：重新授权入口（仅未授权态可见，文本随语言重建刷新）
-                addRow(p, g, "", enhancedReauthButton.apply {
-                    text = MpSqlVisualizerBundle.message("settings.enhancedCapture.reauth")
-                    toolTipText = MpSqlVisualizerBundle.message("settings.enhancedCapture.reauth.tip")
-                })
-                // T-SourceJumpFunnel P1-3：帧过滤前缀（自研框架包名登记，热下发 agent）
-                frameSkipPrefixesField.apply {
-                    text = PluginSettings.getInstance().state.sourceFrameSkipPrefixes
-                    toolTipText = MpSqlVisualizerBundle.message("settings.sourceFrameSkipPrefixes.tip")
-                }
-                // T-ToolSiteBizFrame：JAR 业务帧反向名单（与跳过前缀语义相反，热下发 agent）
-                bizJarPrefixesField.apply {
-                    text = PluginSettings.getInstance().state.sourceFrameBizJarPrefixes
-                    toolTipText = MpSqlVisualizerBundle.message("settings.sourceFrameBizJarPrefixes.tip")
-                }
-                // T-FramePrefixResize：两框置入垂直分栏（拖拽中缝重分配高度 + 比例记忆）；
-                // 行 fill=HORIZONTAL，宽度随设置对话框拉伸，占位文案不再截断
-                addRow(p, g, "", buildFramePrefixesSplitter(), fill = GridBagConstraints.HORIZONTAL)
-                // T-PrefixValidate：校验结果行（问题数 + 首条，悬停看全部；一键修复按钮同行）
-                addRow(p, g, "", prefixValidationRow)
-            }
-        }
-
-        // 组 5：界面与操作（默认展开）
-        if (SECTION_UI in sections) {
-            sectionGroup("settings.section.ui") { p, g ->
-                addRow(p, g, "", gutterIconCheck.apply { text = MpSqlVisualizerBundle.message("settings.showGutterIcon") })
-                addRow(p, g, "", gutterGroupMapperXmlCheck)
-                addRow(p, g, "", gutterGroupAnnotationCheck)
-                addRow(p, g, "", gutterGroupJpaHqlCheck)
-                addRow(p, g, "", gutterGroupJdbcCheck)
-                addRow(p, g, "", gutterGroupInlineFallbackCheck)
-                addRow(p, g, "", gutterGroupOtherCheck)
-                addRow(p, g, "", xmlInlineSqlCheck.apply {
-                    text = MpSqlVisualizerBundle.message("settings.xmlInlineSql")
-                    toolTipText = MpSqlVisualizerBundle.message("settings.xmlInlineSql.tip")
-                })
-                // T-PerfSweep16 F46（D4=A 定案）：mapper XML 语法高亮开关行（照 R2 六组复选框形态）
-                addRow(p, g, "", xmlSynHiCheck)
-                addRow(p, g, "", joinDiagramNativeCheck.apply {
-                    text = MpSqlVisualizerBundle.message("settings.joinDiagramNative")
-                    toolTipText = MpSqlVisualizerBundle.message("settings.joinDiagramNative.tip")
-                })
-                // T-UxOnboard T-UX-01：首用锚点引导通知开关（一次性语义见 OnboardingAnchorTip）
-                addRow(p, g, "", onboardingAnchorTipCheck.apply {
-                    text = MpSqlVisualizerBundle.message("settings.onboardingAnchorTip")
-                    toolTipText = MpSqlVisualizerBundle.message("settings.onboardingAnchorTip.tip")
-                })
-                // T-PreviewWhitespaceToggle O-44a：空白符可视化（默认关=不设置该属性、继承 IDE 全局）
-                addRow(p, g, "", editorShowWhitespacesCheck.apply {
-                    text = MpSqlVisualizerBundle.message("settings.editorShowWhitespaces")
-                    toolTipText = MpSqlVisualizerBundle.message("settings.editorShowWhitespaces.tip")
-                })
-                addRow(p, g, MpSqlVisualizerBundle.message("settings.language"), languageCombo.apply {
-                    model = DefaultComboBoxModel(languageOptions())
-                    selectedItem = languageOptions().firstOrNull { it.value == settings.state.language }
-                        ?: languageOptions().first()
-                })
-            }
-        }
-
-        // 组 5.5：快捷键（T-ShortcutSettings：插件 5 个动作快捷键统一管理；独立节便于搜索定位）
-        if (SECTION_SHORTCUTS in sections) {
-            sectionGroup("settings.section.shortcuts") { p, g ->
-                addRow(p, g, MpSqlVisualizerBundle.message("settings.shortcut"), shortcutEditor.apply { updateTexts() })
-                addRow(p, g, MpSqlVisualizerBundle.message("settings.shortcut.sqlToJava"), reverseShortcutEditor.apply { updateTexts() })
-                addRow(p, g, MpSqlVisualizerBundle.message("settings.shortcut.explain"), explainShortcutEditor.apply { updateTexts() })
-                addRow(p, g, MpSqlVisualizerBundle.message("settings.shortcut.count"), countShortcutEditor.apply { updateTexts() })
-                addRow(p, g, MpSqlVisualizerBundle.message("settings.shortcut.sample"), sampleShortcutEditor.apply { updateTexts() })
-            }
-        }
-
-        // 组 6：更新与诊断（默认折叠）
-        if (SECTION_UPDATE_DIAGNOSTICS in sections) {
-            sectionGroup("settings.section.updateDiagnostics") { p, g ->
-                addRow(p, g, MpSqlVisualizerBundle.message("settings.cache.label"),
-                    JPanel(FlowLayout(FlowLayout.LEFT, 4, 0)).apply {
-                        isOpaque = false
-                        add(cacheInfoLabel)
-                        add(clearCacheButton.apply {
-                            toolTipText = MpSqlVisualizerBundle.message("settings.cache.tip")
-                            addActionListener {
-                                ProjectManager.getInstance().openProjects.forEach { PluginCacheManager.clearAll(it) }
-                                cacheInfoLabel.text = MpSqlVisualizerBundle.message("settings.cache.cleared")
-                            }
-                        })
-                    })
-                g.anchor = GridBagConstraints.NORTHWEST
-                addRow(p, g, MpSqlVisualizerBundle.message("settings.update.versionInfo"), updateSection.apply { updateTexts() })
-                g.anchor = GridBagConstraints.WEST
-                addRow(p, g, MpSqlVisualizerBundle.message("settings.buildNumber"), JPanel(BorderLayout(8, 0)).apply {
-                    add(JBLabel().apply {
-                        text = PluginBuildInfo.displayText()
-                        toolTipText = MpSqlVisualizerBundle.message("settings.buildNumber.tip")
-                    }, BorderLayout.CENTER)
-                    add(JButton(MpSqlVisualizerBundle.message("settings.buildNumber.copy")).apply {
-                        isEnabled = PluginBuildInfo.mpvBuild() != null
-                        addActionListener {
-                            UiTextClipboard.copy(PluginBuildInfo.displayText())
-                            val original = text
-                            text = MpSqlVisualizerBundle.message("settings.buildNumber.copied")
-                            javax.swing.Timer(1200) { text = original }.apply { isRepeats = false; start() }
-                        }
-                    }, BorderLayout.EAST)
-                })
-                addRow(p, g, MpSqlVisualizerBundle.message("settings.pluginSettings"), JPanel(BorderLayout(8, 0)).apply {
-                    isOpaque = false
-                    add(JPanel(FlowLayout(FlowLayout.LEFT, 8, 0)).apply {
-                        isOpaque = false
-                        add(JButton(MpSqlVisualizerBundle.message("settings.import")).apply {
-                            toolTipText = MpSqlVisualizerBundle.message("settings.import.tip")
-                            addActionListener { importSettings() }
-                        })
-                        add(JButton(MpSqlVisualizerBundle.message("settings.export")).apply {
-                            toolTipText = MpSqlVisualizerBundle.message("settings.export.tip")
-                            addActionListener { exportSettings() }
-                        })
-                    }, BorderLayout.CENTER)
-                    add(statusLabel, BorderLayout.EAST)
-                })
-            }
-        }
-
-        // 底部 weighty 占位（内容顶置）
-        gbc.gridx = 0; gbc.gridy++; gbc.weighty = 1.0; gbc.fill = GridBagConstraints.BOTH
-        panel.add(JPanel(), gbc)
-    }
-
-    /**
-     * Phase 3：实时过滤配置行。
-     *
-     * - 空搜索框：恢复全部行可见 + 恢复折叠状态。
-     * - 非空搜索框：隐藏不匹配的行，展开包含匹配行的折叠面板。
-     * 匹配范围：行标签文本 + 组件 tooltip。
-     */
-    /**
-     * 快捷键内嵌编辑行（M14.1）：只读显示当前快捷键 + 「修改」按钮弹出录制对话框，
-     * 捕获按键组合后回填（保存时由 [PluginSettingsPanel.apply] 写入 Keymap）。
-     * 不依赖 impl 包（KeyboardShortcutPanel 为包私有），全公开 API 实现。
-     *
-     * T-M41：actionId 参数化——同一组件服务多个 action（Convert to SQL / SQL→Java），
-     * 冲突检测与保存写入均以各自 actionId 为准。internal：测试访问器返回类型（行存在/修改检测）。
-     */
     internal inner class ShortcutEditor(
-        private val actionId: String,
+        internal val actionId: String,
     ) : JPanel(BorderLayout(6, 0)) {
 
         var shortcut: KeyboardShortcut? = null
@@ -1593,7 +1017,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
      * T-JumpCapture：注入编排与四类结果弹窗收敛到 [SourceCaptureGuide]（与「跳转源码」
      * 引导弹框共用，防重入亦在其中）；面板侧仅保留勾选回滚——仅它持有 checkbox。
      */
-    private fun triggerInterceptorInjection() {
+    internal fun triggerInterceptorInjection() {
         val project = ProjectManager.getInstance().openProjects.firstOrNull()
         if (project == null) {
             Messages.showWarningDialog(
@@ -2087,7 +1511,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
     // F-43：自动保存历史 SQL 辅助方法
     // ------------------------------------------------------------------
 
-    private fun browseAutoSavePath() {
+    internal fun browseAutoSavePath() {
         val descriptor = com.intellij.openapi.fileChooser.FileChooserDescriptor(
             false, true, false, false, false, false
         ).withTitle(MpSqlVisualizerBundle.message("settings.log.autoSave.browse.tip"))
@@ -2099,7 +1523,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
         }
     }
 
-    private fun updateAutoSavePreview() {
+    internal fun updateAutoSavePreview() {
         val pattern = logAutoSavePatternField.text.trim()
             .ifEmpty { PluginSettings.DEFAULT_LOG_AUTO_SAVE_FILE_NAME_PATTERN }
         val resolved = resolvePatternPreview(pattern)
@@ -2130,7 +1554,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
      * 从 JSON 文件导入设置（文件选择器 → 读取 → 覆盖当前全局配置 → 刷新表单）。
      * 20260907：结果反馈改面板内行内 label（原模态弹窗 parent=rootPanel 叠在 Settings 对话框之下，须关掉设置才可见）。
      */
-    private fun importSettings() {
+    internal fun importSettings() {
         val descriptor = com.intellij.openapi.fileChooser.FileChooserDescriptor(true, false, false, false, false, false)
             .withFileFilter { it.extension?.lowercase() == "json" }
             .withTitle(MpSqlVisualizerBundle.message("settings.import"))
@@ -2162,7 +1586,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
      * 导出当前设置到 JSON 文件（文件选择器 → 写入）。
      * 20260907：结果反馈改面板内行内 label（同导入）。
      */
-    private fun exportSettings() {
+    internal fun exportSettings() {
         val descriptor = com.intellij.openapi.fileChooser.FileSaverDescriptor(
             MpSqlVisualizerBundle.message("settings.export"),
             "JSON (*.json)",
@@ -2215,3 +1639,4 @@ class PluginSettingsPanel @JvmOverloads constructor(
         return if (msg.length > 120) msg.take(120) + "…" else msg
     }
 }
+

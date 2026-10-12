@@ -660,11 +660,16 @@ internal object JpaMetadataReader {
      * 嵌入对象展平产物（T-J18）。
      *
      * @param field      嵌入对象内部字段（注释提取用）
-     * @param fieldName  内部字段名（ColumnInfo.fieldName；非完整路径——嵌套路径为已知降级边界）
+     * @param fieldName  内部字段名（ColumnInfo.fieldName；非完整路径——嵌套路径见 [embeddedPath]）
      * @param columnName 展平列名（@AttributeOverride > 内部字段 @Column > 驼峰转下划线）
      * @param fieldType  内部字段类型文本（参数回填引号推断用）
      * @param insertable 内部字段 @Column(insertable)
      * @param updatable  内部字段 @Column(updatable)
+     * @param embeddedPath 完整嵌入段驼峰路径（实体根起算，各级嵌入字段名首字母大写，如
+     *   `address.zipcode.zip` → `addressZipcodeZip`）——两级以上嵌入链的派生查询路径
+     *   （`findByAddressZipcodeZip`）据此命中本列（G2 修复点）
+     * @param fromAttributeOverride 列名是否来自 @AttributeOverride——JPA 轨覆写名即最终列名，
+     *   SD @Embedded(prefix) 不再叠加（同口径声明防撞车场景，G1 修复点）
      */
     data class EmbeddedColumnSpec(
         val field: PsiField,
@@ -673,6 +678,8 @@ internal object JpaMetadataReader {
         val fieldType: String?,
         val insertable: Boolean,
         val updatable: Boolean,
+        val embeddedPath: String,
+        val fromAttributeOverride: Boolean,
     )
 
     /**
@@ -691,8 +698,13 @@ internal object JpaMetadataReader {
      */
     fun flattenEmbeddedColumns(field: PsiField, overrides: Map<String, String>): List<EmbeddedColumnSpec> {
         val clazz = runCatching { (field.type as? PsiClassType)?.resolve() }.getOrNull() ?: return emptyList()
-        val rootKeyPrefix = runCatching { field.name }.getOrNull()?.let { "$it." } ?: ""
-        return flattenEmbeddableClass(clazz, overrides, mutableSetOf(), rootKeyPrefix, pathPrefix = "")
+        val rootFieldName = runCatching { field.name }.getOrNull() ?: ""
+        val rootKeyPrefix = if (rootFieldName.isEmpty()) "" else "$rootFieldName."
+        // camelPathPrefix：实体根起的驼峰路径累积（顶层嵌入字段名起算），逐段拼给末端列
+        return flattenEmbeddableClass(
+            clazz, overrides, mutableSetOf(), rootKeyPrefix,
+            pathPrefix = "", camelPathPrefix = rootFieldName,
+        )
     }
 
     private fun flattenEmbeddableClass(
@@ -701,6 +713,7 @@ internal object JpaMetadataReader {
         seen: MutableSet<PsiClass>,
         rootKeyPrefix: String,
         pathPrefix: String,
+        camelPathPrefix: String,
     ): List<EmbeddedColumnSpec> {
         if (!seen.add(clazz)) return emptyList()
         val result = mutableListOf<EmbeddedColumnSpec>()
@@ -720,21 +733,26 @@ internal object JpaMetadataReader {
                     seen,
                     rootKeyPrefix,
                     pathPrefix = "$pathPrefix$fieldName.",
+                    camelPathPrefix = camelPathPrefix + fieldName.replaceFirstChar { it.uppercaseChar() },
                 )
                 continue
             }
             val columnAnnotation = findFlex(field, FQN_COLUMN)
+            // 覆写查找三级兜底（实体根点路径 → 嵌入对象相对点路径 → 裸名）；命中即 JPA 轨最终列名
+            val override = overrides["$rootKeyPrefix$pathPrefix$fieldName"]
+                ?: overrides["$pathPrefix$fieldName"]
+                ?: overrides[fieldName]
             result += EmbeddedColumnSpec(
                 field = field,
                 fieldName = fieldName,
-                columnName = overrides["$rootKeyPrefix$pathPrefix$fieldName"]
-                    ?: overrides["$pathPrefix$fieldName"]
-                    ?: overrides[fieldName]
+                columnName = override
                     ?: columnAnnotation?.let { attrString(it, "name") }
                     ?: NamingStrategy.toSnakeCase(fieldName),
                 fieldType = runCatching { field.type.canonicalText }.getOrNull(),
                 insertable = columnAnnotation?.let { attrBoolean(it, "insertable") } ?: true,
                 updatable = columnAnnotation?.let { attrBoolean(it, "updatable") } ?: true,
+                embeddedPath = camelPathPrefix + fieldName.replaceFirstChar { it.uppercaseChar() },
+                fromAttributeOverride = override != null,
             )
         }
         return result

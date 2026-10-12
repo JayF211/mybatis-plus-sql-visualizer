@@ -398,6 +398,35 @@ object DatabaseSchemaResolver {
     }
 
     /**
+     * T-Dgm-StmtScope：**语句级**批量元数据（JOIN 图整图富化用）——同一句的表尽量取自**同一个库**。
+     *
+     * 逐表的 [tableMeta] 在多数据源下是「注册序首个命中」，跨库同名表会被撞上：真机 A10
+     * （2026-10-11 沙盒实测）`"user"` + user_address + area 同句，本地 `jpa_demo` 里也有张 `user`
+     * （9 列、**零 COMMENT**，注册序在 `mpj_demo` 之前）→ 主表落到那张表上：列注释空白、类型串变成
+     * 那张表的、库里独有列还被当「实体未映射列」追加进节点；而同一句的 JOIN 表只有 `mpj_demo` 有、
+     * 解析正确 → 图上「主表无注释、副表有注释」。沙盒日志三行可复现该判据：
+     * `scan: table=user, ds=jpa_demo@localhost, hit=true, foundColumns=9` /
+     * `warn … native Database diagram (B path) not taken` / `B path locateDbTables: wanted=["user", …]`。
+     *
+     * 消歧规则（[resolveBatchFromSources]）：先逐表按名解析（成本、正/负缓存、库名限定语义与
+     * [tableMeta] 逐字一致），再以「各来源持有本批表的数量」投票选主来源，少数来源持有的表若主来源
+     * 也有则改判给主来源。主来源没有的表**保留原来源**——跨库联接仍逐表回落，不引入新失败模式。
+     *
+     * @param tableNames 表名（可含引用符/大小写原样；键按**传入原样**返回，调用方按同名回查）
+     * @return 表名 → 元数据（含解析不到的条目 = 空 [TableMeta]，调用方据此保留实体推断值）
+     */
+    fun tableMetas(project: Project?, tableNames: Collection<String>): Map<String, TableMeta> {
+        val raws = tableNames.filter { it.isNotBlank() }.distinct()
+        if (project == null || raws.isEmpty()) return emptyMap()
+        if (!isDatabaseAvailable()) return emptyMap()
+        val sources = dataSources(project) ?: return emptyMap()
+        if (sources.isEmpty()) return emptyMap()
+        return ReadAction.compute<Map<String, TableMeta>, Throwable> {
+            resolveBatchFromSources(raws, sources)
+        }
+    }
+
+    /**
      * 数据源侧元数据（表注释为 null 时该维度缺失，调用方逐维度回落）。
      *
      * @param scanBailed T-DbSchemaCompletion：本次**没能查**（数据源模型未加载 / ObjectKind 取不到 /
@@ -527,6 +556,83 @@ object DatabaseSchemaResolver {
             LOG.info("DatabaseSchemaResolver: table=$name not found in ${sources.size} data sources")
         }
         return TableMeta(null, emptyMap(), scanBailed = bailed > 0 && bailed == sources.size)
+    }
+
+    /**
+     * T-Dgm-StmtScope：批量解析（[tableMetas] 的实现，纯逻辑便于单测直测）。
+     *
+     * 阶段 1 逐表按名解析：对每个表名按数据源注册序逐个 [probe]，首个产出（列非空 ∨ 表注释非空）
+     * 的来源即该表的来源——与单表 [resolveFromSources] 的「首个命中」逐字同口径（含 hits/miss 时
+     * 的正负缓存写入），故**单表批量与旧行为完全一致**。
+     *
+     * 阶段 2 句内一致性：以「持有本批表的数量」投票选出主来源（[pickStatementSource]），
+     * 少数来源持有的表若在主来源里也存在则改判给主来源（表集越全的来源才可能是本句真正在用的库）；
+     * 主来源没有的表保留阶段 1 的来源（跨库联接逐表回落）。
+     *
+     * @param probe 测试缝：默认 `(ds, name) -> resolveFromSources(name, listOf(ds))`；替身只换取数，
+     *   投票/改判逻辑仍是生产代码本体
+     * @return 以**传入原样表名**为键（含引用符），解析不到的键也有条目（空 [TableMeta]）
+     */
+    internal fun resolveBatchFromSources(
+        rawNames: List<String>,
+        sources: List<Any>,
+        probe: ((Any, String) -> TableMeta)? = null,
+    ): Map<String, TableMeta> {
+        val fetch: (Any, String) -> TableMeta =
+            probe ?: { ds, name -> resolveFromSources(name, listOf(ds)) }
+        fun found(meta: TableMeta): Boolean = meta.columns.isNotEmpty() || meta.comment != null
+
+        val owners = IntArray(rawNames.size) { -1 }
+        val metas = arrayOfNulls<TableMeta>(rawNames.size)
+        for (i in rawNames.indices) {
+            for (si in sources.indices) {
+                val meta = fetch(sources[si], rawNames[i])
+                if (found(meta)) {
+                    owners[i] = si
+                    metas[i] = meta
+                    break
+                }
+            }
+        }
+
+        val primary = pickStatementSource(owners.toList())
+        if (primary != null) {
+            for (i in rawNames.indices) {
+                // 未解析到的表不必再试：阶段 1 已扫过全部来源（包含主来源）
+                if (owners[i] == primary || owners[i] < 0) continue
+                val meta = fetch(sources[primary], rawNames[i])
+                if (found(meta)) {
+                    owners[i] = primary
+                    metas[i] = meta
+                }
+            }
+        }
+        return rawNames.withIndex().associate { (i, raw) -> raw to (metas[i] ?: TableMeta(null, emptyMap())) }
+    }
+
+    /**
+     * T-Dgm-StmtScope：句内主来源选择（纯逻辑，单测直测）——返回持有本批表**最多**的数据源下标
+     * （[owners] 逐表给出来源下标，-1 = 未解析到）。
+     *
+     * 同票取**下标最小者**（数据源注册序在前者），与单表解析的「注册序首个命中」同口径：
+     * 单表批量、或全部表都在同一来源时，结论与改动前逐字一致。无来源持有时返回 null。
+     */
+    internal fun pickStatementSource(owners: List<Int>): Int? {
+        val counts = LinkedHashMap<Int, Int>()
+        for (owner in owners) {
+            if (owner < 0) continue
+            counts[owner] = (counts[owner] ?: 0) + 1
+        }
+        var best: Int? = null
+        var bestCount = 0
+        // 迭代序 = 首次出现序 = 来源注册序，故严格大于才换人（同票留住先出现的）
+        for ((owner, count) in counts) {
+            if (count > bestCount) {
+                best = owner
+                bestCount = count
+            }
+        }
+        return best
     }
 
     /** database 插件是否可用（Ultimate/DataGrip）。 */

@@ -115,7 +115,13 @@ async function main() {
     const sqlv = [...names].filter((n) => n.startsWith("sqlv_"));
     console.log("SQLV TOOLS VISIBLE:", sqlv.length, "|", sqlv.join(", "));
 
-    const demoRoot = "F:/code/Java/Gitee/SongRenShuo/mybatis-plus-sql-visualizer-demo";
+    // demo 工程根取自环境（2026-10-10 T-LocalEnvOverride）；不再写死本机绝对路径
+    const demoRoot = process.env.MPSV_DEMO_ROOT;
+    if (!demoRoot) {
+      console.error("缺少 MPSV_DEMO_ROOT：请指向 demo 工程根目录（键名见 .local/local.env.example）。例如：");
+      console.error("  set -a; . .local/local.env; set +a   # 或 export MPSV_DEMO_ROOT=<path>");
+      process.exit(1);
+    }
     const demo = `${demoRoot}/mybatis-plus-demo`;
     const PP = { projectPath: demoRoot };
     const withPP = (o) => ({ ...o, ...PP });

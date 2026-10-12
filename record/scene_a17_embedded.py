@@ -1,0 +1,106 @@
+# -*- coding: utf-8 -*-
+"""A17 JPA 嵌入值对象 @Embedded 展平列名（jpa-embedded.gif）20261012。
+
+前置：demo 的 `CustomerRepository`（jpa-hibernate-demo）有两个嵌套嵌入派生方法——
+      `findByAddressZipcodeZip`（属性路径 address.zipcode.zip 两级穿透 → WHERE cust_zip）
+      `findByBizAddressStreet`（@Embedded prefix=biz_ → WHERE biz_street，不是 biz_biz_street）。
+流程：光标压在方法名 token 上 → Alt+Shift+Q 开预览（SELECT 出全部展平列名）
+      → 往 #zip 参数框填值 → WHERE cust_zip = ? 变实值
+      → 关弹窗 → 跳到第二个派生方法 → 再预览 → WHERE biz_street = ?（前缀展平对照）。
+
+标定（20261012，IDE @ 277,25）：
+  文件搜索结果行        screen (777,342)
+  编辑器取焦落点        screen (600,500)
+  参数框 #zip           screen (593,417)
+  SQL 里的 cust_zip 行  screen (866,411)
+  SQL 里的 biz_street 行 screen (852,477)
+  SQL 里的 WHERE 行     screen (887,669)
+  预览浮窗「取消」      screen (1485,828)
+
+坑：① 跳行对话框会残留上次输入 → goto() 内已先 Ctrl+A 清空；
+    ② IntelliJ 的 Home 是智能 Home，列号基准要按两下才到绝对行首 → goto_col() 内已处理；
+    ③ 光标必须压在 token 上（落行首缩进 anchor=null，只弹通知不弹预览）。
+"""
+import os
+import sys
+import time
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
+
+from gifkit import Recorder
+from nav import close_preview, force_en_us, goto, goto_col, shot, trigger_preview
+
+REGION = (277, 25, 1370, 984)
+OUT = "perf/a17_embedded.mp4"
+
+FILE = "CustomerRepository.java"
+RESULT_ROW = (777, 342)
+EDITOR_SPOT = (600, 500)
+PARAM_ZIP = (593, 417)
+SQL_CUST_ZIP = (866, 411)
+SQL_BIZ_STREET = (852, 477)
+SQL_WHERE = (887, 669)
+
+LINE_A, COL_A = 21, 26          # findByAddressZipcodeZip
+LINE_B, COL_B = 26, 26          # findByBizAddressStreet
+
+
+def main():
+    import pyautogui
+    import gifkit
+
+    pyautogui.FAILSAFE = False
+    pyautogui.PAUSE = 0
+    force_en_us()
+
+    # ---- prep（不入镜）：开文件 + 光标压到方法名 token + 已开好第一张预览 ----
+    close_preview()
+    pyautogui.click(*EDITOR_SPOT)
+    time.sleep(0.5)
+    pyautogui.hotkey("ctrl", "shift", "n")
+    time.sleep(1.4)
+    pyautogui.hotkey("ctrl", "a")
+    time.sleep(0.3)
+    force_en_us()
+    pyautogui.typewrite(FILE, interval=0.05)
+    time.sleep(1.8)
+    pyautogui.click(*RESULT_ROW)
+    time.sleep(0.4)
+    pyautogui.click(*RESULT_ROW)
+    time.sleep(2.5)
+    goto_col(LINE_A, COL_A)
+    trigger_preview()
+
+    r = Recorder(REGION, OUT)
+    r.start()
+
+    # 1. 起手凝视：沿 SELECT 的展平列名往下走——assemble 会裁静止段，得用缓慢移动撑住时长，
+    #    同时让 cust_street / cust_zip / biz_street / biz_zip 这一串「点路径展平」看清。
+    pyautogui.moveTo(600, 300, duration=0.5)
+    pyautogui.moveTo(*SQL_CUST_ZIP, duration=1.0)
+    pyautogui.moveTo(*SQL_BIZ_STREET, duration=1.0)
+    pyautogui.moveTo(*SQL_WHERE, duration=0.9)
+
+    # 2. #zip 参数回填：WHERE cust_zip = ? → 实值
+    pyautogui.click(*PARAM_ZIP)
+    time.sleep(0.5)
+    gifkit.paste("100085")
+    time.sleep(1.8)
+
+    # 3. 关弹窗 → 跳到第二个派生方法（对照：@Embedded(prefix=biz_) 展平）
+    close_preview(wait=1.2)
+    goto_col(LINE_B, COL_B, wait=1.0)
+    trigger_preview(wait=0.0)
+    time.sleep(2.6)
+
+    # 4. 收尾凝视：biz_street 与 WHERE 行同屏——证明前缀只拼一次
+    pyautogui.moveTo(*SQL_BIZ_STREET, duration=1.0)
+    pyautogui.moveTo(*SQL_WHERE, duration=1.0)
+    time.sleep(0.6)
+
+    shot("perf/a17_final.png")
+    print("frames:", r.stop())
+
+
+if __name__ == "__main__":
+    sys.exit(main())

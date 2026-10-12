@@ -25,6 +25,8 @@
 
 核心差距：**没有 `dev-support/README.md` 索引**，新会话/新协作者面对 30+ 文件无从下手；`tmp-capturerepro` 的名字会让人误以为可以随手删。
 
+> 2026-10-10 旁证与边界：同日 `3ef0c0a`（外层工作区清理）删掉的是**仓库外** `F:/code/Java/Gitee/SongRenShuo/` 下的两个失败证据目录（`shard3-fail-evidence/`、`tperf10-failure-evidence/`），**与 `dev-support/` 内的 `evidence/` 无关**——本计划「保留 dev-support 内取证日志」的决定不受其影响；同日 `3e531d1`（v2026.10.13 发行）对 `dev-support/e2e-fake-ide/evidence/*.log` 只做了行尾归一，内容与目录结构不变。
+
 ## 二、目标
 
 1. `tmp-capturerepro/` 正名（去掉误导性的 `tmp`），保留其可复用装置与取证日志。
@@ -55,11 +57,25 @@
 ## 六、验收清单
 
 - [ ] `dev-support/agent-capture-repro/` 存在，`dev-support/tmp-capturerepro/` 不存在。
-- [ ] `grep -rn "tmp-capturerepro" .`（排除 `.git`/`build`/`out`）为 0。
+- [ ] `grep -rn "tmp-capturerepro" .`（排除 `.git`/`build`/`out`）**无代码/配置级引用**；仅剩描述本次正名的计划/变更记录与 `agent-capture-repro/*.log` 的历史运行目录实录（后者按「不改写历史取证」保留）。
 - [ ] `git log --follow dev-support/agent-capture-repro/README.md` 能看到改名前的历史（证明 `git mv` 生效）。
 - [ ] `dev-support/README.md` 存在，索引内每条路径/命令实测存在。
 - [ ] `./gradlew` 相关构建不受影响（`dev-support/` 非源码集，`plain-fjpf` 路径未动）。
 
-## 七、实施记录
+## 七、实施记录（2026-10-10 实施）
 
-（待实施后回填）
+**改动**
+
+| 文件 | 操作 |
+|---|---|
+| `dev-support/tmp-capturerepro/` → `dev-support/agent-capture-repro/` | `git mv`（保历史，8 个文件） |
+| `dev-support/README.md` | 新增：按用途分组的索引（门禁与兼容 / 发行 / 更新通道 / 测试辅助 / 采样 / 端到端装置 / 文档型子目录 / 其他），每条给一句话用途与入口命令 |
+
+**验证读数**
+
+- `dev-support/agent-capture-repro/` 存在、`dev-support/tmp-capturerepro/` 不存在 ✓
+- `grep -rn tmp-capturerepro`（排除 `.git`/`build`/`out`）：**无代码/配置/构建引用**；仅剩描述本次正名的计划与变更记录，以及 `agent-capture-repro/*.log` 里当时运行目录的实录（历史取证，按计划不改写）✓
+- `dev-support/README.md` 内每条路径与入口命令逐条核对存在 ✓
+- `plain-fjpf/` 未动（确认是 `mpv-runide.gradle.kts:21` 的编译输入）；`e2e-fake-ide/evidence/` 保留 ✓
+
+**说明**：验收清单原写的「grep 命中为 0」过严——描述「正名」这件事本身的计划/记录必然要提旧名，历史日志也如实记着当时的目录。实际判据已改为「无代码/配置级引用」。

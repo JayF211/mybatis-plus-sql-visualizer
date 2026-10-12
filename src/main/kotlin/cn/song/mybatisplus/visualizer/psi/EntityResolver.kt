@@ -263,6 +263,7 @@ class EntityResolver {
                 updatable = spec.updatable,
                 embedded = true,
                 embeddedParent = fieldName,
+                embeddedPath = spec.embeddedPath,
             )
         }
     }

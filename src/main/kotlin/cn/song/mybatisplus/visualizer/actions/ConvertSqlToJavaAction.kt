@@ -9,6 +9,7 @@ import cn.song.mybatisplus.visualizer.reverse.SqlToJavaConverter
 import cn.song.mybatisplus.visualizer.ui.EntitySelectionDialog
 import cn.song.mybatisplus.visualizer.ui.JavaCodePreviewDialog
 import cn.song.mybatisplus.visualizer.ui.SqlSelectionDialog
+import cn.song.mybatisplus.visualizer.ui.entityCandidateSubtitle
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnAction
@@ -214,7 +215,7 @@ class ConvertSqlToJavaAction : AnAction() {
                 val displayTexts = candidates.map { c ->
                     SqlSelectionDialog.Row.of(
                         "${c.psiClass.name}（表 ${c.tableInfo.tableName}）",
-                        c.psiClass.containingFile?.name ?: "",
+                        entityCandidateSubtitle(c.psiClass),
                     )
                 }
                 SqlSelectionDialog(project, candidates, displayTexts) { selected ->

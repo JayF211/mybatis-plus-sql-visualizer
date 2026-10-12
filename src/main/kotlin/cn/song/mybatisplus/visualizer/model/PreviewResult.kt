@@ -101,4 +101,24 @@ data class PreviewResult(
      * 最后一次为准）。面板据此给「写重」轻提示；空集 = 无重复。
      */
     val duplicateParamNames: Set<String> = emptySet(),
+    /**
+     * F-1 修复：JOIN 图标签页的**独立**语句载体（仅含 JOIN 的 SELECT 非 null）。
+     *
+     * 为什么不能复用 [previewModel]：`previewModel` 只在有动态条件视图（`collectConditionViews` 非空，
+     * 即链里有 eq/like 等条件调用）时才构造——无条件的联表链（如 MPJ 的 `selectAll + leftJoin + fill`）
+     * `previewModel` 为 null，而 `result.sql` 是纯文本、面板无从判断 JOIN，导致这类链拿不到「JOIN 图」
+     * 标签页。本字段把「是否画图」的判据与「是否走模型级重渲染」的判据解耦：有 JOIN 即非 null，与
+     * `previewModel` 空否无关。默认 null，既有构造点零影响（向后兼容）。
+     */
+    val diagramStatement: SelectStatement? = null,
+    /**
+     * 参数历史缓存键的**稳定指纹种子**（注入拦截器子句之前的 SQL 文本）。
+     *
+     * 为什么不能直接用 [sql] 当指纹：历史键 = `表名:SHA-256(SQL 全文)`，而逻辑删除 / 多租户等
+     * 拦截器模拟会在渲染前改写 SQL 文本（追加 `AND deleted = 0` / `AND tenant_id = ?`）——
+     * 用户一开这些开关，键就变，此前回填好的参数全部召回 miss、退回占位符（且 500ms 防抖后
+     * 新键还会以空值覆盖落库）。本字段承载「注入前」的语句文本，供面板算键时优先使用，
+     * 使开关切换不再影响参数历史归属。null = 回落 [sql]（存量行为零变化）。
+     */
+    val historyFingerprintSeed: String? = null,
 )

@@ -65,6 +65,7 @@ import cn.song.mybatisplus.visualizer.sql.Dialect
 import cn.song.mybatisplus.visualizer.sql.DialectRegistry
 import cn.song.mybatisplus.visualizer.sql.ParameterReplacer
 import cn.song.mybatisplus.visualizer.sql.SqlGenerator
+import cn.song.mybatisplus.visualizer.sql.DataSourceUrlProbe
 import cn.song.mybatisplus.visualizer.sql.SqlPerfAnalyzer
 import cn.song.mybatisplus.visualizer.sql.perf.PerfWarning
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
@@ -99,7 +100,7 @@ import com.intellij.psi.util.PsiTreeUtil
  * （IDE 自动发现；构造函数仅依赖 Project，满足轻服务条件），获取方式不变（project.getService）。
  */
 @Service(Service.Level.PROJECT)
-class SqlPreviewService(private val project: Project) {
+class SqlPreviewService(internal val project: Project) {
 
     /** 文件级解析缓存（F-20）：文件内容变更（modificationStamp）即失效。 */
     private val cache = WrapperCache()
@@ -161,7 +162,7 @@ class SqlPreviewService(private val project: Project) {
     /**
      * 全局配置（测试环境未注册 service 时为 null，使用默认值）。
      */
-    private val settings: PluginSettings? =
+    internal val settings: PluginSettings? =
         runCatching { PluginSettings.getInstance() }.getOrNull()
 
     /**
@@ -208,6 +209,36 @@ class SqlPreviewService(private val project: Project) {
      * @param anchor 光标处 / 悬停处的 PSI 元素
      * @return 预览结果；两者均未命中时返回 null
      */
+    /**
+     * F-1 修复：Repository **接口方法声明行**预览（无调用表达式，[preview] 的批量/JPA 管线永不认领）。
+     *
+     * 缺口形态（2026-10-12 演示录制中发现，诊断报告 `docs/调研报告/20261012-0900-*`）：
+     * `deleteAllInBatch()` 这类 bulk 形态既不在派生查询线（不含 `By`、`*All` 词干白名单不放行
+     * `InBatch`），也没有调用表达式给 CRUD 转换线——声明行光标下零可达，而模板在转换层完整存在。
+     *
+     * 语义与调用点 CRUD 线一致（同一 `buildRepositoryMethod` 模板），差别只有：声明行无实参可静态
+     * 求值，一律 `?` 占位。非 Repository 接口 / 方法名不在名单 / 实体不可解析 → null（交回回落链）。
+     */
+    fun previewRepositoryDeclaration(method: PsiMethod): PreviewResult? {
+        val jpaCrud = JpaCrudOperationConverter.convertRepositoryDeclaration(
+            method,
+            resolveVariables = effectiveReplaceParams(),
+        ) ?: return null
+        val result = PreviewResult(
+            sql = jpaCrud.sql,
+            compactSql = jpaCrud.sql,
+            unresolvedParams = jpaCrud.paramSources,
+            paramTable = jpaCrud.paramGroups,
+            wrapperType = null,
+            tableName = jpaCrud.tableName,
+            warning = jpaCrud.warning,
+            paramHints = jpaCrud.paramHints,
+            batchModel = jpaCrud.batchModel,
+        )
+        recordHistory(result, method)
+        return result
+    }
+
     fun preview(anchor: PsiElement): PreviewResult? {
         // JDBC 模板 SQL 字符串预览（正向）：queryForList/update 等方法的字符串 SQL 实参 → 预览
         // 放在最前：JDBC 分支不写 Wrapper 缓存、不依赖实体解析，与既有路径完全隔离
@@ -308,6 +339,10 @@ class SqlPreviewService(private val project: Project) {
                 // T-FS-04：显式传本服务绑定的 project（converter 内类名兜底推断的项目级表配置口径）
                 else -> ConverterRegistry.convert(located.chain, table, project) ?: return null
             }
+            // 缺陷②修复：参数历史键指纹取「注入前」语句文本——下面这一串注入（逻辑删除 / 乐观锁 /
+            // 多租户 / 数据权限 / 分页 LIMIT）都会改写 SQL 文本，而历史键原先是 SHA-256(SQL 全文)，
+            // 用户一开这些开关键就变 → 已回填参数召回 miss 退回占位符（且防抖后新键以空值覆盖落库）。
+            val historyFingerprintSeed = SqlGenerator.generate(statement, compact = true, dialect = currentDialect())
             // T-M15-07：逻辑删除注入（@TableLogic 实体 + 配置开启）——查询/计数/exists/删除自动追加 `AND deleted = 0`
             // （对齐 MyBatis-Plus 全局 logic-delete-field 配置；UPDATE 不注入——更新可能修改 deleted 本身）
             // T-M20-05（P1-01 语义修正）：MPJ 六方法按源码顺序求值——主表/副表逻辑删除独立开关，
@@ -352,7 +387,10 @@ class SqlPreviewService(private val project: Project) {
             // R12 T-PaginationSim：分页 COUNT 包裹预览（D1=A 预览附第二条语句；D2=A 基础包裹形态；
             // D3=A searchCount=false 跳过；count/exists 消费不产 COUNT——复用 T-M29-02/03 分页消费口径）
             val countSql = paginationCountSql(located.chain, pagedStatement)
-            val result = buildPreviewResult(located.chain.wrapperType, table, pagedStatement, countSql)
+            val result = buildPreviewResult(
+                located.chain.wrapperType, table, pagedStatement, countSql,
+                historyFingerprintSeed = historyFingerprintSeed,
+            )
             recordHistory(result, anchor)
             // exists 消费：外层包裹 SELECT EXISTS（对齐 MP 3.5.15 BaseMapper.exists 语义）
             return if (located.chain.existsConsumed && located.chain.wrapperType.isQueryLike()) {
@@ -472,63 +510,6 @@ class SqlPreviewService(private val project: Project) {
      * Querydsl（QD）。三者按 entry + receiver 启发认领（普通类同名方法不命中，负例守卫），
      * 不认领返回 null（交回 JPA CRUD / MP 批量管道）。
      */
-    private fun convertOtherOrm(call: PsiMethodCallExpression, resolveVariables: Boolean): PreviewResult? {
-        val eq = EasyQueryConverter.convert(call, resolveVariables)
-        if (eq != null) {
-            return PreviewResult(
-                sql = eq.sql,
-                compactSql = eq.sql.replace(SQL_WHITESPACE_RUN, " ").trim(),
-                unresolvedParams = eq.paramSources,
-                paramTable = ParameterReplacer.buildParamTable(eq.paramSources),
-                paramHints = eq.paramHints,
-                wrapperType = WrapperType.EQ_PROXY,
-                tableName = eq.tableName,
-                warning = eq.warning,
-                columns = eq.columns,
-                batchModel = eq.batchModel,
-            )
-        }
-        val mds = MdsConverter.convert(call, resolveVariables)
-        if (mds != null) {
-            return PreviewResult(
-                sql = mds.sql,
-                compactSql = mds.sql.replace(SQL_WHITESPACE_RUN, " ").trim(),
-                unresolvedParams = mds.paramSources,
-                paramTable = ParameterReplacer.buildParamTable(mds.paramSources),
-                paramHints = mds.paramHints,
-                wrapperType = WrapperType.MDS,
-                tableName = mds.tableName,
-                warning = mds.warning,
-                columns = mds.columns,
-            )
-        }
-        val qd = QuerydslConverter.convert(call, resolveVariables)
-        if (qd != null) {
-            return PreviewResult(
-                sql = qd.sql,
-                compactSql = qd.sql.replace(SQL_WHITESPACE_RUN, " ").trim(),
-                unresolvedParams = qd.paramSources,
-                paramTable = ParameterReplacer.buildParamTable(qd.paramSources),
-                paramHints = qd.paramHints,
-                wrapperType = WrapperType.QD,
-                tableName = qd.tableName,
-                warning = qd.warning,
-                columns = qd.columns,
-            )
-        }
-        return null
-    }
-
-    /**
-     * JPA 推导查询预览（F-14 阶段四）：解析 Repository 方法名 → PartTree → SqlStatement → PreviewResult。
-     *
-     * 供 [cn.song.mybatisplus.visualizer.ui.gutter.JpaGutterLineMarkerProvider] 点击调用与
-     * T-J9 调用点反查（ConvertToSqlAction）调用。
-     *
-     * @param method   Repository 声明方法
-     * @param callArgs T-J9 调用点实参（`userRepository.findByName(x, PageRequest.of(0, 20))` 的实参列表）；
-     *                 非 null 时对 PageRequest.of / Sort.by 做静态求值（有字面量就内联渲染，无则 ? 占位）
-     */
     fun previewDerivedQuery(method: PsiMethod, callArgs: List<PsiExpression>? = null): PreviewResult? {
         val methodInfo = DerivedMethodLocator.locate(method.containingFile ?: return null, method.textRange.startOffset)
             ?: return null
@@ -591,91 +572,7 @@ class SqlPreviewService(private val project: Project) {
      * 注释行以 `-- ` 前缀追加 SQL 尾部（对齐 JpaCrudOperationConverter notes 惯例）；
      * 全程无注解/无参数时返回原文（存量字节级行为零变化）。
      */
-    private fun applyJpaMethodEnhancements(
-        method: PsiMethod?,
-        sql: String,
-        table: TableInfo?,
-        native: Boolean,
-        limitAppliedInModel: Boolean = false,
-        pageNotes: List<String>? = null,
-        dialectOverride: Dialect? = null,
-    ): String = runCatching {
-        if (method == null) return@runCatching sql
-        // T-PS5-03：方言由调用入口求一次后透传（未传则本地求一次，语义不变）——单次预览的
-        // `DialectRegistry.effective` 调用数由「增强/分页/结果构建各一次」收敛为入口一次
-        val dialect = dialectOverride ?: currentDialect()
-        val notes = mutableListOf<String>()
-        var enhanced = sql
-
-        // T-J15：@EntityGraph → LEFT JOIN（JPQL/HQL 非原生路径；原生查询运行时不应用实体图）
-        var joinLines: List<String> = emptyList()
-        JpaQueryEnhancer.entityGraph(method)?.let { graph ->
-            if (native || table == null) {
-                notes += "@EntityGraph(attributePaths)：原生 SQL 查询运行时不应用实体图，预览不追加 JOIN"
-            } else {
-                val (joins, graphNotes) = JpaQueryEnhancer.resolveEntityGraphJoins(graph, table)
-                notes += graphNotes
-                val mainAlias = detectMainAlias(enhanced, table)
-                joinLines = joins.map { JpaQueryEnhancer.renderJoinLine(it, mainAlias, dialect) }
-                if (joins.isNotEmpty()) {
-                    notes += "@EntityGraph(attributePaths=${graph.paths.joinToString(", ")})：按实体图 LEFT JOIN 抓取（type=${graph.type ?: "LOAD"}）"
-                }
-            }
-        }
-
-        // T-J10：Pageable/Limit → LIMIT；Sort → ORDER BY（查询内已有子句时降级注释）。
-        // limitAppliedInModel：派生/Criteria 路径 LIMIT 已在语句模型级挂载（传 true 跳过文本追加，
-        // 避免同语句双 LIMIT）；
-        // pageNotes 非 null：调用方已完成分页/排序分析（含调用点实参求值，T-J9/J10），notes 直接透传、
-        // 跳过本方法内的二次分析（callArgs=null 的重分析会产出与实际内联结果相悖的「静态不可解析」注释）
-        if (pageNotes != null) {
-            notes += pageNotes
-        } else {
-            JpaQueryEnhancer.evaluatePageSort(method, null, dialect, table)?.let { pageSort ->
-                notes += pageSort.notes
-                pageSort.limit?.let { limit ->
-                    if (limitAppliedInModel ||
-                        JpaQueryEnhancer.containsTopLevelClause(enhanced, LIMIT_OFFSET_FETCH_CLAUSE)
-                    ) {
-                        if (!limitAppliedInModel) {
-                            notes += "查询内已含分页子句，方法分页参数以查询内为准（预览不重复追加）"
-                        }
-                    } else {
-                        enhanced += "\n" + dialect.renderLimit(limit)
-                    }
-                }
-                if (pageSort.orderBy.isNotEmpty()) {
-                    if (JpaQueryEnhancer.containsTopLevelClause(enhanced, ORDER_BY_CLAUSE)) {
-                        notes += "查询内已含 ORDER BY，Sort 参数运行时与其合并"
-                    } else {
-                        enhanced += "\nORDER BY " + pageSort.orderBy.joinToString(", ") {
-                            it.column.qualifiedName + if (it.asc) " ASC" else " DESC"
-                        }
-                    }
-                }
-            }
-        }
-
-        // JOIN 行插入（置于 LIMIT/ORDER BY 之前的顶层位置）
-        enhanced = JpaQueryEnhancer.insertJoinLines(enhanced, joinLines)
-
-        // T-J15：@Lock → FOR UPDATE / 共享锁方言差异注释
-        JpaQueryEnhancer.lockClause(method)?.let { (clause, note) ->
-            notes += note
-            if (clause != null) enhanced += " $clause"
-        }
-        // T-J15：@QueryHints 逐条注释
-        notes += JpaQueryEnhancer.queryHintNotes(method)
-        // T-J22：返回类型 notes + Page 返回时展示 @Query.countQuery 的 count SQL
-        notes += JpaQueryEnhancer.returnTypeNotes(method)
-        notes += countQueryNotes(method, table)
-
-        if (notes.isEmpty()) return@runCatching sql
-        enhanced + notes.filter { it.isNotBlank() }.joinToString("") { "\n-- $it" }
-    }.getOrDefault(sql)
-
-    /** T-J22：@Query.countQuery → count SQL 注释行（Page 返回语义；转换失败降级原文注释）。 */
-    private fun countQueryNotes(method: PsiMethod, table: TableInfo?): List<String> = runCatching {
+    internal fun countQueryNotes(method: PsiMethod, table: TableInfo?): List<String> = runCatching {
         val countJpql = JpaQueryEnhancer.countQueryAttribute(method) ?: return@runCatching emptyList()
         // 注释前缀 "-- " 由 applyJpaMethodEnhancements 统一追加，此处只给内容行
         listOf("@Query.countQuery（Page 返回的 count 伴随查询）：") + runCatching {
@@ -687,8 +584,9 @@ class SqlPreviewService(private val project: Project) {
      * 从 SQL 文本探测主表别名（EntityGraph JOIN 的 ON 左值用）：
      * `FROM t_user u` → `u`；无别名/别名是 SQL 关键字 → 表名本名。
      */
-    private fun detectMainAlias(sql: String, table: TableInfo): String = runCatching {
-        val match = FROM_TABLE_ALIAS.find(sql)
+    internal fun detectMainAlias(sql: String, table: TableInfo): String = runCatching {
+        val regex = Regex("(?i)\\bFROM\\s+[`\"(]*([\\w.]+)[`\"]*)\\s+([a-zA-Z_][\\w$]*)")
+        val match = regex.find(sql)
         val alias = match?.groupValues?.get(2)
         if (alias == null || SQL_CLAUSE_KEYWORDS.any { alias.equals(it, ignoreCase = true) }) {
             table.tableName
@@ -788,7 +686,7 @@ class SqlPreviewService(private val project: Project) {
      * 维持按序回填。位置参数混入时名序数量与 `?` 不齐，按名会把无名的 `?` 配空值——
      * 保守回退既有语义。`?` 计数用朴素 count（判定用途，非替换位点）。
      */
-    private fun usableNamedPlaceholderSources(sql: String, namedParamNames: List<String>): List<String>? =
+    internal fun usableNamedPlaceholderSources(sql: String, namedParamNames: List<String>): List<String>? =
         namedParamNames.takeIf { it.isNotEmpty() && it.size == sql.count { ch -> ch == '?' } }
 
     // T-JpaParamOrder F6：静态值字面量形态（数字含 Java 类型后缀 / 枚举常量引用）
@@ -1334,63 +1232,7 @@ class SqlPreviewService(private val project: Project) {
      * @param paramNames   参数名列表（来自方法签名）
      * @param method       方法（用于提取实体列信息）
      */
-    private fun buildJpaPreviewResult(
-        statement: SqlStatement,
-        convertedSql: String,
-        tableName: String,
-        paramNames: List<String>,
-        method: PsiMethod?,
-        inClauseParams: Set<String> = emptySet(),
-        dialectOverride: Dialect? = null,
-        placeholderParamNames: List<String> = emptyList(),
-        duplicateParamNames: Set<String> = emptySet(),
-        initialParamValues: Map<String, String> = emptyMap(),
-    ): PreviewResult {
-        // T-PS5-03：方言由调用入口透传（未传则本地求一次）——见 applyJpaMethodEnhancements 同款说明
-        val dialect = dialectOverride ?: currentDialect()
-        val views = collectConditionViews(statement)
-        // T-JpaParamOrder F3：占位符名序可用性判定——convertedSql 可能是增强后形态（LIMIT 等），
-        // 但增强不增删 `?`；全部 `?` 均来自命名参数时启用按名回填，否则置空维持按序
-        val usableNamedSources = usableNamedPlaceholderSources(convertedSql, placeholderParamNames).orEmpty()
-        // T-JpaParamOrder F3：回填提示与「渲染实际用的 sources」平行——按名回填启用时随名序，
-        // 否则随面板行序（paramNames），保证 backfillParamsBySource 的第 i 位提示对第 i 位来源
-        val backfillSources = usableNamedSources.ifEmpty { paramNames }
-        // 参数回填提示：根据方法签名参数类型判定是否需要引号
-        // - IN 子句参数：数值类型不加引号，字符串加引号
-        // - 非 IN 参数：数值类型不加引号，字符串加引号（quote=true）
-        // - 无法判定类型时默认加引号（保守策略）
-        val paramHints = if (backfillSources.isNotEmpty()) {
-            backfillSources.map { name ->
-                val inList = name in inClauseParams
-                val isNumeric = isNumericParam(method, name)
-                // 数值类型不加引号，其他类型（String/Date 等）加引号
-                ParamHint(quote = !isNumeric, inList = inList)
-            }
-        } else emptyList()
-        return PreviewResult(
-            sql = convertedSql,
-            compactSql = convertedSql.replace(SQL_WHITESPACE_RUN, " ").trim(),
-            unresolvedParams = paramNames,
-            paramTable = ParameterReplacer.buildParamTable(paramNames),
-            paramHints = paramHints,
-            wrapperType = null,
-            tableName = tableName,
-            warning = buildJpaWarning(statement),
-            columns = (statement.table as? TableInfo)?.allColumnNames ?: emptyList(),
-            previewModel = if (views.isEmpty()) null else SqlPreviewModel(statement, dialect, formatSql(), views),
-            placeholderParamNames = usableNamedSources,
-            duplicateParamNames = duplicateParamNames,
-            initialParamValues = initialParamValues,
-        )
-    }
-
-    /**
-     * 判断方法参数是否为数值类型（Integer/Long/BigDecimal 等）。
-     *
-     * 用于 IN 子句参数回填时决定是否需要引号：数值类型不加引号，字符串加引号。
-     * 支持 Collection<NumericType>、NumericType[] 等集合/数组形态。
-     */
-    private fun isNumericParam(method: PsiMethod?, paramName: String): Boolean {
+    internal fun isNumericParam(method: PsiMethod?, paramName: String): Boolean {
         if (method == null) return false
         val param = method.parameterList.parameters.firstOrNull { it.name == paramName } ?: return false
         val type = param.type
@@ -1419,7 +1261,7 @@ class SqlPreviewService(private val project: Project) {
      * bulk UPDATE 静默（MP 链 buildWarning 两种都报，不对称）；UPDATE 的 conditions 空
      * ⟺ 文本无 WHERE（JpaUpdateParser.parseWhere 对非空 WHERE 必产 Raw 兜底），无错报面。
      */
-    private fun buildJpaWarning(statement: SqlStatement): String? = when (statement) {
+    internal fun buildJpaWarning(statement: SqlStatement): String? = when (statement) {
         is UpdateStatement -> if (statement.conditions.isEmpty()) "⚠ [BlockAttack] 无 WHERE 条件，将更新全表数据！" else null
         is DeleteStatement -> if (statement.conditions.isEmpty()) "⚠ [BlockAttack] 无 WHERE 条件，将删除全表数据！" else null
         else -> null
@@ -1434,57 +1276,6 @@ class SqlPreviewService(private val project: Project) {
     /**
      * 由语句模型构建预览结果（应用方言与格式化配置）。
      * R12 T-PaginationSim：[countSql] 非 null 时透传 [PreviewResult.countSql]（面板在主 SQL 后并列渲染）。
-     */
-    private fun buildPreviewResult(
-        wrapperType: cn.song.mybatisplus.visualizer.model.WrapperType?,
-        table: cn.song.mybatisplus.visualizer.model.TableInfo,
-        statement: SqlStatement,
-        countSql: String? = null,
-    ): PreviewResult {
-        val dialect = currentDialect()
-        val compact = !formatSql()
-        val generated = SqlGenerator.generateWithParams(statement, compact = compact, dialect = dialect)
-        // 动态条件视图（扁平化，含嵌套组内）；无动态条件时 previewModel 为 null → 面板走旧文本渲染路径
-        val views = collectConditionViews(statement)
-        return PreviewResult(
-            sql = generated.sql,
-            compactSql = SqlGenerator.generate(statement, compact = true, dialect = dialect),
-            unresolvedParams = generated.unresolvedParams,
-            paramTable = ParameterReplacer.buildParamTable(generated.unresolvedParams),
-            wrapperType = wrapperType,
-            tableName = table.tableName,
-            warning = buildWarning(statement),
-            columns = table.allColumnNames,
-            // M16：列注释与表注释（补全 tailText / 关键词检索；来自 EntityResolver 的四级优先级提取）
-            columnComments = table.columns.mapNotNull { col ->
-                col.comment?.takeIf { it.isNotBlank() }?.let { col.columnName to it }
-            }.toMap(),
-            tableComment = table.comment,
-            previewModel = if (views.isEmpty()) null else SqlPreviewModel(statement, dialect, formatSql(), views),
-            paramHints = generated.paramHints,
-            // F-2：SQL 性能分析（仅 SELECT）：委托 [SqlPerfAnalyzer]；UPDATE/DELETE 走既有 buildWarning 路径
-            perfWarnings = analyzePerf(generated.sql, statement),
-            // T-MpjFill：fill 附加查询子句（MPJ 1.5.1+）——透传至面板追加渲染
-            fillClauses = (statement as? SelectStatement)?.fillClauses,
-            // R12 T-PaginationSim：分页 COUNT 包裹（面板在主 SQL 后并列渲染第二条语句）
-            countSql = countSql,
-        )
-    }
-
-    /**
-     * R12 T-PaginationSim：分页 COUNT 包裹预览文本（D2=A 基础包裹形态）。
-     *
-     * MP PaginationInnerInterceptor 运行时先对**原语句（不含 LIMIT）**执行 COUNT、再给分页语句
-     * 追加 LIMIT（willDoQuery → autoCountSql → handlerLimit 顺序，3.5.17 反编译实证）——故包裹体
-     * 取 `copy(limit = null)` 的语句重生成（模型级去 LIMIT，避免文本截断）。
-     *
-     * 产出条件（全部满足）：
-     *  - 设置开关 [PluginSettings.State.paginationSimEnabled]（默认开）；
-     *  - 子开关 [PluginSettings.State.paginationCountEnabled]（T-CountSimToggle，默认开；
-     *    关=只追加 LIMIT 不产 COUNT，父开关优先）；
-     *  - 语句为 SELECT 且已应用分页 LIMIT（`mapper.selectList(page, w)` 等分页消费产物）；
-     *  - 非 count/exists 消费（其本身即计数语义，不再包裹——对齐 T-M29-02/03 分页消费排除口径）；
-     *  - Page.searchCount != false（D3=A；MP 运行时 searchCount=false 不执行 COUNT，反编译实证）。
      */
     private fun paginationCountSql(
         chain: cn.song.mybatisplus.visualizer.model.WrapperChain,
@@ -1503,15 +1294,43 @@ class SqlPreviewService(private val project: Project) {
     /**
      * 性能分析（仅 SELECT）：委托 [SqlPerfAnalyzer]（F-2）。
      * UPDATE/DELETE 走既有 buildWarning 路径，不重复分析。
+     *
+     * T-DialectQuoteWarn §十二：带方言 + 绑定数据源的 ANSI_QUOTES 三态分析——「MySQL 家族 + 双引号
+     * 标识符」这一档只有在**确知连接声明了** `ANSI_QUOTES` 时才不报，否则降级 WARN（见
+     * [boundAnsiQuotesOrNull]）。
      */
-    private fun analyzePerf(sql: String, statement: SqlStatement): List<PerfWarning>? {
+    internal fun analyzePerf(sql: String, statement: SqlStatement): List<PerfWarning>? {
         if (statement !is SelectStatement) return null
-        val warnings = SqlPerfAnalyzer.analyze(sql)
+        val warnings = SqlPerfAnalyzer.analyze(sql, currentDialect(), boundAnsiQuotesOrNull())
         return warnings.ifEmpty { null }
     }
 
+    /**
+     * T-DialectQuoteWarn §十二：绑定数据源是否**已声明** `sql_mode` 含 `ANSI_QUOTES`（三态：
+     * `true`/`false`/`null`＝未知）。
+     *
+     * 绑定源与预览面板指示行**同源同优先级**（[cn.song.mybatisplus.visualizer.ui.boundDataSourceNameForDisplay]
+     * 的链）：活控制台绑定 [DataSourceSelector.boundConsoleDataSourceName] > last-used 记忆
+     * [DataSourceSelector.rememberedDataSourceName]（面板 `bindstate.associated`）> 未绑定（null）。
+     * 拿到名字后按名取 URL（[DataSourceUrlProbe.urlByName]），**不用** [DataSourceUrlProbe.firstUrl]
+     * ——首个数据源与绑定源可以不同且 `ANSI_QUOTES` 状态相反（本项目 demo：首个 jpa_demo、绑定 mpj_demo），
+     * 拿首个当绑定源会给出错误结论。
+     *
+     * 取不到名字/URL/无法判定 → null（未知），规则据此降级 WARN（不假装知道连接选项）。
+     * 全程 runCatching：无项目/无 Database 插件/反射失败一律回落 null，绝不影响预览主流程。
+     */
+    private fun boundAnsiQuotesOrNull(): Boolean? {
+        val name = runCatching {
+            cn.song.mybatisplus.visualizer.execute.DataSourceSelector.boundConsoleDataSourceName()
+        }.getOrNull() ?: runCatching {
+            cn.song.mybatisplus.visualizer.execute.DataSourceSelector.rememberedDataSourceName(project)
+        }.getOrNull() ?: return null
+        val url = runCatching { DataSourceUrlProbe.urlByName(project, name) }.getOrNull() ?: return null
+        return runCatching { DataSourceUrlProbe.ansiQuotesFromUrl(url) }.getOrNull()
+    }
+
     /** 收集语句中的动态条件行（M12）：遍历 WHERE 条件树，扁平化 toggle 元数据（含嵌套 Group 内）。 */
-    private fun collectConditionViews(statement: SqlStatement): List<ConditionView> = when (statement) {
+    internal fun collectConditionViews(statement: SqlStatement): List<ConditionView> = when (statement) {
         is SelectStatement -> statement.conditions.flatMap { it.toConditionViews() }
         is UpdateStatement -> statement.conditions.flatMap { it.toConditionViews() }
         is DeleteStatement -> statement.conditions.flatMap { it.toConditionViews() }
@@ -1529,66 +1348,6 @@ class SqlPreviewService(private val project: Project) {
      *    - subToWhere=true（`logicDelToWhere`）→ WHERE 末尾追加带别名的 `alias.deleted = 0`（主表在前、副表在后）。
      *
      * 副表仅 SELECT 有 joins；DELETE 无 joins 维持主表注入（受 mainActive 控制）。
-     */
-    private fun injectLogicDeleteCondition(
-        table: TableInfo,
-        statement: SqlStatement,
-        state: LogicDeleteState,
-    ): SqlStatement {
-        // T-M31.18：逻辑删除值可配置（默认 0，用户可调整——对齐 MP logic-delete-value）
-        // T-SettingsTruth P4：项目级 logicDeleteValue 覆盖（空回退全局，再兜底 "0"）
-        val logicDeleteValue = effectiveLogicDeleteValue().ifBlank { "0" }
-        return when (statement) {
-            is SelectStatement -> {
-                var conditions = statement.conditions
-                if (state.mainActive) {
-                    table.logicDeleteColumn?.let { column ->
-                        conditions = conditions + Condition.Simple(
-                            ColumnRef(tableAlias = statement.tableAlias, columnName = column), "=", SqlValue.Literal(logicDeleteValue),
-                        )
-                    }
-                }
-                // 副表注入：ON 追加 / WHERE 末尾（子查询形态 tableName 以 '(' 开头无 logicDeleteColumn，天然跳过）
-                val subWhere = mutableListOf<Condition>()
-                val joins = statement.joins.map { join ->
-                    val column = join.logicDeleteColumn ?: return@map join
-                    if (!state.subActive) return@map join
-                    val cond = Condition.Simple(
-                        ColumnRef(tableAlias = join.alias, columnName = column), "=", SqlValue.Literal(logicDeleteValue),
-                    )
-                    if (state.subToWhere) {
-                        subWhere += cond
-                        join
-                    } else {
-                        join.copy(onConditions = join.onConditions + cond)
-                    }
-                }
-                if (subWhere.isNotEmpty()) conditions = conditions + subWhere
-                statement.copy(conditions = conditions, joins = joins)
-            }
-            is DeleteStatement -> {
-                val column = table.logicDeleteColumn ?: return statement
-                if (!state.mainActive) return statement
-                statement.copy(
-                    conditions = statement.conditions + Condition.Simple(
-                        ColumnRef(tableAlias = statement.tableAlias, columnName = column), "=", SqlValue.Literal(logicDeleteValue),
-                    ),
-                )
-            }
-            else -> statement
-        }
-    }
-
-    /**
-     * T-M22-02：乐观锁条件注入（@Version 实体 + MP OptimisticLockerInnerInterceptor 语义）——
-     * UPDATE 语句自动追加 `SET version = version + 1` 与 WHERE 末尾 `AND version = ?`；
-     * 语句已显式涉及 version 列（SET 赋值或 WHERE 条件）时不重复注入。
-     * **不依赖配置开关**（对齐 MP 拦截器默认行为，无 @Version 字段的实体零影响）；
-     * 仅 [UpdateStatement] 注入——SelectStatement/DeleteStatement 不注入。
-     *
-     * 边界（文档化，不实现）：
-     *  - `@InterceptorIgnore`（方法级注解，静态代码不可映射调用方意图）不做抑制处理；
-     *  - `@KeySequence`（序列取主键）不在主键解析范围内——主键恒以列名占位。
      */
     private fun injectOptimisticLockCondition(table: TableInfo, statement: SqlStatement): SqlStatement {
         val update = statement as? UpdateStatement ?: return statement
@@ -1623,78 +1382,6 @@ class SqlPreviewService(private val project: Project) {
      *
      * 与 injectLogicDeleteCondition / injectOptimisticLockCondition 三层串行——
      * 三者按语句类型互补：逻辑删除仅 SELECT/DELETE、乐观锁仅 UPDATE、租户 SELECT/UPDATE/DELETE。
-     */
-    private fun injectTenantLineCondition(
-        table: TableInfo,
-        statement: SqlStatement,
-        hasInterceptorIgnore: Boolean,
-    ): SqlStatement {
-        val settings = PluginSettings.getInstance().state
-        if (!settings.injectTenantLine) {
-            LOG.info("injectTenantLine: SKIP switch=off, stmt=${statement::class.simpleName}, table=${table.tableName}")
-            return statement
-        }
-        if (hasInterceptorIgnore) {
-            LOG.info("injectTenantLine: SKIP @InterceptorIgnore(tenantLine=true), stmt=${statement::class.simpleName}")
-            return statement
-        }
-        val tenantColumn = settings.tenantColumnName.ifBlank { DEFAULT_TENANT_COLUMN }
-        return when (statement) {
-            is SelectStatement -> {
-                if (conditionReferencesColumn(statement.conditions, tenantColumn)) {
-                    LOG.info("injectTenantLine: SKIP column already in WHERE, col=$tenantColumn, stmt=SELECT")
-                    return statement
-                }
-                LOG.info("injectTenantLine: INJECT col=$tenantColumn, stmt=SELECT, table=${table.tableName}")
-                statement.copy(
-                    conditions = statement.conditions + Condition.Simple(
-                        ColumnRef(tableAlias = statement.tableAlias, columnName = tenantColumn),
-                        "=", SqlValue.Placeholder("$tenantColumn (= ?)"),
-                    ),
-                )
-            }
-            is UpdateStatement -> {
-                if (statement.sets.any { it.column?.columnName == tenantColumn }) {
-                    LOG.info("injectTenantLine: SKIP column in SET, col=$tenantColumn, stmt=UPDATE")
-                    return statement
-                }
-                if (conditionReferencesColumn(statement.conditions, tenantColumn)) {
-                    LOG.info("injectTenantLine: SKIP column already in WHERE, col=$tenantColumn, stmt=UPDATE")
-                    return statement
-                }
-                LOG.info("injectTenantLine: INJECT col=$tenantColumn, stmt=UPDATE, table=${table.tableName}")
-                statement.copy(
-                    conditions = statement.conditions + Condition.Simple(
-                        ColumnRef(tableAlias = statement.tableAlias, columnName = tenantColumn),
-                        "=", SqlValue.Placeholder("$tenantColumn (= ?)"),
-                    ),
-                )
-            }
-            is DeleteStatement -> {
-                if (conditionReferencesColumn(statement.conditions, tenantColumn)) {
-                    LOG.info("injectTenantLine: SKIP column already in WHERE, col=$tenantColumn, stmt=DELETE")
-                    return statement
-                }
-                LOG.info("injectTenantLine: INJECT col=$tenantColumn, stmt=DELETE, table=${table.tableName}")
-                statement.copy(
-                    conditions = statement.conditions + Condition.Simple(
-                        ColumnRef(tableAlias = statement.tableAlias, columnName = tenantColumn),
-                        "=", SqlValue.Placeholder("$tenantColumn (= ?)"),
-                    ),
-                )
-            }
-        }
-    }
-
-    /**
-     * F-6 Phase B：动态表名替换——按用户配置的 [TableNameRule] 列表逐条匹配替换表名。
-     *
-     * 规则按列表顺序应用（首个匹配即停）；正则编译失败时跳过该规则并日志警告（不中断预览）。
-     * 替换模板支持 `$1`/`$2` 引用捕获组、`$tableName` 引用完整原始表名。
-     *
-     * @param table     当前语句关联的实体表（用于 DynamicTableNameProcessor 的上下文）
-     * @param statement 当前语句模型
-     * @return 表名替换后的新语句（无规则命中时返回原实例）
      */
     private fun processDynamicTableName(table: TableInfo, statement: SqlStatement): SqlStatement {
         val rules = settings?.state?.dynamicTableNameRules?.filter { it.enabled && it.pattern.isNotBlank() }
@@ -1757,7 +1444,7 @@ class SqlPreviewService(private val project: Project) {
     }
 
     /** T-M22-02：条件树是否已提及指定列（Simple/In/Between/Like/Unary/ColumnComparison 按列名匹配，Group 递归）。 */
-    private fun conditionReferencesColumn(conditions: List<Condition>, columnName: String): Boolean =
+    internal fun conditionReferencesColumn(conditions: List<Condition>, columnName: String): Boolean =
         conditions.any { condition ->
             when (condition) {
                 is Condition.Simple -> condition.column.columnName == columnName
@@ -1778,7 +1465,7 @@ class SqlPreviewService(private val project: Project) {
      * 组复选框 + 组内子条件值输入框（来源递归收集去重，按渲染顺序），子条件不再单独成行；
      * 组无开关（无布尔标志 `and(w -> ...)`）与非组条件：自身 toggle + 嵌套子条件扁平化（M19.6 存量）。
      */
-    private fun Condition.toConditionViews(): List<ConditionView> {
+    internal fun Condition.toConditionViews(): List<ConditionView> {
         val ownToggle = toggle
         if (this is Condition.Group && ownToggle != null) {
             val sources = groupValueSources()
@@ -1802,7 +1489,7 @@ class SqlPreviewService(private val project: Project) {
     }
 
     /** T-M29.1：组内子条件值来源递归收集（Simple/Like/Between/In 占位符，组递归；去重保持渲染顺序）。 */
-    private fun Condition.groupValueSources(): List<String> = when (this) {
+    internal fun Condition.groupValueSources(): List<String> = when (this) {
         is Condition.Simple -> listOfNotNull((value as? SqlValue.Placeholder)?.source)
         is Condition.Like -> listOfNotNull((pattern as? SqlValue.Placeholder)?.source)
         is Condition.Between -> listOfNotNull(
@@ -1849,7 +1536,7 @@ class SqlPreviewService(private val project: Project) {
                   { projectSettings?.effectiveInjectLogicDelete() })
 
     /** 有效逻辑删除值（项目级优先，空回退全局）。 */
-    private fun effectiveLogicDeleteValue(): String =
+    internal fun effectiveLogicDeleteValue(): String =
         effectiveString(settings?.state?.logicDeleteValue ?: "",
                         projectSettings?.effectiveLogicDeleteValue())
 
@@ -1879,7 +1566,7 @@ class SqlPreviewService(private val project: Project) {
      * BlockAttackInnerInterceptor 阻止无 WHERE 的 UPDATE/DELETE——现有警示已覆盖核心功能；
      * 增强：标记为 BlockAttack 风格（拦截器名称标注）+ DataPermission 运行时差异提示。
      */
-    private fun buildWarning(statement: SqlStatement): String? {
+    internal fun buildWarning(statement: SqlStatement): String? {
         val baseWarning = when (statement) {
             is UpdateStatement -> if (statement.conditions.isEmpty()) "⚠ [BlockAttack] 无 WHERE 条件，将更新全表数据！" else null
             is DeleteStatement -> if (statement.conditions.isEmpty()) "⚠ [BlockAttack] 无 WHERE 条件，将删除全表数据！" else null
@@ -1892,7 +1579,7 @@ class SqlPreviewService(private val project: Project) {
     /**
      * 查询类 Wrapper 类型（可能被删除类消费方法 `remove(wrapper)`/`delete(wrapper)` 复用为删除条件，M10）。
      */
-    private fun WrapperType.isQueryLike(): Boolean = this in setOf(
+    internal fun WrapperType.isQueryLike(): Boolean = this in setOf(
         WrapperType.LAMBDA_QUERY,
         WrapperType.QUERY,
         WrapperType.MPJ_LAMBDA,
@@ -1975,63 +1662,7 @@ class SqlPreviewService(private val project: Project) {
      * 会跳过 hbm 兜底与别名反查，下游展开器必出「列信息未解析」降级注释；
      * 判据改为「非 null 且列非空」，列空时继续走后续路径。
      */
-    private fun resolveHqlTable(entityClass: PsiClass?, entityClassName: String?, hql: String): TableInfo? {
-        val resolver = JpaEntityResolver()
-        // T-Fix-SettingsScope：下方 project 一律取本服务绑定的 [project]，勿用
-        // openProjects.firstOrNull()——多项目同开时后者取谁取决于 IDE 打开顺序，会在 B 项目里
-        // 按 A 项目的项目级表配置修饰表名，并使 GlobalSearchScope/JavaPsiFacade 落到错误的项目范围。
-        val className = entityClassName ?: extractEntityNameFromHql(hql)
-
-        // 路径 1：有 PsiClass 直接解析（JPA 注解）。列空不短路到「更弱的路径」——
-        // 夹具/局部类场景路径 2/3 反而找不到该类；列空仅在「有更好的候选」时被替换：
-        // 即后续路径找到的表列非空才覆盖，否则保留路径 1 结果（含表名与实体类名，
-        // 展开器照常给「列信息未解析」诊断，不丢 FROM 表名替换）。
-        var resolved: TableInfo? = null
-        if (entityClass != null) {
-            val table = resolver.resolve(entityClass)
-            if (table.columns.isNotEmpty()) return table
-            resolved = table
-        }
-
-        // 路径 2：按类名查找 @Entity 类（JPA 注解）；列空不短路
-        if (className != null) {
-            val scope = com.intellij.psi.search.GlobalSearchScope.allScope(project)
-            val psiClass = com.intellij.psi.JavaPsiFacade.getInstance(project).findClass(className, scope)
-                ?: findClassByShortName(project, className, scope)
-                ?: findClassByEntityName(project, className, scope)
-            if (psiClass != null) {
-                val table = resolver.resolve(psiClass)
-                if (table.columns.isNotEmpty()) return table
-                if (resolved == null) resolved = table
-            }
-        }
-
-        // 路径 3：Hibernate XML 映射文件（.hbm.xml）
-        if (className != null) {
-            val hbmMapping = HbmXmlEntityResolver.resolve(className, project)
-            if (hbmMapping != null) {
-                return convertHbmMappingToTableInfo(hbmMapping)
-            }
-        }
-
-        return resolved
-    }
-
-    /**
-     * T-HqlInhCols：按 @Entity(name=...) 实体别名查找实体类。
-     *
-     * HQL `FROM Alias` 的 Alias 可为实体名（JPA 语义）而非类名——
-     * 类名快路径（findClass/findClassByShortName）未命中时按注解值反查。
-     * 扫描结果（实体名 → 全限定名）缓存于 Project userData，以
-     * PsiModificationTracker.modificationCount 失效（照抄 EntityClassFinder 的
-     * @TableName 反查同款缓存惯例；未命中也入缓存防重复全量扫描）。
-     *
-     * T-GutterDupFreeze（S3，20261008 冻结事故）：慢路径原为**无上限全项目扫描**，且不判索引就绪；
-     * 误判输入（链源码里抓到的表名 `t_order`）在索引构建期实测 70 秒、读锁全程不放。现两道护栏：
-     *  1. 索引构建期（dumb）直接按未命中降级，**不写负缓存**（索引就绪后重试仍可命中）；
-     *  2. 扫描改有界（上限 + 取消检查），收口 [cn.song.mybatisplus.visualizer.psi.jpa.EntityAliasSweep]。
-     */
-    private fun findClassByEntityName(
+    internal fun findClassByEntityName(
         project: com.intellij.openapi.project.Project,
         entityName: String,
         scope: com.intellij.psi.search.GlobalSearchScope,
@@ -2093,14 +1724,14 @@ class SqlPreviewService(private val project: Project) {
      * 适用于 createQuery(HQL) 单参数场景（无 Entity.class 二参）；
      * 语句头优先口径——UPDATE/DELETE 头同样命中，不再只认 FROM 子句。
      */
-    private fun extractEntityNameFromHql(hql: String): String? {
+    internal fun extractEntityNameFromHql(hql: String): String? {
         return HqlEntityNameExtractor.extract(hql)
     }
 
     /**
      * 将 HBM XML 映射转换为 TableInfo（供 HqlConverter 使用）。
      */
-    private fun convertHbmMappingToTableInfo(mapping: HbmXmlMapping.ClassMapping): TableInfo {
+    internal fun convertHbmMappingToTableInfo(mapping: HbmXmlMapping.ClassMapping): TableInfo {
         val columns = mapping.properties.map { prop ->
             ColumnInfo(
                 fieldName = prop.fieldName,
@@ -2130,7 +1761,7 @@ class SqlPreviewService(private val project: Project) {
      * 按短类名查找 PsiClass（JavaPsiFacade.findClass 需要全限定名）。
      * 使用 PsiShortNamesManager 按短名搜索，返回第一个匹配的类。
      */
-    private fun findClassByShortName(
+    internal fun findClassByShortName(
         project: com.intellij.openapi.project.Project,
         shortName: String,
         scope: com.intellij.psi.search.GlobalSearchScope,
@@ -2190,7 +1821,7 @@ class SqlPreviewService(private val project: Project) {
     }
 
     companion object {
-        private val LOG = Logger.getInstance(SqlPreviewService::class.java)
+        internal val LOG = Logger.getInstance(SqlPreviewService::class.java)
 
         /**
          * R54（O-108）：历史耗时回填匹配键两级化——exact 命中优先（原全文精确匹配，现行为
@@ -2236,7 +1867,7 @@ class SqlPreviewService(private val project: Project) {
         private const val METHOD_LOGIC_DEL_TO_WHERE = "logicDelToWhere"
 
         /** 默认租户列名（T-TenantLine）：tenantColumnName 空白时回退此值。 */
-        private const val DEFAULT_TENANT_COLUMN = "tenant_id"
+        internal const val DEFAULT_TENANT_COLUMN = "tenant_id"
 
         /** SQL 子句关键字（detectMainAlias 探测主表别名时排除的关键字形态）。 */
         private val SQL_CLAUSE_KEYWORDS = setOf(
@@ -2360,3 +1991,4 @@ class SqlPreviewService(private val project: Project) {
         }
     }
 }
+

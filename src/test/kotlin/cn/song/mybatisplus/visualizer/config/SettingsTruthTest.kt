@@ -63,7 +63,11 @@ class SettingsTruthTest {
 
     @Test
     fun testP2_状态行接线与五态键源码守卫() {
-        val src = mainSrc("cn/song/mybatisplus/visualizer/log/agent/AgentManager.kt")
+        // T-M53-II（2026-10-10）：SplitCollapse —— AgentStatusSnapshot 等支撑类型已由
+        // AgentManager.kt 原样搬出到同包的 AgentSessionSupport.kt（逐字符搬运、零行为改动），
+        // 故本守卫的读取面覆盖两个文件；断言语义不变（声明须在 agent 包内存在）。
+        val src = mainSrc("cn/song/mybatisplus/visualizer/log/agent/AgentManager.kt") +
+            mainSrc("cn/song/mybatisplus/visualizer/log/agent/AgentSessionSupport.kt")
         // statusSummary 只取数，文案交纯函数（纯函数五态语义由 AgentStatusTextTest 运行期覆盖）
         assertTrue("AgentManager 应声明 statusSummary", src.contains("internal fun statusSummary()"))
         assertTrue("statusSummary 应委托纯函数 agentStatusText", src.contains("agentStatusText("))

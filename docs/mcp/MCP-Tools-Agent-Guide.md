@@ -24,7 +24,7 @@
 | sqlv_explain | 对单条 SELECT 跑 EXPLAIN 出执行计划 | 需数据源 |
 | sqlv_check_sql | 静态写风险与语句类型核查 | 纯文本 |
 | sqlv_rollback_plan | 为 INSERT/UPDATE/DELETE 生成回滚预案（不执行） | 纯文本 |
-| sqlv_perf_advice | 20 条规则的静态性能建议 | 纯文本 |
+| sqlv_perf_advice | 21 条规则的静态性能建议 | 纯文本 |
 | sqlv_crud_sql | 实体类生成 CRUD 四件套 SQL | 需项目（索引就绪） |
 | sqlv_reverse_sql | SQL 转 MyBatis-Plus QueryWrapper 代码 | 纯文本 |
 | sqlv_mapper_check | mapper XML 契约核查 + 渲染产物风险分析 | xmlSnippet 纯文本 / filePath 需项目 |
@@ -124,7 +124,7 @@
 
 ### 3.7 sqlv_perf_advice — 性能建议
 
-用途：20 条规则引擎的静态性能建议（复用 IDE 内置分析链），纯静态、不触数据库。
+用途：21 条规则引擎的静态性能建议（复用 IDE 内置分析链），纯静态、不触数据库。
 
 | 入参 | 类型 | 必填 | 说明 |
 |------|------|------|------|

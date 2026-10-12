@@ -74,6 +74,9 @@ class ExplainPanelWiringGuardTest {
     }
 
     /**
+     * T-M53-II D2-5：面板的组合式重构把 EXPLAIN 分派链（explainSql / submitExplainDirect /
+     * submitExplainOrStructured / embedExplainView）逐字符搬出到同包协作文件，故读取面取
+     * **面板全体源文件**的并集——只读主文件会在成员搬走后变成空扫描（断言假红或假绿的同一根因）。
      * R61 接线钉：跨次对比必须真的在结构化 onPlan 链上——基线存储（lastStructuredExplain）+
      * 对比计算（ExplainPlanDiff.diff）+ 基线滚动更新 + 视图入参（diff = planDiff）四件齐全；
      * 摘掉任一件对比条即静默消失（无编译期保护的 wiring 面，同 hasUnfilledParams 教训）。
@@ -96,7 +99,14 @@ class ExplainPanelWiringGuardTest {
     }
 
     private fun sqlPreviewPanelSource(): String =
-        File(repoRoot(), "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanel.kt").readText()
+        panelSourceFiles().joinToString("\n") { File(repoRoot(), it).readText() }
+
+    private fun panelSourceFiles(): List<String> =
+        File(repoRoot(), "src/main/kotlin/cn/song/mybatisplus/visualizer/ui").listFiles()
+            .orEmpty()
+            .filter { it.isFile && it.name.startsWith("SqlPreviewPanel") && it.extension == "kt" }
+            .map { "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/${it.name}" }
+            .sorted()
 
     /** 仓库根定位（同 McpErrorPositionTextTest：从 user.dir 上溯到含 src/main/kotlin 的目录）。 */
     private fun repoRoot(): File {

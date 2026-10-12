@@ -231,9 +231,6 @@ class JpaEntityResolver {
         // @Embedded / @Embeddable / @EmbeddedId：嵌入对象字段展平（T-J18）；
         // SD8 形态（裸 @Embedded / 捷径 @Embedded.Nullable / @Embedded.Empty，T-Embedded D2）——
         // SD 判定在前取 prefix 语义，jakarta 轨兜底（裸 SD @Embedded 此前经短名轨命中，行为不回归）
-        // @Embedded / @Embeddable / @EmbeddedId：嵌入对象字段展平（T-J18）；
-        // SD8 形态（裸 @Embedded / 捷径 @Embedded.Nullable / @Embedded.Empty，T-Embedded D2）——
-        // SD 判定在前取 prefix 语义，jakarta 轨兜底（裸 SD @Embedded 此前经短名轨命中，行为不回归）
         val sdEmbedded = JpaMetadataReader.isSpringDataEmbeddedField(field)
         if (isEmbeddedId || sdEmbedded || JpaMetadataReader.isEmbeddedField(field)) {
             val sdPrefix = if (sdEmbedded) JpaMetadataReader.springDataEmbeddedPrefixOf(field) else ""
@@ -293,6 +290,12 @@ class JpaEntityResolver {
      *
      * T-Embedded D2：[sdPrefix] 为 SD @Embedded(prefix) 前缀，官方语义拼在嵌入对象每一列之前
      * （同一值对象多次嵌入防撞车）；非 SD 轨为空串，列名逐字节不变。
+     *
+     * G1 修复（prefix 不写重）：**@AttributeOverride 命中的列名是 JPA 轨最终列名**（Hibernate 运行期
+     * 实际使用的列），SD prefix 不再叠加——同型值对象二次嵌入的混合声明里，覆写名通常已按
+     * 「prefix + 列名」同口径书写（demo `CustomerEntity` 的 bizAddress：prefix=biz_ 且覆写
+     * street→biz_street），叠加会产出 `biz_biz_street` 这类两轨都不存在的列名。无覆写时 prefix
+     * 照旧拼在每一列之前（`shipping_street` 形态不回归）。
      */
     private fun flattenEmbeddedColumns(
         field: PsiField,
@@ -325,7 +328,11 @@ class JpaEntityResolver {
         return specs.map { spec ->
             ColumnInfo(
                 fieldName = spec.fieldName,
-                columnName = sdPrefix + spec.columnName,
+                columnName = if (sdPrefix.isEmpty() || spec.fromAttributeOverride) {
+                    spec.columnName
+                } else {
+                    sdPrefix + spec.columnName
+                },
                 isId = isPrimaryKey,
                 idTypeAuto = false,
                 fieldType = spec.fieldType,
@@ -336,6 +343,7 @@ class JpaEntityResolver {
                 updatable = spec.updatable,
                 embedded = true,
                 embeddedParent = fieldName,
+                embeddedPath = spec.embeddedPath,
             )
         }
     }

@@ -4,6 +4,8 @@ import cn.song.mybatisplus.visualizer.psi.WrapperLocator
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.DialogWrapper
+import com.intellij.psi.PsiClass
+import com.intellij.psi.PsiJavaFile
 import com.intellij.psi.PsiMethodCallExpression
 import com.intellij.ui.TreeUIHelper
 import com.intellij.ui.components.JBList
@@ -146,4 +148,17 @@ class SqlSelectionDialog<T>(
         /** 代码行预览最大长度（字符；超出截断加省略号，防撑爆弹窗宽度）。 */
         const val MAX_LINE_LENGTH = 80
     }
+}
+
+
+/**
+ * 实体候选副标题：完整限定类名——副标题只放文件名时，不同包/模块的同名实体
+ * （如多模块 demo 里两处 `User.java`）完全无法区分（20261011 录制实测）。
+ * qualifiedName 不可得时回退 `包路径/文件名`，再不行退文件名。
+ */
+internal fun entityCandidateSubtitle(psiClass: PsiClass): String {
+    psiClass.qualifiedName?.takeIf { it.isNotBlank() }?.let { return it }
+    val file = psiClass.containingFile ?: return ""
+    val pkg = (file as? PsiJavaFile)?.packageName?.takeIf { it.isNotBlank() }?.let { "$it." } ?: ""
+    return pkg + file.name
 }

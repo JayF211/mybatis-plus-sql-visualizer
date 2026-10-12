@@ -87,303 +87,6 @@ import javax.swing.border.EmptyBorder
 import javax.swing.event.DocumentEvent
 import javax.swing.event.DocumentListener
 
-/** SQL 末尾分号结束符（显示层统一追加；已以 `;` 结尾或空串不重复；T-M42 提为顶层，openPreview/右键复制/列表复制共用）。 */
-internal fun withTerminator(sql: String): String =
-    if (sql.isEmpty() || sql.endsWith(";")) sql else sql + ";"
-
-/**
- * 右键菜单选中收敛（T-ListPreviewCopy）：命中行已在多选集合内 → 保留原多选（复制项=批量复制）；
- * 否则收敛为命中行（右键=切换操作目标，与改造前无条件收敛单行等价）。纯函数可独立单测，
- * 日志 tab 与历史 tab 右键菜单共用。
- */
-internal fun resolveContextMenuSelection(selectedIndices: IntArray, hitIndex: Int): IntArray =
-    if (hitIndex in selectedIndices) selectedIndices else intArrayOf(hitIndex)
-
-/**
- * 批量复制文本（T-ListPreviewCopy）：选中条目升序逐条 [withTerminator] 后 `"\n"` 拼接——
- * 与 JBList 内置 Ctrl+C 多选拼接链路（itemToText 逐条 + join("\n")）逐字节同构，
- * 右键批量复制与键盘复制两条入口产物一致。
- */
-internal fun batchCopySql(entries: List<LogSqlEntry>): String =
-    entries.joinToString("\n") { withTerminator(it.restoredSql) }
-
-/** 复制菜单项文案（T-ListPreviewCopy）：多选带条数走 [selectedKey]（`{0}`=条数），单选沿用 [baseKey]。 */
-internal fun copyMenuText(baseKey: String, selectedKey: String, count: Int): String =
-    if (count > 1) MpSqlVisualizerBundle.message(selectedKey, count.toString())
-    else MpSqlVisualizerBundle.message(baseKey)
-
-// ---------- T-LogListFreeze：列表刷新分批常量 ----------
-
-/** 首屏立即写入条数（保证快速首屏，EDT 冻结可控）。 */
-internal const val REFRESH_FIRST_BATCH_SIZE = 30
-
-/** 每批异步追加条数（invokeLater 每批一次 EDT 脉冲）。 */
-internal const val REFRESH_CHUNK_SIZE = 30
-
-/**
- * F80（T-PerfSweep24）：flushRebuildChainSync 单拍同步补完封顶——默认设置（logMaxCount=200）
- * 在途余量 ≤170 全量补完（行为不变）；用户调大 logMaxCount 至数千时，超出部分不再单拍
- * 同步写数千条模型（EDT 冻结随 logMaxCount 线性放大），改由 appendRebuildChunk 逐拍链推进、
- * 本拍刷新挂起链尾补跑。
- */
-internal const val FLUSH_SYNC_MAX = 512
-
-/**
- * 日志条目列表（T-M42）：覆写 JBList.itemToText——内置 Ctrl+C 复制默认返回 cellRenderer
- * 渲染文本（HTML 源码，用户实测缺陷），覆写后复制输出纯 SQL（多选逐条换行拼接、
- * CopyPasteManager 写入、Ctrl+C 快捷键注册均由 JBList 既有链路复用）。
- * open：internal 类默认 final，测试子类经公开包装访问 protected itemToText。
- *
- * T-ClickPreviewCopyRestore 二轮（20261008）勘正：上句「Ctrl+C 快捷键注册」经实证**来自平台 LAF**
- * （`List.focusInputMap` 已含 `control C → copy`，headless 实测 `inputMap.get` 直接命中，
- * 早先据 `InputMap.keys()==null` 判「无绑定」是懒加载 InputMap 的假象）；`JBList.installDefaultCopyAction`
- * 只负责 ActionMap 侧。二轮曾在此补绑 InputMap，验证发现冗余（摘除后绑定仍在）已回退——列表 Ctrl+C
- * 本就可达，用户「点击后复制失效」的断点在单击预览浮层抢焦点，修复见 [SqlClickPreview] 的 Swing 层绑定。
- */
-internal open class SqlEntryList(model: ListModel<LogSqlEntry>) : TextCopyList<LogSqlEntry>(model) {
-    /** Ctrl+C 复制文本（T-SqlCopyShortcuts：委派给共享基类；多选逐行拼接由平台既有 copy 动作完成）。 */
-    override fun copyTextFor(element: LogSqlEntry): String = textFor(element)
-
-    /** 速度搜索与 Ctrl+C 复制共用的条目文本。 */
-    internal fun textFor(element: LogSqlEntry): String = withTerminator(element.restoredSql)
-}
-
-/**
- * 空态文案写入（T-AgentDiagWrap T-04，独立成顶层函数以便单测）。
- *
- * 为什么不能 `status.text = plain`：`JBList.emptyText` 是 `com.intellij.util.ui.StatusText`
- * （**不是** JLabel），内容落在 `SimpleColoredComponent` 上——它不解析 HTML，
- * 也不把 `\n` 当换行（`\n` 被当普通字符画成零宽，两段文字被无声拼接；超宽只裁不折）。
- * 平台侧唯一的多行手段是 [com.intellij.util.ui.StatusText.appendLine]：每行一个 Fragment，
- * `paintColumnInBounds` 逐 Fragment 单独绘制（**仍不折行**，所以宽度折行由
- * [wrapEmptyTextLines] 先算好）。
- *
- * @param widthPx 列表当前可用像素宽度
- * @param measure 单串像素宽度测量
- */
-internal fun applyEmptyTextLines(
-    status: com.intellij.util.ui.StatusText,
-    text: String,
-    widthPx: Int,
-    measure: (String) -> Int,
-) {
-    status.clear()
-    wrapEmptyTextLines(text, widthPx, measure).forEach { status.appendLine(it) }
-}
-
-/**
- * 排序模式（P-06 / T-LogSortModes）：默认 [TIME_ASC]（时间升序 = 捕获顺序，与未排序时观感一致）；
- * 另支持时间降序、耗时升/降序、行号。耗时缺失的条目恒沉底（两个方向的升降序都不让空值顶到前面）。
- */
-enum class SortMode { TIME_ASC, TIME_DESC, DURATION_ASC, DURATION_DESC, SEQUENCE }
-
-/** 排序方式下拉项（文案 + 模式）。 */
-internal data class SortOption(val label: String, val mode: SortMode)
-
-/** 排序方式选项（顺序即下拉序；默认项在首位 = 时间升序）。 */
-internal fun sortOptions(): List<SortOption> = listOf(
-    SortOption(MpSqlVisualizerBundle.message("log.sort.time.asc"), SortMode.TIME_ASC),
-    SortOption(MpSqlVisualizerBundle.message("log.sort.time.desc"), SortMode.TIME_DESC),
-    SortOption(MpSqlVisualizerBundle.message("log.sort.duration.asc"), SortMode.DURATION_ASC),
-    SortOption(MpSqlVisualizerBundle.message("log.sort.duration.desc"), SortMode.DURATION_DESC),
-    SortOption(MpSqlVisualizerBundle.message("log.sort.sequence"), SortMode.SEQUENCE),
-)
-
-/** 类型多选弹窗可勾选的类型（OTHER 不单列；全选时 OTHER 一并透传）。 */
-internal val FILTERABLE_TYPES: List<StatementType> = listOf(
-    StatementType.SELECT,
-    StatementType.INSERT,
-    StatementType.UPDATE,
-    StatementType.DELETE,
-)
-
-/**
- * 类型过滤（纯逻辑，可独立单测）：所选类型覆盖全部可筛选类型时视为「全部」，
- * 透传所有条目（含 OTHER）；否则仅保留分类命中的条目。
- */
-internal fun filterByType(entries: List<LogSqlEntry>, activeTypes: Set<StatementType>): List<LogSqlEntry> {
-    if (activeTypes.containsAll(FILTERABLE_TYPES)) return entries
-    // T-CrudColor：改用条目级缓存属性（行为等价）——避免每次刷新都重跑分类
-    // （classify 内 Regex 每次编译 Pattern），与渲染器共用同一份结果。
-    return entries.filter { it.statementType in activeTypes }
-}
-
-/**
- * 屏蔽规则存量过滤（T-SqlSuppress O-69，纯逻辑，可独立单测）：命中屏蔽指纹集的条目
- * 从列表隐藏（缓冲里仍在——删除规则后复现；闸门已丢弃的历史条目不可恢复，UI 文案明示）。
- * [suppressKeys] 与闸门同一数据源（[SqlSuppressRuleManager.suppressedKeys] 经 [SqlLogManager]
- * 同步进缓冲），空集透传（无规则常态零成本）。
- */
-internal fun filterBySuppress(entries: List<LogSqlEntry>, suppressKeys: Set<String>): List<LogSqlEntry> {
-    if (suppressKeys.isEmpty()) return entries
-    // T-SqlSuppressUx 二段：精确键或结构键（手动开启结构匹配的规则）任一命中即滤除
-    return entries.filter { it.suppressKey !in suppressKeys && it.structureKey !in suppressKeys }
-}
-
-/**
- * 搜索过滤（纯逻辑，可独立单测）：查询词 contains，匹配还原 SQL 与摘要
- * （摘要含参数值的还原 SQL 前缀；参数值是常见检索目标）；空白查询透传全部。
- *
- * T-LogSearchRowTime 扩展：
- * - 行号——`#5` / `5` 精确 equals [LogSqlEntry.sequenceNumber]（渲染形态 `#123`，所见即可搜；
- *   精确而非 contains：搜 `1` 不应命中全部 1xx 行；0 = 无行号条目天然不命中任何行号查询）
- * - 时间——对显示片段（[timestampDisplayText]，含方括号与设置格式，所见即所搜）contains；
- *   显示开关关闭时片段为 null，时间分支天然不参与
- * [timestampTextOf] 可注入（测试绕开设置读取），默认取当前设置下的真实显示片段。
- *
- * T-HistorySearchToggles：[matchCase] 大小写敏感开关（默认 false=忽略大小写，与历史面板/
- * MCP 链三链语义统一；默认值保既有测试零改动）。行号精确匹配不受开关影响。
- *
- * T-SearchToggleNativeLook（20261010 用户令日志页补正则钮，D133「日志页无正则」拍板翻案）：
- * [regexEnabled] 正则开关生效条件 = 开启开关**或** `regex:` 前缀（[HISTORY_REGEX_PREFIX]，
- * 与历史页同语义）；正则路径命中 restoredSql/summary 两维（行号/时间不参与，对齐历史页）；
- * 编译旗随 [matchCase]；非法正则 fail-closed 回退普通子串（回退查询为原始 query 全文含前缀）。
- * [memo] 传面板持有的 [HistoryRegexMemo] 实例防抖重复编译；纯函数缺省各建临时实例零复用。
- */
-internal fun filterBySearch(
-    entries: List<LogSqlEntry>,
-    query: String,
-    matchCase: Boolean = false,
-    regexEnabled: Boolean = false,
-    memo: HistoryRegexMemo = HistoryRegexMemo(),
-    timestampTextOf: (LogSqlEntry) -> String? = ::timestampDisplayText,
-): List<LogSqlEntry> {
-    val q = query.trim()
-    if (q.isEmpty()) return entries
-    if (regexEnabled || q.startsWith(HISTORY_REGEX_PREFIX)) {
-        val pattern = resolveHistoryRegex(q.removePrefix(HISTORY_REGEX_PREFIX), matchCase, memo)
-        if (pattern != null) {
-            return entries.filter { entry ->
-                pattern.containsMatchIn(entry.restoredSql) || pattern.containsMatchIn(entry.summary)
-            }
-        }
-        // 非法正则：回退普通子串匹配（继续走下方通用路径）
-    }
-    val rowNumber = q.removePrefix("#").toLongOrNull()?.takeIf { it > 0 }
-    return entries.filter {
-        it.restoredSql.contains(q, ignoreCase = !matchCase)
-            || it.summary.contains(q, ignoreCase = !matchCase)
-            || (rowNumber != null && it.sequenceNumber == rowNumber)
-            || timestampTextOf(it)?.contains(q, ignoreCase = !matchCase) == true
-    }
-}
-
-/**
- * 时间显示片段文本（T-LogSearchRowTime）：`[yyyy-MM-dd HH:mm:ss]` 形态（去段间距尾随空格），
- * 与列表渲染逐字节一致（所见即所搜/所复制的单一真源——格式/来源/开关语义全在
- * [formatTimestampFragment]）；开关关闭返回 null（页面上没有时间片段可搜可复制）。
- */
-internal fun timestampDisplayText(entry: LogSqlEntry): String? =
-    formatTimestampFragment(entry)?.first?.trim()
-
-/**
- * 批量复制时间戳（T-LogSearchRowTime）：显示片段去方括号（用户定调：复制出纯时间文本
- * `2024-01-15 10:30:45`，不带显示装饰括号）逐行拼接，与 [batchCopySql] 同构；
- * 显示开关关闭时片段为 null 被跳过——全部关闭时返回空串（菜单项据此置灰）。
- */
-internal fun batchCopyTimestamps(entries: List<LogSqlEntry>): String =
-    entries.mapNotNull { timestampDisplayText(it)?.removeSurrounding("[", "]") }.joinToString("\n")
-
-// ---------- T-Perf-03：流式增量刷新差分（纯逻辑，可独立单测） ----------
-
-/**
- * M56 T-M56-00：动态聚焦页签过滤层（纯逻辑，插在 [filterByType] 与 [filterBySearch] 之间）。
- * [FocusFilter.method] 匹配 [LogSqlEntry.mapperStatement]（agent 通道直取 / 桥通道标记第 4 段，
- * 忽略大小写）；[FocusFilter.requestTag] 精确匹配 [LogSqlEntry.requestTag]。
- * 双条件为「且」；null 维度透传；全 null 等价不过滤。T-M56-06 起 method 扩展真实方法边界
- * `{Class}#{method}` 形态（届时在 [focusMethodKey] 统一登记来源）。
- */
-internal data class FocusFilter(
-    val method: String? = null,
-    val requestTag: String? = null,
-) {
-    /** 是否为空过滤（全维度 null = 透传）。 */
-    val isPassthrough: Boolean get() = method == null && requestTag == null
-}
-
-/** 条目的聚焦 method 键（当前 = mapper 语句 id；T-M56-06 扩展真实方法边界）。 */
-internal fun focusMethodKey(entry: LogSqlEntry): String? = entry.mapperStatement
-
-internal fun filterByFocus(entries: List<LogSqlEntry>, focus: FocusFilter?): List<LogSqlEntry> {
-    if (focus == null || focus.isPassthrough) return entries
-    return entries.filter { e ->
-        val methodOk = focus.method?.let { f ->
-            focusMethodKey(e)?.equals(f, ignoreCase = true) == true
-        } ?: true
-        val tagOk = focus.requestTag?.let { f -> f == e.requestTag } ?: true
-        methodOk && tagOk
-    }
-}
-
-/** 同步增量追加条数上限：超过则回退全量重建（全量重建带分批 EDT 写入，大批量更稳）。 */
-internal const val MAX_SYNC_APPEND = 300
-
-/**
- * 新旧可见列表差分结果（增量刷新决策；元素按同一性 `===` 比较——条目为不可变数据类，
- * 缓冲内同一条目恒为同一实例）。（T-Perf-03 自 dev 移植）
- */
-internal sealed class VisibleDiff {
-    /** 头部淘汰 `evicted` 条 + 尾部追加 `appended`（缓冲满后的流式 steady state；appended 可为空）。 */
-    data class HeadEvictAppend(val evicted: Int, val appended: List<LogSqlEntry>) : VisibleDiff()
-    /** 从 `index` 起插入 `entries`（尾部纯追加时 index == old.size）。 */
-    data class Insert(val index: Int, val entries: List<LogSqlEntry>) : VisibleDiff()
-    /** 尾部纯移除：移除 `[from, old.size)`。 */
-    data class TailRemove(val from: Int) : VisibleDiff()
-    /** 无变化。 */
-    object Same : VisibleDiff()
-    /** 无法增量（离散增删/超大追加）——全量重建。 */
-    object FullRebuild : VisibleDiff()
-}
-
-/** 同一性公共前缀长度。 */
-internal fun commonPrefixLength(old: List<LogSqlEntry>, new: List<LogSqlEntry>): Int {
-    val n = minOf(old.size, new.size)
-    var i = 0
-    while (i < n && old[i] === new[i]) i++
-    return i
-}
-
-/** 同一性公共后缀长度（不与 prefix 重叠）。 */
-internal fun commonSuffixLength(old: List<LogSqlEntry>, new: List<LogSqlEntry>, prefix: Int): Int {
-    val n = minOf(old.size, new.size) - prefix
-    var i = 0
-    while (i < n && old[old.size - 1 - i] === new[new.size - 1 - i]) i++
-    return i
-}
-
-/** [old] 的 [aStart..] 与 [new] 的 [bStart..] 前 [length] 个元素是否同一。 */
-internal fun identityPrefix(old: List<LogSqlEntry>, aStart: Int, new: List<LogSqlEntry>, bStart: Int, length: Int): Boolean {
-    if (old.size - aStart < length || new.size - bStart < length) return false
-    for (i in 0 until length) if (old[aStart + i] !== new[bStart + i]) return false
-    return true
-}
-
-/**
- * 可见列表差分：流式灌入时把「clear+全量重建」降阶为「尾部追加 / 头部淘汰+追加」。
- *
- * 判定顺序：
- *  1. 头部淘汰对齐（evicted>0 且 old 去头后与 new 前缀同一）→ HeadEvictAppend；
- *  2. 前缀/后缀差分 → 纯插入（含尾部追加）/ 尾部纯移除 / 无变化；
- *  3. 其余（过滤、搜索、去重裁剪、排序导致的离散增删）→ FullRebuild。
- */
-internal fun diffVisible(old: List<LogSqlEntry>, new: List<LogSqlEntry>, evicted: Int): VisibleDiff {
-    if (evicted > 0 && old.size >= evicted && new.size >= old.size - evicted &&
-        identityPrefix(old, evicted, new, 0, old.size - evicted)
-    ) {
-        return VisibleDiff.HeadEvictAppend(evicted, new.drop(old.size - evicted))
-    }
-    val prefix = commonPrefixLength(old, new)
-    val suffix = commonSuffixLength(old, new, prefix)
-    val removed = old.size - prefix - suffix
-    val added = new.size - prefix - suffix
-    return when {
-        removed == 0 && added == 0 -> VisibleDiff.Same
-        removed == 0 && added in 1..MAX_SYNC_APPEND -> VisibleDiff.Insert(prefix, new.subList(prefix, prefix + added))
-        added == 0 && suffix == 0 -> VisibleDiff.TailRemove(prefix)
-        else -> VisibleDiff.FullRebuild
-    }
-}
-
 /**
  * 工具窗口面板（标签页 + 工具栏；headless 测试不布局，交互断言走条目模型层）。
  *
@@ -394,12 +97,12 @@ internal fun diffVisible(old: List<LogSqlEntry>, new: List<LogSqlEntry>, evicted
  * - Ctrl+F/⌘F 搜索：默认隐藏的搜索条，快捷键唤起实时过滤（Esc 清空后再按收起）
  */
 class SqlLogPanel(
-    private val project: Project,
-    private val manager: SqlLogManager,
+    internal val project: Project,
+    internal val manager: SqlLogManager,
 ) : JPanel(BorderLayout()), Disposable {
 
     private val listModel = DefaultListModel<LogSqlEntry>()
-    private val list = SqlEntryList(listModel)
+    internal val list = SqlEntryList(listModel)
     /** 列表条目单元格渲染器（internal 供 UI 测试直接渲染、断言 HTML 输出）。 */
     private lateinit var entryCellRenderer: LogEntryListCellRenderer
     /** T-ClickPreview：单击出轻量预览弹窗（点击时按行捕获 SQL，锚点在行下缘不遮行），双击走 openPreview 完整弹窗；悬停 tooltip 已移除（卡顿根因）。
@@ -477,7 +180,7 @@ class SqlLogPanel(
     private var refreshGeneration = 0L
 
     /** 上一轮渲染的可见列表（同一性差分基线；由 applyIncremental/applyFullRebuild 与 listModel 保持同步）。 */
-    private var lastRendered: List<LogSqlEntry> = emptyList()
+    internal var lastRendered: List<LogSqlEntry> = emptyList()
 
     // T-Perf-15：manager 监听器命名引用（uiRefreshListener/capturingUiListener）声明于 init 前统一区块。
     //
@@ -1022,7 +725,7 @@ class SqlLogPanel(
     }
 
     /** Ctrl+F/⌘F 唤起搜索条（快捷键经 CommonShortcuts.getFind() 平台 keymap 自适应 mac/win）。 */
-    private inner class ShowSearchAction : AnAction() {
+    internal inner class ShowSearchAction : AnAction() {
         init {
             registerCustomShortcutSet(CommonShortcuts.getFind(), list)
         }
@@ -1253,7 +956,7 @@ class SqlLogPanel(
      * 捕捉开关（T-UiNative T-UN-11：挂工具窗标题栏，经 [captureToggleAction] 暴露）。
      * 图标/文案在 update 按 manager.capturing 态输出（平台更新机制驱动，不再反射强改按钮）。
      */
-    private inner class CaptureAction : AnAction() {
+    internal inner class CaptureAction : AnAction() {
         override fun update(e: AnActionEvent) {
             if (manager.capturing) {
                 e.presentation.icon = AllIcons.Actions.Suspend
@@ -1304,9 +1007,8 @@ class SqlLogPanel(
         }
     }
 
-    private inner class ClearAction : AnAction() {
+    internal inner class ClearAction : AnAction() {
         override fun update(e: AnActionEvent) {
-            e.presentation.icon = AllIcons.Actions.GC
             e.presentation.text = MpSqlVisualizerBundle.message("log.panel.clear")
         }
 
@@ -1319,7 +1021,7 @@ class SqlLogPanel(
      * T-SqlLogPerf：「滚动到底部」动作（跳列表底 + 恢复尾部跟随）。
      * 图标复用 [AllIcons.General.ArrowDown]（本文件 SQL类型/排序按钮同款下箭头，向下语义一致）。
      */
-    private inner class ScrollToEndAction : AnAction() {
+    internal inner class ScrollToEndAction : AnAction() {
         override fun update(e: AnActionEvent) {
             e.presentation.icon = AllIcons.General.ArrowDown
             e.presentation.text = MpSqlVisualizerBundle.message("log.panel.scrollBottom")
@@ -1331,7 +1033,7 @@ class SqlLogPanel(
         }
     }
 
-    private inner class SettingsAction : AnAction() {
+    internal inner class SettingsAction : AnAction() {
         override fun update(e: AnActionEvent) {
             e.presentation.icon = AllIcons.General.Settings
             e.presentation.text = MpSqlVisualizerBundle.message("log.panel.settings")
@@ -1349,7 +1051,7 @@ class SqlLogPanel(
      * `AllIcons.General.Filter`——262 jar 实渲染比对后用户选定，全栏无漏斗形不撞车）。
      * 打开与右键「管理屏蔽规则…」同一非模态对话框。
      */
-    private inner class ManageSuppressAction : AnAction() {
+    internal inner class ManageSuppressAction : AnAction() {
         override fun update(e: AnActionEvent) {
             e.presentation.icon = AllIcons.General.Filter
             e.presentation.text = MpSqlVisualizerBundle.message("log.suppress.manage")
@@ -1376,7 +1078,7 @@ class SqlLogPanel(
      *  - 本地 HTML（loadHTML）→ 样式完整、秒开、零依赖 ✓（定稿）。
      *  样式保证：marketplace-custom-page.html 为纯内联 <style>，无 link/script/img/url()，
      *  不发起任何外部请求，不存在资源加载失败导致缺样式。 */
-    private inner class HelpAction : AnAction() {
+    internal inner class HelpAction : AnAction() {
         override fun update(e: AnActionEvent) {
             e.presentation.icon = AllIcons.Actions.Help
             e.presentation.text = MpSqlVisualizerBundle.message("log.panel.help")
@@ -2067,138 +1769,14 @@ class SqlLogPanel(
     }
 
     /** R4（W3 历史工作流包）：导出当前可见行集（lastRendered=面板过滤/搜索/排序后的实际可见集）。 */
-    private inner class ExportVisibleAction : AnAction(MpSqlVisualizerBundle.message("log.export.visible")) {
+    internal inner class ExportVisibleAction : AnAction(MpSqlVisualizerBundle.message("log.export.visible")) {
         override fun actionPerformed(e: AnActionEvent) {
             exportVisibleEntries()
         }
     }
 
     /** R4 导出：格式四选（CSV/TSV/TXT/SQL，默认 SQL）→ 文件保存 → 后台写盘 → 通知（行集=lastRendered 快照）。 */
-    internal fun exportVisibleEntries() {
-        val rows = lastRendered.map {
-            val source = buildString {
-                if (!it.sourceFile.isNullOrBlank()) {
-                    append(it.sourceFile)
-                    if (it.sourceLine > 0) append(":").append(it.sourceLine)
-                }
-            }
-            SqlExportRow(
-                time = SqlExportService.formatTime(it.timestamp),
-                sql = it.restoredSql,
-                source = source,
-                durationMs = it.executionTimeMs,
-            )
-        }
-        if (rows.isEmpty()) return
-        val format = chooseExportFormat() ?: return
-        val descriptor = com.intellij.openapi.fileChooser.FileSaverDescriptor(
-            MpSqlVisualizerBundle.message("log.export.visible"),
-            "SQL (${format.ext.uppercase()})",
-            format.ext,
-        )
-        val dialog = com.intellij.openapi.fileChooser.FileChooserFactory.getInstance()
-            .createSaveFileDialog(descriptor, project)
-        // T-ExportSqlFormat（用户拍板 20261009）：SQL 格式默认名 sql-export-<yyyyMMdd-HHmmss>.sql
-        // （时间戳防同日覆盖、不占 sql-history 名族）；CSV/TSV/TXT 保持原名随 ext。
-        val defaultName = if (format == SqlExportFormat.SQL) {
-            SqlExportService.defaultSqlExportFileName()
-        } else {
-            "sql-log.${format.ext}"
-        }
-        val saved = dialog.save(null as com.intellij.openapi.vfs.VirtualFile?, defaultName)
-            ?: return
-        val target = saved.file
-        ApplicationManager.getApplication().executeOnPooledThread {
-            runCatching {
-                // R60（T-LaneB D96）：导出链脱敏——展示开关开时导出文本同步打码（投影级，行集不动）
-                SqlExportService.exportToFile(
-                    target,
-                    SqlExportService.format(rows, format, PluginSettings.getInstance().state.displayMaskEnabled),
-                )
-            }.onSuccess {
-                com.intellij.notification.NotificationGroupManager.getInstance()
-                    .getNotificationGroup(NOTIFICATION_GROUP_ID)
-                    .createNotification(
-                        MpSqlVisualizerBundle.message("log.history.export.done", rows.size, target.absolutePath),
-                        com.intellij.notification.NotificationType.INFORMATION,
-                    ).notify(project)
-            }.onFailure {
-                com.intellij.notification.NotificationGroupManager.getInstance()
-                    .getNotificationGroup(NOTIFICATION_GROUP_ID)
-                    .createNotification(
-                        MpSqlVisualizerBundle.message("log.history.export.failed", it.message ?: ""),
-                        com.intellij.notification.NotificationType.ERROR,
-                    ).notify(project)
-            }
-        }
-    }
-
-    /** R4：导出格式四选（取消返回 null）。默认选中 SQL（T-ExportSqlFormat 用户拍板 20261009；
-     *  P3：showChooseDialog 返回所选下标、取消 -1）。 */
-    private fun chooseExportFormat(): SqlExportFormat? {
-        val names = arrayOf("CSV", "TSV", "TXT", "SQL")
-        val idx = com.intellij.openapi.ui.Messages.showChooseDialog(
-            project,
-            MpSqlVisualizerBundle.message("log.history.export.choose"),
-            MpSqlVisualizerBundle.message("log.export.visible"),
-            com.intellij.openapi.ui.Messages.getQuestionIcon(),
-            names,
-            names[3],
-        )
-        if (idx < 0) return null
-        return when (idx) {
-            0 -> SqlExportFormat.CSV
-            1 -> SqlExportFormat.TSV
-            2 -> SqlExportFormat.TXT
-            3 -> SqlExportFormat.SQL
-            else -> null
-        }
-    }
-
-    private fun showContextMenu(e: MouseEvent) {
-        val index = list.locationToIndex(e.point)
-        if (index < 0) return
-        // T-ListPreviewCopy：命中行已在多选内 → 保留多选（复制项=批量复制多条）；否则收敛为该行。
-        // 删除/发送/跳转等其余菜单项恒作用于被右键的行
-        list.selectedIndices = resolveContextMenuSelection(list.selectedIndices, index)
-        val entry = list.model.getElementAt(index)
-        val selectedEntries = list.selectedIndices.map { list.model.getElementAt(it) }
-        // T-UiNative P1a：JPopupMenu+JMenuItem → 平台 DefaultActionGroup+AnAction（ActionPopupMenu 承载）
-        val group = DefaultActionGroup()
-        group.add(CopySqlAction(selectedEntries))
-        // T-LogSearchRowTime：复制时间戳（所见即所复制的纯时间文本，无方括号）；
-        // 显示开关关闭时无片段可复制 → 菜单项置灰（置灰逻辑在 CopyTimestampAction.update）
-        val timestampClip = batchCopyTimestamps(selectedEntries)
-        group.add(CopyTimestampAction(selectedEntries, timestampClip))
-        group.add(DeleteSqlAction(entry))
-        // T-SqlSuppress（O-69）：屏蔽此 SQL（多选按不同指纹各成一条规则，已存在跳过）——
-        // 置「删除」之后（计划定稿位），balloon 反馈带管理直达
-        group.add(SuppressSqlAction(selectedEntries))
-        // T-M37 P1：发送到 SQL → Java 转换（第三 tab）——还原 SQL 写入输入区并切换选中该 tab
-        group.add(SendToSqlToJavaAction(entry))
-        // T-M38：发送到日志转 SQL（第二 tab）——条目渲染回日志文本并立即转换
-        group.add(SendToLogToSqlAction(entry))
-        // O-1：日志 ↔ 源码关联跳转（Phase A）；T-M55-01：拆「跳转到 Java」「跳转到 XML」双目标
-        group.add(JumpToSourceAction(entry))
-        group.add(JumpToMapperXmlAction(entry))
-        // T-M55-03：方法级聚焦（sourceFile 非空时可用；解析失败 toast 提示，无静默吞没）
-        group.add(FocusCallerMethodAction(entry))
-        // T-M55-04：按请求聚焦（requestTag 非空时可用；页签 K 有界防高基数爆列表）
-        group.add(FocusRequestAction(entry))
-        // O-90：按模板聚焦（「×N 同模板」徽章达阈值才可用；过滤出该模板全部条目）
-        group.add(FocusTemplateAction(entry))
-        // R4（W3 历史工作流包）：导出当前可见行集（与面板过滤/搜索一致；CSV/TSV/TXT/SQL，后台写盘）
-        group.add(ExportVisibleAction())
-        val popup = ActionManager.getInstance().createActionPopupMenu("mpvs.log.list", group)
-        // 243 的 ActionPopupMenu 只有 setter 无 getter，Kotlin 不合成 targetComponent 属性——显式调 setter
-        popup.setTargetComponent(list)
-        popup.component.show(list, e.x, e.y)
-    }
-
-    // ---------- T-UiNative P1a：列表右键菜单动作（原 JMenuItem 语义平移，update 设文案/灰置，actionPerformed 平移原监听体） ----------
-
-    /** 复制 SQL：多选批量逐行拼接（[batchCopySql]），单选复制该行。 */
-    private inner class CopySqlAction(private val entries: List<LogSqlEntry>) : AnAction() {
+    internal inner class CopySqlAction(private val entries: List<LogSqlEntry>) : AnAction() {
         override fun update(e: AnActionEvent) {
             e.presentation.text = copyMenuText("log.panel.copy", "log.panel.copySelected", entries.size)
         }
@@ -2209,7 +1787,7 @@ class SqlLogPanel(
     }
 
     /** 复制时间戳：显示开关关闭时无片段可复制 → update 置灰。 */
-    private inner class CopyTimestampAction(private val entries: List<LogSqlEntry>, private val clip: String) : AnAction() {
+    internal inner class CopyTimestampAction(private val entries: List<LogSqlEntry>, private val clip: String) : AnAction() {
         override fun update(e: AnActionEvent) {
             e.presentation.text = copyMenuText("log.panel.copyTimestamp", "log.panel.copyTimestampSelected", entries.size)
             e.presentation.isEnabled = clip.isNotEmpty()
@@ -2223,7 +1801,7 @@ class SqlLogPanel(
     }
 
     /** 删除被右键的条目。 */
-    private inner class DeleteSqlAction(private val entry: LogSqlEntry) : AnAction() {
+    internal inner class DeleteSqlAction(private val entry: LogSqlEntry) : AnAction() {
         override fun update(e: AnActionEvent) {
             e.presentation.text = MpSqlVisualizerBundle.message("log.panel.delete")
         }
@@ -2239,7 +1817,7 @@ class SqlLogPanel(
      * 动作链：规则入库（监听器同步更新缓冲键集）→ refreshList（存量心跳行立即消失，D4 最强反馈）
      * → balloon 反馈附「管理屏蔽规则…」直达对话框（D4 中层）。
      */
-    private inner class SuppressSqlAction(private val entries: List<LogSqlEntry>) : AnAction() {
+    internal inner class SuppressSqlAction(private val entries: List<LogSqlEntry>) : AnAction() {
         override fun update(e: AnActionEvent) {
             val count = entries.distinctBy { it.dedupeKey }.size
             e.presentation.text = if (count > 1) {
@@ -2262,46 +1840,7 @@ class SqlLogPanel(
      * T-SqlSuppress：屏蔽成功 balloon（D5 定案独立通知组 logsuppress）。
      * 附「管理屏蔽规则…」动作直达对话框；测试模式跳过（对齐 [showJumpToast] 约定）。
      */
-    private fun showSuppressBalloon(addedCount: Int) {
-        if (ApplicationManager.getApplication().isUnitTestMode) return
-        runCatching {
-            val notification = NotificationGroupManager.getInstance()
-                .getNotificationGroup(SUPPRESS_NOTIFICATION_GROUP_ID)
-                .createNotification(
-                    MpSqlVisualizerBundle.message("log.suppress.added.title"),
-                    MpSqlVisualizerBundle.message("log.suppress.added.body", addedCount.toString()),
-                    NotificationType.INFORMATION,
-                )
-            notification.addAction(
-                NotificationAction.createSimple(MpSqlVisualizerBundle.message("log.suppress.manage")) {
-                    notification.expire()
-                    SqlSuppressManagerDialog(project).show()
-                },
-            )
-            notification.notify(project)
-        }
-    }
-
-    /** T-SqlSuppress：达上限提示 balloon（D6：拒新增不淘汰，文案引导先删不用的规则）。 */
-    private fun showSuppressLimitBalloon() {
-        if (ApplicationManager.getApplication().isUnitTestMode) return
-        runCatching {
-            NotificationGroupManager.getInstance()
-                .getNotificationGroup(SUPPRESS_NOTIFICATION_GROUP_ID)
-                .createNotification(
-                    MpSqlVisualizerBundle.message("log.suppress.added.title"),
-                    MpSqlVisualizerBundle.message(
-                        "log.suppress.limit",
-                        SqlSuppressRuleManager.MAX_RULES.toString(),
-                    ),
-                    NotificationType.WARNING,
-                )
-                .notify(project)
-        }
-    }
-
-    /** 发送到 SQL → Java 转换（第三 tab）。T-RecentExecMenu O-119：落点收口 [openEntryInTab]（弹框右键同用）。 */
-    private inner class SendToSqlToJavaAction(private val entry: LogSqlEntry) : AnAction() {
+    internal inner class SendToSqlToJavaAction(private val entry: LogSqlEntry) : AnAction() {
         override fun update(e: AnActionEvent) {
             e.presentation.text = MpSqlVisualizerBundle.message("log.panel.sendToReverse")
         }
@@ -2312,7 +1851,7 @@ class SqlLogPanel(
     }
 
     /** 发送到日志转 SQL（第二 tab）。T-RecentExecMenu O-119：落点收口 [openEntryInTab]（弹框右键同用）。 */
-    private inner class SendToLogToSqlAction(private val entry: LogSqlEntry) : AnAction() {
+    internal inner class SendToLogToSqlAction(private val entry: LogSqlEntry) : AnAction() {
         override fun update(e: AnActionEvent) {
             e.presentation.text = MpSqlVisualizerBundle.message("logToSql.sendTo")
         }
@@ -2323,7 +1862,7 @@ class SqlLogPanel(
     }
 
     /** 跳转到 Java 调用方（T-M55-01：与「跳转到 XML」拆分为双目标；无位置→引导捕获弹窗，无提示/文件丢失→toast）。 */
-    private inner class JumpToSourceAction(private val entry: LogSqlEntry) : AnAction() {
+    internal inner class JumpToSourceAction(private val entry: LogSqlEntry) : AnAction() {
         override fun update(e: AnActionEvent) {
             e.presentation.text = MpSqlVisualizerBundle.message("log.panel.jumpToJava")
         }
@@ -2338,7 +1877,7 @@ class SqlLogPanel(
      * （update 内解析一次并存引用，actionPerformed 复用，单次右键只做一次索引查询）；
      * 定位失败（XML 不存在/多模块未命中）不显示，原有「跳转到 Java」承担回退，不劣化。
      */
-    private inner class JumpToMapperXmlAction(private val entry: LogSqlEntry) : AnAction() {
+    internal inner class JumpToMapperXmlAction(private val entry: LogSqlEntry) : AnAction() {
         private var resolved: LogJumpTarget.MapperXml? = null
 
         override fun update(e: AnActionEvent) {
@@ -2359,7 +1898,7 @@ class SqlLogPanel(
      * 点击时解析方法行号区间并加入聚焦页签栏（解析失败 toast，不静默）。
      * Ultra 的编辑器行槽 ⚡ 入口首批不做（记录为可选增强）。
      */
-    private inner class FocusCallerMethodAction(private val entry: LogSqlEntry) : AnAction() {
+    internal inner class FocusCallerMethodAction(private val entry: LogSqlEntry) : AnAction() {
         override fun update(e: AnActionEvent) {
             e.presentation.text = MpSqlVisualizerBundle.message("log.panel.focusCallerMethod")
             // MP 分页 COUNT 标记无用户调用点；其余 sourceFile 非空即可用（解析成败在 action 时点判定）
@@ -2384,7 +1923,7 @@ class SqlLogPanel(
      * （与 03 方法聚焦同策略）。「最近 K 个请求标签下拉」的独立入口不另做——右键任意
      * 同标签条目等价可达，计划内「或」二选一取轻。
      */
-    private inner class FocusRequestAction(private val entry: LogSqlEntry) : AnAction() {
+    internal inner class FocusRequestAction(private val entry: LogSqlEntry) : AnAction() {
         override fun update(e: AnActionEvent) {
             e.presentation.text = MpSqlVisualizerBundle.message("log.panel.focusRequest")
             e.presentation.isEnabled = !entry.requestTag.isNullOrBlank()
@@ -2403,7 +1942,7 @@ class SqlLogPanel(
      * 列表片段非交互组件），聚焦入口落在本动作；T-DevAcceptFix2 ⑪ 起菜单项带 description
      * 说明判定口径（「字面量不同也算」——用户实测里 `IN ('a')` 与 `IN ('b')` 计同一结构）。
      */
-    private inner class FocusTemplateAction(private val entry: LogSqlEntry) : AnAction() {
+    internal inner class FocusTemplateAction(private val entry: LogSqlEntry) : AnAction() {
         override fun update(e: AnActionEvent) {
             e.presentation.text = MpSqlVisualizerBundle.message("log.panel.focusTemplate")
             e.presentation.description = MpSqlVisualizerBundle.message("log.panel.focusTemplate.desc")
@@ -2439,7 +1978,7 @@ class SqlLogPanel(
      * T-RecentExecMenu O-119：面板外请求（弹框右键「发送到…」）把条目送进对应页签并选中——
      * 与右键 [SendToSqlToJavaAction] / [SendToLogToSqlAction] 同体（三处共用本方法，单一实现）。
      */
-    private fun openEntryInTab(entry: LogSqlEntry, tab: LogEntryTab) {
+    internal fun openEntryInTab(entry: LogSqlEntry, tab: LogEntryTab) {
         when (tab) {
             LogEntryTab.LOG_TO_SQL -> {
                 logToSqlPanel.loadFromEntry(entry)
@@ -2514,9 +2053,9 @@ class SqlLogPanel(
         private val LOG = Logger.getInstance(SqlLogPanel::class.java)
         private const val TOOLBAR_ID = "cn.song.mybatisplus.visualizer.log.toolbar"
         /** T-UiNative T-UN-02：轻提示通知组（plugin.xml 已注册）。 */
-        private const val NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview"
+        internal const val NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview"
         /** T-SqlSuppress（O-69/D5）：屏蔽规则 balloon 通知组（plugin.xml 独立注册）。 */
-        private const val SUPPRESS_NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.logsuppress"
+        internal const val SUPPRESS_NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.logsuppress"
         /** T-Perf-24（自 dev 移植）：搜索输入防抖窗口（毫秒）。 */
         private const val SEARCH_DEBOUNCE_MS = 200
 
@@ -2543,8 +2082,11 @@ class SqlLogPanel(
         /** T-M39：帮助文档 URL（降级系统浏览器打开）。
          *  2026-08-31 改为自建站点 jvtools.cn（可自主接入国内 CDN；
          *  当前实测：直连不通，需走系统/IDE 代理才可达，与 plugins.jetbrains.com 同）。 */
+        // 2026-10-12：改用 canonical 域名 + 无后缀路径。旧写法
+        // `mybatis-plus-sql-visualizer.jvtools.cn/features/wrapper-preview.html` 实测要走
+        // 两次跳转（旧域名 301 → 新域名，`.html` 308 → 无后缀），canonical 地址直接 200。
         private const val HELP_DOCUMENTATION_URL =
-            "https://mybatis-plus-sql-visualizer.jvtools.cn/features/wrapper-preview.html"
+            "https://sql-visualizer.jvtools.cn/features/wrapper-preview"
         /** T-M39：帮助标签页标题。 */
         private const val HELP_TAB_TITLE = "SQL Visualizer - Help"
 
@@ -2561,379 +2103,4 @@ class SqlLogPanel(
 
 // =================== 文件级：列表渲染辅助（internal 渲染器与 SqlLogPanel 共用） ===================
 
-/** 元信息灰（时间戳/来源/徽章；与原 HTML 通道 #9E9E9E 一致）。T-UN-13（T-UiNative）：改 namedColor，亮值不变。 */
-private val LIST_META_GRAY = SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, MpvsUiColors.META_GRAY)
 
-/**
- * T-CrudColor：按标记形态应用「色条 / 整行淡背景」——**两个列表渲染器共用**（§1.2.1）。
- *
- * 三分支：
- *  - 关闭 / OTHER（[tint] = null）→ 与改造前逐字节一致；
- *  - [SqlListTypeColor.STYLE_BAR] → 色条着色，单元格背景走平台选中填充（色条不受影响，选中不丢色）；
- *  - [SqlListTypeColor.STYLE_BACKGROUND] → **未选中**行底色与列表背景淡混色（类型标记）；
- *    选中行交给平台选中填充（T-UN-09 描边退役——自研选中视觉整体下线，不再干预 Border）。
- */
-internal fun applyCrudColorMark(
-    cell: JPanel,
-    colorBar: JPanel,
-    normalBorder: Border,
-    tint: Color?,
-    isSelected: Boolean,
-    list: javax.swing.JList<*>?,
-) {
-    val listBg = list?.background ?: cell.background
-    val selectionBg = list?.selectionBackground ?: listBg
-    when (SqlListTypeColor.styleOf()) {
-        SqlListTypeColor.STYLE_BAR -> {
-            if (tint == null) {
-                setOpaqueIfChanged(colorBar, false)
-            } else {
-                setBackgroundIfChanged(colorBar, tint)
-                setOpaqueIfChanged(colorBar, true)
-            }
-            setBorderIfChanged(cell, normalBorder)
-            setBackgroundIfChanged(cell, if (isSelected) selectionBg else listBg)
-        }
-        SqlListTypeColor.STYLE_BACKGROUND -> {
-            setOpaqueIfChanged(colorBar, false)
-            setBorderIfChanged(cell, normalBorder)
-            setBackgroundIfChanged(
-                cell,
-                when {
-                    isSelected -> selectionBg
-                    tint == null -> listBg
-                    else -> SqlListTypeColor.blend(listBg, tint, SqlListTypeColor.MIX_NORMAL)
-                },
-            )
-        }
-        else -> { // STYLE_OFF
-            setOpaqueIfChanged(colorBar, false)
-            setBorderIfChanged(cell, normalBorder)
-            setBackgroundIfChanged(cell, if (isSelected) selectionBg else listBg)
-        }
-    }
-}
-
-/**
- * 仅在变化时设置边框（T-CrudColor 性能守卫）。
- *
- * 实测（JBR 21）：`JComponent.setBorder(新实例)` **即使值与旧值相同也会触发 `repaint() +1`**，
- * 而传入**同一实例**则 revalidate/repaint 均为 0。渲染器逐格调用，若每格无脑赋值就会把
- * 渲染热路径变成「每格一次重绘调度」——正是 T-LogListFreeze 那类副作用累积问题的成因。
- * 用**同一性**（`!==`）比较：本函数只会在预建的两个 Border 实例间切换，身份比较即可，
- * 且避免 `CompoundBorder.equals` 的深度比较开销。
- */
-private fun setBorderIfChanged(cell: JPanel, border: Border) {
-    if (cell.border !== border) cell.border = border
-}
-
-/**
- * 仅在变化时设置背景（T-CrudColor 性能守卫）。
- *
- * 实测（JBR 21）：`setBackground(新 Color 实例)` 即使 RGB 相同也会触发 `repaint() +1`；
- * 传入同一实例则为 0。配合 [SqlListTypeColor.colorOf] 的实例缓存，同色格不再产生任何 repaint。
- */
-private fun setBackgroundIfChanged(target: JPanel, color: Color) {
-    if (target.background != color) target.background = color
-}
-
-/** 仅在变化时设置不透明（`setOpaque` 同值本身零副作用，此处为语义显式化）。 */
-private fun setOpaqueIfChanged(target: JPanel, opaque: Boolean) {
-    if (target.isOpaque != opaque) target.isOpaque = opaque
-}
-
-
-// ----------
-// T-PerfSweep3 #3：SimpleDateFormat 复用——[formatTimestampFragment] 是「每可见单元格渲染 +
-// 每条目搜索匹配/批量复制」的双热路径（SqlLogPanel 与 HistorySqlLogPanel 两面板共用本单点），
-// 此前每次调用新建 SimpleDateFormat。SimpleDateFormat 非线程安全，照 SqlLogAutoSaver 的
-// T-Perf-12 先例做 ThreadLocal + 格式串键缓存：键=格式串天然跟随设置变更（换格式=新条目，
-// 无需失效钩子）；消费形态是 EDT 渲染/搜索与右键菜单，ThreadLocal 在覆盖多线程的同时免同步。
-// format(Date) 每次完整重置内部 calendar，复用同一实例输出与逐次新建逐字节一致；
-// 缓存规模上界=用户可配置的格式串种类数（个位数量级），非法格式串构造即抛不进缓存、
-// 每次重试构造（与逐次新建同语义，仍由调用处 catch 回落默认格式）。
-// ----------
-private val timestampFormatterCache =
-    ThreadLocal.withInitial<HashMap<String, SimpleDateFormat>> { HashMap() }
-
-private fun timestampFormatter(formatStr: String): SimpleDateFormat =
-    timestampFormatterCache.get().getOrPut(formatStr) { SimpleDateFormat(formatStr) }
-
-/** 时间戳片段：未开启时间戳返回 null。片段文本带尾随空格做段间距（原 HTML `<span>` 尾空格语义）。 */
-internal fun formatTimestampFragment(entry: LogSqlEntry): Pair<String, SimpleTextAttributes>? {
-    val state = PluginSettings.getInstance().state
-    if (!state.logTimestampEnabled) return null
-    val ts = when (state.logTimestampSource) {
-        LOG_TIMESTAMP_SOURCE_LOG -> entry.logTimestamp ?: entry.timestamp
-        else -> entry.timestamp
-    }
-    val formatted = try {
-        timestampFormatter(state.logTimestampFormat).format(Date(ts))
-    } catch (_: IllegalArgumentException) {
-        timestampFormatter(SqlLogPanel.DEFAULT_TIMESTAMP_FORMAT).format(Date(ts))
-    }
-    return "[$formatted] " to LIST_META_GRAY
-}
-
-/** 耗时片段：颜色分档与原 HTML 通道一致（选中白/无耗时灰/慢红/偏慢橙/正常绿）；无耗时显示 "—" 占位。 */
-internal fun formatDurationFragment(ms: Long?, isSelected: Boolean): Pair<String, SimpleTextAttributes> {
-    val threshold = PluginSettings.getInstance().state.slowQueryThresholdMs
-    val color = when {
-        // T-UN-13（T-UiNative）：五档写死色 → namedColor（亮值不变）
-        isSelected -> MpvsUiColors.DURATION_SELECTED
-        ms == null -> MpvsUiColors.DURATION_NONE   // 灰：无耗时
-        ms >= threshold -> MpvsUiColors.DURATION_SLOW // 红：慢查询
-        ms >= threshold / 2 -> MpvsUiColors.DURATION_WARN // 橙：偏慢
-        else -> MpvsUiColors.DURATION_OK           // 绿：正常
-    }
-    val text = ms?.let { "${it}ms" } ?: "—"
-    return "$text " to SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, color)
-}
-
-/** M56 T-M56-02：增强捕获角标已按用户要求移除（增强为默认通道，逐行标来源属噪音）。 */
-
-/**
- * O-90：同模板计数徽章（N+1 捕获后聚类标记）——counts[structureKey] 达 [TEMPLATE_BADGE_MIN_COUNT]
- * 才显示「×N 同模板」，与去重 ⨉N 徽章相邻同落点（元信息行尾）。计数由调用方传面板全量条目的
- * [structureKeyCounts] 聚合快照（徽章计数不随当前过滤波动）；无计数/未达阈值返回 null 不显示。
- * 文案走双语 bundle（log.panel.templateBadge）；着色 [MpvsUiColors.TEMPLATE_N1]（选中白同规）。
- */
-internal fun formatTemplateCountFragment(
-    entry: LogSqlEntry,
-    counts: Map<String, Int>,
-    isSelected: Boolean,
-): Pair<String, SimpleTextAttributes>? {
-    val n = counts[entry.structureKey] ?: return null
-    if (n < TEMPLATE_BADGE_MIN_COUNT) return null
-    val color = if (isSelected) Color(0xFFFFFF) else MpvsUiColors.TEMPLATE_N1
-    return MpSqlVisualizerBundle.message("log.panel.templateBadge", n) + " " to
-        SimpleTextAttributes(SimpleTextAttributes.STYLE_BOLD, color)
-}
-
-/**
- * T-AgentDialectLoop：目标库角标（agent 通道由连接 URL 推断）；未知返回 null 不显示。
- *
- * T-DataSourceBadgeMode（O-133，D135 显示侧门控）：默认仅显示数据库类型——` · ` 分隔符唯一产自
- * [cn.song.mybatisplus.visualizer.log.agent.JdbcUrlDialects.badgeName]，OFF 态切其前段即纯方言段
- * （落盘/历史读回/MCP 检索链仍消费全量串，后开开关不丢信息，切换即时生效）；
- * ON 态原样全量（`[MySQL · jpa_demo@localhost:3306]`）。无 ` · ` 分隔符的串（方言解析失败仅存
- * 连接事实）OFF 态原样保留——辨不出方言时保留最后上下文优于显示空白。null 恒 null 不显示。
- * 热路径直读设置沿 [formatDurationFragment] 先例（每 cell 一次服务查找，V38 基准同量级）。
- */
-internal fun formatDatabaseFragment(entry: LogSqlEntry, isSelected: Boolean): Pair<String, SimpleTextAttributes>? {
-    val full = entry.databaseName ?: return null
-    val db = if (PluginSettings.getInstance().state.dataSourceBadgeDetail) full else full.substringBefore(" · ")
-    val color = if (isSelected) Color(0xFFFFFF) else Color(0x00695C)
-    return "[$db] " to SimpleTextAttributes(SimpleTextAttributes.STYLE_BOLD, color)
-}
-
-/**
- * T-McpAuditTrail T-MAT-05：MCP 通道徽标——`source == MCP`（MCP 执行类工具跑过的语句）才显示，
- * 其余来源返回 null 不显示（与目标库角标同规：未知即不占位，零噪音）。
- *
- * 落点与既有角标一致（时间/耗时/目标库之后、来源之前），协议同为
- * `Pair<String, SimpleTextAttributes>?`——两页渲染器（[LogEntryListCellRenderer] 与历史页
- * [HistoryCellRenderer]）共用本函数，避免「同条目两页显示不一致」。
- * 读回侧来源由 [SqlSource.MCP] 的 pd 载荷回填（见 SqlLogParamCodec）。
- */
-internal fun formatMcpFragment(entry: LogSqlEntry, isSelected: Boolean): Pair<String, SimpleTextAttributes>? {
-    if (entry.source != SqlSource.MCP) return null
-    val color = if (isSelected) Color(0xFFFFFF) else Color(0x7B1FA2)
-    return "[MCP] " to SimpleTextAttributes(SimpleTextAttributes.STYLE_BOLD, color)
-}
-
-/** M56 T-M56-05：影响行数片段（DML 语义；null 未知不显示）。 */
-internal fun formatUpdateCountFragment(entry: LogSqlEntry, isSelected: Boolean): Pair<String, SimpleTextAttributes>? {
-    val u = entry.updateCount ?: return null
-    // 负值 = 无有效计数（JDBC getUpdateCount 的 -1 语义；旧版 agent 会误报 -1）→ 不显示
-    if (u < 0) return null
-    val color = if (isSelected) Color(0xFFFFFF) else Color(0x607D8B)
-    return "(${u} rows) " to SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, color)
-}
-
-/** M56 T-M56-05：报错片段（errorText 同列展示；红字截断首段，悬停完整文本在预览窗）。 */
-internal fun formatErrorFragment(entry: LogSqlEntry): Pair<String, SimpleTextAttributes>? {
-    val err = entry.errorText ?: return null
-    val oneLine = err.replace(Regex("\\s+"), " ")
-    val text = if (oneLine.length > 80) oneLine.substring(0, 80) + "…" else oneLine
-    return "⛔ $text " to SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, Color(0xD32F2F))
-}
-
-/** 来源片段：未知来源返回 null；选中态走组件前景（selectionForeground），非选中灰。 */
-internal fun formatSourceFragment(entry: LogSqlEntry, isSelected: Boolean): Pair<String, SimpleTextAttributes>? {
-    val source = when {
-        SourceMarkers.isMpPaginationCount(entry.sourceFile) -> "MP 分页计数"
-        entry.sourceFile != null -> {
-            // F-44-7：标记路径始终使用正斜杠（与 CallerSourceLocator 一致），不能用 File.separatorChar
-            val name = entry.sourceFile.substringAfterLast('/')
-            if (entry.sourceLine > 0) "$name:${entry.sourceLine}" else name
-        }
-        else -> return null
-    }
-    return "[$source] " to if (isSelected) SimpleTextAttributes.REGULAR_ATTRIBUTES else LIST_META_GRAY
-}
-
-/**
- * 日志列表条目单元格渲染器（F-44-2 重写；T-LogListFreeze-04 弃 HTML 通道）：
- * 双 [SimpleColoredComponent] 两行结构（T-TwoLine 语义保留：元信息行在上、SQL 高亮行在下）。
- * 原 JLabel+HTML 通道每次 setText 都触发 BasicHTML 解析排版，叠加可变行高逐条测量——
- * 16s EDT Freeze 报告主因；片段通道渲染只剩轻量文本测量，配合固定行高布局走 O(1) 快路径。
- * 文本原样着色（无 HTML 转义面，注入场景不复存在）；摘要构造时已在首行截断（[LogSqlEntry.summary]），无换行处理面。
- * 抽为具名 internal 类，便于单元测试直接渲染各种条目状态、锁定配色语义。
- */
-internal class LogEntryListCellRenderer : JPanel(BorderLayout()), javax.swing.ListCellRenderer<Any?> {
-    /** 去重丢弃计数快照（徽章渲染数据源；由 [SqlLogPanel.refreshList] 更新）。 */
-    var dedupeCounts: Map<String, Int> = emptyMap()
-
-    /** O-90：同模板计数快照（「×N 同模板」徽章渲染数据源；refreshList 随 dedupeCounts 一并更新）。 */
-    var templateCounts: Map<String, Int> = emptyMap()
-
-    /** 元信息行（internal 供 UI 测试遍历片段断言文本与着色）。 */
-    internal val metaLine = SimpleColoredComponent()
-
-    /** SQL 行组件池（T-ListMode：单行模式恒 1 行；多行模式按变换后行数伸缩）。 */
-    private val sqlLinePool = mutableListOf(SimpleColoredComponent())
-
-    /** SQL 首行（SINGLE_LINE 恒为唯一 SQL 行；测试断言兼容 T-LogListFreeze-04 单行语义）。 */
-    internal val sqlLine: SimpleColoredComponent get() = sqlLinePool[0]
-
-    /** 全部 SQL 行（internal 供 UI 测试按行断言多行模式渲染）。 */
-    internal val sqlLines: List<SimpleColoredComponent> get() = sqlLinePool
-
-    private val linesPanel = JPanel(GridLayout(0, 1)).apply { isOpaque = false }
-
-    /**
-     * T-CrudColor：左侧类型色条（[SqlListTypeColor.STYLE_BAR] 下着色可见；
-     * 其他样式 `isOpaque=false` 但仍**占位**——占位是刻意的：切换样式时文本左缘不位移，
-     * 且左内边距 5 + 色条 3 = 原 8px，文本左缘像素位置与改造前一致。
-     */
-    internal val colorBar = JPanel().apply {
-        preferredSize = Dimension(SqlListTypeColor.BAR_WIDTH, 1)
-        isOpaque = false
-    }
-
-    /** 未选中态 Border（分隔线 + 内边距；T-UN-09 描边退役后选中态同样只用它，选中视觉归平台绘制）。 */
-    internal val normalBorder: Border = BorderFactory.createCompoundBorder(
-        BorderFactory.createMatteBorder(0, 0, 1, 0, JBColor.border()),
-        EmptyBorder(5, 5, 5, 8), // 左 5 + 色条 3 = 原 8
-    )
-
-    init {
-        layout = BorderLayout()
-        isOpaque = true
-        metaLine.isOpaque = false
-        sqlLinePool[0].isOpaque = false
-        linesPanel.add(metaLine)
-        linesPanel.add(sqlLinePool[0])
-        // T-CrudColor：色条挂 WEST——CENTER 已被组件池面板占用，WEST 空闲且零结构冲突
-        add(colorBar, BorderLayout.WEST)
-        add(linesPanel, BorderLayout.CENTER)
-        border = normalBorder
-    }
-
-    /** 元信息行渲染文本（测试断言用：全部片段拼接、trim 段间距）。 */
-    val metaTextForTest: String
-        get() = buildString {
-            val it = metaLine.iterator()
-            while (it.hasNext()) append(it.next())
-        }.trim()
-
-    override fun getListCellRendererComponent(
-        list: javax.swing.JList<*>?,
-        value: Any?,
-        index: Int,
-        isSelected: Boolean,
-        cellHasFocus: Boolean,
-    ): java.awt.Component {
-        val entry = value as? LogSqlEntry
-
-        // T-CrudColor：标记形态分派（读设置 + 纯函数；热路径零分配）
-        val tint = entry?.let { SqlListTypeColor.colorOf(it.statementType) }
-        // T-UN-09：选中描边退役后，三种样式的选中行统一走平台选中填充 → 前景按选中态取
-        // selectionForeground（耗时着色随 formatDurationFragment 的选中白语义）
-        val useSelectionFill = isSelected
-        applyCrudColorMark(this, colorBar, normalBorder, tint, isSelected, list)
-
-        val fg = if (useSelectionFill) (list?.selectionForeground ?: JBColor.foreground())
-        else (list?.foreground ?: JBColor.foreground())
-        metaLine.foreground = fg
-        metaLine.clear()
-        val lineFragments = if (entry != null) {
-            // T-LogRowNumber：行号片段在最前（最高频引用锚点；0 = 无行号——历史文件/round-trip 条目）
-            if (entry.sequenceNumber > 0) {
-                metaLine.append("#${entry.sequenceNumber} ", LIST_META_GRAY)
-            }
-            // T-TwoLine：元信息行（时间戳/耗时/来源/去重徽章）在上，段间距由尾随空格承担
-            formatTimestampFragment(entry)?.let { (t, a) -> metaLine.append(t, a) }
-            if (PluginSettings.getInstance().state.showDurationInLogList) {
-                val (t, a) = formatDurationFragment(entry.executionTimeMs, useSelectionFill)
-                metaLine.append(t, a)
-            }
-            // T-AgentDialectLoop：目标库角标（耗时后、来源前——与「这条 SQL 跑在哪」的阅读顺序一致）
-            formatDatabaseFragment(entry, useSelectionFill)?.let { (t, a) -> metaLine.append(t, a) }
-            // T-McpAuditTrail T-MAT-05：MCP 徽标（同落点：目标库后、来源前；非 MCP 返回 null 不显示）
-            formatMcpFragment(entry, useSelectionFill)?.let { (t, a) -> metaLine.append(t, a) }
-            formatSourceFragment(entry, useSelectionFill)?.let { (t, a) -> metaLine.append(t, a) }
-            // 注：原「[⚡增强]」来源角标已按用户要求移除（增强为默认捕获通道，逐行标来源属噪音）
-            formatUpdateCountFragment(entry, isSelected)?.let { (t, a) -> metaLine.append(t, a) }
-            formatErrorFragment(entry)?.let { (t, a) -> metaLine.append(t, a) }
-            dedupeCounts[entry.dedupeKey]?.takeIf { it > 0 }?.let { metaLine.append("⨉$it ", LIST_META_GRAY) }
-            // O-90：同模板 ×N 徽章（去重徽章后相邻；≥TEMPLATE_BADGE_MIN_COUNT 才显示）
-            formatTemplateCountFragment(entry, templateCounts, isSelected)?.let { (t, a) -> metaLine.append(t, a) }
-            sqlLineFragmentsFor(entry)
-        } else {
-            null
-        }
-        // SQL 高亮行在下（T-ListMode：行数随显示模式伸缩）；选中态保留 SQL 高亮原色
-        ensureSqlLineCount(if (lineFragments != null) lineFragments.size else 1)
-        // T-UiNative speed search 高亮：对元信息行与各 SQL 行施加匹配片段高亮（平台 applySpeedSearchHighlighting
-        // 依 supply.matchingFragments 精确命中区间；fragments 文本已在上面 append，此处在片段级叠加 STYLE_SEARCH_MATCH）
-        list?.let { l -> SpeedSearchUtil.applySpeedSearchHighlighting(l, metaLine, false, useSelectionFill) }
-        sqlLinePool.forEachIndexed { i, comp ->
-            comp.foreground = fg
-            comp.clear()
-            lineFragments?.getOrNull(i)?.forEach { f -> comp.append(f.text, f.attributes) }
-            list?.let { l -> SpeedSearchUtil.applySpeedSearchHighlighting(l, comp, false, useSelectionFill) }
-        }
-        // T-ClickPreview：不设 toolTipText（悬停逐行弹气泡 = 条目多时卡顿根因），预览改单击触发
-        return this
-    }
-
-    /** SQL 行组件池伸缩到 n 行（首位恒保留——[sqlLine] 测试缝；收缩移除末尾）。 */
-    private fun ensureSqlLineCount(n: Int) {
-        while (sqlLinePool.size < n) {
-            val comp = SimpleColoredComponent()
-            comp.isOpaque = false
-            sqlLinePool += comp
-            linesPanel.add(comp)
-        }
-        while (sqlLinePool.size > maxOf(1, n)) {
-            linesPanel.remove(sqlLinePool.removeAt(sqlLinePool.size - 1))
-        }
-    }
-
-    /**
-     * SQL 行片段（T-ListMode 模式分流）：SINGLE_LINE 直渲染不缓存（固定行高 + 主题切换实时生效）；
-     * 多行模式走条目级缓存（键含模式自动失效）——可变行高布局逐条测量免重复分词。
-     *
-     * R60（T-LaneB D96）：日志列表链脱敏——displayMaskEnabled 开时**展示文本**先经
-     * [DisplayMasker.maskDisplay] 打码（数据层 entry 不动）；缓存键**加脱敏位**——设置翻转后
-     * 旧缓存（打码/未打码形态）自动失效重渲染（V112.3 回执的附带发现，防脏缓存）。
-     */
-    private fun sqlLineFragmentsFor(entry: LogSqlEntry): List<List<SqlTextFragment>> {
-        val maskOn = PluginSettings.getInstance().state.displayMaskEnabled
-        val sql = withTerminator(DisplayMasker.maskDisplay(entry.summary, maskOn))
-        val mode = PluginSettings.getInstance().sqlListDisplayMode()
-        if (mode == SqlListDisplayMode.SINGLE_LINE) {
-            return listOf(SqlListFragmentRenderer.renderFragments(sql))
-        }
-        entry.cachedListLineFragments
-            ?.takeIf { entry.cachedListLineFragmentsMode == mode && entry.cachedListLineFragmentsMasked == maskOn }
-            ?.let { return it }
-        return SqlListFragmentRenderer.renderLineFragments(sql, mode).also {
-            entry.cachedListLineFragments = it
-            entry.cachedListLineFragmentsMode = mode
-            entry.cachedListLineFragmentsMasked = maskOn
-        }
-    }
-}

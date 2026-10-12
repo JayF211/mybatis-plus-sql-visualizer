@@ -2,6 +2,10 @@ package cn.song.mybatisplus.visualizer.ui.inlay
 
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel
+// T-M53-II D2-5：`showResult`/`clear` 已搬为 ui 包内的同包扩展函数（原 SqlPreviewPanel 成员），
+// 跨包（ui.inlay）调用点需显式导入。
+import cn.song.mybatisplus.visualizer.ui.clear
+import cn.song.mybatisplus.visualizer.ui.showResult
 import cn.song.mybatisplus.visualizer.xml.XmlMapperParser
 import cn.song.mybatisplus.visualizer.xml.XmlPreviewModel
 import cn.song.mybatisplus.visualizer.xml.XmlStatementKind

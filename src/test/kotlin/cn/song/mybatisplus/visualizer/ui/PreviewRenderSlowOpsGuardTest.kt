@@ -106,9 +106,21 @@ class PreviewRenderSlowOpsGuardTest {
     }
 
     private companion object {
-        /** 重渲染链宿主文件（相对 src/main/kotlin/cn/song/mybatisplus/visualizer/）。 */
+        /**
+         * 重渲染链宿主文件（相对 src/main/kotlin/cn/song/mybatisplus/visualizer/）。
+         *
+         * T-M53-II D2-5：面板巨文件被拆成同包协作文件集——判定面必须跟着铺开，否则链上的文件
+         * 一旦不是扫描目标，「把慢操作 API 拷进面板即红」这条守卫就在那些文件里静默失效
+         * （扫描面漏站点＝假绿）。故按**面板家族全集 + 折叠收口**登记；当前各文件命中均为 0。
+         */
         val SCAN_FILES = listOf(
             "ui/SqlPreviewPanel.kt",
+            "ui/SqlPreviewPanelSqlView.kt",
+            "ui/SqlPreviewPanelResultView.kt",
+            "ui/SqlPreviewPanelParamPanel.kt",
+            "ui/SqlPreviewPanelExecution.kt",
+            "ui/SqlPreviewPanelEditorLifecycle.kt",
+            "ui/SqlPreviewPanelText.kt",
             "ui/highlight/SqlAutoFolding.kt",
         )
     }

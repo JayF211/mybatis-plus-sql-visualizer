@@ -74,6 +74,9 @@ out/
 ### 演示 GIF 录制（record/ 只入库可复用脚本，中间产物不进仓库）###
 record/perf/
 record/**/__pycache__/
+# Python 字节码缓存：dev-support 下的编排脚本（拆文件/权重刷新等）本地 import 即生成
+dev-support/**/__pycache__/
+**/__pycache__/
 
 ### Plugin Verifier（校验产物，不进仓库） ###
 dev-support/verify-target/
@@ -81,7 +84,12 @@ dev-support/verify-logs/
 verification-*/
 *.hprof
 
-### 本地凭据（严禁提交） ###
+### 机器本地文件（凭据/令牌/本机路径覆盖，严禁提交） ###
+# .local/ 收拢机器本地文件；整目录忽略，仅放行说明用 README（git 规则：
+# 父目录被排除则无法再包含子文件，故必须用 .local/* 而非 .local/）。
+.local/*
+!.local/README.md
+!.local/local.env.example
 gitee-token.*
 *.token
 .secrets/
