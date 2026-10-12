@@ -191,3 +191,26 @@ gitignore，属本机 IDE 状态，非仓库内容）。**上一轮据此得出�
 
 **另**：§一 表里三行取证本身没错（MP/MPJ 确实原样拼接、MySQL 默认 sql_mode 下确实报 1064），错的是**由此推出
 「demo 坏了」的那一步**——缺了「连接选项会改变结论」这个变量。
+
+### 十一·补：A/B 实测（2026-10-12，用户授权修数据源后）
+
+用 mysql-connector-j 8.0.33 + JDK17 直连本机 MySQL，两个 URL 各连一次、跑同一条
+`SELECT COUNT(*) FROM "user"`：
+
+| 组 | URL | 会话 sql_mode | 结果 |
+|---|---|---|---|
+| A 应用侧 | 带 `sessionVariables=sql_mode=ANSI_QUOTES` | `ANSI_QUOTES,STRICT_TRANS_TABLES` | **OK，COUNT = 1** |
+| B IDE 侧（改前） | 无该参数 | `ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,…`（默认） | **FAILED**：`1064 … near '"user"' at line 1` |
+
+**结论坐实**：demo 的 SQL 在应用连接下合法可跑；1064 只出现在缺该参数的连接上。
+另用 DBX 复核了默认会话 sql_mode（同样不含 `ANSI_QUOTES`）；DBX 的 MCP 策略会拦 `SET SESSION`
+（高危 SQL），故 A 组改走 JDBC 直连。
+
+**修复已实施（用户授权）**：`.idea/dataSources.xml` 的 `mpj_demo@localhost` 补上
+`sessionVariables=sql_mode=ANSI_QUOTES`，与应用 `application.yml` 的 URL **逐字一致**（XML 校验合法）。
+`.idea/` 在本仓 gitignore，属本机 IDE 状态，需重启 IDE 生效。代价＝该连接的会话 sql_mode 随之改变
+（`"…"` 成为标识符引号），用户已知情。
+
+**对规则的影响（现在更确定）**：修完数据源后，这条 demo SQL 在 IDE 连接下**也合法**了，
+而插件只看方言、看不到连接 sql_mode，故新规则会在本项目的 demo 上**确定性误报 ERROR**。
+§十一 列的三种处置仍未选，建议尽快定（我倾向第 2 条：读绑定数据源的 URL 判 sql_mode，确知未开才报错）。
