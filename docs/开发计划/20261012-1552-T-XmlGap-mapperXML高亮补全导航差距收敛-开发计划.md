@@ -278,18 +278,23 @@
 | **标识符着色**（W3 新增能力） | ✅ 列名/表名（`o.id`/`t_order`/`user`/`u.id`）呈 IDENTIFIER 浅蓝，肉眼可辨 | 同上 |
 | **`${}` 着色**（W2 分色） | ✅ 定界符 `${`/`}` 呈 KEYWORD 橙、内部标识符另色——与 `#{}` 一眼可分的设计目标达成 | 同上 |
 | 语句标签折叠标记 | ✅ 第 6/11/17 行（含 id 的语句标签）gutter 有折叠标记 | `xmlgap-06-editor-clean2.png` |
-| **拼写豁免** | ❌→已修：SQL 文本上仍有绿色 typo 波浪线 | 见下 |
-| 折叠**占位文本**（`select#id`） | ❓ 未直接观察到——折叠操作被插件自身预览弹窗打断（模态抢交互），标记在场已证 | `xmlgap-10/12-*.png` |
+| **我方注入在场**（判别性证据） | ✅ `Alt+Enter` 意图列表含 **`Edit MpSqlMapper Fragment`**——该意图只对**注入片段**生成，且语言名正是本插件的 `MpSqlMapper` ⇒ 我方注入未被让位 | `xmlgap-31-altenter-zoom.png` |
+| **拼写豁免** | ✅ **无缺陷**（勘误，见下）：SQL 文本上的波浪线经 tooltip 实证为**平台 SQL 方言弱警告**，与拼写检查无关 | `xmlgap-33-tooltip-zoom.png` |
+| 折叠**占位文本**（`select#id`） | ❓ 未隔离观察到：平台标签折叠与我方区**范围相同**，`Ctrl+Shift+Minus` 折叠呈现的是平台区（`....>` 形态）；我方占位优先级属渲染期行为，如实留作未证 | `xmlgap-35/39-*.png` |
 
-**走查抓出的缺陷与修法（这是本轮走查的最大价值）**：拼写豁免原先只挂在**注入语言** `MpSqlMapper` 上，而 mapper 语句文本的拼写检查发生在**宿主 XmlText** 上——平台 `XmlSpellcheckingStrategy`（`extends SuppressibleSpellcheckingStrategy`）经 `hasForeignLanguageChildren`/`hasOnlySupportedDialects` 判定是否回落检查原文（javap 实证），我方自研语言不在其「支持方言」集合内 ⇒ 回落 ⇒ 波浪线照旧。
-修法：新增 `SqlMapperXmlSpellcheckingStrategy`（**继承平台 XML 策略**，只对「mapper 语句标签下的 XmlText」返回空 tokenizer，其余元素 `super` 原样委托，非目标 XML 拼写行为与平台逐字一致）+ `<spellchecker.support language="XML">` 注册；用例 `SqlMapperXmlSpellcheckingStrategyTest` 钉「语句文本豁免 / 非 mapper 文本与属性值原样委托」四条边界。
+**一次误诊与勘误（留痕，勿重犯）**：走查首轮看到 SQL 文本上的波浪线，我按「绿/黄波浪＝typo」的经验判为拼写检查未豁免，并据此新增了 `SqlMapperXmlSpellcheckingStrategy`（XML 级注册、继承平台策略）。复验时悬停取到 **tooltip 原文：「SQL dialect is not configured.」**——波浪线实为**平台 SQL 方言弱警告**（IU 下平台给 mapper XML 语句文本挂了 SQL 方言语义），与拼写检查无关。
+**处置**：该误诊方案（类 + EP + 用例）**已整批回退**（`plugin.xml` 保留一条勘误注记防重犯）；`spellchecker.support language="MpSqlMapper"` 按计划原样保留。
+**教训**：波浪线判色不足以定性 inspection——**必须取 tooltip 原文**（或 Alt+Enter 意图名）再动手；本轮若不复验，就会把一个「平台既有行为」当成我方缺陷修，还留下一条无效注册。
 
-**沙盒清理核验**：`Alt+F4` 逐级关闭（模态 → 项目信任框 → 欢迎页）后 `runIde` 任务正常结束（exit 0）；`Get-CimInstance` 按命令行过滤 `xmlgap`/`idea-sandbox`/`MPSV` **零残留**（记忆里「强停 gradle 不带走进程 ⇒ 下次 runIde 目录锁失败」的坑已避开）。
+**顺带观测（非本批次引入）**：IU 下 mapper 语句文本带「SQL dialect is not configured」弱警告属平台既有行为——竞品对此的解法是让用户手写引导注释（内部调研报告 §6），我方不做校验器、不引入注释负担，故该警告保持原样（用户可在 IDE 里为项目配置 SQL 方言消除）。
+
+**沙盒清理核验**：两轮走查均以 `Alt+F4` 逐级关闭（模态 → 项目信任框 → 欢迎页 → Confirm Exit）后 `runIde` 任务正常结束（exit 0）；`Get-CimInstance` 按命令行过滤 `xmlgap`/`idea-sandbox`/`MPSV` **零残留**（记忆里「强停 gradle 不带走进程 ⇒ 下次 runIde 目录锁失败」的坑两轮均避开）。
 
 ### 遗留与待真机项（W8 收口）
 
 1. **颜色页**：✅ 已补（见上节）。
-2. **真机走查**（用户 IU 2026.2，装 CHP 已激活 + zMyBatis）：语句含 `#{}` 时 SQL 关键字着色可见；`#{}`/`${}` 分色；属性值补全；Ctrl+B 九类跳转；live template `cd`/`co` 展开；成对删；拼写不再误标；颜色页可调。
+2. **真机走查**：**沙盒半已做**（见上节，IU-2024.3.7.1 = 243 最低支持版；着色/注入在场/折叠标记/清理零残留均有读数）。**用户 IU 2026.2 半待用户执行**（需用户 IDE；用户机另装 CHP 已激活 + zMyBatis，是我方「共存不打架」的唯一真实环境）：核对清单＝语句含 `#{}` 时 SQL 关键字着色可见、`#{}`/`${}` 分色、属性值补全、Ctrl+B 九类跳转、live template `cd`/`co` 展开、成对删、颜色页可调。
+3. **折叠占位文本**（`select#id`）未隔离观察：与平台标签折叠范围相同，需真机确认谁胜出；若平台恒胜，则本项能力「有代码有测试但用户看不到」，届时应评估是否改为折叠**语句体文本**区间以避开与平台同范围（已留判据）。
 3. **W4/W5 子代理登记的未单测项**（受 Light 沙箱索引限制）：跨文件 `refid`、`<properties>` key 聚合、foreach item 元素字段、`@类@静态成员`——由 W8 收口时评估补测或真机复核。
 4. **W2/W3 登记的两处待评审取舍**：布尔是否单独配色（现与关键字同色）；方言并集过度着色是否要 per-file 方言收敛。
 5. **全量门禁**：一次（收口阶段，只读收口代理执行）；因新增平台 API 面（`RestartableLexer`）与 7 个新 EP，附加 `verifyPlugin` 三目标。
