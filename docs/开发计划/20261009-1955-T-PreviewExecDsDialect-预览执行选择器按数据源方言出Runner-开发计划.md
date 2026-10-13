@@ -53,10 +53,53 @@
 
 ## 七、运行读数
 
-（实施时回填：定向测试读数、反向验证读数、沙盒 V1~V4 截图与 idea.log 关键行）
+实施于 2026-10-13（工作树 t-o136-dsdialect），读数见 §九 实施记录。
 
 ## 八、影响面 / 不做
 
 - 不改捕获链（agent/桥）、不改 MCP 的数据源匹配、不改 MySQL 既有执行行为。
 - 不在本计划内解决「DAS 控制台对未配凭据数据源不产结果」的一般性问题（凭据属数据源配置，用户配置后即通；本轮已在沙盒实证 DM DS 配好后可出结果）。
 - 达梦 ADD_BATCH/CLEAR_BATCH 织入面缺失（T-DmWeave 已登记的织入局限）与本计划无关，不在此处理。
+
+## 九、实施记录（2026-10-13，工作树 t-o136-dsdialect）
+
+**D140 按推荐定案（20261013 用户开工令）**：D1＝平台 DAS 方言优先＋插件 URL 推断兜底；D2＝草稿方言按「上次使用/默认数据源」设定＋缓存命中路径同款对齐；D3＝空 Runner 二分归因给可行动文案；D4＝多语句脚本维持现状（执行链不渲染分页、占位符未填走既有参数面板，DBN whole-script 原生处理，无需新增文案）。
+
+### 前提证伪结论（动手前逐条核实）
+
+- **P1 成立（字节码实证，243.7.1 DatabaseTools jar 反编译）**：`DatabaseRunners.getAttachDataSourceRunners → DbImplUtil.getAppropriateDataSourcesForExec(psiFile) → getSqlLanguageDialectForExec(psiFile)`（PSI 方言 or `SqlPsiFacade.getConfiguredSqlLanguageDialect(vf)`，即 SqlDialectMappings 文件级映射）→ `DatabaseDialect` → `DbSqlUtilCore.getAppropriateDataSources` 按 `getDatabaseDialect(ds).similarTo(文件方言)` 过滤。Runner 集合确由 psiFile 方言决定；平台自带 `DbSqlUtilCore.findSqlDialect(LocalDataSource)`（getDefaultDialect→findDialectById→guessSqlDialect(URL)）可按数据源取 SQL Language，即 D1 的现成实现面。另证：方言匹配集≠全部数据源时平台返回 "All" 组 Runner（`getSubRunners()`，组项 runnable 为 EmptyRunnable 空操作）——插件弹窗不展开子级，DM 藏在死项里不可选，此为第二处堵点。
+- **P5 成立但无共享冲突**：`DialectPreMapping.ensureMapped` 全部 3 个调用点中，exec 链 2 处映射 `exec/mpsql-exec.sql` 按文件、预览链 1 处映射 `preview/` 目录——映射对象不相交。方言跟随只需参数化 exec 链目标语言，预览链保持 MySQL；高亮/格式化/EXPLAIN 与行注释接管（`--`，与方言无关）均不受影响。
+- **P2/P4 环境受限未实测**：本环境无 DM 数据源、无真机沙盒（headless Community 测试 JVM 无 Database 插件），DM Runner 出现与 DM 双语句执行留待真机验证（机制层面 P1 已实证，平台 API 面 243 javap 核对）。
+- **243 平台 SQL 方言集无 DM**（`sql/dialects/*` 全量 xml 核对）→ URL 兜底表对 DM 只给候选 id ["DM","Dameng"]，平台缺位时诚实落 null 保持 MySQL（不猜近似方言）；真机 262 由主链路（平台 findSqlDialect）承担。
+
+### 变更点（文件:行）
+
+- `ExecDialectRouting.kt`（新增，~215 行）：目标数据源解析（last-used UUID→显示名→默认数据源，纯函数可测）＋目标方言 id 决策（平台 findSqlDialect 优先/URL 兜底/皆无 null）＋组 Runner 展开纯函数与反射生产链＋空 Runner 文案选择纯函数。
+- `DialectPreMapping.kt:52-96/165-216/218-288`：`ensureMapped` 增目标方言重载（null=MySQL 旧行为）、`setLanguageOnEdt`/`configuredLanguageId`/`languageById`；两段式线程语义（BGT 读探测稳态跳过/EDT 写）不变，读探测判据泛化为「已配置语言==目标语言」（含 DBN push 自愈）。
+- `DataSourceSelector.kt:112-125/1476-1493/1530-1533`：`dialectMappedLanguageId` 字段；`mapDialectBeforePsi` 内部路由（幂等短路收紧为「同 vf 且同方言」）；prewarm 缓存命中路径补对齐。
+- `DataSourceSelectorResults.kt:246-257/1189-1194/1368-1371/275-303`：chooseAndPrepare 枚举后展开组 Runner（DM 子 Runner 浮出去重）；createTempPsiFile 缓存命中路径对齐映射；prewarmExecTempFileInner 收口统一入口；空 Runner 二分文案。
+
+### 读数（真实读数，均本工作树实测）
+
+- **件1 先红**：`./gradlew test --tests ...ExecDialectRoutingTest` → `Task :compileTestKotlin FAILED`，`Unresolved reference 'ExecDialectRouting'`（测试先行）。
+- **件1 后绿**：同命令 `BUILD SUCCESSFUL`，`tests=18 failures=0 errors=0`；触链回归 ExecSlowOpsRoutingTest 3/ExecTempFileFixTest 6/CachedTempPsiFileTest 3/SqlPreviewPanelPrewarmConsumeTest 3/SqlPreviewPanelPreviewTempFileTest 4 全绿。
+- **件1 反向验证**：临时摘除 mapDialectBeforePsi 路由（REVERSE-PROBE）→ `接线守卫_执行文件方言映射走数据源方言路由 FAILED`（tests=18 failures=1）；恢复后 `tests=18 failures=0`。
+- **件2 先红**：接线守卫断言失败（`tests=19 failures=1`，首因守卫正则窗口 200 字符小于 intervening 注释长度，放宽 800 后过——守卫窗口按实码校准）。后绿 `tests=19 failures=0`。
+- **件2 反向验证**：摘除展开（`runners = enumerated` 探针）→ `接线守卫_弹窗前展开组Runner FAILED`（failures=1）；恢复后绿。
+- **件3 先红**：`接线守卫_空Runner分支给方言不匹配文案 FAILED`（tests=20 failures=1）。后绿 `tests=20 failures=0`。
+- **件3 反向验证**：dialectMismatch 分支改投 empty 文案探针 → 守卫红（failures=1）；恢复后绿。
+- **收口**：`testFast` `BUILD SUCCESSFUL`（**3900 tests / 0 failures / 0 errors**，315 类）；定向终批 8 类（ExecDialectRoutingTest 20、ExecSlowOpsRoutingTest 3、ExecTempFileFixTest 6、CachedTempPsiFileTest 3、ExecDocSync2Test 8、ExecSilentNoopHintTest 5、SqlPreviewPanelPrewarmConsumeTest 3、SqlPreviewPanelPreviewTempFileTest 4）全绿。
+
+### 提交清单
+
+- 38737b98 feat(preview): O-136 执行草稿方言按数据源路由出 Runner（件1 路由核心）
+- a6df0e41 feat(preview): O-136 预览执行弹窗展开组 Runner（件2，方言不匹配数据源浮出）
+- e0b3d254 feat(preview): O-136 空 Runner 归因方言不匹配并给可行动文案（件3，D3/V3）
+- 603e3ed6 WIP(o136)（看门狗掉线保存收编，内容＝件1 测试文件草稿，与本轮工作树逐字一致，无未落盘成果）
+
+### 未做项与验收边界
+
+- **V1/V2 的真机（DM/MySQL 端到端）未执行**：本环境无 DM 数据源、headless 无 Database 插件；机制层面由 P1 字节码链与守卫测试覆盖，真机复核留待用户沙盒（DM DS 已按 §一 就位）。
+- `testDatabase` 通道未跑（集成任务依赖 MySQL 沙盒，本轮按定向纪律只跑定向＋testFast）。
+- D4 多语句：零代码改动（理由见 D140 定案）。
+
