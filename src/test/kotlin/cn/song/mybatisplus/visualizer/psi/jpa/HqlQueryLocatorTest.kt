@@ -721,4 +721,29 @@ class HqlQueryLocatorTest : BasePlatformTestCase() {
         assertNotNull("String hql = sb.toString(); createQuery(hql) 应被识别", info)
         assertEquals("select u from UserEntity u order by u.id", info!!.hql)
     }
+
+    fun testCreateQuery_helperMethodReturningHql() {
+        myFixture.configureByText(
+            "UserDao.java",
+            """
+            public class UserDao {
+                public List<UserEntity> findByStatus(Session session) {
+                    return session.createQuery(buildHql()).list();
+                }
+
+                private String buildHql() {
+                    return "from UserEntity u " + "where u.status = 'A'";
+                }
+            }
+            interface Session {
+                Query createQuery(String hql);
+            }
+            interface Query { List list(); }
+            class UserEntity { private String status; }
+            """.trimIndent(),
+        )
+        val info = HqlQueryLocator.locate(findMethod("findByStatus"))
+        assertNotNull("createQuery(源码可见方法返回的 HQL) 应被识别", info)
+        assertEquals("from UserEntity u where u.status = 'A'", info!!.hql)
+    }
 }

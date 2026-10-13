@@ -5,6 +5,7 @@
 ## [Unreleased]
 
 ### Added
+- **支持「SQL 由同工程方法拼好再传入」的写法（T-HqlHelperReturn）**：`commonDao.findByQuery(buildHql(), …)` / `session.createQuery(buildHql())` 这类把 SQL 交给一个**源码可见**的方法去拼的调用，此前既不亮预览图标、快捷键预览也失败（判定口径是「调用处首参是否为字符串承载」，方法调用不在其列，`locate` 直接返回 null）。现改为跟随到该方法的 `return` 表达式聚合：深度上限 3 层（防递归/环）、只收本方法自身的 `return`（排除嵌套方法与 lambda 体内的）、**多分支返回内容不一致时不猜**（宁缺不错）、方法返回类型非 String 或没有源码体（JDK/三方库）一律不认领（挡住 `selectList(<wrapper 链>)` 这类误判回归）。demo 复现模块 `jpa-embedded-prefix-demo` 现备齐三种 HQL 承载形态（拼接变量 / StringBuffer + `sb.toString()` / 方法返回），插件侧门禁 `DemoEmbeddedPrefixReproAnchorTest` 断言三者各恰 1 枚图标
 - **方言引号不匹配静态告警（T-DialectQuoteWarn，静态规则第 21 条 `dialect_quote_mismatch`）**：SQL 里的标识符用了当前方言不接受的引号字符时给出告警（如 MySQL 方言下出现 `FROM "user" t`）。`@TableName("\"user\"")` 这类达梦风格双引号在 MySQL 真机会报 `[42000][1064]`，插件此前只是如实画出。**只报告不改写**：渲染的仍是 MyBatis-Plus 真实发出的 SQL（改写会让预览偏离真机、把用户代码里的真 bug 静默抹平）。告警同时流到预览面板静态规则区与 MCP `sqlv_perf_advice`；方言从项目设置解析，取不到时不判定（不硬编码 MySQL）。判据按各方言实际宽容度定：SQL Server 的 `QUOTED_IDENTIFIER` 默认 ON（双引号合法）、SQLite/H2 收多种引号，避免误报。**（T-DialectQuoteWarn §十二 调整）**「MySQL 家族（MySQL/MariaDB/OceanBase）+ 双引号」这一档不再一律报 ERROR——双引号是否为标识符取决于连接 `sql_mode` 是否含 `ANSI_QUOTES`，而数据源 URL **只能证明「合法」不能证明「非法」**（URL 未声明该项时服务端全局仍可能开着）：预览按绑定数据源（活控制台 > last-used 记忆）的 URL 取该三态，确知声明了才不报，已知未声明或未知都降级为**带前提的 WARN**（缓存键含该三态，避免串味）；PG/Oracle/DM/KingBase/openGauss 遇反引号、非 SQL Server 遇方括号等无歧义档仍报 ERROR
 
 ### Changed

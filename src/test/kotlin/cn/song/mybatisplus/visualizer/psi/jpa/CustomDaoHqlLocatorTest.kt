@@ -623,6 +623,85 @@ class CustomDaoHqlLocatorTest : BasePlatformTestCase() {
     }
 
     // ------------------------------------------------------------------
+    // T-HqlHelperReturn：首参是「源码可见方法返回的字符串」
+    // ------------------------------------------------------------------
+
+    fun testHqlHelperReturn_methodReturningHql() {
+        myFixture.configureByText(
+            "WmsQueryService.java",
+            """
+            public class WmsQueryService {
+                public java.util.List findLocations(CommonDao commonDao) {
+                    return commonDao.findByQueryMaxNum(buildHql(), new String[]{}, new Object[]{}, 0, 10);
+                }
+
+                private String buildHql() {
+                    return "from WmsLocation loc " + "where loc.status = 'E'";
+                }
+            }
+            interface CommonDao {
+                java.util.List findByQueryMaxNum(String hql, String[] names, Object[] values, int start, int max);
+            }
+            """.trimIndent(),
+        )
+        val info = CustomDaoHqlLocator.locate(findMethod("findLocations"))
+        assertNotNull("首参为方法调用（源码可见、返回 String）应被识别", info)
+        assertTrue("应聚合出被调方法的 return 内容: ${info!!.hql}", info.hql.contains("from WmsLocation loc"))
+        assertEquals("WmsLocation", info.entityClassName)
+    }
+
+    fun testHqlHelperReturn_multiBranchInconsistentNotClaimed() {
+        myFixture.configureByText(
+            "WmsQueryService2.java",
+            """
+            public class WmsQueryService2 {
+                public java.util.List findLocations(CommonDao commonDao, boolean flag) {
+                    return commonDao.findByQueryMaxNum(buildHql(flag), new String[]{}, new Object[]{}, 0, 10);
+                }
+
+                private String buildHql(boolean flag) {
+                    if (flag) {
+                        return "from WmsLocation loc where loc.status = 'E'";
+                    }
+                    return "select count(1) from WmsZone z";
+                }
+            }
+            interface CommonDao {
+                java.util.List findByQueryMaxNum(String hql, String[] names, Object[] values, int start, int max);
+            }
+            """.trimIndent(),
+        )
+        assertNull(
+            "多分支返回内容不一致 → 不猜哪条分支（宁缺不错），不认领",
+            CustomDaoHqlLocator.locate(findMethod("findLocations")),
+        )
+    }
+
+    fun testHqlHelperReturn_nonStringReturnNotClaimed() {
+        myFixture.configureByText(
+            "WrapperQueryService.java",
+            """
+            public class WrapperQueryService {
+                public java.util.List findLocations(CommonDao commonDao) {
+                    return commonDao.findByQueryMaxNum(buildWrapper(), new String[]{}, new Object[]{}, 0, 10);
+                }
+
+                private Object buildWrapper() {
+                    return new Object();
+                }
+            }
+            interface CommonDao {
+                java.util.List findByQueryMaxNum(String hql, String[] names, Object[] values, int start, int max);
+            }
+            """.trimIndent(),
+        )
+        assertNull(
+            "被调方法返回非 String → 不认领（防 wrapper 链误判回归）",
+            CustomDaoHqlLocator.locate(findMethod("findLocations")),
+        )
+    }
+
+    // ------------------------------------------------------------------
     // 辅助方法
     // ------------------------------------------------------------------
 

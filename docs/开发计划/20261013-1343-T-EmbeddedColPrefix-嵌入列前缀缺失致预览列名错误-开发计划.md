@@ -328,4 +328,44 @@ component-path 复现模块，正是这种形态；以聚合根打开工程时�
 `/embed-prefix/hql`（待预览 HQL 原文）。另附 `db/schema.sql`（DDL 里就写着 `qty_base_qty`，
 兼作插件期望产物的对照表）。
 
+### 8.9 追加（同日）：支持「首参是被调方法返回的字符串」（T-HqlHelperReturn）
+
+**起因（用户实测报障）**：§8.8 的 demo 复现用例把 HQL 抽进 `buildAvailableInventoryHql()` 后，
+调用处首参成了方法调用；**当时**插件既不解包方法返回值也不认该形态，`locate` 返回 null——
+**预览图标与快捷键预览同时失效**。用户据此指出「方法调用这种写法也很合理，插件是不是该支持」，
+遂落成能力（而不是只让 demo 迁就插件）。
+
+**实现**（三处，都是既有链路的自然延伸，无第二套逻辑）：
+
+- `psource/SqlStringConcatenator`：`concatUnwrappingToString` 改为带深度的私有重载；
+  `PsiMethodCallExpression` 分支在原有「`.toString()` / `.append()` 解包」之外新增
+  `concatMethodReturn`——解析到被调方法体，收**本方法自身**的 `return`（排除嵌套方法 / lambda 体内的）
+  逐条聚合；**只有全部 return 文本一致才采纳**，不一致（多分支返回不同内容）返回 null；
+  深度上限 `MAX_METHOD_FOLLOW_DEPTH = 3` 防递归与环。方法体内含参数等静态不可求值片段时，
+  沿用既有 `/*运行时值*/…*/` 占位 + `complete=false` 降级，不编造内容。
+- `psi/PreviewReceiverResolver`：`isStringLikeExpression` 的 MCE 分支新增
+  `returnsStringFromSourceMethod`（**返回类型是 String** 且 `body != null`），并把它公开给
+  HqlQueryLocator 复用。两道必要条件缺一不可：「返回类型是 String」挡住
+  `selectList(<wrapper 链>)`（防 S1 修过的老误判回归），「有源码体」把 JDK / 三方库方法
+  （如 `String.valueOf`）排除在外。
+- `psi/jpa/HqlQueryLocator.hasStringHqlArgument`：MCE 分支同步放行该形态。
+
+**测试**：`CustomDaoHqlLocatorTest` +3（方法返回被识别 / 多分支不一致不认领 / 返回非 String 不认领）、
+`HqlQueryLocatorTest` +1（`createQuery(buildHql())`）；demo 复现用例补第三种形态
+`findAvailableInventoryViaHelper`，门禁 `DemoEmbeddedPrefixReproAnchorTest` 改为断言
+「三种承载形态各恰 1 枚图标」+「返回非 String 的方法调用 → 0 图标」反向断言。
+
+**读数**：定向 16 类 **188 例 0 失败 0 错误**（含既有 demo 语料的两道锚点普查
+`DemoRecognitionTest` / `DemoMpChainAnchorCensusTest`——放宽「字符串形态」判据后，既有语料上没有
+多冒图标，这是本次最需要防的回归面）。
+
+**反向验证**：把 `concatUnwrappingToString` 的「跟随方法返回」一档改成 `return null`（其余不动）→
+`CustomDaoHqlLocatorTest`、`HqlQueryLocatorTest`、`DemoEmbeddedPrefixReproAnchorTest` **各 1 例红**
+（两个正向用例 + 门禁的「3 调用各 1 图标」），两条负向用例（多分支不一致、返回非 String）保持绿，
+GRADLE_EXIT=1；还原后复跑 188/0/0。
+
+**demo 侧同步**：补第三种形态后，`/embed-prefix/query` 增加 `mode=plain|buffer|helper` 三档真跑入口；
+模块 README 与插件仓 CHANGELOG 同步该能力，并更正了 §8.8 里那条「不要把 HQL 抽成独立方法」的
+过时提示（该形态现已支持）。
+
 

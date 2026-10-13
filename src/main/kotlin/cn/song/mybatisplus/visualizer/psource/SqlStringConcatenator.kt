@@ -5,12 +5,15 @@ import com.intellij.psi.PsiBinaryExpression
 import com.intellij.psi.PsiCodeBlock
 import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiExpression
+import com.intellij.psi.PsiLambdaExpression
 import com.intellij.psi.PsiLiteralExpression
 import com.intellij.psi.PsiLocalVariable
+import com.intellij.psi.PsiMethod
 import com.intellij.psi.PsiMethodCallExpression
 import com.intellij.psi.PsiNewExpression
 import com.intellij.psi.PsiPolyadicExpression
 import com.intellij.psi.PsiReferenceExpression
+import com.intellij.psi.PsiReturnStatement
 import com.intellij.psi.PsiStatement
 import com.intellij.psi.PsiVariable
 import com.intellij.psi.util.PsiTreeUtil
@@ -46,6 +49,9 @@ object SqlStringConcatenator {
     /** 变量 initializer 追踪最大深度（防循环引用）。 */
     private const val MAX_TRACE_DEPTH = 5
 
+    /** 跟随「源码可见方法返回值」的最大层数（T-HqlHelperReturn：防递归/环）。 */
+    private const val MAX_METHOD_FOLLOW_DEPTH = 3
+
     // ------------------------------------------------------------------
     // 入口
     // ------------------------------------------------------------------
@@ -80,13 +86,54 @@ object SqlStringConcatenator {
      * @param expr SQL 字符串实参表达式（字面量 / 拼接 / 变量引用 / `sb.toString()` 调用链）
      * @return 聚合结果；无法聚合返回 `null`
      */
-    fun concatUnwrappingToString(expr: PsiExpression?): ConcatenationResult? {
+    fun concatUnwrappingToString(expr: PsiExpression?): ConcatenationResult? =
+        concatUnwrappingToString(expr, 0)
+
+    /**
+     * 聚合入口（带跟随深度）。
+     *
+     * `PsiMethodCallExpression` 分两种承载：
+     *  1. `sb.toString()` / `sb.append(x)` → 解包到持有变量后走 [concat]（T-HqlBufConcat）；
+     *  2. **源码可见的方法返回的字符串**（`findByQuery(buildHql(), …)`）→ 跟随到方法体聚合其
+     *     `return` 表达式（T-HqlHelperReturn）。
+     */
+    private fun concatUnwrappingToString(expr: PsiExpression?, depth: Int): ConcatenationResult? {
         if (expr == null) return null
         if (expr is PsiMethodCallExpression) {
-            val target = unwrapToStringTarget(expr) ?: return null
-            return concat(target)
+            unwrapToStringTarget(expr)?.let { return concat(it) }
+            return concatMethodReturn(expr, depth)
         }
         return concat(expr)
+    }
+
+    /**
+     * 跟随「首参是被调方法」的形态：`commonDao.findByQuery(buildHql(), …)` 这类把 SQL 交给一个
+     * 同工程方法去拼的写法（T-HqlHelperReturn）。
+     *
+     * 判定与护栏（保守优先，与「宁缺不错」一致）：
+     *  - 方法必须**源码可见**（`PsiMethod.body != null`）：JDK / 三方库方法不跟随；
+     *  - 聚合其全部 `return` 表达式：一个都聚合不出 → null；聚合结果**文本不一致**（多分支返回不同
+     *    内容）→ null（不猜哪条分支）；
+     *  - 只收本方法自身的 `return`，排除嵌套方法 / lambda 体内的（那些不属于本方法的返回值）；
+     *  - 深层跟随有上限 [MAX_METHOD_FOLLOW_DEPTH]，防递归与环。
+     *
+     * 运行时值照既有口径降级：方法体内出现参数 / 调用等静态不可求值片段时，聚合结果带
+     * `/*运行时值*​/…*/` 占位并置 `complete=false`，不编造内容。
+     */
+    private fun concatMethodReturn(call: PsiMethodCallExpression, depth: Int): ConcatenationResult? {
+        if (depth >= MAX_METHOD_FOLLOW_DEPTH) return null
+        val method = call.resolveMethod() ?: return null
+        val body = method.body ?: return null
+        val returns = PsiTreeUtil.collectElementsOfType(body, PsiReturnStatement::class.java)
+            .filter { PsiTreeUtil.getParentOfType(it, PsiMethod::class.java) === method }
+            .filter { PsiTreeUtil.getParentOfType(it, PsiLambdaExpression::class.java, true) == null }
+        val aggregated = returns.mapNotNull { stmt ->
+            stmt.returnValue?.let { concatUnwrappingToString(it, depth + 1) }
+        }
+        if (aggregated.isEmpty()) return null
+        val texts = aggregated.map { it.sql }.distinct()
+        if (texts.size != 1) return null
+        return ConcatenationResult(sql = texts[0], complete = aggregated.all { it.complete })
     }
 
     /**

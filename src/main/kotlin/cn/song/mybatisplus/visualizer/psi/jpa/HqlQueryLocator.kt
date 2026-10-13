@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.psi.jpa
 
+import cn.song.mybatisplus.visualizer.psi.PreviewReceiverResolver
 import cn.song.mybatisplus.visualizer.psource.SqlStringConcatenator
 import com.intellij.psi.PsiBinaryExpression
 import com.intellij.psi.PsiClass
@@ -207,11 +208,12 @@ object HqlQueryLocator {
                     false
                 }
             }
-            // T-HqlBufConcat：`sb.toString()` / `sb.append(x).toString()`——StringBuffer/StringBuilder
-            // 承载的拼接串（解包与聚合在 extractHqlString 完成，此处仅放行形态）
+            // T-HqlBufConcat / T-HqlHelperReturn：`sb.toString()`（StringBuffer 承载）与
+            // 「源码可见方法返回的字符串」（`createQuery(buildHql())`）——解包与聚合在 extractHqlString 完成
             is PsiMethodCallExpression -> {
                 val name = firstArg.methodExpression.referenceName
-                name == "toString" || name == "append"
+                name == "toString" || name == "append" ||
+                    PreviewReceiverResolver.returnsStringFromSourceMethod(firstArg)
             }
             else -> false // Class 字面量等
         }
