@@ -26,6 +26,9 @@ object ResultMapColumns {
 
     /** 从 mapper 全文中提取 SELECT 投影列名（去重保序）。 */
     fun extractColumns(mapperText: String): List<String> {
+        // F89（T-PerfSweep25）：文本长度熔断（对齐 [XmlSynHiGate.MAX_TEXT_LENGTH] 100K 口径）——
+        // 超长 mapper 的全文 findAll 不再受理（补全候选提取的输入卡顿防线），超限一律空候选。
+        if (mapperText.length > XmlSynHiGate.MAX_TEXT_LENGTH) return emptyList()
         val out = LinkedHashSet<String>()
         SELECT_PROJECTION.findAll(mapperText).forEach { m ->
             out += projectionColumns(m.groupValues[1])
@@ -43,6 +46,8 @@ object ResultMapColumns {
      */
     fun extractColumnsForResultMap(mapperText: String, resultMapId: String): List<String> {
         if (resultMapId.isBlank()) return emptyList()
+        // F89：同 [extractColumns] 的文本长度熔断（两条提取入口同口径）。
+        if (mapperText.length > XmlSynHiGate.MAX_TEXT_LENGTH) return emptyList()
         val out = LinkedHashSet<String>()
         SELECT_STATEMENT.findAll(mapperText).forEach { m ->
             val ref = RESULT_MAP_ATTR.find(m.groupValues[1])?.groupValues?.get(1)?.trim()

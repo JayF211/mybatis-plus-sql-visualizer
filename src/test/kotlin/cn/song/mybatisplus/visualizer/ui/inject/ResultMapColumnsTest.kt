@@ -26,6 +26,24 @@ class ResultMapColumnsTest {
     }
 
     @Test
+    fun testF89_超长文本熔断_零提取() {
+        // F89（T-PerfSweep25）：提取前文本长度熔断（对齐 XmlSynHiGate.MAX_TEXT_LENGTH 100K 口径）。
+        // 修复前超限文本照常全文 findAll——尾部的合法 select 仍被提出（两条入口均非空 → 红）；
+        // 修复后超限一律空候选（补全候选提取的输入卡顿防线）。
+        val huge = "<!-- " + "x".repeat(XmlSynHiGate.MAX_TEXT_LENGTH) + " -->\n" +
+            "<select id=\"a\" resultMap=\"rm\">SELECT fuse_col FROM t</select>"
+        assertTrue("夹具须真超限", huge.length > XmlSynHiGate.MAX_TEXT_LENGTH)
+        assertTrue(
+            "超限全文提取熔断=空候选（修复前提取出 fuse_col → 红）",
+            ResultMapColumns.extractColumns(huge).isEmpty(),
+        )
+        assertTrue(
+            "超限 resultMap 定向提取熔断=空候选（修复前提取出 fuse_col → 红）",
+            ResultMapColumns.extractColumnsForResultMap(huge, "rm").isEmpty(),
+        )
+    }
+
+    @Test
     fun test建议_前缀精确优先() {
         val cols = listOf("order_id", "user_name", "createdAt")
         val out = ResultMapColumns.suggest(cols, "order")
