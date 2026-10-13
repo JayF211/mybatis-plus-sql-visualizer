@@ -63,12 +63,10 @@ SCROLL_NOTCHES = -18         # Ctrl+Home 钉首行=1 后滚 54 行 → 首行=55
 #                              子菜单下方放不下 → **向上展开**，三项全在取景框内
 #                              （锚点在 75 时菜单末项 889、子菜单向下展开，第三项 1054 出框）
 
-ANCHOR = (790, 165)          # L58 注释里的 `car_device_info`（编辑区第 4 行；窗口上移 75px 后）
-WIN = (277, -75, 1370, 1105) # 窗口上移到 y=-75、高 1105 → 底边仍 1030：**SQL 上下文栏**
-#                              （`Script / Generic SQL / <data source>`，SQL 文件绑了数据源才有）
-#                              连同标签页行一起被推到屏幕外，编辑区第一行落到 y≈75；
-#                              取景框仍是 0..1030（避任务栏）。上移 75px 是实测需要：
-#                              子菜单向下展开时第三项要到 y≈1006 才进框（上移 35px 时是 1046 ✗）
+ANCHOR = (790, 175)          # L58 注释里的 `car_device_info`（编辑区第一行；窗口标准位置）
+WIN = (277, 25, 1370, 984)   # 标准几何（不推窗口出屏——用户要求 IDE 顶部完整入镜）
+#                              锚点在第一行文字 y≈175 时，菜单末项 ≈175+814=989，取景框底 1009 ✓；
+#                              子菜单下方放不下 → 向上展开，三项在 y≈891/924/957 ✓ 全在框内
 ITEM_H = 41                  # 菜单单项高度（实测，仅注释用；扫描不依赖它）
 
 # 子菜单所在横带：菜单右边缘 ≈ 锚点 x+368，子菜单面板 ≈ 锚点 x+378..+588
@@ -115,6 +113,23 @@ def restore_backdrop(ide_hwnd):
     if not ch:
         print("⚠️ 没找到 Chrome 窗口，背景未恢复")
         return
+    # 用户要求背景是 Chrome 的**白色新标签页**：先给 Chrome 开一个空白新标签，再最大化垫到 IDE 后面
+    # SetForegroundWindow 会被前台锁拦下 → 走 AttachThreadInput（同 restore_chrome_front_ide.py）。
+    # 不确认拿到焦点就按 Ctrl+T，会把新标签开进 IDE 里。
+    u32 = ctypes.windll.user32
+    k32 = ctypes.windll.kernel32
+    fg = u32.GetForegroundWindow()
+    fg_thread = u32.GetWindowThreadProcessId(ctypes.c_void_p(fg), None)
+    my_thread = k32.GetCurrentThreadId()
+    u32.AttachThreadInput(my_thread, fg_thread, True)
+    u32.SetForegroundWindow(ctypes.c_void_p(ch))
+    u32.AttachThreadInput(my_thread, fg_thread, False)
+    time.sleep(0.8)
+    if u32.GetForegroundWindow() != ch:
+        print("⚠️ Chrome 未拿到焦点（fg=%s），跳过开新标签" % u32.GetForegroundWindow())
+    else:
+        pyautogui.hotkey('ctrl', 't')
+        time.sleep(1.5)
     here = os.path.dirname(os.path.abspath(__file__))
     subprocess.run([sys.executable, os.path.join(here, "restore_chrome_front_ide.py"),
                     str(ide_hwnd), str(ch)], cwd=here, timeout=90)
@@ -244,10 +259,10 @@ def main():
     # 录制器要求宽高为偶数（否则 gifkit assert 挂）
     region = (rect[0], top_clip, rect[2] - rect[0], (bottom_clip - top_clip) // 2 * 2)
     global SCAN_YMAX
-    SCAN_YMAX = min(1020, bottom_clip - 4)
+    SCAN_YMAX = min(1005, bottom_clip - 4)
     print("窗口 rect=%s region=%s 扫描上限=%d" % (rect, region, SCAN_YMAX))
-    if rect[1] > 0 or rect[3] < 1020:
-        raise RuntimeError("窗口未能上移到 y<=0 且底边 >=1020（实际 %s）" % (rect,))
+    if rect[1] < 0 or rect[3] < 1000:
+        raise RuntimeError("窗口位置不对（要求顶部完整、底边 >=1000，实际 %s）" % (rect,))
 
     # 光标压表名：Ctrl+Home 钉首行=1，再滚固定档数把 L58 送到编辑区第一行
     pyautogui.click(700, 300); time.sleep(0.5)
