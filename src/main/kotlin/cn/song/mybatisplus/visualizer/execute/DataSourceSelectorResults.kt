@@ -949,11 +949,32 @@ internal fun shouldComposeEmbedSplitPane(
     hasResultComponent: Boolean,
 ): Boolean = hasEmbedHost && hasResultComponent
 
+/**
+ * T-SqlTemplateUx P2 补：`refreshResultsComponent` 的**组件换入**段是否需要执行——需同时具备
+ * 嵌入宿主（`pendingOnConsole`）与持久容器（topBlock）。无宿主时摘 DBN 结果组件无收益、
+ * 只扰动其组件树（[shouldComposeEmbedSplitPane] 的 A49 口径）。
+ *
+ * **错误晚检段不受本判据约束**：无嵌入宿主路径（SQL 快捷模板三动作 / 日志转 SQL 的「执行」，
+ * 均 `SqlExecutor.execute(onConsole = null)`）同样需要执行失败反馈——本函数拆两段正是为此，
+ * 详见 [refreshResultsComponent] 的 T-SqlTemplateUx P2 补说明。
+ */
+internal fun refreshSwapEnabled(
+    hasEmbedHost: Boolean,
+    hasTopBlock: Boolean,
+): Boolean = hasEmbedHost && hasTopBlock
+
 /** 读取 RunnerLayoutUi 当前全部结果内容（排除 Output/输出）。 */
 
 internal fun DataSourceSelector.refreshResultsComponent(ui: Any, LOG: com.intellij.openapi.diagnostic.Logger, forceSwapIn: Boolean = false, generation: Int = swapGeneration, onError: ((String) -> Unit)? = null, onErrorRich: ((ExecutionErrorInfo) -> Unit)? = null, sqlText: String? = null) {
-    val callback = pendingOnConsole ?: return
-    val top = sharedTopBlock ?: preparedTopBlock ?: return
+    // T-SqlTemplateUx P2 补（真机 2026-10-13 录制实录）：本函数是「结果页签已出现、错误晚到」的
+    // **唯一**晚检通道（[startResultTabRetry] 一旦找到结果 Tab 即停、不再扫错误）。此前首行以
+    // `pendingOnConsole` 非空判定整体早退，把**无嵌入宿主**路径（SQL 快捷模板三动作 / 日志转 SQL
+    // 的「执行」，均 SqlExecutor.execute(onConsole = null)）一并挡在门外——DBN 错误晚于结果页签写入
+    // history 时无人检测，执行失败对用户完全静默（画面只剩控制台报错 + 0 rows）。故拆两段：
+    // **错误晚检恒跑**（与宿主无关）；**组件换入**用 [refreshSwapEnabled] 收窄（无宿主不摘 DBN 组件，A49 口径）。
+    val callback = pendingOnConsole
+    val top = sharedTopBlock ?: preparedTopBlock
+    val swapEnabled = refreshSwapEnabled(hasEmbedHost = callback != null, hasTopBlock = top != null)
     val shared = sharedConsole
     var ticks = 0
     var swapped = false
@@ -1016,7 +1037,9 @@ internal fun DataSourceSelector.refreshResultsComponent(ui: Any, LOG: com.intell
             )
             // 仅第四判据为真 = 身份与名称都没变、组件被 DBN 挂回原生宿主 → 本拍是「回收重挂」
             val reclaimed = shouldSwap && !(forceSwapIn && !swapped) && !instanceChanged && !namesChanged
-            if (shouldSwap && live != null) {
+            // 无宿主（swapEnabled=false）时不做换入——错误晚检已在上方独立完成；`top != null` 供 smart-cast
+            // （逻辑上 swapEnabled 已蕴含之）。
+            if (swapEnabled && top != null && shouldSwap && live != null) {
                 // M36.5.41-A4：持久整控台原位换底（不重建 SplitPane，身份稳定）；
                 // M36.5.43：swap 助手不再返回 null（强制换入），持久容器缺失时回退
                 // buildConsoleSplitPane（feature flag）。
