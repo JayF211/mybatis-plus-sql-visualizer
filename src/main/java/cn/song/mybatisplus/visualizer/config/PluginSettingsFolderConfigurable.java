@@ -683,6 +683,7 @@ public class PluginSettingsFolderConfigurable implements Configurable {
         fields.add(new SearchableField(msg("settings.dataPermissionMockCondition"), msg("settings.dataPermissionMockCondition.tip"), "settings.section.preview", p));
         fields.add(new SearchableField(msg("settings.reverseWrapperFormat"), msg("settings.reverseWrapperFormat.tip"), "settings.section.preview", p));
         fields.add(new SearchableField(msg("settings.reverseManualEntitySelection"), msg("settings.reverseManualEntitySelection.tip"), "settings.section.preview", p));
+        fields.add(new SearchableField(msg("settings.embeddedColumnNaming"), msg("settings.embeddedColumnNaming.tip"), "settings.section.preview", p));
         fields.add(new SearchableField(msg("settings.verticalPairAnnotation"), "", "settings.section.preview", p));
         fields.add(new SearchableField(msg("settings.autoFold.enabled"), msg("settings.autoFold.enabled.tip"), "settings.section.preview", p));
         fields.add(new SearchableField(msg("settings.autoFold.threshold"), msg("settings.autoFold.threshold.tip"), "settings.section.preview", p));

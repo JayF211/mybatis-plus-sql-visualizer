@@ -274,6 +274,55 @@ public class PluginSettingsPanel implements Disposable {
     }
 
     /**
+     * T-EmbeddedColPrefix：嵌入列命名约定下拉项（值 + 当前语言显示文案）。
+     * 与 {@link LanguageOption} 同理必须按 value 判等（JDK17 `JComboBox.setSelectedItem` 按 equals 匹配）。
+     */
+    public static final class EmbeddedNamingOption {
+
+        final String value;
+        final String label;
+
+        EmbeddedNamingOption(String value, String label) {
+            this.value = value;
+            this.label = label;
+        }
+
+        @Override
+        public String toString() {
+            return label;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (!(o instanceof EmbeddedNamingOption)) return false;
+            return Objects.equals(value, ((EmbeddedNamingOption) o).value);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hashCode(value);
+        }
+    }
+
+    /** 嵌入列命名约定选项（T-EmbeddedColPrefix）：AUTO 自动 / NONE 无前缀 / COMPONENT_PATH 组件路径前缀。 */
+    public static EmbeddedNamingOption[] embeddedNamingOptions() {
+        return new EmbeddedNamingOption[]{
+            new EmbeddedNamingOption(PluginSettings.EMBEDDED_NAMING_AUTO, MpSqlVisualizerBundle.message("settings.embeddedColumnNaming.auto")),
+            new EmbeddedNamingOption(PluginSettings.EMBEDDED_NAMING_NONE, MpSqlVisualizerBundle.message("settings.embeddedColumnNaming.none")),
+            new EmbeddedNamingOption(PluginSettings.EMBEDDED_NAMING_COMPONENT_PATH, MpSqlVisualizerBundle.message("settings.embeddedColumnNaming.componentPath")),
+        };
+    }
+
+    /** value 匹配选项（k2j 翻译期助手，master 无此函数；形态对齐 {@link #inferenceOptionByValue}）。 */
+    public static EmbeddedNamingOption embeddedNamingOptionByValue(String value) {
+        for (EmbeddedNamingOption option : embeddedNamingOptions()) {
+            if (Objects.equals(option.value, value)) return option;
+        }
+        return null;
+    }
+
+    /**
      * T-CrudColor：CRUD 颜色标记形态下拉项（值 + 当前语言下的显示文案）。
      * 与 {@link LanguageOption} 同理必须按 value 判等（JDK17 `JComboBox.setSelectedItem` 按 equals 匹配）。
      */
@@ -829,6 +878,9 @@ public class PluginSettingsPanel implements Disposable {
 
     /** 反向转换 Wrapper 形态下拉（T-M36.3：AUTO/QUERY/LAMBDA/MPJ_LAMBDA）。 */
     public final JComboBox<ReverseFormatOption> reverseFormatCombo = new JComboBox<>();
+
+    /** 嵌入列命名约定下拉（T-EmbeddedColPrefix：AUTO/NONE/COMPONENT_PATH）。 */
+    public final JComboBox<EmbeddedNamingOption> embeddedNamingCombo = new JComboBox<>();
 
     /** 反向转换手动选择实体类开关（自动推断未命中/多表 JOIN 时弹实体选择弹窗）。 */
     public final JBCheckBox manualEntityCheck = new JBCheckBox();
@@ -1532,7 +1584,10 @@ public class PluginSettingsPanel implements Disposable {
             || !ignoredFieldsField.getText().trim().equals(s.getIgnoredFields())
             || !removeTablePrefixField.getText().trim().equals(s.getRemoveTablePrefix())
             || !removeTableSuffixField.getText().trim().equals(s.getRemoveTableSuffix())
-            || columnCalibrationCheck.isSelected() != s.getColumnCalibrationEnabled();
+            || columnCalibrationCheck.isSelected() != s.getColumnCalibrationEnabled()
+            || !Objects.equals(embeddedNamingCombo.getSelectedItem() instanceof EmbeddedNamingOption
+                               ? ((EmbeddedNamingOption) embeddedNamingCombo.getSelectedItem()).value : null,
+                               s.getEmbeddedColumnNaming());
     }
 
     private boolean isModifiedCodeGen(PluginSettings.State s) {
@@ -1678,6 +1733,10 @@ public class PluginSettingsPanel implements Disposable {
             s.setRemoveTablePrefix(removeTablePrefixField.getText().trim());
             s.setRemoveTableSuffix(removeTableSuffixField.getText().trim());
             s.setColumnCalibrationEnabled(columnCalibrationCheck.isSelected());
+            Object embedded = embeddedNamingCombo.getSelectedItem();
+            s.setEmbeddedColumnNaming(embedded instanceof EmbeddedNamingOption
+                ? ((EmbeddedNamingOption) embedded).value
+                : PluginSettings.EMBEDDED_NAMING_AUTO);
         }
         if (sections.contains(SECTION_CODE_GEN)) {
             Object reverse = reverseFormatCombo.getSelectedItem();
@@ -1872,6 +1931,8 @@ public class PluginSettingsPanel implements Disposable {
             removeTablePrefixField.setText(s.getRemoveTablePrefix());
             removeTableSuffixField.setText(s.getRemoveTableSuffix());
             columnCalibrationCheck.setSelected(s.getColumnCalibrationEnabled());
+            EmbeddedNamingOption embedded = embeddedNamingOptionByValue(s.getEmbeddedColumnNaming());
+            embeddedNamingCombo.setSelectedItem(embedded != null ? embedded : embeddedNamingOptions()[0]);
         }
         if (sections.contains(SECTION_CODE_GEN)) {
             ReverseFormatOption reverse = reverseFormatOptionByValue(s.getReverseWrapperFormat());

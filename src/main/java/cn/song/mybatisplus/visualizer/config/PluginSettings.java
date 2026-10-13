@@ -228,6 +228,14 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         private boolean autoCheckUpdate = false;
         private String ignoredUpdateVersions = "";
         private String reverseWrapperFormat = REVERSE_AUTO;
+
+        /**
+         * 嵌入列（@Embedded/@Embeddable 展平列）的命名约定（T-EmbeddedColPrefix）：
+         * {@link #EMBEDDED_NAMING_AUTO} 自动（按工程内 Hibernate 命名配置判定，判不出按无前缀）/
+         * {@link #EMBEDDED_NAMING_NONE} 无前缀（JPA 默认）/ {@link #EMBEDDED_NAMING_COMPONENT_PATH} 组件路径前缀。
+         * 解析见 {@code cn.song.mybatisplus.visualizer.psi.jpa.EmbeddedColumnNamingResolver}。
+         */
+        private String embeddedColumnNaming = EMBEDDED_NAMING_AUTO;
         private boolean reverseManualEntitySelection = true;
         private String logSqlPrefix = DEFAULT_LOG_SQL_PREFIX;
         private String logParamPrefix = DEFAULT_LOG_PARAM_PREFIX;
@@ -606,6 +614,9 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         public String getReverseWrapperFormat() { return reverseWrapperFormat; }
         public void setReverseWrapperFormat(String reverseWrapperFormat) { this.reverseWrapperFormat = reverseWrapperFormat; }
 
+        public String getEmbeddedColumnNaming() { return embeddedColumnNaming; }
+        public void setEmbeddedColumnNaming(String embeddedColumnNaming) { this.embeddedColumnNaming = embeddedColumnNaming; }
+
         public boolean getReverseManualEntitySelection() { return reverseManualEntitySelection; }
         public void setReverseManualEntitySelection(boolean reverseManualEntitySelection) { this.reverseManualEntitySelection = reverseManualEntitySelection; }
 
@@ -835,6 +846,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
             c.autoCheckUpdate = autoCheckUpdate;
             c.ignoredUpdateVersions = ignoredUpdateVersions;
             c.reverseWrapperFormat = reverseWrapperFormat;
+            c.embeddedColumnNaming = embeddedColumnNaming;
             c.reverseManualEntitySelection = reverseManualEntitySelection;
             c.logSqlPrefix = logSqlPrefix;
             c.logParamPrefix = logParamPrefix;
@@ -975,6 +987,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
                     && columnCalibrationEnabled == that.columnCalibrationEnabled
                     && Objects.equals(ignoredUpdateVersions, that.ignoredUpdateVersions)
                     && Objects.equals(reverseWrapperFormat, that.reverseWrapperFormat)
+                    && Objects.equals(embeddedColumnNaming, that.embeddedColumnNaming)
                     && Objects.equals(reverseManualEntitySelection, that.reverseManualEntitySelection)
                     && Objects.equals(logSqlPrefix, that.logSqlPrefix)
                     && Objects.equals(logParamPrefix, that.logParamPrefix)
@@ -1016,7 +1029,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
                     logicDeleteValue, injectTenantLine, tenantColumnName, tenantColumnDefault, injectTenantOnInsert,
                     tablePrefix, tableSuffix, tableNameInference, ignoredFields, removeTablePrefix, removeTableSuffix,
                     columnCalibrationEnabled,
-                    autoCheckUpdate, ignoredUpdateVersions, reverseWrapperFormat, reverseManualEntitySelection,
+                    autoCheckUpdate, ignoredUpdateVersions, reverseWrapperFormat, embeddedColumnNaming, reverseManualEntitySelection,
                     logSqlPrefix, logParamPrefix, logMixedPrefix, logAutoCaptureOnStart, logAutoCaptureSuppressed,
                     logStopOnToolWindowClose, logAutoOpenOnCapture, logTimestampEnabled, logTimestampFormat, logTimestampSource,
                     logFormatSql, literalParamRecovery, logFilterKeywords, logDedupeWindowMs, logMaxParseLength, logMaxCount,
@@ -1086,6 +1099,15 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
 
     /** 反向转换 Wrapper 形态：MPJLambdaWrapper（无实体回落字符串）。 */
     public static final String REVERSE_MPJ_LAMBDA = "MPJ_LAMBDA";
+
+    /** 嵌入列命名：自动（按工程 Hibernate 命名配置判定，T-EmbeddedColPrefix 默认）。 */
+    public static final String EMBEDDED_NAMING_AUTO = "AUTO";
+
+    /** 嵌入列命名：无前缀（JPA 默认，`qty.baseQty` → `base_qty`）。 */
+    public static final String EMBEDDED_NAMING_NONE = "NONE";
+
+    /** 嵌入列命名：组件路径前缀（Hibernate component-path，`qty.baseQty` → `qty_base_qty`）。 */
+    public static final String EMBEDDED_NAMING_COMPONENT_PATH = "COMPONENT_PATH";
 
     // ---------- SQL 日志默认值（T-M31.14） ----------
     public static final String DEFAULT_LOG_SQL_PREFIX = "Preparing:";

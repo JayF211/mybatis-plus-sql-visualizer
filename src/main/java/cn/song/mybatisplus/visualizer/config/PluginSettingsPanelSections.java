@@ -145,6 +145,11 @@ public final class PluginSettingsPanelSections {
                 self.columnCalibrationCheck.setText(MpSqlVisualizerBundle.message("settings.columnCalibration"));
                 self.columnCalibrationCheck.setToolTipText(MpSqlVisualizerBundle.message("settings.columnCalibration.tip"));
                 addRow(p, g, "", self.columnCalibrationCheck);
+                self.embeddedNamingCombo.setModel(new DefaultComboBoxModel<>(self.embeddedNamingOptions()));
+                self.embeddedNamingCombo.setToolTipText(MpSqlVisualizerBundle.message("settings.embeddedColumnNaming.tip"));
+                Object embedded = self.embeddedNamingOptionByValue(self.settings.getState().getEmbeddedColumnNaming());
+                self.embeddedNamingCombo.setSelectedItem(embedded != null ? embedded : self.embeddedNamingOptions()[0]);
+                addRow(p, g, MpSqlVisualizerBundle.message("settings.embeddedColumnNaming"), self.embeddedNamingCombo);
             });
         }
 
