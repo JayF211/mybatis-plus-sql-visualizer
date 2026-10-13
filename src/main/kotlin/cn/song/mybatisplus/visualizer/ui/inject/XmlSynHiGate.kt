@@ -74,6 +74,48 @@ object XmlSynHiGate {
     private val foreignProbeMemo: MutableMap<PsiElement, ProbeMemo> =
         java.util.Collections.synchronizedMap(java.util.WeakHashMap<PsiElement, ProbeMemo>())
 
+    // ------------------------------------------------------------------
+    // V38 计数缝（诊断，默认关）
+    // ------------------------------------------------------------------
+
+    /**
+     * T-PerfSweep25 通道 1 ③（V38）：F79 残留探针税**量级实测**所需的计数缝。
+     *
+     * 量级不可静态推算——探针被问几次取决于真机编辑动作与在册注入器形态（含第三方），
+     * 故以开关式计数记录「[occupiedRanges] 每问：memo 命中 / 实探」的累计读数，每 100 问
+     * 打一行到 idea.log（logger 名 `mpsv.v38`），供真机（沙盒 vmoptions 注
+     * `-Dmpsv.probeTrace=true`）直读：某次编辑动作前后两行读数之差 = 该动作的问询量与实探量。
+     *
+     * 成本：开关为类加载期读一次系统属性的字段（测试可翻转），**关闭时每问只多一次布尔读**
+     * （零增量分配、无 Timer/无正则，符合红线族）；开启时每问两次 AtomicLong 增量，仅诊断期承担。
+     */
+    internal var probeTraceEnabled: Boolean = System.getProperty("mpsv.probeTrace") == "true"
+    private val traceCalls = java.util.concurrent.atomic.AtomicLong()
+    private val traceMemoHits = java.util.concurrent.atomic.AtomicLong()
+    private val traceProbeRuns = java.util.concurrent.atomic.AtomicLong()
+    private val traceLog = com.intellij.openapi.diagnostic.Logger.getInstance("mpsv.v38")
+
+    private fun traceCall(memoHit: Boolean) {
+        if (!probeTraceEnabled) return
+        val total = traceCalls.incrementAndGet()
+        if (memoHit) traceMemoHits.incrementAndGet() else traceProbeRuns.incrementAndGet()
+        if (total % 100L == 0L) {
+            traceLog.info("[V38] probeCalls=$total memoHits=${traceMemoHits.get()} probeRuns=${traceProbeRuns.get()}")
+        }
+    }
+
+    /**
+     * V38 计数缝读数快照（calls / memoHits / probeRuns 三累计）。真机读数由 idea.log 的
+     * `[V38]` 行直读；本快照供测试直读（免日志解析）。
+     */
+    internal fun probeTraceSnapshot(): LongArray =
+        longArrayOf(traceCalls.get(), traceMemoHits.get(), traceProbeRuns.get())
+
+    /** V38 计数缝复位（测试用；真机不需要——进程级累计即读数）。 */
+    internal fun resetProbeTraceForTest() {
+        traceCalls.set(0); traceMemoHits.set(0); traceProbeRuns.set(0)
+    }
+
 
     /**
      * 默认区间探针：EP 枚举（项目级）+ [foreignInjectorsOccupiedRanges]（读
@@ -113,8 +155,9 @@ object XmlSynHiGate {
             if (file != null) {
                 foreignProbeMemo[host]
                     ?.takeIf { it.psiStamp == psiStamp && it.injectorList === injectorList }
-                    ?.let { return it.ranges }
+                    ?.let { traceCall(memoHit = true); return it.ranges }
             }
+            traceCall(memoHit = false)
             val fresh = foreignInjectionProbe?.let { seam ->
                 if (seam(project, host)) InjectRangePlan.yieldAll(host.textLength) else emptyList()
             } ?: foreignOccupiedRangesProbe(project, host)
