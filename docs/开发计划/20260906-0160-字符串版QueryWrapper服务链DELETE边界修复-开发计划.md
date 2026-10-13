@@ -3,7 +3,7 @@
 - **任务ID**：T-StrWrapperDeleteWhere
 - **立项时间**：2026-09-06 02:00
 - **分支**：`dev`
-- **前置**：M37M38 已知边界记录（`docs/架构设计/M37M38竞品融合新增功能-说明文档.md` §五）+ 金样矩阵 M38.2 缺陷尾注（`SqlPreviewSpecMatrixTest.kt` 文件尾）；第二轮调研报告（20260906-0120）§5.2 O-8 立项
+- **前置**：M37M38 已知边界记录（`docs/架构设计/M37M38新增功能-说明文档.md` §五）+ 金样矩阵 M38.2 缺陷尾注（`SqlPreviewSpecMatrixTest.kt` 文件尾）；第二轮调研报告（20260906-0120）§5.2 O-8 立项
 
 ## 1. 问题
 
@@ -64,7 +64,7 @@ M37M38 记录的已知边界：字符串版 `QueryWrapper` 经 `service.remove(w
 | `ui/SqlPreviewService.kt` | ① table=null 分支改显式降级警示（§2.2）；② deleteConsumed 分支透传 last 尾段（§2.3） |
 | `model/SqlStatement.kt`（DeleteStatement）+ `sql/SqlGenerator.kt`（generateDelete） | DELETE 尾段承载与渲染（§2.3，形态以实施期确认为准） |
 | `src/test/kotlin/cn/song/mybatisplus/visualizer/sql/spec/SqlPreviewSpecMatrixTest.kt` | 第九批场景 S83~S90（见 §2.7）+ warning 断言 helper；删除文件尾 M38.2 已知缺陷尾注（缺陷随本计划收敛） |
-| `docs/架构设计/M37M38竞品融合新增功能-说明文档.md` §五 | 「DELETE 缺 WHERE」表述勘误为实测边界（var 消费语义/service.query 无预览/DELETE 丢 last），标注修复版本 |
+| `docs/架构设计/M37M38新增功能-说明文档.md` §五 | 「DELETE 缺 WHERE」表述勘误为实测边界（var 消费语义/service.query 无预览/DELETE 丢 last），标注修复版本 |
 
 ### 2.7 测试设计（矩阵第九批，每条一行预期语义）
 

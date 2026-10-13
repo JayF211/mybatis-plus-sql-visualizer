@@ -1,7 +1,7 @@
 # dev 与 t-crudcolor 分支合并 master 验收文档
 
 > **验收对象**：2026-09-13 master 吸收 dev（119 提交）与 t-crudcolor（7 提交）两分支的合并交付（merge `a5d9307` + `8d2c919`，文档同步 `d879760`）。
-> **面向读者**：功能验收人（含用户本人真机走查）。实现细节见 [T-MergeDevCrudcolorIntoMaster 开发计划](../开发计划/20260913-1134-T-MergeDevCrudcolorIntoMaster-dev与CrudColor分支合并master-开发计划.md)，M37 系列功能的使用说明另见 [M37/M38 竞品融合新增功能说明](../架构设计/M37M38竞品融合新增功能-说明文档.md)。
+> **面向读者**：功能验收人（含用户本人真机走查）。实现细节见 [T-MergeDevCrudcolorIntoMaster 开发计划](../开发计划/20260913-1134-T-MergeDevCrudcolorIntoMaster-dev与CrudColor分支合并master-开发计划.md)，M37 系列功能的使用说明另见 [M37/M38 竞品融合新增功能说明](../架构设计/M37M38新增功能-说明文档.md)。
 > **回归基线**：全量 3880/0/6 绿（303 测试类）；verifyPlugin 三目标 Compatible（IU-243/253/262）；buildPlugin 产出 `mybatis-plus-sql-visualizer-2026.9.14-beta.1.zip`。
 
 ---
@@ -88,7 +88,7 @@
 | 2 | 点击 | 按当前方言包装 EXPLAIN 提交原生控制台，真实执行计划与面板静态性能标注同屏对照；无 DML 二次确认弹窗 |
 | 3 | 换 Oracle 或 SQL Server 数据源点击 | 提示该方言不支持，不影响其他功能 |
 
-方言渲染形态与真机验证矩阵见 [M37/M38 说明 §2.3](../架构设计/M37M38竞品融合新增功能-说明文档.md)。前置：Ultimate + 已配数据源。
+方言渲染形态与真机验证矩阵见 [M37/M38 说明 §2.3](../架构设计/M37M38新增功能-说明文档.md)。前置：Ultimate + 已配数据源。
 
 ### 3.6 ORM 识别域扩展（M39/M44）
 

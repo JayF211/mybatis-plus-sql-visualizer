@@ -1,4 +1,4 @@
-# T-JdbcMultiline：多行 JdbcTemplate 日志漏捕获与 MyBatisCodeHelper-Pro 精华移植 开发计划
+# T-JdbcMultiline：多行 JdbcTemplate 日志漏捕获修复 开发计划
 
 > **创建日期**：2026-09-08
 > **分支**：master（当前 HEAD `86105cd`）
@@ -67,27 +67,27 @@
 - **不会双记**：多行还原文本与 named 单行副本的差异已由 T-LogDedupeMpMark 的 `normalizeSqlWhitespace`（trim + 连续空白折叠，含换行）归一，去重链路天然兼容；
 - **手动粘贴面板同源同漏**：`LogToSqlPanel`（:236-248）同样逐行 feed 同一解析器，用户复制控制台多行块粘贴进去也拿不到——本修复两路同时受益。
 
-### 2.4 MyBatisCodeHelper-Pro 能力对照结论（在售版 3.5.9+2321）
+### 2.4 同类工具能力对照结论（在售版）
 
-其 SQL 日志功能源自开源 BatsLog（plugin.xml changelog 自述 "Sql log from batslog"），机制按行为语义对照还原。
+其 SQL 日志功能源自开源 BatsLog，机制按行为语义对照还原。
 
-**捕获架构**：`consoleFilterProvider` EP（plugin.xml 注册 `com.ccnode.codegenerator.P.c`）→ `P.b implements Filter` 逐行 `applyFilter`。比我们的反射桥少一层平台版本适配成本——他们用的 `com.intellij.execution.filters.Filter` 是稳定接口，2024~2026.2 未破坏（我们 2026.2 被 `addMessageFilter` 独立接口变更咬过一次，T-M31.12）。
+**捕获架构**：通过 `consoleFilterProvider` 稳定 EP 注册逐行 Filter。比我们的反射桥少一层平台版本适配成本——它用的 `com.intellij.execution.filters.Filter` 是稳定接口，2024~2026.2 未破坏（我们 2026.2 被 `addMessageFilter` 独立接口变更咬过一次，T-M31.12）。
 
-**解析模型**（`P.b.applyFilter` + `f.g`）：
+**解析模型**：
 
 - **可配置前缀配对**：`sqlPrefix`（默认 `Preparing:`）/`paramsPrefix`（默认 `Parameters:`），支持逗号分隔多前缀（`enableMixedPrefix`）；Preparing 行缓存为 lastPrepareLine，Parameters 行到来时才配对产出——**只有成对语句产出**，无参数的 SQL 单行不捕；
-- **尾部公共后缀对齐降噪**（`f.g.b(String,String)`，f/g.java:91）：Preparing 与 Parameters 两行从尾部逐字符比较，削去共同后缀——不认识日志格式也能去掉行尾噪音（自定义 pattern 的耗时、来源等后缀），零配置通用；
-- **多行容忍**（`f.g.a(...)`，f/g.java:219-288）：prepare+params 拼接后整体 `split("\n")` 逐行扫描，参数续行 append 到上一条（行尾 `)` 判闭合）；但 SQL 本身仍按单行取，跨行 SQL 它一样丢；
-- **参数还原**（`f.g.b(String)`，f/g.java:529）：MyBatis `(value(Type))` 序列从尾向头扫描，`null(Null)` 特判；类型表 8 包装类 + 23 JDBC 类型名驱动，`Class.forName("java.lang."+type)` 真实转换后判数值/字符串——与我们 PLAIN_TYPES 同型。
+- **尾部公共后缀对齐降噪**：Preparing 与 Parameters 两行从尾部逐字符比较，削去共同后缀——不认识日志格式也能去掉行尾噪音（自定义 pattern 的耗时、来源等后缀），零配置通用；
+- **多行容忍**：prepare+params 拼接后整体 `split("\n")` 逐行扫描，参数续行 append 到上一条（行尾 `)` 判闭合）；但 SQL 本身仍按单行取，跨行 SQL 它一样丢；
+- **参数还原**：MyBatis `(value(Type))` 序列从尾向头扫描，`null(Null)` 特判；类型表 8 包装类 + 23 JDBC 类型名驱动，`Class.forName("java.lang."+type)` 真实转换后判数值/字符串——与我们 PLAIN_TYPES 同型。
 
 **输出侧工程**（这是它最扎实的部分）：
 
-- **批量异步写 UI**：捕获只 `ConcurrentLinkedQueue.offer`；单守护线程 `SQL-Batch-Processor` 每 1s 排空，按 Project 分组，每组一次 `invokeLater` + 一次 `WriteCommandAction` 批量插入（P.b.b()/c()/a(Project,...)）——高频日志下 EDT 写次数与 SQL 条数解耦；
+- **批量异步写 UI**：捕获只入并发队列；单守护线程每 1s 排空，按 Project 分组，每组一次 `invokeLater` + 一次 `WriteCommandAction` 批量插入——高频日志下 EDT 写次数与 SQL 条数解耦；
 - **文档自清理**：输出文档超 200k 字符删头部 50k（两处落点一致）；
 - **去重**：开关 + 时间窗（key=prepare+params 原文拼接，value=count+lastTime，窗内命中 count++）——原文键正是 T-LogDedupeMpMark 刚证明会漏判的方案，我们的 `sqlFingerprint` 指纹键已优于它；
-- **其余设置面**（BatsLogConfig，22 项）：`ignoreSqlContains` 逗号分隔黑名单、`maxPrepareAndParameterLength` 超长防护（超长时控制台打超链接提示而非静默截断）、`autoJumpOut` 首次捕获自动弹工具窗（static latch 只弹一次）、`addTimestamp`+`timeFormat`+自增序号写 `/*seq timestamp mapper*/` 头注释、`deleteLogSuffix` 削指定行尾、`startWithProject` 随项目自启（我们 LogStartupCapture 已有）。
+- **其余设置面**（约 22 项）：逗号分隔黑名单、超长防护（超长时控制台打超链接提示而非静默截断）、首次捕获自动弹工具窗（只弹一次）、时间戳+格式+自增序号写 `/*seq timestamp mapper*/` 头注释、删指定行尾、随项目自启（我们 LogStartupCapture 已有）。
 
-**能力边界（关键结论）**：全源码 grep 无 `Executing`/`JdbcTemplate`/`prepared SQL` 任何处理——它对 Hibernate/JdbcTemplate 格式零支持。用户样本喂给它同样一条不进。**反编译的精华是"怎么工程化地吃日志"，不是"这条日志的现成答案"。**
+**能力边界（关键结论）**：对日志格式零硬支持——`Executing`/`JdbcTemplate`/`prepared SQL` 均不处理，Hibernate/JdbcTemplate 格式零支持。用户样本喂给它同样一条不进。**可借鉴的精华是「怎么工程化地吃日志」，不是「这条日志的现成答案」。**
 
 **精华对照表**：
 
@@ -100,7 +100,7 @@
 | 类型驱动参数还原 | 已有（PLAIN_TYPES + 类名前缀剥离） | 已对齐 |
 | 批量异步写 UI / 文档自清理 | 已有（T-Perf-03 差分刷新、EntryBuffer 淘汰） | 已对齐 |
 | 指纹去重 + 时间窗 | 已有且更强（T-Perf-19/T-LogDedupeMpMark） | 已对齐 |
-| ignoreSqlContains 黑名单 | 无 | 本轮采纳（§3.2） |
+| 日志黑名单 | 无 | 本轮采纳（§3.2） |
 | 超长 SQL 用户可见提示 | 静默截断 | P2 可选（§3.3） |
 
 ## 三、技术方案
@@ -123,11 +123,11 @@ private var multilineNetBrackets = 0            // string-aware 净括号计数
 - **防失控边界**：COLLECTING 态遇到新语句行（SQL_LINE_PATTERN 动作短语命中）或 NamedParameter 行 → 按现文本强制闭合（宁错切不吞后句）；`closePending()` 对未闭合的 COLLECTING buffer 同样强制闭合——`LogToSqlPanel` 末尾的 `closePending()`（:247）零改动即受益；
 - **不动的部分**：SQL_LINE_PATTERN 原正则保留做单行快路径（含 `take(maxParseLength)`）；`feed` 分支顺序、`closePending` 签名、`SqlLogConsoleBridge`/`SqlLogPanel` 全部零改动——不碰 T-LogListFreeze04 刚重构的渲染管线。
 
-### 3.2 改动点二：ignoreSqlContains 黑名单（BatsLogConfig 精华移植）
+### 3.2 改动点二：日志黑名单（同类工具精华移植）
 
 > **实施核实（2026-09-08）**：该能力已由既有 `logFilterKeywords` 等价覆盖——设置 UI（PluginSettingsPanel.kt:446）、
 > buffer 层过滤（SqlLogEntryBuffer.kt:138，`contains` ignoreCase）、SqlLogManager 同步（:262）与测试齐备。
-> 本轮未新增代码，BatsLog 的 `ignoreSqlContains` 与本插件 `logFilterKeywords` 判为同一能力的两种命名。
+> 本轮未新增代码，同类工具的日志黑名单与本插件 `logFilterKeywords` 判为同一能力的两种命名。
 
 - `PluginSettings` 增 `logIgnoreSqlContains: String`（默认空，逗号分隔，contains 匹配，trim 逐项）；
 - `processConsoleLine` 在 `taken` 之后、`buffer.addEntry` 之前过滤（与 `pendingSource` 暂存逻辑无交集）；`BridgeLineContext` 加缓存字段，随 `refreshConsoleContexts` 刷新（对齐 T-LogPerf-04 的零逐行成本模式，不逐行读设置）；
@@ -145,7 +145,7 @@ private var multilineNetBrackets = 0            // string-aware 净括号计数
 - **druid SQLUtils 格式化**：对方借 druid 做方言格式化，我们引入 33MB 依赖不现实，自研 formatter 已覆盖；
 - **还原 SQL 彩色回显进运行控制台**（BatsLog 的 FormatConsole + 关键字着色）：向用户运行控制台写内容侵入性强，与我们的侧边面板形态冲突；
 - **原文拼接键去重**：T-LogDedupeMpMark 已实证原文键漏判，指纹键不回退；
-- **照抄混淆 API**：反编译产物类名方法名多为 a/b/c，一律以行为语义为准重写，方法命名遵循本地规范，杜绝调用不存在的 API（用户铁律）。
+- **移植他方 API 形态**：以行为语义为准重写，方法命名遵循本地规范，杜绝调用不存在的 API（用户铁律）。
 
 ## 四、测试计划
 
@@ -157,7 +157,7 @@ private var multilineNetBrackets = 0            // string-aware 净括号计数
   5. 回归：既有单行 prepared/named/参数行/存储过程用例零改动通过（快路径不变的证据）；
 - `SqlLogConsoleBridgeMarkerTest`：样本经 `processConsoleLine` 端到端 → `SELECT COUNT(` 逐条判定命中 [MP 分页计数] 标记（F-44-7 语义在多行路径上仍成立）；
 - `LogToSqlPanel` 粘贴路径：多行块粘贴 → 末尾 closePending 强制闭合产出；
-- ignoreSqlContains：命中过滤 / 未命中放行 / 空设置全放行 / 与去重徽章链路无串扰；
+- 日志黑名单：命中过滤 / 未命中放行 / 空设置全放行 / 与去重徽章链路无串扰；
 - 全量基线：当前 3112 通过为基线，预计净增 12~15 个用例；跑 `./gradlew` 前按铁律先 `python C:\Users\USER\.zcode\cli\parallel_tasks.py check`。
 
 ## 五、风险与边界
@@ -197,8 +197,7 @@ private var multilineNetBrackets = 0            // string-aware 净括号计数
    平衡括号被计入缓冲——真实控制台续行是裸文本，测试改为裸行后通过）；`takeEntries` 二次取的清空语义
    理解错（首次取已取走 COUNT 条目）；Bridge 批内应为两条（named 行自身也产出，与 T-LogDedupeMpMark
    批序语义一致）。
-2. 反编译工具链：捆绑 java-decompiler.jar 为 class file 69（Java 25），PATH 的 JDK 8/21 均跑不动，
-   须用 IDEA 自带 JBR 25（`IDEA安装目录/jbr/bin/java`）运行；unzip 通配符不递归，须全量解包后按目录清理。
+2. 方法名核对：对照时以行为语义为准，凡命名形态与原实现不一致者一律重写为本地规范命名，杜绝调用不存在的 API。
 
 **遗留人工跟进**：runIde 真机以用户项目日志（TLog TID 前缀 + 跨行 SQL）重放验证，统一走 runide-demo-verify-workflow；
 P2 三项（尾部公共后缀降噪、超长可见提示、consoleFilterProvider EP 双轨）按需另行立项。

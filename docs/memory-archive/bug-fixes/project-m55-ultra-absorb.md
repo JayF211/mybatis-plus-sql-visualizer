@@ -10,7 +10,7 @@ metadata:
 
 # M55 Ultra 精华融合（已立项待实施）
 
-**2026-09-07 立项**，提交 2d0a41c 于 feature/r2-competition-response（worktree mpsv-r2）。计划：`docs/开发计划/20260907-0905-MybatisLogUltra精华融合-开发计划.md`。
+**2026-09-07 立项**，提交 2d0a41c 于 feature/r2-competition-response（worktree mpsv-r2）。计划：`docs/开发计划/20260907-0905-MybatisLogUltra能力对照-开发计划.md`。
 
 **来源**：N-10 调研（20260906-0230）结论「无需另立」被深化调研推翻——四源证据（updates API 经 `/api/updates/{id}` 端点逐版取全量 changeNotes、文档站 i18n、演示 GIF 帧、GitHub）修正三处认知：① 方法级聚焦完成度被低估（动态 `Class#method` 页签，与 Mapper 方法名分组是两个特性）；② 请求级聚合实为扁平过滤视图而非树形分组；③ Restful Api Tool 是真实内嵌 HTTP 客户端且为请求边界触发器。
 
@@ -34,4 +34,4 @@ metadata:
 
 ## 2026-09-16 核实（待办盘点会话）
 
-四子任务**全部未实施**：标志物 `MapperXmlLocator` 在 master / dev / feature/r2-competition-response 三分支 `git grep` 零命中。标记行 3~5 段宽松化公共约定已随 T-M56-00 提前交付；四子任务与 M56 agent 通道职责重叠，**建议与 M56 统筹而非独立排期**。另实测本计划文档在 r2 与 master 的 `docs/开发计划/20260907-0905-MybatisLogUltra精华融合-开发计划.md` 路径均 git cat-file 失败，文档实际位置待查（r2 分支现存 HEAD 8c90b74）。
+四子任务**全部未实施**：标志物 `MapperXmlLocator` 在 master / dev / feature/r2-competition-response 三分支 `git grep` 零命中。标记行 3~5 段宽松化公共约定已随 T-M56-00 提前交付；四子任务与 M56 agent 通道职责重叠，**建议与 M56 统筹而非独立排期**。另实测本计划文档在 r2 与 master 的 `docs/开发计划/20260907-0905-MybatisLogUltra能力对照-开发计划.md` 路径均 git cat-file 失败，文档实际位置待查（r2 分支现存 HEAD 8c90b74）。

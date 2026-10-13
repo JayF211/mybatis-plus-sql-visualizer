@@ -7,7 +7,7 @@ metadata:
   originSessionId: sess_8afc9bd7-fcdf-42b6-9c4c-a44484b3c8f0
 ---
 
-第三轮竞品横向对比 2026-09-14 交付，主报告 `docs/调研报告/20260914-0211-竞品横向对比与功能建议-第三轮调研报告.md`，两个专项：DBX（`20260914-0211-DBX数据库工具深度调研与MCP吸收规划-调研报告.md`，源码克隆 `F:\code\Database\dbx`）、MyBatis SQL Analyzer（`20260914-0211-MyBatisSQLAnalyzer对标-调研报告.md`，克隆 `F:\code\Java\Github\mybatis-sql-analyzer`）。
+第三轮竞品横向对比 2026-09-14 交付，主报告 `docs/调研报告/20260914-0211-竞品横向对比与功能建议-第三轮调研报告.md`，两个专项：DBX（`DBX 数据库工具调研（内部资料库）`，源码克隆 `F:\code\Database\dbx`）、MyBatis SQL Analyzer（`MyBatisSQLAnalyzer 对标调研（内部资料库）`，克隆 `F:\code\Java\Github\mybatis-sql-analyzer`）。
 
 关键事实（后续会话直接引用，勿重查）：
 - **分支债（2026-09-14 晚已清账）**：上轮九条建议（N-6~N-10/O-5~O-8，5✅4🟡零弃坑）+ T-RollbackSql 已随 `feature/r2-competition-response`（63 提交）合入 `t-fourplans-20260914`（merge 4b5b964，4167 绿，见 [[t-fourplans-batch]]，待最终集成后落 master）；合流时 O-6 增强废弃（被 T-JumpCapture 捕获位置路线取代）、N-9 废弃（master M37.4 生成测试已下线，思路留档）。t-m56-00/01 分支仍待合（合入前需独立性能评估）。
