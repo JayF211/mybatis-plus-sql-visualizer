@@ -108,7 +108,13 @@ internal object ExecDialectRouting {
         return null
     }
 
-    /** 组 Runner 展开判定（纯函数）：该 runner 是否携带非空子 Runner 列表。 */
+    /**
+     * 组 Runner 展开判定（纯函数）：该 runner 是否携带非空子 Runner 列表。
+     *
+     * 空子项组**保留原项**（`subs.isNullOrEmpty()` 与「非组项」同支）：平台「All」组在数据源
+     * introspect 完成前子 Runner 为空，此时组项仍是唯一执行句柄——按空展开剔除会把 Runner
+     * 列表清空、命中空 Runner 归因文案并终结执行链（20261014 testDbConsole 集成回归实证）。
+     */
     internal fun <T> expandGroupRunners(
         runners: List<T>,
         nameOf: (T) -> String,
@@ -118,11 +124,11 @@ internal object ExecDialectRouting {
         val seen = HashSet<String>()
         for (r in runners) {
             val subs = subRunnersOf(r)
-            if (subs == null) {
+            if (subs.isNullOrEmpty()) {
                 if (seen.add(nameOf(r))) out.add(r)
                 continue
             }
-            // 组项本体剔除（平台组 runnable 为空操作）；子 Runner 浮出顶层、按显示名去重
+            // 组项本体剔除（有子项可浮出时组项不再承载可选项）；子 Runner 浮出顶层、按显示名去重
             for (sub in subs) {
                 if (seen.add(nameOf(sub))) out.add(sub)
             }

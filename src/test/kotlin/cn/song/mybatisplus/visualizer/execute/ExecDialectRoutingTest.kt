@@ -13,8 +13,10 @@ import java.io.File
  *  - 目标方言 id 决策（平台 DAS 方言优先，URL 推断兜底，皆无 null=保持 MySQL 现状）；
  *  - 目标数据源解析（last-used 记忆 UUID→名字→插件默认数据源→null）；
  *  - URL 子协议 → 平台 SQL 方言 language id 兜底（平台不可用/方言缺位时诚实降级，不猜）；
- *  - 组 Runner 展开（"All" 组的 sub-runners 浮出顶层并按显示名去重——平台组项 runnable 为空操作，
- *    插件弹窗不展开子级，导致方言不匹配的数据源（DM 等）藏在死项里不可选）；
+ *  - 组 Runner 展开（"All" 组的 sub-runners 浮出顶层并按显示名去重——插件弹窗不展开子级，
+ *    导致方言不匹配的数据源（DM 等）藏在组项里不可选；**空子项组保留原项**：数据源
+ *    introspect 完成前组项子 Runner 为空，此时组项仍是唯一执行句柄，剔除会清空 Runner
+ *    列表并终结执行链——20261014 testDbConsole 集成回归实证）；
  *  - 空 Runner 文案选择（有在册数据源=方言不匹配可行动文案；无在册=既有空数据源文案）；
  *  - 生产接线守卫（源码扫描）：路由调用、展开调用、方言不匹配文案三处接线在场——
  *    摘掉接线即红（反向验证锚点）。
@@ -201,13 +203,18 @@ class ExecDialectRoutingTest {
     }
 
     @Test
-    fun `组Runner展开_空子Runner的组项剔除`() {
+    fun `组Runner展开_空子Runner的组项保留`() {
+        // 20261014 集成回归（testDbConsole）实证：平台「All」组在数据源 introspect 完成前
+        // 子 Runner 为空，但组项本身仍是唯一执行句柄——剔除会把 Runner 列表清空、
+        // 命中空 Runner 归因文案并终结执行链。无子项可浮出时按普通项保留原实例。
+        val all = R("All Data Sources", emptyList())
         val expanded = ExecDialectRouting.expandGroupRunners(
-            listOf(R("a"), R("All Data Sources", emptyList())),
+            listOf(R("a"), all),
             nameOf = { it.name },
             subRunnersOf = { it.subs },
         )
-        assertEquals("空组项是死项（平台组 runnable 为空操作），应剔除", listOf("a"), expanded.map { it.name })
+        assertEquals("空子项组无子项可浮出，应保留原项", listOf("a", "All Data Sources"), expanded.map { it.name })
+        assertTrue("保留的应是原组项实例", expanded.last() === all)
     }
 
     // ------------------------------------------------------------------
