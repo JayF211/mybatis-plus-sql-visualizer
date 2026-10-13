@@ -282,12 +282,27 @@ internal fun DataSourceSelector.chooseAndPrepare(
 
     when {
         runners.isEmpty() -> {
-            LOG.warn("[M36] runners empty (execute=$executeAfterPrepare)")
+            // O-136 T-PreviewExecDsDialect D3：空 Runner 二分归因——有在册数据源 = 方言不匹配
+            //（或数据源均不可连接），给可行动文案（V3），不再让用户笼统「没数据源」或等超时；
+            // 真无数据源保持既有引导文案。
+            val registered = runCatching { DataSourceSettings.getAllDataSources(project) }.getOrDefault(emptyList())
+            LOG.warn("[M36] runners empty (execute=$executeAfterPrepare, registered=${registered.size})")
+            if (executeAfterPrepare) openDatabaseToolWindow(project)
+            if (registered.isEmpty()) {
+                onError?.invoke(MpSqlVisualizerBundle.message("execute.datasource.empty"))
+            } else {
+                val targetDs = ExecDialectRouting.resolveTargetDataSource(project)
+                val targetLanguage = ExecDialectRouting.resolveTargetLanguage(project, targetDs)
+                val dialectDisplay = (targetLanguage as? com.intellij.lang.Language)?.id
+                    ?: ExecDialectRouting.MYSQL_LANGUAGE_ID
+                val names = registered.joinToString(", ") { DataSourceSettings.getName(it) }
+                onError?.invoke(
+                    MpSqlVisualizerBundle.message("execute.datasource.dialectMismatch", dialectDisplay, names),
+                )
+            }
             // T-DsCover：仅显式执行引导打开 Database 工具窗；预览默认准备静默——
             // 补全 M36.5 预览路径（onError=null）设计意图，避免每次双击预览抢占侧边栏。
-            if (executeAfterPrepare) openDatabaseToolWindow(project)
             // M36.3：无数据源时通知 UI 从「执行中」恢复
-            onError?.invoke(MpSqlVisualizerBundle.message("execute.datasource.empty"))
             // T-FirstExecResultInvisible F1：链就此终结，复位单飞位（否则后续执行被永久排队）
             if (ownsGate) prepareGate.finishPrepare()
             callback?.invoke(false)

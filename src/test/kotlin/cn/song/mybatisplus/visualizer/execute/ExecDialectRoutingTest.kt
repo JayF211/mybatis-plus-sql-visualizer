@@ -255,4 +255,23 @@ class ExecDialectRoutingTest {
                 .containsMatchIn(results),
         )
     }
+
+    @Test
+    fun `接线守卫_空Runner分支给方言不匹配文案`() {
+        val results = mainSource("cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResults.kt")
+        assertTrue(
+            "chooseAndPrepare 空 Runner 分支未接方言不匹配可行动文案（D3/V3）——用户将继续面对笼统空数据源提示或超时",
+            results.contains("execute.datasource.dialectMismatch"),
+        )
+        val en = File(repoRoot(), "src/main/resources/messages/MpSqlVisualizerBundle.properties").readText()
+        val zh = File(repoRoot(), "src/main/resources/messages/MpSqlVisualizerBundle_zh.properties").readText()
+        val enLine = en.lineSequence().firstOrNull { it.startsWith("execute.datasource.dialectMismatch=") }
+        val zhLine = zh.lineSequence().firstOrNull { it.startsWith("execute.datasource.dialectMismatch=") }
+        assertTrue("en bundle 缺 execute.datasource.dialectMismatch", enLine != null)
+        assertTrue("zh bundle 缺 execute.datasource.dialectMismatch", zhLine != null)
+        for (placeholder in listOf("{0}", "{1}")) {
+            assertTrue("en 文案缺占位符 $placeholder（方言名/在册数据源清单）", enLine.orEmpty().contains(placeholder))
+            assertTrue("zh 文案缺占位符 $placeholder（方言名/在册数据源清单）", zhLine.orEmpty().contains(placeholder))
+        }
+    }
 }
