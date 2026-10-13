@@ -26,8 +26,9 @@ import java.util.List;
  *  <li>D3 属性 OGNL：{@code test}/{@code value}/{@code collection}/{@code item} 等
  *    {@link XmlSynHiGate#allowAttributeValue} 白名单属性值注入同语言（属性位无 SQL 文本，独立注入位；
  *    决策 1-A 注）；</li>
- *  <li>守卫：{@link XmlSynHiGate} 双让位（设置/平台 per-host/三方插件）+ 根 mapper（{@link XmlSynHiGate#inMapperFile}）
- *    + 文本长度熔断（{@link XmlSynHiGate#allowStatementText}）；让位命中 → 零注入（反向验证）。</li>
+ *  <li>守卫：{@link XmlSynHiGate} 设置开关线 + <b>W1 区间级互补</b>（{@link InjectRangePlan}：只注入
+ *    外来注入器未占用的余下区间；未占用则整段注入）+ 根 mapper（{@link XmlSynHiGate#inMapperFile}）
+ *    + 文本长度熔断（{@link XmlSynHiGate#allowStatementText}）；占用覆盖整段 → 零注入（反向验证）。</li>
  * </ul>
  *
  * <p>T-PerfSweep16 F37（D1=B 案落地）：喂入契约按**元素级**——243 平台源码 jar 实证：
@@ -61,7 +62,7 @@ public class SqlMapperInjector implements MultiHostInjector, DumbAware {
         if (!(context instanceof XmlText) && !(context instanceof XmlAttributeValue)) {
             return;
         }
-        if (XmlSynHiGate.shouldYield(context.getProject(), host)) {
+        if (XmlSynHiGate.shouldYield(context.getProject())) {
             return;
         }
         TextRange rangeInsideHost;
@@ -103,9 +104,24 @@ public class SqlMapperInjector implements MultiHostInjector, DumbAware {
         } else {
             return;
         }
+        // T-XmlGap W1 区间级互补（取代原「命中即整宿主让位」）：外来注入器只占 `#{}`/`${}` 区间时，
+        // 我方仍为**余下区间**着色——原形态下「语句里有一个 `#{}`」会让整条语句的关键字/注释/字符串
+        // 全无色（Community 版 + 装竞品即中招；见 XmlSynHiGate/InjectRangePlan KDoc）。
+        // 设置开关线已在上面短路；occupiedRanges 自带 fail-safe（探测失败 → 全覆盖哨兵 → 零注入）。
+        List<TextRange> fragments = InjectRangePlan.plan(
+                context.getText(),
+                rangeInsideHost,
+                XmlSynHiGate.occupiedRanges(context.getProject(), host));
+        if (fragments.isEmpty()) {
+            return;
+        }
         ensureParserDefinitionRegistered();
-        registrar.startInjecting(SqlMapperLanguage.INSTANCE);
-        registrar.addPlace(null, null, host, rangeInsideHost);
+        // 一个注入会话内多 place（同一宿主）：注入文本为各片段拼接，注入侧偏移经 DocumentWindow
+        // 映射回宿主——补全贡献器的宿主坐标还原链（T-XmlCmplDispatch）按 window 取值，不受影响。
+        MultiHostRegistrar session = registrar.startInjecting(SqlMapperLanguage.INSTANCE);
+        for (TextRange fragment : fragments) {
+            session.addPlace(null, null, host, fragment);
+        }
         registrar.doneInjecting();
     }
 
