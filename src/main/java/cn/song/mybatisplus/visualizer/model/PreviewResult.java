@@ -41,6 +41,14 @@ import java.util.Set;
  *                         空表 = 按序回填（既有语义）
  * @param duplicateParamNames  同名命名参数多次 setParameter 的参数名集合（T-JpaParamOrder F5，覆盖语义）；
  *                         空集 = 无重复
+ * @param diagramStatement F-1 修复：JOIN 图标签页的<b>独立</b>语句载体（仅含 JOIN 的 SELECT 非 null）。
+ *                         不能复用 {@code previewModel}——后者只在有动态条件视图时构造，无条件的联表链
+ *                         为 null，而 {@code sql} 是纯文本、面板无从判断 JOIN；本字段把「是否画图」与
+ *                         「是否走模型级重渲染」解耦。默认 null，既有构造点零影响
+ * @param historyFingerprintSeed 参数历史缓存键的<b>稳定指纹种子</b>（注入拦截器子句之前的 SQL 文本）。
+ *                         不能直接用 {@code sql} 当指纹——逻辑删除/多租户等拦截器模拟会在渲染前改写
+ *                         SQL 文本，用户一开这些开关键就变、回填好的参数全部召回 miss；null = 回落
+ *                         {@code sql}（存量行为零变化）
  */
 public final class PreviewResult {
     private final String sql;
@@ -103,6 +111,27 @@ public final class PreviewResult {
      * 最后一次为准）。面板据此给「写重」轻提示；空集 = 无重复。
      */
     private final Set<String> duplicateParamNames;
+    /**
+     * F-1 修复：JOIN 图标签页的<b>独立</b>语句载体（仅含 JOIN 的 SELECT 非 null）。
+     *
+     * <p>为什么不能复用 {@code previewModel}：{@code previewModel} 只在有动态条件视图
+     * （{@code collectConditionViews} 非空，即链里有 eq/like 等条件调用）时才构造——无条件的联表链
+     * （如 MPJ 的 {@code selectAll + leftJoin + fill}）{@code previewModel} 为 null，而 {@code sql}
+     * 是纯文本、面板无从判断 JOIN，导致这类链拿不到「JOIN 图」标签页。本字段把「是否画图」的判据与
+     * 「是否走模型级重渲染」的判据解耦：有 JOIN 即非 null，与 {@code previewModel} 空否无关。
+     * 默认 null，既有构造点零影响（向后兼容）。</p>
+     */
+    private final SelectStatement diagramStatement;
+    /**
+     * 参数历史缓存键的<b>稳定指纹种子</b>（注入拦截器子句之前的 SQL 文本）。
+     *
+     * <p>为什么不能直接用 {@code sql} 当指纹：历史键 = {@code 表名:SHA-256(SQL 全文)}，而逻辑删除 /
+     * 多租户等拦截器模拟会在渲染前改写 SQL 文本（追加 {@code AND deleted = 0} / {@code AND tenant_id = ?}）——
+     * 用户一开这些开关，键就变，此前回填好的参数全部召回 miss、退回占位符（且 500ms 防抖后
+     * 新键还会以空值覆盖落库）。本字段承载「注入前」的语句文本，供面板算键时优先使用，
+     * 使开关切换不再影响参数历史归属。null = 回落 {@code sql}（存量行为零变化）。</p>
+     */
+    private final String historyFingerprintSeed;
 
     public PreviewResult(String sql, String compactSql, List<String> unresolvedParams, String paramTable,
                          WrapperType wrapperType, String tableName, String warning, List<String> columns,
@@ -148,9 +177,10 @@ public final class PreviewResult {
     }
 
     /**
-     * 规范构造器（27 参）：K2J 侧 {@code countSql}/{@code paginationLimitLine} 为 master 新增的带默认值
-     * 后置字段（Kotlin 默认参），历史 25 参形态在 Kotlin 调用方天然合法——Java 侧保留 25 参重载（见下）
-     * 委托本构造器、新两参取 null（与 master 默认值等价）。
+     * 规范构造器（29 参）：K2J 侧 {@code countSql}/{@code paginationLimitLine}/{@code diagramStatement}/
+     * {@code historyFingerprintSeed} 为 master 新增的带默认值后置字段（Kotlin 默认参），历史 25/27 参形态
+     * 在 Kotlin 调用方天然合法——Java 侧保留 25/27 参重载（见下）委托本构造器、新参取默认值
+     * （null，与 master 默认值等价）。
      */
     public PreviewResult(String sql, String compactSql, List<String> unresolvedParams, String paramTable,
                          WrapperType wrapperType, String tableName, String warning, List<String> columns,
@@ -160,7 +190,8 @@ public final class PreviewResult {
                          List<FillClause> fillClauses, String previousSql, List<PagesColumn> pagesColumns,
                          Map<String, ParamHint> namedParamHints, String stackDigest, boolean hasDollarRawSegments,
                          String countSql, String paginationLimitLine,
-                         List<String> placeholderParamNames, Set<String> duplicateParamNames) {
+                         List<String> placeholderParamNames, Set<String> duplicateParamNames,
+                         SelectStatement diagramStatement, String historyFingerprintSeed) {
         this.sql = sql;
         this.compactSql = compactSql;
         this.unresolvedParams = unresolvedParams;
@@ -188,6 +219,25 @@ public final class PreviewResult {
         this.paginationLimitLine = paginationLimitLine;
         this.placeholderParamNames = placeholderParamNames != null ? placeholderParamNames : List.of();
         this.duplicateParamNames = duplicateParamNames != null ? duplicateParamNames : Set.of();
+        this.diagramStatement = diagramStatement;
+        this.historyFingerprintSeed = historyFingerprintSeed;
+    }
+
+    /** K2J 互操作：master 新两参（diagramStatement/historyFingerprintSeed）取默认 null 的历史 27 参形态。 */
+    public PreviewResult(String sql, String compactSql, List<String> unresolvedParams, String paramTable,
+                         WrapperType wrapperType, String tableName, String warning, List<String> columns,
+                         Map<String, String> columnComments, String tableComment, SqlPreviewModel previewModel,
+                         List<ParamHint> paramHints, List<TableInfo> candidateTables, BatchModel batchModel,
+                         XmlPreviewModel xmlModel, Map<String, String> initialParamValues, List<PerfWarning> perfWarnings,
+                         List<FillClause> fillClauses, String previousSql, List<PagesColumn> pagesColumns,
+                         Map<String, ParamHint> namedParamHints, String stackDigest, boolean hasDollarRawSegments,
+                         String countSql, String paginationLimitLine,
+                         List<String> placeholderParamNames, Set<String> duplicateParamNames) {
+        this(sql, compactSql, unresolvedParams, paramTable, wrapperType, tableName, warning, columns,
+                columnComments, tableComment, previewModel, paramHints, candidateTables, batchModel, xmlModel,
+                initialParamValues, perfWarnings, fillClauses, previousSql, pagesColumns,
+                namedParamHints, stackDigest, hasDollarRawSegments, countSql, paginationLimitLine,
+                placeholderParamNames, duplicateParamNames, null, null);
     }
 
     /** K2J 互操作：master 新两参（countSql/paginationLimitLine）取默认 null 的历史 25 参形态。 */
@@ -333,6 +383,16 @@ public final class PreviewResult {
         return paginationLimitLine;
     }
 
+    /** F-1 修复：JOIN 图标签页的独立语句载体（null = 无 JOIN / 不画图）。 */
+    public SelectStatement getDiagramStatement() {
+        return diagramStatement;
+    }
+
+    /** 参数历史缓存键的稳定指纹种子（null = 回落 sql）。 */
+    public String getHistoryFingerprintSeed() {
+        return historyFingerprintSeed;
+    }
+
     public PreviewResult copy(String sql, String compactSql, List<String> unresolvedParams, String paramTable,
                               WrapperType wrapperType, String tableName, String warning, List<String> columns,
                               Map<String, String> columnComments, String tableComment, SqlPreviewModel previewModel,
@@ -343,7 +403,8 @@ public final class PreviewResult {
         return new PreviewResult(sql, compactSql, unresolvedParams, paramTable, wrapperType, tableName, warning, columns,
                 columnComments, tableComment, previewModel, paramHints, candidateTables, batchModel, xmlModel,
                 initialParamValues, perfWarnings, fillClauses, previousSql, pagesColumns, namedParamHints,
-                stackDigest, hasDollarRawSegments, countSql, paginationLimitLine, placeholderParamNames, duplicateParamNames);
+                stackDigest, hasDollarRawSegments, countSql, paginationLimitLine, placeholderParamNames,
+                duplicateParamNames, diagramStatement, historyFingerprintSeed);
     }
 
     public PreviewResult copy(String sql, String compactSql, List<String> unresolvedParams, String paramTable,
@@ -356,7 +417,8 @@ public final class PreviewResult {
         return new PreviewResult(sql, compactSql, unresolvedParams, paramTable, wrapperType, tableName, warning, columns,
                 columnComments, tableComment, previewModel, paramHints, candidateTables, batchModel, xmlModel,
                 initialParamValues, perfWarnings, fillClauses, previousSql, pagesColumns, namedParamHints,
-                stackDigest, hasDollarRawSegments, countSql, paginationLimitLine, placeholderParamNames, duplicateParamNames);
+                stackDigest, hasDollarRawSegments, countSql, paginationLimitLine, placeholderParamNames,
+                duplicateParamNames, diagramStatement, historyFingerprintSeed);
     }
 
     @Override
@@ -394,7 +456,9 @@ public final class PreviewResult {
                 && Objects.equals(countSql, that.countSql)
                 && Objects.equals(paginationLimitLine, that.paginationLimitLine)
                 && Objects.equals(placeholderParamNames, that.placeholderParamNames)
-                && Objects.equals(duplicateParamNames, that.duplicateParamNames);
+                && Objects.equals(duplicateParamNames, that.duplicateParamNames)
+                && Objects.equals(diagramStatement, that.diagramStatement)
+                && Objects.equals(historyFingerprintSeed, that.historyFingerprintSeed);
     }
 
     @Override
@@ -402,7 +466,8 @@ public final class PreviewResult {
         return Objects.hash(sql, compactSql, unresolvedParams, paramTable, wrapperType, tableName, warning, columns,
                 columnComments, tableComment, previewModel, paramHints, candidateTables, batchModel, xmlModel,
                 initialParamValues, perfWarnings, fillClauses, previousSql, pagesColumns, namedParamHints,
-                stackDigest, hasDollarRawSegments, countSql, paginationLimitLine, placeholderParamNames, duplicateParamNames);
+                stackDigest, hasDollarRawSegments, countSql, paginationLimitLine, placeholderParamNames,
+                duplicateParamNames, diagramStatement, historyFingerprintSeed);
     }
 
     @Override
@@ -419,6 +484,8 @@ public final class PreviewResult {
                 + ", countSql=" + countSql
                 + ", paginationLimitLine=" + paginationLimitLine
                 + ", placeholderParamNames=" + placeholderParamNames
-                + ", duplicateParamNames=" + duplicateParamNames + ")";
+                + ", duplicateParamNames=" + duplicateParamNames
+                + ", diagramStatement=" + diagramStatement
+                + ", historyFingerprintSeed=" + historyFingerprintSeed + ")";
     }
 }

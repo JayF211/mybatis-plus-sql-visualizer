@@ -170,6 +170,7 @@ public final class SqlStatementSplitter {
 
     private static List<String> splitInternal(@NotNull String sql, boolean keepComments) {
         lookaheadProbeCount = 0; // T-PS7-01 计数缝：每次切分清零
+        lookaheadScannedCharsForTest = 0; // F90 扫描量缝：每次切分清零
         List<String> parts = new ArrayList<>();
         StringBuilder sb = new StringBuilder();
         boolean inSingle = false;
@@ -1174,8 +1175,13 @@ public final class SqlStatementSplitter {
         boolean inLine = false;
         boolean inBlock = false;
         StringBuilder word = new StringBuilder();
+        // F90（T-PerfSweep25）前视输入上限：病态输入（大量 BEGIN 无配对 END）的「每词位全文
+        // 前视」最坏 O(n²)，限窗后收敛 O(n·W) 线性；窗内无配对词=按既有保守分支落点（不武装，
+        // 与修复前「全文无配对」同一分支，顶层界符照常切分），合法输入（配对距离远小于窗）零变化。
+        int limit = Math.min(sql.length(), from + LOOKAHEAD_WINDOW);
+        lookaheadScannedCharsForTest += (limit - from);
         int i = from;
-        while (i < sql.length()) {
+        while (i < limit) {
             char c = sql.charAt(i);
             Character next = i + 1 < sql.length() ? sql.charAt(i + 1) : null;
             if (inLine) {
@@ -1250,8 +1256,11 @@ public final class SqlStatementSplitter {
         boolean inLine = false;
         boolean inBlock = false;
         StringBuilder word = new StringBuilder();
+        // F90：同 hasWordAhead 的前视输入上限（DECLARE 声明段武装前视同型病态面同收敛）。
+        int limit = Math.min(sql.length(), from + LOOKAHEAD_WINDOW);
+        lookaheadScannedCharsForTest += (limit - from);
         int i = from;
-        while (i < sql.length()) {
+        while (i < limit) {
             char c = sql.charAt(i);
             Character next = i + 1 < sql.length() ? sql.charAt(i + 1) : null;
             if (inLine) {
@@ -1312,4 +1321,22 @@ public final class SqlStatementSplitter {
      * Java 包私有成员对 Kotlin 不可见，参照 UnboundedWriteDetector.parseStatementsForTest 先例。）
      */
     public static int lookaheadProbeCount = 0;
+
+    /**
+     * F90（T-PerfSweep25）前视输入上限：DECLARE/BEGIN 词位的块配对前视单次最多前看的字符数。
+     * 病态输入（大量 BEGIN 无配对 END）修复前每词位触发全文前视、最坏 O(n²)——限窗后收敛为
+     * O(n·W) 线性；窗内无配对词=按既有保守分支「无配对」落点（不武装块感知，顶层界符照常
+     * 切分），合法输入（配对距离远小于窗）零行为变化。量级远小于系内熔断口径
+     * （XmlSynHiGate 100K）：窗只需覆盖常规存储过程/匿名块的整段配对距离。
+     * 计划处置列「split 入口加输入长度上限或按上限截断」两案都会改动合法大脚本的切分结果
+     * （截断丢语句/拒分整段不切），故取只约束前视自身的窗上限（任务口径「前视输入上限」）。
+     */
+    public static final int LOOKAHEAD_WINDOW = 10_000;
+
+    /**
+     * F90 测试缝：切分过程内前视扫描的累计字符数（每次 {@link #splitInternal} 入口清零）——判别
+     * 「前视输入上限」：修复前 ≈ Σ(词位→文尾)，修复后 ≤ 词位数 × {@link #LOOKAHEAD_WINDOW}。
+     * （Kotlin {@code internal var} → public 静态字段，同 {@link #lookaheadProbeCount} 先例。）
+     */
+    public static long lookaheadScannedCharsForTest = 0;
 }
