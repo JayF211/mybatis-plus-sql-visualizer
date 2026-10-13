@@ -43,6 +43,7 @@ v13 take 把末项写死成 (700,1003)，结果点到了**状态栏的路径**�
 """
 import ctypes
 import os
+import subprocess
 import sys
 import time
 
@@ -57,15 +58,20 @@ from locate import close_preview, ensure_foreground, sandbox_pid, windows  # noq
 from nav import force_en_us  # noqa: E402
 
 OUT = "perf/a15_sql_snippets.mp4"
-SCROLL_NOTCHES = -19         # Ctrl+Home 钉首行=1 后滚 57 行 → 首行=58（表名 token 落在编辑区第一行）
+SCROLL_NOTCHES = -18         # Ctrl+Home 钉首行=1 后滚 54 行 → 首行=55，表名行(L58)落在编辑区第 4 行。
+#                              刻意不放第一行：锚点低一点（y≈165）菜单末项就到 y≈979，
+#                              子菜单下方放不下 → **向上展开**，三项全在取景框内
+#                              （锚点在 75 时菜单末项 889、子菜单向下展开，第三项 1054 出框）
 
-ANCHOR = (790, 114)          # L58 注释里的 `car_device_info`（编辑区第一行）
-WIN = (277, 0, 1370, 1030)   # 窗口：上移 25px + 加高到 1030（避开任务栏、装得下菜单）
-ITEM_H = 41                  # 菜单单项高度（实测）
+ANCHOR = (790, 165)          # L58 注释里的 `car_device_info`（编辑区第 4 行；窗口上移 75px 后）
+WIN = (277, -75, 1370, 1105) # 窗口上移到 y=-75、高 1105 → 底边仍 1030：**SQL 上下文栏**
+#                              （`Script / Generic SQL / <data source>`，SQL 文件绑了数据源才有）
+#                              连同标签页行一起被推到屏幕外，编辑区第一行落到 y≈75；
+#                              取景框仍是 0..1030（避任务栏）。上移 75px 是实测需要：
+#                              子菜单向下展开时第三项要到 y≈1006 才进框（上移 35px 时是 1046 ✗）
+ITEM_H = 41                  # 菜单单项高度（实测，仅注释用；扫描不依赖它）
 
 # 子菜单所在横带：菜单右边缘 ≈ 锚点 x+368，子菜单面板 ≈ 锚点 x+378..+588
-SUB_CX = ANCHOR[0] + 460     # 子菜单文字带中心（也是「抽样 10 行」的点击 x）
-SUB_DY = (-83, -43, -5)      # 子菜单三项相对末项中心的纵向偏移（实测：末项在最下）
 GAZE = (1000, 700)
 PARK = (620, 700)
 
@@ -80,61 +86,126 @@ def post_wheel(hwnd, notches, sx=1000, sy=400):
         time.sleep(0.03)
 
 
+def chrome_hwnd():
+    """找 Chrome 主窗口（类名 Chrome_WidgetWin_1）——录制的白色新标签页背景。"""
+    u32 = ctypes.windll.user32
+    found = []
+
+    @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+    def cb(h, _l):
+        buf = ctypes.create_unicode_buffer(64)
+        u32.GetClassNameW(h, buf, 64)
+        if buf.value == "Chrome_WidgetWin_1" and u32.IsWindowVisible(h):
+            r = ctypes.wintypes.RECT()
+            u32.GetWindowRect(h, ctypes.byref(r))
+            if r.right - r.left > 800:
+                found.append(h)
+        return True
+
+    u32.EnumWindows(cb, 0)
+    return found[0] if found else 0
+
+
+def restore_backdrop(ide_hwnd):
+    """把 Chrome（空白新标签页）恢复成全屏当背景，再把 IDE 抬到它前面。
+
+    用户 2026-10-13 要求：录制背景用 Chrome 白页，避免桌面太乱干扰画面。
+    """
+    ch = chrome_hwnd()
+    if not ch:
+        print("⚠️ 没找到 Chrome 窗口，背景未恢复")
+        return
+    here = os.path.dirname(os.path.abspath(__file__))
+    subprocess.run([sys.executable, os.path.join(here, "restore_chrome_front_ide.py"),
+                    str(ide_hwnd), str(ch)], cwd=here, timeout=90)
+    time.sleep(0.6)
+
+
 def _grab(region):
     import mss
     with mss.mss() as sct:
         return np.asarray(sct.grab(region))[:, :, :3].astype(int)
 
 
+SCAN_YMAX = 1020             # 扫描上限：再往下是任务栏，鼠标经过会把图标点亮 → 假变化
+REF_X0 = ANCHOR[0] - 100       # 参照带起点（含菜单本身 + 右侧子菜单可能落位）
+REF_W = 900
+
+
 def _band_ref():
-    """开菜单前取「子菜单带」的参照（整列，逐 y 比对用）。"""
-    return _grab({"left": SUB_CX - 60, "top": 0, "width": 120, "height": 1080})
+    """开菜单前取一条宽参照（含菜单本体与其右侧），后面按行/按列比对都用它。"""
+    return _grab({"left": REF_X0, "top": 0, "width": REF_W, "height": 1080})
 
 
-def _band_changed(ref, y):
-    """悬停 y 处的菜单项时，子菜单带是否出现了。
+def _menu_right(ref):
+    """量菜单面板的右边缘（列方向与参照不同的最大列）。"""
+    row = _grab({"left": REF_X0, "top": ANCHOR[1] + 6, "width": REF_W, "height": 6})
+    cols = np.abs(row - ref[ANCHOR[1] + 6:ANCHOR[1] + 12]).mean(axis=(0, 2))
+    xs = np.where(cols > 8)[0]
+    return REF_X0 + int(xs.max()) if len(xs) else ANCHOR[0] + 380
 
-    子菜单三项在「末项中心 -83/-43/-5」，故取样带取 [y-100, y+20]（120px 高）。
-    判据用**均值差**（实测：子菜单出现时 mean≈38，同图内噪声≈5；单点最大差在
-    状态栏/工具窗底色与菜单底色接近处只有 14，逐点判据不稳）。
+
+def _strip_x(menu_right):
+    """取样带左端：必须**严格在菜单右边缘之外**（贴太近会把菜单本体算成「变化」，
+    整条菜单高度都成了变化行 → 聚簇出来的「最后一项」落在菜单底部而非子菜单项上）。"""
+    return int(menu_right + 12)
+
+
+def _band_changed(ref, y, band_x):
+    """悬停 y 处的菜单项时，子菜单带（子菜单面板所在横带）是否出现。
+
+    **悬停后要等够**：子菜单渲染约 0.3~0.5s，只等 0.24s 会漏检——上一轮就是这样跳过末项、
+    停在上面的 `Git` 上，点下去弹出了 Clone Repository 对话框。
+    判据用**均值差**且阈值压到 8：实测末项子菜单带 mean≈13、同图噪声 2~5
+    （逐点最大差判据不稳：状态栏/工具窗底色与菜单底色接近处只有 14）。
     """
-    cur = _grab({"left": SUB_CX - 60, "top": _band_top(y), "width": 120, "height": 120})
-    top = _band_top(y)
-    return np.abs(cur - ref[top:top + 120]).mean() > 15
+    x = _strip_x(band_x)
+    top = max(0, min(y - 60, 1080 - 120))          # 贴屏幕上下边时夹住（带高固定 120）
+    cur = _grab({"left": x, "top": top, "width": 200, "height": 120})
+    return np.abs(cur - ref[top:top + 120, x - REF_X0:x - REF_X0 + 200]).mean() > 8
 
 
-def _band_top(y):
-    """取样带顶端：以 y-100 为基准，贴屏幕上下边时夹住（带高固定 120）。"""
-    return max(0, min(y - 100, 1080 - 120))
+def _row_changed(ref, y, band_x):
+    x = _strip_x(band_x)
+    y = max(0, min(y, 1080 - 6))
+    cur = _grab({"left": x, "top": y, "width": 200, "height": 6})
+    return np.abs(cur - ref[y:y + 6, x - REF_X0:x - REF_X0 + 200]).mean() > 8
 
 
-def find_last_item(ref, limit_y):
+def sub_item3_y(ref, parent_y, band_x):
+    """悬停末项后，量子菜单**第三项**（抽样 10 行）的中心 y。
+
+    子菜单相对末项向上还是向下展开，取决于下方还有没有空间（两种都实测出现过），
+    所以位置必须现场量。做法：把带内「与参照不同」的行按间隙聚簇，最后一簇＝第三项文字行。
+    """
+    ys = [y for y in range(max(0, parent_y - 150), min(SCAN_YMAX, parent_y + 170), 5)
+          if _row_changed(ref, y, band_x)]
+    clusters = []
+    for y in ys:
+        if clusters and y - clusters[-1][-1] <= 20:
+            clusters[-1].append(y)
+        else:
+            clusters.append([y])
+    if not clusters:
+        raise RuntimeError("悬停末项后没量到子菜单面板")
+    return sum(clusters[-1]) / len(clusters[-1])
+
+
+def find_last_item(ref, band_x, limit_y):
     """自下而上找末项：第一次「子菜单带变了」＝菜单最下面那个带子菜单的项。
 
-    两段扫：粗扫步长=项高（快），命中后在其下方一项内细扫（步长 8）取最靠下的命中点。
-    起点压在屏幕底部（菜单底边最多到屏幕底，再往下没有菜单）。
+    步长必须细（10px）：项高 ≈33~41px，粗步长会整格跳过末项
+    （实测末项盒 914..950，从 1075 起按 41 步会落到 911 → 命中上一项 `Diagrams`）。
+    返回末项**中心** y（命中点是末项下沿，减半项高）。
     """
-    def hit(y):
-        pyautogui.moveTo(ANCHOR[0] + 60, y)
-        time.sleep(0.24)
-        return _band_changed(ref, y)
-
-    coarse = None
-    y = 1075
+    y = SCAN_YMAX
     while y > limit_y:
-        if hit(y):
-            coarse = y
-            break
-        y -= ITEM_H
-    if coarse is None:
-        raise RuntimeError("自下而上扫完也没等到子菜单出现——菜单没开？先看 shots/a15_pre.png")
-
-    y = min(1075, coarse + ITEM_H)
-    while y >= coarse - 2:
-        if hit(y):
-            return y
-        y -= 8
-    return coarse
+        pyautogui.moveTo(ANCHOR[0] + 60, y)
+        time.sleep(0.55)
+        if _band_changed(ref, y, band_x):
+            return y - 16
+        y -= 10
+    raise RuntimeError("自下而上扫完也没等到子菜单出现——菜单没开？先看 shots/a15_pre.png")
 
 
 def main():
@@ -150,7 +221,17 @@ def main():
     # ---- prep（不入镜）----
     for _ in range(3):
         pyautogui.keyDown('esc'); pyautogui.keyUp('esc'); time.sleep(0.4)
+
+    # 模态对话框护栏：沙盒里若还挂着别的窗口（Clone Repository / Settings / Commit…），
+    # 整段 take 都会录进那个对话框——上一轮就是这样白录一条（Esc 关不掉模态框，
+    # 得点它的 Cancel）。宁可在这里报错，也不带病出片。
+    others = [t for h, p, t, r in windows() if p == ide_pid and h != hwnd]
+    if others:
+        raise RuntimeError("沙盒里还挂着模态窗口 %s ——先手工关掉（点它的 Cancel）再录" % others)
+
     close_preview(ide_pid)
+
+    restore_backdrop(hwnd)          # Chrome 白页当背景（用户要求）
 
     u32 = ctypes.WinDLL("user32", use_last_error=True)
     u32.SetWindowPos.argtypes = [ctypes.c_void_p, ctypes.c_void_p,
@@ -158,10 +239,15 @@ def main():
     u32.SetWindowPos(ctypes.c_void_p(hwnd), ctypes.c_void_p(0), WIN[0], WIN[1], WIN[2], WIN[3], 0x0004)
     time.sleep(1.2)
     rect = next(r for h, p, t, r in windows() if h == hwnd)
-    region = (rect[0], rect[1], rect[2] - rect[0], rect[3] - rect[1])
-    print("窗口 rect=%s region=%s" % (rect, region))
-    if rect[1] != 0 or rect[3] < WIN[3]:
-        raise RuntimeError("窗口未能移到 277,0 并加高到 %d（实际 %s）" % (WIN[3], rect))
+    top_clip = max(0, rect[1])
+    bottom_clip = min(1080, rect[3])
+    # 录制器要求宽高为偶数（否则 gifkit assert 挂）
+    region = (rect[0], top_clip, rect[2] - rect[0], (bottom_clip - top_clip) // 2 * 2)
+    global SCAN_YMAX
+    SCAN_YMAX = min(1020, bottom_clip - 4)
+    print("窗口 rect=%s region=%s 扫描上限=%d" % (rect, region, SCAN_YMAX))
+    if rect[1] > 0 or rect[3] < 1020:
+        raise RuntimeError("窗口未能上移到 y<=0 且底边 >=1020（实际 %s）" % (rect,))
 
     # 光标压表名：Ctrl+Home 钉首行=1，再滚固定档数把 L58 送到编辑区第一行
     pyautogui.click(700, 300); time.sleep(0.5)
@@ -169,18 +255,24 @@ def main():
     post_wheel(hwnd, SCROLL_NOTCHES)
     time.sleep(0.9)
 
-    # ---- 开菜单、找末项（不入镜）----
+    # ---- 开菜单、量末项与子菜单（不入镜）----
     ref = _band_ref()
     pyautogui.click(*ANCHOR, button='right'); time.sleep(1.6)
-    last_y = find_last_item(ref, limit_y=ANCHOR[1] + 40)
-    print("末项 y=%d（取景框底 %d）" % (last_y, WIN[3]))
+    menu_right = _menu_right(ref)
+    band_x = menu_right            # 取样带：菜单右边缘之外
+    click_x = menu_right + 90      # 点击 x：落在子菜单文字上
+    last_y = find_last_item(ref, band_x, limit_y=ANCHOR[1] + 40)
+    pyautogui.moveTo(ANCHOR[0] + 60, last_y, duration=0.5); time.sleep(1.5)   # 悬停末项 → 展开子菜单
+    sub3_y = sub_item3_y(ref, last_y, band_x)
+    print("菜单右边缘 x=%d（取样带起点 %d，点击 x %d）" % (menu_right, band_x + 12, click_x))
+    print("末项 y=%.0f  子菜单第三项(抽样 10 行) y=%.0f  取景框底 %d" % (last_y, sub3_y, bottom_clip))
     import mss
     with mss.mss() as sct:
         mss.tools.to_png(sct.grab({"left": 0, "top": 0, "width": 1920, "height": 1080}).rgb,
                          (1920, 1080), output="shots/a15_pre.png")
-    if last_y > WIN[3] - 8:
-        raise RuntimeError("末项 y=%d 超出取景框（%d）——锚点还得往上挪（看 shots/a15_pre.png）"
-                           % (last_y, WIN[3]))
+    if last_y > bottom_clip - 8 or sub3_y > bottom_clip - 8:
+        raise RuntimeError("末项 y=%.0f / 子菜单项 y=%.0f 超出取景框（底 %d）——锚点还得往上挪"
+                           "（看 shots/a15_pre.png）" % (last_y, sub3_y, bottom_clip))
     pyautogui.keyDown('esc'); pyautogui.keyUp('esc'); time.sleep(0.8)
 
     # ---- 录制 ----
@@ -189,7 +281,7 @@ def main():
     time.sleep(0.6)
     pyautogui.click(*ANCHOR, button='right'); time.sleep(1.6)               # 弹菜单（同时落光标）
     pyautogui.moveTo(ANCHOR[0] + 60, last_y, duration=0.6); time.sleep(1.8)  # 悬停末项 → 子菜单
-    pyautogui.click(SUB_CX, last_y + SUB_DY[2]); time.sleep(2.6)             # 点「抽样 10 行」
+    pyautogui.click(click_x, sub3_y); time.sleep(2.6)                        # 点子菜单第三项（抽样 10 行）
     time.sleep(2.4)                                                          # 等控制台出结果
     pyautogui.moveTo(*GAZE, duration=0.7); time.sleep(1.6)
     pyautogui.moveTo(*PARK, duration=0.6); time.sleep(0.8)
