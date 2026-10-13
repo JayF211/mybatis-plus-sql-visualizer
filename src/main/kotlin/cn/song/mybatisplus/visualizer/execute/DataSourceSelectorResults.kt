@@ -243,8 +243,17 @@ internal fun DataSourceSelector.chooseAndPrepare(
         prepareInConsole(project, session, vf, executeAfterPrepare, chosenRunnerName, onConsole, onEditor, onError, onErrorRich, wholeScriptExec, ownsPrepareGate = ownsGate)
     }
 
-    val runners = getAttachDataSourceRunners(psiFile, submitSql, sessionConsumer)
-    LOG.info("[M36] runners=${runners.size}")
+    val enumerated = getAttachDataSourceRunners(psiFile, submitSql, sessionConsumer)
+    // O-136 T-PreviewExecDsDialect：组 Runner 展开——平台在「方言匹配集 ≠ 全部数据源」时返回
+    // "All" 组 Runner（getSubRunners 携带全部数据源的 Runner，组项自身 runnable 为空操作），
+    // 插件弹窗不展开子级 → 方言不匹配的数据源（DM 等）藏在死项里不可选。展开后按显示名去重，
+    // 方言不匹配的数据源在弹窗内直接可见可选（计划 §三「按可选数据源的方言出 Runner」）。
+    val runners = ExecDialectRouting.expandGroupRunners(enumerated)
+    if (runners.size != enumerated.size) {
+        LOG.info("[M36] runners=${enumerated.size} expanded to ${runners.size} (O-136 group runners flattened)")
+    } else {
+        LOG.info("[M36] runners=${runners.size}")
+    }
 
     // M36.5：last-used 数据源静默命中（仅 prepareConsole 路径；显式执行保持弹窗可选）
     // T-SI-02：命中判定升级为「UUID 精确命中 → 名字唯一命中」，同名多条判歧义弃记忆走弹窗

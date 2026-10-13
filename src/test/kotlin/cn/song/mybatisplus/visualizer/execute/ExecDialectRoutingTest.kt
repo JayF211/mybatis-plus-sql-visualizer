@@ -245,4 +245,14 @@ class ExecDialectRoutingTest {
             Regex("""prewarmExecTempFileInner[\s\S]{0,4000}mapDialectBeforePsi\(project, vf, LOG\)""").containsMatchIn(results),
         )
     }
+
+    @Test
+    fun `接线守卫_弹窗前展开组Runner`() {
+        val results = mainSource("cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResults.kt")
+        assertTrue(
+            "chooseAndPrepare 未展开组 Runner——方言不匹配的数据源（DM 等）将藏在死组项里不可选",
+            Regex("""getAttachDataSourceRunners\(psiFile, submitSql, sessionConsumer\)[\s\S]{0,800}expandGroupRunners\(enumerated\)""")
+                .containsMatchIn(results),
+        )
+    }
 }
