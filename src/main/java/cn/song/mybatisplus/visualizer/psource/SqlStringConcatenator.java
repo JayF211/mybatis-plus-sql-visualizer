@@ -146,7 +146,7 @@ public final class SqlStringConcatenator {
      * </ul></p>
      *
      * <p>运行时值照既有口径降级：方法体内出现参数 / 调用等静态不可求值片段时，聚合结果带
-     * {@code /*运行时值*}{@code /…*/} 占位并置 {@code complete=false}，不编造内容。</p>
+     * 「运行时值」前缀占位（形如 前缀+表达式文本+斜杠星号收尾）并置 {@code complete=false}，不编造内容。</p>
      */
     private static ConcatenationResult concatMethodReturn(PsiMethodCallExpression call, int depth) {
         if (depth >= MAX_METHOD_FOLLOW_DEPTH) return null;

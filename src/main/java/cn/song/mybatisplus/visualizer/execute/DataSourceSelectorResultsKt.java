@@ -1609,7 +1609,7 @@ public final class DataSourceSelectorResultsKt {
         // ★A48：显式从**外部宿主**摘出——DBN 在新建结果页签时会把结果组件重新挂回
         // ServiceViewComponentWrapper（同一实例、仅 parent 变），不摘会让组件继续留在原生宿主
         // （预览窗内空白、结果只出现在 IDE 底部原生控制台）。parent 为 sp/无父时本行 no-op。
-        Component extHost = liveResult.getParent();
+        java.awt.Container extHost = liveResult.getParent();
         if (extHost != null && extHost != sp) extHost.remove(liveResult);
         sp.setBottomComponent(liveResult);
         Dimension lrmin = liveResult.getMinimumSize();

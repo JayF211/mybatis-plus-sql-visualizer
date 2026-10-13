@@ -203,7 +203,7 @@ public final class XmlCompletionSymbols {
             if (trimmed.isEmpty()) return null;
             JavaPsiFacade facade = JavaPsiFacade.getInstance(project);
             GlobalSearchScope scope = GlobalSearchScope.allScope(project);
-            if (trimmed.contains('.')) return facade.findClass(trimmed, scope);
+            if (trimmed.contains(".")) return facade.findClass(trimmed, scope);
             PsiClass[] classes = PsiShortNamesCache.getInstance(project).getClassesByName(trimmed, scope);
             return classes.length > 0 ? classes[0] : null;
         } catch (Throwable t) {

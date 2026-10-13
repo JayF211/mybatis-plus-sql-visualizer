@@ -424,6 +424,8 @@ public final class SqlPreviewServiceEnhancementsKt {
                 Map.of(),
                 null,
                 false,
+                null,
+                null,
                 usableNamedSources,
                 duplicateParamNames,
                 diagramStatement,

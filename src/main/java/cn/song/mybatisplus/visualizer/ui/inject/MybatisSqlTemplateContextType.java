@@ -2,6 +2,7 @@
 package cn.song.mybatisplus.visualizer.ui.inject;
 
 import com.intellij.codeInsight.template.TemplateContextType;
+import com.intellij.psi.PsiElement;
 import com.intellij.psi.PsiFile;
 import com.intellij.psi.util.PsiTreeUtil;
 import com.intellij.psi.xml.XmlFile;

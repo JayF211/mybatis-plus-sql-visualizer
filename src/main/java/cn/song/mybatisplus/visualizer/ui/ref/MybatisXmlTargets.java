@@ -146,7 +146,7 @@ public final class MybatisXmlTargets {
         int lastDot = name.lastIndexOf('.');
         String shortName = lastDot >= 0 ? name.substring(lastDot + 1) : name;
 
-        if (name.contains('.')) {
+        if (name.contains(".")) {
             PsiClass byFqn = facade.findClass(name, scope);
             if (byFqn != null) return byFqn;
         }
