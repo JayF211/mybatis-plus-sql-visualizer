@@ -106,6 +106,12 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     /** O-90：当前文件全量条目的同模板计数（徽章渲染与右键聚焦动作共用；applySqlSearch 重建）。 */
     private var templateCounts: Map<String, Int> = emptyMap()
 
+    /** F88 测试缝：非空时替代 [structureKeyCounts] 聚合（测试注入计数 lambda 断言聚合次数）。 */
+    internal var structureKeyCountsHookForTest: ((List<LogSqlEntry>) -> Map<String, Int>)? = null
+
+    /** F88：计数已对齐的条目快照（身份判据）——聚合只随快照换代重算，不随 apply 次数重算。 */
+    private var templateCountsSnapshotFor: List<LogSqlEntry>? = null
+
     /** O-90：同模板聚焦键（非 null 时二级列表只显该模板条目；右键动作与 chip 点击经 [applyTemplateFocus]）。 */
     private var templateFocusKey: String? = null
 
@@ -632,8 +638,15 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
 
     private fun applySqlSearch() {
         // O-90：同模板计数随文件内容重建（**全量条目**聚合——徽章计数不随搜索/聚焦波动）；
-        // 渲染器与右键聚焦动作共用同一快照
-        templateCounts = structureKeyCounts(currentEntries)
+        // 渲染器与右键聚焦动作共用同一快照。
+        // F88（T-PerfSweep25）：聚合与查询无关、只随条目快照换代——同快照反复 apply（空查询
+        // 防抖反复触发、查询进出）不再重复 O(N) 聚合（报告「空查询聚合不短路」的收敛形态）；
+        // 快照换代（换文件/重载/清空）仍首算，徽章口径与首屏计数不丢（朴素「空查询即跳过」
+        // 会使首次空态展示丢徽章——applySqlSearch 是 templateCounts 唯一赋值点，已否）。
+        if (templateCountsSnapshotFor !== currentEntries) {
+            templateCounts = (structureKeyCountsHookForTest ?: ::structureKeyCounts)(currentEntries)
+            templateCountsSnapshotFor = currentEntries
+        }
         sqlCellRenderer.templateCounts = templateCounts
         // T-HistorySearchToggles：查询解析与过滤抽为顶层纯函数 [filterHistoryEntries]（可独立单测，
         // 形态照日志页 filterBySearch 先例）；memo 实例面板持有，防抖 200ms 反复 apply 复用编译结果。
