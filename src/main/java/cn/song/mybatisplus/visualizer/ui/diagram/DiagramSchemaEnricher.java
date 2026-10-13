@@ -2,10 +2,12 @@ package cn.song.mybatisplus.visualizer.ui.diagram;
 
 import cn.song.mybatisplus.visualizer.ui.highlight.DatabaseSchemaResolver;
 import com.intellij.openapi.project.Project;
+import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 
 /**
@@ -20,6 +22,10 @@ import java.util.function.Function;
  * </ul>
  * 逐维度回落：数据源缺席（Community/未配置/表匹配不到）时保留原值——静默降级，
  * 与 nativefw.NativeJoinDiagramSupport 门面同语义。
+ *
+ * <p>T-Dgm-StmtScope：取数走 {@code DatabaseSchemaResolver.tableMetas}（<b>整图一次批量</b>，句内同来源）；
+ * 逐表 `tableMeta` 在多数据源下会被跨库同名表撞上（真机 A10：主表 `"user"` 落 `jpa_demo.user`，
+ * 列注释空白、还多出一堆那张表独有的列），与文档口径「主表与副表同口径拿 DB 类型/注释」不符。</p>
  */
 public final class DiagramSchemaEnricher {
 
@@ -27,14 +33,38 @@ public final class DiagramSchemaEnricher {
     }
 
     /**
+     * 测试缝：批量取数替身（默认 null = 走 {@code DatabaseSchemaResolver.tableMetas}）。
+     *
+     * <p>单测 classpath 无 database 插件（{@code Class.forName} 全链不可用）→ 生产入口在测试里恒为空 Map，
+     * 「模型表名（含引用符）→ applyTableMeta 逐实体回查 → 列注释落地」这段接线否则只能靠真机验。
+     * 替身只换「取数」，合并/回落逻辑仍是生产代码本体（同 resolver 的 traversalForTest 口径）。</p>
+     */
+    @Nullable
+    public static BiFunction<Project, List<String>, Map<String, DatabaseSchemaResolver.TableMeta>> statementMetaForTest = null;
+
+    /**
      * 以数据源 schema 富化模型中的表注释、列类型与列注释。
      * 任一表匹配失败仅影响该表（保留原值），不阻断整体。
+     *
+     * <p>T-Dgm-StmtScope：整图<b>一次批量取数</b>（{@code DatabaseSchemaResolver.tableMetas}）而不是逐表
+     * {@code DatabaseSchemaResolver.tableMeta}——同一句的主表与 JOIN 表必须落在同一个库：多数据源下
+     * 逐表的「注册序首个命中」会被跨库同名表撞上（真机 A10：主表 `"user"` 被喂成 `jpa_demo.user`，
+     * 列注释空白而 JOIN 表正常）。</p>
      */
     public static DiagramModel enrich(Project project, DiagramModel model) {
         if (project == null || model.isEmpty()) {
             return model;
         }
-        return applyTableMeta(model, tableName -> DatabaseSchemaResolver.tableMeta(project, tableName));
+        List<String> names = new ArrayList<>();
+        for (EntityNode entity : model.getEntities()) {
+            names.add(entity.getTableName());
+        }
+        Map<String, DatabaseSchemaResolver.TableMeta> metas = statementMetaForTest != null
+                ? statementMetaForTest.apply(project, names)
+                : DatabaseSchemaResolver.tableMetas(project, names);
+        // k2j 保形注记：master 兜底为 TableMeta(null, emptyMap())（scanBailed 默认 false），
+        // k2j TableMeta 为三参 record——取等价的 EMPTY 常量
+        return applyTableMeta(model, tableName -> metas.getOrDefault(tableName, DatabaseSchemaResolver.TableMeta.EMPTY));
     }
 
     /**

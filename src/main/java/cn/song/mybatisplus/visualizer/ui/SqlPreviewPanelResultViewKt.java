@@ -274,8 +274,11 @@ public final class SqlPreviewPanelResultViewKt {
      * 否则移除标签页（如有）。PlantUML 文本由 {@link JoinDiagramGenerator} 生成，渲染由 {@link DiagramPanel} 后台完成。</p>
      */
     public static void updateDiagramTab(@NotNull SqlPreviewPanel p, PreviewResult result) {
+        // F-1 修复：previewModel 仅在「有动态条件」时才构造（无条件联表链为 null），故图判据先看它、
+        // 缺失时回落到独立的 diagramStatement 载体——否则无条件的 JOIN 链拿不到「JOIN 图」标签页。
         cn.song.mybatisplus.visualizer.model.SqlStatement statement =
                 result.getPreviewModel() != null ? result.getPreviewModel().getStatement() : null;
+        if (statement == null) statement = result.getDiagramStatement();
         boolean hasJoins = statement instanceof SelectStatement
                 && !((SelectStatement) statement).getJoins().isEmpty();
         if (hasJoins) {

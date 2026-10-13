@@ -1424,7 +1424,9 @@ public final class SqlPreviewPanelParamPanelKt {
         PreviewResult result = p.current;
         if (result == null) return null;
         String tableName = result.getTableName();
-        String rawSql = result.getSql();
+        // 缺陷②修复：优先用「注入前」稳定文本当指纹种子——逻辑删除/多租户等拦截器模拟会改写
+        // result.sql，直接拿它算键会让开关一切换就召回 miss（已回填参数退回占位符）。
+        String rawSql = result.getHistoryFingerprintSeed() != null ? result.getHistoryFingerprintSeed() : result.getSql();
         return p.paramHistoryCache.computeKey(tableName, rawSql);
     }
 

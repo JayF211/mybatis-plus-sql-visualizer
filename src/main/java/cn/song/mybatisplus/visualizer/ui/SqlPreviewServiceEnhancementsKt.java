@@ -397,6 +397,9 @@ public final class SqlPreviewServiceEnhancementsKt {
         }
         TableInfo stmtTable = (statement.getTable() instanceof TableInfo) ? (TableInfo) statement.getTable() : null;
         List<String> columns = (stmtTable != null) ? stmtTable.getAllColumnNames() : List.of();
+        // F-1 修复：JPA 联表派生查询同款缺口——图 Tab 判据与 previewModel 解耦
+        SelectStatement selForDiagram = (statement instanceof SelectStatement) ? (SelectStatement) statement : null;
+        SelectStatement diagramStatement = (selForDiagram != null && !selForDiagram.getJoins().isEmpty()) ? selForDiagram : null;
         return new PreviewResult(
                 convertedSql,
                 convertedSql.replaceAll("\\s+", " ").trim(),
@@ -422,7 +425,9 @@ public final class SqlPreviewServiceEnhancementsKt {
                 null,
                 false,
                 usableNamedSources,
-                duplicateParamNames);
+                duplicateParamNames,
+                diagramStatement,
+                null);
     }
 
     /**
@@ -446,6 +451,22 @@ public final class SqlPreviewServiceEnhancementsKt {
             @NotNull TableInfo table,
             @NotNull SqlStatement statement,
             @Nullable String countSql) {
+        return buildPreviewResult(p, wrapperType, table, statement, countSql, null);
+    }
+
+    /**
+     * 由语句模型构建预览结果（应用方言与格式化配置）。
+     *
+     * @param historyFingerprintSeed 注入前语句文本（参数历史键指纹种子）；null = 面板回落用 result.sql 算键
+     */
+    @NotNull
+    public static PreviewResult buildPreviewResult(
+            @NotNull SqlPreviewService p,
+            @Nullable WrapperType wrapperType,
+            @NotNull TableInfo table,
+            @NotNull SqlStatement statement,
+            @Nullable String countSql,
+            @Nullable String historyFingerprintSeed) {
         Dialect dialect = p.currentDialect();
         boolean compact = !p.formatSql();
         cn.song.mybatisplus.visualizer.sql.GeneratedSql generated =
@@ -461,6 +482,9 @@ public final class SqlPreviewServiceEnhancementsKt {
         }
         List<cn.song.mybatisplus.visualizer.model.FillClause> fillClauses = (statement instanceof SelectStatement)
                 ? ((SelectStatement) statement).getFillClauses() : null;
+        // F-1 修复：JOIN 图判据独立于 previewModel（无条件联表链 previewModel 为 null，但仍含 JOIN 可画图）
+        SelectStatement selForDiagram = (statement instanceof SelectStatement) ? (SelectStatement) statement : null;
+        SelectStatement diagramStatement = (selForDiagram != null && !selForDiagram.getJoins().isEmpty()) ? selForDiagram : null;
         return new PreviewResult(
                 generated.getSql(),
                 SqlGenerator.generate(statement, true, dialect, null),
@@ -489,7 +513,10 @@ public final class SqlPreviewServiceEnhancementsKt {
                 countSql,
                 null,
                 List.of(),
-                Set.of());
+                Set.of(),
+                diagramStatement,
+                // 缺陷②修复：参数历史键指纹用「注入前」文本（开关切换不再改键，回填不丢）
+                historyFingerprintSeed);
     }
 
     /**

@@ -318,6 +318,47 @@ public final class SqlPreviewService {
     }
 
     /**
+     * F-1 修复：Repository <b>接口方法声明行</b>预览（无调用表达式，{@link #preview} 的批量/JPA 管线永不认领）。
+     *
+     * <p>缺口形态（2026-10-12 演示录制中发现，诊断报告 {@code docs/调研报告/20261012-0900-*}）：
+     * {@code deleteAllInBatch()} 这类 bulk 形态既不在派生查询线（不含 {@code By}、{@code *All} 词干
+     * 白名单不放行 {@code InBatch}），也没有调用表达式给 CRUD 转换线——声明行光标下零可达，
+     * 而模板在转换层完整存在。</p>
+     *
+     * <p>语义与调用点 CRUD 线一致（同一 {@code buildRepositoryMethod} 模板），差别只有：声明行无实参可静态
+     * 求值，一律 {@code ?} 占位。非 Repository 接口 / 方法名不在名单 / 实体不可解析 → null（交回回落链）。</p>
+     */
+    @Nullable
+    public PreviewResult previewRepositoryDeclaration(@NotNull PsiMethod method) {
+        JpaCrudOperationConverter.JpaCrudPreview jpaCrud =
+                JpaCrudOperationConverter.convertRepositoryDeclaration(method, effectiveReplaceParams());
+        if (jpaCrud == null) return null;
+        PreviewResult result = new PreviewResult(
+                jpaCrud.getSql(),
+                jpaCrud.getSql(),
+                jpaCrud.getParamSources(),
+                jpaCrud.getParamGroups(),
+                null,
+                jpaCrud.getTableName(),
+                jpaCrud.getWarning(),
+                null,
+                java.util.Map.of(),
+                null,
+                null,
+                jpaCrud.getParamHints(),
+                java.util.List.of(),
+                jpaCrud.getBatchModel(),
+                null,
+                java.util.Map.of(),
+                null,
+                null,
+                null,
+                null);
+        recordHistory(result, method);
+        return result;
+    }
+
+    /**
      * 预览锚点元素处的 Wrapper 转换结果。
      *
      * <p>识别顺序：
@@ -428,6 +469,11 @@ public final class SqlPreviewService {
                 statement = converted;
             }
 
+            // 缺陷②修复：参数历史键指纹取「注入前」语句文本——下面这一串注入（逻辑删除 / 乐观锁 /
+            // 多租户 / 数据权限 / 分页 LIMIT）都会改写 SQL 文本，而历史键原先是 SHA-256(SQL 全文)，
+            // 用户一开这些开关键就变 → 已回填参数召回 miss 退回占位符（且防抖后新键以空值覆盖落库）。
+            String historyFingerprintSeed = SqlGenerator.generate(statement, true, currentDialect(), null);
+
             // T-M15-07：逻辑删除注入（@TableLogic 实体 + 配置开启）
             LogicDeleteState logicDelete = evaluateLogicDeleteState(chain.getCalls());
             SqlStatement baseStatement = effectiveInjectLogicDelete() ? SqlPreviewServiceEnhancementsKt.injectLogicDeleteCondition(this, table, statement, logicDelete) : statement;
@@ -458,7 +504,8 @@ public final class SqlPreviewService {
             // R12 T-PaginationSim：分页 COUNT 包裹预览（D1=A 预览附第二条语句；D2=A 基础包裹形态；
             // D3=A searchCount=false 跳过；count/exists 消费不产 COUNT——复用 T-M29-02/03 分页消费口径）
             String countSql = paginationCountSql(chain, pagedStatement);
-            PreviewResult result = SqlPreviewServiceEnhancementsKt.buildPreviewResult(this, chain.getWrapperType(), table, pagedStatement, countSql);
+            PreviewResult result = SqlPreviewServiceEnhancementsKt.buildPreviewResult(
+                    this, chain.getWrapperType(), table, pagedStatement, countSql, historyFingerprintSeed);
             recordHistory(result, anchor);
             // exists 消费：外层包裹 SELECT EXISTS
             if (chain.getExistsConsumed() && isQueryLike(chain.getWrapperType())) {
@@ -1585,11 +1632,59 @@ public final class SqlPreviewService {
 
     /**
      * 性能分析（仅 SELECT）：委托 SqlPerfAnalyzer（F-2）。
+     *
+     * <p>T-DialectQuoteWarn §十二：带方言 + 绑定数据源的 ANSI_QUOTES 三态分析——「MySQL 家族 + 双引号
+     * 标识符」这一档只有在<b>确知连接声明了</b> {@code ANSI_QUOTES} 时才不报，否则降级 WARN（见
+     * {@link #boundAnsiQuotesOrNull}）。</p>
      */
     public List<PerfWarning> analyzePerf(@NotNull String sql, @NotNull SqlStatement statement) {
         if (!(statement instanceof SelectStatement)) return null;
-        List<PerfWarning> warnings = SqlPerfAnalyzer.analyze(sql);
+        List<PerfWarning> warnings = SqlPerfAnalyzer.analyze(sql, currentDialect(), boundAnsiQuotesOrNull());
         return warnings.isEmpty() ? null : warnings;
+    }
+
+    /**
+     * T-DialectQuoteWarn §十二：绑定数据源是否<b>已声明</b> {@code sql_mode} 含 {@code ANSI_QUOTES}
+     * （三态：{@code true}/{@code false}/{@code null}＝未知）。
+     *
+     * <p>绑定源与预览面板指示行<b>同源同优先级</b>（{@code ui.boundDataSourceNameForDisplay} 的链）：
+     * 活控制台绑定 {@code DataSourceSelector.boundConsoleDataSourceName} &gt; last-used 记忆
+     * {@code DataSourceSelector.rememberedDataSourceName}（面板 {@code bindstate.associated}）&gt; 未绑定
+     * （null）。拿到名字后按名取 URL（{@code DataSourceUrlProbe.urlByName}），<b>不用</b>
+     * {@code DataSourceUrlProbe.firstUrl}——首个数据源与绑定源可以不同且 {@code ANSI_QUOTES} 状态相反
+     * （本项目 demo：首个 jpa_demo、绑定 mpj_demo），拿首个当绑定源会给出错误结论。</p>
+     *
+     * <p>取不到名字/URL/无法判定 → null（未知），规则据此降级 WARN（不假装知道连接选项）。
+     * 全程自吞异常：无项目/无 Database 插件/反射失败一律回落 null，绝不影响预览主流程。</p>
+     */
+    @Nullable
+    private Boolean boundAnsiQuotesOrNull() {
+        String name;
+        try {
+            name = cn.song.mybatisplus.visualizer.execute.DataSourceSelector.boundConsoleDataSourceName();
+        } catch (Throwable ignored) {
+            name = null; // getOrNull 语义
+        }
+        if (name == null) {
+            try {
+                name = cn.song.mybatisplus.visualizer.execute.DataSourceSelector.rememberedDataSourceName(project);
+            } catch (Throwable ignored) {
+                name = null; // getOrNull 语义
+            }
+        }
+        if (name == null) return null;
+        String url;
+        try {
+            url = cn.song.mybatisplus.visualizer.sql.DataSourceUrlProbe.urlByName(project, name);
+        } catch (Throwable ignored) {
+            return null; // getOrNull 语义
+        }
+        if (url == null) return null;
+        try {
+            return cn.song.mybatisplus.visualizer.sql.DataSourceUrlProbe.ansiQuotesFromUrl(url);
+        } catch (Throwable ignored) {
+            return null; // getOrNull 语义
+        }
     }
 
     /**
