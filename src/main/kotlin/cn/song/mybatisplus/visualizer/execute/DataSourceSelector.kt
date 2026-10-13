@@ -114,6 +114,14 @@ object DataSourceSelector {
     @Volatile
     internal var dialectMappedVf: com.intellij.openapi.vfs.VirtualFile? = null
 
+    /**
+     * O-136 T-PreviewExecDsDialect：[dialectMappedVf] 当前映射到的方言 language id
+     * （null/「MySQL」= 旧行为）。与 vf 字段同生命周期成对回写——幂等短路判定为
+     * 「同 vf **且同方言**」，目标数据源方言切换（MySQL↔DM）后同 vf 也必须重映射。
+     */
+    @Volatile
+    internal var dialectMappedLanguageId: String? = null
+
     /** T-ExecSlowOps F2：exec 预热进行中标记（并发预览只跑一条真实链，其余直接返回）。 */
     private val execPrewarmInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
 
@@ -1466,12 +1474,21 @@ object DataSourceSelector {
      * 替代人工复现排查。经项目 messageBus 连接（随项目 disposable 自动断开）。
      */
     internal fun mapDialectBeforePsi(project: Project, vf: com.intellij.openapi.vfs.VirtualFile, LOG: com.intellij.openapi.diagnostic.Logger) {
+        // O-136 T-PreviewExecDsDialect：目标方言按数据源路由（last-used/默认数据源的方言；
+        // 解析不出 → null = 保持 MySQL 旧行为，零回归）。平台 Runner 枚举按 psiFile 方言过滤
+        // （DbImplUtil.getAppropriateDataSourcesForExec 字节码实证），草稿恒 MySQL 是 DM 等
+        // 非 MySQL 数据源从预览执行链隐形的根因。
+        val targetDs = ExecDialectRouting.resolveTargetDataSource(project)
+        val targetLanguage = ExecDialectRouting.resolveTargetLanguage(project, targetDs)
+        val targetId = (targetLanguage as? com.intellij.lang.Language)?.id ?: ExecDialectRouting.MYSQL_LANGUAGE_ID
         // T-PreviewFlash：插件侧幂等短路——mpsql-exec.sql 路径稳定，同 vf 已映射过 MySQL 直接跳过，
         // 消除每次预览的点 setMapping（同值 setMapping 仍触发 SqlDialectPusher push all dumb 任务，见沙盒日志）。
-        val inProcessMapped = dialectMappedVf?.isValid == true && dialectMappedVf === vf
-        if (DialectPreMapping.ensureMapped(project, vf, inProcessMapped)) {
+        // O-136：短路收紧为「同 vf 且同方言」——目标数据源方言切换后同 vf 也必须重映射。
+        val inProcessMapped = dialectMappedVf?.isValid == true && dialectMappedVf === vf && dialectMappedLanguageId == targetId
+        if (DialectPreMapping.ensureMapped(project, vf, targetLanguage, inProcessMapped)) {
             dialectMappedVf = vf
-            LOG.info("[M36] dialect pre-mapped to MySQL for ${vf.name}")
+            dialectMappedLanguageId = targetId
+            LOG.info("[M36] dialect pre-mapped to $targetId for ${vf.name} (O-136 ds-dialect routing, ds=${targetDs?.javaClass?.simpleName})")
         }
     }
 
@@ -1518,6 +1535,9 @@ object DataSourceSelector {
         if (project.isDisposed || sql.isBlank()) return
         val cachedVf = cachedTempPsiFile?.first
         if (cachedVf != null && isCacheUsable(project, cachedVf)) {
+            // O-136：缓存命中路径同样对齐方言映射（幂等读探测稳态零写）——否则目标数据源方言
+            // 切换（MySQL↔DM）后预热仍按旧映射放行，Runner 枚举按旧方言过滤。
+            mapDialectBeforePsi(project, cachedVf, LOG)
             // 缓存命中≠内容新鲜：连续预览 SQL 会变，而缓存命中路径不重写文件——只刷新文件
             // 内容（projectExecFile doc 驱动三方同步，vf/psi 身份不变），保证 attachConsole
             // 初始 document 与本条预览 SQL 一致；差量内容比较在 projectExecFile 内部短路。

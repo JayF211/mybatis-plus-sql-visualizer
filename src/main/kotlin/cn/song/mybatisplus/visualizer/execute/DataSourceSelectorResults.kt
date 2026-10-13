@@ -1186,7 +1186,12 @@ internal fun DataSourceSelector.createTempPsiFile(project: Project, sql: String)
     // T-PreviewFlash：EDT 同步 VFS refresh + PsiManager.findFile 已被跨点击缓存吸收——
     // mpsql-exec.sql 路径稳定，vf 仍有效时直接复用配对缓存，把
     // WorkspaceFileIndex.ensureIsUpToDate 的 SEVERE 断言移出每次预览的热路径。
-    consumeCachedTempPsiFile(project)?.let { return it }
+    consumeCachedTempPsiFile(project)?.let { pair ->
+        // O-136：缓存命中路径同样对齐方言映射（幂等读探测稳态零写）——目标数据源方言切换后
+        // 缓存复用不得携带旧映射进 Runner 枚举。
+        mapDialectBeforePsi(project, pair.first, LOG)
+        return pair
+    }
     // T-ExecDocSync2 F4：refresh 前强制收敛——写点之后、refresh 之前若被用户键入/其他写方
     // 插入（doc modified-unsaved + 磁盘≠文档），refresh 恰会命中 MemoryDiskConflictResolver
     // 弹窗条件；findFileByIoFile（与 projectExecFile 内裸调同形态）命中即过一遍分叉探测 +
@@ -1356,11 +1361,10 @@ internal fun DataSourceSelector.prewarmExecTempFileInner(project: Project, sql: 
         LOG.warn("[M36] exec prewarm syncVfContent failed: ${e.javaClass.simpleName}: ${e.message}")
         return
     }
-    // T-ExecSlowOps F1：BGT 两段式映射（读探测稳态跳过 / 首见派 EDT + 有界等待）
-    val inProcessMapped = dialectMappedVf?.isValid == true && dialectMappedVf === vf
-    if (DialectPreMapping.ensureMapped(project, vf, inProcessMapped)) {
-        dialectMappedVf = vf
-    }
+    // T-ExecSlowOps F1：BGT 两段式映射（读探测稳态跳过 / 首见派 EDT + 有界等待）。
+    // O-136：收口到 [mapDialectBeforePsi] 统一入口——目标方言按数据源路由（BGT 两段式语义在
+    // DialectPreMapping.ensureMapped 内保留），不再硬编码 MySQL。
+    mapDialectBeforePsi(project, vf, LOG)
     val psi = try {
         ReadAction.compute<PsiFile?, Throwable> {
             PsiManager.getInstance(project).findFile(vf)
