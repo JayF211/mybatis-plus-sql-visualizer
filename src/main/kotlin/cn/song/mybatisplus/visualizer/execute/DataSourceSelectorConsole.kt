@@ -355,9 +355,9 @@ internal fun DataSourceSelector.prepareAfterEditorResolved(
         // ★A49：**无嵌入宿主（onConsole == null）时不组 SplitPane、不摘 DBN 结果组件**——
         // SQL 快捷模板 / 日志转 SQL 执行链只把语句送原生 Database 控制台执行，控制台由 DBN
         // 在 IDE 底部 Services 视图自行展示；此时组出来的 SplitPane 永不展示（onConsole?.invoke
-        // 是 no-op），却已把 DBN 结果区组件（ui.getComponent()）从原生宿主摘走 → 原生控制台
-        // 结果网格停在 "0 rows of 0+" 不渲染（★A48 家族的另一条路径，回收判据在无宿主时被短路，
-        // 只能一开始就不摘）。判据见 shouldComposeEmbedSplitPane。
+        // 是 no-op），摘取结果组件（ui.getComponent()）无收益、只扰动 DBN 组件树。判据见
+        // shouldComposeEmbedSplitPane（含归因更正：这是排查「网格 0 rows」时顺带发现的收敛，
+        // 该现象真因是调用方传了不存在的表名，非插件行为）。
         val fullComponent: javax.swing.JComponent? = resultComponent?.let { result ->
             if (shouldComposeEmbedSplitPane(onConsole != null, hasResultComponent = true)) {
                 buildConsoleSplitPane(topBlock, result)
@@ -566,11 +566,12 @@ internal fun DataSourceSelector.executeOnConsole(
         // 曾连续多轮"修复未生效"实为用户未重启沙盒 IDE。版本戳让日志第一行即暴露运行版本，
         // 与源码不符时先重启再排查，杜绝无效往返。
         LOG.info("[M36] executeOnConsole begin (build=$BUILD_STAMP)")
-        // ★A49 诊断（只读，非行为改动）：本次提交的 ExecOption 四字段 + 控制台视图是否 showing +
-        // 原生编辑器组件当前宿主——「结果网格 0 rows」剩余候选根因各对应一列读数：
-        //   · newTab=true（A48 家族的「新建结果页签」路径）→ 结果管道走 new-tab 分支；
-        //   · viewShowing=false → DBN 结果视图未挂载/未展示（网格不取数）；
-        //   · editorCompParent=…ConsoleKt$editorComponent$1 → 我方仍把原生编辑器组件摘进了自建容器。
+        // ★A49 只读排障日志（非功能改动，runCatching 包裹零风险）：本次提交的 ExecOption 四字段 +
+        // 控制台视图是否 showing + 原生编辑器组件当前宿主。「原生控制台结果不渲染/停在 0 rows」
+        // 这类现象的三列判别读数——本次该现象的真因已查明在调用方（传了不存在的表名 → 1146），
+        // 本行留作同族现象的快速判因工具：newTab=true＝走 A48 家族「新建结果页签」路径；
+        // viewShowing=false＝DBN 结果视图未挂载/未展示；editorCompParent=…editorComponent$1＝
+        // 我方把原生编辑器组件摘进了自建容器。
         runCatching {
             fun opt(n: String) = runCatching { effectiveExecOption.javaClass.getField(n).get(effectiveExecOption) }.getOrNull()
             val viewShowing = runCatching {

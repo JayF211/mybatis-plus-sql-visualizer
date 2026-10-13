@@ -411,8 +411,10 @@ internal fun DataSourceSelector.reuseSharedConsole(
     }.getOrNull()
     // ★A49：**无嵌入宿主（onConsole == null）时不重摘 DBN 结果组件**——prepare 侧已 gate，但复用链
     // 若仍 swap 会再次把结果区组件从 DBN 原生宿主摘进我方永不展示的 SplitPane（`swapResultIntoPersistentConsole`
-    // 的强制换入分支会 remove 外部宿主 + 设 bottomComponent）→ 原生控制台结果网格停在 "0 rows of 0+"。
-    // 无宿主时沿用既有缓存（可能为 null）、保持原生渲染；有宿主（预览面板复用）时行为逐字不变。
+    // 的强制换入分支会 remove 外部宿主 + 设 bottomComponent）。无宿主时摘取无收益、只扰动 DBN 组件树
+    // （详见 [shouldComposeEmbedSplitPane] 的归因更正：这是排查「网格 0 rows」时顺带发现的收敛，
+    // 该现象真因是调用方传了不存在的表名）。无宿主时沿用既有缓存（可能为 null）；有宿主（预览面板
+    // 复用）时判据化简后与改前逐字等价，行为不变。
     val hasHost = onConsole != null
     val composeNow = shouldComposeEmbedSplitPane(hasHost, liveResult != null)
     val full: javax.swing.JComponent? = when {
@@ -916,24 +918,30 @@ internal fun DataSourceSelector.resultSwapNeeded(
 
 /**
  * ★A49：是否组我方整控台 SplitPane——即是否允许把 DBN 结果区组件（`ui.getComponent()`）摘进
- * 本插件容器（[buildConsoleSplitPane]）。**只有存在嵌入宿主（onConsole 回调）时才允许。**
+ * 本插件容器（[buildConsoleSplitPane] / [swapResultIntoPersistentConsole]）。**只有存在嵌入宿主
+ * （onConsole 回调）时才允许。**
  *
  * 无宿主路径（SQL 快捷模板三动作 / 日志转 SQL 的「执行」，二者都走
  * `SqlExecutor.execute(onConsole = null)`）只把语句交给**原生 Database 控制台**执行，控制台由
- * DBN 在 IDE 底部 Services 视图自行展示。此时若仍 `buildConsoleSplitPane(topBlock, resultComponent)`，
- * 构造 JSplitPane 会把结果区组件从 DBN 原生宿主（`ServiceViewComponentWrapper`）摘进一个**永不展示**
- * 的容器（`onConsole?.invoke` 是 no-op，`pendingOnConsole` 也为 null 故 refreshResultsComponent
- * 直接早退、无人回收）→ 原生控制台结果网格停在 "0 rows of 0+" 不渲染。这正是 ★A48 家族的**另一条
- * 路径**：同是「我方容器摘走了 DBN 的结果组件」，但 A48 的第四判据回收在 `pendingOnConsole == null`
- * 时被短路，回收不了——治本只能是**一开始就不摘**。
+ * DBN 在 IDE 底部 Services 视图自行展示。此时组出来的 SplitPane **永不展示**（`onConsole?.invoke`
+ * 是 no-op，`pendingOnConsole` 也为 null 故 [refreshResultsComponent] 直接早退、无人回收），
+ * 摘取结果组件对本路径**无任何收益**，却扰动 DBN 自己的组件树（把结果区组件从原生宿主
+ * `ServiceViewComponentWrapper` 摘下、再挂进我方容器）——属 ★A48 的**同族现象**（A48 修的是嵌入
+ * 路径上「回收判据看不见 re-parent」，本判据消的是无宿主路径上「本就不该摘」）。
  *
- * 注意：**只 gate prepare 侧**（本函数唯一调用点 [prepareAfterEditorResolved]）。后续执行走
- * [reuseSharedConsole]，它按需自行重建 SplitPane（`sharedFullComponent == null` 时 swap 助手回退
- * [buildConsoleSplitPane]），不受本判据影响——故「首次（full chain）坏、二次（复用）好」的二次
- * 路径行为逐字不变。
+ * **归因更正（2026-10-13）**：本判据最初的立项依据是「录制里原生控制台结果网格停在 `0 rows`」，
+ * 后经沙盒控制台 **Output 页原文**查明该现象真因是**调用方传了不存在的表名**——录制脚本的右键
+ * 锚点按单宽估算 CJK 列宽、落到 `schema.sql` 注释里的中文词上，动作据其拼出
+ * `SELECT … FROM 对齐插件测试`，DBN 正确报 `[42S02][1146] Table 'mpj_demo.对齐插件测试' doesn't exist`，
+ * 网格 0 rows 是该报错的**正常表现**，**与插件行为无关**（锚点 x 610→740 修正后重录一次通过，
+ * 网格 4 行）。故本判据是排查该现象时**顺带发现并收敛**的隐患，**不是该现象的修复**；保留理由＝
+ * 无宿主路径摘取原生组件无收益、有扰动风险，去掉后更安全。
  *
- * @param hasEmbedHost       本次准备是否带嵌入宿主回调（`onConsole != null`）
- * @param hasResultComponent DBN 结果区组件是否取到（`resultComponent != null`）
+ * 两处组入点（prepare 侧 [prepareAfterEditorResolved]、复用侧 [reuseSharedConsole]）同用本判据；
+ * 嵌入/预览路径（`onConsole != null`）的判据在条件化简后与改前**逐字等价**，行为不变。
+ *
+ * @param hasEmbedHost       本次准备/执行是否带嵌入宿主回调（`onConsole != null`）
+ * @param hasResultComponent DBN 结果区组件是否取到（`resultComponent`/`liveResult` != null）
  * @return true = 组 SplitPane 并换入（有宿主）；false = 不组不摘，保持原生控制台渲染
  */
 internal fun shouldComposeEmbedSplitPane(
