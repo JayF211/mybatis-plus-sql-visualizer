@@ -16,9 +16,21 @@ def shot(path, region=WIN):
 
 
 def goto(line, wait=1.2, verify_shot=None):
-    """Ctrl+G 跳行。goto 对话框残留上次输入 -> 先 Ctrl+A 清空再输入。"""
+    """Ctrl+G 跳行。goto 对话框残留上次输入 -> 先 Ctrl+A 清空再输入。
+
+    ⚠️ **输入前必须确认对话框真的弹出来了**（2026-10-13 血的教训）：`Ctrl+G` 被吞时，
+    紧随其后的 `Ctrl+A` 会**把整个文件全选**，`typewrite(str(line))` 于是把**整个文件内容
+    替换成那个行号**——本轮 `DeviceInfoController.java` 就是这样被写成了一个字面 `110`，
+    直到 IDE 报「需要class, interface或enum」才被发现。
+    Goto Line 是**轻量弹窗、窗口枚举看不见**（EnumWindows 无新窗口），所以用**像素护栏**：
+    比对 Ctrl+G 前后编辑区指纹，没变化即判定没弹出 → 直接抛错，绝不往下敲字。
+    """
+    base = _region_fp()
     pyautogui.hotkey('ctrl', 'g')
     time.sleep(0.7)
+    if base is not None and not _changed(base):
+        pyautogui.keyDown('esc'); pyautogui.keyUp('esc')
+        raise RuntimeError('Ctrl+G 未弹出 Goto Line 对话框（可能被吞）——已中止，避免把行号打进编辑器覆盖文件')
     pyautogui.hotkey('ctrl', 'a')
     time.sleep(0.25)
     pyautogui.typewrite(str(line), interval=0.06)
@@ -27,6 +39,31 @@ def goto(line, wait=1.2, verify_shot=None):
     time.sleep(wait)
     if verify_shot:
         shot(verify_shot, SB)
+
+
+# ---- 像素护栏（goto 用）：编辑区指纹比对 -------------------------------------
+_GUARD_REGION = {'left': 460, 'top': 25, 'width': 1100, 'height': 700}   # 编辑区（避开工具栏/侧栏）
+
+
+def _region_fp():
+    """编辑区指纹（8x8 网格灰度）；取不到返回 None（护栏降级为不拦）。"""
+    try:
+        import numpy as np
+        import mss
+        with mss.mss() as sct:
+            img = np.asarray(sct.grab(_GUARD_REGION))[:, :, :3].mean(axis=2)
+        h, w = img.shape
+        return [img[i * h // 8:(i + 1) * h // 8, j * w // 8:(j + 1) * w // 8].mean()
+                for i in range(8) for j in range(8)]
+    except Exception:
+        return None
+
+
+def _changed(base, thr=2.0):
+    cur = _region_fp()
+    if cur is None:
+        return True          # 取不到就放行（保持旧行为，别把护栏变成新故障点）
+    return max(abs(a - b) for a, b in zip(base, cur)) > thr
 
 
 def force_en_us():

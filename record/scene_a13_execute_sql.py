@@ -140,16 +140,20 @@ def main():
     trigger_preview()
     pyautogui.moveTo(*PARK, duration=0.4); time.sleep(1.0)
 
-    # ---- 预热控制台（不入镜）：先执行一次，把控制台与结果页签建起来 ----
-    # 冷启动的控制台下，插件把控制台嵌进预览弹窗时**结果页签还没建立**，弹窗下半部会是**空的**
-    # （用户 2026-10-12 当场指出「sql 预览窗口怎么没结果」，我先前那版成片就是这个问题）。
-    # 先跑一次把控制台+结果页签建好，再关掉弹窗重开，正式 take 的「执行 SQL」复用的就是
-    # 这个已带结果的结果页签（**同一段 SQL，所以复用到的数据是对的**）。
-    warm = find_exec_button(ide_pid)
-    if warm:
-        print("预热执行：点 %s" % (warm,))
-        pyautogui.click(*warm)
-        time.sleep(9.0)
+    # ---- 预热控制台（默认关闭）----
+    # 历史：冷启动控制台下，插件把控制台嵌进预览弹窗时结果页签还没建立，弹窗下半部会是**空的**
+    # （2026-10-12 用户当场指出「sql 预览窗口怎么没结果」）——那是插件缺陷 ★A48，已在插件仓
+    # `09f0b28` 修复（结果换入判定补「组件已不在本 SplitPane 底部」第四判据并每拍幂等回收重挂）。
+    # 修复后**首次执行**就应正常显示结果，故这里默认不再预热：本 take 本身就是 A48 的现场验证。
+    # 若哪天又见到「首次执行预览窗空白」，把 WARMUP 打开即可临时规避，并按 A48 的判据
+    # （日志里有没有 `reclaimed=true`）复查。
+    WARMUP = False
+    if WARMUP:
+        warm = find_exec_button(ide_pid)
+        if warm:
+            print("预热执行：点 %s" % (warm,))
+            pyautogui.click(*warm)
+            time.sleep(9.0)
     close_preview(ide_pid)
     pyautogui.click(600, 500); time.sleep(0.4)
     goto_col(CHAIN_LINE, CHAIN_COL)
