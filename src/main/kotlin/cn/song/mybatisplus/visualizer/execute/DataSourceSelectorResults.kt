@@ -888,6 +888,33 @@ internal fun DataSourceSelector.resultSwapNeeded(
     return host != null && (hostBottom !== live || live.parent !== host)
 }
 
+/**
+ * ★A49：是否组我方整控台 SplitPane——即是否允许把 DBN 结果区组件（`ui.getComponent()`）摘进
+ * 本插件容器（[buildConsoleSplitPane]）。**只有存在嵌入宿主（onConsole 回调）时才允许。**
+ *
+ * 无宿主路径（SQL 快捷模板三动作 / 日志转 SQL 的「执行」，二者都走
+ * `SqlExecutor.execute(onConsole = null)`）只把语句交给**原生 Database 控制台**执行，控制台由
+ * DBN 在 IDE 底部 Services 视图自行展示。此时若仍 `buildConsoleSplitPane(topBlock, resultComponent)`，
+ * 构造 JSplitPane 会把结果区组件从 DBN 原生宿主（`ServiceViewComponentWrapper`）摘进一个**永不展示**
+ * 的容器（`onConsole?.invoke` 是 no-op，`pendingOnConsole` 也为 null 故 refreshResultsComponent
+ * 直接早退、无人回收）→ 原生控制台结果网格停在 "0 rows of 0+" 不渲染。这正是 ★A48 家族的**另一条
+ * 路径**：同是「我方容器摘走了 DBN 的结果组件」，但 A48 的第四判据回收在 `pendingOnConsole == null`
+ * 时被短路，回收不了——治本只能是**一开始就不摘**。
+ *
+ * 注意：**只 gate prepare 侧**（本函数唯一调用点 [prepareAfterEditorResolved]）。后续执行走
+ * [reuseSharedConsole]，它按需自行重建 SplitPane（`sharedFullComponent == null` 时 swap 助手回退
+ * [buildConsoleSplitPane]），不受本判据影响——故「首次（full chain）坏、二次（复用）好」的二次
+ * 路径行为逐字不变。
+ *
+ * @param hasEmbedHost       本次准备是否带嵌入宿主回调（`onConsole != null`）
+ * @param hasResultComponent DBN 结果区组件是否取到（`resultComponent != null`）
+ * @return true = 组 SplitPane 并换入（有宿主）；false = 不组不摘，保持原生控制台渲染
+ */
+internal fun shouldComposeEmbedSplitPane(
+    hasEmbedHost: Boolean,
+    hasResultComponent: Boolean,
+): Boolean = hasEmbedHost && hasResultComponent
+
 /** 读取 RunnerLayoutUi 当前全部结果内容（排除 Output/输出）。 */
 
 internal fun DataSourceSelector.refreshResultsComponent(ui: Any, LOG: com.intellij.openapi.diagnostic.Logger, forceSwapIn: Boolean = false, generation: Int = swapGeneration, onError: ((String) -> Unit)? = null, onErrorRich: ((ExecutionErrorInfo) -> Unit)? = null, sqlText: String? = null) {

@@ -352,8 +352,18 @@ internal fun DataSourceSelector.prepareAfterEditorResolved(
         }
 
         // 4.5 完整控制台 = 顶部块（上）/ 结果区（下）垂直 SplitPane（M36.4 主题化形态）
+        // ★A49：**无嵌入宿主（onConsole == null）时不组 SplitPane、不摘 DBN 结果组件**——
+        // SQL 快捷模板 / 日志转 SQL 执行链只把语句送原生 Database 控制台执行，控制台由 DBN
+        // 在 IDE 底部 Services 视图自行展示；此时组出来的 SplitPane 永不展示（onConsole?.invoke
+        // 是 no-op），却已把 DBN 结果区组件（ui.getComponent()）从原生宿主摘走 → 原生控制台
+        // 结果网格停在 "0 rows of 0+" 不渲染（★A48 家族的另一条路径，回收判据在无宿主时被短路，
+        // 只能一开始就不摘）。判据见 shouldComposeEmbedSplitPane。
         val fullComponent: javax.swing.JComponent? = resultComponent?.let { result ->
-            buildConsoleSplitPane(topBlock, result)
+            if (shouldComposeEmbedSplitPane(onConsole != null, hasResultComponent = true)) {
+                buildConsoleSplitPane(topBlock, result)
+            } else {
+                null
+            }
         }
 
         // 4.6 内嵌（M36.5.6：准备阶段**只嵌编辑器块**——"Console output" 空占位不再预嵌；
@@ -391,10 +401,13 @@ internal fun DataSourceSelector.prepareAfterEditorResolved(
         sharedExecOption = execOption
         sharedUi = ui
         sharedTopBlock = topBlock
-        // M36.5.53：sharedFullComponent 始终缓存**完整 SplitPane**（preparedFullComponent 也是
+        // M36.5.53：sharedFullComponent 缓存**完整 SplitPane**（preparedFullComponent 也是
         // fullComponent），不随预览时内嵌的 component（可能为 topBlock 编辑器）变化——否则
         // 执行时 swapResultIntoPersistentConsole 拿到的 sharedFullComponent 是 topBlock（非
         // SplitPane）→ 回退 buildConsoleSplitPane 重建 → A4 身份漂移。预留给执行复用。
+        // ★A49：无嵌入宿主时 fullComponent 为 null（不组不摘）——执行复用链
+        // （reuseSharedConsole）在 sharedFullComponent == null 时自行回退 buildConsoleSplitPane，
+        // 语义不变（见 shouldComposeEmbedSplitPane）。
         sharedFullComponent = fullComponent
         sharedDataSourceName = dataSourceName
         // T-SI-02：控制台已建，数据源 UUID 从此可取（LocalDataSource.getUniqueId）——
