@@ -4,7 +4,7 @@
 > **分支**：dev（当前 HEAD `a6570ce`）
 > **状态**：立项调研——**仅调研与方案设计，不实施**（用户明确「先不要实施」）
 > **优先级**：P2（消灭日志捕捉链路唯一的常驻开销——反射桥 + 轮询兜底；非功能缺陷，不阻塞当前功能）
-> **来源**：T-PerfBatch 计划 §4.3 的 P2 调研项。MyBatisCodeHelper-Pro 用稳定的 `consoleFilterProvider` 扩展点注册 Filter（plugin.xml 声明该 EP，实现类由 `getDefaultFilters` 返回单个过滤器实例），运行期零挂载负担、零轮询、零组件树遍历。本项目当前用反射桥 + 轮询兜底（T-M31-03），每拍仍有 `hasMainConsole`（descriptor 反射 + `isProcessAlive` 进程存活反射）+ `findConsoleView` 递归组件树遍历。本计划评估把 EP 作为主通道、反射桥降级为兜底的双轨方案。
+> **来源**：T-PerfBatch 计划 §4.3 的 P2 调研项。同类工具用稳定的 `consoleFilterProvider` 扩展点注册 Filter（声明该 EP，由 `getDefaultFilters` 返回单个过滤器实例），运行期零挂载负担、零轮询、零组件树遍历。本项目当前用反射桥 + 轮询兜底（T-M31-03），每拍仍有 `hasMainConsole`（descriptor 反射 + `isProcessAlive` 进程存活反射）+ `findConsoleView` 递归组件树遍历。本计划评估把 EP 作为主通道、反射桥降级为兜底的双轨方案。
 
 ---
 
@@ -16,12 +16,12 @@
 - 逐行解析：`LogFilterProxyHandler`（`java.lang.reflect.Proxy` 实现 `ConsoleView$Filter`/`execution.filters.Filter` 双候选，T-M31.12）经 `console.javaClass.getMethod("addMessageFilter", filterIface).invoke(...)` 反射挂载（SqlLogConsoleBridge.kt:328）。
 - 全程反射的根因：IPGP 裁剪 execution 模块，插件编译 classpath 无 `com.intellij.execution.*`，运行期由真实 IDE 提供。
 
-### 1.2 EP 的优势（对照反编译结论）
+### 1.2 EP 的优势（对照平台契约结论）
 
 `consoleFilterProvider` 是 JetBrains 平台**长期稳定**的扩展点（`com.intellij.execution.filters.ConsoleFilterProvider`），263/262/253/243 均未破坏：
 - 平台在**每个控制台创建时**自动装配 Filter，`applyFilter` 逐行回调——**零轮询、零反射挂载、零组件树遍历**，彻底消灭 `SqlLogConsoleBridge` 的常驻 EDT 轮询负载（性能分析 §3.1 的 P1 项）。
 - Provider 需要 Project：`ConsoleFilterProvider.getDefaultFilters(Project)`，与 `RunContentManager` 的 per-project 语义对齐。
-- MBCHP-Pro 的生产用法就是这一个 EP（P/c.java 反编译实测），无任何配套轮询。
+- 同类工具的生产用法就是这一个 EP（实测），无任何配套轮询。
 
 ### 1.3 双轨的必要性
 
@@ -38,7 +38,7 @@
 
 1. **jar 反编译**：`com.intellij.execution.filters.ConsoleFilterProvider` 与 `Filter.applyFilter(String line, int entireLength)` 在 243/253/262 三发行版的存在与签名（app-client.jar / platform 模块）。目标：确认 `getDefaultFilters` 返回值形态、`Filter.Result`/`Filter.HyperlinkInfo` 是否被裁剪。
 2. **MD 交叉核实**：`ConsoleFilterProvider` 是否 `DumbAware`、是否需要 `Project` 上下文、能否在 provider 内获取 `RunContentDescriptor`（用于区分运行控制台 vs 数据库控制台）。
-3. **现有插件参考**：MBCHP-Pro 的 EP 实现是最简参考（单类单过滤器）；batslog 开源仓库（plugin.xml 自述 "Sql log from batslog"）可查 `ConsoleLogParser`/`ConsoleFilterProvider` 的完整体。
+3. **现有插件参考**：同类工具的 EP 实现是最简参考（单类单过滤器）；batslog 开源仓库可查其 ConsoleLogParser/ConsoleFilterProvider 的完整体。
 
 ### 2.2 双轨架构设计要点
 

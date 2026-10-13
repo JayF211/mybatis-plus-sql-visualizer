@@ -84,8 +84,8 @@
 | [t-crudsql-plan.md](bug-fixes/t-crudsql-plan.md) | 实体类+数据库表右键生成 CRUD SQL（master bf303aa 起，三轮弹窗原生化已合入） |
 | [project-tagline.md](bug-fixes/project-tagline.md) | 产品标语「服务未启，SQL 先知」五处统一（master 37fafcb）+ 反馈入口切官网需求池 |
 | [project-idea-diagram-framework.md](bug-fixes/project-idea-diagram-framework.md) | JOIN 图 IDEA 原生框架接入全集（已发行；dev 已随 master 合入，2026-09-13 实证） |
-| [reference-coolrequest-agent-analysis.md](bug-fixes/reference-coolrequest-agent-analysis.md) | M56 输入调研：CoolRequest premain 实态/驱动自拼 SQL/ByteBuddy retransform/relocate |
-| [reference-debugtools-agent-analysis.md](bug-fixes/reference-debugtools-agent-analysis.md) | M56 输入调研：DebugTools 真 attach+agentmain 反面教材与可照搬四手法 |
+| CoolRequest agent 分析（内部资料库） | M56 输入调研：CoolRequest premain 实态/驱动自拼 SQL/ByteBuddy retransform/relocate |
+| DebugTools agent 分析（内部资料库） | M56 输入调研：DebugTools 真 attach+agentmain 反面教材与可照搬四手法 |
 | [t-archdocs-sync-dev.md](bug-fixes/t-archdocs-sync-dev.md) | docs/架构设计 五文件同步 dev 基线（dev 6f9bd5e）；分支同步范围定案已收编 project-doc-conventions |
 | [t-histparam-plan.md](bug-fixes/t-histparam-plan.md) | 历史页参数识别丢失根治 + 字面量恢复两轮（v2 pd 行 + LiteralParamRecovery，cef6081/f5983b8） |
 | [t-perfsweep-delivery.md](bug-fixes/t-perfsweep-delivery.md) | dev 遗留四热点清扫（重放守卫惰性化/热路径 Regex/dedupeCounts 4096 上限） |
