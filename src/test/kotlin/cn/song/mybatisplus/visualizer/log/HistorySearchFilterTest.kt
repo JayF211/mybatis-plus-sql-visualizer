@@ -202,6 +202,42 @@ class HistorySearchFilterTest : BasePlatformTestCase() {
         }
     }
 
+    fun testF88_聚合只随快照换代_重复apply不重算() {
+        // F88（T-PerfSweep25）：同模板聚合与查询无关、只随条目快照换代——同快照反复 apply
+        // （空查询防抖、查询进出）不再重复 O(N) 聚合；徽章口径不丢（首算一次即全量口径）。
+        writeHistoryFile("sql-history-f88.sql", listOf("SELECT * FROM user WHERE id = 1", "select 1"))
+        val panel = HistorySqlLogPanel(project)
+        panel.refreshForTest()
+        var aggregations = 0
+        panel.structureKeyCountsHookForTest = { entries ->
+            aggregations++
+            structureKeyCounts(entries)
+        }
+        try {
+            panel.openFileForTest(panel.fileListEntries.single())
+            assertEquals("加载后首算恰一次（修复前同）", 1, aggregations)
+            // 空查询反复 apply（防抖反复触发形态）+ 非空查询 apply——同快照不再重算
+            panel.setSearchForTest("")
+            panel.setSearchForTest("")
+            panel.setSearchForTest("select")
+            panel.setSearchForTest("")
+            assertEquals("同快照四次 apply 聚合仍恰一次（修复前 5 → 红）", 1, aggregations)
+            // 语义等价守卫：空查询首算后徽章计数在位（朴素「空查询即跳过」会让首屏徽章丢算 → 此行红）
+            org.junit.Assert.assertTrue(
+                "空查询下徽章计数已首算（全量口径不丢）",
+                panel.templateCountsForTest.isNotEmpty(),
+            )
+            // 快照换代（重读文件）→ 每代恰算一次：refreshForTest 换一代（重读文件）、
+            // 重开文件再换一代——两次换代共重算两次（修复前每次 apply 都重算 → 此处同样红）
+            panel.refreshForTest()
+            panel.openFileForTest(panel.fileListEntries.single())
+            assertEquals("两次快照换代各重算恰一次（修复前每次 apply 都重算 → 红）", 3, aggregations)
+        } finally {
+            panel.structureKeyCountsHookForTest = null
+            panel.dispose()
+        }
+    }
+
     fun test面板开关驱动一级文件名检索() {
         writeHistoryFile("sql-history-case.sql", listOf("SELECT 1"))
         val panel = HistorySqlLogPanel(project)

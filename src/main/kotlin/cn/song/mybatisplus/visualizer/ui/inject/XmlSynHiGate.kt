@@ -145,9 +145,13 @@ object XmlSynHiGate {
      *     不让一个坏/怪注入器把本插件一起拖成零着色——「坏注入器⇒零着色」正是本次验收缺陷的
      *     原始形态；反方向的双写叠色风险由「真 startInjecting 才让位」的精确判定本身兜住）。
      *
-     * per-host 结论**不缓存**（PSI 随重解析失效）；注入器清单每问每取（EP 内部有平台级缓存，
+     * F86 补口径（性能二十五轮，随 F79 同批）：咨询核心自身不缓存（PSI 随重解析失效）；生产路径
+     * [occupiedRanges] 在本核心之上按 F79 刀二 stamped memo 缓存结论（宿主弱键＋文件修改戳＋
+     * 注入器清单实例，任一换代即失效重探）。注入器清单每问每取（EP 内部有平台级缓存，
      * 取列表本身 O(1) 级）。性能注：喂入契约预筛使 SQL 系注入器（喂入类型全为 SQL PSI）对
-     * XML 宿主零试探成本，XML 宿主面典型只剩自身族包名过滤 + 类型 isInstance。
+     * XML 宿主零试探成本，但**喂入契约含 XML 宿主的三方注入器（如 MCH-Pro 社区轨）仍按次
+     * 全价试调**——F79 前 probe 是每问成本主项，现由谓词前置（非 mapper/非白名单宿主零探针）
+     * ＋stamped memo（通过守卫的宿主每修改戳至多一探）摊薄。
      */
     internal fun foreignInjectorsWouldInject(injectors: List<MultiHostInjector>, host: PsiElement): Boolean =
         probeInjectors(injectors, host).any { it.started }
@@ -175,9 +179,13 @@ object XmlSynHiGate {
      *     不让一个坏/怪注入器把本插件一起拖成零着色——「坏注入器⇒零着色」正是该次验收缺陷的
      *     原始形态）。
      *
-     * per-host 结论**不缓存**（PSI 随重解析失效）；注入器清单每问每取（EP 内部有平台级缓存，
+     * F86 补口径（性能二十五轮，随 F79 同批）：咨询核心自身不缓存（PSI 随重解析失效）；生产路径
+     * [occupiedRanges] 在本核心之上按 F79 刀二 stamped memo 缓存结论（宿主弱键＋文件修改戳＋
+     * 注入器清单实例，任一换代即失效重探）。注入器清单每问每取（EP 内部有平台级缓存，
      * 取列表本身 O(1) 级）。性能注：喂入契约预筛使 SQL 系注入器（喂入类型全为 SQL PSI）对
-     * XML 宿主零试探成本，XML 宿主面典型只剩自身族包名过滤 + 类型 isInstance。
+     * XML 宿主零试探成本，但**喂入契约含 XML 宿主的三方注入器（如 MCH-Pro 社区轨）仍按次
+     * 全价试调**——F79 前 probe 是每问成本主项，现由谓词前置（非 mapper/非白名单宿主零探针）
+     * ＋stamped memo（通过守卫的宿主每修改戳至多一探）摊薄。
      */
     private fun probeInjectors(injectors: List<MultiHostInjector>, host: PsiElement): List<ProbeRecord> {
         val out = mutableListOf<ProbeRecord>()
@@ -253,9 +261,12 @@ object XmlSynHiGate {
      * 喂入面（性能十七轮 §5.1）= 任意 XML 族文件每 XmlText/XmlAttributeValue 每 pass 一次
      * shouldYield，原形态每次付 1 次 app 级服务查找（85ns/元素实测）。V38 两案实测（3002 喂入位）：
      * 快照直读 14ns/元素、per-psi-vfs-epoch memo 202ns/元素（查表+containingFile 反超服务查找）
-     * ——**快照案占优落地**。刷新漏斗唯一：[PluginSettings.loadState]（设置页 apply 与 JSON
-     * 导入均汇入，PluginSettingsPanel.apply 末尾恒 loadState(s.copy())）；快照默认 true 同
-     * State 默认值，测试环境无服务时语义不变。
+     * ——**快照案占优落地**。F86/F79 更新（性能二十五轮）：快照读之外 W1 形态还有 per-host 探针
+     * （F79 前 probe 每问全链白付、曾是每问成本主项而本注未登记）——现谓词前置（非 mapper/
+     * 非白名单宿主零探针，SqlMapperInjector 守卫族全在 probe 之前）＋刀二 stamped memo（通过
+     * 守卫的宿主每修改戳至多一探），设置快照读重新是常态唯一成本。刷新漏斗唯一：
+     * [PluginSettings.loadState]（设置页 apply 与 JSON 导入均汇入，PluginSettingsPanel.apply
+     * 末尾恒 loadState(s.copy())）；快照默认 true 同 State 默认值，测试环境无服务时语义不变。
      */
     @Volatile
     private var xmlSynHiEnabledSnapshot: Boolean = true

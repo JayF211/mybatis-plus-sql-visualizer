@@ -66,11 +66,20 @@ def _changed(base, thr=2.0):
     return max(abs(a - b) for a, b in zip(base, cur)) > thr
 
 
-def force_en_us():
-    """Alt+Shift 会触 Windows 输入法切换；输入前强制回 en-US，避免 typewrite 被 IME 吃掉。"""
+def force_en_us(hwnd=None):
+    """把输入法切回 en-US，避免 typewrite 被中文 IME 吃掉。
+
+    ⚠️ **只用 ActivateKeyboardLayout 是无效的**（2026-10-13 实测）：它只影响**调用线程**的
+    键盘布局，对前台 IDE 窗口不起作用——`typewrite('schema.sql')` 仍被中文 IME 转成「上车吗。sql」。
+    正解＝给目标窗口 `PostMessage(WM_INPUTLANGCHANGEREQUEST, 0, hkl)`。
+    """
     try:
-        hkl = ctypes.windll.user32.LoadKeyboardLayoutW('00000409', 1)
-        ctypes.windll.user32.ActivateKeyboardLayout(hkl, 0)
+        u32 = ctypes.windll.user32
+        hkl = u32.LoadKeyboardLayoutW('00000409', 1)
+        u32.ActivateKeyboardLayout(hkl, 0)
+        target = hwnd or u32.GetForegroundWindow()
+        if target:
+            u32.PostMessageW(ctypes.c_void_p(target), 0x0050, 0, ctypes.c_void_p(hkl))
     except Exception:
         pass
 
@@ -116,6 +125,7 @@ def goto_col(line, col, wait=1.0):
         pyautogui.keyDown('home'); pyautogui.keyUp('home'); time.sleep(0.12)
     for _ in range(max(0, col - 1)):
         pyautogui.keyDown('right'); pyautogui.keyUp('right')
+        time.sleep(0.02)   # 连发不间隔会被丢键（实测 31 次右箭头只生效 24 次、列号短 7）
     time.sleep(wait)
 
 

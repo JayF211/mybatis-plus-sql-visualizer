@@ -141,6 +141,7 @@ object SqlStatementSplitter {
 
     private fun splitInternal(sql: String, keepComments: Boolean): List<String> {
         lookaheadProbeCount = 0 // T-PS7-01 计数缝：每次切分清零
+        lookaheadScannedCharsForTest = 0 // F90 扫描量缝：每次切分清零
         val parts = ArrayList<String>()
         val sb = StringBuilder()
         var inSingle = false
@@ -622,8 +623,13 @@ object SqlStatementSplitter {
         var inLine = false
         var inBlock = false
         var word = StringBuilder()
+        // F90（T-PerfSweep25）前视输入上限：病态输入（大量 BEGIN 无配对 END）的「每词位全文
+        // 前视」最坏 O(n²)，限窗后收敛 O(n·W) 线性；窗内无配对词=按既有保守分支落点（不武装，
+        // 与修复前「全文无配对」同一分支，顶层界符照常切分），合法输入（配对距离远小于窗）零变化。
+        val limit = minOf(sql.length, from + LOOKAHEAD_WINDOW)
+        lookaheadScannedCharsForTest += (limit - from)
         var i = from
-        while (i < sql.length) {
+        while (i < limit) {
             val c = sql[i]
             val next = sql.getOrNull(i + 1)
             when {
@@ -670,8 +676,11 @@ object SqlStatementSplitter {
         var inLine = false
         var inBlock = false
         var word = StringBuilder()
+        // F90：同 [hasWordAhead] 的前视输入上限（DECLARE 声明段武装前视同型病态面同收敛）。
+        val limit = minOf(sql.length, from + LOOKAHEAD_WINDOW)
+        lookaheadScannedCharsForTest += (limit - from)
         var i = from
-        while (i < sql.length) {
+        while (i < limit) {
             val c = sql[i]
             val next = sql.getOrNull(i + 1)
             when {
@@ -716,4 +725,19 @@ object SqlStatementSplitter {
      * 计数超阈值即红。仅测试读：生产并发调用计数无契约，纯函数语义不受影响。
      */
     internal var lookaheadProbeCount: Int = 0
+
+    /**
+     * F90（T-PerfSweep25）前视输入上限：DECLARE/BEGIN 词位的块配对前视单次最多前看的字符数。
+     * 病态输入（大量 BEGIN 无配对 END）修复前每词位触发全文前视、最坏 O(n²)——限窗后收敛为
+     * O(n·W) 线性；窗内无配对词=按既有保守分支「无配对」落点（不武装块感知，顶层界符照常
+     * 切分），合法输入（配对距离远小于窗）零行为变化。量级远小于系内熔断口径
+     * （XmlSynHiGate 100K）：窗只需覆盖常规存储过程/匿名块的整段配对距离。
+     * 计划处置列「split 入口加输入长度上限或按上限截断」两案都会改动合法大脚本的切分结果
+     * （截断丢语句/拒分整段不切），故取只约束前视自身的窗上限（任务口径「前视输入上限」）。
+     */
+    internal const val LOOKAHEAD_WINDOW = 10_000
+
+    /** F90 测试缝：切分过程内前视扫描的累计字符数（每次 [splitInternal] 入口清零）——判别
+     *  「前视输入上限」：修复前 ≈ Σ(词位→文尾)，修复后 ≤ 词位数 × [LOOKAHEAD_WINDOW]。 */
+    internal var lookaheadScannedCharsForTest: Long = 0
 }

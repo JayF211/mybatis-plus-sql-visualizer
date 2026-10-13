@@ -537,7 +537,8 @@ class SqlLogPanel(
             if (tabs.selectedComponent == sqlToJavaPanel) {
                 sqlToJavaPanel.refreshFormatFromSettings()
             }
-            // F-44：切换到历史 tab 时刷新数据
+            // F-44：切换到历史 tab 时刷新数据；F87（T-PerfSweep25）起这里同时是**首扫唯一入口**
+            //（历史面板构造不再自带 refresh——开窗即扫回退为首次切换才扫）
             if (historyTabIndex >= 0 && tabs.selectedIndex == historyTabIndex) {
                 historyPanel.refresh()
             }

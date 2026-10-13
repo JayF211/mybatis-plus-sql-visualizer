@@ -6,6 +6,7 @@ import com.intellij.codeInsight.completion.CompletionProvider
 import com.intellij.codeInsight.completion.CompletionResultSet
 import com.intellij.codeInsight.completion.CompletionType
 import com.intellij.codeInsight.lookup.LookupElementBuilder
+import com.intellij.openapi.project.DumbAware
 import com.intellij.patterns.PlatformPatterns
 import com.intellij.psi.JavaPsiFacade
 import com.intellij.psi.PsiClass
@@ -29,9 +30,16 @@ import com.intellij.util.ProcessingContext
  * 非结果映射上下文零候选（反向验证）。
  *
  * T-PerfSweep16 F40：补全链接让位门（[XmlSynHiGate.shouldYield]）+ 全文重扫 memo
- * （键=文件 url + modificationStamp [+ resultMapId]）。
+ * （键=文件 url + modificationStamp [+ resultMapId]；F89 起 [ResultMapColumnCompletionMemo]
+ * 双槽化）。
+ *
+ * F93（T-PerfSweep25，顺手件）：补 [DumbAware] 对齐三兄弟（XmlSqlCompletionContributor /
+ * MybatisConfigCompletionContributor / WrapperCompletionContributor 均为
+ * `CompletionContributor(), DumbAware`——T-XmlCmpl2 教训：缺该标记接口 dumb 期被静默跳过）。
+ * dumb 期列名候选走文件文本提取不受索引影响；类字段候选（[resultMapTypeFields] 的
+ * findClass/ShortNamesCache）索引未就绪时可能不全，runCatching 兜底空表，无异常面。
  */
-class ResultMapColumnCompletionContributor : CompletionContributor() {
+class ResultMapColumnCompletionContributor : CompletionContributor(), DumbAware {
 
     init {
         extend(
@@ -103,15 +111,20 @@ class ResultMapColumnCompletionContributor : CompletionContributor() {
 }
 
 /**
- * T-PerfSweep16 F40 + T-XmlGap W5-10：`extractColumns` 全文重扫的单槽 memo（进程内一份，补全触发高频）。
+ * T-PerfSweep16 F40 + T-XmlGap W5-10：`extractColumns` 全文重扫 memo（进程内一份，补全触发高频）。
  *
  * 键 = 文件 url + modificationStamp + 文本长度（指纹组合）：stamp 变化即失效；**长度是
  * 实测补上的第二键**——测试夹具与部分内存态文件的 LightVirtualFile 在文档变更后
  * modificationStamp 不动（ResultMapColumnCompletionMemoTest 真红实证），单靠 stamp 会
  * 返回陈旧候选。编辑后自然回源重扫。
  *
- * T-XmlGap W5-10 增加第二条轨：[columnsForResultMap]（键额外含 resultMapId，多槽 map），
+ * T-XmlGap W5-10 增加第二条轨：[columnsForResultMap]（键额外含 resultMapId，按文件分槽），
  * 与既有 [columnsFor]（整文件全量，签名保持不变——既有测试与注解链复用）互不干扰。
+ *
+ * F89 双槽化（T-PerfSweep25）：原进程级单槽在两份 mapper 交替补全时互相驱逐，每次交替即一次
+ * 全文重扫 miss——现两轨各两槽（键命中复用、全新键按翻转位驱逐其一），两文件交替各占一槽零重扫；
+ * 单文件常态恒落首槽（与单槽行为一致），三文件起恢复有界乒乓。线程模型同前：字段各自
+ * @Volatile，竞态最坏=陈旧未命中回源重扫，无结构性破坏。
  *
  * `extractor` / `resultMapExtractor` 为 internal 缝——测试注入计数 lambda 断言「二次补全零重扫」。
  */
@@ -124,15 +137,32 @@ internal object ResultMapColumnCompletionMemo {
     internal var resultMapExtractor: (String, String) -> List<String> =
         { text, resultMapId -> ResultMapColumns.extractColumnsForResultMap(text, resultMapId) }
 
-    @Volatile private var memoUrl: String? = null
-    @Volatile private var memoStamp: Long = Long.MIN_VALUE
-    @Volatile private var memoLen: Int = -1
-    @Volatile private var memoValue: List<String> = emptyList()
+    /** F89 双槽：槽 = url 键 + 戳 + 长度 + 值（rm 轨值为 per-resultMapId map）。 */
+    private class Slot(
+        @Volatile var url: String? = null,
+        @Volatile var stamp: Long = Long.MIN_VALUE,
+        @Volatile var len: Int = -1,
+        @Volatile var value: List<String> = emptyList(),
+    )
 
-    @Volatile private var rmMemoUrl: String? = null
-    @Volatile private var rmMemoStamp: Long = Long.MIN_VALUE
-    @Volatile private var rmMemoLen: Int = -1
-    @Volatile private var rmMemoValue: Map<String, List<String>> = emptyMap()
+    private class RmSlot(
+        @Volatile var url: String? = null,
+        @Volatile var stamp: Long = Long.MIN_VALUE,
+        @Volatile var len: Int = -1,
+        @Volatile var value: Map<String, List<String>> = emptyMap(),
+    )
+
+    private val memoSlots = arrayOf(Slot(), Slot())
+    private val rmMemoSlots = arrayOf(RmSlot(), RmSlot())
+    @Volatile private var evictFlip = false
+    @Volatile private var rmEvictFlip = false
+
+    /** F89 双槽选位：本键已有槽则复用；全新键按翻转位驱逐其一（两文件交替各占一槽零驱逐）。 */
+    private fun pickSlot(mine: (Slot) -> Boolean): Slot =
+        memoSlots.firstOrNull(mine) ?: run { evictFlip = !evictFlip; memoSlots[if (evictFlip) 1 else 0] }
+
+    private fun pickRmSlot(mine: (RmSlot) -> Boolean): RmSlot =
+        rmMemoSlots.firstOrNull(mine) ?: run { rmEvictFlip = !rmEvictFlip; rmMemoSlots[if (rmEvictFlip) 1 else 0] }
 
     /** 命中 memo 直接返回缓存（零重扫）；键不匹配才全文提取并回填。 */
     internal fun columnsFor(file: XmlFile): List<String> {
@@ -140,12 +170,13 @@ internal object ResultMapColumnCompletionMemo {
         val url = vf?.url
         val stamp = vf?.modificationStamp ?: file.modificationStamp
         val len = file.textLength
-        if (url == memoUrl && stamp == memoStamp && len == memoLen) return memoValue
+        val slot = pickSlot { it.url == url }
+        if (url == slot.url && stamp == slot.stamp && len == slot.len) return slot.value
         val value = extractor(file.text)
-        memoUrl = url
-        memoStamp = stamp
-        memoLen = len
-        memoValue = value
+        slot.url = url
+        slot.stamp = stamp
+        slot.len = len
+        slot.value = value
         return value
     }
 
@@ -158,28 +189,35 @@ internal object ResultMapColumnCompletionMemo {
         val url = vf?.url
         val stamp = vf?.modificationStamp ?: file.modificationStamp
         val len = file.textLength
-        if (url != rmMemoUrl || stamp != rmMemoStamp || len != rmMemoLen) {
-            rmMemoUrl = url
-            rmMemoStamp = stamp
-            rmMemoLen = len
-            rmMemoValue = emptyMap()
+        val slot = pickRmSlot { it.url == url }
+        if (url != slot.url || stamp != slot.stamp || len != slot.len) {
+            slot.url = url
+            slot.stamp = stamp
+            slot.len = len
+            slot.value = emptyMap()
         }
-        rmMemoValue[resultMapId]?.let { return it }
+        slot.value[resultMapId]?.let { return it }
         // 一次全文扫描解析该 resultMap 的候选（同文件多 resultMap：每 id 一次，file.text O(n)）
         val value = resultMapExtractor(file.text, resultMapId)
-        rmMemoValue = rmMemoValue + (resultMapId to value)
+        slot.value = slot.value + (resultMapId to value)
         return value
     }
 
     /** 测试缝：清空 memo，保证断言从冷态起算。 */
     internal fun resetForTest() {
-        memoUrl = null
-        memoStamp = Long.MIN_VALUE
-        memoLen = -1
-        memoValue = emptyList()
-        rmMemoUrl = null
-        rmMemoStamp = Long.MIN_VALUE
-        rmMemoLen = -1
-        rmMemoValue = emptyMap()
+        memoSlots.forEach { slot ->
+            slot.url = null
+            slot.stamp = Long.MIN_VALUE
+            slot.len = -1
+            slot.value = emptyList()
+        }
+        rmMemoSlots.forEach { slot ->
+            slot.url = null
+            slot.stamp = Long.MIN_VALUE
+            slot.len = -1
+            slot.value = emptyMap()
+        }
+        evictFlip = false
+        rmEvictFlip = false
     }
 }

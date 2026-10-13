@@ -12,8 +12,10 @@ import java.time.ZoneId
  * 读取面复用 [SqlLogFileReader]（不重造），检索语义四维：关键词 / 正则 / 时间范围 / 来源。
  *
  * **域中立（D3=A）**：本对象零 com.intellij、零 mcpserver 依赖，输入输出全是纯数据——
- * MCP 工具（SqlVisualizerHistorySearchTool）与 R16 历史跨文件全文检索 UI 共用同一实现，
- * 一次投入两处收益。MCP 侧的文案格式化/入参校验转译在工具层，不在这里。
+ * 当前唯一调用方=MCP 工具（SqlVisualizerHistorySearchTool），MCP 侧的文案格式化/入参校验
+ * 转译在工具层，不在这里。F94 改注（T-PerfSweep25，文档漂移修正）：原注「与 R16 历史跨文件
+ * 全文检索 UI 共用同一实现」与实况不符——R16 UI（HistorySqlLogPanel 的文件名/条目级检索）
+ * 走自身的 filterHistoryEntries 实现，不经本服务；域中立形态保留为未来复用留位，非既成事实。
  *
  * **「来源」维度的落盘实况（实施期重锚证伪）**：通道标记（SqlSource）在历史文件里
  * **仅 MCP 存活**——SqlLogParamCodec.encodeEntry 只对 MCP 落 `s` 键，控制台/agent 来源

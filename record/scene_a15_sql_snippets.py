@@ -58,15 +58,14 @@ from locate import close_preview, ensure_foreground, sandbox_pid, windows  # noq
 from nav import force_en_us  # noqa: E402
 
 OUT = "perf/a15_sql_snippets.mp4"
-SCROLL_NOTCHES = -18         # Ctrl+Home 钉首行=1 后滚 54 行 → 首行=55，表名行(L58)落在编辑区第 4 行。
-#                              刻意不放第一行：锚点低一点（y≈165）菜单末项就到 y≈979，
-#                              子菜单下方放不下 → **向上展开**，三项全在取景框内
-#                              （锚点在 75 时菜单末项 889、子菜单向下展开，第三项 1054 出框）
+SCROLL_NOTCHES = -19         # Ctrl+Home 钉首行=1 后滚 57 行 → 首行=58（58 ≡ 1 mod 3），
+#                              L58 注释行成为编辑区第一行 → 锚点 y≈143，菜单末项 ≈957 < 取景框底 1009 ✓
+#                              ⚠️ -18 会让首行=55、表名落到第 4 行，锚点按「第一行」量就会落到空行 L57，
+#                              光标不在 token 上 → 子菜单三项全灰、点了没反应（20261013 实测踩过）
 
-ANCHOR = (790, 175)          # L58 注释里的 `car_device_info`（编辑区第一行；窗口标准位置）
+ANCHOR = (740, 185)          # L58 注释里的 `car_device_info`（编辑区第一行；20261013 实测屏幕坐标）
 WIN = (277, 25, 1370, 984)   # 标准几何（不推窗口出屏——用户要求 IDE 顶部完整入镜）
-#                              锚点在第一行文字 y≈175 时，菜单末项 ≈175+814=989，取景框底 1009 ✓；
-#                              子菜单下方放不下 → 向上展开，三项在 y≈891/924/957 ✓ 全在框内
+#                              token 在 L58 的 col 17（`car_device_info` 起始），x 取其中段
 ITEM_H = 41                  # 菜单单项高度（实测，仅注释用；扫描不依赖它）
 
 # 子菜单所在横带：菜单右边缘 ≈ 锚点 x+368，子菜单面板 ≈ 锚点 x+378..+588
@@ -223,6 +222,24 @@ def find_last_item(ref, band_x, limit_y):
     raise RuntimeError("自下而上扫完也没等到子菜单出现——菜单没开？先看 shots/a15_pre.png")
 
 
+def _first_line_y(region):
+    """量编辑区第一行文字的屏幕 y（扫行号槽的亮像素）。
+
+    为什么要量：SQL 文件绑定数据源后会多出「Script / Generic SQL」上下文栏（约 40px），
+    其行高在不同会话间会变，写死锚点 y 会落空（20261013 实测 143 vs 166 两值）。
+    """
+    gx = region[0] + 52
+    # 从 +108 起扫：编辑区顶部有一条「Script / Generic SQL / <data source>」上下文工具行
+    # （图标在 x≈60，与行号槽同列），从更上面扫会把它当成首行；起点太低又会跳过首行。
+    band = _grab({"left": gx, "top": region[1] + 108, "width": 34, "height": 170})
+    rows = band.mean(axis=(1, 2))
+    base = float(np.percentile(rows, 20))
+    for i, v in enumerate(rows):
+        if v > base + 6:
+            return region[1] + 108 + i + 11
+    return None
+
+
 def main():
     pyautogui.FAILSAFE = False
     pyautogui.PAUSE = 0
@@ -236,6 +253,9 @@ def main():
     # ---- prep（不入镜）----
     for _ in range(3):
         pyautogui.keyDown('esc'); pyautogui.keyUp('esc'); time.sleep(0.4)
+
+    # 工具窗回到「SQL 日志」页签（探针曾把它切到「SQL 历史」，出片口径要统一）
+    pyautogui.click(1217, 133); time.sleep(0.8)
 
     # 模态对话框护栏：沙盒里若还挂着别的窗口（Clone Repository / Settings / Commit…），
     # 整段 take 都会录进那个对话框——上一轮就是这样白录一条（Esc 关不掉模态框，
@@ -270,15 +290,34 @@ def main():
     post_wheel(hwnd, SCROLL_NOTCHES)
     time.sleep(0.9)
 
+    # 锚点用常量（20261013 实测屏幕坐标）：
+    #   运行时扫行号槽量 y 不可靠——扫到的是顶部「Script / Generic SQL」工具行；
+    #   x 也必须落准：L58 里「对齐插件测试」（中文词，屏幕 544-652）与「car_device_info」
+    #   （屏幕 657-822）相邻，锚点取 740 才落在真表名上（取 610 会落到中文词，
+    #   执行成 `SELECT COUNT(*) FROM 对齐插件测试` → 1146 报错 → 网格 0 rows）。
+    global ANCHOR
+    print("锚点 %s（常量）" % (ANCHOR,))
+
     # ---- 开菜单、量末项与子菜单（不入镜）----
+    # 右键弹菜单实测不稳（有时不弹），加重试：最多 4 次。
     ref = _band_ref()
-    pyautogui.click(*ANCHOR, button='right'); time.sleep(1.6)
-    menu_right = _menu_right(ref)
-    band_x = menu_right            # 取样带：菜单右边缘之外
-    click_x = menu_right + 90      # 点击 x：落在子菜单文字上
-    last_y = find_last_item(ref, band_x, limit_y=ANCHOR[1] + 40)
-    pyautogui.moveTo(ANCHOR[0] + 60, last_y, duration=0.5); time.sleep(1.5)   # 悬停末项 → 展开子菜单
-    sub3_y = sub_item3_y(ref, last_y, band_x)
+    last_y = sub3_y = None
+    for attempt in range(4):
+        pyautogui.keyDown('esc'); pyautogui.keyUp('esc'); time.sleep(0.5)
+        pyautogui.click(*ANCHOR, button='right'); time.sleep(1.6)
+        menu_right = _menu_right(ref)
+        band_x = menu_right            # 取样带：菜单右边缘之外
+        click_x = menu_right + 90      # 点击 x：落在子菜单文字上
+        try:
+            last_y = find_last_item(ref, band_x, limit_y=ANCHOR[1] + 40)
+        except RuntimeError:
+            print("第 %d 次右键没弹出菜单，重试" % (attempt + 1))
+            continue
+        pyautogui.moveTo(ANCHOR[0] + 60, last_y, duration=0.5); time.sleep(1.5)   # 悬停末项 → 展开子菜单
+        sub3_y = sub_item3_y(ref, last_y, band_x)
+        break
+    if last_y is None:
+        raise RuntimeError("连续 4 次右键都没弹出菜单——先看 shots/a15_pre.png")
     print("菜单右边缘 x=%d（取样带起点 %d，点击 x %d）" % (menu_right, band_x + 12, click_x))
     print("末项 y=%.0f  子菜单第三项(抽样 10 行) y=%.0f  取景框底 %d" % (last_y, sub3_y, bottom_clip))
     import mss
@@ -288,18 +327,24 @@ def main():
     if last_y > bottom_clip - 8 or sub3_y > bottom_clip - 8:
         raise RuntimeError("末项 y=%.0f / 子菜单项 y=%.0f 超出取景框（底 %d）——锚点还得往上挪"
                            "（看 shots/a15_pre.png）" % (last_y, sub3_y, bottom_clip))
+
+    # ---- 预热已移除 ----
+    # 「首次执行结果不渲染」的根因已修（插件仓 b0e9510e：无嵌入宿主时不组整控台 SplitPane），
+    # 故不再需要预热绕过。
     pyautogui.keyDown('esc'); pyautogui.keyUp('esc'); time.sleep(0.8)
 
     # ---- 录制 ----
+    # 子菜单项用**悬停 + 像素点**（键盘导航 End/Right/Down/Enter 实测不触发动作，已回退）。
     r = Recorder(region, OUT)
     r.start()
     time.sleep(0.6)
-    pyautogui.click(*ANCHOR, button='right'); time.sleep(1.6)               # 弹菜单（同时落光标）
-    pyautogui.moveTo(ANCHOR[0] + 60, last_y, duration=0.6); time.sleep(1.8)  # 悬停末项 → 子菜单
-    pyautogui.click(click_x, sub3_y); time.sleep(2.6)                        # 点子菜单第三项（抽样 10 行）
-    time.sleep(2.4)                                                          # 等控制台出结果
-    pyautogui.moveTo(*GAZE, duration=0.7); time.sleep(1.6)
-    pyautogui.moveTo(*PARK, duration=0.6); time.sleep(0.8)
+    pyautogui.click(700, 400); time.sleep(0.6)                               # 先点一次编辑器取焦（防首击被「点击聚焦」吞掉、菜单不弹）
+    pyautogui.click(*ANCHOR, button='right'); time.sleep(1.6)               # 弹菜单（同时把光标落在表名 token 上）
+    pyautogui.moveTo(ANCHOR[0] + 60, last_y, duration=0.6); time.sleep(1.8)  # 悬停末项 → 展开子菜单
+    pyautogui.click(click_x, sub3_y); time.sleep(3.0)                        # 点子菜单项 → 生成语句并执行
+    time.sleep(4.0)                                                          # 等原生 Database 控制台出结果
+    pyautogui.moveTo(*GAZE, duration=0.7); time.sleep(2.0)
+    pyautogui.moveTo(*PARK, duration=0.6); time.sleep(1.0)
     print("frames:", r.stop())
 
 
