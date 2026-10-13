@@ -21,7 +21,7 @@ import org.junit.Assert.assertTrue
  * - S1 确认前置：[AgentManager.ensureConfirmedBeforePremain] 在 updateJavaParameters 窗口内
  *   同步确认，同意后首轮 Run 即产出 premain VM option（[PremainRunConfigurationExtension]
  *   接线由端到端用例钉住——摘掉该调用必红）；
- * - S2 诚实兜底：attach 兜底挂载成功发能力边界通知，每轮至多一次（onRunEnded 复位）。
+ * - S2 诚实兜底：attach 兜底挂载成功发能力边界通知，**每项目会话至多一次**（onRunEnded 不复位）。
  *
  * headless 沙盒口径：premainConsentGate 注入驱动「可弹/不可弹」两分支；生产默认 = EDT 且非 headless。
  */
@@ -34,8 +34,8 @@ class AgentPremainConsentTest : BasePlatformTestCase() {
         super.setUp()
         manager = AgentManager.getInstance(project)
         manager.clockMs = { System.currentTimeMillis() }
-        // 实例可能跨测试类复用（同 AgentConsentFlowTest 防御口径）：复位「每轮一次」通知标记
-        manager.attachFallbackNoticedThisRun.set(false)
+        // 实例可能跨测试类复用（同 AgentConsentFlowTest 防御口径）：复位「每会话一次」通知标记
+        manager.attachFallbackNotifiedThisSession.set(false)
         // 去重窗默认关闭（按用例需要显式开启），防跨用例残留时间戳吞掉后续用例的确认请求
         manager.consentAskGuardMs = 0
         manager.lastConsentAskAtMs.set(0)
@@ -306,16 +306,30 @@ class AgentPremainConsentTest : BasePlatformTestCase() {
 
     // ---------- S2：attach 兜底能力边界通知 ----------
 
-    fun testattach兜底通知_每轮至多一次_运行结束复位() {
+    fun testattach兜底通知_每会话至多一次_运行结束不复位() {
         var notified = 0
         manager.attachFallbackNotifier = { notified++ }
         manager.notifyAttachFallbackOnce()
         manager.notifyAttachFallbackOnce()
         manager.notifyAttachFallbackOnce()
-        assertEquals("同一轮运行内至多通知一次", 1, notified)
+        assertEquals("同一会话内至多通知一次", 1, notified)
         manager.onRunEnded()
         manager.notifyAttachFallbackOnce()
-        assertEquals("运行结束后新的一轮应可再通知", 2, notified)
+        assertEquals("运行结束不再复位——避免每次 Run / 重启项目重复弹同一条告知", 1, notified)
+    }
+
+    /**
+     * 反向验证：去重标记是唯一闸门——清除后同条件再触发即重复弹出。
+     * 若摘掉 [AgentManager.notifyAttachFallbackOnce] 的 CAS 守卫，上一条用例会读到 4（重复弹出）。
+     */
+    fun testattach兜底通知_去重标记清除后重复弹出_反向验证() {
+        var notified = 0
+        manager.attachFallbackNotifier = { notified++ }
+        manager.notifyAttachFallbackOnce()
+        assertEquals(1, notified)
+        manager.attachFallbackNotifiedThisSession.set(false)
+        manager.notifyAttachFallbackOnce()
+        assertEquals("清标记后重复弹出——证明去重条件确在起作用", 2, notified)
     }
 
     fun testattach兜底通知_通知出口异常不外泄() {
