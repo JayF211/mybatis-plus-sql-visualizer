@@ -5,12 +5,14 @@ import com.intellij.psi.PsiBinaryExpression;
 import com.intellij.psi.PsiElement;
 import com.intellij.psi.PsiExpression;
 import com.intellij.psi.PsiExpressionList;
+import com.intellij.psi.PsiLambdaExpression;
 import com.intellij.psi.PsiLiteralExpression;
 import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiMethodCallExpression;
 import com.intellij.psi.PsiNewExpression;
 import com.intellij.psi.PsiPolyadicExpression;
 import com.intellij.psi.PsiReferenceExpression;
+import com.intellij.psi.PsiReturnStatement;
 import com.intellij.psi.PsiVariable;
 import com.intellij.psi.util.PsiTreeUtil;
 
@@ -59,6 +61,9 @@ public final class SqlStringConcatenator {
     /** 变量 initializer 追踪最大深度（防循环引用）。 */
     private static final int MAX_TRACE_DEPTH = 5;
 
+    /** 跟随「源码可见方法返回值」的最大层数（T-HqlHelperReturn：防递归/环）。 */
+    private static final int MAX_METHOD_FOLLOW_DEPTH = 3;
+
     // ------------------------------------------------------------------
     // 入口
     // ------------------------------------------------------------------
@@ -83,6 +88,115 @@ public final class SqlStringConcatenator {
             return concatReference((PsiReferenceExpression) expr);
         }
         return null;
+    }
+
+    /**
+     * 聚合「StringBuffer/StringBuilder 变量 {@code .toString()} 调用链」形态：先把
+     * {@code xxx.toString()} / {@code xxx.append(y).toString()} / {@code xxx.append(y)} 归约到持有变量引用，
+     * 再交 {@link #concat} 走既有聚合（变量 initializer 为 {@code new StringBuilder()} / {@code new StringBuffer()}
+     * 时聚合其同方法体内全部 {@code append} 调用）。
+     *
+     * <p>{@link #concat} 自身对 {@code PsiMethodCallExpression} 无分支（返回 null），直接把 {@code sb.toString()}
+     * 喂进去聚合不出内容——JdbcTemplate 通道靠 {@code JdbcTemplateSqlLocator.resolveToStringCall}
+     * 做这步解包。本方法把同一语义提为共享入口，供 CustomDaoHqlLocator / HqlQueryLocator
+     * 复用（T-HqlBufConcat），避免各处再写一份。</p>
+     *
+     * @param expr SQL 字符串实参表达式（字面量 / 拼接 / 变量引用 / {@code sb.toString()} 调用链）
+     * @return 聚合结果；无法聚合返回 {@code null}
+     */
+    public static ConcatenationResult concatUnwrappingToString(PsiExpression expr) {
+        return concatUnwrappingToString(expr, 0);
+    }
+
+    /**
+     * 聚合入口（带跟随深度）。
+     *
+     * <p>{@code PsiMethodCallExpression} 分两种承载：
+     * <ol>
+     *   <li>{@code sb.toString()} / {@code sb.append(x)} → 解包到持有变量后走 {@link #concat}（T-HqlBufConcat）；</li>
+     *   <li><b>源码可见的方法返回的字符串</b>（{@code findByQuery(buildHql(), …)}）→ 跟随到方法体聚合其
+     *       {@code return} 表达式（T-HqlHelperReturn）。</li>
+     * </ol></p>
+     */
+    private static ConcatenationResult concatUnwrappingToString(PsiExpression expr, int depth) {
+        if (expr == null) {
+            return null;
+        }
+        if (expr instanceof PsiMethodCallExpression) {
+            PsiExpression unwrapped = unwrapToStringTarget((PsiMethodCallExpression) expr);
+            if (unwrapped != null) {
+                return concat(unwrapped);
+            }
+            return concatMethodReturn((PsiMethodCallExpression) expr, depth);
+        }
+        return concat(expr);
+    }
+
+    /**
+     * 跟随「首参是被调方法」的形态：{@code commonDao.findByQuery(buildHql(), …)} 这类把 SQL 交给一个
+     * 同工程方法去拼的写法（T-HqlHelperReturn）。
+     *
+     * <p>判定与护栏（保守优先，与「宁缺不错」一致）：
+     * <ul>
+     *   <li>方法必须<b>源码可见</b>（{@code PsiMethod.getBody() != null}）：JDK / 三方库方法不跟随；</li>
+     *   <li>聚合其全部 {@code return} 表达式：一个都聚合不出 → null；聚合结果<b>文本不一致</b>（多分支返回不同
+     *       内容）→ null（不猜哪条分支）；</li>
+     *   <li>只收本方法自身的 {@code return}，排除嵌套方法 / lambda 体内的（那些不属于本方法的返回值）；</li>
+     *   <li>深层跟随有上限 {@link #MAX_METHOD_FOLLOW_DEPTH}，防递归与环。</li>
+     * </ul></p>
+     *
+     * <p>运行时值照既有口径降级：方法体内出现参数 / 调用等静态不可求值片段时，聚合结果带
+     * {@code /*运行时值*}{@code /…*/} 占位并置 {@code complete=false}，不编造内容。</p>
+     */
+    private static ConcatenationResult concatMethodReturn(PsiMethodCallExpression call, int depth) {
+        if (depth >= MAX_METHOD_FOLLOW_DEPTH) return null;
+        PsiMethod method;
+        try {
+            method = call.resolveMethod();
+        } catch (Throwable ignored) {
+            return null;
+        }
+        if (method == null) return null;
+        PsiElement body = method.getBody();
+        if (body == null) return null;
+        List<ConcatenationResult> aggregated = new ArrayList<>();
+        for (PsiReturnStatement stmt : PsiTreeUtil.collectElementsOfType(body, PsiReturnStatement.class)) {
+            // 只收本方法自身的 return：排除嵌套方法体内的（不属于本方法的返回值）
+            if (PsiTreeUtil.getParentOfType(stmt, PsiMethod.class) != method) continue;
+            // 排除 lambda 体内的 return（同上）
+            if (PsiTreeUtil.getParentOfType(stmt, PsiLambdaExpression.class, true) != null) continue;
+            PsiExpression returnValue = stmt.getReturnValue();
+            if (returnValue == null) continue;
+            ConcatenationResult r = concatUnwrappingToString(returnValue, depth + 1);
+            if (r != null) aggregated.add(r);
+        }
+        if (aggregated.isEmpty()) return null;
+        String text = aggregated.get(0).sql();
+        boolean complete = true;
+        for (ConcatenationResult r : aggregated) {
+            if (!r.sql().equals(text)) return null;
+            if (!r.complete()) complete = false;
+        }
+        return new ConcatenationResult(text, complete);
+    }
+
+    /**
+     * 把 {@code .toString()} / {@code .append(y)} 调用链归约到根变量引用
+     * （{@code xxx.append(y).toString()} → {@code xxx}）。
+     *
+     * <p>方法名不在 {toString, append} 内、或 qualifier 链不落到变量引用时返回 null。</p>
+     */
+    private static PsiExpression unwrapToStringTarget(PsiMethodCallExpression call) {
+        String name = call.getMethodExpression().getReferenceName();
+        if (name == null) return null;
+        if (!"toString".equals(name) && !"append".equals(name)) return null;
+        PsiExpression qualifier = call.getMethodExpression().getQualifierExpression();
+        if (qualifier == null) return null;
+        while (qualifier instanceof PsiMethodCallExpression) {
+            qualifier = ((PsiMethodCallExpression) qualifier).getMethodExpression().getQualifierExpression();
+            if (qualifier == null) return null;
+        }
+        return qualifier;
     }
 
     // ------------------------------------------------------------------

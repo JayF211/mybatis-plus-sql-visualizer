@@ -1,5 +1,7 @@
 package cn.song.mybatisplus.visualizer.psi.jpa;
 
+import cn.song.mybatisplus.visualizer.psi.PreviewReceiverResolver;
+import cn.song.mybatisplus.visualizer.psource.SqlStringConcatenator;
 import com.intellij.psi.PsiBinaryExpression;
 import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiClassObjectAccessExpression;
@@ -227,6 +229,13 @@ public final class HqlQueryLocator {
             }
             return false;
         }
+        // T-HqlBufConcat / T-HqlHelperReturn：`sb.toString()`（StringBuffer 承载）与
+        // 「源码可见方法返回的字符串」（`createQuery(buildHql())`）——解包与聚合在 extractHqlString 完成
+        if (firstArg instanceof PsiMethodCallExpression mc) {
+            String name = mc.getMethodExpression().getReferenceName();
+            return "toString".equals(name) || "append".equals(name)
+                    || PreviewReceiverResolver.returnsStringFromSourceMethod(mc);
+        }
         return false;
     }
 
@@ -378,11 +387,39 @@ public final class HqlQueryLocator {
                         return new HqlStringResult(String.join("", parts), true);
                     }
                 }
+                // T-HqlBufConcat：String hql = sb.toString() → 聚合 StringBuilder 拼接串；
+                // 非 toString/append 调用聚合不出内容，维持既有「回退变量名」降级
+                if (initializer instanceof PsiMethodCallExpression mc) {
+                    HqlStringResult aggregated = aggregateHqlText(mc);
+                    if (aggregated != null) return aggregated;
+                    return new HqlStringResult(ref.getReferenceName(), false);
+                }
                 return new HqlStringResult(ref.getReferenceName(), false);
             }
             return new HqlStringResult(ref.getReferenceName(), false);
         }
-        return new HqlStringResult(expression.getText(), false);
+        // T-HqlBufConcat：createQuery(sb.toString()) / sb.append(x).toString()
+        if (expression instanceof PsiMethodCallExpression mc) {
+            HqlStringResult aggregated = aggregateHqlText(mc);
+            if (aggregated != null) return aggregated;
+            return new HqlStringResult(null, false);
+        }
+        // T-GutterDupFreeze（S1）口径对齐：兜底不再回退表达式源码文本当 HQL
+        return new HqlStringResult(null, false);
+    }
+
+    /**
+     * T-HqlBufConcat：借用 {@code SqlStringConcatenator} 聚合 StringBuilder/StringBuffer 承载的 HQL
+     * （{@code sb.toString()} / {@code sb.append(x).toString()}）。
+     *
+     * @return Pair(聚合文本, 是否完全静态)；空串或无法聚合返回 {@code null}（＝不是 HQL 承载）
+     */
+    @Nullable
+    private static HqlStringResult aggregateHqlText(@NotNull PsiExpression expression) {
+        SqlStringConcatenator.ConcatenationResult result = SqlStringConcatenator.concatUnwrappingToString(expression);
+        if (result == null) return null;
+        if (result.sql().isBlank()) return null;
+        return new HqlStringResult(result.sql(), result.complete());
     }
 
     /**

@@ -235,7 +235,9 @@ public final class PreviewReceiverResolver {
     }
 
     /**
-     * 表达式是否为字符串形态：字面量 String / 双目·多目拼接 / 解析为 String 类型的变量引用 / {@code xx.toString()} 调用。
+     * 表达式是否为字符串形态：字面量 String / 双目·多目拼接 / 解析为 String 类型的变量引用 /
+     * {@code xx.toString()} 调用 / <b>源码可见方法返回的字符串</b>（{@code findByQuery(buildHql(), …)}，
+     * T-HqlHelperReturn）。
      */
     private static boolean isStringLikeExpression(@NotNull PsiElement expr) {
         if (!(expr instanceof PsiExpression)) return false;
@@ -247,7 +249,9 @@ public final class PreviewReceiverResolver {
             return true;
         }
         if (e instanceof PsiMethodCallExpression) {
-            return "toString".equals(((PsiMethodCallExpression) e).getMethodExpression().getReferenceName());
+            PsiMethodCallExpression call = (PsiMethodCallExpression) e;
+            return "toString".equals(call.getMethodExpression().getReferenceName())
+                    || returnsStringFromSourceMethod(call);
         }
         if (e instanceof PsiReferenceExpression) {
             // 变量/参数引用：解析其类型是否 String（PsiVariable 覆盖 PsiParameter / PsiLocalVariable）
@@ -264,5 +268,34 @@ public final class PreviewReceiverResolver {
             return false;
         }
         return false;
+    }
+
+    /**
+     * 被调方法是否「<b>返回 String 且源码可见</b>」——首参写成方法调用时据此放行
+     * （T-HqlHelperReturn：{@code commonDao.findByQuery(buildHql(), …)}，SQL 交给一个同工程方法拼）。
+     *
+     * <p>两道必要条件缺一不可：
+     * <ul>
+     *   <li><b>返回类型是 String</b>：否则 {@code selectList(wrapperChain)} 这类非字符串实参会被误放行
+     *       （会回归 S1 修过的「wrapper 链被当成 HQL」老误判）；</li>
+     *   <li><b>有源码体</b>（{@code PsiMethod.getBody() != null}）：JDK / 三方库方法（如 {@code String.valueOf(x)}）
+     *       不算——它们不是「工程里写着的 SQL 拼装」。</li>
+     * </ul></p>
+     *
+     * <p>性能口径：本判据会在 gutter 热路径上多一次 {@code resolveMethod()}；但它只在<b>名字启发已命中</b>的
+     * 方法调用上被求值（{@code CustomDaoHqlLocator} 名字层先行、{@code matchesHqlContent} 在其后），
+     * 不必对项目内每个方法调用付这笔开销。</p>
+     */
+    public static boolean returnsStringFromSourceMethod(@NotNull PsiMethodCallExpression call) {
+        try {
+            com.intellij.psi.PsiMethod method = call.resolveMethod();
+            if (method == null) return false;
+            if (method.getBody() == null) return false;
+            PsiType returnType = method.getReturnType();
+            String typeName = returnType != null ? returnType.getCanonicalText() : null;
+            return "java.lang.String".equals(typeName) || "String".equals(typeName);
+        } catch (Throwable t) {
+            return false;
+        }
     }
 }

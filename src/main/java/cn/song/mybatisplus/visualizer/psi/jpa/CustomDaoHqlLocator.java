@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.psi.jpa;
 
 import cn.song.mybatisplus.visualizer.psi.PreviewReceiverResolver;
+import cn.song.mybatisplus.visualizer.psource.SqlStringConcatenator;
 import com.intellij.psi.PsiArrayInitializerExpression;
 import com.intellij.psi.PsiBinaryExpression;
 import com.intellij.psi.PsiCodeBlock;
@@ -333,7 +334,9 @@ public final class CustomDaoHqlLocator {
      * 支持：
      *  - 字符串字面量（PsiLiteralExpression）→ 直接取值
      *  - 字符串拼接（"..." + "..."）→ 递归收集 PsiLiteralExpression 子节点并拼接
-     *  - 变量引用（PsiReferenceExpression）→ 尝试解析为常量
+     *  - 变量引用（PsiReferenceExpression）→ 尝试解析为常量；StringBuffer/StringBuilder 变量
+     *    （{@code new StringBuilder()} 初始化）→ 聚合其 append 序列（T-HqlBufConcat）
+     *  - {@code sb.toString()} / {@code sb.append(x).toString()}（PsiMethodCallExpression）→ 解包后聚合（T-HqlBufConcat）
      *
      * @param call 目标方法调用
      * @return Pair(HQL 字符串, 是否为纯字面量)
@@ -377,18 +380,51 @@ public final class CustomDaoHqlLocator {
             PsiElement resolved = refExpr.resolve();
             if (resolved instanceof PsiVariable) {
                 PsiExpression initializer = ((PsiVariable) resolved).getInitializer();
-                if (initializer != null) {
-                    return extractHqlString(initializer);
+                if (initializer == null) {
+                    return new HqlStringResult(refExpr.getReferenceName(), false);
                 }
-                return new HqlStringResult(refExpr.getReferenceName(), false);
+                // T-HqlBufConcat：StringBuffer/StringBuilder 变量（`new StringBuilder()` 初始化）
+                // → 聚合其同方法体内 append 序列；聚合不出内容时保持既有「回退变量名」行为
+                if (initializer instanceof PsiNewExpression) {
+                    HqlStringResult aggregated = aggregateHqlText(expression);
+                    if (aggregated != null) return aggregated;
+                    return new HqlStringResult(refExpr.getReferenceName(), false);
+                }
+                return extractHqlString(initializer);
             }
             return new HqlStringResult(refExpr.getReferenceName(), false);
+        }
+        // T-HqlBufConcat：`sb.toString()` / `sb.append(x).toString()`（方法调用表达式承载的
+        // StringBuilder/StringBuffer 拼接串）→ 解包到变量后聚合 append 序列；
+        // 非字符串方法调用（典型＝wrapper 调用链）聚合不出内容 → null，维持「不是 HQL 承载」判定
+        if (expression instanceof PsiMethodCallExpression) {
+            HqlStringResult aggregated = aggregateHqlText(expression);
+            if (aggregated != null) return aggregated;
+            return new HqlStringResult(null, false);
         }
         // T-GutterDupFreeze（S1）：兜底分支原为 `expression.getText() to false`——把**任意表达式的
         // 源码文本**当字符串返回，是「wrapper 链源码被当成 HQL」这一误判的最终落点（链、new、
         // toString() 调用等都会走到这里）。改为「无法静态取得字符串」= 不是 HQL 承载：
         // 上游 matchesHqlContent 因 hql 为空判否、locateFromCall 亦不产出 info。
         return new HqlStringResult(null, false);
+    }
+
+    /**
+     * T-HqlBufConcat：借用 {@code SqlStringConcatenator} 聚合 StringBuilder/StringBuffer 承载的 SQL
+     * （{@code sb} 变量 / {@code sb.toString()} / {@code sb.append(x).toString()}）。
+     *
+     * <p>与内容启发共用同一提取逻辑（单一来源）：此前 {@code sb.toString()} 落入 extractHqlString 兜底
+     * 返回 null，导致用户「StringBuffer 逐句 append + sb.toString() 传自定义 DAO」的调用不被认领
+     * （2026-10-13 用户报障 commonDao.findByQueryMaxNum）。</p>
+     *
+     * @return Pair(聚合文本, 是否完全静态)；空串或无法聚合返回 {@code null}（＝不是 HQL 承载）
+     */
+    @Nullable
+    private static HqlStringResult aggregateHqlText(@NotNull PsiExpression expression) {
+        SqlStringConcatenator.ConcatenationResult result = SqlStringConcatenator.concatUnwrappingToString(expression);
+        if (result == null) return null;
+        if (result.sql().isBlank()) return null;
+        return new HqlStringResult(result.sql(), result.complete());
     }
 
     /**

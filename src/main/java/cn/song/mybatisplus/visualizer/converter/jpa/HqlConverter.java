@@ -27,7 +27,7 @@ import org.jetbrains.annotations.Nullable;
  *  1. 命名参数 `:param` → `?`
  *  2. 位置参数 `?1` → `?`
  *  3. IN 子句修正：`IN ?` → `IN (?)`
- *  4. NEW DTO(...) 表达式 → 提取构造参数
+ *  4. `new Xxx(...)` 动态实例化表达式 → 提取构造参数（关键字大小写不敏感，见 {@link NewExpressionStripper}）
  *  5. JOIN FETCH / 关联 JOIN → LEFT/INNER JOIN（J7：ON 条件经 JpaJoinOnResolver
  *     按「PSI 注解 > 关联元数据 > 猜测降级」三级优先真实化）
  *  6. 实体名 → 表名映射（仅当有有效 TableInfo 时）
@@ -229,8 +229,8 @@ public final class HqlConverter {
         // 3. 处理 IN 子句：IN ? → IN (?)
         sql = handleInClause(sql);
 
-        // 4. 处理 NEW DTO(...) 表达式
-        sql = handleNewExpression(sql);
+        // 4. 处理 `new Xxx(...)` 动态实例化表达式（关键字大小写不敏感）
+        sql = NewExpressionStripper.strip(sql);
 
         // 5. 处理 JOIN FETCH / 关联 JOIN → LEFT/INNER JOIN（J7：ON 条件真实化）
         sql = JpaJoinRewriter.rewrite(sql, table, project);
@@ -359,39 +359,6 @@ public final class HqlConverter {
      */
     private static String handleInClause(@NotNull String hql) {
         return HQL_IN_SPACE_Q.matcher(hql).replaceAll("IN (?)");
-    }
-
-    // ------------------------------------------------------------------
-    // NEW DTO 表达式
-    // ------------------------------------------------------------------
-
-    /**
-     * 处理 `NEW com.xxx.VO(a, b)` 表达式 → 提取构造参数。
-     * 使用括号计数法支持嵌套括号。
-     */
-    private static String handleNewExpression(@NotNull String hql) {
-        String prefix = "NEW";
-        int searchStart = 0;
-        while (true) {
-            int newIndex = hql.indexOf(prefix, searchStart);
-            if (newIndex < 0) break;
-            int parenOpen = hql.indexOf('(', newIndex + prefix.length());
-            if (parenOpen < 0) break;
-            int depth = 1;
-            int i = parenOpen + 1;
-            while (i < hql.length() && depth > 0) {
-                char c = hql.charAt(i);
-                if (c == '(') depth++;
-                else if (c == ')') depth--;
-                i++;
-            }
-            if (depth != 0) break;
-            int parenClose = i - 1;
-            String args = hql.substring(parenOpen + 1, parenClose).trim();
-            String replacement = hql.substring(0, newIndex) + args + hql.substring(parenClose + 1);
-            return handleNewExpression(replacement);
-        }
-        return hql;
     }
 
     // ------------------------------------------------------------------
