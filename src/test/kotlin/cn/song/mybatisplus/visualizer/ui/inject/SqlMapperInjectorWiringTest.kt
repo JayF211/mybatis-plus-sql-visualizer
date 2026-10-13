@@ -109,6 +109,24 @@ class SqlMapperInjectorWiringTest : BasePlatformTestCase() {
         assertEquals("非 mapper 文件零注入位（根守卫）", 0, myLanguagePlaceCount(file))
     }
 
+    /**
+     * F79 刀一（管线级判别）：非 mapper XML 的高亮喂入 pass 全程探针零咨询——
+     * 修复前 probe 跑在 mapper 判定之前，每宿主白付全链（计数 >0 → 红）。
+     */
+    @Test
+    fun testF79_非mapper文件_管线级探针零咨询() {
+        val notMapper = mapper.replace("<mapper namespace=\"n\">", "<configuration>")
+        val file = openPhysicalFile(notMapper)
+        val consulted = intArrayOf(0)
+        XmlSynHiGate.foreignInjectionProbe = { _, _ -> consulted[0]++; false }
+        try {
+            assertEquals("非 mapper 文件零注入位（根守卫）", 0, myLanguagePlaceCount(file))
+            assertEquals("非 mapper 文件管线喂入全程：探针零咨询（修复前每宿主白付 → 红）", 0, consulted[0])
+        } finally {
+            XmlSynHiGate.foreignInjectionProbe = originalProbe
+        }
+    }
+
     @Test
     fun testF37_让位态_零注入位() {
         val file = openPhysicalFile(mapper)
