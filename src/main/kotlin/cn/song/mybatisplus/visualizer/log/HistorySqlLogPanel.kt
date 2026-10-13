@@ -307,7 +307,12 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
 
     init {
         buildUI()
-        refresh()
+        // F87（T-PerfSweep25）懒首扫：原「构造即 refresh」把后台扫盘成本从「用时才有」提前到
+        // 「工具窗开窗即付」（R19 历史 tab 常驻使本面板随 SqlLogPanel init 构造）。现首扫延迟到
+        // 首次切到历史 tab——SqlLogPanel 的 tab ChangeListener 已有「切到历史 tab 即 refresh」
+        // 接线（F-44 形态保留，见 SqlLogPanel），即首扫唯一入口；设置变更路径经
+        // [historyDirChangedSinceLastScan] 照旧。R19 引导闭环不受影响：空态引导文案由
+        // [buildUI] 渲染（updateFilesEmptyText），与扫描无关，开窗即见。
     }
 
     private fun buildUI() {
@@ -484,7 +489,12 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
      * 才重读；未变则后台只做目录扫描 + countInFile（有缓存）。日常 IDE 实测 19MB/8708 条文件
      * 一次浏览窗口内被 refresh + showFileContent 全量解析约 3 遍（15~16.6s），此处消除 refresh 侧的重复成本。
      */
+    /** F87 测试缝：refresh 实际调用计数（判别「构造即扫」与「懒首扫」——构造路径须为 0）。 */
+    internal var refreshInvocationCountForTest: Int = 0
+        private set
+
     fun refresh() {
+        refreshInvocationCountForTest++
         // T-HistoryTabAlways：记录本次扫描所用目录（EDT 侧纯字段写），供设置变更时判定要不要重扫
         lastScannedDir = getHistoryDir()
         val gen = ++bgGeneration
