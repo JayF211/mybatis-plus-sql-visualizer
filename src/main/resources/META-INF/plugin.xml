@@ -43,7 +43,7 @@
             <li><b>一键回滚 SQL</b>：对预览的 INSERT 推导逆向 DELETE（SQL Server / 达梦自增列自动包装）；UPDATE / DELETE 支持快照回填恢复</li>
             <li><b>执行与分析 · 执行 SQL 与执行计划</b>：内嵌原生 Database 控制台执行，一键 EXPLAIN 按方言提交，JOIN 关系图支持 PNG / SVG 导出；执行前有 <code>${}</code> 注入确认、无界写清单与超时护栏（需 Ultimate，社区版自动降级）</li>
             <li><b>调用栈悬停与最近执行记录</b>：调用栈悬停弹出调试器风格弹层（帧数可配置、跳转源码）；最近执行记录弹框浏览并跳转源码</li>
-            <li><b>编码期与工作流增强</b>：mapper XML 语句语法高亮；SQL 历史条目可钉住、正则检索、导出 CSV / TSV / 纯文本 / 可执行 SQL 脚本，并支持两条历史版本对比；预览参数预设按语句隔离、可折叠；分页拦截器模拟 LIMIT 与 COUNT 可分别控制；EXPLAIN 支持结构化渲染与 Oracle / SQL Server 模板</li>
+            <li><b>编码期与工作流增强</b>：mapper XML 语句语法高亮、动态标签折叠与引用导航；方言引号不匹配静态告警；SQL 快捷模板支持光标压在表名上使用；SQL 历史条目可钉住、正则检索、导出 CSV / TSV / 纯文本 / 可执行 SQL 脚本，并支持两条历史版本对比；预览参数预设按语句隔离、可折叠；分页拦截器模拟 LIMIT 与 COUNT 可分别控制；EXPLAIN 支持结构化渲染与 Oracle / SQL Server 模板</li>
             <li><b>面向 AI · MCP 工具</b>：接入平台 MCP Server（近版 IDE 内置），<code>sqlv_*</code> 11 个确定性只读工具覆盖渲染 / 日志还原 / 核查 / 执行计划 / 回滚预案 / CRUD / 反向转换等，设置页逐项门控</li>
         </ul>
         <p>触发方式：代码左侧 gutter 图标 / 右键菜单 / <code>Alt+Shift+Q</code>。</p>
@@ -59,11 +59,14 @@
             <li><b>Rollback SQL in one click</b>: derive the reverse DELETE for an INSERT preview (identity-column wrapping for SQL Server and DM); snapshot recovery for UPDATE / DELETE</li>
             <li><b>Analyze &middot; execution and EXPLAIN</b>: run SQL in the embedded native Database console, one-click EXPLAIN, JOIN diagram with PNG / SVG export; <code>${}</code> injection confirmation, unbounded-write findings and a timeout guard (Ultimate; Community degrades gracefully)</li>
             <li><b>Call stack hover and recent executions</b>: debugger-style stack popup (configurable frame count, jump-to-source) and a recent-executions dialog</li>
-            <li><b>Editing and workflow</b>: SQL syntax highlighting for mapper XML statements; history pinning, regex search, export to CSV / TSV / plain text / executable SQL, and two-entry version diff; per-statement collapsible parameter presets; pagination-interceptor simulation with LIMIT and COUNT controlled separately; structured EXPLAIN rendering plus Oracle / SQL Server templates</li>
+            <li><b>Editing and workflow</b>: SQL syntax highlighting, dynamic-tag folding and reference navigation for mapper XML statements; a static warning for dialect quote mismatches; SQL quick templates usable with the caret on a table name; history pinning, regex search, export to CSV / TSV / plain text / executable SQL, and two-entry version diff; per-statement collapsible parameter presets; pagination-interceptor simulation with LIMIT and COUNT controlled separately; structured EXPLAIN rendering plus Oracle / SQL Server templates</li>
             <li><b>AI agents &middot; MCP tools</b>: 11 deterministic read-only <code>sqlv_*</code> tools on the platform MCP Server (render, log restore, checks, EXPLAIN, rollback plan, CRUD, reverse SQL), per-tool gating in settings</li>
         </ul>
         <p>Trigger: gutter icon / context menu / <code>Alt+Shift+Q</code> (rebindable).</p>
         <p>Requirements: IntelliJ IDEA 2024.3+ (baseline 2026.x); Execute SQL, EXPLAIN and the native JOIN diagram need Ultimate; MCP tools need the platform MCP Server.</p>
+        <h3>作者微信 / 交流群</h3>
+        <p>扫码添加作者微信，或加入 SQL Visualizer 交流群（二维码为限时码；交流群二维码失效时，可添加作者微信）。</p>
+        <p><img src="https://sql-visualizer.jvtools.cn/wechat-qr.png" width="200" alt="作者微信"> <img src="https://sql-visualizer.jvtools.cn/group-qr.png" width="200" alt="交流群"></p>
         ]]></description>
 
     <!-- 插件变更说明由 build.gradle.kts patchPluginXml.changeNotes 注入（M18.2）——
@@ -354,7 +357,8 @@
              T-UN-12（T-UiNative）：独立历史 ToolWindow 工厂类已删除 -->
         <!-- T-XmlSynHi（D1/D2/D3）：mapper XML 语句文本与属性表达式注入（lexer-only 自研语言
              SqlMapperLanguage；双让位门控见 XmlSynHiGate——Ultimate 平台注入 / CodeHelperPro
-             在位 / 设置关闭时全族让位零注入）。语言注册走 multiHostInjector + syntaxHighlighterFactory，
+             在位 / 设置关闭时全族让位零注入）。语言注册走 multiHostInjector +
+             lang.syntaxHighlighterFactory（注意限定名，见下方注），
              无独立 FileType（注入语言不挂编辑器文件类型）。 -->
         <multiHostInjector implementation="cn.song.mybatisplus.visualizer.ui.inject.SqlMapperInjector"/>
         <!-- T-XmlSynHi D5 后半：resultMap column 属性值补全（ResultMapColumns 提取/排序纯函数接线；
@@ -365,8 +369,46 @@
              EP 名=typedHandler（TypedHandlerDelegate.EP_NAME 实际常量，243/253/262 三版 javap 实测一致；
              历史误写 typedHandlerDelegate 会被平台按未知 EP 静默忽略——handler 永不触发） -->
         <typedHandler implementation="cn.song.mybatisplus.visualizer.ui.inject.ParamBraceTypedHandler"/>
-        <syntaxHighlighterFactory language="MpSqlMapper"
-                                  implementationClass="cn.song.mybatisplus.visualizer.ui.inject.SqlMapperSyntaxHighlighterFactory"/>
+        <!-- T-XmlGap 收口修：EP 名必须是 lang.syntaxHighlighterFactory（限定名
+             com.intellij.lang.syntaxHighlighterFactory）——平台在 intellij.platform.ide.impl.jar
+             的 PlatformExtensionPoints.xml 里就这么声明的（243/262 两版实测同名）。
+             历史误写裸 <syntaxHighlighterFactory>（= com.intellij.syntaxHighlighterFactory）被平台
+             按未知 EP 静默忽略，故 SyntaxHighlighterFactory.getSyntaxHighlighter 落到
+             PlainSyntaxHighlighterFactory 默认实现 → mapper 语句文本整段无色（用户报「SQL 文本整段
+             白」的真根因；同族坑见上方 typedHandler 注）。勿再改回裸名。 -->
+        <lang.syntaxHighlighterFactory language="MpSqlMapper"
+                                       implementationClass="cn.song.mybatisplus.visualizer.ui.inject.SqlMapperSyntaxHighlighterFactory"/>
+        <!-- T-XmlGap W7：mapper XML 引用（跳转/查找用法）——只产 soft 引用，不注册任何
+             inspection/annotator（红线：不做校验器形态）；无目标时零报红 -->
+        <psi.referenceContributor language="XML"
+                                  implementation="cn.song.mybatisplus.visualizer.ui.ref.MybatisXmlReferenceContributor"/>
+        <!-- T-XmlGap W6：mybatis-config.xml 补全（<setting name>/value、配置子标签名）。
+             独立于 mapper 补全贡献器（后者根守卫是 mapper，配置文件整类落在它之外） -->
+        <completion.contributor language="XML"
+                                implementationClass="cn.song.mybatisplus.visualizer.ui.highlight.MybatisConfigCompletionContributor"/>
+        <!-- T-XmlGap W6：编辑辅助三件（声明式 EP）——
+             live template（cd/co 两个骨架 + 自定义上下文，只含纯骨架、不含竞品引导注释模板）；
+             语句内编辑放大重算脏区（收窄到所属语句标签，非整文件）；
+             `#{}`/`${}` 成对删除（charDeleted 阶段补删，不改平台原有删除语义） -->
+        <defaultLiveTemplates file="/templates/mybatis-sql"/>
+        <liveTemplateContext implementation="cn.song.mybatisplus.visualizer.ui.inject.MybatisSqlTemplateContextType"/>
+        <daemon.changeLocalityDetector
+                implementation="cn.song.mybatisplus.visualizer.ui.inject.SqlMapperChangeLocalityDetector"/>
+        <backspaceHandlerDelegate
+                implementation="cn.song.mybatisplus.visualizer.ui.inject.SqlMapperBackspaceHandler"/>
+        <!-- T-XmlGap W6：注入片段拼写豁免——按**注入语言**注册（非 XML 级），作用面只限本插件
+             注入的语句文本，不触碰 XML 全局拼写行为。
+             注（沙盒走查勘误）：曾一度再加一条 language="XML" 的注册试图豁免宿主 XmlText，但走查证实
+             mapper 语句文本上的波浪线实为**平台 SQL 方言弱警告**（tooltip 原文「SQL dialect is not
+             configured.」），不是拼写检查——该误诊方案已回退，勿再加 XML 级拼写策略 -->
+        <spellchecker.support language="MpSqlMapper"
+                              implementationClass="cn.song.mybatisplus.visualizer.ui.inject.SqlMapperSpellcheckingStrategy"/>
+        <!-- T-XmlGap W6：注入语言的颜色设置页（14 键可调；此前颜色只借平台语义槽，用户只能改全局主题） -->
+        <colorSettingsPage implementation="cn.song.mybatisplus.visualizer.ui.inject.SqlMapperColorSettingsPage"/>
+        <!-- T-XmlGap W6：mapper 语句标签的带 id 折叠（平台已为 XML 标签建区、占位为标签名本身；
+             本类只把占位换成 `select#id`，作用面收窄到 mapper 文件的语句标签/<sql> 且跨多行） -->
+        <lang.foldingBuilder language="XML" order="first"
+                             implementationClass="cn.song.mybatisplus.visualizer.ui.inject.SqlMapperFoldingBuilder"/>
     </extensions>
 
     <!-- T-M53：Kotlin plugin mode 声明——本插件只用 Kotlin PSI（gutter 标记），不涉及 Analysis API，

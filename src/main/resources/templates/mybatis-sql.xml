@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  T-XmlGap W6：mapper 语句内的两个纯骨架模板（context id 与 MybatisSqlTemplateContextType.ID 一致）。
+  有意不含竞品的「引导注释」类模板（Table / sql / ignoreSql 三个注释块）——那三个属它的引导注释
+  体系，我方不做校验器即无此依赖（内部调研报告 §2.5 留痕）。
+-->
+<templateSet group="MyBatis">
+  <template name="cd"
+            value="&lt;![CDATA[$SELECTION$]]&gt;$END$"
+            description="用 CDATA 包裹（mapper 语句内）"
+            toReformat="false"
+            toShortenFQNames="false">
+    <context>
+      <option name="MYBATIS_SQL" value="true"/>
+    </context>
+  </template>
+
+  <template name="co"
+            value="&lt;foreach collection=&quot;$COLL$&quot; item=&quot;item&quot; open=&quot;(&quot; separator=&quot;,&quot; close=&quot;)&quot;&gt;&#10;    #{item}&#10;&lt;/foreach&gt;$END$"
+            description="foreach 骨架（mapper 语句内）"
+            toReformat="true"
+            toShortenFQNames="false">
+    <variable name="COLL" expression="" defaultValue="" alwaysStopAt="true"/>
+    <context>
+      <option name="MYBATIS_SQL" value="true"/>
+    </context>
+  </template>
+</templateSet>
