@@ -240,7 +240,7 @@ class MybatisXmlReferenceTest : BasePlatformTestCase() {
             .first { (it.parent as? XmlAttribute)?.name == "name" }
         assertTrue(
             "非 mapper 文件不产引用（根守卫）",
-            MybatisXmlAttributeReferenceProvider.getReferencesByElement(value, ProcessingContext()).isEmpty(),
+            MybatisXmlAttributeReferenceProvider.INSTANCE.getReferencesByElement(value, ProcessingContext()).isEmpty(),
         )
     }
 
@@ -256,7 +256,7 @@ class MybatisXmlReferenceTest : BasePlatformTestCase() {
             .first { (it.parent as? XmlAttribute)?.name == "statementType" }
         assertTrue(
             "未覆盖属性不产引用",
-            MybatisXmlAttributeReferenceProvider.getReferencesByElement(value, ProcessingContext()).isEmpty(),
+            MybatisXmlAttributeReferenceProvider.INSTANCE.getReferencesByElement(value, ProcessingContext()).isEmpty(),
         )
     }
 
