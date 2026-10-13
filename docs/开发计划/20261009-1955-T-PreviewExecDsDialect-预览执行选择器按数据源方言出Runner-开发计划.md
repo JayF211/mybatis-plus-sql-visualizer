@@ -100,6 +100,14 @@
 ### 未做项与验收边界
 
 - **V1/V2 的真机（DM/MySQL 端到端）未执行**：本环境无 DM 数据源、headless 无 Database 插件；机制层面由 P1 字节码链与守卫测试覆盖，真机复核留待用户沙盒（DM DS 已按 §一 就位）。
-- `testDatabase` 通道未跑（集成任务依赖 MySQL 沙盒，本轮按定向纪律只跑定向＋testFast）。
+- `testDatabase` 通道未跑（集成任务依赖 MySQL 沙盒，本轮按定向纪律只跑定向＋testFast）。**→ 已于 2026-10-14 收口复验，见下节；该缺口当时漏掉了组展开回归。**
 - D4 多语句：零代码改动（理由见 D140 定案）。
+
+### 收口复验（2026-10-14，dev 树；取代上节「testDatabase 未跑」条目）
+
+- **testDatabase 首跑抓出回归**：`testDbConsole` 1 例失败（`testPrepareExecuteAndParameterChangeEndToEnd`，报「没有与该 SQL 方言（MySQL）匹配的已配置数据源」＝件3 文案）。dev 运行日志定位＝`[M36] runners=1 expanded to 0 (O-136 group runners flattened)`——平台「All」组在数据源 introspect 完成前子 Runner 为空，被件2 的展开剔成 0 个 Runner，控制台执行链当场终结（落 `runners.isEmpty()` 归因分支）；方言映射侧本身正确（日志 `dialect pre-mapped to MySQL … ds=null`，零回归）。
+- **对照实验定性**：master 树（无 O-136）同一用例通过（tests=1 fail=0 err=0 skip=0）→ 回归坐实，非既有环境红。
+- **修复**：`ExecDialectRouting.expandGroupRunners` 空子项组**保留原项**（`subs.isNullOrEmpty()` 与「非组项」同支）——无子项可浮出时组项仍是唯一执行句柄，剔除即清空列表并终结链。先红＝单测新例「组Runner展开_空子Runner的组项保留」20 例 1 失败（旧实现剔除）→ 后绿＝BUILD SUCCESSFUL in 16s。旧单测「空子 Runner 的组项剔除（空组项是死项）」系把缺口钉成契约，已按集成实证纠正为保留语义。
+- **复跑读数**：`testDatabase --no-configuration-cache` **10/0/0/0**（testDbConsole 1、testDbSelector 5、testDbDiagram 1、testDbExecDocGate 1、testDbDriverPipeline 2；**零跳过＝断言真跑**，本地 MySQL 在位）BUILD SUCCESSFUL in 6m42s；全量 `testShards --no-configuration-cache` 复跑读数回填盘点 74 版。
+- **教训**：定向单测 20 例全绿仍漏掉生产链回归——「组展开遇空子项」形态只在 DB 集成链出现（单测喂的桩对象恒有子项）；验收位若当时补跑 testDatabase 即可当场拦住。
 
