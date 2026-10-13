@@ -58,6 +58,7 @@ class HistorySqlLogPanelPreviewTest : BasePlatformTestCase() {
         )
 
         val panel = HistorySqlLogPanel(project)
+        panel.refreshForTest() // F87 懒首扫：构造不再自动扫盘，测试显式触发（同步路径）
         try {
             val fileEntry = panel.fileListEntries.single()
             panel.openFileForTest(fileEntry)
@@ -81,6 +82,7 @@ class HistorySqlLogPanelPreviewTest : BasePlatformTestCase() {
         )
 
         val panel = HistorySqlLogPanel(project)
+        panel.refreshForTest() // F87 懒首扫：构造不再自动扫盘，测试显式触发（同步路径）
         try {
             panel.openFileForTest(panel.fileListEntries.single())
             val entry = panel.sqlListEntries.single()
@@ -105,6 +107,7 @@ class HistorySqlLogPanelPreviewTest : BasePlatformTestCase() {
         )
 
         val panel = HistorySqlLogPanel(project)
+        panel.refreshForTest() // F87 懒首扫：构造不再自动扫盘，测试显式触发（同步路径）
         try {
             panel.openFileForTest(panel.fileListEntries.single())
             val entry = panel.sqlListEntries.single()

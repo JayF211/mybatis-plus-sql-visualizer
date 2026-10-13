@@ -498,6 +498,72 @@ class ColumnNameCalibratorTest {
         assertEquals("在途放开后应恢复投递", listOf("t_order"), dispatched)
     }
 
+    // ------------------------------------------------------------------
+    // T-EmbeddedColPrefix：嵌入列缺前缀（组件路径命名策略）的兜底校正
+    // ------------------------------------------------------------------
+
+    // k2j 互操作：ColumnInfo 为 Java 类（15 参构造），embedded/embeddedParent/embeddedPath
+    // 具名实参改位置实参，缺省槽按 Kotlin 数据类默认值补齐（role=BUSINESS、insertable/updatable=true）。
+
+    @Test
+    fun `嵌入列缺前缀时按嵌入段路径校正`() {
+        ColumnNameCalibrator.columnSourceForTest = { _, _ ->
+            setOf("id", "qty_base_qty", "move_tool_pallet_no", "be_exception")
+        }
+        val t = ColumnNameCalibrator.calibrate(
+            null,
+            table(
+                column("id", "id"),
+                ColumnInfo("baseQty", "base_qty", false, false, null, null, null, ColumnRole.BUSINESS, true, true, null, true, false, "qty", "qtyBaseQty"),
+                ColumnInfo("palletNo", "pallet_no", false, false, null, null, null, ColumnRole.BUSINESS, true, true, null, true, false, "moveTool", "moveToolPalletNo"),
+            ),
+        )
+
+        assertEquals("qty_base_qty", t.columns[1].columnName)
+        assertEquals("move_tool_pallet_no", t.columns[2].columnName)
+        assertEquals("非嵌入列不受影响", "id", t.columns[0].columnName)
+    }
+
+    @Test
+    fun `嵌入列路径候选按库内大小写形态回写`() {
+        ColumnNameCalibrator.columnSourceForTest = { _, _ -> setOf("ID", "QTY_BASE_QTY") }
+        val t = ColumnNameCalibrator.calibrate(
+            null,
+            table(ColumnInfo("baseQty", "base_qty", false, false, null, null, null, ColumnRole.BUSINESS, true, true, null, true, false, "qty", "qtyBaseQty")),
+        )
+
+        assertEquals("归一化唯一命中 → 采用库里的实际形态", "QTY_BASE_QTY", t.columns[0].columnName)
+    }
+
+    @Test
+    fun `嵌入列路径候选不存在或歧义时不改写`() {
+        ColumnNameCalibrator.columnSourceForTest = { _, _ -> setOf("id", "be_exception") }
+        val absent = table(ColumnInfo("baseQty", "base_qty", false, false, null, null, null, ColumnRole.BUSINESS, true, true, null, true, false, "qty", "qtyBaseQty"))
+        assertSame("候选不存在 → 返回入参实例本身", absent, ColumnNameCalibrator.calibrate(null, absent))
+
+        ColumnNameCalibrator.resetPrefetchStateForTest()
+        // 候选本身**不是**精确成员，但有两列归一化后与它同形 → 歧义，不改写
+        ColumnNameCalibrator.columnSourceForTest = { _, _ -> setOf("id", "QTY-BASE-QTY", "Qty_Base_Qty") }
+        val ambiguous = table(ColumnInfo("baseQty", "base_qty", false, false, null, null, null, ColumnRole.BUSINESS, true, true, null, true, false, "qty", "qtyBaseQty"))
+        assertSame("归一化同形两列 → 歧义，不改写", ambiguous, ColumnNameCalibrator.calibrate(null, ambiguous))
+    }
+
+    @Test
+    fun `当前列名已在库中时路径兜底不介入`() {
+        ColumnNameCalibrator.columnSourceForTest = { _, _ -> setOf("base_qty", "qty_base_qty") }
+        val t = table(ColumnInfo("baseQty", "base_qty", false, false, null, null, null, ColumnRole.BUSINESS, true, true, null, true, false, "qty", "qtyBaseQty"))
+
+        assertSame("库里真有 base_qty → 第 1 步即判「无需改写」，不得被路径候选抢走", t, ColumnNameCalibrator.calibrate(null, t))
+    }
+
+    @Test
+    fun `非嵌入列不走嵌入段路径兜底`() {
+        ColumnNameCalibrator.columnSourceForTest = { _, _ -> setOf("id", "qty_base_qty") }
+        val t = table(ColumnInfo("baseQty", "base_qty", false, false, null, null, null, ColumnRole.BUSINESS, true, true, null, false, false, null, "qtyBaseQty"))
+
+        assertSame("非嵌入列不适用（无嵌入段语义）", t, ColumnNameCalibrator.calibrate(null, t))
+    }
+
     /** 剥离块注释与行注释：守卫扫的是代码事实，KDoc 里提及某成员不算引用。 */
     private fun stripComments(text: String): String =
         Regex("/\\*.*?\\*/", RegexOption.DOT_MATCHES_ALL)

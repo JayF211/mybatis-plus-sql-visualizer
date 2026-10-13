@@ -13,7 +13,9 @@ import org.junit.Test
  *  - `<listener topic=`：plugin.xml 不支持该注册形态（ProjectManagerListener 等须 messageBus
  *    编程注册——全局平台陷阱清单）；
  *  - `<action` 缺 `class=`：整个插件无法加载（bug-fixes/project-plugin-xml-kotlin-optional.md）；
- *  - description 内嵌外链 `<img`：Marketplace 302 防盗链全部图挂（pitfalls/pitfall-gitee-hotlink-302.md）；
+ *  - description 内嵌外链 `<img`：第三方图床在 Marketplace 会被 302 防盗链、图全挂
+ *    （pitfalls/pitfall-gitee-hotlink-302.md）——2026-10-13 用户要求把文档站二维码卡片加到描述底部
+ *    后，本规则收窄为「只允许自有文档站域名 sql-visualizer.jvtools.cn」，其余外链 `<img>` 仍禁；
  *  - T-PluginDescReshape（2026-10-08）新增描述结构四条：`<hr/>` 与 HTML 注释被 Marketplace 剥离
  *    （实测 tag 2026.10.7 本地有 hr、线上同版本 hr=0，中英两段粘连）、首 40 字符须英文摘要
  *    （预览卡文案位，官方 best-practices 硬要求）、数字与行为声明对账（11 方言 / 10 工具 /
@@ -75,11 +77,30 @@ class PluginXmlStructureGuardTest {
         }
     }
 
+    /**
+     * 描述内嵌 `<img>` 的准入＝**只允许自有文档站域名**（`sql-visualizer.jvtools.cn`）。
+     *
+     * 原规则禁一切外链 `<img>`，依据是 pitfalls/pitfall-gitee-hotlink-302 的实测：第三方图床在
+     * Marketplace 会被 302 防盗链、图全挂。2026-10-13 用户要求把文档站的两张二维码卡片
+     * （作者微信 / 交流群）加到描述底部、并明确「用链接引用本站图片」，故按域名准入收窄：
+     * 本站域名（自有 Cloudflare Pages，非第三方图床）放行，其余外链 `<img>` 一律仍禁。
+     * **平台侧残余风险**：描述区外链图在 Marketplace 可能仍被 302 挡住不显示（Gitee 与本地看
+     * plugin.xml 不受影响），已与用户确认按此形态落地。
+     */
     @Test
-    fun `description不得内嵌外链img`() {
+    fun `description内嵌img仅限自有文档站域名`() {
+        val allowedPrefix = "https://sql-visualizer.jvtools.cn/"
         for ((name, xml) in strippedXmls()) {
             val desc = xml.substringAfter("<description", "").substringBefore("</description>")
-            assertHolds("$name description 内嵌 <img>（Marketplace 302 防盗链图全挂，用文字+链接）", !desc.contains("<img"))
+            val offenders = Regex("""<img\b[^>]*>""").findAll(desc)
+                .map { it.value }
+                .filterNot { it.contains("src=\"$allowedPrefix") }
+                .toList()
+            assertHolds(
+                "$name description 内嵌了非自有域名的 <img>（第三方图床在 Marketplace 被 302 防盗链图全挂；" +
+                    "只允许 src=\"$allowedPrefix…\"）：$offenders",
+                offenders.isEmpty(),
+            )
         }
     }
 

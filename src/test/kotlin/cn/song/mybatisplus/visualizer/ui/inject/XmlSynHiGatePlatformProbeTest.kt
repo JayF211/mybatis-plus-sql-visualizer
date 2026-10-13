@@ -247,13 +247,15 @@ class XmlSynHiGatePlatformProbeTest : BasePlatformTestCase() {
 
     /**
      * 真实 EP 冒烟：裸测试平台（无 XML 宿主命中项）上默认探针可判定且不炸，判 false
-     * （注入链在此环境必须活）。
+     * （注入链在此环境必须活）。T-XmlGap W1 起生产入口是 XmlSynHiGate.occupiedRanges
+     * （区间形态），此处按其判定面断言——布尔缝未覆写时二者语义一致。
      */
     @Test
     fun testF68_默认探针_真实EP环境_不炸且裸环境判不让位() {
         val host = firstMapperText()
-        val result = XmlSynHiGate.foreignInjectionProbe(project, host)
+        val result = XmlSynHiGate.shouldYield(project, host)
         assertFalse("裸测试平台 EP 无 XML 宿主命中 → 不让位（注入链活）", result)
+        assertTrue("区间形态同口径：无占用区间", XmlSynHiGate.occupiedRanges(project, host).isEmpty())
     }
 
     /** 空清单形态：无在册注入器 → 不让位（Community 无 DatabaseTools 的常态）。 */
