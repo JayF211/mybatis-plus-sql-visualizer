@@ -17,7 +17,8 @@ import java.time.format.DateTimeFormatter
  * 首次触达 SQL 历史自动落盘资产（F-43 SqlLogAutoSaver；此前 `sqlv_render_logs` 只收 agent
  * 自带日志文本，落盘历史对其不可见）。
  *
- * 检索语义在 [HistorySearchService]（T-01 域中立纯逻辑，R16 UI 共用）：关键词/正则/时间范围/
+ * 检索语义在 [HistorySearchService]（T-01 域中立纯逻辑；F94 改注：R16 UI 走
+ * HistorySqlLogPanel 自身的 filterHistoryEntries，不经本服务）：关键词/正则/时间范围/
  * 来源文件四维过滤；范围默认当日（D1=A，`allDates=true` 显式扩展）、返回摘要+命中计数（D2=A）。
  * 逻辑分层同 [SqlVisualizerRenderLogsTool]：[formatResult]/[searchHistory] 纯函数可测。
  *

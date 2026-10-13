@@ -106,6 +106,12 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     /** O-90：当前文件全量条目的同模板计数（徽章渲染与右键聚焦动作共用；applySqlSearch 重建）。 */
     private var templateCounts: Map<String, Int> = emptyMap()
 
+    /** F88 测试缝：非空时替代 [structureKeyCounts] 聚合（测试注入计数 lambda 断言聚合次数）。 */
+    internal var structureKeyCountsHookForTest: ((List<LogSqlEntry>) -> Map<String, Int>)? = null
+
+    /** F88：计数已对齐的条目快照（身份判据）——聚合只随快照换代重算，不随 apply 次数重算。 */
+    private var templateCountsSnapshotFor: List<LogSqlEntry>? = null
+
     /** O-90：同模板聚焦键（非 null 时二级列表只显该模板条目；右键动作与 chip 点击经 [applyTemplateFocus]）。 */
     private var templateFocusKey: String? = null
 
@@ -307,7 +313,12 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
 
     init {
         buildUI()
-        refresh()
+        // F87（T-PerfSweep25）懒首扫：原「构造即 refresh」把后台扫盘成本从「用时才有」提前到
+        // 「工具窗开窗即付」（R19 历史 tab 常驻使本面板随 SqlLogPanel init 构造）。现首扫延迟到
+        // 首次切到历史 tab——SqlLogPanel 的 tab ChangeListener 已有「切到历史 tab 即 refresh」
+        // 接线（F-44 形态保留，见 SqlLogPanel），即首扫唯一入口；设置变更路径经
+        // [historyDirChangedSinceLastScan] 照旧。R19 引导闭环不受影响：空态引导文案由
+        // [buildUI] 渲染（updateFilesEmptyText），与扫描无关，开窗即见。
     }
 
     private fun buildUI() {
@@ -484,7 +495,12 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
      * 才重读；未变则后台只做目录扫描 + countInFile（有缓存）。日常 IDE 实测 19MB/8708 条文件
      * 一次浏览窗口内被 refresh + showFileContent 全量解析约 3 遍（15~16.6s），此处消除 refresh 侧的重复成本。
      */
+    /** F87 测试缝：refresh 实际调用计数（判别「构造即扫」与「懒首扫」——构造路径须为 0）。 */
+    internal var refreshInvocationCountForTest: Int = 0
+        private set
+
     fun refresh() {
+        refreshInvocationCountForTest++
         // T-HistoryTabAlways：记录本次扫描所用目录（EDT 侧纯字段写），供设置变更时判定要不要重扫
         lastScannedDir = getHistoryDir()
         val gen = ++bgGeneration
@@ -622,8 +638,15 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
 
     private fun applySqlSearch() {
         // O-90：同模板计数随文件内容重建（**全量条目**聚合——徽章计数不随搜索/聚焦波动）；
-        // 渲染器与右键聚焦动作共用同一快照
-        templateCounts = structureKeyCounts(currentEntries)
+        // 渲染器与右键聚焦动作共用同一快照。
+        // F88（T-PerfSweep25）：聚合与查询无关、只随条目快照换代——同快照反复 apply（空查询
+        // 防抖反复触发、查询进出）不再重复 O(N) 聚合（报告「空查询聚合不短路」的收敛形态）；
+        // 快照换代（换文件/重载/清空）仍首算，徽章口径与首屏计数不丢（朴素「空查询即跳过」
+        // 会使首次空态展示丢徽章——applySqlSearch 是 templateCounts 唯一赋值点，已否）。
+        if (templateCountsSnapshotFor !== currentEntries) {
+            templateCounts = (structureKeyCountsHookForTest ?: ::structureKeyCounts)(currentEntries)
+            templateCountsSnapshotFor = currentEntries
+        }
         sqlCellRenderer.templateCounts = templateCounts
         // T-HistorySearchToggles：查询解析与过滤抽为顶层纯函数 [filterHistoryEntries]（可独立单测，
         // 形态照日志页 filterBySearch 先例）；memo 实例面板持有，防抖 200ms 反复 apply 复用编译结果。

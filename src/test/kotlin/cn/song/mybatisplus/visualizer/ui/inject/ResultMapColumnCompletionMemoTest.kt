@@ -60,4 +60,42 @@ class ResultMapColumnCompletionMemoTest : BasePlatformTestCase() {
             ResultMapColumnCompletionMemo.resetForTest()
         }
     }
+
+    @Test
+    fun testF89_两文件交替补全_双槽零互相驱逐() {
+        // F89（T-PerfSweep25）：两份 mapper 交替补全——修复前进程级单槽，每次交替即驱逐重扫
+        // （4 次调用 4 次全文重扫 → 红）；双槽化后两文件各占一槽，交替零互相驱逐。
+        val fileA = myFixture.configureByText(
+            "ma.xml",
+            "<mapper namespace=\"n\"><select id=\"a\" resultMap=\"rm\">SELECT col_a FROM t</select></mapper>",
+        ) as XmlFile
+        val fileB = myFixture.configureByText(
+            "mb.xml",
+            "<mapper namespace=\"n\"><select id=\"b\" resultMap=\"rm\">SELECT col_b FROM t</select></mapper>",
+        ) as XmlFile
+        ResultMapColumnCompletionMemo.resetForTest()
+        val originalExtractor = ResultMapColumnCompletionMemo.extractor
+        val originalRmExtractor = ResultMapColumnCompletionMemo.resultMapExtractor
+        var count = 0
+        var rmCount = 0
+        ResultMapColumnCompletionMemo.extractor = { _ -> count++; listOf("c$count") }
+        ResultMapColumnCompletionMemo.resultMapExtractor = { _, _ -> rmCount++; listOf("rm$rmCount") }
+        try {
+            ResultMapColumnCompletionMemo.columnsFor(fileA)
+            ResultMapColumnCompletionMemo.columnsFor(fileB)
+            ResultMapColumnCompletionMemo.columnsFor(fileA)
+            ResultMapColumnCompletionMemo.columnsFor(fileB)
+            assertEquals("两文件交替 4 次调用只 2 次全文重扫（单槽 4 次 → 红）", 2, count)
+            // rm 轨同口径（生产路径 columnsForResultMap 的文件级槽）
+            ResultMapColumnCompletionMemo.columnsForResultMap(fileA, "rm")
+            ResultMapColumnCompletionMemo.columnsForResultMap(fileB, "rm")
+            ResultMapColumnCompletionMemo.columnsForResultMap(fileA, "rm")
+            ResultMapColumnCompletionMemo.columnsForResultMap(fileB, "rm")
+            assertEquals("rm 轨两文件交替 4 次调用只 2 次重扫（单槽 4 次 → 红）", 2, rmCount)
+        } finally {
+            ResultMapColumnCompletionMemo.extractor = originalExtractor
+            ResultMapColumnCompletionMemo.resultMapExtractor = originalRmExtractor
+            ResultMapColumnCompletionMemo.resetForTest()
+        }
+    }
 }
