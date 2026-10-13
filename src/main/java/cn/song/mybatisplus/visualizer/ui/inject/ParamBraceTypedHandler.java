@@ -27,7 +27,9 @@ import java.util.Set;
  *  <li>已是 {@code {} → 不补插（对方插件/用户已手敲 {@code {}，双插会产出 {@code #{{}}）——直接放行原字符。</li>
  * </ul>
  * （T-PerfSweep16 F46 口径对齐：历史 KDoc 声称 {@code }} 后也放行，实现自始只查 {@code {}——修文档不改行为。）
- * 守卫：XmlSynHiGate 双让位（平台/CodeHelperPro 在位即不接管）+ 根 mapper + 语句标签内。
+ * 守卫：XmlSynHiGate <b>设置开关线</b>（{@code shouldYield(project)} 单参形态）+ 根 mapper + 语句标签内。
+ * （T-XmlGap W1 勘误：本 KDoc 旧述「双让位（平台/CodeHelperPro 在位即不接管）」与实现不符——
+ * 本类<b>从不做</b> per-host 探测，共存安全靠下面的「先查后插」与语句标签守卫，不靠让位。）
  *
  * <p>243+ 注入片段击键路由（TypedHandler.callDelegates 字节码实证）：光标在注入片段内时
  * 传给本回调的 {@code file} 是**注入 PsiFile**（SQL 语言）而非宿主 XmlFile、{@code editor} 是
