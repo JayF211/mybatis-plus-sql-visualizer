@@ -173,13 +173,17 @@ object PreviewReceiverResolver {
         return call.argumentList.expressions.any { isStringLikeExpression(it) }
     }
 
-    /** 表达式是否为字符串形态：字面量 String / 双目·多目拼接 / 解析为 String 类型的变量引用 / `xx.toString()` 调用。 */
+    /**
+     * 表达式是否为字符串形态：字面量 String / 双目·多目拼接 / 解析为 String 类型的变量引用 /
+     * `xx.toString()` 调用 / **源码可见方法返回的字符串**（`findByQuery(buildHql(), …)`，T-HqlHelperReturn）。
+     */
     private fun isStringLikeExpression(expr: PsiElement): Boolean {
         val e = expr as? PsiExpression ?: return false
         return when (e) {
             is PsiLiteralExpression -> e.value is String
             is PsiBinaryExpression, is PsiPolyadicExpression -> true
-            is PsiMethodCallExpression -> e.methodExpression.referenceName == "toString"
+            is PsiMethodCallExpression ->
+                e.methodExpression.referenceName == "toString" || returnsStringFromSourceMethod(e)
             is PsiReferenceExpression -> {
                 // 变量/参数引用：解析其类型是否 String（PsiVariable 覆盖 PsiParameter / PsiLocalVariable）
                 val resolved = runCatching { e.resolve() }.getOrNull() as? com.intellij.psi.PsiVariable
@@ -189,4 +193,25 @@ object PreviewReceiverResolver {
             else -> false
         }
     }
+
+    /**
+     * 被调方法是否「**返回 String 且源码可见**」——首参写成方法调用时据此放行
+     * （T-HqlHelperReturn：`commonDao.findByQuery(buildHql(), …)`，SQL 交给一个同工程方法拼）。
+     *
+     * 两道必要条件缺一不可：
+     *  - **返回类型是 String**：否则 `selectList(wrapperChain)` 这类非字符串实参会被误放行
+     *    （会回归 S1 修过的「wrapper 链被当成 HQL」老误判）；
+     *  - **有源码体**（`PsiMethod.body != null`）：JDK / 三方库方法（如 `String.valueOf(x)`）不算——
+     *    它们不是「工程里写着的 SQL 拼装」。
+     *
+     * 性能口径：本判据会在 gutter 热路径上多一次 `resolveMethod()`；但它只在**名字启发已命中**的
+     * 方法调用上被求值（`CustomDaoHqlLocator` 名字层先行、`matchesHqlContent` 在其后），
+     * 不必对项目内每个方法调用付这笔开销。
+     */
+    fun returnsStringFromSourceMethod(call: PsiMethodCallExpression): Boolean = runCatching {
+        val method = call.resolveMethod() ?: return@runCatching false
+        if (method.body == null) return@runCatching false
+        val typeName = method.returnType?.canonicalText
+        typeName == "java.lang.String" || typeName == "String"
+    }.getOrDefault(false)
 }

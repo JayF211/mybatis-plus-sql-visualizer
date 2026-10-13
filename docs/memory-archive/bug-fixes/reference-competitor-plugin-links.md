@@ -30,4 +30,4 @@ README.md「参考与致谢」节（2026-09-11 新增，位于「变更记录」
 - 其余核验过的 id（未进 README 但调研报告在用）：MyBatisCodeHelperPro Marketplace Edition=14522、MyBatis Log=13905、Free MyBatis Tool=18617、MyBatisPlus=12670、MySQL Explain=13192（repo newhoo/mysql-explain）、Mybatis-Flex-Helper=22165、JPA Buddy=15075、MyBatisSQLPreviewer=28245、MyBatis SQL Analyzer=32766。BatsLog 上游 = github.com/PerccyKing/batslog。
 - GitHub 直连在本机网络下不通（curl 000），验证仓库可达用直连超时后改走代理或只信 API 登记。
 
-相关 [[reference-coolrequest-agent-analysis]]、[[project-m56-agent-bytecode]]；README 精简口径见 [[feedback-doc-lists-keep-main-only]]。
+相关 CoolRequest agent 分析（内部资料库）、[[project-m56-agent-bytecode]]；README 精简口径见 [[feedback-doc-lists-keep-main-only]]。

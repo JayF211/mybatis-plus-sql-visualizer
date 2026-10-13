@@ -409,13 +409,23 @@ internal fun DataSourceSelector.reuseSharedConsole(
     val liveResult = runCatching {
         sharedUi?.javaClass?.getMethod("getComponent")?.invoke(sharedUi) as? javax.swing.JComponent
     }.getOrNull()
-    val full = when {
-        liveResult == null -> sharedFullComponent
-        // M36.5.43：swap 助手强制换入（不再返回 null）——结果区从 DBN 宿主摘入本 SplitPane
-        else -> swapResultIntoPersistentConsole(sharedFullComponent, liveResult, top, LOG)
-    } ?: return false
+    // ★A49：**无嵌入宿主（onConsole == null）时不重摘 DBN 结果组件**——prepare 侧已 gate，但复用链
+    // 若仍 swap 会再次把结果区组件从 DBN 原生宿主摘进我方永不展示的 SplitPane（`swapResultIntoPersistentConsole`
+    // 的强制换入分支会 remove 外部宿主 + 设 bottomComponent）。无宿主时摘取无收益、只扰动 DBN 组件树
+    // （详见 [shouldComposeEmbedSplitPane] 的归因更正：这是排查「网格 0 rows」时顺带发现的收敛，
+    // 该现象真因是调用方传了不存在的表名）。无宿主时沿用既有缓存（可能为 null）；有宿主（预览面板
+    // 复用）时判据化简后与改前逐字等价，行为不变。
+    val hasHost = onConsole != null
+    val composeNow = shouldComposeEmbedSplitPane(hasHost, liveResult != null)
+    val full: javax.swing.JComponent? = when {
+        composeNow && liveResult != null ->
+            // M36.5.43：swap 助手强制换入（不再返回 null）——结果区从 DBN 宿主摘入本 SplitPane
+            swapResultIntoPersistentConsole(sharedFullComponent, liveResult, top, LOG)
+        else -> sharedFullComponent
+    }
+    if (hasHost && full == null) return false
     if (liveResult != null) lastLiveResultSwapped = liveResult
-    sharedFullComponent = full
+    if (hasHost) sharedFullComponent = full
     preparedConsole = console
     preparedEditor = editor
     preparedScriptModel = refreshedModel ?: scriptModel
@@ -424,9 +434,9 @@ internal fun DataSourceSelector.reuseSharedConsole(
     preparedUi = sharedUi
     preparedTopBlock = top
     preparedResultComponent = liveResult
-    preparedFullComponent = full
+    if (hasHost) preparedFullComponent = full
     onEditor?.invoke(editor)
-    onConsole?.invoke(full)
+    full?.let { onConsole?.invoke(it) }
     // M36.5.55：预览（execute=false）复用 console 时也把结果区（bottom）折叠——divider 压到
     // 接近底部，bottom（DBN Output/Tx 结果区占位）收起不显示，满足"未执行不显示结果面板"。
     // T-FirstExecResultInvisible F3：折叠归口 embedMode——仅 PREVIEW 且结果区无内容才折叠
@@ -785,6 +795,24 @@ internal fun DataSourceSelector.afterSubmitted(
         val pre = resultContents(ui)
         val preExistingNames = pre.map { it.displayName }.toSet()
         LOG.info("[M36] result watch started (pre-existing-names=$preExistingNames, ids=${pre.map { System.identityHashCode(it) }})")
+        // ★A49 取证：提交时刻结果区组件的**宿主**——判「有没有被摘走」的决定性读数（无论本拍是否
+        // 发生 swap 都打）。`parent` 全类名是判别力所在：`…ServiceViewComponentWrapper` = 仍在 DBN
+        // 原生宿主（未摘）；`…buildConsoleSplitPane$1` = 已在我方容器（摘了）。
+        runCatching {
+            val liveNow = ui?.javaClass?.getMethod("getComponent")?.invoke(ui) as? javax.swing.JComponent
+            val mySp = sharedFullComponent ?: preparedFullComponent
+            val myBottom = (mySp as? javax.swing.JSplitPane)?.bottomComponent
+            val viewShowing = runCatching {
+                val v = console.javaClass.getMethod("getView").invoke(console)
+                v?.javaClass?.getMethod("isShowing")?.invoke(v)
+            }.getOrNull()
+            LOG.info(
+                "[M36][A49] result host at submit: parent=${liveNow?.parent?.javaClass?.name ?: "null"}, " +
+                    "mySplitBottom=${myBottom?.javaClass?.name ?: "null"}, " +
+                    "stolen=${liveNow != null && mySp != null && liveNow === myBottom && liveNow.parent === mySp}, " +
+                    "viewShowing=$viewShowing",
+            )
+        }
         // ② 8s 连接等待监控（从提交时刻起算）。M36.5.44 放宽：原判定 `!newTab || !namespaceOk`
         // 双条件任一为假即报超时——但连接建立慢（首个 SQL，query 在 8s 后才完成）时
         // newTab=false 且 namespace 可能暂空，**误报"执行超时"**（用户截图红字实证）。
@@ -851,11 +879,102 @@ internal fun DataSourceSelector.afterSubmitted(
         }
     }, com.intellij.openapi.application.ModalityState.any())
 }
+/**
+ * ★A48：结果换入判定（纯函数，[refreshResultsComponent] 每拍调用）——在既有三条判据
+ * （强制首换 / 组件实例变化 / 结果页签名称集合变化）之外补**第四判据：已换入组件被 DBN 挂回原生宿主**。
+ *
+ * 根因（M36.5.43 沙盒实证，见 [swapResultIntoPersistentConsole] KDoc）：DBN 结果区组件的
+ * 「长期老家」是 `ServiceViewComponentWrapper`，DBN 在**本次提交新建结果页签**时会把它重新
+ * 挂回该宿主（同一实例，仅 parent 变）。原判据只比较**组件身份**（`live !== lastLiveResultSwapped`）
+ * 与**页签名称集合**——re-parent 两者都不变，判据恒 false，SplitPane 底部因此滞留空组件，
+ * 结果只落在 IDE 底部原生控制台（用户实证「同一会话第一次点执行预览窗内看不到结果，再点一次
+ * 才有」）。复用旧页签路径不新建内容、不触发挂父，故不中招——与两次执行日志对照一致
+ * （newTab=true 坏 / newTab=false 好）。M36.5.43 声称的「被 DBN 抢走则下拍换回」正是该判据，
+ * 但身份去重把它短路成了**一次性换入**。
+ *
+ * @param host        持久整控台 SplitPane（换入目标；非分栏形态传 null）
+ * @param hostBottom  [host] 当前底部组件
+ * @param live        本拍从 `ui.getComponent()` 取到的结果组件
+ * @param lastSwapped 上一次换入的组件（去重基线）
+ * @return true = 本拍需要（重新）换入
+ */
+internal fun DataSourceSelector.resultSwapNeeded(
+    host: java.awt.Component?,
+    hostBottom: java.awt.Component?,
+    live: java.awt.Component?,
+    lastSwapped: java.awt.Component?,
+    namesChanged: Boolean,
+    forceSwapIn: Boolean,
+    alreadySwapped: Boolean,
+): Boolean {
+    if (live == null) return false
+    if (forceSwapIn && !alreadySwapped) return true
+    if (live !== lastSwapped) return true
+    if (namesChanged) return true
+    // 第四判据：身份/名称都未变，但组件已不在本 SplitPane 底部（被 DBN 挂回原生宿主）——
+    // 身份去重看不见 re-parent，须按「仍在位」判定，幂等重挂回底部。
+    return host != null && (hostBottom !== live || live.parent !== host)
+}
+
+/**
+ * ★A49：是否组我方整控台 SplitPane——即是否允许把 DBN 结果区组件（`ui.getComponent()`）摘进
+ * 本插件容器（[buildConsoleSplitPane] / [swapResultIntoPersistentConsole]）。**只有存在嵌入宿主
+ * （onConsole 回调）时才允许。**
+ *
+ * 无宿主路径（SQL 快捷模板三动作 / 日志转 SQL 的「执行」，二者都走
+ * `SqlExecutor.execute(onConsole = null)`）只把语句交给**原生 Database 控制台**执行，控制台由
+ * DBN 在 IDE 底部 Services 视图自行展示。此时组出来的 SplitPane **永不展示**（`onConsole?.invoke`
+ * 是 no-op，`pendingOnConsole` 也为 null 故 [refreshResultsComponent] 直接早退、无人回收），
+ * 摘取结果组件对本路径**无任何收益**，却扰动 DBN 自己的组件树（把结果区组件从原生宿主
+ * `ServiceViewComponentWrapper` 摘下、再挂进我方容器）——属 ★A48 的**同族现象**（A48 修的是嵌入
+ * 路径上「回收判据看不见 re-parent」，本判据消的是无宿主路径上「本就不该摘」）。
+ *
+ * **归因更正（2026-10-13）**：本判据最初的立项依据是「录制里原生控制台结果网格停在 `0 rows`」，
+ * 后经沙盒控制台 **Output 页原文**查明该现象真因是**调用方传了不存在的表名**——录制脚本的右键
+ * 锚点按单宽估算 CJK 列宽、落到 `schema.sql` 注释里的中文词上，动作据其拼出
+ * `SELECT … FROM 对齐插件测试`，DBN 正确报 `[42S02][1146] Table 'mpj_demo.对齐插件测试' doesn't exist`，
+ * 网格 0 rows 是该报错的**正常表现**，**与插件行为无关**（锚点 x 610→740 修正后重录一次通过，
+ * 网格 4 行）。故本判据是排查该现象时**顺带发现并收敛**的隐患，**不是该现象的修复**；保留理由＝
+ * 无宿主路径摘取原生组件无收益、有扰动风险，去掉后更安全。
+ *
+ * 两处组入点（prepare 侧 [prepareAfterEditorResolved]、复用侧 [reuseSharedConsole]）同用本判据；
+ * 嵌入/预览路径（`onConsole != null`）的判据在条件化简后与改前**逐字等价**，行为不变。
+ *
+ * @param hasEmbedHost       本次准备/执行是否带嵌入宿主回调（`onConsole != null`）
+ * @param hasResultComponent DBN 结果区组件是否取到（`resultComponent`/`liveResult` != null）
+ * @return true = 组 SplitPane 并换入（有宿主）；false = 不组不摘，保持原生控制台渲染
+ */
+internal fun shouldComposeEmbedSplitPane(
+    hasEmbedHost: Boolean,
+    hasResultComponent: Boolean,
+): Boolean = hasEmbedHost && hasResultComponent
+
+/**
+ * T-SqlTemplateUx P2 补：`refreshResultsComponent` 的**组件换入**段是否需要执行——需同时具备
+ * 嵌入宿主（`pendingOnConsole`）与持久容器（topBlock）。无宿主时摘 DBN 结果组件无收益、
+ * 只扰动其组件树（[shouldComposeEmbedSplitPane] 的 A49 口径）。
+ *
+ * **错误晚检段不受本判据约束**：无嵌入宿主路径（SQL 快捷模板三动作 / 日志转 SQL 的「执行」，
+ * 均 `SqlExecutor.execute(onConsole = null)`）同样需要执行失败反馈——本函数拆两段正是为此，
+ * 详见 [refreshResultsComponent] 的 T-SqlTemplateUx P2 补说明。
+ */
+internal fun refreshSwapEnabled(
+    hasEmbedHost: Boolean,
+    hasTopBlock: Boolean,
+): Boolean = hasEmbedHost && hasTopBlock
+
 /** 读取 RunnerLayoutUi 当前全部结果内容（排除 Output/输出）。 */
 
 internal fun DataSourceSelector.refreshResultsComponent(ui: Any, LOG: com.intellij.openapi.diagnostic.Logger, forceSwapIn: Boolean = false, generation: Int = swapGeneration, onError: ((String) -> Unit)? = null, onErrorRich: ((ExecutionErrorInfo) -> Unit)? = null, sqlText: String? = null) {
-    val callback = pendingOnConsole ?: return
-    val top = sharedTopBlock ?: preparedTopBlock ?: return
+    // T-SqlTemplateUx P2 补（真机 2026-10-13 录制实录）：本函数是「结果页签已出现、错误晚到」的
+    // **唯一**晚检通道（[startResultTabRetry] 一旦找到结果 Tab 即停、不再扫错误）。此前首行以
+    // `pendingOnConsole` 非空判定整体早退，把**无嵌入宿主**路径（SQL 快捷模板三动作 / 日志转 SQL
+    // 的「执行」，均 SqlExecutor.execute(onConsole = null)）一并挡在门外——DBN 错误晚于结果页签写入
+    // history 时无人检测，执行失败对用户完全静默（画面只剩控制台报错 + 0 rows）。故拆两段：
+    // **错误晚检恒跑**（与宿主无关）；**组件换入**用 [refreshSwapEnabled] 收窄（无宿主不摘 DBN 组件，A49 口径）。
+    val callback = pendingOnConsole
+    val top = sharedTopBlock ?: preparedTopBlock
+    val swapEnabled = refreshSwapEnabled(hasEmbedHost = callback != null, hasTopBlock = top != null)
     val shared = sharedConsole
     var ticks = 0
     var swapped = false
@@ -904,8 +1023,23 @@ internal fun DataSourceSelector.refreshResultsComponent(ui: Any, LOG: com.intell
             val live = runCatching {
                 ui.javaClass.getMethod("getComponent").invoke(ui) as? javax.swing.JComponent
             }.getOrNull()
-            val shouldSwap = live != null && (forceSwapIn && !swapped || live !== lastLiveResultSwapped || namesChanged)
-            if (shouldSwap && live != null) {
+            // ★A48：第四判据（re-parent 回收）参与换入决策——详见 resultSwapNeeded KDoc。
+            val host = sharedFullComponent
+            val instanceChanged = live !== lastLiveResultSwapped
+            val shouldSwap = resultSwapNeeded(
+                host = host,
+                hostBottom = (host as? javax.swing.JSplitPane)?.bottomComponent,
+                live = live,
+                lastSwapped = lastLiveResultSwapped,
+                namesChanged = namesChanged,
+                forceSwapIn = forceSwapIn,
+                alreadySwapped = swapped,
+            )
+            // 仅第四判据为真 = 身份与名称都没变、组件被 DBN 挂回原生宿主 → 本拍是「回收重挂」
+            val reclaimed = shouldSwap && !(forceSwapIn && !swapped) && !instanceChanged && !namesChanged
+            // 无宿主（swapEnabled=false）时不做换入——错误晚检已在上方独立完成；`top != null` 供 smart-cast
+            // （逻辑上 swapEnabled 已蕴含之）。
+            if (swapEnabled && top != null && shouldSwap && live != null) {
                 // M36.5.41-A4：持久整控台原位换底（不重建 SplitPane，身份稳定）；
                 // M36.5.43：swap 助手不再返回 null（强制换入），持久容器缺失时回退
                 // buildConsoleSplitPane（feature flag）。
@@ -920,7 +1054,7 @@ internal fun DataSourceSelector.refreshResultsComponent(ui: Any, LOG: com.intell
                     // Timer 回调已在 EDT，直接换入（模态 pump 中 Timer 照常 fire）
                     cb.invoke(full)
                 }
-                LOG.info("[M36] results refreshed (tick=$ticks, forced=$forceSwapIn, instanceChanged=$changed, namesChanged=$namesChanged, gen=$generation)")
+                LOG.info("[M36] results refreshed (tick=$ticks, forced=$forceSwapIn, instanceChanged=$changed, namesChanged=$namesChanged, reclaimed=$reclaimed, gen=$generation)")
             }
             if (ticks >= 8) {
                 timer.stop()
@@ -1377,6 +1511,11 @@ internal fun DataSourceSelector.swapResultIntoPersistentConsole(
 ): javax.swing.JComponent {
     val sp = full as? javax.swing.JSplitPane
         ?: return buildConsoleSplitPane(topBlock, liveResult)
+    // ★A49 取证修正：换入**前**记录结果组件的真实宿主。旧日志在 `sp.bottomComponent = liveResult`
+    // 之后才读 parent，恒打印本 SplitPane，证明不了「有没有从 DBN 宿主摘走」。改在改动前取，
+    // 并用**全类名**（判别力所在）：`…ServiceViewComponentWrapper` = 仍在 DBN 原生宿主；
+    // `…DataSourceSelectorResultsKt$buildConsoleSplitPane$1` = 已在我方容器。
+    val prevParent = liveResult.parent
     val current = sp.bottomComponent
     if (current === liveResult && liveResult.parent === sp) {
         // M36.5.45：同实例也要强制重绘——DBN 复用同一 Content 组件（DataGrid），实例不变
@@ -1397,6 +1536,10 @@ internal fun DataSourceSelector.swapResultIntoPersistentConsole(
     }
     // 强制换入：从 DBN 宿主（ServiceView 等）摘出，挂回本 SplitPane 底部。
     if (current != null) sp.remove(current)
+    // ★A48：显式从**外部宿主**摘出——DBN 在新建结果页签时会把结果组件重新挂回
+    // ServiceViewComponentWrapper（同一实例、仅 parent 变），不摘会让组件继续留在原生宿主
+    // （预览窗内空白、结果只出现在 IDE 底部原生控制台）。parent 为 sp/无父时本行 no-op。
+    (liveResult.parent)?.takeIf { it !== sp }?.remove(liveResult)
     sp.bottomComponent = liveResult
     // M36.5.64：换入路径也设 bottom 最小高度——防 JSplitPane 重排时把结果区压回 preferred。
     liveResult.minimumSize = java.awt.Dimension(
@@ -1414,7 +1557,7 @@ internal fun DataSourceSelector.swapResultIntoPersistentConsole(
     realignSplitDivider(sp, force = true)
     sp.revalidate()
     sp.repaint()
-    LOG.info("[M36] persistent console bottom swapped (result id=${System.identityHashCode(liveResult)}, prevParent=${liveResult.parent?.javaClass?.simpleName ?: "null"})")
+    LOG.info("[M36] persistent console bottom swapped (result id=${System.identityHashCode(liveResult)}, prevParent=${prevParent?.javaClass?.name ?: "null"}, fromExternalHost=${prevParent != null && prevParent !== sp})")
     return sp
 }
 

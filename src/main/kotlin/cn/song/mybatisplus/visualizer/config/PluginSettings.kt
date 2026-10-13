@@ -242,6 +242,14 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         var reverseWrapperFormat: String = REVERSE_AUTO,
 
         /**
+         * 嵌入列（@Embedded/@Embeddable 展平列）的命名约定（T-EmbeddedColPrefix）：
+         * [EMBEDDED_NAMING_AUTO] 自动（按工程内 Hibernate 命名配置判定，判不出按无前缀）/
+         * [EMBEDDED_NAMING_NONE] 无前缀（JPA 默认）/ [EMBEDDED_NAMING_COMPONENT_PATH] 组件路径前缀。
+         * 解析见 [cn.song.mybatisplus.visualizer.psi.jpa.EmbeddedColumnNamingResolver]。
+         */
+        var embeddedColumnNaming: String = EMBEDDED_NAMING_AUTO,
+
+        /**
          * 允许手动选择实体类（默认开）：自动推断（类名推断 + @TableName 反查）未命中或
          * 多表 JOIN 时，弹实体选择弹窗让用户从项目类中手动挑选（借助实体做列→字段映射）；
          * 关闭后保持纯自动推断——未命中直接回落字符串列名形态，不弹任何选择框。
@@ -709,6 +717,15 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
 
         /** 反向转换 Wrapper 形态：MPJLambdaWrapper（无实体回落字符串）。 */
         const val REVERSE_MPJ_LAMBDA = "MPJ_LAMBDA"
+
+        /** 嵌入列命名：自动（按工程 Hibernate 命名配置判定，T-EmbeddedColPrefix 默认）。 */
+        const val EMBEDDED_NAMING_AUTO = "AUTO"
+
+        /** 嵌入列命名：无前缀（JPA 默认，`qty.baseQty` → `base_qty`）。 */
+        const val EMBEDDED_NAMING_NONE = "NONE"
+
+        /** 嵌入列命名：组件路径前缀（Hibernate component-path，`qty.baseQty` → `qty_base_qty`）。 */
+        const val EMBEDDED_NAMING_COMPONENT_PATH = "COMPONENT_PATH"
 
         // ---------- SQL 日志默认值（T-M31.14） ----------
         const val DEFAULT_LOG_SQL_PREFIX = "Preparing:"

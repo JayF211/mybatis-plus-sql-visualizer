@@ -239,6 +239,12 @@ internal fun PluginSettingsPanel.buildSections(panel: JPanel) {
                 text = MpSqlVisualizerBundle.message("settings.columnCalibration")
                 toolTipText = MpSqlVisualizerBundle.message("settings.columnCalibration.tip")
             })
+            addRow(p, g, MpSqlVisualizerBundle.message("settings.embeddedColumnNaming"), embeddedNamingCombo.apply {
+                model = DefaultComboBoxModel(embeddedNamingOptions())
+                toolTipText = MpSqlVisualizerBundle.message("settings.embeddedColumnNaming.tip")
+                selectedItem = embeddedNamingOptions().firstOrNull { it.value == settings.state.embeddedColumnNaming }
+                    ?: embeddedNamingOptions().first()
+            })
         }
     }
 

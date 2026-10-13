@@ -667,4 +667,83 @@ class HqlQueryLocatorTest : BasePlatformTestCase() {
         )
         assertEquals("无 FROM 的 UPDATE 应按语句头提取实体类名", "WmsDockBooking", info.entityClassName)
     }
+
+    // ------------------------------------------------------------------
+    // T-HqlBufConcat：StringBuffer/StringBuilder 拼接串（与自定义 DAO 通道同族收敛）
+    // ------------------------------------------------------------------
+
+    fun testCreateQuery_stringBufferToString() {
+        myFixture.configureByText(
+            "UserDao.java",
+            """
+            public class UserDao {
+                public List<UserEntity> findByStatus(Session session) {
+                    StringBuffer sb = new StringBuffer();
+                    sb.append("from UserEntity u ");
+                    sb.append("where u.status = 'A'");
+                    return session.createQuery(sb.toString()).list();
+                }
+            }
+            interface Session {
+                Query createQuery(String hql);
+            }
+            interface Query { List list(); }
+            class UserEntity { private String status; }
+            """.trimIndent(),
+        )
+        val info = HqlQueryLocator.locate(findMethod("findByStatus"))
+        assertNotNull("createQuery(sb.toString()) 应被识别", info)
+        assertEquals("from UserEntity u where u.status = 'A'", info!!.hql)
+        assertEquals("UserEntity", info.entityClassName)
+    }
+
+    fun testCreateQuery_stringBuilderViaStringVariable() {
+        myFixture.configureByText(
+            "UserDao.java",
+            """
+            public class UserDao {
+                public List<UserEntity> findAllUsers(Session session) {
+                    StringBuilder sb = new StringBuilder();
+                    sb.append("select u from UserEntity u ");
+                    sb.append("order by u.id");
+                    String hql = sb.toString();
+                    return session.createQuery(hql).list();
+                }
+            }
+            interface Session {
+                Query createQuery(String hql);
+            }
+            interface Query { List list(); }
+            class UserEntity {}
+            """.trimIndent(),
+        )
+        val info = HqlQueryLocator.locate(findMethod("findAllUsers"))
+        assertNotNull("String hql = sb.toString(); createQuery(hql) 应被识别", info)
+        assertEquals("select u from UserEntity u order by u.id", info!!.hql)
+    }
+
+    fun testCreateQuery_helperMethodReturningHql() {
+        myFixture.configureByText(
+            "UserDao.java",
+            """
+            public class UserDao {
+                public List<UserEntity> findByStatus(Session session) {
+                    return session.createQuery(buildHql()).list();
+                }
+
+                private String buildHql() {
+                    return "from UserEntity u " + "where u.status = 'A'";
+                }
+            }
+            interface Session {
+                Query createQuery(String hql);
+            }
+            interface Query { List list(); }
+            class UserEntity { private String status; }
+            """.trimIndent(),
+        )
+        val info = HqlQueryLocator.locate(findMethod("findByStatus"))
+        assertNotNull("createQuery(源码可见方法返回的 HQL) 应被识别", info)
+        assertEquals("from UserEntity u where u.status = 'A'", info!!.hql)
+    }
 }

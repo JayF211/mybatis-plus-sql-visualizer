@@ -215,6 +215,20 @@ class JpqlConverterTest {
             result.sql.contains("u.username") && result.sql.contains("u.email"))
     }
 
+    /**
+     * T-HqlBufConcat：小写 `new Map(...)` 同样必须剥离（旧实现字面量 "NEW" 嗅探摘不掉小写形态）。
+     */
+    @Test
+    fun `lowercaseNewMap_extracted`() {
+        val jpql = "SELECT new Map(u.username AS un, u.email AS em) FROM UserEntity u"
+        val result = JpqlConverter.convert(jpql, userTable)
+
+        assertFalse("不应含 new Map: ${result.sql}", result.sql.contains("new Map"))
+        assertTrue("构造实参应被提取: ${result.sql}", result.sql.contains("u.username"))
+        assertTrue("自定义别名应保留: ${result.sql}", result.sql.contains("un"))
+        assertTrue("应含 FROM user: ${result.sql}", result.sql.contains("FROM user"))
+    }
+
     // ------------------------------------------------------------------
     // MEMBER OF 降级处理测试
     // ------------------------------------------------------------------

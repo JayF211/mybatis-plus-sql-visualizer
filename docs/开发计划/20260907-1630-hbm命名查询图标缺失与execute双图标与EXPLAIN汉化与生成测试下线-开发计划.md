@@ -84,7 +84,7 @@ zh bundle `panel.explain=执行计划`；en 保持 `EXPLAIN`。同步核查该�
 | T-E1 | zh bundle `panel.explain=执行计划`；全量核查 en/zh 键值对齐（只改 zh） | `messages/MpSqlVisualizerBundle_zh.properties` | en 侧 EXPLAIN 为术语保留 |
 | T-R1 | 删除 `testgen/TestAssetGenerator.kt`（整个 testgen 包）；`SqlPreviewPanel` 删按钮（L406~407）、`generateTestAsset()`、`testAssetStepForTest()`、`timestampLabel()`、`saveSqlScriptAsset()` 及相关 import | `src/main/kotlin/.../testgen/` + `ui/SqlPreviewPanel.kt` | `JavaCodePreviewDialog` 保留（ConvertSqlToJavaAction 在用） |
 | T-R2 | 删除 `TestAssetGeneratorTest.kt` 与 `SqlPreviewPanelTest.testTestAssetOnChosen走DoFinalStep不出同步弹窗` | `src/test/kotlin/.../testgen/` + `ui/SqlPreviewPanelTest.kt` | 20260907-1500 的 doFinalStep 修复本体（gutter 二级列表分支）保留不动 |
-| T-R3 | bundle 删 `panel.genTest` + `genTest.*` 共 7 键 ×2 文件；`docs/架构设计/M37M38竞品融合新增功能-说明文档.md` 生成测试节标注已下线；CHANGELOG Unreleased 新增 Removed 条目；`docs/MEMORY.md` 变更记录同步 | bundle ×2 + docs | 键删除后 grep 确认无残留引用 |
+| T-R3 | bundle 删 `panel.genTest` + `genTest.*` 共 7 键 ×2 文件；`docs/架构设计/M37M38新增功能-说明文档.md` 生成测试节标注已下线；CHANGELOG Unreleased 新增 Removed 条目；`docs/MEMORY.md` 变更记录同步 | bundle ×2 + docs | 键删除后 grep 确认无残留引用 |
 
 ## 五、验证标准
 

@@ -18,7 +18,9 @@ import com.intellij.psi.xml.XmlTag
  * 「先查后插」防双插（决策 4-A，共存插件同型行为）：插入前查光标后方字符——
  *  - 已是 `{` → 不补插（对方插件/用户已手敲 `{`，双插会产出 `#{{}}`）——直接放行原字符。
  *  （T-PerfSweep16 F46 口径对齐：历史 KDoc 声称 `}` 后也放行，实现自始只查 `{`——修文档不改行为。）
- * 守卫：XmlSynHiGate 双让位（平台/CodeHelperPro 在位即不接管）+ 根 mapper + 语句标签内。
+ * 守卫：XmlSynHiGate **设置开关线**（`shouldYield(project)` 单参形态）+ 根 mapper + 语句标签内。
+ * （T-XmlGap W1 勘误：本 KDoc 旧述「双让位（平台/CodeHelperPro 在位即不接管）」与实现不符——
+ *  本类**从不做** per-host 探测，共存安全靠下面的「先查后插」与语句标签守卫，不靠让位。）
  *
  * 243+ 注入片段击键路由（TypedHandler.callDelegates 字节码实证）：光标在注入片段内时
  * 传给本回调的 [file] 是**注入 PsiFile**（SQL 语言）而非宿主 XmlFile、[editor] 是

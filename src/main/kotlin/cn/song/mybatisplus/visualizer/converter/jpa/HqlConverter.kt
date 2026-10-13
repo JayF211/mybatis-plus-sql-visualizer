@@ -15,7 +15,7 @@ import com.intellij.openapi.project.Project
  *  1. 命名参数 `:param` → `?`
  *  2. 位置参数 `?1` → `?`
  *  3. IN 子句修正：`IN ?` → `IN (?)`
- *  4. NEW DTO(...) 表达式 → 提取构造参数
+ *  4. `new Xxx(...)` 动态实例化表达式 → 提取构造参数（关键字大小写不敏感，见 [NewExpressionStripper]）
  *  5. JOIN FETCH / 关联 JOIN → LEFT/INNER JOIN（J7：ON 条件经 [JpaJoinOnResolver]
  *     按「PSI 注解 > 关联元数据 > 猜测降级」三级优先真实化）
  *  6. 实体名 → 表名映射（仅当有有效 TableInfo 时）
@@ -132,8 +132,8 @@ object HqlConverter {
         // 3. 处理 IN 子句：IN ? → IN (?)
         sql = handleInClause(sql)
 
-        // 4. 处理 NEW DTO(...) 表达式
-        sql = handleNewExpression(sql)
+        // 4. 处理 `new Xxx(...)` 动态实例化表达式（关键字大小写不敏感）
+        sql = NewExpressionStripper.strip(sql)
 
         // 5. 处理 JOIN FETCH / 关联 JOIN → LEFT/INNER JOIN（J7：ON 条件真实化）
         sql = JpaJoinRewriter.rewrite(sql, table, project)
@@ -252,40 +252,6 @@ object HqlConverter {
      */
     private fun handleInClause(hql: String): String {
         return hql.replace(HQL_IN_SPACE_Q, "IN (?)")
-    }
-
-    // ------------------------------------------------------------------
-    // NEW DTO 表达式
-    // ------------------------------------------------------------------
-
-    /**
-     * 处理 `NEW com.xxx.VO(a, b)` 表达式 → 提取构造参数。
-     * 使用括号计数法支持嵌套括号。
-     */
-    private fun handleNewExpression(hql: String): String {
-        val prefix = "NEW"
-        var searchStart = 0
-        while (true) {
-            val newIndex = hql.indexOf(prefix, searchStart)
-            if (newIndex < 0) break
-            val parenOpen = hql.indexOf('(', newIndex + prefix.length)
-            if (parenOpen < 0) break
-            var depth = 1
-            var i = parenOpen + 1
-            while (i < hql.length && depth > 0) {
-                when (hql[i]) {
-                    '(' -> depth++
-                    ')' -> depth--
-                }
-                i++
-            }
-            if (depth != 0) break
-            val parenClose = i - 1
-            val args = hql.substring(parenOpen + 1, parenClose).trim()
-            val replacement = hql.substring(0, newIndex) + args + hql.substring(parenClose + 1)
-            return handleNewExpression(replacement)
-        }
-        return hql
     }
 
     // ------------------------------------------------------------------

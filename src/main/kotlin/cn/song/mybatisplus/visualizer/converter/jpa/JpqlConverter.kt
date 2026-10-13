@@ -23,7 +23,7 @@ import com.intellij.openapi.project.Project
  *  - `JOIN FETCH e.relation r` / `JOIN e.relation r` → `LEFT/INNER JOIN table r ON ...`
  *    （J7：ON 条件经 [JpaJoinOnResolver] 按「PSI 注解 > 关联元数据 > 猜测降级」三级真实化）
  *  - `UPDATE <Entity> [alias] SET ... [WHERE ...]` → [UpdateStatement]（J2）
- *  - `NEW com.xxx.VO(a, b)` → `SELECT a, b`
+ *  - `new Xxx(a, b)` 构造函数表达式（关键字大小写不敏感）→ `SELECT a, b`
  *  - `MEMBER OF` → 降级提示
  *
  * 对于复杂 JPQL（子查询、MEMBER OF、NEW DTO(...)），展示基础转换 + 注释提示。
@@ -94,8 +94,8 @@ object JpqlConverter {
         // 2.5 处理 IN 子句：IN ? → IN (?)（集合参数应展开为多占位符）
         sql = handleInClause(sql)
 
-        // 3. 处理 NEW DTO(...) 表达式
-        sql = handleNewExpression(sql)
+        // 3. 处理 `new Xxx(...)` 动态实例化表达式（关键字大小写不敏感）
+        sql = NewExpressionStripper.strip(sql)
 
         // 4. 处理 JOIN FETCH / 关联 JOIN → LEFT/INNER JOIN（J7：ON 条件真实化）
         sql = JpaJoinRewriter.rewrite(sql, table, project)
@@ -208,46 +208,6 @@ object JpqlConverter {
      */
     private fun handleInClause(jpql: String): String {
         return jpql.replace(JPQL_IN_SPACE_Q, "IN (?)")
-    }
-
-    /**
-     * 处理 `NEW com.xxx.VO(a, b)` 表达式。
-     *
-     * JPQL 的构造函数表达式映射为 SELECT 列提取。
-     * 示例：`SELECT NEW com.example.UserDTO(u.name, u.age) FROM User u`
-     * → `SELECT u.name, u.age FROM User u`
-     *
-     * 支持嵌套括号（如 `NEW DTO(o.id, COUNT(o), SUM(o.totalAmount))`）——
-     * 使用括号计数法找到匹配的闭合括号，避免正则 `[^)]+` 在嵌套括号处截断。
-     */
-    private fun handleNewExpression(jpql: String): String {
-        val prefix = "NEW"
-        var searchStart = 0
-        while (true) {
-            val newIndex = jpql.indexOf(prefix, searchStart)
-            if (newIndex < 0) break
-            // 找到 NEW 后的第一个 '('
-            val parenOpen = jpql.indexOf('(', newIndex + prefix.length)
-            if (parenOpen < 0) break
-            // 括号计数法找到匹配的 ')'
-            var depth = 1
-            var i = parenOpen + 1
-            while (i < jpql.length && depth > 0) {
-                when (jpql[i]) {
-                    '(' -> depth++
-                    ')' -> depth--
-                }
-                i++
-            }
-            if (depth != 0) break // 括号不匹配，跳过
-            val parenClose = i - 1
-            // 提取括号内的参数列表
-            val args = jpql.substring(parenOpen + 1, parenClose).trim()
-            // 替换 `NEW ClassName(args)` → `args`
-            val replacement = jpql.substring(0, newIndex) + args + jpql.substring(parenClose + 1)
-            return handleNewExpression(replacement) // 递归处理多个 NEW（罕见）
-        }
-        return jpql
     }
 
     // ------------------------------------------------------------------

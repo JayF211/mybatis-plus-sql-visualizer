@@ -1,106 +1,95 @@
 # -*- coding: utf-8 -*-
-"""A13 执行 SQL（临时 .sql + 结果）20261012。
+"""A13 执行 SQL（临时 .sql + 结果）20261012 v5。
 
-素材：`DeviceInfoServiceImpl#joinListEntity`（`car_device_info LEFT JOIN station_info`，
-mpj_demo 库，与 A11 同一目标——该链的 SQL 在 mpj_demo@localhost 上**实测可执行**；
-先前用 `WrapperAdvancedCoverageServiceImpl`（mp_demo 模块）会报
-`[42S22][1054] Unknown column 'password' in 'field list'`，属该模块表结构与库不符）。
-流程：光标压链 → 预览 → 点「执行 SQL」→ 插件把语句写进项目内临时文件
-`.idea/sql-visualizer/exec/mpsql-exec.sql` 提交原生数据库控制台执行 → 下方结果网格出数据。
+v1~v4 的返工各自暴露一个坑，全部已固化进 locate/verify 标准件：
+  ① 弹窗按钮行**目测**写死偏低 48px（连点三次落空）→ `bright_band_y` 实测；
+  ② 按钮 x 写死（右对齐按钮随弹窗宽度变）→ `bright_band_x` 取亮簇；
+  ③ `window_rect(pid=None)` 会匹配到**别人的同尺寸窗口**（撞上 ZCode 的 ZCodeTpsFooter）→ 限定沙盒 PID；
+  ④ **IDE 不在前台 → 键盘快捷键送不到**（开文件无反应、预览不出，且不报错）→ `ensure_foreground` 置顶+取焦+校验。
 
-标定（20261012，IDE @ 277,25）：
-  链 token 第 110 行第 18 列（`.eq(DeviceInfoEntity::getShareSchemeId, 1)`）
-  「执行 SQL」按钮 **x 固定 979（窗口坐标），y 由 find_button_row() 按像素剖面动态求**——
-  弹出面板高度随 SQL 内容变，按钮行位置随之上下浮动，**目测写死必错**（本轮实测目测值偏低约 48px，
-  连点三次都没命中）。
+素材：`DeviceInfoServiceImpl#joinListEntity`（mpjdemo，`car_device_info` LEFT JOIN `station_info`）。
+**为什么最终选它**：本张要的是「执行 SQL 有结果」——
+① 曾经的目标 `UserServiceImpl#selectJoinList` 执行**必然 0 行**：链里写死 `.eq(UserDO::getId, 1)`，
+   而 demo 库里 `user` 只有一行且 **id = 2**（2026-10-12 直连 MySQL 只读清点：user 1 行 / user_address 2 行 /
+   area 3 行 / station_info 3 行 / car_device_info 4 行）——造数与条件不匹配，属 demo 侧数据问题，不改 demo。
+② 本素材 `eq(shareSchemeId, 1)` 命中 2 行（car_device_info 的 share_scheme_id 为 1,1,2,3），结果网格非空。
+③ 其链 `leftJoin(StationInfoEntity.class, StationInfoEntity::getStationId, DeviceInfoEntity::getStationId)`
+   的 ON 右侧列**正是主表字段**，不涉及插件缺陷 ★A47，画面即标准形态。
 
-坑：① 设置对话框是模态的，开着时点预览按钮无效 → prep 先 Cancel 掉；
-    ② 裸屏捕获下鼠标移动不产生像素变化，会被静段裁剪吃掉 → 靠「临时文件执行 + 结果网格」撑长度；
-    ③ 首连数据源可能 5~15s。
+★A47 的现场读数另存为 `perf/a13_a47_evidence.png`（用 UserServiceImpl 链录的那版帧：修复后渲染
+`RIGHT JOIN area areaDO ON areaDO.id = addressDO.area_id`，执行不再报 1054）。
 """
 import os
 import sys
 import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import mss  # noqa: E402
-import numpy as np  # noqa: E402
-import PIL.Image  # noqa: E402
-
-from gifkit import Recorder  # noqa: E402
-from nav import force_en_us, goto_col, trigger_preview  # noqa: E402
+from gifkit import Recorder                                              # noqa: E402
+from locate import (bright_band_x, bright_band_y, close_preview,         # noqa: E402
+                    ensure_foreground, grab as locate_grab, sandbox_pid,
+                    window_rect, windows)
+from nav import force_en_us, goto_col, trigger_preview                   # noqa: E402
+from verify import Guard                                                 # noqa: E402
 
 REGION = (277, 25, 1370, 984)
 OUT = "perf/a13_execute_sql.mp4"
 
 FILE_QUERY = "mpjdemo/DeviceInfoServiceImpl.java"
-CHAIN_LINE = 110
-CHAIN_COL = 18
+FILE_TITLE_KEY = "DeviceInfoServiceImpl"
+CHAIN_LINE, CHAIN_COL = 110, 18         # .eq(DeviceInfoEntity::getShareSchemeId, 1)
 
-SETTINGS_CANCEL = (1329, 942)
-POP_CANCEL = (1489, 781)
-BTN_EXEC_X = 979          # 窗口坐标；screen x = 277 + 979
-ROW_X = 777
-ROW_YS = (350, 358, 366)
+ROW_X = 600                    # Go-to-File 首条结果行的点击 x：**必须落在行左半的路径文字上**。
+# ⚠️ 别点行右半：结果行右半会被一个白色浮层 chip（`1 mpjdemo/UserServiceImpl.java`）盖住，
+# 点在它边缘会**穿透到后面的编辑器**（弹窗还开着、编辑器却选中了一行），实测 x=777 就是这样
+# 失效的；x=600 落在 chip 左侧的路径文字上，稳定命中。
+# 首条结果行的 y：**实测 341**。候选从行内往上留一点开始、再向下兜底，覆盖 ±20px 的弹窗位置漂移；
+# 落在搜索框或弹窗外都无害（不关弹窗），首个命中即开文件。
+# ⚠️ 键盘路径（`↓` + Return）在本平台**无效**：实测 Down 连选中行都不动、Return 也不开文件
+# （弹窗仍在、标题不变），别再用它。
+FILE_ROW_YS = (341, 333, 349, 357)
+MAVEN_HIDE = (1622, 103)       # Maven 工具窗面板头部的「—」
 
+OVERLAY_WATCH = (1290, 520, 60, 200)    # 预览右缘深色边距（浅底浮层盖上来会明显变亮）
+CLICK_WATCH = (740, 620, 500, 190)      # 点「执行 SQL」后会长出结果网格的地方
+PARK = (577, 725)
 GAZE_SQL = (1100, 500)
 
 
-def shot(path, region=REGION):
-    with mss.mss() as sct:
-        img = sct.grab({'left': region[0], 'top': region[1], 'width': region[2], 'height': region[3]})
-        mss.tools.to_png(img.rgb, img.size, output=path)
+def ide_hwnd_and_title(pid):
+    for h, p, t, r in windows():
+        if p == pid and (r[2] - r[0]) > 1200:
+            return h, t
+    return None, ""
 
 
-def popup_rect():
-    """用 EnumWindows 取预览弹窗的屏幕矩形（它不是进程主窗口，MainWindowHandle 看不到）。
+def find_exec_button(ide_pid):
+    """定位预览弹窗底部「执行 SQL」按钮 → 屏幕坐标；弹窗不在新建态时抛错。
 
-    返回 (left, top, right, bottom)；找不到返回 None。
+    y 用**几何标定**（底边 − 39，与 plan/BASELINE 实测一致），不用 `bright_band_y`：
+    底部这带的**行**均值只有 40~43（面板底色 26、按钮是描边样式文字稀疏），行向阈值分不出来
+    （实测 thr=45 全幅无亮带）；而**列**均值能把按钮文字聚成亮簇。实测三簇恰为
+    执行 SQL / 复制 SQL / 取消，最左簇＝执行 SQL。
+    ⚠️ 弹窗必须处于**新建态（SQL 视图）**：停在结果态时按钮行整体上移约 40px，
+    底边−39 会落到按钮下方空白处。
     """
-    import re
-    import subprocess
-    out = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
-                          "-File", "F:/tmp/find_dlg.ps1"],
-                         capture_output=True, text=True).stdout
-    best = None
-    for line in out.splitlines():
-        m = re.search(r"\((-?\d+),(-?\d+)\)-\((-?\d+),(-?\d+)\) (\d+)x(\d+)", line)
-        if not m:
-            continue
-        l, t, r, b, w, h = (int(x) for x in m.groups())
-        if 300 < w < 1350 and 300 < h < 980:      # 排除主窗口（1370x984）
-            if best is None or w * h > best[4]:
-                best = (l, t, r, b, w * h)
-    return best[:4] if best else None
-
-
-def find_button_row(debug_png="perf/_a13_btnrow.png"):
-    """求「执行 SQL」按钮行的屏幕 y。
-
-    实测定则：按钮行恒在预览弹窗底边上方约 39px（弹窗高度随 SQL 内容变，故不能用固定值）。
-    先用弹窗矩形算；取不到时回退到像素剖面（右半区最亮连续段）。
-    """
-    rect = popup_rect()
-    if rect:
-        return rect[3] - 39
-    shot(debug_png)
-    a = np.asarray(PIL.Image.open(debug_png).convert("L"), dtype=float)
-    prof = [(y, float(a[y, 900:1260].mean())) for y in range(600, 900)]
-    bright = [y for y, v in prof if v > 35]
-    if not bright:
-        raise RuntimeError("未找到按钮行（预览面板可能未打开）")
-    runs, start = [], None
-    for y in range(600, 900):
-        on = y in bright
-        if on and start is None:
-            start = y
-        if not on and start is not None:
-            runs.append((start, y - 1)); start = None
-    if start is not None:
-        runs.append((start, 899))
-    y0, y1 = max(runs, key=lambda r: r[1] - r[0])
-    return 25 + (y0 + y1) // 2
+    main_rect = window_rect(pid=ide_pid, pick="largest")
+    popup = window_rect(pid=ide_pid, pick="smallest", min_size=(600, 400))
+    if popup is None or popup == main_rect:
+        raise RuntimeError("预览弹窗未打开（限定 PID 后只匹配到主窗口 %s）" % (main_rect,))
+    pw, ph = popup[2] - popup[0], popup[3] - popup[1]
+    img = locate_grab((popup[0], popup[1], pw, ph))
+    rx0 = int(pw * 0.45)
+    row_y = ph - 39
+    clusters = bright_band_x(img, max(0, row_y - 14), min(ph, row_y + 14), rx0, pw,
+                             thr=45.0, min_gap=14, min_w=8)
+    if not clusters:
+        raise RuntimeError("按钮行上未找到亮簇（弹窗可能不在新建态）")
+    btn = (popup[0] + (clusters[0][0] + clusters[0][1]) // 2, popup[1] + row_y)
+    print("预览弹窗=%s(%dx%d) 按钮行 popup y=%d 亮簇=%s → 点最左簇=%s"
+          % (popup, pw, ph, row_y, [(popup[0] + a, popup[0] + b) for a, b in clusters[:4]], btn))
+    return btn
 
 
 def main():
@@ -109,50 +98,85 @@ def main():
     pyautogui.FAILSAFE = False
     pyautogui.PAUSE = 0
     force_en_us()
+    g = Guard()
+
+    # ---- 前置：沙盒 PID + 前台（键盘输入的前提）----
+    ide_pid = sandbox_pid()
+    if ide_pid is None:
+        raise RuntimeError("未找到沙盒 IDE 进程（命令行应含 MPSV-GifFresh）")
+    hwnd, title0 = ide_hwnd_and_title(ide_pid)
+    if not ensure_foreground(hwnd):
+        raise RuntimeError("无法把沙盒 IDE 弄到前台（当前前台句柄 != %s）——键盘快捷键会送不到" % hwnd)
+    print("沙盒 pid=%s hwnd=%s 已置前，起始标题=%s" % (ide_pid, hwnd, title0[:60]))
 
     # ---- prep（不入镜）----
-    pyautogui.click(*SETTINGS_CANCEL); time.sleep(1.5)
-    pyautogui.keyDown('esc'); pyautogui.keyUp('esc'); time.sleep(0.6)
-    pyautogui.click(*POP_CANCEL); time.sleep(1.2)
-    pyautogui.keyDown('esc'); pyautogui.keyUp('esc'); time.sleep(0.6)
-    pyautogui.click(600, 500); time.sleep(0.4)
+    pyautogui.keyDown('esc'); pyautogui.keyUp('esc'); time.sleep(0.8)
+    print("关旧预览弹窗:", "已关闭" if close_preview(ide_pid) else "!! 没关掉")
+    pyautogui.keyDown('esc'); pyautogui.keyUp('esc'); time.sleep(0.5)
+    pyautogui.click(*MAVEN_HIDE); time.sleep(1.2)      # 收起 Maven 工具窗，恢复录制版式
+    pyautogui.click(600, 500); time.sleep(0.5)
+
     pyautogui.hotkey("ctrl", "shift", "n"); time.sleep(1.4)
     pyautogui.hotkey("ctrl", "a"); time.sleep(0.5)
     force_en_us()
-    pyautogui.typewrite(FILE_QUERY, interval=0.05); time.sleep(1.6)
-    # 开文件用坐标扫掠（probe_openfile.py 验证过的路径；Return 打不开结果行——JBR 吞键）。
-    # ⚠ 本轮未解阻塞：弹窗关掉后扫掠的余点会落到编辑器代码上，触发插件给列名提供的
-    # documentation 浮层，且它会**粘住不退**（Esc 可关，但 take 中再压到代码会再弹），
-    # 末帧右侧被「Data Source/Schema/Table/Column + alter table …」整块挡掉。
-    # 试过改用键盘路径（↓ + Return）——会把 `settings-1.1.0.xsd` 当首条结果打开，**开错文件**。
-    # 下一步方向：把扫掠 y 标定到该文件的**空白行**（各文件排版不同，350/358/366 只对旧目标有效），
-    # 或在设置里关掉「Show quick documentation on mouse move」后再录。
-    for y in ROW_YS:
-        pyautogui.click(ROW_X, y); time.sleep(0.4)
-    time.sleep(2.4)
+    pyautogui.typewrite(FILE_QUERY, interval=0.05); time.sleep(1.8)
+    # **点首条结果行**开文件（扫掠几个候选 y，首个命中即开）。
+    # 键盘路径实测无效（Down 不动选中、Return 不开文件），坐标路径在本平台可靠。
+    for y in FILE_ROW_YS:
+        pyautogui.click(ROW_X, y); time.sleep(1.4)
+        _, t = ide_hwnd_and_title(ide_pid)
+        if FILE_TITLE_KEY in t and "UserWrite" not in t:
+            print("开文件命中：点 y=%d → %s" % (y, t[:60]))
+            break
+    time.sleep(1.6)
+    _, title1 = ide_hwnd_and_title(ide_pid)
+    if not (FILE_TITLE_KEY in title1 and "UserWrite" not in title1):
+        raise RuntimeError("开文件失败：标题仍为 %s（期望命中 %s）" % (title1[:70], FILE_TITLE_KEY))
+    print("开文件后标题 = %s（命中目标）" % title1[:66])
+
+    pyautogui.moveTo(300, 300, duration=0.3); time.sleep(0.5)
+    pyautogui.keyDown('esc'); pyautogui.keyUp('esc'); time.sleep(0.8)
     goto_col(CHAIN_LINE, CHAIN_COL)
     trigger_preview()
-    pyautogui.moveTo(*GAZE_SQL, duration=0.4)
-    time.sleep(1.0)
+    pyautogui.moveTo(*PARK, duration=0.4); time.sleep(1.0)
 
-    by = find_button_row()
-    btn = (277 + BTN_EXEC_X, by)
-    print("按钮行 screen y =", by, "→ 点击 screen", btn)
+    # ---- 预热控制台（默认关闭）----
+    # 历史：冷启动控制台下，插件把控制台嵌进预览弹窗时结果页签还没建立，弹窗下半部会是**空的**
+    # （2026-10-12 用户当场指出「sql 预览窗口怎么没结果」）——那是插件缺陷 ★A48，已在插件仓
+    # `09f0b28` 修复（结果换入判定补「组件已不在本 SplitPane 底部」第四判据并每拍幂等回收重挂）。
+    # 修复后**首次执行**就应正常显示结果，故这里默认不再预热：本 take 本身就是 A48 的现场验证。
+    # 若哪天又见到「首次执行预览窗空白」，把 WARMUP 打开即可临时规避，并按 A48 的判据
+    # （日志里有没有 `reclaimed=true`）复查。
+    WARMUP = False
+    if WARMUP:
+        warm = find_exec_button(ide_pid)
+        if warm:
+            print("预热执行：点 %s" % (warm,))
+            pyautogui.click(*warm)
+            time.sleep(9.0)
+    close_preview(ide_pid)
+    pyautogui.click(600, 500); time.sleep(0.4)
+    goto_col(CHAIN_LINE, CHAIN_COL)
+    trigger_preview()
+    pyautogui.moveTo(*PARK, duration=0.4); time.sleep(1.0)
 
+    # ---- 开录前自检：预览右缘必须是深色（浅底文档浮层盖上来会变亮）----
+    mean = float(locate_grab(OVERLAY_WATCH).mean())
+    print("预览右缘灰度均值 = %.1f（干净态 ~26）" % mean)
+    if mean > 60:
+        raise AssertionError("开录前画面不干净：预览右缘变亮（%.1f）——文档浮层可能盖住了预览" % mean)
+
+    btn = find_exec_button(ide_pid)
+
+    # ---- 录制 ----
     r = Recorder(REGION, OUT)
     r.start()
-
-    pyautogui.moveTo(*GAZE_SQL, duration=0.6)
-    time.sleep(1.2)
-    pyautogui.click(*btn)
-    time.sleep(3.0)
+    pyautogui.moveTo(*GAZE_SQL, duration=0.6); time.sleep(1.2)
+    g.after_click(btn, region=CLICK_WATCH, wait=1.2, retries=1,
+                  msg="点『执行 SQL』后预览下半部无变化（落空）")
+    time.sleep(2.5)
     time.sleep(10.0)
-    # 收尾停到预览左栏（不压在代码/网格上：压代码会弹 documentation 浮层挡画面，
-    # 压结果网格会弹列类型浮层——两处都在本轮踩过）
-    pyautogui.moveTo(577, 725, duration=0.8)
-    time.sleep(1.2)
-
-    shot("perf/a13_final.png")
+    pyautogui.moveTo(*PARK, duration=0.8); time.sleep(1.2)
     print("frames:", r.stop())
 
 

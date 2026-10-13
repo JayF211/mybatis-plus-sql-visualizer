@@ -16,7 +16,7 @@ FILE = sys.argv[1]
 LINE = sys.argv[2]
 OUT = sys.argv[3] if len(sys.argv) > 3 else "record/perf/op1.png"
 
-RESULT_ROW = (777, 342)   # 「文件」搜索弹窗首个结果行（20261011 标定）
+RESULT_ROW = (777, 350)   # 「文件」搜索弹窗首个结果行（20261011 标定）
 
 pyautogui.FAILSAFE = False
 pyautogui.PAUSE = 0
@@ -32,9 +32,12 @@ pyautogui.hotkey("ctrl", "a")
 time.sleep(0.4)
 pyautogui.typewrite(FILE, interval=0.05)
 time.sleep(1.6)
-pyautogui.click(*RESULT_ROW)
+# 键盘路径：↓ 把选中落到结果列表首行，再 Return（goto 已验证 keyDown/keyUp('return') 可用）；
+# 结果行的屏幕落点在不同会话间漂得厉害，点行不可靠。
+pyautogui.press("down")
 time.sleep(0.5)
-pyautogui.click(*RESULT_ROW)
+pyautogui.keyDown("return")
+pyautogui.keyUp("return")
 time.sleep(2.4)
 
 # 跳行

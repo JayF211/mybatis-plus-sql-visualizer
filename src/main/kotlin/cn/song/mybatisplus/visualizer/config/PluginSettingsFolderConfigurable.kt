@@ -565,6 +565,7 @@ class PluginSettingsFolderConfigurable : Configurable {
             fields.add(SearchableField(b.message("settings.dataPermissionMockCondition"), b.message("settings.dataPermissionMockCondition.tip"), "settings.section.preview", p))
             fields.add(SearchableField(b.message("settings.reverseWrapperFormat"), b.message("settings.reverseWrapperFormat.tip"), "settings.section.preview", p))
             fields.add(SearchableField(b.message("settings.reverseManualEntitySelection"), b.message("settings.reverseManualEntitySelection.tip"), "settings.section.preview", p))
+            fields.add(SearchableField(b.message("settings.embeddedColumnNaming"), b.message("settings.embeddedColumnNaming.tip"), "settings.section.preview", p))
             fields.add(SearchableField(b.message("settings.verticalPairAnnotation"), "", "settings.section.preview", p))
             fields.add(SearchableField(b.message("settings.autoFold.enabled"), b.message("settings.autoFold.enabled.tip"), "settings.section.preview", p))
             fields.add(SearchableField(b.message("settings.autoFold.threshold"), b.message("settings.autoFold.threshold.tip"), "settings.section.preview", p))

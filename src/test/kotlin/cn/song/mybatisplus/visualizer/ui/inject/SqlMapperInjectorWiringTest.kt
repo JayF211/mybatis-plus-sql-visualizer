@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.ui.inject
 
 import com.intellij.lang.injection.InjectedLanguageManager
+import com.intellij.openapi.util.TextRange
 import com.intellij.openapi.util.io.FileUtil
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.psi.PsiDocumentManager
@@ -162,5 +163,80 @@ class SqlMapperInjectorWiringTest : BasePlatformTestCase() {
             Regex("<multiHostInjector\\s+implementation=\"cn\\.song\\.mybatisplus\\.visualizer\\.ui\\.inject\\.SqlMapperInjector\"")
                 .containsMatchIn(xml),
         )
+    }
+
+    // ------------------------------------------------------------------
+    // T-XmlGap W1：区间级互补（管线级）
+    // ------------------------------------------------------------------
+
+    private val paramMapper = """<mapper namespace="n">
+  <select id="a">SELECT * FROM t WHERE a = #{id} AND b = 2</select>
+</mapper>"""
+
+    /** 本语言注入产物文本清单（同一会话多 place 会拼成一个注入文件）。 */
+    private fun myLanguageInjectedTexts(file: XmlFile): List<String> {
+        val manager = InjectedLanguageManager.getInstance(project)
+        val hosts = PsiTreeUtil.collectElements(file) { it is XmlText || it is XmlAttributeValue }
+        val out = mutableListOf<String>()
+        for (host in hosts) {
+            manager.enumerateEx(host, file, false) { injectedPsi, _ ->
+                if (injectedPsi.language == SqlMapperLanguage) out += injectedPsi.text
+            }
+        }
+        return out
+    }
+
+    /**
+     * W1 核心（管线级）：外来注入器只占 `#{}` 区间 → 我方**仍注入余下区间**，且注入文本里
+     * 不再含 `#{}`（那一段留给对方）。旧宿主级形态在此为 0 注入位（整条语句无色）——本用例即判别位。
+     *
+     * 形态坑（本轮真红实证）：**缝必须在 `openPhysicalFile` 之前设**——平台在文件入 VFS/配置编辑器
+     * 阶段就会算一次注入并把结果缓存在 PSI 上，之后再改缝也拿不到新结果（首跑两例皆红的根因）。
+     */
+    @Test
+    fun testW1_外来只占参数区间_我方仍注入余下区间() {
+        val pattern = Regex("""[#$]\{[^}]*}""")
+        withRangeSeam({ host -> pattern.findAll(host.text).map { TextRange(it.range.first, it.range.last + 1) }.toList() }) {
+            val file = openPhysicalFile(paramMapper)
+            val texts = myLanguageInjectedTexts(file)
+            assertEquals("语句文本须有注入位且为单会话拼接产物", 1, texts.size)
+            val injected = texts.single()
+            org.junit.Assert.assertTrue("余下区间仍被注入（SQL 文本在场）", injected.contains("SELECT * FROM t"))
+            org.junit.Assert.assertTrue("` AND b = 2` 尾部区间仍被注入", injected.contains("AND b = 2"))
+            org.junit.Assert.assertFalse("被占的 `#{}` 段须留给对方，不得出现在我方注入文本里", injected.contains("#{id}"))
+        }
+    }
+
+    /** 反向：外来注入器占满整宿主 → 我方在语句文本上零着色（保守线保留）。 */
+    @Test
+    fun testW1_外来占满整宿主_语句文本零着色() {
+        withRangeSeam({ host -> InjectRangePlan.yieldAll(host.textLength) }) {
+            val file = openPhysicalFile(paramMapper)
+            val texts = myLanguageInjectedTexts(file)
+            org.junit.Assert.assertFalse(
+                "整宿主被占 → 语句文本不得由我方注入（反向验证：摘掉互补计算改用旧整宿主让位 → 同样无语句文本，本用例钉住不回归）",
+                texts.any { it.contains("SELECT * FROM t") },
+            )
+        }
+    }
+
+    /**
+     * 区间缝注入 + 还原（**须包住 openPhysicalFile**，见用例 KDoc 的缓存坑）。
+     *
+     * 同时把**布尔缝置空**：本类 setUp 把布尔缝钉成 `false`（固定「平台不注入」环境），而
+     * [XmlSynHiGate.occupiedRanges] 会优先采纳被覆写的布尔缝——不清空它，区间缝永远不被咨询
+     * （本轮两例同红的第二层根因）。
+     */
+    private fun <T> withRangeSeam(seam: (com.intellij.psi.PsiElement) -> List<TextRange>, block: () -> T): T {
+        val originalRanges = XmlSynHiGate.foreignOccupiedRangesProbe
+        val originalBool = XmlSynHiGate.foreignInjectionProbe
+        XmlSynHiGate.foreignInjectionProbe = null
+        XmlSynHiGate.foreignOccupiedRangesProbe = { _, h -> seam(h) }
+        try {
+            return block()
+        } finally {
+            XmlSynHiGate.foreignOccupiedRangesProbe = originalRanges
+            XmlSynHiGate.foreignInjectionProbe = originalBool
+        }
     }
 }

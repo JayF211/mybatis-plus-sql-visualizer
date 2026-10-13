@@ -352,8 +352,18 @@ internal fun DataSourceSelector.prepareAfterEditorResolved(
         }
 
         // 4.5 完整控制台 = 顶部块（上）/ 结果区（下）垂直 SplitPane（M36.4 主题化形态）
+        // ★A49：**无嵌入宿主（onConsole == null）时不组 SplitPane、不摘 DBN 结果组件**——
+        // SQL 快捷模板 / 日志转 SQL 执行链只把语句送原生 Database 控制台执行，控制台由 DBN
+        // 在 IDE 底部 Services 视图自行展示；此时组出来的 SplitPane 永不展示（onConsole?.invoke
+        // 是 no-op），摘取结果组件（ui.getComponent()）无收益、只扰动 DBN 组件树。判据见
+        // shouldComposeEmbedSplitPane（含归因更正：这是排查「网格 0 rows」时顺带发现的收敛，
+        // 该现象真因是调用方传了不存在的表名，非插件行为）。
         val fullComponent: javax.swing.JComponent? = resultComponent?.let { result ->
-            buildConsoleSplitPane(topBlock, result)
+            if (shouldComposeEmbedSplitPane(onConsole != null, hasResultComponent = true)) {
+                buildConsoleSplitPane(topBlock, result)
+            } else {
+                null
+            }
         }
 
         // 4.6 内嵌（M36.5.6：准备阶段**只嵌编辑器块**——"Console output" 空占位不再预嵌；
@@ -391,10 +401,13 @@ internal fun DataSourceSelector.prepareAfterEditorResolved(
         sharedExecOption = execOption
         sharedUi = ui
         sharedTopBlock = topBlock
-        // M36.5.53：sharedFullComponent 始终缓存**完整 SplitPane**（preparedFullComponent 也是
+        // M36.5.53：sharedFullComponent 缓存**完整 SplitPane**（preparedFullComponent 也是
         // fullComponent），不随预览时内嵌的 component（可能为 topBlock 编辑器）变化——否则
         // 执行时 swapResultIntoPersistentConsole 拿到的 sharedFullComponent 是 topBlock（非
         // SplitPane）→ 回退 buildConsoleSplitPane 重建 → A4 身份漂移。预留给执行复用。
+        // ★A49：无嵌入宿主时 fullComponent 为 null（不组不摘）——执行复用链
+        // （reuseSharedConsole）在 sharedFullComponent == null 时自行回退 buildConsoleSplitPane，
+        // 语义不变（见 shouldComposeEmbedSplitPane）。
         sharedFullComponent = fullComponent
         sharedDataSourceName = dataSourceName
         // T-SI-02：控制台已建，数据源 UUID 从此可取（LocalDataSource.getUniqueId）——
@@ -553,6 +566,25 @@ internal fun DataSourceSelector.executeOnConsole(
         // 曾连续多轮"修复未生效"实为用户未重启沙盒 IDE。版本戳让日志第一行即暴露运行版本，
         // 与源码不符时先重启再排查，杜绝无效往返。
         LOG.info("[M36] executeOnConsole begin (build=$BUILD_STAMP)")
+        // ★A49 只读排障日志（非功能改动，runCatching 包裹零风险）：本次提交的 ExecOption 四字段 +
+        // 控制台视图是否 showing + 原生编辑器组件当前宿主。「原生控制台结果不渲染/停在 0 rows」
+        // 这类现象的三列判别读数——本次该现象的真因已查明在调用方（传了不存在的表名 → 1146），
+        // 本行留作同族现象的快速判因工具：newTab=true＝走 A48 家族「新建结果页签」路径；
+        // viewShowing=false＝DBN 结果视图未挂载/未展示；editorCompParent=…editorComponent$1＝
+        // 我方把原生编辑器组件摘进了自建容器。
+        runCatching {
+            fun opt(n: String) = runCatching { effectiveExecOption.javaClass.getField(n).get(effectiveExecOption) }.getOrNull()
+            val viewShowing = runCatching {
+                val v = consoleClass.getMethod("getView").invoke(console)
+                v?.javaClass?.getMethod("isShowing")?.invoke(v)
+            }.getOrNull()
+            val editorCompParent = runCatching { editor.component?.parent?.javaClass?.name }.getOrNull()
+            LOG.info(
+                "[M36][A49] submit diag: newTab=${opt("newTab")}, execInside=${opt("execInside")}, " +
+                    "execOutside=${opt("execOutside")}, execSelection=${opt("execSelection")}, " +
+                    "viewShowing=$viewShowing, editorCompParent=$editorCompParent",
+            )
+        }
         com.intellij.openapi.project.DumbService.getInstance(project).runWhenSmart {
             if (generation != executionGeneration) {
                 LOG.warn("[M36] execution submit cancelled (generation $generation != ${executionGeneration})")

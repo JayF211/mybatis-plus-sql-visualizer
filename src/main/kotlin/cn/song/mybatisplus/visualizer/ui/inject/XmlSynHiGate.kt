@@ -13,16 +13,18 @@ import com.intellij.psi.xml.XmlTag
 import java.util.concurrent.CancellationException
 
 /**
- * T-XmlSynHi D2/D3 门控（决策 1-A「双让位」+ 守卫族）：任一命中 → 本插件注入器**全族让位**
- * （D2 语句文本 + D3 属性 OGNL 一并让位，决策 1-A 注）。
+ * T-XmlSynHi D2/D3 门控 + T-XmlGap W1 区间级互补：让位从**宿主级**下沉到**区间级**。
  *
- * 让位清单（T-DevAcceptFix ④ 验收定案形态，20261006）：
- *  1. 设置开关 [PluginSettings.state.xmlSynHiEnabled] 关闭（用户显式停用）；
- *  2. **任一其他注入器会对该宿主注入**（per-host 探测，D68）——枚举 `com.intellij.multiHostInjector`
- *     EP 的**全部**在册注入器（除本插件自身族），按喂入契约预筛（[MultiHostInjector.elementsToInjectIn]
- *     含宿主类型才会被平台喂入）后以 stub registrar 试调 `getLanguagesToInject`，`startInjecting`
- *     被调用 = 该注入器会给这个宿主上色 → 让位；单个注入器试探抛异常 → 跳过它继续问下一个
- *     （不让一个坏注入器把本插件也拖成零着色）；EP 访问/枚举整体异常 → 让位（fail-safe 保守）。
+ * 让位清单（T-DevAcceptFix ④ 定案 + W1 修订）：
+ *  1. 设置开关 [PluginSettings.state.xmlSynHiEnabled] 关闭（用户显式停用）→ 全族零注入；
+ *  2. **准入区间**（[occupiedRanges]，D68 + W1）——枚举 `com.intellij.multiHostInjector` EP 的
+ *     **全部**在册注入器（除本插件自身族），按喂入契约预筛（[MultiHostInjector.elementsToInjectIn]
+ *     含宿主类型才会被平台喂入）后以 stub registrar 试调 `getLanguagesToInject`，记录其
+ *     `addPlace` 的**区间**；[SqlMapperInjector] 只注入「这些区间之外」的余下部分。
+ *     W1 前的形态是「任一命中即整宿主让位」——语句里只要有一个 `#{}`，整条语句的关键字/注释/
+ *     字符串全部无色（Community 版 + 装第三方 MyBatis 插件即中招）。
+ *     单个注入器试探抛异常 → 跳过它继续问下一个（不让一个坏注入器把本插件也拖成零着色）；
+ *     EP 访问/枚举整体异常 → 返回全覆盖哨兵（fail-safe 保守让位）。
  *
  * 两条历史让位线**同批废止**（20261006 验收实测证伪「在位=覆盖」这一共同前提）：
  *  - 「平台 `SqlLanguageInjector` 类在场即让位」：该类在 243 构建发行物（599 jar）与用户真机
@@ -32,6 +34,12 @@ import java.util.concurrent.CancellationException
  *  - 「三方 MyBatisCodeHelperPro 安装且启用即让位」：用户真机 MCH-Pro 启用中，mapper 语句文本
  *    关键字仍无色（在位≠覆盖）——批发让位正是本次验收缺陷现场；现并入上条 per-host 探测，
  *    它真会给该宿主上色才让位。
+ *
+ * W1 实测补充（20261012，证据见 T-XmlGap 计划 §实施记录）：竞品 MCH-Pro 3.6.7 的三条社区轨注入器
+ * 都被自身的「平台让位门」挡住（`plugin.xml:484` 可选依赖 `com.intellij.database` ⇒
+ * `plugin_database.xml` 注册 `ultimateVersionChecker` ⇒ `i.b.c()` 为真 ⇒ 三注入器整段跳过），
+ * 平台轨注入器的喂入类型是 `XmlTag`（不在本门探测面）；用户真机另装的 zMyBatis **不注册任何注入器**。
+ * 故 Ultimate 真机上本门不触发——W1 的价值在 Community 版（社区轨注入器活跃）与任何未来第三方注入器。
  *
  * 守卫族（非让位，自身 O(1)）：
  *  - 根/祖先标签 mapper（与 STATEMENT_TAGS 消费口径一致）；
@@ -46,47 +54,81 @@ object XmlSynHiGate {
     private const val SELF_PACKAGE_PREFIX = "cn.song.mybatisplus."
 
     /**
-     * D68 per-host 探测缝（形态沿用 F38 internal var 测试缝）：默认实现读
-     * `MultiHostInjector.MULTIHOST_INJECTOR_EP_NAME`（平台 util 模块编译期 API，243/262 双版
-     * javap 实证同形态）枚举在册注入器后走 [foreignInjectorsWouldInject]。测试经本缝注入
-     * stub 判定（会注入/不会注入/抛异常三形态）。
+     * D68 per-host 探测缝（布尔形态）。**null = 未覆写**——此时让位判定由 W1 的区间级探测推导
+     * （[foreignOccupiedRangesProbe]，语义等价但信息更细：布尔形态表达不了「对方只占了一个 `#{}`」）。
+     * 既有用例仍可置非 null 直接钉布尔形态（会注入/不会注入/抛异常三形态）。
      */
-    internal var foreignInjectionProbe: (Project?, PsiElement) -> Boolean =
-        { project, host -> defaultForeignInjectionProbe(project, host) }
+    internal var foreignInjectionProbe: ((Project?, PsiElement) -> Boolean)? = null
 
     /**
-     * F79 刀二（T-PerfSweep24）：per-host 探针结论 stamped memo——喂入面上探针是唯一重操作
-     * （EP 枚举 O(1) 之后的逐注入器试探链，成本三方决定不可控），结论按「宿主弱身份＋含文件
-     * PSI 修改戳＋在册注入器清单实例」缓存：
-     *  - **失效对齐 PSI 生命周期**：已提交文档修改 → [PsiFile.getModificationStamp] 变化 →
-     *    该文件全部宿主结论重探；宿主被重解析换对象 → WeakHashMap 弱键消亡、新宿主首问重探
-     *    ——无陈旧结论跨修改残留；
-     *  - 注入器集合变化（插件启停等 EP 缓存换代）→ [getExtensions][com.intellij.openapi.extensions.ExtensionPointName.getExtensions]
-     *    返回的清单实例换代 → 全量重探——取清单实例当代际戳（读本身 O(1) 平台缓存），不直引
-     *    `PluginManagerCore`（该组 API 2025.3~2026.2 有包迁移，仓内 PluginVersion 同因规避）；
-     *  - 探针异常的 fail-safe 让位**不入缓存**（瞬时故障不得跨修改残留，恢复后下一问重探）；
-     *  - 同步 WeakHashMap——高亮 pass 并发（PreviewReceiverResolver.classifyCache 同款惯用形）。
+     * T-XmlGap W1 区间级探测缝：外来注入器对该宿主**实际占用**的区间（宿主坐标系）。
+     *
+     * 生产路径（[SqlMapperInjector]）只走区间——由 [InjectRangePlan] 算出「未被子集覆盖的余下区间」
+     * 再注入，取代原「命中即整宿主放弃」。测试可直注区间清单（含全覆盖 = 让位、部分覆盖 = 互补）。
      */
-    private class ProbeMemo(val psiStamp: Long, val injectorList: List<MultiHostInjector>, val yields: Boolean)
+    internal var foreignOccupiedRangesProbe: (Project?, PsiElement) -> List<TextRange> =
+        { project, host -> defaultForeignOccupiedRanges(project, host) }
+    /** F79 刀二（T-PerfSweep24）：per-host 探针结论 stamped memo（戳=含文件 PSI 修改戳＋在册注入器清单实例）。 */
+    private class ProbeMemo(val psiStamp: Long, val injectorList: List<MultiHostInjector>, val ranges: List<TextRange>)
 
     private val foreignProbeMemo: MutableMap<PsiElement, ProbeMemo> =
         java.util.Collections.synchronizedMap(java.util.WeakHashMap<PsiElement, ProbeMemo>())
 
+
     /**
-     * 默认探针：EP 枚举（项目级）+ [foreignInjectorsWouldInject]。EP 访问/解析任何异常 →
-     * 让位（fail-safe，D68 口径：整体探测不了时回到保守让位）；[ProcessCanceledException]/
-     * [CancellationException] 照平台契约原样上抛（吞掉会破坏取消协议）。
+     * 默认区间探针：EP 枚举（项目级）+ [foreignInjectorsOccupiedRanges]（读
+     * `MultiHostInjector.MULTIHOST_INJECTOR_EP_NAME`，平台 util 模块编译期 API，243/262 双版
+     * javap 实证同形态）。EP 访问/解析任何异常 → 返回**全覆盖哨兵**（保守让位，D68 口径）；
+     * [ProcessCanceledException]/[CancellationException] 照平台契约原样上抛（吞掉会破坏取消协议）。
      */
-    private fun defaultForeignInjectionProbe(project: Project?, host: PsiElement): Boolean = try {
+    private fun defaultForeignOccupiedRanges(project: Project?, host: PsiElement): List<TextRange> = try {
         val proj = project ?: host.project
-        foreignInjectorsWouldInject(MultiHostInjector.MULTIHOST_INJECTOR_EP_NAME.getExtensions(proj), host)
+        foreignInjectorsOccupiedRanges(MultiHostInjector.MULTIHOST_INJECTOR_EP_NAME.getExtensions(proj), host)
     } catch (cancelled: ProcessCanceledException) {
         throw cancelled
     } catch (cancelled: CancellationException) {
         throw cancelled
     } catch (t: Throwable) {
         if (FatalErrors.isFatal(t)) throw t // T-FP-02：fatal 透传
-        true
+        InjectRangePlan.yieldAll(host.textLength)
+    }
+
+    /**
+     * T-XmlGap W1：该宿主被外来注入器占用的区间表（生产入口）。
+     *
+     * 三条线：设置开关关闭 → 全覆盖哨兵（等价让位）；布尔缝被测试覆写 → 以它为准（true 全覆盖、
+     * false 空表）；否则走区间探针。任一线抛异常 → 全覆盖哨兵（fail-safe 保守让位，D68 口径）。
+     */
+    fun occupiedRanges(project: Project?, host: PsiElement): List<TextRange> {
+        if (!xmlSynHiEnabled()) return InjectRangePlan.yieldAll(host.textLength)
+        return try {
+            foreignInjectionProbe?.let { seam ->
+                return if (seam(project, host)) InjectRangePlan.yieldAll(host.textLength) else emptyList()
+            }
+            // F79 刀二（T-PerfSweep24）：per-host 探针结论 stamped memo——喂入面上探针是唯一重操作
+            //（EP 枚举 O(1) 之后的逐注入器试探链），结论按「宿主弱身份＋含文件 PSI 修改戳＋在册注入器
+            // 清单实例」缓存：修改戳变化 / 宿主重解析换对象 / 注入器清单换代 → 结论自动失效；探针异常
+            // 走外层 catch 的 fail-safe 全覆盖且**不入缓存**（瞬时故障不得跨修改残留，恢复后下一问重探）。
+            val file = host.containingFile ?: return foreignOccupiedRangesProbe(project, host)
+            val psiStamp = file.modificationStamp
+            val injectorList = MultiHostInjector.MULTIHOST_INJECTOR_EP_NAME.getExtensions(project ?: host.project)
+            foreignProbeMemo[host]
+                ?.takeIf { it.psiStamp == psiStamp && it.injectorList === injectorList }
+                ?.let { return it.ranges }
+            val fresh = foreignOccupiedRangesProbe(project, host)
+            // 全覆盖哨兵可能是 fail-safe 形态（探测失败）——不入缓存，恢复后下一问重探
+            val failSafeShape =
+                fresh.size == 1 && fresh[0].startOffset == 0 && fresh[0].endOffset == host.textLength
+            if (!failSafeShape) foreignProbeMemo[host] = ProbeMemo(psiStamp, injectorList, fresh)
+            fresh
+        } catch (cancelled: ProcessCanceledException) {
+            throw cancelled
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (t: Throwable) {
+            if (FatalErrors.isFatal(t)) throw t // T-FP-02：fatal 透传
+            InjectRangePlan.yieldAll(host.textLength)
+        }
     }
 
     /**
@@ -99,19 +141,49 @@ object XmlSynHiGate {
      *     不让一个坏/怪注入器把本插件一起拖成零着色——「坏注入器⇒零着色」正是本次验收缺陷的
      *     原始形态；反方向的双写叠色风险由「真 startInjecting 才让位」的精确判定本身兜住）。
      *
-     * per-host 结论经 [foreignProbeMemo] stamped memo 缓存（F79 刀二；探测主体本身仍每问每跑）；
-     * 注入器清单每问每取（EP 内部有平台级缓存，取列表本身 O(1) 级，取回实例兼作 memo 的集合
-     * 代际戳）。性能注：喂入契约预筛使 SQL 系注入器（喂入类型全为 SQL PSI）对 XML 宿主零
-     * 试探成本，XML 宿主面典型只剩自身族包名过滤 + 类型 isInstance。
+     * per-host 结论**不缓存**（PSI 随重解析失效）；注入器清单每问每取（EP 内部有平台级缓存，
+     * 取列表本身 O(1) 级）。性能注：喂入契约预筛使 SQL 系注入器（喂入类型全为 SQL PSI）对
+     * XML 宿主零试探成本，XML 宿主面典型只剩自身族包名过滤 + 类型 isInstance。
      */
-    internal fun foreignInjectorsWouldInject(injectors: List<MultiHostInjector>, host: PsiElement): Boolean {
+    internal fun foreignInjectorsWouldInject(injectors: List<MultiHostInjector>, host: PsiElement): Boolean =
+        probeInjectors(injectors, host).any { it.started }
+
+    /**
+     * T-XmlGap W1 区间主体（与 [foreignInjectorsWouldInject] 共用同一咨询核心）：返回外来注入器
+     * 对该宿主**记录到的 addPlace 区间**并集（宿主坐标系，未排序未合并——由 [InjectRangePlan] 归一）。
+     *
+     * 与布尔形态的差别：布尔只要 `startInjecting` 被调即算「对方覆盖」，区间形态要求**确有 addPlace**
+     * ——「调了 startInjecting 却没落任何 place」属畸形注入（平台侧会断言失败），不该让我们整宿主放弃。
+     */
+    internal fun foreignInjectorsOccupiedRanges(injectors: List<MultiHostInjector>, host: PsiElement): List<TextRange> =
+        probeInjectors(injectors, host).flatMap { it.ranges }
+
+    /** 单次咨询记录：`started` = 调过 `startInjecting`；`ranges` = 记录到的 addPlace 区间。 */
+    private class ProbeRecord(val started: Boolean, val ranges: List<TextRange>)
+
+    /**
+     * 咨询核心（internal 供测试直注注入器清单）：逐在册注入器（自身族除外）——
+     *  1. 喂入契约预筛：`elementsToInjectIn` 含宿主类型才会被平台喂入（243
+     *     `InjectedLanguageUtilBase.probeElementsUpInner` 同口径），不命中直接跳过（不咨询）；
+     *  2. 命中者以 [RangeRegistrar] 试调 `getLanguagesToInject`，记录 `startInjecting` 与每个
+     *     `addPlace` 的区间；
+     *  3. 单个注入器试探抛异常 → **跳过它继续问下一个**（T-DevAcceptFix ④：该注入器覆盖不可判，
+     *     不让一个坏/怪注入器把本插件一起拖成零着色——「坏注入器⇒零着色」正是该次验收缺陷的
+     *     原始形态）。
+     *
+     * per-host 结论**不缓存**（PSI 随重解析失效）；注入器清单每问每取（EP 内部有平台级缓存，
+     * 取列表本身 O(1) 级）。性能注：喂入契约预筛使 SQL 系注入器（喂入类型全为 SQL PSI）对
+     * XML 宿主零试探成本，XML 宿主面典型只剩自身族包名过滤 + 类型 isInstance。
+     */
+    private fun probeInjectors(injectors: List<MultiHostInjector>, host: PsiElement): List<ProbeRecord> {
+        val out = mutableListOf<ProbeRecord>()
         for (inj in injectors) {
             if (isSelfProvided(inj)) continue
-            val started = try {
+            val record = try {
                 if (inj.elementsToInjectIn().none { it.isInstance(host) }) continue
-                val registrar = ProbeRegistrar()
+                val registrar = RangeRegistrar()
                 inj.getLanguagesToInject(registrar, host)
-                registrar.started
+                ProbeRecord(registrar.started, registrar.ranges)
             } catch (cancelled: ProcessCanceledException) {
                 throw cancelled
             } catch (cancelled: CancellationException) {
@@ -120,19 +192,21 @@ object XmlSynHiGate {
                 if (FatalErrors.isFatal(t)) throw t // T-FP-02：fatal 透传
                 continue
             }
-            if (started) return true
+            out += record
         }
-        return false
+        return out
     }
 
     /** 自身族判定：本插件包前缀的在册项不参与探测（自身让位由门其余各线负责）。 */
     private fun isSelfProvided(inj: MultiHostInjector): Boolean =
         inj.javaClass.name.startsWith(SELF_PACKAGE_PREFIX)
 
-    /** 只记录 `startInjecting` 是否被调的 stub registrar（探针专用；二参 startInjecting 的
-     *  接口默认实现委托一参——243 lib/util-8.jar 字节码实证，故只覆写一参即覆盖两种调用形）。 */
-    private class ProbeRegistrar : MultiHostRegistrar {
+    /** 记录 `startInjecting` 与每个 `addPlace` 区间 的 stub registrar（探针专用；二参
+     *  startInjecting 的接口默认实现委托一参——243 lib/util-8.jar 字节码实证，故只覆写一参
+     *  即覆盖两种调用形）。 */
+    private class RangeRegistrar : MultiHostRegistrar {
         var started = false
+        val ranges = mutableListOf<TextRange>()
 
         override fun startInjecting(language: Language): MultiHostRegistrar {
             started = true
@@ -144,7 +218,10 @@ object XmlSynHiGate {
             suffix: String?,
             host: PsiLanguageInjectionHost,
             rangeInsideHost: TextRange,
-        ): MultiHostRegistrar = this
+        ): MultiHostRegistrar {
+            ranges += rangeInsideHost
+            return this
+        }
 
         override fun doneInjecting() {}
     }
@@ -153,56 +230,17 @@ object XmlSynHiGate {
     fun shouldYield(project: Project?): Boolean = !xmlSynHiEnabled()
 
     /**
-     * per-host 让位判定（D68）：共通线之外叠加「其他注入器会对该宿主注入」探测；F79 刀二起
-     * 探测结论经 [foreignProbeMemo] stamped memo 缓存（键=宿主弱身份，戳=含文件 PSI 修改戳＋
-     * 在册注入器清单实例）。探针任何异常 → 让位（fail-safe，D68 口径）且**不入缓存**；
-     * [ProcessCanceledException]/[CancellationException] 照平台契约原样上抛（吞掉会破坏取消
-     * 协议）。catch 挂缝调用点——测试缝替身炸掉同样兜住（默认实现内的 catch 是纵深第二层）。
+     * per-host 让位判定（D68 + W1）：**整宿主**都被对方占用才算让位（我方无处可注入）。
+     *
+     * W1 语义修订留痕：本方法曾以「占用区间非空」为判据——在区间形态下会把「对方只占了一个
+     * `#{}`」也判成让位，正好抵消 W1 的互补收益（本类自测
+     * `XmlSynHiGateRangeTest.testW1_部分占用_不让位` 抓出）。现改为按「宿主全段是否被覆盖」判定，
+     * 与 [SqlMapperInjector] 的零注入条件严格一致（plan 为空）。
      */
     fun shouldYield(project: Project?, host: PsiElement): Boolean {
-        if (shouldYield(project)) return true
-        val file = host.containingFile
-        if (file == null) return probeFailSafe(project, host)
-        val psiStamp = file.modificationStamp
-        val proj = project ?: host.project
-        // 代际戳＝在册注入器清单实例（O(1) 平台缓存读）；EP 读取异常退回无缓存路径（其内
-        // fail-safe 让位，与旧语义一致——读取不了时回到保守让位）
-        val injectorList = try {
-            MultiHostInjector.MULTIHOST_INJECTOR_EP_NAME.getExtensions(proj)
-        } catch (cancelled: ProcessCanceledException) {
-            throw cancelled
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (t: Throwable) {
-            if (FatalErrors.isFatal(t)) throw t // T-FP-02：fatal 透传
-            return probeFailSafe(project, host)
-        }
-        foreignProbeMemo[host]?.takeIf { it.psiStamp == psiStamp && it.injectorList === injectorList }
-            ?.let { return it.yields }
-        val fresh = try {
-            foreignInjectionProbe(project, host)
-        } catch (cancelled: ProcessCanceledException) {
-            throw cancelled
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (t: Throwable) {
-            if (FatalErrors.isFatal(t)) throw t // T-FP-02：fatal 透传
-            return true // fail-safe 让位；**不入缓存**——探针异常是瞬时态，恢复后下一问须重探
-        }
-        foreignProbeMemo[host] = ProbeMemo(psiStamp, injectorList, fresh)
-        return fresh
-    }
-
-    /** 无含文件宿主路径：fail-safe 单问（无缓存语义）。 */
-    private fun probeFailSafe(project: Project?, host: PsiElement): Boolean = try {
-        foreignInjectionProbe(project, host)
-    } catch (cancelled: ProcessCanceledException) {
-        throw cancelled
-    } catch (cancelled: CancellationException) {
-        throw cancelled
-    } catch (t: Throwable) {
-        if (FatalErrors.isFatal(t)) throw t // T-FP-02：fatal 透传
-        true
+        val occupied = occupiedRanges(project, host)
+        if (occupied.isEmpty()) return false
+        return InjectRangePlan.plan(host.text, TextRange(0, host.textLength), occupied).isEmpty()
     }
 
     /**

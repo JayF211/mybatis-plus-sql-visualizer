@@ -684,7 +684,7 @@ internal object JpaMetadataReader {
 
     /**
      * 展平嵌入对象字段为列清单（T-J18）：逐字段解析 @AttributeOverride 覆写 →
-     * 内部字段 @Column → 驼峰转下划线；嵌套 @Embedded 递归展平（JPA 无隐式列名前缀）。
+     * 内部字段 @Column → 兜底命名；嵌套 @Embedded 递归展平。
      * 嵌入类型不可解析时返回空列表（调用方降级为单列形态）。
      *
      * T-Embedded D1（点路径覆写）：[overrides] 的键支持三种形态，查找按点路径优先、裸名兜底——
@@ -693,17 +693,29 @@ internal object JpaMetadataReader {
      *  - 嵌入对象相对点路径（字段级 @AttributeOverride，规范 Example 2 的 `zipcode.zip`）；
      *  - 裸属性名（既有形态，T-J18 用例不回归）。
      *
+     * T-EmbeddedColPrefix：兜底命名由 [naming] 决定——[EmbeddedColumnNaming.NONE] 用内层字段名本身
+     * （JPA 默认），[EmbeddedColumnNaming.COMPONENT_PATH] 把嵌入段路径并进列名（Hibernate
+     * component-path）。两档**只影响既无 @AttributeOverride 也无内层 @Column(name) 的兜底档**。
+     *
      * @param rootKeyPrefix 实体根起算的键前缀（顶层嵌入字段名 + `.`，如 `address.`）——类级覆写键
      *   相对实体根，而展平内部按嵌入对象相对路径查找，靠它把两个键空间对上
+     * @param naming 嵌入列命名约定（默认无前缀，保持既有行为）
      */
-    fun flattenEmbeddedColumns(field: PsiField, overrides: Map<String, String>): List<EmbeddedColumnSpec> {
+    fun flattenEmbeddedColumns(
+        field: PsiField,
+        overrides: Map<String, String>,
+        naming: EmbeddedColumnNaming = EmbeddedColumnNaming.NONE,
+    ): List<EmbeddedColumnSpec> {
         val clazz = runCatching { (field.type as? PsiClassType)?.resolve() }.getOrNull() ?: return emptyList()
         val rootFieldName = runCatching { field.name }.getOrNull() ?: ""
         val rootKeyPrefix = if (rootFieldName.isEmpty()) "" else "$rootFieldName."
         // camelPathPrefix：实体根起的驼峰路径累积（顶层嵌入字段名起算），逐段拼给末端列
+        // snakePathPrefix：同一条路径的「下划线连接」形态，仅 COMPONENT_PATH 档用于拼列名前缀
         return flattenEmbeddableClass(
             clazz, overrides, mutableSetOf(), rootKeyPrefix,
             pathPrefix = "", camelPathPrefix = rootFieldName,
+            snakePathPrefix = if (rootFieldName.isEmpty()) "" else "${rootFieldName}_",
+            naming = naming,
         )
     }
 
@@ -714,6 +726,8 @@ internal object JpaMetadataReader {
         rootKeyPrefix: String,
         pathPrefix: String,
         camelPathPrefix: String,
+        snakePathPrefix: String,
+        naming: EmbeddedColumnNaming,
     ): List<EmbeddedColumnSpec> {
         if (!seen.add(clazz)) return emptyList()
         val result = mutableListOf<EmbeddedColumnSpec>()
@@ -734,6 +748,8 @@ internal object JpaMetadataReader {
                     rootKeyPrefix,
                     pathPrefix = "$pathPrefix$fieldName.",
                     camelPathPrefix = camelPathPrefix + fieldName.replaceFirstChar { it.uppercaseChar() },
+                    snakePathPrefix = "$snakePathPrefix${fieldName}_",
+                    naming = naming,
                 )
                 continue
             }
@@ -747,7 +763,7 @@ internal object JpaMetadataReader {
                 fieldName = fieldName,
                 columnName = override
                     ?: columnAnnotation?.let { attrString(it, "name") }
-                    ?: NamingStrategy.toSnakeCase(fieldName),
+                    ?: embeddedFallbackColumnName(snakePathPrefix, fieldName, naming),
                 fieldType = runCatching { field.type.canonicalText }.getOrNull(),
                 insertable = columnAnnotation?.let { attrBoolean(it, "insertable") } ?: true,
                 updatable = columnAnnotation?.let { attrBoolean(it, "updatable") } ?: true,
@@ -756,6 +772,29 @@ internal object JpaMetadataReader {
             )
         }
         return result
+    }
+
+    /**
+     * 嵌入列的**兜底**列名（既无 @AttributeOverride、也无内层 @Column(name) 时，T-EmbeddedColPrefix）。
+     *
+     *  - [EmbeddedColumnNaming.NONE]（JPA 默认）：内层字段名本身（`baseQty` → `base_qty`）；
+     *  - [EmbeddedColumnNaming.COMPONENT_PATH]：把嵌入段路径并进列名
+     *    （`qty` + `baseQty` → `qty_base_qty`；多级嵌入逐段累积 `a` + `b` + `c` → `a_b_c`）。
+     *
+     * COMPONENT_PATH 的形态与 Hibernate 一致：hibernate-core 5.6.4
+     * `ImplicitNamingStrategyComponentPathImpl.transformAttributePath` 用**原始属性名**按 `_`
+     * 递归连接父路径，下划线化由 PhysicalNamingStrategy 完成；此处对连接后的整串做一次 snake 化，
+     * 结果等价（`toSnakeCase("qty_baseQty")` = `qty_base_qty`）。
+     *
+     * @param snakePathPrefix 自实体根起的嵌入段路径（原始字段名以 `_` 连接，含尾随 `_`；顶层为空串时无前缀）
+     */
+    private fun embeddedFallbackColumnName(
+        snakePathPrefix: String,
+        fieldName: String,
+        naming: EmbeddedColumnNaming,
+    ): String = when (naming) {
+        EmbeddedColumnNaming.NONE -> NamingStrategy.toSnakeCase(fieldName)
+        EmbeddedColumnNaming.COMPONENT_PATH -> NamingStrategy.toSnakeCase(snakePathPrefix + fieldName)
     }
 
     // ------------------------------------------------------------------

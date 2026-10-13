@@ -1,0 +1,169 @@
+package cn.song.mybatisplus.visualizer.actions
+
+import com.intellij.testFramework.fixtures.BasePlatformTestCase
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
+
+/**
+ * T-SqlTemplateCaret：快捷模板「光标处表名」三层测试。
+ *
+ *  1. [identifierAtCaret]（纯函数）：光标处标识符的词边界扫描——含引号包裹、限定名跨点、
+ *     空白/标点/单引号字符串边界、文件首尾、越界钳制；
+ *  2. [resolveTemplateText]（纯函数）：非空选区优先、空白选区/无选区退化到光标处；
+ *  3. [editorTemplateText]（真编辑器，`myFixture`）：把前两层接到 `Editor` 上，
+ *     验「有选区取选区、无选区取光标处、光标在空白处禁用」。
+ *
+ * 三层都不依赖真机/沙盒：第 1、2 层是纯逻辑，第 3 层用测试框架的内存编辑器。
+ */
+class SelectedTableCaretTextTest : BasePlatformTestCase() {
+
+    /** 用 `|` 标记光标：返回该光标处取到的标识符。 */
+    private fun id(textWithCaret: String): String? {
+        val caret = textWithCaret.indexOf('|')
+        require(caret >= 0) { "用例文本缺少光标标记 |" }
+        return identifierAtCaret(textWithCaret.removeRange(caret, caret + 1), caret)
+    }
+
+    // ---------- 第 1 层：identifierAtCaret 词边界扫描 ----------
+
+    fun `test 光标在标识符中间`() {
+        assertEquals("car_device_info", id("FROM car_dev|ice_info"))
+    }
+
+    fun `test 光标在标识符首`() {
+        assertEquals("car_device_info", id("FROM |car_device_info"))
+    }
+
+    fun `test 光标在标识符尾`() {
+        assertEquals("car_device_info", id("FROM car_device_info|"))
+    }
+
+    fun `test 光标压空白禁用`() {
+        assertNull(id("FROM |  t_order"))
+    }
+
+    fun `test 光标压标点禁用`() {
+        assertNull(id("SELECT *,| FROM t"))
+    }
+
+    fun `test 反引号标识符连引号一并取`() {
+        assertEquals("`car_device_info`", id("FROM `car_dev|ice_info`"))
+    }
+
+    fun `test 双引号标识符连引号一并取`() {
+        assertEquals("\"car_device_info\"", id("FROM \"car_dev|ice_info\""))
+    }
+
+    fun `test 方括号标识符连引号一并取`() {
+        assertEquals("[car_device_info]", id("FROM [car_dev|ice_info]"))
+    }
+
+    fun `test 光标压在开引号上`() {
+        assertEquals("`car_device_info`", id("FROM |`car_device_info`"))
+    }
+
+    fun `test 光标压在闭引号之后`() {
+        assertEquals("`car_device_info`", id("FROM `car_device_info`| "))
+    }
+
+    fun `test 单引号字符串不连引号`() {
+        assertEquals("car_device_info", id("= 'car_dev|ice_info'"))
+    }
+
+    fun `test 注释内标识符仍可取`() {
+        assertEquals("car_device_info", id("-- car_dev|ice_info"))
+    }
+
+    fun `test 注释符处禁用`() {
+        assertNull(id("--|"))
+    }
+
+    fun `test 限定名跨点取全`() {
+        assertEquals("mpj_demo.t_order", id("FROM mpj_demo.t_|order"))
+    }
+
+    fun `test 限定名带引号跨点取全`() {
+        assertEquals("`db`.`t_order`", id("FROM `db`.`t_|order`"))
+    }
+
+    fun `test 星号不并入限定名`() {
+        assertEquals("t_order", id("FROM t_order|.*"))
+    }
+
+    fun `test 文件首标识符`() {
+        assertEquals("SELECT", id("|SELECT * FROM t"))
+    }
+
+    fun `test 文件尾标识符`() {
+        assertEquals("t_order", id("SELECT * FROM t_order|"))
+    }
+
+    fun `test 空文档返回null`() {
+        assertNull(identifierAtCaret("", 0))
+    }
+
+    fun `test 光标越界钳制`() {
+        assertEquals("abc", identifierAtCaret("abc", 99))
+        assertEquals("abc", identifierAtCaret("abc", -5))
+    }
+
+    // ---------- 第 2 层：resolveTemplateText 优先级 ----------
+
+    fun `test 非空选区优先于光标处`() {
+        assertEquals("t_order", resolveTemplateText("t_order", "car_device_info"))
+    }
+
+    fun `test 空白选区退化到光标处`() {
+        // 实证场景：预览弹窗无选区时报 14 个空格选区，不得据此判成禁用
+        assertEquals("car_device_info", resolveTemplateText("              ", "car_device_info"))
+    }
+
+    fun `test 无选区取光标处`() {
+        assertEquals("car_device_info", resolveTemplateText(null, "car_device_info"))
+    }
+
+    fun `test 两路皆空返回null`() {
+        assertNull(resolveTemplateText(null, null))
+        assertNull(resolveTemplateText("   ", null))
+        assertNull(resolveTemplateText("   ", "  "))
+    }
+
+    // ---------- 第 3 层：editorTemplateText 接到真编辑器 ----------
+
+    private fun editorAt(text: String, offset: Int) =
+        myFixture.configureByText("T.txt", text).let {
+            myFixture.editor.caretModel.moveToOffset(offset)
+            myFixture.editor
+        }
+
+    fun `test 编辑器有选区取选区文本`() {
+        val text = "SELECT * FROM car_device_info"
+        val editor = myFixture.configureByText("T.txt", text).let { myFixture.editor }
+        val start = text.indexOf("car_device_info")
+        editor.selectionModel.setSelection(start, start + "car_device_info".length)
+        assertEquals("car_device_info", editorTemplateText(editor))
+    }
+
+    fun `test 编辑器无选区取光标处标识符`() {
+        val text = "SELECT * FROM car_device_info"
+        val editor = editorAt(text, text.indexOf("device"))
+        assertEquals("car_device_info", editorTemplateText(editor))
+    }
+
+    fun `test 编辑器光标在空白处禁用`() {
+        val text = "SELECT * FROM car_device_info"
+        // 光标压在第 8 位空格上（两侧均为非标识符字符：'*' 与 ' '）
+        val editor = editorAt(text, text.indexOf(" FROM"))
+        assertNull(editorTemplateText(editor))
+    }
+
+    fun `test 编辑器空白选区退化取光标处`() {
+        val text = "SELECT * FROM   car_device_info"
+        val editor = myFixture.configureByText("T.txt", text).let { myFixture.editor }
+        val spaces = text.indexOf("   ")
+        editor.selectionModel.setSelection(spaces, spaces + 3)
+        // 保留空白选区的同时把光标移到标识符上（collapseSelection=false）
+        editor.caretModel.moveToOffset(text.indexOf("car_device_info"), false)
+        assertEquals("car_device_info", editorTemplateText(editor))
+    }
+}
