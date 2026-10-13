@@ -1,0 +1,215 @@
+package cn.song.mybatisplus.visualizer.execute
+
+import com.intellij.openapi.project.Project
+
+/**
+ * O-136 T-PreviewExecDsDialect：预览执行链「数据源方言 → 草稿文件 SQL 方言 → Runner 集合」路由核心。
+ *
+ * 根因（计划 §二，243 平台 jar 字节码实证）：平台
+ * `DatabaseRunners.getAttachDataSourceRunners → DbImplUtil.getAppropriateDataSourcesForExec(psiFile)`
+ * 按 **psiFile 的 SQL 方言**（`SqlPsiFacade.getConfiguredSqlLanguageDialect`，即 SqlDialectMappings
+ * 的文件级映射）取 `DatabaseDialect`，再以 `ds.getDatabaseDialect().similarTo(文件方言)` 过滤数据源——
+ * 插件此前把 exec 草稿恒映射 MySQL，DM 等非 MySQL 数据源的 Runner 全被排除。
+ *
+ * 修复方向（S1+D1，按计划推荐定案）：
+ *  - 目标数据源解析：last-used 记忆（UUID→显示名）→ 插件默认数据源 → null；
+ *  - 方言来源：平台 `DbSqlUtilCore.findSqlDialect(LocalDataSource)`（数据源自身方言设置 →
+ *    平台按连接配置推断，即 DAS 口径）优先；平台不可得时按插件 URL 推断
+ *    （[cn.song.mybatisplus.visualizer.sql.UrlSubprotocolDialects]）映射平台 SQL 方言 language id
+ *    兜底；仍不可得 → null = 保持 MySQL 映射（零回归，不猜近似方言）；
+ *  - 组 Runner 展开：平台在「方言匹配集 ≠ 全部数据源」时返回一个 "All" 组 Runner
+ *    （`getSubRunners()` 携带全部数据源的 Runner；组项自身 runnable 为 EmptyRunnable 空操作），
+ *    插件弹窗不展开子级 → 方言不匹配的数据源（DM 等）藏在死项里不可选。展开后按显示名去重浮出。
+ *
+ * 反射隔离约定：平台类一律 `Class.forName` 反射 + runCatching，Community/无 Database 插件下降级
+ * null（调用方保持 MySQL 现状），与 [DataSourceSettings] 同款口径。
+ */
+internal object ExecDialectRouting {
+
+    /** 平台 MySQL SQL 方言 language id（[DialectPreMapping.findMySql] 同款判定口径）。 */
+    internal const val MYSQL_LANGUAGE_ID = "MySQL"
+
+    /**
+     * 插件方言名（[cn.song.mybatisplus.visualizer.sql.DialectRegistry] 命名空间，键须与
+     * [cn.song.mybatisplus.visualizer.sql.Dialect.name] 逐字一致）→ 平台 SQL 方言 language id
+     * 候选清单（按序尝试，命中平台可用清单为止）。
+     *
+     * id 依据：243 平台 com/intellij/sql/dialects 目录下各方言 xml 的 `lang.parserDefinition language`
+     * 逐文件核对——MySQL / PostgreSQL / Oracle / MariaDB / TSQL(mssql) / H2 为 243 在册实锤；
+     * DM / KingBase / OceanBase / openGauss / SQLite 在 243 方言集缺位（无对应 dialect xml），
+     * 候选 id 取产品名常见注册形态，真平台缺位时 [urlFallbackId] 自然落 null（不猜近似方言）。
+     * 家族别名仅作平台缺位时的尽力兜底（如 OceanBase MySQL 模式 → MySQL），别名错误最多
+     * 令 Runner 枚举落空（与现状同态），不产生错误执行。
+     */
+    internal val PLUGIN_DIALECT_TO_SQL_LANGUAGE_IDS: Map<String, List<String>> = mapOf(
+        "MySQL" to listOf("MySQL"),
+        "MariaDB" to listOf("MariaDB", "MySQL"),
+        "PostgreSQL" to listOf("PostgreSQL"),
+        "Oracle" to listOf("Oracle"),
+        "SQL Server" to listOf("TSQL"),
+        "H2" to listOf("H2"),
+        "SQLite" to listOf("SQLite"),
+        "DM（达梦）" to listOf("DM", "Dameng"),
+        "KingBase（人大金仓）" to listOf("KingBase", "KingbaseES", "PostgreSQL"),
+        "OceanBase" to listOf("OceanBase", "MySQL"),
+        "openGauss" to listOf("openGauss", "GaussDB", "PostgreSQL"),
+    )
+
+    /** 目标数据源解析测试缝（headless 无 DataSourceStorage；生产恒 null 走真链）。 */
+    @Volatile
+    internal var targetDataSourceForTest: ((Project) -> Any?)? = null
+
+    /** last-used 记忆的轻量投影（与 DataSourceSelector.LastUsedMemory 同构，测试面免平台类型）。 */
+    internal data class MemoryRef(val dataSourceId: String?, val displayName: String?)
+
+    // ------------------------------------------------------------------
+    // 纯逻辑（表驱动单测）
+    // ------------------------------------------------------------------
+
+    /**
+     * 目标方言 id 决策：平台 DAS 方言优先，URL 推断兜底；皆无（或空白）→ null = 保持 MySQL 映射。
+     */
+    internal fun targetLanguageId(platformDialectId: String?, urlFallbackId: String?): String? =
+        platformDialectId?.takeIf { it.isNotBlank() } ?: urlFallbackId?.takeIf { it.isNotBlank() }
+
+    /**
+     * 目标数据源解析（纯函数）：记忆 UUID 精确命中 → 显示名唯一命中 → 插件默认数据源 → null。
+     * 与 T-SI-02 的记忆命中口径同源（UUID 优先、名字回退、皆不唯一不猜）。
+     */
+    internal fun resolveTargetDataSourceFromInputs(
+        memory: MemoryRef?,
+        dataSourceById: (String) -> Any?,
+        registeredDataSources: List<Any>,
+        dataSourceName: (Any) -> String,
+        defaultDataSource: () -> Any?,
+    ): Any? {
+        if (memory != null) {
+            memory.dataSourceId?.takeIf { it.isNotBlank() }?.let { id ->
+                dataSourceById(id)?.let { return it }
+            }
+            memory.displayName?.takeIf { it.isNotBlank() }?.let { name ->
+                registeredDataSources.firstOrNull { dataSourceName(it) == name }?.let { return it }
+            }
+        }
+        return defaultDataSource()
+    }
+
+    /**
+     * URL 兜底：数据源 URL → 插件子协议推断 → 平台 SQL 方言 language id 候选 → 平台可用清单命中。
+     * 任何一步不可得 → null（调用方保持 MySQL，不猜）。
+     */
+    internal fun urlFallbackId(ds: Any?, availableIds: List<String>): String? {
+        if (ds == null) return null
+        val url = dataSourceUrl(ds) ?: return null
+        val pluginDialect = cn.song.mybatisplus.visualizer.sql.UrlSubprotocolDialects.dialectName(url) ?: return null
+        for (candidate in PLUGIN_DIALECT_TO_SQL_LANGUAGE_IDS[pluginDialect].orEmpty()) {
+            if (availableIds.any { it.equals(candidate, ignoreCase = true) }) return candidate
+        }
+        return null
+    }
+
+    /** 组 Runner 展开判定（纯函数）：该 runner 是否携带非空子 Runner 列表。 */
+    internal fun <T> expandGroupRunners(
+        runners: List<T>,
+        nameOf: (T) -> String,
+        subRunnersOf: (T) -> List<T>?,
+    ): List<T> {
+        val out = ArrayList<T>(runners.size)
+        val seen = HashSet<String>()
+        for (r in runners) {
+            val subs = subRunnersOf(r)
+            if (subs == null) {
+                if (seen.add(nameOf(r))) out.add(r)
+                continue
+            }
+            // 组项本体剔除（平台组 runnable 为空操作）；子 Runner 浮出顶层、按显示名去重
+            for (sub in subs) {
+                if (seen.add(nameOf(sub))) out.add(sub)
+            }
+        }
+        return out
+    }
+
+    /**
+     * 空 Runner 文案选择（D3）：项目存在已配置数据源 → 方言不匹配可行动文案；
+     * 真的没有任何数据源 → 既有空数据源引导文案。
+     */
+    internal fun emptyRunnersHintKey(hasRegisteredDataSources: Boolean): String =
+        if (hasRegisteredDataSources) "execute.datasource.dialectMismatch" else "execute.datasource.empty"
+
+    // ------------------------------------------------------------------
+    // 反射段（平台不可用一律降级 null / 空清单）
+    // ------------------------------------------------------------------
+
+    /** 数据源 JDBC URL（LocalDataSource.getUrl() 反射；取不到 null）。 */
+    internal fun dataSourceUrl(ds: Any?): String? = runCatching {
+        ds?.javaClass?.getMethod("getUrl")?.invoke(ds) as? String
+    }.getOrNull()
+
+    /**
+     * 平台方言探测：`DbSqlUtilCore.findSqlDialect(LocalDataSource)` 的 language id——
+     * 数据源自身方言设置（getDefaultDialect）→ 平台按连接配置推断，null = 平台不可用/数据源无方言。
+     * 刻意用可空的 findSqlDialect 而非 getSqlDialect（后者兜底 Generic 方言，会把枚举引向空集）。
+     */
+    internal fun platformDialectId(ds: Any?): String? = runCatching {
+        if (ds == null) return null
+        val core = Class.forName("com.intellij.database.util.DbSqlUtilCore")
+        val method = core.getMethod("findSqlDialect", Class.forName("com.intellij.database.dataSource.LocalDataSource"))
+        val dialect = method.invoke(null, ds) ?: return null
+        (dialect as? com.intellij.lang.Language)?.id
+    }.getOrNull()
+
+    /** 平台可用 SQL 方言 language id 清单（SqlDialectMappings.getAvailableValues 投影；失败空清单）。 */
+    internal fun availableLanguageIds(project: Project): List<String> = runCatching {
+        val mappings = Class.forName("com.intellij.sql.dialects.SqlDialectMappings")
+            .getMethod("getInstance", Project::class.java).invoke(null, project)
+        @Suppress("UNCHECKED_CAST")
+        val values = mappings.javaClass.getMethod("getAvailableValues").invoke(mappings) as? List<Any?>
+        values?.mapNotNull { (it as? com.intellij.lang.Language)?.id } ?: emptyList()
+    }.getOrDefault(emptyList())
+
+    /**
+     * 目标 SQL Language 实例（[DialectPreMapping.setMapping] 消费形态）：
+     * 平台方言 id → URL 兜底 id → 平台可用清单内取 Language；null = 保持 MySQL 映射（零回归）。
+     */
+    internal fun resolveTargetLanguage(project: Project, ds: Any?): Any? {
+        if (ds == null) return null
+        val platform = runCatching { platformDialectId(ds) }.getOrNull()
+        val url = runCatching { urlFallbackId(ds, availableLanguageIds(project)) }.getOrNull()
+        val targetId = targetLanguageId(platform, url) ?: return null
+        return runCatching { DialectPreMapping.languageById(project, targetId) }.getOrNull()
+    }
+
+    /**
+     * 目标数据源解析（生产链）：last-used 记忆（UUID→显示名）→ 插件默认数据源 → null。
+     */
+    internal fun resolveTargetDataSource(project: Project): Any? {
+        targetDataSourceForTest?.let { return it(project) }
+        val memory = runCatching {
+            DataSourceSelector.lastUsedRunner(project)
+        }.getOrNull()?.let { MemoryRef(it.dataSourceId, it.displayName) }
+        return resolveTargetDataSourceFromInputs(
+            memory = memory,
+            dataSourceById = { id -> runCatching { DataSourceSettings.getDataSourceById(project, id) }.getOrNull() },
+            registeredDataSources = runCatching { DataSourceSettings.getAllDataSources(project) }.getOrDefault(emptyList()),
+            dataSourceName = { ds -> DataSourceSettings.getName(ds) },
+            defaultDataSource = { runCatching { DataSourceSettings.getDefaultDataSource(project) }.getOrNull() },
+        )
+    }
+
+    /**
+     * 组 Runner 展开生产链：反射 `getSubRunners()`（平台组 Runner 标志方法，
+     * DatabaseRunners$3 字节码实证），非组 Runner / 反射失败按普通项保留。
+     */
+    internal fun expandGroupRunners(runners: List<Any>): List<Any> =
+        expandGroupRunners(
+            runners,
+            nameOf = { ds -> DataSourceSelector.getRunnerName(ds) },
+            subRunnersOf = { runner ->
+                runCatching {
+                    @Suppress("UNCHECKED_CAST")
+                    runner.javaClass.getMethod("getSubRunners").invoke(runner) as? List<Any>
+                }.getOrNull()
+            },
+        )
+}

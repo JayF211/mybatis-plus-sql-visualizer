@@ -243,8 +243,17 @@ internal fun DataSourceSelector.chooseAndPrepare(
         prepareInConsole(project, session, vf, executeAfterPrepare, chosenRunnerName, onConsole, onEditor, onError, onErrorRich, wholeScriptExec, ownsPrepareGate = ownsGate)
     }
 
-    val runners = getAttachDataSourceRunners(psiFile, submitSql, sessionConsumer)
-    LOG.info("[M36] runners=${runners.size}")
+    val enumerated = getAttachDataSourceRunners(psiFile, submitSql, sessionConsumer)
+    // O-136 T-PreviewExecDsDialect：组 Runner 展开——平台在「方言匹配集 ≠ 全部数据源」时返回
+    // "All" 组 Runner（getSubRunners 携带全部数据源的 Runner，组项自身 runnable 为空操作），
+    // 插件弹窗不展开子级 → 方言不匹配的数据源（DM 等）藏在死项里不可选。展开后按显示名去重，
+    // 方言不匹配的数据源在弹窗内直接可见可选（计划 §三「按可选数据源的方言出 Runner」）。
+    val runners = ExecDialectRouting.expandGroupRunners(enumerated)
+    if (runners.size != enumerated.size) {
+        LOG.info("[M36] runners=${enumerated.size} expanded to ${runners.size} (O-136 group runners flattened)")
+    } else {
+        LOG.info("[M36] runners=${runners.size}")
+    }
 
     // M36.5：last-used 数据源静默命中（仅 prepareConsole 路径；显式执行保持弹窗可选）
     // T-SI-02：命中判定升级为「UUID 精确命中 → 名字唯一命中」，同名多条判歧义弃记忆走弹窗
@@ -273,12 +282,27 @@ internal fun DataSourceSelector.chooseAndPrepare(
 
     when {
         runners.isEmpty() -> {
-            LOG.warn("[M36] runners empty (execute=$executeAfterPrepare)")
+            // O-136 T-PreviewExecDsDialect D3：空 Runner 二分归因——有在册数据源 = 方言不匹配
+            //（或数据源均不可连接），给可行动文案（V3），不再让用户笼统「没数据源」或等超时；
+            // 真无数据源保持既有引导文案。
+            val registered = runCatching { DataSourceSettings.getAllDataSources(project) }.getOrDefault(emptyList())
+            LOG.warn("[M36] runners empty (execute=$executeAfterPrepare, registered=${registered.size})")
+            if (executeAfterPrepare) openDatabaseToolWindow(project)
+            if (registered.isEmpty()) {
+                onError?.invoke(MpSqlVisualizerBundle.message("execute.datasource.empty"))
+            } else {
+                val targetDs = ExecDialectRouting.resolveTargetDataSource(project)
+                val targetLanguage = ExecDialectRouting.resolveTargetLanguage(project, targetDs)
+                val dialectDisplay = (targetLanguage as? com.intellij.lang.Language)?.id
+                    ?: ExecDialectRouting.MYSQL_LANGUAGE_ID
+                val names = registered.joinToString(", ") { DataSourceSettings.getName(it) }
+                onError?.invoke(
+                    MpSqlVisualizerBundle.message("execute.datasource.dialectMismatch", dialectDisplay, names),
+                )
+            }
             // T-DsCover：仅显式执行引导打开 Database 工具窗；预览默认准备静默——
             // 补全 M36.5 预览路径（onError=null）设计意图，避免每次双击预览抢占侧边栏。
-            if (executeAfterPrepare) openDatabaseToolWindow(project)
             // M36.3：无数据源时通知 UI 从「执行中」恢复
-            onError?.invoke(MpSqlVisualizerBundle.message("execute.datasource.empty"))
             // T-FirstExecResultInvisible F1：链就此终结，复位单飞位（否则后续执行被永久排队）
             if (ownsGate) prepareGate.finishPrepare()
             callback?.invoke(false)
@@ -1186,7 +1210,12 @@ internal fun DataSourceSelector.createTempPsiFile(project: Project, sql: String)
     // T-PreviewFlash：EDT 同步 VFS refresh + PsiManager.findFile 已被跨点击缓存吸收——
     // mpsql-exec.sql 路径稳定，vf 仍有效时直接复用配对缓存，把
     // WorkspaceFileIndex.ensureIsUpToDate 的 SEVERE 断言移出每次预览的热路径。
-    consumeCachedTempPsiFile(project)?.let { return it }
+    consumeCachedTempPsiFile(project)?.let { pair ->
+        // O-136：缓存命中路径同样对齐方言映射（幂等读探测稳态零写）——目标数据源方言切换后
+        // 缓存复用不得携带旧映射进 Runner 枚举。
+        mapDialectBeforePsi(project, pair.first, LOG)
+        return pair
+    }
     // T-ExecDocSync2 F4：refresh 前强制收敛——写点之后、refresh 之前若被用户键入/其他写方
     // 插入（doc modified-unsaved + 磁盘≠文档），refresh 恰会命中 MemoryDiskConflictResolver
     // 弹窗条件；findFileByIoFile（与 projectExecFile 内裸调同形态）命中即过一遍分叉探测 +
@@ -1356,11 +1385,10 @@ internal fun DataSourceSelector.prewarmExecTempFileInner(project: Project, sql: 
         LOG.warn("[M36] exec prewarm syncVfContent failed: ${e.javaClass.simpleName}: ${e.message}")
         return
     }
-    // T-ExecSlowOps F1：BGT 两段式映射（读探测稳态跳过 / 首见派 EDT + 有界等待）
-    val inProcessMapped = dialectMappedVf?.isValid == true && dialectMappedVf === vf
-    if (DialectPreMapping.ensureMapped(project, vf, inProcessMapped)) {
-        dialectMappedVf = vf
-    }
+    // T-ExecSlowOps F1：BGT 两段式映射（读探测稳态跳过 / 首见派 EDT + 有界等待）。
+    // O-136：收口到 [mapDialectBeforePsi] 统一入口——目标方言按数据源路由（BGT 两段式语义在
+    // DialectPreMapping.ensureMapped 内保留），不再硬编码 MySQL。
+    mapDialectBeforePsi(project, vf, LOG)
     val psi = try {
         ReadAction.compute<PsiFile?, Throwable> {
             PsiManager.getInstance(project).findFile(vf)
