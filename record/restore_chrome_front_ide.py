@@ -6,6 +6,7 @@
 用法: python restore_chrome_front_ide.py <ide_hwnd> <chrome_hwnd>
 """
 import ctypes
+import os
 import sys
 import time
 from ctypes import wintypes
@@ -48,5 +49,7 @@ print("fg now:", buf.value[:60])
 
 with mss.mss() as sct:
     img = sct.grab({"left": 277, "top": 25, "width": 1370, "height": 984})
-    mss.tools.to_png(img.rgb, img.size, output="record/perf/ide_front2.png")
-print("shot -> record/perf/ide_front2.png")
+    out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "perf", "ide_front2.png")
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    mss.tools.to_png(img.rgb, img.size, output=out)
+print("shot ->", out)

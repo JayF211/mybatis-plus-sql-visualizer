@@ -32,7 +32,7 @@ from nav import force_en_us, goto_col                                       # no
 REGION = (277, 25, 1370, 984)
 OUT = "perf/a28_completion_datasource.mp4"
 
-TAB_SCHEMA = (707, 102)          # 标签栏里的 schema.sql
+TAB_SCHEMA = (910, 102)          # 标签栏里的 schema.sql（mybatis-plus-join-demo 那个；20261013 布局实测）
 INS_LINE, INS_COL = 105, 32      # INSERT INTO `car_device_info` ( ← 括号后
 GAZE_POPUP_A = (900, 300)
 GAZE_POPUP_B = (900, 380)
