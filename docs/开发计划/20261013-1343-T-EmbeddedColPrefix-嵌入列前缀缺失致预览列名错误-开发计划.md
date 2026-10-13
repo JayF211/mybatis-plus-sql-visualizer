@@ -289,4 +289,43 @@ BUILD SUCCESSFUL（GRADLE_EXIT=0）。设置守卫三家族均绿（`SettingsRea
   **零设置自愈**；未绑数据源时仍由 A（配置探测）/ B（设置项）兜。
 - 未做的仍是方案 C 的完整版（按真库列清单校正**一切**猜测列名，含语义改名）——那超出本轮范围。
 
+### 8.7 追加（同日）：A 的探测范围收敛到「实体所在模块」
+
+起因是 §8.8 要加 demo 复现载体时踩到的形态：原实现按**整个工程**扫 `application*.yml/.yaml/.properties`，
+而命名策略是**每个持久化单元（模块）**的事——多模块工程里只要有一个兄弟模块声明 component-path，
+其它模块的嵌入列就会被错误套上前缀（demo 仓同时放了「无前缀」的 `jpa-hibernate-demo` 与新增的
+component-path 复现模块，正是这种形态；以聚合根打开工程时必然误判）。
+
+修法：`HibernateNamingConfigProbe` 改为以**实体文件所在模块**的 `src/main/resources` 为扫描范围——
+自实体文件路径上溯找最近的 `pom.xml` / `build.gradle*`，只扫该模块的资源目录；认不出模块布局
+（无任何标记文件）时回落工程全扫，行为与改前一致。缓存键 = 工程 + 扫描目录，按 PSI 版本失效；
+实体文件由 `JpaEntityResolver` 传 `field.containingFile?.virtualFile` 进来。
+纯函数 `nearestModuleRootPath(anchorPath, isModuleDir)` 承担上溯逻辑并单测三条
+（多模块取**最近**者不落到聚合根 / 仅聚合根有标记时取聚合根 / 全无标记返回 null）。
+
+定向读数：16 类 **222 例 0 失败 0 错误**（GRADLE_EXIT=0），含新增 3 条上溯用例。
+
+### 8.8 追加（同日）：demo 仓新增复现载体 `jpa-embedded-prefix-demo`
+
+**为什么不是加在 `jpa-hibernate-demo`（用户问过）**：那条路是**破坏性**的。复现必须让 Hibernate 真的按
+组件路径命名（否则真库列名不会是 `qty_base_qty`，用例与库就对不上），而命名策略是模块级全局配置；
+`jpa-hibernate-demo` 的既有嵌入语料全是**裸字段**（`UpdateInfo.createdTime`、`Address.street`、
+`Zipcode.zip/areaCode` 都没有 `@Column`），一旦切到 component-path 就会变成
+`update_info_created_time` / `address_street`，直接推翻已交付（且来源是用户报障）的
+`T-HqlUpdateEntityMap` 用例前提——那份计划文档第 29 行白纸黑字写着「`UpdateInfo.createdTime`
+**无 @Column 注解**，物理列名由 JPA 隐式命名策略推导为 `created_time`」。加显式注解去「钉住」旧名同样不行：
+那会把该用例的前提从「命名策略推导」偷换成「显式注解」，前提变了。
+
+故新增独立模块 `jpa-embedded-prefix-demo`（端口 8087 / 同库 `jpa_demo` / 独立表
+`wms_inventory_embed_demo`），自带 `application.yml`（component-path）与整套复现语料：
+实体 `WmsInventoryEntity` + `@Embedded WmsMoveTool moveTool` / `@Embedded WmsInventoryQty qty`
+（**内部字段零注解**）+ `CommonDao.findByQueryMaxNum(hql, new String[]{…}, new Object[]{…}, 0, 10)`
+（用户报障同款调用）——命名策略是每个持久化单元各自的事，本模块的配置只作用于自己，
+既有模块的实体/配置/表一概不动。
+
+验证入口（HTTP，均为真跑）：`/embed-prefix/naming`（回显 component-path）、`/embed-prefix/columns`
+（读 information_schema 打印真库列名，判据来源）、`/embed-prefix/query`（按该列名真跑）、
+`/embed-prefix/hql`（待预览 HQL 原文）。另附 `db/schema.sql`（DDL 里就写着 `qty_base_qty`，
+兼作插件期望产物的对照表）。
+
 

@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.psi.jpa
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.vfs.VirtualFile
 
 /**
  * `@Embedded` 展平列的命名约定（T-EmbeddedColPrefix）。
@@ -34,14 +35,16 @@ object EmbeddedColumnNamingResolver {
      * 解析当前应使用的嵌入列命名约定。
      *
      * @param project 宿主工程（用于配置探测）；为 null 时跳过探测，只认显式设置
+     * @param anchor 正在解析的实体文件——探测范围收敛到它**所在模块**（命名策略是每个持久化单元
+     *   的事，多模块工程里各模块配置互不影响）；null 时按整个工程扫
      */
-    fun resolve(project: Project?): EmbeddedColumnNaming {
+    fun resolve(project: Project?, anchor: VirtualFile? = null): EmbeddedColumnNaming {
         val configured = runCatching { PluginSettings.getInstance().state.embeddedColumnNaming }.getOrNull()
         return when (configured) {
             PluginSettings.EMBEDDED_NAMING_NONE -> EmbeddedColumnNaming.NONE
             PluginSettings.EMBEDDED_NAMING_COMPONENT_PATH -> EmbeddedColumnNaming.COMPONENT_PATH
             // AUTO（或取值不认识）：探测工程配置，判不出按 NONE
-            else -> if (project != null && HibernateNamingConfigProbe.projectUsesComponentPath(project)) {
+            else -> if (project != null && HibernateNamingConfigProbe.projectUsesComponentPath(project, anchor)) {
                 EmbeddedColumnNaming.COMPONENT_PATH
             } else {
                 EmbeddedColumnNaming.NONE

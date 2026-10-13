@@ -1,6 +1,8 @@
 package cn.song.mybatisplus.visualizer.psi.jpa
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -76,5 +78,41 @@ class HibernateNamingConfigProbeTest {
     @Test
     fun `empty text is not component path`() {
         assertFalse(HibernateNamingConfigProbe.indicatesComponentPath(""))
+    }
+
+    // ------------------------------------------------------------------
+    // 模块根上溯（探测范围收敛到实体所在模块，防多模块工程里兄弟模块的配置外溢）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `nearest module root is the innermost module`() {
+        val moduleDirs = setOf("/demo", "/demo/jpa-embedded-prefix-demo", "/demo/jpa-hibernate-demo")
+        assertEquals(
+            "取最近的模块根，不能上溯到聚合根",
+            "/demo/jpa-embedded-prefix-demo",
+            HibernateNamingConfigProbe.nearestModuleRootPath(
+                "/demo/jpa-embedded-prefix-demo/src/main/java/cn/song/Entity.java",
+            ) { it in moduleDirs },
+        )
+    }
+
+    @Test
+    fun `only aggregate root has marker`() {
+        assertEquals(
+            "/demo",
+            HibernateNamingConfigProbe.nearestModuleRootPath(
+                "/demo/jpa-hibernate-demo/src/main/java/cn/song/Entity.java",
+            ) { it == "/demo" },
+        )
+    }
+
+    @Test
+    fun `no module marker at all yields null`() {
+        assertNull(
+            "认不出模块布局 → 回落工程全扫（行为与改前一致）",
+            HibernateNamingConfigProbe.nearestModuleRootPath(
+                "/demo/jpa-hibernate-demo/src/main/java/cn/song/Entity.java",
+            ) { false },
+        )
     }
 }

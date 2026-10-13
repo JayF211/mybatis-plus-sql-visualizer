@@ -306,8 +306,11 @@ class JpaEntityResolver {
         val fieldName = field.name
         // 字段级 @AttributeOverride 优先于类级（合并顺序：右侧覆盖左侧同名键）
         val overrides = classOverrides + JpaMetadataReader.attributeOverrides(field)
-        // T-EmbeddedColPrefix：嵌入列命名约定按「显式设置 > 工程 Hibernate 命名配置探测 > 无前缀」解析
-        val naming = EmbeddedColumnNamingResolver.resolve(runCatching { field.project }.getOrNull())
+        // T-EmbeddedColPrefix：嵌入列命名约定按「显式设置 > 所在模块的 Hibernate 命名配置探测 > 无前缀」解析
+        val naming = EmbeddedColumnNamingResolver.resolve(
+            runCatching { field.project }.getOrNull(),
+            runCatching { field.containingFile?.virtualFile }.getOrNull(),
+        )
         val specs = runCatching { JpaMetadataReader.flattenEmbeddedColumns(field, overrides, naming) }
             .getOrDefault(emptyList())
         if (specs.isEmpty()) {
