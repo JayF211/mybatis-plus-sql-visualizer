@@ -800,10 +800,15 @@ internal fun DataSourceSelector.afterSubmitted(
             val liveNow = ui?.javaClass?.getMethod("getComponent")?.invoke(ui) as? javax.swing.JComponent
             val mySp = sharedFullComponent ?: preparedFullComponent
             val myBottom = (mySp as? javax.swing.JSplitPane)?.bottomComponent
+            val viewShowing = runCatching {
+                val v = console.javaClass.getMethod("getView").invoke(console)
+                v?.javaClass?.getMethod("isShowing")?.invoke(v)
+            }.getOrNull()
             LOG.info(
                 "[M36][A49] result host at submit: parent=${liveNow?.parent?.javaClass?.name ?: "null"}, " +
                     "mySplitBottom=${myBottom?.javaClass?.name ?: "null"}, " +
-                    "stolen=${liveNow != null && mySp != null && liveNow === myBottom && liveNow.parent === mySp}",
+                    "stolen=${liveNow != null && mySp != null && liveNow === myBottom && liveNow.parent === mySp}, " +
+                    "viewShowing=$viewShowing",
             )
         }
         // ② 8s 连接等待监控（从提交时刻起算）。M36.5.44 放宽：原判定 `!newTab || !namespaceOk`

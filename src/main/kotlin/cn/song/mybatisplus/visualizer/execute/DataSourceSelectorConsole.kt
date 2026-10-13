@@ -566,6 +566,24 @@ internal fun DataSourceSelector.executeOnConsole(
         // 曾连续多轮"修复未生效"实为用户未重启沙盒 IDE。版本戳让日志第一行即暴露运行版本，
         // 与源码不符时先重启再排查，杜绝无效往返。
         LOG.info("[M36] executeOnConsole begin (build=$BUILD_STAMP)")
+        // ★A49 诊断（只读，非行为改动）：本次提交的 ExecOption 四字段 + 控制台视图是否 showing +
+        // 原生编辑器组件当前宿主——「结果网格 0 rows」剩余候选根因各对应一列读数：
+        //   · newTab=true（A48 家族的「新建结果页签」路径）→ 结果管道走 new-tab 分支；
+        //   · viewShowing=false → DBN 结果视图未挂载/未展示（网格不取数）；
+        //   · editorCompParent=…ConsoleKt$editorComponent$1 → 我方仍把原生编辑器组件摘进了自建容器。
+        runCatching {
+            fun opt(n: String) = runCatching { effectiveExecOption.javaClass.getField(n).get(effectiveExecOption) }.getOrNull()
+            val viewShowing = runCatching {
+                val v = consoleClass.getMethod("getView").invoke(console)
+                v?.javaClass?.getMethod("isShowing")?.invoke(v)
+            }.getOrNull()
+            val editorCompParent = runCatching { editor.component?.parent?.javaClass?.name }.getOrNull()
+            LOG.info(
+                "[M36][A49] submit diag: newTab=${opt("newTab")}, execInside=${opt("execInside")}, " +
+                    "execOutside=${opt("execOutside")}, execSelection=${opt("execSelection")}, " +
+                    "viewShowing=$viewShowing, editorCompParent=$editorCompParent",
+            )
+        }
         com.intellij.openapi.project.DumbService.getInstance(project).runWhenSmart {
             if (generation != executionGeneration) {
                 LOG.warn("[M36] execution submit cancelled (generation $generation != ${executionGeneration})")
