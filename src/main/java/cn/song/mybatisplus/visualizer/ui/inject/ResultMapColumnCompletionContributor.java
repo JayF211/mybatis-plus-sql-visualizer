@@ -1,4 +1,5 @@
 // T-SyncK2JMaster482 新建翻译自 master src/main/kotlin/cn/song/mybatisplus/visualizer/ui/inject/ResultMapColumnCompletionContributor.kt
+// T-SyncK2JMaster104 波C 增量同步：W5-10 resultMap 引用列候选 + F89 memo 双槽化 + F93 DumbAware
 package cn.song.mybatisplus.visualizer.ui.inject;
 
 import com.intellij.codeInsight.completion.CompletionContributor;
@@ -7,30 +8,49 @@ import com.intellij.codeInsight.completion.CompletionProvider;
 import com.intellij.codeInsight.completion.CompletionResultSet;
 import com.intellij.codeInsight.completion.CompletionType;
 import com.intellij.codeInsight.lookup.LookupElementBuilder;
+import com.intellij.openapi.project.DumbAware;
 import com.intellij.patterns.PlatformPatterns;
+import com.intellij.psi.JavaPsiFacade;
+import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiElement;
+import com.intellij.psi.search.GlobalSearchScope;
+import com.intellij.psi.search.PsiShortNamesCache;
 import com.intellij.psi.xml.XmlAttribute;
 import com.intellij.psi.xml.XmlAttributeValue;
 import com.intellij.psi.xml.XmlFile;
 import com.intellij.psi.xml.XmlTag;
 import com.intellij.util.ProcessingContext;
 
-import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.function.BiFunction;
 import java.util.function.Function;
+import java.util.function.Predicate;
 
 /**
- * T-XmlSynHi D5 后半：resultMap {@code column} 属性值补全（ResultMapColumns 接线）。
+ * T-XmlSynHi D5 后半 + T-XmlGap W5-10：resultMap 属性值补全。
  *
- * <p>触发位：{@code <result|id … column="…">} 属性值（resultMap 上下文）。
- * 候选 = mapper 全文 SELECT 投影列名（{@link ResultMapColumnCompletionMemo#columnsFor}），
- * 按已输入前缀过滤/排序（{@link ResultMapColumns#suggest}：前缀精确 &gt; 下划线驼峰近邻 &gt; Levenshtein）。
+ * <p>触发位：{@code <result|id … column="…"|property="…">} 属性值（resultMap 上下文）。</p>
+ * <ul>
+ *   <li>{@code column} 候选 = <b>引用了该 resultMap 的 {@code <select>} 语句</b>的投影列
+ *       （T-XmlGap W5-10 修正：原为 mapper 全文 SELECT 投影列，会混入无关列），
+ *       按已输入前缀过滤/排序（{@link ResultMapColumns#suggest}）。</li>
+ *   <li>{@code property} 候选 = 该 resultMap {@code <resultMap type="X">} 的类字段（新增，W5-10「property 建议」）。</li>
+ * </ul>
  * 非结果映射上下文零候选（反向验证）。
  *
- * <p>T-PerfSweep16 F40：补全链接让位门（{@link XmlSynHiGate#shouldYield}，与 typedHandler 口径对齐）
- * + 全文重扫单槽 memo（键=文件 url + modificationStamp，stamp 变化即失效）。
+ * <p>T-PerfSweep16 F40：补全链接让位门（{@link XmlSynHiGate#shouldYield}）+ 全文重扫 memo
+ * （键=文件 url + modificationStamp [+ resultMapId]；F89 起 {@link ResultMapColumnCompletionMemo}
+ * 双槽化）。</p>
+ *
+ * <p>F93（T-PerfSweep25，顺手件）：补 {@link DumbAware} 对齐三兄弟（XmlSqlCompletionContributor /
+ * MybatisConfigCompletionContributor / WrapperCompletionContributor 均为
+ * {@code CompletionContributor(), DumbAware}——T-XmlCmpl2 教训：缺该标记接口 dumb 期被静默跳过）。
+ * dumb 期列名候选走文件文本提取不受索引影响；类字段候选（{@link #resultMapTypeFields} 的
+ * findClass/ShortNamesCache）索引未就绪时可能不全，runCatching 兜底空表，无异常面。</p>
  */
-public class ResultMapColumnCompletionContributor extends CompletionContributor {
+public class ResultMapColumnCompletionContributor extends CompletionContributor implements DumbAware {
 
     public ResultMapColumnCompletionContributor() {
         extend(CompletionType.BASIC,
@@ -48,7 +68,7 @@ public class ResultMapColumnCompletionContributor extends CompletionContributor 
                             return;
                         }
                         XmlAttribute attr = (XmlAttribute) attrValue.getParent();
-                        if (!attr.getName().equals("column")) {
+                        if (!attr.getName().equals("column") && !attr.getName().equals("property")) {
                             return;
                         }
                         if (!(attr.getParent() instanceof XmlTag)) {
@@ -58,20 +78,28 @@ public class ResultMapColumnCompletionContributor extends CompletionContributor 
                         if (!tag.getName().equals("result") && !tag.getName().equals("id")) {
                             return;
                         }
-                        if (!inResultMap(tag)) {
+                        XmlTag resultMapTag = enclosingResultMap(tag);
+                        if (resultMapTag == null) {
                             return;
                         }
                         // T-PerfSweep16 F40：让位门（设置关/平台注入器/三方插件在场 → 零候选）
                         if (XmlSynHiGate.shouldYield(position.getProject())) {
                             return;
                         }
-                        if (!(tag.getContainingFile() instanceof XmlFile)) {
+                        if (!(resultMapTag.getContainingFile() instanceof XmlFile)) {
                             return;
                         }
-                        XmlFile file = (XmlFile) tag.getContainingFile();
-                        List<String> columns = ResultMapColumnCompletionMemo.columnsFor(file);
+                        XmlFile file = (XmlFile) resultMapTag.getContainingFile();
                         String typed = currentTyped(attrValue, parameters);
-                        for (String candidate : ResultMapColumns.suggest(columns, typed)) {
+                        List<String> candidates;
+                        if (attr.getName().equals("column")) {
+                            String resultMapId = resultMapTag.getAttributeValue("id");
+                            candidates = ResultMapColumnCompletionMemo.columnsForResultMap(
+                                    file, resultMapId != null ? resultMapId : "");
+                        } else {
+                            candidates = resultMapTypeFields(resultMapTag);
+                        }
+                        for (String candidate : ResultMapColumns.suggest(candidates, typed)) {
                             result.addElement(LookupElementBuilder.create(candidate));
                         }
                     }
@@ -90,30 +118,72 @@ public class ResultMapColumnCompletionContributor extends CompletionContributor 
     }
 
     /** 祖先链存在 resultMap 标签（result/id 行属于结果映射上下文）。 */
-    private static boolean inResultMap(XmlTag tag) {
+    private static XmlTag enclosingResultMap(XmlTag tag) {
         XmlTag cur = tag.getParentTag();
         while (cur != null) {
             if (cur.getName().equals("resultMap")) {
-                return true;
+                return cur;
             }
             cur = cur.getParentTag();
         }
-        return false;
+        return null;
+    }
+
+    /** {@code <resultMap type="X">} 的类字段（不可解析 → 空）。 */
+    private static List<String> resultMapTypeFields(XmlTag resultMapTag) {
+        try {
+            String rawType = resultMapTag.getAttributeValue("type");
+            String typeName = rawType != null ? rawType.trim() : null;
+            if (typeName == null || typeName.isBlank()) {
+                return List.of();
+            }
+            com.intellij.openapi.project.Project project = resultMapTag.getProject();
+            GlobalSearchScope scope = GlobalSearchScope.allScope(project);
+            PsiClass clazz;
+            if (typeName.contains('.')) {
+                clazz = JavaPsiFacade.getInstance(project).findClass(typeName, scope);
+            } else {
+                PsiClass[] classes = PsiShortNamesCache.getInstance(project).getClassesByName(typeName, scope);
+                clazz = classes.length > 0 ? classes[0] : null;
+            }
+            if (clazz == null) {
+                return List.of();
+            }
+            java.util.LinkedHashSet<String> names = new java.util.LinkedHashSet<>();
+            for (com.intellij.psi.PsiField field : clazz.getAllFields()) {
+                String name = field.getName();
+                if (name != null && !name.isBlank()) names.add(name);
+            }
+            return List.copyOf(names);
+        } catch (Throwable t) {
+            return List.of();
+        }
     }
 }
 
 /**
- * T-PerfSweep16 F40：{@code extractColumns} 全文重扫的单槽 memo（进程内一份，补全触发高频）。
+ * T-PerfSweep16 F40 + T-XmlGap W5-10：{@code extractColumns} 全文重扫 memo（进程内一份，补全触发高频）。
  *
- * <p>键 = 文件 url + modificationStamp + 文本长度（指纹组合）：stamp 变化即失效；**长度是
- * 实测补上的第二键**——测试夹具与部分内存态文件的 LightVirtualFile 在文档变更后
+ * <p>键 = 文件 url + modificationStamp + 文本长度（指纹组合）：stamp 变化即失效；<b>长度是
+ * 实测补上的第二键</b>——测试夹具与部分内存态文件的 LightVirtualFile 在文档变更后
  * modificationStamp 不动（ResultMapColumnCompletionMemoTest 真红实证），单靠 stamp 会
- * 返回陈旧候选。编辑后自然回源重扫。
- * {@code extractor} 为 internal 缝——测试注入计数 lambda 断言「二次补全零重扫」。
+ * 返回陈旧候选。编辑后自然回源重扫。</p>
  *
- * <p>移植注记：Kotlin internal object → public final 类 + 全静态（k2j 规则 §0.1）。
+ * <p>T-XmlGap W5-10 增加第二条轨：{@link #columnsForResultMap}（键额外含 resultMapId，按文件分槽），
+ * 与既有 {@link #columnsFor}（整文件全量，签名保持不变——既有测试与注解链复用）互不干扰。</p>
+ *
+ * <p>F89 双槽化（T-PerfSweep25）：原进程级单槽在两份 mapper 交替补全时互相驱逐，每次交替即一次
+ * 全文重扫 miss——现两轨各两槽（键命中复用、全新键按翻转位驱逐其一），两文件交替各占一槽零重扫；
+ * 单文件常态恒落首槽（与单槽行为一致），三文件起恢复有界乒乓。线程模型同前：字段各自
+ * volatile，竞态最坏=陈旧未命中回源重扫，无结构性破坏。</p>
+ *
+ * <p>{@code extractor} / {@code resultMapExtractor} 为 internal 缝——测试注入计数 lambda
+ * 断言「二次补全零重扫」。</p>
+ *
+ * <p>移植注记：Kotlin internal object → public final 类 + 全静态（k2j 规则 §0.1；internal→public——
+ * master 侧 ui.highlight 包的 XmlSqlCompletionContributor 跨包引用本类，包私有不可达）。</p>
  */
-final class ResultMapColumnCompletionMemo {
+public final class ResultMapColumnCompletionMemo {
 
     private ResultMapColumnCompletionMemo() {
     }
@@ -122,10 +192,46 @@ final class ResultMapColumnCompletionMemo {
     public static volatile Function<String, List<String>> extractor =
             text -> ResultMapColumns.extractColumns(text);
 
-    private static volatile String memoUrl = null;
-    private static volatile long memoStamp = Long.MIN_VALUE;
-    private static volatile int memoLen = -1;
-    private static volatile List<String> memoValue = new ArrayList<>();
+    /** W5-10 提取函数缝（文本 + resultMapId → 候选）。 */
+    public static volatile BiFunction<String, String, List<String>> resultMapExtractor =
+            (text, resultMapId) -> ResultMapColumns.extractColumnsForResultMap(text, resultMapId);
+
+    /** F89 双槽：槽 = url 键 + 戳 + 长度 + 值（rm 轨值为 per-resultMapId map）。 */
+    private static final class Slot {
+        volatile String url = null;
+        volatile long stamp = Long.MIN_VALUE;
+        volatile int len = -1;
+        volatile List<String> value = List.of();
+    }
+
+    private static final class RmSlot {
+        volatile String url = null;
+        volatile long stamp = Long.MIN_VALUE;
+        volatile int len = -1;
+        volatile Map<String, List<String>> value = Map.of();
+    }
+
+    private static final Slot[] memoSlots = {new Slot(), new Slot()};
+    private static final RmSlot[] rmMemoSlots = {new RmSlot(), new RmSlot()};
+    private static volatile boolean evictFlip = false;
+    private static volatile boolean rmEvictFlip = false;
+
+    /** F89 双槽选位：本键已有槽则复用；全新键按翻转位驱逐其一（两文件交替各占一槽零驱逐）。 */
+    private static Slot pickSlot(Predicate<Slot> mine) {
+        for (Slot slot : memoSlots) {
+            if (mine.test(slot)) return slot;
+        }
+        evictFlip = !evictFlip;
+        return memoSlots[evictFlip ? 1 : 0];
+    }
+
+    private static RmSlot pickRmSlot(Predicate<RmSlot> mine) {
+        for (RmSlot slot : rmMemoSlots) {
+            if (mine.test(slot)) return slot;
+        }
+        rmEvictFlip = !rmEvictFlip;
+        return rmMemoSlots[rmEvictFlip ? 1 : 0];
+    }
 
     /** 命中 memo 直接返回缓存（零重扫）；键不匹配才全文提取并回填。 */
     public static List<String> columnsFor(XmlFile file) {
@@ -133,22 +239,61 @@ final class ResultMapColumnCompletionMemo {
         long stamp = file.getVirtualFile() != null
                 ? file.getVirtualFile().getModificationStamp() : file.getModificationStamp();
         int len = file.getTextLength();
-        if (java.util.Objects.equals(url, memoUrl) && stamp == memoStamp && len == memoLen) {
-            return memoValue;
+        Slot slot = pickSlot(s -> java.util.Objects.equals(url, s.url));
+        if (java.util.Objects.equals(url, slot.url) && stamp == slot.stamp && len == slot.len) {
+            return slot.value;
         }
         List<String> value = extractor.apply(file.getText());
-        memoUrl = url;
-        memoStamp = stamp;
-        memoLen = len;
-        memoValue = value;
+        slot.url = url;
+        slot.stamp = stamp;
+        slot.len = len;
+        slot.value = value;
+        return value;
+    }
+
+    /**
+     * W5-10：指定 resultMap 的候选（引用该 resultMap 的 {@code <select>} 投影列）。
+     * 同一文件内多 resultMap 复用一份解析结果（按 resultMapId 分槽）。
+     */
+    public static List<String> columnsForResultMap(XmlFile file, String resultMapId) {
+        String url = file.getVirtualFile() != null ? file.getVirtualFile().getUrl() : null;
+        long stamp = file.getVirtualFile() != null
+                ? file.getVirtualFile().getModificationStamp() : file.getModificationStamp();
+        int len = file.getTextLength();
+        RmSlot slot = pickRmSlot(s -> java.util.Objects.equals(url, s.url));
+        if (!java.util.Objects.equals(url, slot.url) || stamp != slot.stamp || len != slot.len) {
+            slot.url = url;
+            slot.stamp = stamp;
+            slot.len = len;
+            slot.value = Map.of();
+        }
+        List<String> cached = slot.value.get(resultMapId);
+        if (cached != null) {
+            return cached;
+        }
+        // 一次全文扫描解析该 resultMap 的候选（同文件多 resultMap：每 id 一次，file.text O(n)）
+        List<String> value = resultMapExtractor.apply(file.getText(), resultMapId);
+        Map<String, List<String>> updated = new LinkedHashMap<>(slot.value);
+        updated.put(resultMapId, value);
+        slot.value = java.util.Collections.unmodifiableMap(updated);
         return value;
     }
 
     /** 测试缝：清空 memo，保证断言从冷态起算。 */
     public static void resetForTest() {
-        memoUrl = null;
-        memoStamp = Long.MIN_VALUE;
-        memoLen = -1;
-        memoValue = new ArrayList<>();
+        for (Slot slot : memoSlots) {
+            slot.url = null;
+            slot.stamp = Long.MIN_VALUE;
+            slot.len = -1;
+            slot.value = List.of();
+        }
+        for (RmSlot slot : rmMemoSlots) {
+            slot.url = null;
+            slot.stamp = Long.MIN_VALUE;
+            slot.len = -1;
+            slot.value = Map.of();
+        }
+        evictFlip = false;
+        rmEvictFlip = false;
     }
 }

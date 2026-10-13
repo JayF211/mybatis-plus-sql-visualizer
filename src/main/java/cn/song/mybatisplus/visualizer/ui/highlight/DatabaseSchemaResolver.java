@@ -483,6 +483,38 @@ public final class DatabaseSchemaResolver {
     }
 
     /**
+     * T-Dgm-StmtScope：<b>语句级</b>批量元数据（JOIN 图整图富化用）——同一句的表尽量取自<b>同一个库</b>。
+     *
+     * <p>逐表的 {@link #tableMeta} 在多数据源下是「注册序首个命中」，跨库同名表会被撞上：真机 A10
+     * （2026-10-11 沙盒实测）{@code "user"} + user_address + area 同句，本地 {@code jpa_demo} 里也有张
+     * {@code user}（9 列、<b>零 COMMENT</b>，注册序在 {@code mpj_demo} 之前）→ 主表落到那张表上：列注释空白、
+     * 类型串变成那张表的、库里独有列还被当「实体未映射列」追加进节点；而同一句的 JOIN 表只有
+     * {@code mpj_demo} 有、解析正确 → 图上「主表无注释、副表有注释」。沙盒日志三行可复现该判据：
+     * {@code scan: table=user, ds=jpa_demo@localhost, hit=true, foundColumns=9} /
+     * {@code warn … native Database diagram (B path) not taken} / {@code B path locateDbTables: wanted=["user", …]}。</p>
+     *
+     * <p>消歧规则（{@link #resolveBatchFromSources}）：先逐表按名解析（成本、正/负缓存、库名限定语义与
+     * {@link #tableMeta} 逐字一致），再以「各来源持有本批表的数量」投票选主来源，少数来源持有的表若主来源
+     * 也有则改判给主来源。主来源没有的表<b>保留原来源</b>——跨库联接仍逐表回落，不引入新失败模式。</p>
+     *
+     * @param tableNames 表名（可含引用符/大小写原样；键按<b>传入原样</b>返回，调用方按同名回查）
+     * @return 表名 → 元数据（含解析不到的条目 = 空 TableMeta，调用方据此保留实体推断值）
+     */
+    public static Map<String, TableMeta> tableMetas(Project project, Collection<String> tableNames) {
+        Set<String> rawSet = new LinkedHashSet<>();
+        for (String name : tableNames) {
+            if (name != null && !name.isBlank()) rawSet.add(name);
+        }
+        if (project == null || rawSet.isEmpty()) return Map.of();
+        if (!isDatabaseAvailable()) return Map.of();
+        List<Object> sources = dataSources(project);
+        if (sources == null) return Map.of();
+        if (sources.isEmpty()) return Map.of();
+        List<String> raws = new ArrayList<>(rawSet);
+        return ReadAction.compute(() -> resolveBatchFromSources(raws, sources, null));
+    }
+
+    /**
      * 数据源侧元数据（表注释为 null 时该维度缺失，调用方逐维度回落）。
      *
      * @param comment    数据源表 COMMENT（`DasTable.getComment()`，null/空白 = 数据库没写，调用方回落实体注释）
@@ -636,6 +668,88 @@ public final class DatabaseSchemaResolver {
     /** {@link #resolveFromSources} 便捷形态：scanProbe 缺省 null（生产反射路径）。 */
     public static TableMeta resolveFromSources(String tableName, List<Object> sources) {
         return resolveFromSources(tableName, sources, null);
+    }
+
+    /**
+     * T-Dgm-StmtScope：批量解析（{@link #tableMetas} 的实现，纯逻辑便于单测直测）。
+     *
+     * <p>阶段 1 逐表按名解析：对每个表名按数据源注册序逐个 probe，首个产出（列非空 ∨ 表注释非空）
+     * 的来源即该表的来源——与单表 {@link #resolveFromSources} 的「首个命中」逐字同口径（含 hits/miss 时
+     * 的正负缓存写入），故<b>单表批量与旧行为完全一致</b>。</p>
+     *
+     * <p>阶段 2 句内一致性：以「持有本批表的数量」投票选出主来源（{@link #pickStatementSource}），
+     * 少数来源持有的表若在主来源里也存在则改判给主来源（表集越全的来源才可能是本句真正在用的库）；
+     * 主来源没有的表保留阶段 1 的来源（跨库联接逐表回落）。</p>
+     *
+     * @param probe 测试缝：默认 {@code (ds, name) -> resolveFromSources(name, listOf(ds))}；替身只换取数，
+     *   投票/改判逻辑仍是生产代码本体
+     * @return 以<b>传入原样表名</b>为键（含引用符），解析不到的键也有条目（空 TableMeta）
+     */
+    public static Map<String, TableMeta> resolveBatchFromSources(List<String> rawNames, List<Object> sources) {
+        return resolveBatchFromSources(rawNames, sources, null);
+    }
+
+    public static Map<String, TableMeta> resolveBatchFromSources(
+            List<String> rawNames, List<Object> sources, BiFunction<Object, String, TableMeta> probe) {
+        BiFunction<Object, String, TableMeta> fetch =
+                probe != null ? probe : (ds, name) -> resolveFromSources(name, List.of(ds));
+
+        int[] owners = new int[rawNames.size()];
+        java.util.Arrays.fill(owners, -1);
+        TableMeta[] metas = new TableMeta[rawNames.size()];
+        for (int i = 0; i < rawNames.size(); i++) {
+            for (int si = 0; si < sources.size(); si++) {
+                TableMeta meta = fetch.apply(sources.get(si), rawNames.get(i));
+                if (!meta.columns().isEmpty() || meta.comment() != null) {
+                    owners[i] = si;
+                    metas[i] = meta;
+                    break;
+                }
+            }
+        }
+
+        Integer primary = pickStatementSource(java.util.Arrays.stream(owners).boxed().toList());
+        if (primary != null) {
+            for (int i = 0; i < rawNames.size(); i++) {
+                // 未解析到的表不必再试：阶段 1 已扫过全部来源（包含主来源）
+                if (owners[i] == primary || owners[i] < 0) continue;
+                TableMeta meta = fetch.apply(sources.get(primary), rawNames.get(i));
+                if (!meta.columns().isEmpty() || meta.comment() != null) {
+                    owners[i] = primary;
+                    metas[i] = meta;
+                }
+            }
+        }
+        Map<String, TableMeta> out = new LinkedHashMap<>();
+        for (int i = 0; i < rawNames.size(); i++) {
+            out.put(rawNames.get(i), metas[i] != null ? metas[i] : new TableMeta(null, Map.of()));
+        }
+        return out;
+    }
+
+    /**
+     * T-Dgm-StmtScope：句内主来源选择（纯逻辑，单测直测）——返回持有本批表<b>最多</b>的数据源下标
+     * （owners 逐表给出来源下标，-1 = 未解析到）。
+     *
+     * <p>同票取<b>下标最小者</b>（数据源注册序在前者），与单表解析的「注册序首个命中」同口径：
+     * 单表批量、或全部表都在同一来源时，结论与改动前逐字一致。无来源持有时返回 null。</p>
+     */
+    public static Integer pickStatementSource(List<Integer> owners) {
+        Map<Integer, Integer> counts = new LinkedHashMap<>();
+        for (Integer owner : owners) {
+            if (owner == null || owner < 0) continue;
+            counts.merge(owner, 1, Integer::sum);
+        }
+        Integer best = null;
+        int bestCount = 0;
+        // 迭代序 = 首次出现序 = 来源注册序，故严格大于才换人（同票留住先出现的）
+        for (Map.Entry<Integer, Integer> entry : counts.entrySet()) {
+            if (entry.getValue() > bestCount) {
+                best = entry.getKey();
+                bestCount = entry.getValue();
+            }
+        }
+        return best;
     }
 
     /** database 插件是否可用（Ultimate/DataGrip）。 */

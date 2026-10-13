@@ -33,13 +33,30 @@ public final class SourceSqlCompleter {
     public static final SourceSqlCompleter INSTANCE = new SourceSqlCompleter();
 
     /**
-     * 返回未过滤前缀的补全项（关键字/表名/列名/别名列/{@code #{}` 参数名}）。
+     * 返回未过滤前缀的补全项（关键字/函数/表名/列名/别名列/{@code #{}} 参数名/投影属性/反引号列名）。
      *
      * @param text    语句文本（已 stripXmlTags 等长 / 注解常量求值文本）
      * @param offset  光标在 text 中的偏移（0..text.length，越界 clamp）
      * @param context 补全上下文（主表 + 联表候选 + 参数名；XmlSqlCompletionContextResolver 产物）
      */
     public static List<LookupElementBuilder> sqlCompletions(String text, int offset, SourceSqlContext context) {
+        return sqlCompletions(text, offset, context, List.of(), List.of());
+    }
+
+    /**
+     * 返回未过滤前缀的补全项（关键字/函数/表名/列名/别名列/{@code #{}} 参数名/投影属性/反引号列名）。
+     *
+     * @param text    语句文本（已 stripXmlTags 等长 / 注解常量求值文本）
+     * @param offset  光标在 text 中的偏移（0..text.length，越界 clamp）
+     * @param context 补全上下文（主表 + 联表候选 + 参数名；XmlSqlCompletionContextResolver 产物）
+     * @param projectionProperties   T-XmlGap W5-7：SELECT 投影位的额外候选（resultType 类属性，
+     *                               由贡献器按 PSI 解析后传入；空=不产）。纯文本层不感知 PSI。
+     * @param quotedIdentifierCandidates T-XmlGap W5-8：反引号内的额外候选（本文件 resultMap 的
+     *                               column+property，由贡献器传入；空=不产）。
+     */
+    public static List<LookupElementBuilder> sqlCompletions(
+            String text, int offset, SourceSqlContext context,
+            List<String> projectionProperties, List<String> quotedIdentifierCandidates) {
         try {
             int safeOffset = Math.max(0, Math.min(offset, text.length()));
             String before = text.substring(0, safeOffset);
@@ -47,6 +64,7 @@ public final class SourceSqlCompleter {
             Map<String, TableInfo> aliasMap = bindAliases(SqlTextAnalysis.parseTableAliases(text), context);
 
             List<LookupElementBuilder> result = new ArrayList<>();
+            Set<String> seen = new LinkedHashSet<>();
 
             // 关键字：无前缀（光标前无进行中的词）时过滤已在文本中出现的关键字（避免重复建议）
             Matcher prefixM = PREFIX_AT_CARET.matcher(before);
@@ -54,7 +72,21 @@ public final class SourceSqlCompleter {
             String upperText = text.toUpperCase();
             SqlLexer.KEYWORDS.stream()
                     .filter(keyword -> !typedPrefix.isEmpty() || !upperText.contains(keyword))
-                    .forEach(keyword -> result.add(SourceSqlSuggestionFactory.keyword(keyword)));
+                    .forEach(keyword -> {
+                        if (seen.add(keyword)) result.add(SourceSqlSuggestionFactory.keyword(keyword));
+                    });
+
+            // T-XmlGap W5-9：SQL 函数表（独立于关键字；与 KEYWORDS 混排的九个函数名由 seen 去重）
+            MyBatisXmlCompletionData.SQL_FUNCTIONS.stream()
+                    .filter(fn -> !typedPrefix.isEmpty() || !upperText.contains(fn))
+                    .forEach(fn -> {
+                        if (seen.add(fn)) result.add(SourceSqlSuggestionFactory.keyword(fn));
+                    });
+
+            // T-XmlGap W5-9：单字母关键字捷径（已输入恰好 1 个字符时按表补候选；已出现者去重）
+            for (String keyword : MyBatisXmlCompletionData.singleLetterShortcuts(typedPrefix)) {
+                if (seen.add(keyword)) result.add(SourceSqlSuggestionFactory.keyword(keyword));
+            }
 
             // `别名.` 前缀：命中绑定别名 → 该实体列；未命中 → 跳过列补全（不产出无前缀列）
             Matcher aliasM = ALIAS_PREFIX_AT_CARET.matcher(before);
@@ -83,21 +115,35 @@ public final class SourceSqlCompleter {
                 }
             }
 
+            // T-XmlGap W5-7：SELECT 投影位（SELECT 与 FROM 之间）额外产出 resultType 类属性
+            if (clause == SqlClause.SELECT_COLUMN && !projectionProperties.isEmpty()) {
+                for (String prop : projectionProperties) {
+                    if (seen.add(prop)) result.add(SourceSqlSuggestionFactory.param(prop));
+                }
+            }
+
             // 表名：FROM/JOIN 后——主表（表注释）+ candidates 其余表（去重，全给）
             if (clause == SqlClause.TABLE) {
-                Set<String> seen = new LinkedHashSet<>();
+                Set<String> tableSeen = new LinkedHashSet<>();
                 SqlCompletionContext main = context.getMain();
                 if (main != null) {
                     String mainName = main.tableName;
-                    if (mainName != null && seen.add(mainName)) {
+                    if (mainName != null && tableSeen.add(mainName)) {
                         result.add(SourceSqlSuggestionFactory.table(mainName, main.tableComment));
                     }
                 }
                 for (TableInfo table : context.getCandidates()) {
                     String tName = table.getTableName();
-                    if (seen.add(tName)) {
+                    if (tableSeen.add(tName)) {
                         result.add(SourceSqlSuggestionFactory.table(tName, table.getComment()));
                     }
+                }
+            }
+
+            // T-XmlGap W5-8：反引号内（`xxx）——产出额外候选（插入串带反引号，成对）
+            if (QUOTED_IDENTIFIER_AT_CARET.matcher(before).find()) {
+                for (String name : quotedIdentifierCandidates) {
+                    result.add(SourceSqlSuggestionFactory.quotedIdentifier(name));
                 }
             }
 
@@ -148,6 +194,9 @@ public final class SourceSqlCompleter {
 
     /** 光标左侧最近 {@code 别名.} 片段（必须紧贴光标，如 {@code SELECT u.<caret>}）；dropLast(1) 得别名。 */
     private static final Pattern ALIAS_PREFIX_AT_CARET = Pattern.compile("[\\w$]+\\.$");
+
+    /** T-XmlGap W5-8：光标处于未闭合反引号内（{@code `xxx}；行内恰有一个前导反引号）。 */
+    private static final Pattern QUOTED_IDENTIFIER_AT_CARET = Pattern.compile("`[\\w$]*$");
 
     private SourceSqlCompleter() {
     }
