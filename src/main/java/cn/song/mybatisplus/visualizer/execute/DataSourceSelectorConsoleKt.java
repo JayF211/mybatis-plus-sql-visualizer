@@ -330,7 +330,18 @@ public final class DataSourceSelectorConsoleKt {
                 }
             }
 
-            JComponent fullComponent = resultComponent != null ? DataSourceSelectorResultsKt.buildConsoleSplitPane(topBlock, resultComponent) : null;
+            // 4.5 完整控制台 = 顶部块（上）/ 结果区（下）垂直 SplitPane（M36.4 主题化形态）
+            // ★A49：**无嵌入宿主（onConsole == null）时不组 SplitPane、不摘 DBN 结果组件**——
+            // SQL 快捷模板 / 日志转 SQL 执行链只把语句送原生 Database 控制台执行，控制台由 DBN
+            // 在 IDE 底部 Services 视图自行展示；此时组出来的 SplitPane 永不展示（onConsole?.invoke
+            // 是 no-op），摘取结果组件（ui.getComponent()）无收益、只扰动 DBN 组件树。判据见
+            // shouldComposeEmbedSplitPane（含归因更正：这是排查「网格 0 rows」时顺带发现的收敛，
+            // 该现象真因是调用方传了不存在的表名，非插件行为）。
+            JComponent fullComponent = resultComponent != null
+                    ? (DataSourceSelectorResultsKt.shouldComposeEmbedSplitPane(onConsole != null, true)
+                        ? DataSourceSelectorResultsKt.buildConsoleSplitPane(topBlock, resultComponent)
+                        : null)
+                    : null;
 
             pendingOnConsole = onConsole;
             JComponent component = fullComponent != null ? fullComponent : topBlock;
@@ -351,6 +362,13 @@ public final class DataSourceSelectorConsoleKt {
             sharedExecOption = execOption;
             sharedUi = ui;
             sharedTopBlock = topBlock;
+            // M36.5.53：sharedFullComponent 缓存**完整 SplitPane**（preparedFullComponent 也是
+            // fullComponent），不随预览时内嵌的 component（可能为 topBlock 编辑器）变化——否则
+            // 执行时 swapResultIntoPersistentConsole 拿到的 sharedFullComponent 是 topBlock（非
+            // SplitPane）→ 回退 buildConsoleSplitPane 重建 → A4 身份漂移。预留给执行复用。
+            // ★A49：无嵌入宿主时 fullComponent 为 null（不组不摘）——执行复用链
+            // （reuseSharedConsole）在 sharedFullComponent == null 时自行回退 buildConsoleSplitPane，
+            // 语义不变（见 shouldComposeEmbedSplitPane）。
             sharedFullComponent = fullComponent;
             sharedDataSourceName = dataSourceName;
             // T-SI-02：控制台已建，数据源 UUID 从此可取（LocalDataSource.getUniqueId）——
@@ -502,6 +520,42 @@ public final class DataSourceSelectorConsoleKt {
 
             final int generation = executionGeneration;
             LOG.info("[M36] executeOnConsole begin (build=" + BUILD_STAMP + ")");
+            // ★A49 只读排障日志（非功能改动，整体自吞不干扰提交流程）：本次提交的 ExecOption 四字段 +
+            // 控制台视图是否 showing + 原生编辑器组件当前宿主。「原生控制台结果不渲染/停在 0 rows」
+            // 这类现象的三列判别读数——本次该现象的真因已查明在调用方（传了不存在的表名 → 1146），
+            // 本行留作同族现象的快速判因工具：newTab=true＝走 A48 家族「新建结果页签」路径；
+            // viewShowing=false＝DBN 结果视图未挂载/未展示；editorCompParent=…editorComponent$1＝
+            // 我方把原生编辑器组件摘进了自建容器。
+            try {
+                final Object optTarget = effectiveExecOption;
+                java.util.function.Function<String, Object> opt = n -> {
+                    try {
+                        return optTarget.getClass().getField(n).get(optTarget);
+                    } catch (Throwable ignored) {
+                        return null; // getOrNull 语义
+                    }
+                };
+                Object viewShowing;
+                try {
+                    Object v = consoleClass.getMethod("getView").invoke(console);
+                    viewShowing = v != null ? v.getClass().getMethod("isShowing").invoke(v) : null;
+                } catch (Throwable ignored) {
+                    viewShowing = null; // getOrNull 语义
+                }
+                String editorCompParent;
+                try {
+                    editorCompParent = editor.getComponent() != null && editor.getComponent().getParent() != null
+                            ? editor.getComponent().getParent().getClass().getName() : null;
+                } catch (Throwable ignored) {
+                    editorCompParent = null; // getOrNull 语义
+                }
+                LOG.info("[M36][A49] submit diag: newTab=" + opt.apply("newTab") + ", execInside=" + opt.apply("execInside")
+                        + ", execOutside=" + opt.apply("execOutside") + ", execSelection=" + opt.apply("execSelection")
+                        + ", viewShowing=" + viewShowing + ", editorCompParent=" + editorCompParent);
+            } catch (Throwable t) {
+                if (FatalErrors.isFatal(t)) throw (Error) t; // T-FP-02：fatal 透传
+                // 排障读数失败只略过（runCatching 语义），不打断提交流程
+            }
             DumbService.getInstance(project).runWhenSmart(() -> {
                 if (generation != executionGeneration) {
                     LOG.warn("[M36] execution submit cancelled (generation " + generation + " != " + executionGeneration + ")");

@@ -465,16 +465,25 @@ public final class DataSourceSelectorResultsKt {
         } catch (Throwable ignored) {
             // ignore
         }
+        // ★A49：**无嵌入宿主（onConsole == null）时不重摘 DBN 结果组件**——prepare 侧已 gate，但复用链
+        // 若仍 swap 会再次把结果区组件从 DBN 原生宿主摘进我方永不展示的 SplitPane（swapResultIntoPersistentConsole
+        // 的强制换入分支会 remove 外部宿主 + 设 bottomComponent）。无宿主时摘取无收益、只扰动 DBN 组件树
+        //（详见 shouldComposeEmbedSplitPane 的归因更正：这是排查「网格 0 rows」时顺带发现的收敛，
+        // 该现象真因是调用方传了不存在的表名）。无宿主时沿用既有缓存（可能为 null）；有宿主（预览面板
+        // 复用）时判据化简后与改前逐字等价，行为不变。
+        boolean hasHost = onConsole != null;
+        boolean composeNow = shouldComposeEmbedSplitPane(hasHost, liveResult != null);
         JComponent full;
         JComponent sharedFull = sharedFullComponent;
-        if (liveResult == null) {
-            full = sharedFull;
-        } else {
+        if (composeNow && liveResult != null) {
+            // M36.5.43：swap 助手强制换入（不再返回 null）——结果区从 DBN 宿主摘入本 SplitPane
             full = swapResultIntoPersistentConsole(sharedFull, liveResult, top, LOG);
+        } else {
+            full = sharedFull;
         }
-        if (full == null) return false;
+        if (hasHost && full == null) return false;
         if (liveResult != null) lastLiveResultSwapped = liveResult;
-        sharedFullComponent = full;
+        if (hasHost) sharedFullComponent = full;
         preparedConsole = console;
         preparedEditor = editor;
         preparedScriptModel = refreshedModel != null ? refreshedModel : scriptModel;
@@ -483,9 +492,9 @@ public final class DataSourceSelectorResultsKt {
         preparedUi = sharedUi;
         preparedTopBlock = top;
         preparedResultComponent = liveResult instanceof JComponent ? (JComponent) liveResult : null;
-        preparedFullComponent = full;
+        if (hasHost) preparedFullComponent = full;
         if (onEditor != null) onEditor.accept(editor);
-        if (onConsole != null) onConsole.accept(full);
+        if (full != null && onConsole != null) onConsole.accept(full);
         if (!executeAfterPrepare) {
             // write-safe: UI-only（纯 Swing/只读，无文档写）
             if (full instanceof JSplitPane) {
@@ -845,6 +854,35 @@ public final class DataSourceSelectorResultsKt {
             List<Content> pre = resultContents(ui);
             Set<String> preExistingNames = pre.stream().map(Content::getDisplayName).collect(Collectors.toSet());
             LOG.info("[M36] result watch started (pre-existing-names=" + preExistingNames + ", ids=" + pre.stream().map(System::identityHashCode).toList() + ")");
+            // ★A49 取证：提交时刻结果区组件的**宿主**——判「有没有被摘走」的决定性读数（无论本拍是否
+            // 发生 swap 都打）。`parent` 全类名是判别力所在：`…ServiceViewComponentWrapper` = 仍在 DBN
+            // 原生宿主（未摘）；`…buildConsoleSplitPane$1` = 已在我方容器（摘了）。
+            try {
+                JComponent liveNow = null;
+                try {
+                    Object c = ui != null ? ui.getClass().getMethod("getComponent").invoke(ui) : null;
+                    liveNow = c instanceof JComponent ? (JComponent) c : null;
+                } catch (Throwable ignored) {
+                    // getOrNull 语义
+                }
+                JComponent mySp = sharedFullComponent != null ? sharedFullComponent : preparedFullComponent;
+                Component myBottom = mySp instanceof JSplitPane ? ((JSplitPane) mySp).getBottomComponent() : null;
+                Object viewShowing;
+                try {
+                    Object v = console.getClass().getMethod("getView").invoke(console);
+                    viewShowing = v != null ? v.getClass().getMethod("isShowing").invoke(v) : null;
+                } catch (Throwable ignored) {
+                    viewShowing = null; // getOrNull 语义
+                }
+                LOG.info("[M36][A49] result host at submit: parent="
+                        + (liveNow != null && liveNow.getParent() != null ? liveNow.getParent().getClass().getName() : "null")
+                        + ", mySplitBottom=" + (myBottom != null ? myBottom.getClass().getName() : "null")
+                        + ", stolen=" + (liveNow != null && mySp != null && liveNow == myBottom && liveNow.getParent() == mySp)
+                        + ", viewShowing=" + viewShowing);
+            } catch (Throwable t) {
+                if (FatalErrors.isFatal(t)) throw (Error) t; // T-FP-02：fatal 透传
+                // 取证失败只略过（runCatching 语义）
+            }
             if (ui != null && onError != null) {
                 final Object uiForWatch = ui;
                 final Consumer<String> hintOnError = onError;
@@ -906,15 +944,101 @@ public final class DataSourceSelectorResultsKt {
     }
 
 
+    /**
+     * ★A48：结果换入判定（纯函数，{@link #refreshResultsComponent} 每拍调用）——在既有三条判据
+     * （强制首换 / 组件实例变化 / 结果页签名称集合变化）之外补**第四判据：已换入组件被 DBN 挂回原生宿主**。
+     *
+     * <p>根因（M36.5.43 沙盒实证，见 {@link #swapResultIntoPersistentConsole} KDoc）：DBN 结果区组件的
+     * 「长期老家」是 {@code ServiceViewComponentWrapper}，DBN 在**本次提交新建结果页签**时会把它重新
+     * 挂回该宿主（同一实例，仅 parent 变）。原判据只比较**组件身份**（live !== lastLiveResultSwapped）
+     * 与**页签名称集合**——re-parent 两者都不变，判据恒 false，SplitPane 底部因此滞留空组件，
+     * 结果只落在 IDE 底部原生控制台（用户实证「同一会话第一次点执行预览窗内看不到结果，再点一次
+     * 才有」）。复用旧页签路径不新建内容、不触发挂父，故不中招——与两次执行日志对照一致
+     * （newTab=true 坏 / newTab=false 好）。M36.5.43 声称的「被 DBN 抢走则下拍换回」正是该判据，
+     * 但身份去重把它短路成了**一次性换入**。</p>
+     *
+     * @param host        持久整控台 SplitPane（换入目标；非分栏形态传 null）
+     * @param hostBottom  host 当前底部组件
+     * @param live        本拍从 {@code ui.getComponent()} 取到的结果组件
+     * @param lastSwapped 上一次换入的组件（去重基线）
+     * @return true = 本拍需要（重新）换入
+     */
+    public static boolean resultSwapNeeded(
+            @Nullable Component host,
+            @Nullable Component hostBottom,
+            @Nullable Component live,
+            @Nullable Component lastSwapped,
+            boolean namesChanged,
+            boolean forceSwapIn,
+            boolean alreadySwapped) {
+        if (live == null) return false;
+        if (forceSwapIn && !alreadySwapped) return true;
+        if (live != lastSwapped) return true;
+        if (namesChanged) return true;
+        // 第四判据：身份/名称都未变，但组件已不在本 SplitPane 底部（被 DBN 挂回原生宿主）——
+        // 身份去重看不见 re-parent，须按「仍在位」判定，幂等重挂回底部。
+        return host != null && (hostBottom != live || live.getParent() != host);
+    }
+
+    /**
+     * ★A49：是否组我方整控台 SplitPane——即是否允许把 DBN 结果区组件（{@code ui.getComponent()}）摘进
+     * 本插件容器（{@link #buildConsoleSplitPane} / {@link #swapResultIntoPersistentConsole}）。**只有存在嵌入宿主
+     * （onConsole 回调）时才允许。**
+     *
+     * <p>无宿主路径（SQL 快捷模板三动作 / 日志转 SQL 的「执行」，二者都走
+     * {@code SqlExecutor.execute(onConsole = null)}）只把语句交给**原生 Database 控制台**执行，控制台由
+     * DBN 在 IDE 底部 Services 视图自行展示。此时组出来的 SplitPane **永不展示**（{@code onConsole?.invoke}
+     * 是 no-op，{@code pendingOnConsole} 也为 null 故 {@link #refreshResultsComponent} 直接早退、无人回收），
+     * 摘取结果组件对本路径**无任何收益**，却扰动 DBN 自己的组件树（把结果区组件从原生宿主
+     * {@code ServiceViewComponentWrapper} 摘下、再挂进我方容器）——属 ★A48 的**同族现象**（A48 修的是嵌入
+     * 路径上「回收判据看不见 re-parent」，本判据消的是无宿主路径上「本就不该摘」）。</p>
+     *
+     * <p><b>归因更正（2026-10-13）</b>：本判据最初的立项依据是「录制里原生控制台结果网格停在 0 rows」，
+     * 后经沙盒控制台 <b>Output 页原文</b>查明该现象真因是**调用方传了不存在的表名**——录制脚本的右键
+     * 锚点按单宽估算 CJK 列宽、落到 {@code schema.sql} 注释里的中文词上，动作据其拼出
+     * {@code SELECT … FROM 对齐插件测试}，DBN 正确报 {@code [42S02][1146] Table 'mpj_demo.对齐插件测试' doesn't exist}，
+     * 网格 0 rows 是该报错的**正常表现**，**与插件行为无关**（锚点 x 610→740 修正后重录一次通过，
+     * 网格 4 行）。故本判据是排查该现象时**顺带发现并收敛**的隐患，**不是该现象的修复**；保留理由＝
+     * 无宿主路径摘取原生组件无收益、有扰动风险，去掉后更安全。</p>
+     *
+     * <p>两处组入点（prepare 侧 {@code prepareAfterEditorResolved}、复用侧 {@link #reuseSharedConsole}）同用本判据；
+     * 嵌入/预览路径（{@code onConsole != null}）的判据在条件化简后与改前**逐字等价**，行为不变。</p>
+     *
+     * @param hasEmbedHost       本次准备/执行是否带嵌入宿主回调（{@code onConsole != null}）
+     * @param hasResultComponent DBN 结果区组件是否取到（{@code resultComponent}/{@code liveResult} != null）
+     * @return true = 组 SplitPane 并换入（有宿主）；false = 不组不摘，保持原生控制台渲染
+     */
+    public static boolean shouldComposeEmbedSplitPane(boolean hasEmbedHost, boolean hasResultComponent) {
+        return hasEmbedHost && hasResultComponent;
+    }
+
+    /**
+     * T-SqlTemplateUx P2 补：{@link #refreshResultsComponent} 的**组件换入**段是否需要执行——需同时具备
+     * 嵌入宿主（{@code pendingOnConsole}）与持久容器（topBlock）。无宿主时摘 DBN 结果组件无收益、
+     * 只扰动其组件树（{@link #shouldComposeEmbedSplitPane} 的 A49 口径）。
+     *
+     * <p><b>错误晚检段不受本判据约束</b>：无嵌入宿主路径（SQL 快捷模板三动作 / 日志转 SQL 的「执行」，
+     * 均 {@code SqlExecutor.execute(onConsole = null)}）同样需要执行失败反馈——本函数拆两段正是为此，
+     * 详见 {@link #refreshResultsComponent} 的 T-SqlTemplateUx P2 补说明。</p>
+     */
+    public static boolean refreshSwapEnabled(boolean hasEmbedHost, boolean hasTopBlock) {
+        return hasEmbedHost && hasTopBlock;
+    }
+
     /** M36.5.8/M36.5.9/M36.5.13：执行后结果区刷新——限时多次重取。 */
     public static void refreshResultsComponent(Object ui, Logger LOG, boolean forceSwapIn, int generation,
                                                 @Nullable Consumer<String> onError,
                                                 @Nullable Consumer<ExecutionErrorInfo> onErrorRich,
                                                 @Nullable String sqlText) {
+        // T-SqlTemplateUx P2 补（真机 2026-10-13 录制实录）：本函数是「结果页签已出现、错误晚到」的
+        // **唯一**晚检通道（startResultTabRetry 一旦找到结果 Tab 即停、不再扫错误）。此前首行以
+        // `pendingOnConsole` 非空判定整体早退，把**无嵌入宿主**路径（SQL 快捷模板三动作 / 日志转 SQL
+        // 的「执行」，均 SqlExecutor.execute(onConsole = null)）一并挡在门外——DBN 错误晚于结果页签写入
+        // history 时无人检测，执行失败对用户完全静默（画面只剩控制台报错 + 0 rows）。故拆两段：
+        // **错误晚检恒跑**（与宿主无关）；**组件换入**用 refreshSwapEnabled 收窄（无宿主不摘 DBN 组件，A49 口径）。
         Consumer<JComponent> callback = pendingOnConsole;
-        if (callback == null) return;
         JComponent top = sharedTopBlock != null ? sharedTopBlock : preparedTopBlock;
-        if (top == null) return;
+        boolean swapEnabled = refreshSwapEnabled(callback != null, top != null);
         Object shared = sharedConsole;
         final int[] ticks = {0};
         final boolean[] swapped = {false};
@@ -957,8 +1081,21 @@ public final class DataSourceSelectorResultsKt {
             } catch (Throwable ignored) {
                 // ignore
             }
-            boolean shouldSwap = live != null && (forceSwapIn && !swapped[0] || live != lastLiveResultSwapped || namesChanged);
-            if (shouldSwap && live != null) {
+            // ★A48：第四判据（re-parent 回收）参与换入决策——详见 resultSwapNeeded KDoc。
+            JComponent host = sharedFullComponent;
+            boolean instanceChanged = live != lastLiveResultSwapped;
+            boolean shouldSwap = resultSwapNeeded(
+                    host,
+                    host instanceof JSplitPane ? ((JSplitPane) host).getBottomComponent() : null,
+                    live,
+                    lastLiveResultSwapped,
+                    namesChanged,
+                    forceSwapIn,
+                    swapped[0]);
+            // 仅第四判据为真 = 身份与名称都没变、组件被 DBN 挂回原生宿主 → 本拍是「回收重挂」
+            boolean reclaimed = shouldSwap && !(forceSwapIn && !swapped[0]) && !instanceChanged && !namesChanged;
+            // 无宿主（swapEnabled=false）时不做换入——错误晚检已在上方独立完成
+            if (swapEnabled && top != null && shouldSwap && live != null) {
                 JComponent full = swapResultIntoPersistentConsole(sharedFullComponent, live, top, LOG);
                 boolean changed = live != lastLiveResultSwapped;
                 swapped[0] = true;
@@ -967,7 +1104,7 @@ public final class DataSourceSelectorResultsKt {
                 preparedFullComponent = full;
                 Consumer<JComponent> cb = pendingOnConsole;
                 if (cb != null) cb.accept(full);
-                LOG.info("[M36] results refreshed (tick=" + ticks[0] + ", forced=" + forceSwapIn + ", instanceChanged=" + changed + ", namesChanged=" + namesChanged + ", gen=" + generation + ")");
+                LOG.info("[M36] results refreshed (tick=" + ticks[0] + ", forced=" + forceSwapIn + ", instanceChanged=" + changed + ", namesChanged=" + namesChanged + ", reclaimed=" + reclaimed + ", gen=" + generation + ")");
             }
             if (ticks[0] >= 8) {
                 timer.stop();
@@ -1454,6 +1591,11 @@ public final class DataSourceSelectorResultsKt {
             Logger LOG) {
         JSplitPane sp = full instanceof JSplitPane ? (JSplitPane) full : null;
         if (sp == null) return buildConsoleSplitPane(topBlock, liveResult);
+        // ★A49 取证修正：换入**前**记录结果组件的真实宿主。旧日志在 `sp.bottomComponent = liveResult`
+        // 之后才读 parent，恒打印本 SplitPane，证明不了「有没有从 DBN 宿主摘走」。改在改动前取，
+        // 并用**全类名**（判别力所在）：`…ServiceViewComponentWrapper` = 仍在 DBN 原生宿主；
+        // `…DataSourceSelectorResultsKt$buildConsoleSplitPane$1`（Java 匿名类形态 `…$1`）= 已在我方容器。
+        Component prevParent = liveResult.getParent();
         Component current = sp.getBottomComponent();
         if (current == liveResult && liveResult.getParent() == sp) {
             Dimension rmin = liveResult.getMinimumSize();
@@ -1464,6 +1606,11 @@ public final class DataSourceSelectorResultsKt {
             return sp;
         }
         if (current != null) sp.remove(current);
+        // ★A48：显式从**外部宿主**摘出——DBN 在新建结果页签时会把结果组件重新挂回
+        // ServiceViewComponentWrapper（同一实例、仅 parent 变），不摘会让组件继续留在原生宿主
+        // （预览窗内空白、结果只出现在 IDE 底部原生控制台）。parent 为 sp/无父时本行 no-op。
+        Component extHost = liveResult.getParent();
+        if (extHost != null && extHost != sp) extHost.remove(liveResult);
         sp.setBottomComponent(liveResult);
         Dimension lrmin = liveResult.getMinimumSize();
         liveResult.setMinimumSize(new Dimension(lrmin != null ? lrmin.width : 400, 160));
@@ -1482,7 +1629,8 @@ public final class DataSourceSelectorResultsKt {
         sp.revalidate();
         sp.repaint();
         LOG.info("[M36] persistent console bottom swapped (result id=" + System.identityHashCode(liveResult)
-                + ", prevParent=" + (liveResult.getParent() != null ? liveResult.getParent().getClass().getSimpleName() : "null") + ")");
+                + ", prevParent=" + (prevParent != null ? prevParent.getClass().getName() : "null")
+                + ", fromExternalHost=" + (prevParent != null && prevParent != sp) + ")");
         return sp;
     }
 

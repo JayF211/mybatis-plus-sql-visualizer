@@ -2,6 +2,8 @@
 package cn.song.mybatisplus.visualizer.mcp;
 
 import cn.song.mybatisplus.visualizer.execute.UnboundedWriteDetector;
+import cn.song.mybatisplus.visualizer.sql.Dialect;
+import cn.song.mybatisplus.visualizer.sql.DialectRegistry;
 import cn.song.mybatisplus.visualizer.sql.SqlPerfAnalyzer;
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
 import cn.song.mybatisplus.visualizer.xml.XmlMapperParser;
@@ -16,6 +18,7 @@ import com.intellij.mcpserver.annotations.McpToolHintValue;
 import com.intellij.mcpserver.annotations.McpToolHints;
 import com.intellij.openapi.application.ReadAction;
 import com.intellij.openapi.project.Project;
+import com.intellij.openapi.project.ProjectManager;
 import com.intellij.openapi.vfs.VirtualFile;
 
 import java.nio.charset.StandardCharsets;
@@ -92,12 +95,44 @@ public class SqlVisualizerMapperCheckTool extends McpToolsetSupport {
                 );
                 return null; // 不可达：throwExpected 必抛
             }
-            return mapperCheck(text, simulate);
+            return mapperCheck(text, simulate, resolveDialectOrNull());
         });
     }
 
-    /** 纯函数核心（文本已在手的契约+渲染分析；XmlMapperParser/渲染链零 IDE fixture 依赖）。 */
+    /**
+     * 解析当前 MCP 调用绑定项目的方言（T-DialectQuoteWarn）；无项目上下文 → null（方言感知规则
+     * 自动不判，**不**硬编码 MySQL）。master 形态经
+     * {@code McpExpectedBridge.currentProjectOrNull(coroutineContext)} 取框架注入项目——k2j 无续体
+     * 访问通道（见 {@link McpToolsetSupport} 类头移植注记），按 requireProject 同口径取「唯一打开
+     * 项目」；此处不抛：无/多个打开项目 → null（方言规则不判）。
+     */
+    private Dialect resolveDialectOrNull() {
+        Project project;
+        try {
+            Project[] openProjects = ProjectManager.getInstance().getOpenProjects();
+            project = openProjects.length == 1 ? openProjects[0] : null;
+        } catch (Throwable ignored) {
+            return null; // getOrNull 语义
+        }
+        if (project == null) return null;
+        try {
+            return DialectRegistry.INSTANCE.effective(project);
+        } catch (Throwable ignored) {
+            return null; // getOrNull 语义
+        }
+    }
+
+    /** {@link #mapperCheck(String, boolean, Dialect)} 的方言未知形态（Kotlin 默认参数重载链）。 */
     public String mapperCheck(String text, boolean simulate) {
+        return mapperCheck(text, simulate, null);
+    }
+
+    /**
+     * 纯函数核心（文本已在手的契约+渲染分析；XmlMapperParser/渲染链零 IDE fixture 依赖）。
+     *
+     * @param dialect 当前项目方言（T-DialectQuoteWarn）；null 时方言感知规则不判（默认 null 保持既有测试可编译）。
+     */
+    public String mapperCheck(String text, boolean simulate, Dialect dialect) {
         if (text.isBlank()) {
             throwExpected(McpToolErrors.code(McpToolErrors.INVALID_ARGUMENT, "xmlSnippet/filePath is empty."));
         }
@@ -181,7 +216,9 @@ public class SqlVisualizerMapperCheckTool extends McpToolsetSupport {
                             out.append("    simulate risk note: ").append(finding.detail()).append('\n');
                         }
                     }
-                    var perf = SqlPerfAnalyzer.analyze(rendered.sql());
+                    // T-DialectQuoteWarn §十二：MCP 调用点无预览面板（无绑定数据源上下文），
+                    // ANSI_QUOTES 传 null ＝未知 → 「MySQL 家族 + 双引号」这一档降级 WARN。
+                    var perf = SqlPerfAnalyzer.analyze(rendered.sql(), dialect, null);
                     if (!perf.isEmpty()) {
                         out.append("    simulate perf:\n");
                         for (var warning : perf) {

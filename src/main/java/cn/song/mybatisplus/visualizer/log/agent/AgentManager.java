@@ -924,13 +924,18 @@ public final class AgentManager implements Disposable {
     /**
      * T-FirstUsePremainConsent S2：attach 兜底挂载成功后的能力边界告知——agent 只在驱动 connect
      * 时包装连接，attach 前已存在的（池化）连接不可回溯包装，该轮 SQL 可能不全；如实告知
-     * 「重新运行项目后完整生效」，不做虚假承诺。每轮运行至多一次（{@link #onRunEnded} 复位）。
+     * 「重新运行项目后完整生效」，不做虚假承诺。
+     *
+     * <p>频次收敛（用户反馈「气泡出现频繁影响体验」）：由「每轮运行至多一次」改为<b>每项目会话至多一次</b>
+     * （{@link #attachFallbackNotifiedThisSession} 不再随 {@link #onRunEnded} 复位）。文案口径与首次语义不变——
+     * 首次挂载成功仍如实告知能力边界；此后每轮挂载只走状态行「已挂载 pid=x」与日志，不再重复弹气泡，
+     * 避免开发期反复重启项目 / 执行 SQL 时同一条告知反复打扰。
      */
     public void notifyAttachFallbackOnce() {
-        if (!attachFallbackNoticedThisRun.compareAndSet(false, true)) {
+        if (!attachFallbackNotifiedThisSession.compareAndSet(false, true)) {
             return;
         }
-        LOG.info("notifyAttachFallbackOnce: attach 兜底挂载成功——发能力边界通知（本轮仅一次）");
+        LOG.info("notifyAttachFallbackOnce: attach 兜底挂载成功——发能力边界通知（本项目会话仅一次）");
         // 通知出口自吞异常（挂载已成功，通知失败不得打断链路）；fatal 按项目惯例透传（T-FP-02）
         Runnable notifier = attachFallbackNotifier;
         if (notifier == null) {
@@ -952,8 +957,8 @@ public final class AgentManager implements Disposable {
      */
     public Runnable attachFallbackNotifier;
 
-    /** 本轮 attach 兜底通知已发标记（每轮复位；public 为同模块测试缝，供测试实例复用场景复位）。 */
-    public final AtomicBoolean attachFallbackNoticedThisRun = new AtomicBoolean(false);
+    /** attach 兜底通知已发标记（<b>每项目会话一次</b>，不随 {@link #onRunEnded} 复位；public 为同模块测试缝，供测试复位）。 */
+    public final AtomicBoolean attachFallbackNotifiedThisSession = new AtomicBoolean(false);
 
     /**
      * T-AgentConfigChannel T-02：CONFIG 回执超时巡检的排定入口（构造会话时注入）。
@@ -1967,8 +1972,8 @@ public final class AgentManager implements Disposable {
      * 与 {@link #PREMAIN_CHANNEL_TTL_MS}（见 {@link #isChannelExpired}）。
      */
     public void onRunEnded() {
-        // T-FirstUsePremainConsent S2：运行结束 → attach 兜底通知的「每轮一次」记忆复位
-        attachFallbackNoticedThisRun.set(false);
+        // T-FirstUsePremainConsent S2 频次收敛：attach 兜底通知改为「每项目会话至多一次」——
+        // 运行结束**不再**复位该标记（复位会让每次 Run / 重启项目都重弹同一条能力边界告知）。
         if (premainChannels.isEmpty()) {
             return;
         }

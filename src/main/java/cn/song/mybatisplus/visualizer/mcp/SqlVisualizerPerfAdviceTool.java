@@ -1,6 +1,8 @@
 // T-SyncK2JMaster309 自 master src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/SqlVisualizerPerfAdviceTool.kt 移植
 package cn.song.mybatisplus.visualizer.mcp;
 
+import cn.song.mybatisplus.visualizer.sql.Dialect;
+import cn.song.mybatisplus.visualizer.sql.DialectRegistry;
 import cn.song.mybatisplus.visualizer.sql.SqlPerfAnalyzer;
 import cn.song.mybatisplus.visualizer.sql.perf.PerfWarning;
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
@@ -8,6 +10,8 @@ import com.intellij.mcpserver.annotations.McpDescription;
 import com.intellij.mcpserver.annotations.McpTool;
 import com.intellij.mcpserver.annotations.McpToolHintValue;
 import com.intellij.mcpserver.annotations.McpToolHints;
+import com.intellij.openapi.project.Project;
+import com.intellij.openapi.project.ProjectManager;
 
 import java.util.Comparator;
 import java.util.List;
@@ -15,7 +19,7 @@ import java.util.List;
 /**
  * sqlv_perf_advice 工具（T-McpToolset2 / T-MTS2-01，R1 纯逻辑）：SQL 性能建议。
  *
- * 复用 F-2 的 SqlPerfAnalyzer（20 条规则引擎，规则内缓存）；警告经
+ * 复用 F-2 的 SqlPerfAnalyzer（21 条规则引擎，规则内缓存）；警告经
  * {@link MpSqlVisualizerBundle#messageEn}（bundle base 即英文，零新键）渲染为 agent 面英文，
  * 未识别键诚实输出键名。纯静态分析，不触数据库。
  * 逻辑分层同 {@link SqlVisualizerCheckSqlTool}：{@link #perfAdvice} 纯函数可测，挂起方法只做 audit 包装。
@@ -24,7 +28,7 @@ import java.util.List;
 public class SqlVisualizerPerfAdviceTool extends McpToolsetSupport {
 
     /**
-     * 建议条数预算（20 条规则多命中理论上可超）：超限按 SEVERITY 等级序先裁低级
+     * 建议条数预算（21 条规则多命中理论上可超）：超限按 SEVERITY 等级序先裁低级
      * （ERROR &gt; WARN &gt; INFO，高危建议不因预算丢失），计数后缀恒可见。阈值宽于正常
      * 产出（日常 SQL 命中为个位数）——少于上限的输出逐字节与无预算版本一致（防回归硬门禁）。
      */
@@ -46,7 +50,7 @@ public class SqlVisualizerPerfAdviceTool extends McpToolsetSupport {
     @McpDescription(
         description = "Static performance review of a single SQL statement (no execution, no database access): "
             + "SELECT * usage, missing-index hints, unindexed LIKE leading-wildcard, large IN lists, "
-            + "NULL-comparison pitfalls and more (20 rules, severity ERROR/WARN/INFO, with line numbers). "
+            + "NULL-comparison pitfalls and more (21 rules, severity ERROR/WARN/INFO, with line numbers). "
             + "Deterministic rule-engine analysis. Typical chain: sqlv_render_sql or sqlv_render_logs to "
             + "produce the SQL, this tool to review it, sqlv_explain to get the real plan. "
             + "Read-only: analysis only, never executes SQL."
@@ -57,15 +61,51 @@ public class SqlVisualizerPerfAdviceTool extends McpToolsetSupport {
         idempotentHint = McpToolHintValue.TRUE
     )
     public McpToolTextResult sqlv_perf_advice(String sql) {
-        return audit("sqlv_perf_advice", () -> perfAdvice(sql));
+        return audit("sqlv_perf_advice", () -> perfAdvice(sql, resolveDialectOrNull()));
     }
 
-    /** 纯函数核心（零 IDE 依赖）：规则分析 + 预算渲染。 */
+    /** {@link #perfAdvice(String, Dialect)} 的方言未知形态（Kotlin 默认参数重载链）。 */
     public String perfAdvice(String sql) {
+        return perfAdvice(sql, null);
+    }
+
+    /**
+     * 纯函数核心（零 IDE 依赖）：规则分析 + 预算渲染。
+     *
+     * @param dialect 当前项目方言（T-DialectQuoteWarn）；**取不到时传 null**——方言感知规则
+     *                （{@code dialect_quote_mismatch}）在 null 下自动不判，**不**硬编码 MySQL。
+     */
+    public String perfAdvice(String sql, Dialect dialect) {
         if (sql.isBlank()) {
             throwExpected(McpToolErrors.code(McpToolErrors.INVALID_ARGUMENT, "sql is empty."));
         }
-        return renderFindings(SqlPerfAnalyzer.analyze(sql));
+        // T-DialectQuoteWarn §十二：MCP 调用点无预览面板（无绑定数据源上下文），ANSI_QUOTES 传 null
+        // ＝未知 → 「MySQL 家族 + 双引号」这一档降级 WARN（不假装知道连接 sql_mode）。
+        return renderFindings(SqlPerfAnalyzer.analyze(sql, dialect, null));
+    }
+
+    /**
+     * 解析当前 MCP 调用绑定项目的方言（T-DialectQuoteWarn）；无项目上下文 → null。
+     *
+     * <p>master 形态经 {@code McpExpectedBridge.currentProjectOrNull(coroutineContext)} 取框架注入项目
+     * （该函数为**非挂起**，不引入新的挂起点）；k2j 无续体访问通道（见 {@link McpToolsetSupport}
+     * 类头移植注记），按 requireProject 同口径取「唯一打开项目」。{@code DialectRegistry.effective}
+     * 内部已自吞异常，此处再兜底一层：任何解析失败一律回落 null（不判），绝不抛出影响工具主流程。</p>
+     */
+    private Dialect resolveDialectOrNull() {
+        Project project;
+        try {
+            Project[] openProjects = ProjectManager.getInstance().getOpenProjects();
+            project = openProjects.length == 1 ? openProjects[0] : null;
+        } catch (Throwable ignored) {
+            return null; // getOrNull 语义
+        }
+        if (project == null) return null;
+        try {
+            return DialectRegistry.INSTANCE.effective(project);
+        } catch (Throwable ignored) {
+            return null; // getOrNull 语义
+        }
     }
 
     /**
@@ -78,7 +118,7 @@ public class SqlVisualizerPerfAdviceTool extends McpToolsetSupport {
      */
     public String renderFindings(List<PerfWarning> warnings) {
         if (warnings.isEmpty()) {
-            return "No performance findings (20-rule static review passed).";
+            return "No performance findings (21-rule static review passed).";
         }
         List<PerfWarning> shown;
         if (warnings.size() > MAX_FINDINGS) {

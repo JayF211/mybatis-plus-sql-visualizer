@@ -639,7 +639,8 @@ public class SqlLogPanel extends JPanel implements Disposable {
             if (tabs.getSelectedComponent() == sqlToJavaPanel) {
                 sqlToJavaPanel.refreshFormatFromSettings();
             }
-            // F-44：切换到历史 tab 时刷新数据
+            // F-44：切换到历史 tab 时刷新数据；F87（T-PerfSweep25）起这里同时是**首扫唯一入口**
+            //（历史面板构造不再自带 refresh——开窗即扫回退为首次切换才扫）
             if (historyTabIndex >= 0 && tabs.getSelectedIndex() == historyTabIndex) {
                 getHistoryPanel().refresh();
             }
@@ -2287,9 +2288,12 @@ public class SqlLogPanel extends JPanel implements Disposable {
     public static final String DEFAULT_TIMESTAMP_FORMAT = "yyyy-MM-dd HH:mm:ss";
     /** T-M39：帮助文档 URL（降级系统浏览器打开）。
      *  2026-08-31 改为自建站点 jvtools.cn（可自主接入国内 CDN；
-     *  当前实测：直连不通，需走系统/IDE 代理才可达，与 plugins.jetbrains.com 同）。 */
+     *  当前实测：直连不通，需走系统/IDE 代理才可达，与 plugins.jetbrains.com 同）。
+     *  2026-10-12：改用 canonical 域名 + 无后缀路径。旧写法
+     *  `mybatis-plus-sql-visualizer.jvtools.cn/features/wrapper-preview.html` 实测要走
+     *  两次跳转（旧域名 301 → 新域名，`.html` 308 → 无后缀），canonical 地址直接 200。 */
     private static final String HELP_DOCUMENTATION_URL =
-            "https://mybatis-plus-sql-visualizer.jvtools.cn/features/wrapper-preview.html";
+            "https://sql-visualizer.jvtools.cn/features/wrapper-preview";
     /** T-M39：帮助标签页标题。 */
     private static final String HELP_TAB_TITLE = "SQL Visualizer - Help";
 

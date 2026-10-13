@@ -25,6 +25,7 @@ import com.intellij.ui.components.JBList;
 import com.intellij.ui.components.JBScrollPane;
 import kotlin.Pair;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
 import java.awt.BorderLayout;
 import java.awt.CardLayout;
@@ -102,6 +103,13 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
     /** O-90：当前文件全量条目的同模板计数（徽章渲染与右键聚焦动作共用；applySqlSearch 重建）。 */
     private Map<String, Integer> templateCounts = Map.of();
 
+    /** F88 测试缝：非空时替代 {@code LogSqlModelsKt#structureKeyCounts} 聚合（测试注入计数 lambda 断言聚合次数）。 */
+    @Nullable
+    public java.util.function.Function<List<LogSqlEntry>, Map<String, Integer>> structureKeyCountsHookForTest = null;
+
+    /** F88：计数已对齐的条目快照（身份判据）——聚合只随快照换代重算，不随 apply 次数重算。 */
+    private List<LogSqlEntry> templateCountsSnapshotFor = null;
+
     /** O-90：同模板聚焦键（非 null 时二级列表只显该模板条目；右键动作与 chip 点击经 {@link #applyTemplateFocus}）。 */
     private String templateFocusKey = null;
 
@@ -170,7 +178,12 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
         this.searchBar = nativeSearch.getRow();
         this.searchDebounceTimer.setRepeats(false);
         buildUI();
-        refresh();
+        // F87（T-PerfSweep25）懒首扫：原「构造即 refresh」把后台扫盘成本从「用时才有」提前到
+        // 「工具窗开窗即付」（R19 历史 tab 常驻使本面板随 SqlLogPanel init 构造）。现首扫延迟到
+        // 首次切到历史 tab——SqlLogPanel 的 tab ChangeListener 已有「切到历史 tab 即 refresh」
+        // 接线（F-44 形态保留，见 SqlLogPanel），即首扫唯一入口；设置变更路径经
+        // historyDirChangedSinceLastScan 照旧。R19 引导闭环不受影响：空态引导文案由
+        // buildUI 渲染（updateFilesEmptyText），与扫描无关，开窗即见。
     }
 
     // ---------- 测试访问器（F-44-3 两级导航真实场景测试） ----------
@@ -572,7 +585,16 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
      * 才重读；未变则后台只做目录扫描 + countInFile（有缓存）。日常 IDE 实测 19MB/8708 条文件
      * 一次浏览窗口内被 refresh + showFileContent 全量解析约 3 遍（15~16.6s），此处消除 refresh 侧的重复成本。
      */
+    /** F88 测试缝：refresh 实际调用计数（判别「构造即扫」与「懒首扫」——构造路径须为 0；Kotlin private set 形态）。 */
+    private int refreshInvocationCountForTest = 0;
+
+    /** F88 测试缝读数（internal 读 → public getter）。 */
+    public int getRefreshInvocationCountForTest() {
+        return refreshInvocationCountForTest;
+    }
+
     public void refresh() {
+        refreshInvocationCountForTest++;
         // T-HistoryTabAlways：记录本次扫描所用目录（EDT 侧纯字段写），供设置变更时判定要不要重扫
         lastScannedDir = getHistoryDir();
         final int gen = ++bgGeneration;
@@ -751,8 +773,17 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
 
     private void applySqlSearch() {
         // O-90：同模板计数随文件内容重建（**全量条目**聚合——徽章计数不随搜索/聚焦波动）；
-        // 渲染器与右键聚焦动作共用同一快照
-        templateCounts = LogSqlModelsKt.structureKeyCounts(currentEntries);
+        // 渲染器与右键聚焦动作共用同一快照。
+        // F88（T-PerfSweep25）：聚合与查询无关、只随条目快照换代——同快照反复 apply（空查询
+        // 防抖反复触发、查询进出）不再重复 O(N) 聚合（报告「空查询聚合不短路」的收敛形态）；
+        // 快照换代（换文件/重载/清空）仍首算，徽章口径与首屏计数不丢（朴素「空查询即跳过」
+        // 会使首次空态展示丢徽章——applySqlSearch 是 templateCounts 唯一赋值点，已否）。
+        if (templateCountsSnapshotFor != currentEntries) {
+            templateCounts = structureKeyCountsHookForTest != null
+                    ? structureKeyCountsHookForTest.apply(currentEntries)
+                    : LogSqlModelsKt.structureKeyCounts(currentEntries);
+            templateCountsSnapshotFor = currentEntries;
+        }
         sqlCellRenderer.templateCounts = templateCounts;
         // T-HistorySearchToggles：查询解析与过滤抽为顶层纯函数 [filterHistoryEntries]（可独立单测，
         // 形态照日志页 filterBySearch 先例）；memo 实例面板持有，防抖 200ms 反复 apply 复用编译结果。
