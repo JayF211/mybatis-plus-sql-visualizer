@@ -157,11 +157,11 @@ public final class MpjLambdaConverter implements WrapperConverter {
                     if (java.util.Objects.equals(joinEntityClassName(call), cls)) { skip = true; break; }
                 }
                 if (skip) continue;
-                JoinClause join = parseJoin(call, mainAlias, project);
+                JoinClause join = parseJoin(call, mainAlias, project, classToAlias);
                 if (join == null) continue;
                 joins.add(join);
             } else if (SELECT_COLLECTION.equals(mn)) {
-                JoinClause j = parseCollection(call, joinCalls, mainAlias, project);
+                JoinClause j = parseCollection(call, joinCalls, mainAlias, project, classToAlias);
                 if (j != null) joins.add(j);
             }
         }
@@ -482,8 +482,16 @@ public final class MpjLambdaConverter implements WrapperConverter {
         return new ColumnRef(tableAlias, column.getColumnName(), alias, null, null, null, colType);
     }
 
-    /** 解析 join → 联表子句（支持 6 种 ON 形态）。 */
-    private JoinClause parseJoin(WrapperCall call, String mainAlias, Project project) {
+    /**
+     * 解析 join → 联表子句（支持 6 种 ON 形态）。
+     *
+     * <p>⚠️ T-A47（2026-10-12）：常见写法里 ON 两侧是「关联表字段 / 主表字段」，但这不是 MPJ 语义——
+     * MPJ 对 ON 两侧的列<b>各自按列自己的实体类</b>定别名。凡能识别出去重实体类的列，别名一律经
+     * {@link #onColumnAlias} 解析（查不到才回落默认值）。显式右别名（{@code leftJoin(Class, "别名", 左列,
+     * "右别名", 右列)} 形态）不受影响。</p>
+     */
+    private JoinClause parseJoin(WrapperCall call, String mainAlias, Project project,
+                                 Map<String, String> classToAlias) {
         JoinType type;
         switch (call.getMethodName()) {
             case "leftJoin" -> type = JoinType.LEFT;
@@ -570,15 +578,23 @@ public final class MpjLambdaConverter implements WrapperConverter {
         } else if (args.size() == 4 && args.get(1) instanceof WrapperArg.ColumnArg && args.get(2) instanceof WrapperArg.ColumnArg
                 && args.get(3) instanceof WrapperArg.NestedArg) {
             // ext 函数
-            onConditions.add(new Condition.ColumnComparison(withAlias(args.get(1), alias), withAlias(args.get(2), mainAlias), null));
-            onConditions.addAll(parseOnLambda(((WrapperArg.NestedArg) args.get(3)).getChain(), alias, mainAlias));
+            ColumnRef onLeft = ((WrapperArg.ColumnArg) args.get(1)).getColumn();
+            ColumnRef onRight = ((WrapperArg.ColumnArg) args.get(2)).getColumn();
+            onConditions.add(new Condition.ColumnComparison(
+                    WrapperConverterKt.withTableAlias(onLeft, onColumnAlias(onLeft, classToAlias, alias)),
+                    WrapperConverterKt.withTableAlias(onRight, onColumnAlias(onRight, classToAlias, mainAlias)), null));
+            onConditions.addAll(parseOnLambda(((WrapperArg.NestedArg) args.get(3)).getChain(), alias, mainAlias, classToAlias));
         } else if (args.size() == 5 && args.get(1) instanceof WrapperArg.ValueArg && args.get(2) instanceof WrapperArg.ColumnArg
                 && args.get(3) instanceof WrapperArg.ColumnArg && args.get(4) instanceof WrapperArg.NestedArg) {
             // 别名 + ext
             String a = literalUnquoted(args.get(1));
             if (a != null) alias = a;
-            onConditions.add(new Condition.ColumnComparison(withAlias(args.get(2), alias), withAlias(args.get(3), mainAlias), null));
-            onConditions.addAll(parseOnLambda(((WrapperArg.NestedArg) args.get(4)).getChain(), alias, mainAlias));
+            ColumnRef onLeft = ((WrapperArg.ColumnArg) args.get(2)).getColumn();
+            ColumnRef onRight = ((WrapperArg.ColumnArg) args.get(3)).getColumn();
+            onConditions.add(new Condition.ColumnComparison(
+                    WrapperConverterKt.withTableAlias(onLeft, onColumnAlias(onLeft, classToAlias, alias)),
+                    WrapperConverterKt.withTableAlias(onRight, onColumnAlias(onRight, classToAlias, mainAlias)), null));
+            onConditions.addAll(parseOnLambda(((WrapperArg.NestedArg) args.get(4)).getChain(), alias, mainAlias, classToAlias));
         } else if (args.size() == 4 && args.get(1) instanceof WrapperArg.NestedArg && args.get(2) instanceof WrapperArg.ColumnArg
                 && args.get(3) instanceof WrapperArg.ColumnArg) {
             // 子表 MConsumer 子查询
@@ -598,10 +614,12 @@ public final class MpjLambdaConverter implements WrapperConverter {
             tableName = "(" + SqlGenerator.INSTANCE.generate(subStatementWithAlias, true, MySqlDialect.INSTANCE, null) + ")";
             alias = subAlias;
             logicDelete = null;
-            onConditions.add(new Condition.ColumnComparison(withAlias(args.get(2), subAlias), withAlias(args.get(3), mainAlias), null));
+            ColumnRef onRight = ((WrapperArg.ColumnArg) args.get(3)).getColumn();
+            onConditions.add(new Condition.ColumnComparison(withAlias(args.get(2), subAlias),
+                    WrapperConverterKt.withTableAlias(onRight, onColumnAlias(onRight, classToAlias, mainAlias)), null));
         } else if (firstRest instanceof WrapperArg.NestedArg na) {
             // 4. lambda ON
-            onConditions.addAll(parseOnLambda(na.getChain(), alias, mainAlias));
+            onConditions.addAll(parseOnLambda(na.getChain(), alias, mainAlias, classToAlias));
         } else {
             int index = 0;
             if (firstRest instanceof WrapperArg.ValueArg va) {
@@ -614,14 +632,14 @@ public final class MpjLambdaConverter implements WrapperConverter {
             }
             WrapperArg aliasNext = argAt(rest, index);
             if (aliasNext instanceof WrapperArg.NestedArg na) {
-                onConditions.addAll(parseOnLambda(na.getChain(), alias, mainAlias));
+                onConditions.addAll(parseOnLambda(na.getChain(), alias, mainAlias, classToAlias));
             } else if (aliasNext instanceof WrapperArg.OnConditionArg oca) {
                 List<WrapperArg> tailArgs = rest.size() > index ? rest.subList(index, rest.size()) : java.util.Collections.emptyList();
                 for (WrapperArg restArg : tailArgs) {
                     if (restArg instanceof WrapperArg.OnConditionArg oc) {
                         onConditions.add(new Condition.ColumnComparison(
-                                WrapperConverterKt.withTableAlias(oc.getLeft(), mainAlias),
-                                WrapperConverterKt.withTableAlias(oc.getRight(), alias)
+                                WrapperConverterKt.withTableAlias(oc.getLeft(), onColumnAlias(oc.getLeft(), classToAlias, mainAlias)),
+                                WrapperConverterKt.withTableAlias(oc.getRight(), onColumnAlias(oc.getRight(), classToAlias, alias))
                         , null));
                     }
                 }
@@ -630,14 +648,40 @@ public final class MpjLambdaConverter implements WrapperConverter {
                 WrapperArg.ColumnArg right = argAt(rest, index + 1) instanceof WrapperArg.ColumnArg ca ? ca : null;
                 if (left != null && right != null) {
                     onConditions.add(new Condition.ColumnComparison(
-                            WrapperConverterKt.withTableAlias(left.getColumn(), alias),
-                            WrapperConverterKt.withTableAlias(right.getColumn(), mainAlias)
+                            WrapperConverterKt.withTableAlias(left.getColumn(), onColumnAlias(left.getColumn(), classToAlias, alias)),
+                            WrapperConverterKt.withTableAlias(right.getColumn(), onColumnAlias(right.getColumn(), classToAlias, mainAlias))
                     , null));
                 }
             }
         }
 
         return new JoinClause(type, tableName, alias, onConditions, null, null, logicDelete, tableInfo);
+    }
+
+    /**
+     * T-A47：ON 条件里列的表别名——<b>优先按列自己的实体类</b>在链内别名表里查，查不到再回落 {@code fallback}。
+     *
+     * <p>对齐 MPJ 真实行为（1.5.8 {@code JoinAbstractLambdaWrapper.columnToString}）：先
+     * {@code LambdaUtils.getEntityClass(column)}，再按该类查前缀（{@code tableList.getPrefix(index, clazz, false)}）——
+     * <b>与「是不是主表」无关</b>。</p>
+     *
+     * <p>修复前的写法把 ON 右侧列一律按主表别名渲染，于是
+     * {@code rightJoin(AreaDO.class, AreaDO::getId, AddressDO::getAreaId)} 渲染成 {@code areaDO.id = t.area_id}，
+     * 而 MPJ 真实执行的是 {@code areaDO.id = addressDO.area_id}——预览 SQL 与执行 SQL 不一致，该句还直接报
+     * {@code [42S22][1054] Unknown column 't.area_id' in 'on clause'}（2026-10-12 录制 A13 时实测）。</p>
+     *
+     * <p>兼容性：{@code ColumnRef.entityClass} 为空（PSI 未解析出接收者，例如手工构造的链）时逐字节回落到
+     * 修复前行为；实体类就是主实体（不在 join 别名表内）时同样回落 {@code fallback}，故常见写法结果不变。
+     * 该值可能是简单类名或全限定名，两种形状都查一遍。</p>
+     */
+    private static String onColumnAlias(ColumnRef column, Map<String, String> classToAlias, String fallback) {
+        String raw = column.getEntityClass() != null ? column.getEntityClass().trim() : "";
+        if (raw.isEmpty()) return fallback;
+        String alias = classToAlias.get(raw);
+        if (alias == null) {
+            alias = classToAlias.get(raw.substring(raw.lastIndexOf('.') + 1));
+        }
+        return alias != null ? alias : fallback;
     }
 
     /** 字符串 join 的 {i} 绑定参数替换。 */
@@ -671,7 +715,8 @@ public final class MpjLambdaConverter implements WrapperConverter {
     }
 
     /** 解析 lambda ON（leftJoin(Class, on -> on.eq(...))）。 */
-    private List<Condition> parseOnLambda(WrapperChain chain, String alias, String mainAlias) {
+    private List<Condition> parseOnLambda(WrapperChain chain, String alias, String mainAlias,
+                                          Map<String, String> classToAlias) {
         List<Condition> result = new ArrayList<>();
         for (WrapperCall call : chain.getCalls()) {
             switch (call.getMethodName()) {
@@ -679,7 +724,10 @@ public final class MpjLambdaConverter implements WrapperConverter {
                     WrapperArg left = argAt(call.getArgs(), 0);
                     ColumnRef leftCol = null;
                     if (left instanceof WrapperArg.ColumnArg ca) {
-                        leftCol = WrapperConverterKt.withTableAlias(ca.getColumn(), alias);
+                        // T-A47：ON 内的列一律**按列自己的实体类**定别名（MPJ 真实行为），
+                        // 查不到才回落关联表别名 / 主表别名
+                        leftCol = WrapperConverterKt.withTableAlias(ca.getColumn(),
+                                onColumnAlias(ca.getColumn(), classToAlias, alias));
                     } else if (left instanceof WrapperArg.ValueArg va) {
                         SqlValue v = va.getValue();
                         if (v instanceof SqlValue.Literal lit) {
@@ -690,7 +738,8 @@ public final class MpjLambdaConverter implements WrapperConverter {
                     WrapperArg right = argAt(call.getArgs(), 1);
                     if (right instanceof WrapperArg.ColumnArg ca) {
                         result.add(new Condition.ColumnComparison(leftCol,
-                                WrapperConverterKt.withTableAlias(ca.getColumn(), mainAlias), null));
+                                WrapperConverterKt.withTableAlias(ca.getColumn(),
+                                        onColumnAlias(ca.getColumn(), classToAlias, mainAlias)), null));
                     } else if (right instanceof WrapperArg.ValueArg va) {
                         SqlValue lit = va.getValue();
                         if (lit instanceof SqlValue.Literal l && l.getUnquoted().contains(".")) {
@@ -802,7 +851,8 @@ public final class MpjLambdaConverter implements WrapperConverter {
     }
 
     /** 解析 selectCollection → LEFT JOIN 子查询。 */
-    private JoinClause parseCollection(WrapperCall call, List<WrapperCall> joinCalls, String mainAlias, Project project) {
+    private JoinClause parseCollection(WrapperCall call, List<WrapperCall> joinCalls, String mainAlias, Project project,
+                                       Map<String, String> classToAlias) {
         boolean prefixForm = isPrefixForm(call);
         String childClass;
         String alias;
@@ -849,7 +899,7 @@ public final class MpjLambdaConverter implements WrapperConverter {
                 match = v instanceof SqlValue.Literal lit && lit.getUnquoted().equals(childClass);
             }
             if (!match) continue;
-            JoinClause joinClause = parseJoin(joinCall, mainAlias, project);
+            JoinClause joinClause = parseJoin(joinCall, mainAlias, project, classToAlias);
             if (joinClause == null) continue;
             String joinAlias = joinClause.getAlias();
             for (Condition cond : joinClause.getOnConditions()) {
