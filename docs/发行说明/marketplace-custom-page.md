@@ -40,7 +40,8 @@
 | SQL 格式化 | 弹窗内切换 | 多行缩进 / 单行；分页子句按 11 种方言渲染 |
 | 多租户 / 数据权限模拟 ![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) | 设置页配置 | 对齐 MP 多租户拦截器：自动注入 `AND tenant_id = ?`（列名 / 默认值可配）；数据权限可模拟 WHERE 片段 |
 | 字段列表自动折叠 ![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) | 设置页配置（默认关） | 超长列清单 / VALUES / SET 折叠为「... N columns」，点击展开 |
-| mapper XML 语法高亮 ![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) | 自动生效 | mapper XML 语句内 SQL 关键字 / 字符串 / 注释着色，`#{}` / `${}` 参数占位底色，`test` / `value` 属性表达式着色；`#` / `$` 敲键自动闭合 `{}`，resultMap `column` 补全列名 |
+| mapper XML 语法高亮与补全 ![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) | 自动生效 | mapper XML 语句内 SQL 关键字 / 字符串 / 注释着色，`#{}` / `${}` 分色，`${}` 内与属性值内 OGNL 细着色，表名 / 列名 / 运算符着色；`#` / `$` 敲键自动闭合 `{}`，resultMap `column` 补全列名；动态标签折叠与引用导航（跳转 / 查找用法），颜色设置页可配 |
+| 方言引号不匹配告警 ![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) | 自动生效 | SQL 标识符用了当前方言不接受的引号字符时给出告警（如 MySQL 方言下 `FROM "user" t`），只报告不改写；判据按各方言实际宽容度定，不确定时降级为带前提的 WARN |
 | 参数预设 ![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) | 面板参数区「预设」行 | 参数整组另存 / 切换 / 管理（含 OGNL 勾选态与 foreach 权威值）；按语句隔离、快照语义；预设行可折叠 |
 | 分页拦截器模拟 ![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) | 设置页开关（默认开） | 带 `IPage` 形参的查询按方言追 LIMIT 并并列产出 COUNT 包裹语句；LIMIT 与 COUNT 可分别控制 |
 | 执行计划 EXPLAIN ![Ultimate](https://sql-visualizer.jvtools.cn/badges/tag-ultimate.svg)![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) | 弹窗内「执行计划」按钮 | 按方言提交原生控制台，真实计划与静态性能标注同屏对照；覆盖 11 种方言（含 Oracle / SQL Server 模板），可选结构化渲染（表格 / 可折叠树 + 索引建议） |

@@ -226,9 +226,14 @@ JdbcTemplate 字符串 SQL 渲染为可读可执行的真实 SQL，参数值自�
       <td>超长列清单 / VALUES / SET 折叠为「... N columns」，点击展开</td>
     </tr>
     <tr>
-      <td>mapper XML 语法高亮 <span class="tag tag-new">New</span></td>
+      <td>mapper XML 语法高亮与补全 <span class="tag tag-new">New</span></td>
       <td>自动生效</td>
-      <td>mapper XML 语句内 SQL 关键字 / 字符串 / 注释着色，<code>#{}</code> / <code>${}</code> 参数占位底色，<code>test</code> / <code>value</code> 属性表达式着色；<code>#</code> / <code>$</code> 敲键自动闭合 <code>{}</code>，resultMap <code>column</code> 补全列名</td>
+      <td>mapper XML 语句内 SQL 关键字 / 字符串 / 注释着色，<code>#{}</code> / <code>${}</code> 分色，<code>${}</code> 内与属性值内 OGNL 细着色，表名 / 列名 / 运算符着色；<code>#</code> / <code>$</code> 敲键自动闭合 <code>{}</code>，resultMap <code>column</code> 补全列名；动态标签折叠与引用导航（跳转 / 查找用法），颜色设置页可配</td>
+    </tr>
+    <tr>
+      <td>方言引号不匹配告警 <span class="tag tag-new">New</span></td>
+      <td>自动生效</td>
+      <td>SQL 标识符用了当前方言不接受的引号字符时给出告警（如 MySQL 方言下 <code>FROM "user" t</code>），只报告不改写；判据按各方言实际宽容度定，不确定时降级为带前提的 WARN</td>
     </tr>
     <tr>
       <td>参数预设 <span class="tag tag-new">New</span></td>
