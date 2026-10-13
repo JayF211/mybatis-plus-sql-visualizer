@@ -6,6 +6,7 @@ import com.intellij.codeInsight.completion.CompletionProvider
 import com.intellij.codeInsight.completion.CompletionResultSet
 import com.intellij.codeInsight.completion.CompletionType
 import com.intellij.codeInsight.lookup.LookupElementBuilder
+import com.intellij.openapi.project.DumbAware
 import com.intellij.patterns.PlatformPatterns
 import com.intellij.psi.JavaPsiFacade
 import com.intellij.psi.PsiClass
@@ -29,9 +30,16 @@ import com.intellij.util.ProcessingContext
  * 非结果映射上下文零候选（反向验证）。
  *
  * T-PerfSweep16 F40：补全链接让位门（[XmlSynHiGate.shouldYield]）+ 全文重扫 memo
- * （键=文件 url + modificationStamp [+ resultMapId]）。
+ * （键=文件 url + modificationStamp [+ resultMapId]；F89 起 [ResultMapColumnCompletionMemo]
+ * 双槽化）。
+ *
+ * F93（T-PerfSweep25，顺手件）：补 [DumbAware] 对齐三兄弟（XmlSqlCompletionContributor /
+ * MybatisConfigCompletionContributor / WrapperCompletionContributor 均为
+ * `CompletionContributor(), DumbAware`——T-XmlCmpl2 教训：缺该标记接口 dumb 期被静默跳过）。
+ * dumb 期列名候选走文件文本提取不受索引影响；类字段候选（[resultMapTypeFields] 的
+ * findClass/ShortNamesCache）索引未就绪时可能不全，runCatching 兜底空表，无异常面。
  */
-class ResultMapColumnCompletionContributor : CompletionContributor() {
+class ResultMapColumnCompletionContributor : CompletionContributor(), DumbAware {
 
     init {
         extend(
