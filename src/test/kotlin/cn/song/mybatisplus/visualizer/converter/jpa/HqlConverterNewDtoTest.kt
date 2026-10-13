@@ -51,4 +51,20 @@ class HqlConverterNewDtoTest {
         assertFalse("不应含 NEW", result.sql.contains("NEW "))
         assertTrue("应含 FROM", result.sql.contains("FROM"))
     }
+
+    /**
+     * T-HqlBufConcat：小写 `new Map(...)`（Hibernate 动态实例化常见写法）同样必须剥离——
+     * 旧实现以字面量 "NEW" 嗅探，小写形态摘不掉，产物会含 `SELECT new Map(...)` 非法 SQL。
+     */
+    @Test
+    fun testNewMap_lowercaseStrippedFromSelect() {
+        val hql = "SELECT new Map(o.customerId AS cid, o.totalAmount AS amt) FROM OrderEntity o"
+        val result = HqlConverter.convert(hql, orderTable)
+
+        assertFalse("不应含 new Map: [${result.sql}]", result.sql.contains("new Map"))
+        assertFalse("不应含 Map(: [${result.sql}]", result.sql.contains("Map("))
+        assertTrue("应含映射后的列 customer_id: [${result.sql}]", result.sql.contains("customer_id"))
+        assertTrue("中文/自定义别名应保留: [${result.sql}]", result.sql.contains("cid"))
+        assertTrue("应含 FROM t_order: [${result.sql}]", result.sql.contains("FROM t_order"))
+    }
 }

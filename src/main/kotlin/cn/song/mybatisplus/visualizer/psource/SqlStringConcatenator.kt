@@ -66,6 +66,45 @@ object SqlStringConcatenator {
         }
     }
 
+    /**
+     * 聚合「StringBuffer/StringBuilder 变量 `.toString()` 调用链」形态：先把
+     * `xxx.toString()` / `xxx.append(y).toString()` / `xxx.append(y)` 归约到持有变量引用，
+     * 再交 [concat] 走既有聚合（变量 initializer 为 `new StringBuilder()` / `new StringBuffer()`
+     * 时聚合其同方法体内全部 `append` 调用）。
+     *
+     * [concat] 自身对 `PsiMethodCallExpression` 无分支（返回 null），直接把 `sb.toString()`
+     * 喂进去聚合不出内容——JdbcTemplate 通道靠 `JdbcTemplateSqlLocator.resolveToStringCall`
+     * 做这步解包。本方法把同一语义提为共享入口，供 CustomDaoHqlLocator / HqlQueryLocator
+     * 复用（T-HqlBufConcat），避免各处再写一份。
+     *
+     * @param expr SQL 字符串实参表达式（字面量 / 拼接 / 变量引用 / `sb.toString()` 调用链）
+     * @return 聚合结果；无法聚合返回 `null`
+     */
+    fun concatUnwrappingToString(expr: PsiExpression?): ConcatenationResult? {
+        if (expr == null) return null
+        if (expr is PsiMethodCallExpression) {
+            val target = unwrapToStringTarget(expr) ?: return null
+            return concat(target)
+        }
+        return concat(expr)
+    }
+
+    /**
+     * 把 `.toString()` / `.append(y)` 调用链归约到根变量引用
+     * （`xxx.append(y).toString()` → `xxx`）。
+     *
+     * 方法名不在 {toString, append} 内、或 qualifier 链不落到变量引用时返回 null。
+     */
+    private fun unwrapToStringTarget(call: PsiMethodCallExpression): PsiExpression? {
+        val name = call.methodExpression.referenceName ?: return null
+        if (name != "toString" && name != "append") return null
+        var qualifier: PsiExpression? = call.methodExpression.qualifierExpression ?: return null
+        while (qualifier is PsiMethodCallExpression) {
+            qualifier = qualifier.methodExpression.qualifierExpression ?: return null
+        }
+        return qualifier
+    }
+
     // ------------------------------------------------------------------
     // 路径 A — 字面量 + 拼接
     // ------------------------------------------------------------------

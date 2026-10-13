@@ -4,6 +4,7 @@ import com.intellij.psi.PsiMethod
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -490,6 +491,135 @@ class CustomDaoHqlLocatorTest : BasePlatformTestCase() {
         assertEquals(DaoQueryKind.NAMED_QUERY, CustomDaoHqlLocator.classifyHibernateTemplateMethod("findByNamedQuery"))
         assertEquals(DaoQueryKind.NAMED_QUERY, CustomDaoHqlLocator.classifyHibernateTemplateMethod("findByNamedQueryAndNamedParam"))
         assertEquals(DaoQueryKind.NAMED_QUERY, CustomDaoHqlLocator.classifyHibernateTemplateMethod("findByNamedQueryAndValueBean"))
+    }
+
+    // ------------------------------------------------------------------
+    // T-HqlBufConcat：StringBuffer/StringBuilder 拼接串（2026-10-13 用户报障）
+    // ------------------------------------------------------------------
+
+    fun testHqlBufConcat_stringBufferToString() {
+        myFixture.configureByText(
+            "WmsLocationService.java",
+            """
+            public class WmsLocationService {
+                public java.util.List findLocations(WmsLocationDao wmsLocationDao) {
+                    StringBuffer sb = new StringBuffer();
+                    sb.append("SELECT loc.id AS locationId ");
+                    sb.append("FROM WmsLocation loc ");
+                    sb.append("WHERE 1=1 ");
+                    sb.append("AND loc.status = 'E' ");
+                    sb.append("ORDER BY loc.putawaySequence");
+                    return wmsLocationDao.findByQueryMaxNum(sb.toString(), new String[]{}, new Object[]{}, 0, 10);
+                }
+            }
+            interface WmsLocationDao {
+                java.util.List findByQueryMaxNum(String hql, String[] names, Object[] values, int start, int max);
+            }
+            """.trimIndent(),
+        )
+        val info = CustomDaoHqlLocator.locate(findMethod("findLocations"))
+        assertNotNull("StringBuffer + append + sb.toString() 应被识别", info)
+        val hql = info!!.hql
+        assertEquals("WmsLocation", info.entityClassName)
+        assertTrue("应含 SELECT 段: $hql", hql.contains("SELECT loc.id AS locationId"))
+        assertTrue("应含 FROM 段: $hql", hql.contains("FROM WmsLocation loc"))
+        assertTrue("应含 ORDER BY 段: $hql", hql.contains("ORDER BY loc.putawaySequence"))
+        assertTrue("片段应按书写序拼接", hql.indexOf("WHERE 1=1") < hql.indexOf("ORDER BY"))
+        assertTrue("全字面量应判为静态", info.isLiteralHql)
+    }
+
+    fun testHqlBufConcat_stringBuilderRuntimeValueDegraded() {
+        myFixture.configureByText(
+            "WmsQueryService.java",
+            """
+            public class WmsQueryService {
+                public java.util.List findLocations(CommonDao commonDao, java.util.Map<String,Object> param) {
+                    StringBuilder sb = new StringBuilder();
+                    sb.append("SELECT loc.id FROM WmsLocation loc WHERE 1=1 ");
+                    sb.append("and loc.warehouseId = ").append(param.get("warehouseId")).append(" ");
+                    sb.append("AND loc.status = 'E'");
+                    return commonDao.findByQueryMaxNum(sb.toString(), new String[]{}, new Object[]{}, 0, 10);
+                }
+            }
+            interface CommonDao {
+                java.util.List findByQueryMaxNum(String hql, String[] names, Object[] values, int start, int max);
+            }
+            """.trimIndent(),
+        )
+        val info = CustomDaoHqlLocator.locate(findMethod("findLocations"))
+        assertNotNull("StringBuilder + 链式 append + 运行时值 应被识别", info)
+        val hql = info!!.hql
+        assertTrue("应含 FROM 段: $hql", hql.contains("FROM WmsLocation"))
+        assertFalse("含运行时值应判为非静态", info.isLiteralHql)
+        assertTrue("运行时值应留占位标记: $hql", hql.contains("/*运行时值*/"))
+    }
+
+    fun testHqlBufConcat_viaStringVariable() {
+        myFixture.configureByText(
+            "WmsQueryService2.java",
+            """
+            public class WmsQueryService2 {
+                public java.util.List findLocations(CommonDao commonDao) {
+                    StringBuffer sb = new StringBuffer();
+                    sb.append("SELECT loc.id FROM WmsLocation loc ");
+                    sb.append("WHERE loc.status = 'E'");
+                    String hql = sb.toString();
+                    return commonDao.findByQueryMaxNum(hql, new String[]{}, new Object[]{}, 0, 10);
+                }
+            }
+            interface CommonDao {
+                java.util.List findByQueryMaxNum(String hql, String[] names, Object[] values, int start, int max);
+            }
+            """.trimIndent(),
+        )
+        val info = CustomDaoHqlLocator.locate(findMethod("findLocations"))
+        assertNotNull("String hql = sb.toString() 经变量传入应被识别", info)
+        assertTrue("应含 FROM 段: ${info!!.hql}", info.hql.contains("FROM WmsLocation"))
+    }
+
+    fun testHqlBufConcat_nonHqlContentNotClaimed() {
+        myFixture.configureByText(
+            "LogService.java",
+            """
+            public class LogService {
+                public java.util.List doLog(CommonDao commonDao) {
+                    StringBuffer sb = new StringBuffer();
+                    sb.append("hello ");
+                    sb.append("world");
+                    return commonDao.findByQueryMaxNum(sb.toString(), new String[]{}, new Object[]{}, 0, 10);
+                }
+            }
+            interface CommonDao {
+                java.util.List findByQueryMaxNum(String hql, String[] names, Object[] values, int start, int max);
+            }
+            """.trimIndent(),
+        )
+        assertNull(
+            "非 HQL 内容的拼接串不应被认领（内容启发守门）",
+            CustomDaoHqlLocator.locate(findMethod("doLog")),
+        )
+    }
+
+    fun testHqlBufConcat_wrapperChainNotClaimed() {
+        myFixture.configureByText(
+            "UserService.java",
+            """
+            public class UserService {
+                public java.util.List list(UserMapper userMapper) {
+                    return userMapper.selectList(
+                        new QueryWrapper().exists("select 1 from t_order where x = 1"));
+                }
+            }
+            interface UserMapper { java.util.List selectList(Object wrapper); }
+            class QueryWrapper {
+                QueryWrapper exists(String sql) { return this; }
+            }
+            """.trimIndent(),
+        )
+        assertNull(
+            "wrapper 链（内嵌 SQL 串）不应被认领为自定义 DAO HQL（T-GutterDupFreeze 反向守卫）",
+            CustomDaoHqlLocator.locate(findMethod("list")),
+        )
     }
 
     // ------------------------------------------------------------------

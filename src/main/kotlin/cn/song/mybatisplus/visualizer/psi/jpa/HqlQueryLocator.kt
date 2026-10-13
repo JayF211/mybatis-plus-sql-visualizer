@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.psi.jpa
 
+import cn.song.mybatisplus.visualizer.psource.SqlStringConcatenator
 import com.intellij.psi.PsiBinaryExpression
 import com.intellij.psi.PsiClass
 import com.intellij.psi.PsiCodeBlock
@@ -206,6 +207,12 @@ object HqlQueryLocator {
                     false
                 }
             }
+            // T-HqlBufConcat：`sb.toString()` / `sb.append(x).toString()`——StringBuffer/StringBuilder
+            // 承载的拼接串（解包与聚合在 extractHqlString 完成，此处仅放行形态）
+            is PsiMethodCallExpression -> {
+                val name = firstArg.methodExpression.referenceName
+                name == "toString" || name == "append"
+            }
             else -> false // Class 字面量等
         }
     }
@@ -349,6 +356,10 @@ object HqlQueryLocator {
                             if (parts.isNotEmpty()) parts.joinToString("") to true
                             else firstArg.referenceName to false
                         }
+                        // T-HqlBufConcat：String hql = sb.toString() → 聚合 StringBuilder 拼接串；
+                        // 非 toString/append 调用聚合不出内容，维持既有「回退变量名」降级
+                        initializer is PsiMethodCallExpression ->
+                            aggregateHqlText(initializer) ?: (firstArg.referenceName to false)
                         // PsiParameter / 其他非空表达式 / 无 initializer：无法静态解析，优雅降级
                         else -> firstArg.referenceName to false
                     }
@@ -356,8 +367,23 @@ object HqlQueryLocator {
                     firstArg.referenceName to false
                 }
             }
-            else -> firstArg.text to false
+            // T-HqlBufConcat：createQuery(sb.toString()) / sb.append(x).toString()
+            is PsiMethodCallExpression -> aggregateHqlText(firstArg) ?: (null to false)
+            // T-GutterDupFreeze（S1）口径对齐：兜底不再回退表达式源码文本当 HQL
+            else -> null to false
         }
+    }
+
+    /**
+     * T-HqlBufConcat：借用 [SqlStringConcatenator] 聚合 StringBuilder/StringBuffer 承载的 HQL
+     * （`sb.toString()` / `sb.append(x).toString()`）。
+     *
+     * @return Pair(聚合文本, 是否完全静态)；空串或无法聚合返回 null（＝不是 HQL 承载）
+     */
+    private fun aggregateHqlText(expression: PsiExpression): Pair<String?, Boolean>? {
+        val result = SqlStringConcatenator.concatUnwrappingToString(expression) ?: return null
+        if (result.sql.isBlank()) return null
+        return result.sql to result.complete
     }
 
     /**

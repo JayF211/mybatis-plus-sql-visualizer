@@ -267,6 +267,73 @@ fun aggregateHqlText(expr: PsiExpression): Pair<String?, Boolean>? {
 6. **旧版构建（2026.9.18-beta.4）与新版的对应关系**：本缺陷在最新 tag（2026.10.9）同样存在，
    修复只能进更新版本；用户侧是否具备升级条件需确认（本计划不负责发布节奏）。
 
-## 八、实施记录
+## 八、实施记录（2026-10-13）
 
-（待实施后回填：改动文件、定向读数、反向验证两次读数、未做项。）
+### 8.1 改动文件
+
+- `src/main/kotlin/…/converter/jpa/NewExpressionStripper.kt`（**新增**）：`HqlConverter` 与
+  `JpqlConverter` 两份重复的 `handleNewExpression` 收敛为单一实现（整词 + 大小写不敏感 +
+  「`new` 空白 类名 `(`」形态）；两个转换器的私有实现删除、调用点改 `NewExpressionStripper.strip(...)`、
+  类 KDoc 第 4/3 步说明同步。
+- `src/main/kotlin/…/psi/jpa/CustomDaoHqlLocator.kt`：`extractHqlString` 新增
+  `PsiMethodCallExpression` 分支（`sb.toString()` / 链式 `append(...).toString()`）与
+  `PsiNewExpression` 初始化变量分支，委托新私有 `aggregateHqlText`；导入 `psource.SqlStringConcatenator`；
+  `extractHqlString` 的 KDoc 补两形态。
+- `src/main/kotlin/…/psi/jpa/HqlQueryLocator.kt`：`hasStringHqlArgument` 放行 `toString`/`append` 形态；
+  `extractHqlString` 接入 `aggregateHqlText`（含 `String hql = sb.toString()` 的 initializer 形态）；
+  末支 `else -> firstArg.text to false` 改为 `null to false`（对齐 T-GutterDupFreeze S1）。
+- `src/main/kotlin/…/psource/SqlStringConcatenator.kt`：新增共享入口 `concatUnwrappingToString`
+  （`.toString()` / `.append(y)` 解包到根变量后交既有 `concat`），提为三通道共用。
+- `CHANGELOG.md`：`[Unreleased] › Fixed` 顶部加 T-HqlBufConcat 条目。
+- 计划本文档 §八/§九。
+
+### 8.2 测试
+
+新增 17 例：`NewExpressionStripperTest`（新增类 7 例）；`CustomDaoHqlLocatorTest` +5（共 24）、
+`HqlQueryLocatorTest` +2（共 23）、`HqlConverterNewDtoTest` +1（共 3）、`JpqlConverterTest` +1（共 32）。
+
+### 8.3 定向读数
+
+```
+./gradlew test --tests "…psi.jpa.CustomDaoHqlLocatorTest" --tests "…psi.jpa.HqlQueryLocatorTest"
+  --tests "…converter.jpa.NewExpressionStripperTest" --tests "…converter.jpa.HqlConverterNewDtoTest"
+  --tests "…converter.jpa.JpqlConverterTest" -Pkotlin.compiler.execution.strategy=in-process
+```
+
+`CustomDaoHqlLocatorTest 24/0/0`、`HqlQueryLocatorTest 23/0/0`、`NewExpressionStripperTest 7/0/0`、
+`HqlConverterNewDtoTest 3/0/0`、`JpqlConverterTest 32/0/0`（合计 89 例，0 失败 0 错误），
+BUILD SUCCESSFUL（GRADLE_EXIT=0）。
+
+### 8.4 反向验证（两次）
+
+- **反向 1（摘掉提取分支）**：`CustomDaoHqlLocator` 的 MCE 分支改回 `null to false`、
+  `HqlQueryLocator` 的 MCE 与 `initializer is PsiMethodCallExpression` 两分支改回旧行为 →
+  `CustomDaoHqlLocatorTest failures=3`、`HqlQueryLocatorTest failures=2`（`assertNotNull` 全红：
+  `locate` 返回 null），GRADLE_EXIT=1。**新用例是判别性的**。
+- **反向 2（复刻旧嗅探）**：`NewExpressionStripper` 的 `IGNORE_CASE` 去掉后大写用例失败（1 例，
+  证明该 flag 承载大小写不敏感）；进一步把模式改成大写-only `NEW`（复刻旧行为）→
+  `NewExpressionStripperTest failures=3`，红的正是三条小写用例
+  （`lowercase new Map stripped` / `lowercase new with space before paren stripped` /
+  `nested parens stripped by brace counting`），`uppercase`/`renew`/`unbalanced`/`noNew` 保持绿，
+  GRADLE_EXIT=1。
+- 还原后复跑：89/0/0 全绿（即提交态 = 已测态）。
+
+### 8.5 未做
+
+真机 / runIde / 全量测试 / 构建校验（`verifyGate`/`verifyPlugin`/`buildPlugin`）——按验证三档分层，
+全量与门禁留待收口；本轮沙盒被录制任务占用。
+
+## 九、遗留与边界（本轮未解决）
+
+1. **条件分支 append 会被全量聚合**：`SqlStringConcatenator.collectAppendCalls` 扫描整个方法体、
+   不区分 `if`，故 `if (param.containsKey("仓库序号")) sb.append(" and loc.warehouseId = ")` 这类
+   条件片段也会被无条件计入 → 用户这段代码的预览是「所有可选条件全在场」的**最大化 SQL**，而非
+   某次运行的真实 SQL。JdbcTemplate 通道既有口径，本轮**沿用未改**（见 §3.3），需向用户明确。
+2. **真实工程端到端未验**：用户 HQL 里的 `WmsLocation` 实体解析、`sub.qty.baseQty`
+   （`@Embeddable` 组件路径）是否被 `mapAssociationPath` 误判为关联、`NOT EXISTS` / `IN` / `false`
+   的透传——见 §七待验证前提 2~4，仍需在 demo 或用户工程实测。
+3. **`createQuery(sb)`（StringBuffer 变量直传）未放开**：`HqlQueryLocator.hasStringHqlArgument`
+   的类型门仍只放行 String 类型变量，StringBuilder/StringBuffer 变量直传不放行——该写法在 Java 下
+   不编译（`createQuery` 收 String），故未放开；已支持的现实形态是 `createQuery(sb.toString())` 与
+   `String hql = sb.toString(); createQuery(hql)`。
+
