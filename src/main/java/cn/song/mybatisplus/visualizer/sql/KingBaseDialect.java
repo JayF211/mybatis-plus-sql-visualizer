@@ -30,6 +30,11 @@ public final class KingBaseDialect implements Dialect {
         return "\"" + identifier + "\"";
     }
 
+    @Override
+    public Set<Character> getIdentifierQuotes() {
+        return Set.of('"');
+    }
+
     /**
      * O-51：金仓与 PG 同折叠方向（裸标识符折叠为小写）→ LOWER 族。
      *

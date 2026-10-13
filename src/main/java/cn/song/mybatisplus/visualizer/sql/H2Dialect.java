@@ -31,6 +31,12 @@ public final class H2Dialect implements Dialect {
         return "\"" + identifier + "\"";
     }
 
+    /** T-DialectQuoteWarn：H2 收双引号 / 反引号 / 方括号三种标识符引号（引擎宽容）。 */
+    @Override
+    public Set<Character> getIdentifierQuotes() {
+        return Set.of('"', '`', '[');
+    }
+
     /**
      * O-51：H2 裸标识符<b>折叠为大写</b>（与 Oracle 同族）→ UPPER 族，目录来源的字典名
      * 「含小写字母即加引号」。

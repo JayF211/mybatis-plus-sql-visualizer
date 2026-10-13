@@ -34,6 +34,11 @@ public final class DmDialect implements Dialect {
         return "\"" + identifier + "\"";
     }
 
+    @Override
+    public Set<Character> getIdentifierQuotes() {
+        return Set.of('"');
+    }
+
     /**
      * <b>DM8 需要 identity 包装（2026-09-23 真机实测新增，原默认「不包装」是缺陷）</b>（O-52）。
      *

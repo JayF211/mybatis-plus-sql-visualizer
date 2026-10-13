@@ -29,6 +29,11 @@ public final class PostgreSQLDialect implements Dialect {
         return "\"" + identifier + "\"";
     }
 
+    @Override
+    public Set<Character> getIdentifierQuotes() {
+        return Set.of('"');
+    }
+
     /**
      * O-51：PG 裸标识符<b>折叠为小写</b>，故目录来源（字典真实名字）按「含大写字母即加引号」判定
      * ——以引号创建的大写名裸写后被折叠为小写 → 查不到。

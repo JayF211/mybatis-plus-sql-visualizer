@@ -32,6 +32,12 @@ public final class SqlServerDialect implements Dialect {
         return "[" + identifier + "]";
     }
 
+    /** T-DialectQuoteWarn：{@code QUOTED_IDENTIFIER} 默认 ON → 方括号与双引号都合法（判双引号错即误报）。 */
+    @Override
+    public Set<Character> getIdentifierQuotes() {
+        return Set.of('[', '"');
+    }
+
     @Override
     public Set<String> getReservedWords() {
         return SqlKeywords.SQLSERVER_RESERVED;

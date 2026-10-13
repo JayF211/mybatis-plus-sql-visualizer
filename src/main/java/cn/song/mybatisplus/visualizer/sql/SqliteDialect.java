@@ -29,6 +29,12 @@ public final class SqliteDialect implements Dialect {
         return "\"" + identifier + "\"";
     }
 
+    /** T-DialectQuoteWarn：SQLite 收双引号 / 反引号 / 方括号三种标识符引号（官方文法宽容）。 */
+    @Override
+    public Set<Character> getIdentifierQuotes() {
+        return Set.of('"', '`', '[');
+    }
+
     @Override
     public Set<String> getReservedWords() {
         return SqlKeywords.SQLITE_RESERVED;

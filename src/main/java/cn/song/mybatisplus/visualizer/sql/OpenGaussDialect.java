@@ -56,6 +56,11 @@ public final class OpenGaussDialect implements Dialect {
         return "\"" + identifier + "\"";
     }
 
+    @Override
+    public Set<Character> getIdentifierQuotes() {
+        return Set.of('"');
+    }
+
     /**
      * 折叠方向 LOWER：openGauss 5.0.0 真机实测（2026-09-23，DBX 只读通道），与 PG/KingBase 同族
      * ——目录来源「含大写字母即加引号」。

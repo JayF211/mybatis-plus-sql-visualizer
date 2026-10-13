@@ -46,6 +46,27 @@ public interface Dialect {
     }
 
     /**
+     * 本方言<b>可接受的标识符引号字符</b>集合（T-DialectQuoteWarn，{@code dialect_quote_mismatch} 判定用）。
+     *
+     * <p>存<b>开引号字符</b>：反引号 {@code `} / 双引号 {@code "} / 方括号 {@code [}（方括号的闭引号
+     * {@code ]} 不单列）。空集 = <b>不做引号方言判定</b>（基类兜底：无方言上下文时宁可不报也不误报）。</p>
+     *
+     * <p>各方言按<b>实际宽容度</b>给集合，不按「品牌印象」一刀切：
+     * <ul>
+     *   <li>MySQL / MariaDB / OceanBase：仅反引号（双引号默认是字符串字面量，{@code ANSI_QUOTES} 下才成标识符）；</li>
+     *   <li>PostgreSQL / Oracle / DM / KingBase / openGauss：仅双引号；</li>
+     *   <li>SQL Server：方括号 + 双引号（{@code QUOTED_IDENTIFIER} <b>默认 ON</b>，双引号合法，判错即误报）；</li>
+     *   <li>SQLite / H2：双引号 + 反引号 + 方括号（两者都收多种引号）。</li>
+     * </ul></p>
+     *
+     * <p><b>不要</b>用 {@code quoteIdentifier("x").charAt(0)} 反推——基类 {@link #quoteIdentifier} 原样返回，
+     * 反推会得到字母 {@code x}（而非引号）。本属性是引号方言判定的唯一事实源。</p>
+     */
+    default Set<Character> getIdentifierQuotes() {
+        return Set.of();
+    }
+
+    /**
      * 本方言保留字集合（T-M23.4，小写；{@link #quoteIfKeyword} 判定用）。
      */
     Set<String> getReservedWords();

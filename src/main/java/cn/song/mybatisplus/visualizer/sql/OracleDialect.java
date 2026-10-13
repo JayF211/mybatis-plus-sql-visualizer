@@ -33,6 +33,11 @@ public final class OracleDialect implements Dialect {
         return "\"" + identifier + "\"";
     }
 
+    @Override
+    public Set<Character> getIdentifierQuotes() {
+        return Set.of('"');
+    }
+
     /**
      * O-42 的「含小写字母即加引号」规则自 O-51 起由接口按族实现（{@link Dialect#quoteIfNeeded}），
      * 本类<b>不再覆写</b>该方法——只声明族归属，判据落在 {@link IdentifierFolding#UPPER} 分支。

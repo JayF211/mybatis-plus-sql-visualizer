@@ -35,6 +35,11 @@ public final class MariaDbDialect implements Dialect {
     }
 
     @Override
+    public Set<Character> getIdentifierQuotes() {
+        return Set.of('`');
+    }
+
+    @Override
     public Set<String> getReservedWords() {
         return SqlKeywords.MARIA_RESERVED;
     }

@@ -1,11 +1,13 @@
 package cn.song.mybatisplus.visualizer.sql;
 
 import cn.song.mybatisplus.visualizer.execute.SqlAstParser;
+import cn.song.mybatisplus.visualizer.sql.perf.PerfContext;
 import cn.song.mybatisplus.visualizer.sql.perf.PerfRuleEngine;
 import cn.song.mybatisplus.visualizer.sql.perf.PerfWarning;
 import cn.song.mybatisplus.visualizer.sql.perf.rules.PerfRulesBatch1;
 import cn.song.mybatisplus.visualizer.sql.perf.rules.PerfRulesBatch2;
 import cn.song.mybatisplus.visualizer.sql.perf.rules.PerfRulesBatch3;
+import cn.song.mybatisplus.visualizer.sql.perf.rules.PerfRulesBatch4;
 import net.sf.jsqlparser.statement.Statement;
 
 import java.util.ArrayList;
@@ -21,13 +23,13 @@ import java.util.Map;
  *
  * <p>分析流程：
  * <ol>
- *  <li>查缓存（同 SQL 文本不重复分析）；</li>
+ *  <li>查缓存（同 SQL 文本 + 同方言 + 同 ANSI_QUOTES 三态不重复分析）；</li>
  *  <li>JSqlParser 解析为 Statement AST（失败降级到纯正则规则）；</li>
  *  <li>{@link PerfRuleEngine} 应用所有已注册规则；</li>
  *  <li>返回 {@link PerfWarning} 列表（最多 10 条）。</li>
  * </ol>
  *
- * <p>规则注册在静态初始化块中完成（三批共 20 条规则）。
+ * <p>规则注册在静态初始化块中完成（四批共 21 条规则）。
  *
  * <p>性能约束：
  * <ul>
@@ -44,7 +46,7 @@ public final class SqlPerfAnalyzer {
     /** 警告数量上限。 */
     private static final int MAX_WARNINGS = 10;
 
-    /** SQL → 警告列表的缓存（LinkedHashMap 实现 LRU）。 */
+    /** SQL + 方言 + ANSI_QUOTES 三态 → 警告列表的缓存（LinkedHashMap 实现 LRU）。键见 {@link #cacheKey}。 */
     private static final Map<String, List<PerfWarning>> CACHE =
             new LinkedHashMap<String, List<PerfWarning>>(128, 0.75f, true) {
                 @Override
@@ -54,10 +56,11 @@ public final class SqlPerfAnalyzer {
             };
 
     static {
-        // 注册三批规则（共 20 条）
+        // 注册四批规则（共 21 条）
         PerfRuleEngine.registerAll(PerfRulesBatch1.all);
         PerfRuleEngine.registerAll(PerfRulesBatch2.all);
         PerfRuleEngine.registerAll(PerfRulesBatch3.all);
+        PerfRuleEngine.registerAll(PerfRulesBatch4.all);
     }
 
     private SqlPerfAnalyzer() {
@@ -70,17 +73,58 @@ public final class SqlPerfAnalyzer {
      * @return 警告列表（按规则注册顺序，最多 {@link #MAX_WARNINGS} 条）；无问题返回空列表，不返回 null
      */
     public static List<PerfWarning> analyze(String sql) {
+        return analyze(sql, null, null);
+    }
+
+    /** {@link #analyze(String, Dialect, Boolean)} 的方言/ANSI_QUOTES 均未知形态（Kotlin 默认参数重载链）。 */
+    public static List<PerfWarning> analyze(String sql, Dialect dialect) {
+        return analyze(sql, dialect, null);
+    }
+
+    /**
+     * 分析 SQL，返回性能警告列表。
+     *
+     * @param sql        完整 SQL 文本（多行或单行）
+     * @param dialect    当前数据库方言；可为 null（无上下文，方言感知规则自动不判）。默认 null 保持
+     *                   既有调用点逐字节行为不变
+     * @param ansiQuotes 绑定数据源是否<b>已声明</b> {@code sql_mode} 含 {@code ANSI_QUOTES}
+     *                   （T-DialectQuoteWarn §十二）：{@code true} = 可证明合法、{@code false} = 已知但未声明、
+     *                   {@code null} = 未知（默认）。{@code false} 与 {@code null} 判定等价（都只能 WARN），
+     *                   但<b>参与缓存键</b>——三态必须分开缓存
+     * @return 警告列表（按规则注册顺序，最多 {@link #MAX_WARNINGS} 条）；无问题返回空列表，不返回 null
+     */
+    public static List<PerfWarning> analyze(String sql, Dialect dialect, Boolean ansiQuotes) {
         if (sql == null || sql.trim().isEmpty()) return List.of();
+        String key = cacheKey(sql, dialect, ansiQuotes);
         List<PerfWarning> cached;
         synchronized (CACHE) {
-            cached = CACHE.get(sql);
+            cached = CACHE.get(key);
         }
         if (cached != null) return cached;
-        List<PerfWarning> warnings = analyzeInternal(sql);
+        List<PerfWarning> warnings = analyzeInternal(sql, dialect, ansiQuotes);
         synchronized (CACHE) {
-            CACHE.put(sql, warnings);
+            CACHE.put(key, warnings);
         }
         return warnings;
+    }
+
+    /**
+     * 缓存键：{@code sql + '\u0000' + 方言名 + '\u0000' + ansiQuotes 三态}（T-DialectQuoteWarn 四·3 + §十二）。
+     *
+     * <p><b>必须带方言</b>：同一条 SQL 在 MySQL（{@code FROM "user"} 报引号告警）与 PostgreSQL（不报）下
+     * 结论相反，不带方言会让后一次分析命中前一次的缓存返回错结果（串味）。<b>必须带 ansiQuotes 三态</b>
+     * （§十二）：同一 {@code sql + 方言} 在「URL 声明 ANSI_QUOTES」（不报）与「未知」（WARN）下结论相反，
+     * 三态共键同样串味。{@code '\u0000'} 是不会出现在 SQL 文本里的分隔符，避免
+     * {@code sql="a"+方言名} 与 {@code sql="a<方言名>"} 撞键。</p>
+     */
+    private static String cacheKey(String sql, Dialect dialect, Boolean ansiQuotes) {
+        String ansiPart;
+        if (ansiQuotes == null) {
+            ansiPart = "?";
+        } else {
+            ansiPart = ansiQuotes ? "true" : "false";
+        }
+        return sql + '\u0000' + (dialect != null ? dialect.getName() : "") + '\u0000' + ansiPart;
     }
 
     /**
@@ -105,9 +149,9 @@ public final class SqlPerfAnalyzer {
     // 内部实现
     // ------------------------------------------------------------------
 
-    private static List<PerfWarning> analyzeInternal(String sql) {
+    private static List<PerfWarning> analyzeInternal(String sql, Dialect dialect, Boolean ansiQuotes) {
         Statement ast = parseSql(sql);
-        List<PerfWarning> warnings = PerfRuleEngine.apply(sql, ast);
+        List<PerfWarning> warnings = PerfRuleEngine.apply(new PerfContext(sql, ast, dialect, ansiQuotes));
         if (warnings.size() > MAX_WARNINGS) {
             return new ArrayList<>(warnings.subList(0, MAX_WARNINGS));
         }

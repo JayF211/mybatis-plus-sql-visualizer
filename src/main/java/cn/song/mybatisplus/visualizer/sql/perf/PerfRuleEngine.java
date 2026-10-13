@@ -3,10 +3,7 @@ package cn.song.mybatisplus.visualizer.sql.perf;
 import java.util.ArrayList;
 import java.util.List;
 
-import net.sf.jsqlparser.statement.Statement;
-
 import org.jetbrains.annotations.NotNull;
-import org.jetbrains.annotations.Nullable;
 
 /**
  * 性能规则引擎（F-2 SQL 性能分析）。
@@ -49,16 +46,19 @@ public final class PerfRuleEngine {
     /**
      * 应用所有规则到 SQL。
      *
-     * @param sql 原始 SQL 文本
-     * @param ast JSqlParser 解析后的语句树；可为 null（降级模式）
+     * @param ctx 执行上下文（SQL 文本 / AST / 方言 / ANSI_QUOTES 三态）；AST 可为 null（降级模式），
+     *            方言可为 null（无上下文）。仅实现 {@link DialectAwarePerfRule} 的规则收到整个 {@link PerfContext}，
+     *            其余规则一律按 {@link PerfRule#check} 调用（只取 {@code ctx.sql()} / {@code ctx.ast()}）
      * @return 所有规则的警告列表（按规则注册顺序）
      */
     @NotNull
-    public static List<PerfWarning> apply(@NotNull String sql, @Nullable Statement ast) {
+    public static List<PerfWarning> apply(@NotNull PerfContext ctx) {
         List<PerfWarning> warnings = new ArrayList<>();
         for (PerfRule rule : rules) {
             try {
-                List<PerfWarning> result = rule.check(sql, ast);
+                List<PerfWarning> result = rule instanceof DialectAwarePerfRule dialectAware
+                        ? dialectAware.check(ctx)
+                        : rule.check(ctx.sql(), ctx.ast());
                 if (!result.isEmpty()) {
                     warnings.addAll(result);
                 }

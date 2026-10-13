@@ -55,6 +55,11 @@ public final class OceanBaseDialect implements Dialect {
     }
 
     @Override
+    public Set<Character> getIdentifierQuotes() {
+        return Set.of('`');
+    }
+
+    @Override
     public Set<String> getReservedWords() {
         return SqlKeywords.MYSQL_RESERVED;
     }
