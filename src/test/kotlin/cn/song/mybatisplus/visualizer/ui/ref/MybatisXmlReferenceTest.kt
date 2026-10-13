@@ -280,10 +280,11 @@ class MybatisXmlReferenceTest : BasePlatformTestCase() {
     /** 红线守卫：本包源码不得出现 inspection/annotator/ProblemHolder 类注册面。 */
     @Test
     fun testW7_红线_本包无校验器形态() {
-        val dir = java.io.File("src/main/kotlin/cn/song/mybatisplus/visualizer/ui/ref")
+        // k2j 适配：生产树是 Java，扫描根 src/main/kotlin→src/main/java、.kt→.java（SettingsTruthTest 同款惯例）
+        val dir = java.io.File("src/main/java/cn/song/mybatisplus/visualizer/ui/ref")
         assertTrue("W7 源码目录存在", dir.isDirectory)
         val banned = listOf("LocalInspectionTool", "Annotator", "ProblemHighlightType", "HighlightInfo", "InspectionManager")
-        for (f in dir.listFiles { f -> f.name.endsWith(".kt") }.orEmpty()) {
+        for (f in dir.listFiles { f -> f.name.endsWith(".java") }.orEmpty()) {
             val text = f.readText()
             for (token in banned) {
                 assertFalse("W7 不得引入校验器形态（红线）：${f.name} 出现 $token", text.contains(token))

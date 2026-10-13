@@ -17,10 +17,11 @@ import java.io.File
 class EmptyTextLinkApiGuardTest : TestCase() {
 
     fun test生产码无appendSecondaryText实际调用() {
-        val root = File("src/main/kotlin")
+        // k2j 适配：生产树是 Java，扫描根 src/main/kotlin→src/main/java、.kt→.java（SettingsTruthTest 同款惯例）
+        val root = File("src/main/java")
         assertTrue("源码根目录应存在（工作目录=项目根）", root.isDirectory)
         val offenders = mutableListOf<String>()
-        root.walkTopDown().filter { it.isFile && it.extension == "kt" }.forEach { file ->
+        root.walkTopDown().filter { it.isFile && it.extension == "java" }.forEach { file ->
             file.readLines().forEachIndexed { index, raw ->
                 val trimmed = raw.trimStart()
                 if (trimmed.startsWith("//") || trimmed.startsWith("*") || trimmed.startsWith("/*")) return@forEachIndexed
