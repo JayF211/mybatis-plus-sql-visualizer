@@ -770,6 +770,41 @@ class SqlStatementSplitterTest {
         )
     }
 
+    // ==================== 前视输入上限（T-PerfSweep25 / F90） ====================
+
+    /**
+     * F90 判别：病态输入（大量 BEGIN 无配对 END）——修复前每个 BEGIN 词位触发全文前视，
+     * 累计扫描字符 ≈ Σ(词位→文尾)（本语料 ≈20.2M，最坏 O(n²)）；前视输入上限后单次前视
+     * ≤ [SqlStatementSplitter.LOOKAHEAD_WINDOW]，累计 ≤ 词位数×窗（O(n·W) 线性）。
+     * 摘掉窗上限（limit=全文）读数 20,201,500 超界即红。语义伴检：无配对 END → 不武装
+     * 块感知（与修复前同一保守分支），顶层分号照常切分。
+     */
+    @Test
+    fun `F90_病态无配对BEGIN前视扫描有界`() {
+        val begins = 200
+        val gap = " ".repeat(1_000)
+        val sql = List(begins) { "BEGIN$gap" }.joinToString("") + ";SELECT 1;"
+        val parts = split(sql)
+        assertEquals("无配对 BEGIN 不武装块感知——顶层分号照常切分（语义与修复前一致）", 2, parts.size)
+        assertTrue(
+            "前视累计扫描 ≤ 词位数×窗（修复前 20,201,500 全文前视，实际 ${SqlStatementSplitter.lookaheadScannedCharsForTest}）",
+            SqlStatementSplitter.lookaheadScannedCharsForTest <= begins * SqlStatementSplitter.LOOKAHEAD_WINDOW,
+        )
+    }
+
+    /** 窗界等价守卫：END 恰在窗内（配对距离 < 10K）→ 块感知照常武装（1 段）；END 越窗 →
+     *  保守不武装（2 段：`BEGIN…SELECT 1` 与 `END` 按顶层分号切开，与「无配对」同分支）
+     *  ——窗上限的语义影响面被钉死在这条边界上。 */
+    @Test
+    fun `F90_窗界内外块感知武装边界`() {
+        val inWindow = "BEGIN" + " ".repeat(9_000) + "SELECT 1;END;"
+        assertEquals("END 在窗内——块感知照常武装，整块一条", 1, split(inWindow).size)
+        val beyondWindow = "BEGIN" + " ".repeat(11_000) + "SELECT 1;END;"
+        val parts = split(beyondWindow)
+        assertEquals("END 越窗——保守不武装，顶层分号照常切分", 2, parts.size)
+        assertEquals("END", parts[1])
+    }
+
     /** 边缘（等价守卫）：END 与后随 IF 之间隔着块注释——单次取词仍须跳过注释识别 `END IF` 内层终结符。 */
     @Test
     fun `PS7_01_前视跳过块注释_END_IF不误判块尾`() {

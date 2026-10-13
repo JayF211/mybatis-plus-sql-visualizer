@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.sql
 
 import cn.song.mybatisplus.visualizer.sql.perf.PerfSeverity
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -92,6 +93,106 @@ class SqlPerfAnalyzerTest {
         SqlPerfAnalyzer.analyze("SELECT * FROM user")
         SqlPerfAnalyzer.clearCache()
         assertEquals(0, SqlPerfAnalyzer.cacheSize())
+    }
+
+    @Test
+    fun `analyze_同SQL不同方言不串味（T-DialectQuoteWarn）`() {
+        // 同一 SQL：MySQL 下双引号表名命中方言规则（§十二 起为 WARN，见下条三态用例），
+        // PostgreSQL 下合法（不应命中）。缓存键不带方言时，第二次分析会命中第一次的缓存返回错结果（串味）。
+        val sql = "SELECT t.id FROM \"user\" t WHERE t.id = 1"
+        val mysql = SqlPerfAnalyzer.analyze(sql, MySqlDialect.INSTANCE)
+        assertTrue(
+            "MySQL 应命中 dialect_quote_mismatch，实际: $mysql",
+            mysql.any { it.ruleId == "dialect_quote_mismatch" },
+        )
+        val pg = SqlPerfAnalyzer.analyze(sql, PostgreSQLDialect.INSTANCE)
+        assertFalse(
+            "PostgreSQL 不应命中（缓存不得串味），实际: $pg",
+            pg.any { it.ruleId == "dialect_quote_mismatch" },
+        )
+    }
+
+    @Test
+    fun `analyze_同SQL不同ANSI_QUOTES三态不串味（T-DialectQuoteWarn §十二）`() {
+        // 同一 SQL + 同一方言（MySQL），三种 ANSI_QUOTES 态结论不同：
+        //  - true（URL 声明）→ 不报；false/null → WARN。
+        // 缓存键不带 ansiQuotes 三态时，「false/null」会命中「true」的空结果 → 串味（漏报）。
+        val sql = "SELECT t.id FROM \"user\" t WHERE t.id = 1"
+
+        val declared = SqlPerfAnalyzer.analyze(sql, MySqlDialect.INSTANCE, true)
+        assertFalse(
+            "URL 声明 ANSI_QUOTES → 不报，实际: $declared",
+            declared.any { it.ruleId == "dialect_quote_mismatch" },
+        )
+
+        val knownOff = SqlPerfAnalyzer.analyze(sql, MySqlDialect.INSTANCE, false)
+        assertTrue(
+            "已知未声明 → WARN（不得命中上面的空结果），实际: $knownOff",
+            knownOff.any { it.ruleId == "dialect_quote_mismatch" && it.severity == PerfSeverity.WARN },
+        )
+
+        val unknown = SqlPerfAnalyzer.analyze(sql, MySqlDialect.INSTANCE, null)
+        assertTrue(
+            "未知 → WARN，实际: $unknown",
+            unknown.any { it.ruleId == "dialect_quote_mismatch" && it.severity == PerfSeverity.WARN },
+        )
+
+        assertEquals("三态应各占一条缓存，不得互相命中", 3, SqlPerfAnalyzer.cacheSize())
+    }
+
+    // ------------------------------------------------------------------
+    // §十二 取数：URL → ANSI_QUOTES 三态（DataSourceUrlProbe，同包直测）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `ansiQuotesFromUrl_URL声明ANSI_QUOTES_判为已声明`() {
+        assertEquals(
+            true,
+            DataSourceUrlProbe.ansiQuotesFromUrl(
+                "jdbc:mysql://localhost:3306/mpj_demo?sessionVariables=sql_mode=ANSI_QUOTES",
+            ),
+        )
+        // URL 编码的逗号（多个 mode 连写）
+        assertEquals(
+            true,
+            DataSourceUrlProbe.ansiQuotesFromUrl(
+                "jdbc:mysql://localhost:3306/db?sessionVariables=sql_mode=STRICT_TRANS_TABLES%2CANSI_QUOTES",
+            ),
+        )
+        // URL 编码的引号（connector/j 常见写法）
+        assertEquals(
+            true,
+            DataSourceUrlProbe.ansiQuotesFromUrl(
+                "jdbc:mysql://localhost:3306/db?sessionVariables=sql_mode=%27ANSI_QUOTES%27&useSSL=false",
+            ),
+        )
+    }
+
+    @Test
+    fun `ansiQuotesFromUrl_URL未声明或缺失_判为未声明或未知`() {
+        assertEquals(
+            "URL 存在但未声明 ANSI_QUOTES → 已知未声明",
+            false,
+            DataSourceUrlProbe.ansiQuotesFromUrl("jdbc:mysql://localhost:3306/db"),
+        )
+        assertEquals(
+            false,
+            DataSourceUrlProbe.ansiQuotesFromUrl(
+                "jdbc:mysql://localhost:3306/db?sessionVariables=sql_mode=STRICT_TRANS_TABLES",
+            ),
+        )
+        assertEquals("URL 缺失 → 未知", null, DataSourceUrlProbe.ansiQuotesFromUrl(null))
+        assertEquals("URL 空白 → 未知", null, DataSourceUrlProbe.ansiQuotesFromUrl(""))
+    }
+
+    @Test
+    fun `analyze_无方言上下文时方言规则不判（T-DialectQuoteWarn）`() {
+        val sql = "SELECT t.id FROM \"user\" t WHERE t.id = 1"
+        val warnings = SqlPerfAnalyzer.analyze(sql)
+        assertFalse(
+            "无方言上下文不得判定引号方言（不硬编码 MySQL），实际: $warnings",
+            warnings.any { it.ruleId == "dialect_quote_mismatch" },
+        )
     }
 
     @Test
