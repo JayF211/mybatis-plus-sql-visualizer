@@ -921,6 +921,8 @@ public final class JpaMetadataReader {
 
     /**
      * 嵌入对象展平产物（T-J18）。
+     *
+     * <p>内部字段访问器说明见各参数文档。</p>
      */
     public static final class EmbeddedColumnSpec {
         private final PsiField field;
@@ -929,15 +931,33 @@ public final class JpaMetadataReader {
         private final String fieldType;
         private final boolean insertable;
         private final boolean updatable;
+        private final String embeddedPath;
+        private final boolean fromAttributeOverride;
 
+        /**
+         * @param field      嵌入对象内部字段（注释提取用）
+         * @param fieldName  内部字段名（ColumnInfo.fieldName；非完整路径——嵌套路径见 {@link #getEmbeddedPath()}）
+         * @param columnName 展平列名（@AttributeOverride &gt; 内部字段 @Column &gt; 兜底命名）
+         * @param fieldType  内部字段类型文本（参数回填引号推断用）
+         * @param insertable 内部字段 @Column(insertable)
+         * @param updatable  内部字段 @Column(updatable)
+         * @param embeddedPath 完整嵌入段驼峰路径（实体根起算，各级嵌入字段名首字母大写，如
+         *   {@code address.zipcode.zip} → {@code addressZipcodeZip}）——两级以上嵌入链的派生查询路径
+         *   （{@code findByAddressZipcodeZip}）据此命中本列（G2 修复点）
+         * @param fromAttributeOverride 列名是否来自 @AttributeOverride——JPA 轨覆写名即最终列名，
+         *   SD @Embedded(prefix) 不再叠加（同口径声明防撞车场景，G1 修复点）
+         */
         EmbeddedColumnSpec(PsiField field, String fieldName, String columnName, String fieldType,
-                           boolean insertable, boolean updatable) {
+                           boolean insertable, boolean updatable, String embeddedPath,
+                           boolean fromAttributeOverride) {
             this.field = field;
             this.fieldName = fieldName;
             this.columnName = columnName;
             this.fieldType = fieldType;
             this.insertable = insertable;
             this.updatable = updatable;
+            this.embeddedPath = embeddedPath;
+            this.fromAttributeOverride = fromAttributeOverride;
         }
 
         public PsiField getField() {
@@ -963,11 +983,21 @@ public final class JpaMetadataReader {
         public boolean isUpdatable() {
             return updatable;
         }
+
+        /** 完整嵌入段驼峰路径（实体根起算，各级嵌入字段名首字母大写；G2 修复段落盘）。 */
+        public String getEmbeddedPath() {
+            return embeddedPath;
+        }
+
+        /** 列名是否来自 @AttributeOverride（JPA 轨覆写名即最终列名，SD prefix 不叠加；G1 修复点）。 */
+        public boolean isFromAttributeOverride() {
+            return fromAttributeOverride;
+        }
     }
 
     /**
      * 展平嵌入对象字段为列清单（T-J18）：逐字段解析 @AttributeOverride 覆写 →
-     * 内部字段 @Column → 驼峰转下划线；嵌套 @Embedded 递归展平（JPA 无隐式列名前缀）。
+     * 内部字段 @Column → 兜底命名；嵌套 @Embedded 递归展平。
      * 嵌入类型不可解析时返回空列表（调用方降级为单列形态）。
      *
      * <p>T-Embedded D1（点路径覆写）：{@code overrides} 的键支持三种形态，查找按点路径优先、裸名兜底——
@@ -976,12 +1006,38 @@ public final class JpaMetadataReader {
      *       点路径，jakarta persistence javadoc「a dot (".") notation form must be used」）；</li>
      *   <li>嵌入对象相对点路径（字段级 @AttributeOverride，规范 Example 2 的 {@code zipcode.zip}）；</li>
      *   <li>裸属性名（既有形态，T-J18 用例不回归）。</li>
-     * </ul>
+     * </ul></p>
      *
      * @param rootKeyPrefix 实体根起算的键前缀（顶层嵌入字段名 + {@code .}，如 {@code address.}）——类级覆写键
      *   相对实体根，而展平内部按嵌入对象相对路径查找，靠它把两个键空间对上
      */
     public static List<EmbeddedColumnSpec> flattenEmbeddedColumns(PsiField field, Map<String, String> overrides) {
+        return flattenEmbeddedColumns(field, overrides, EmbeddedColumnNaming.NONE);
+    }
+
+    /**
+     * 展平嵌入对象字段为列清单（T-J18）：逐字段解析 @AttributeOverride 覆写 →
+     * 内部字段 @Column → 兜底命名；嵌套 @Embedded 递归展平。
+     * 嵌入类型不可解析时返回空列表（调用方降级为单列形态）。
+     *
+     * <p>T-Embedded D1（点路径覆写）：{@code overrides} 的键支持三种形态，查找按点路径优先、裸名兜底——
+     * <ul>
+     *   <li>实体根相对点路径（类级 @AttributeOverride，如 {@code address.zipcode.zip}——覆写嵌套嵌入必须用
+     *       点路径，jakarta persistence javadoc「a dot (".") notation form must be used」）；</li>
+     *   <li>嵌入对象相对点路径（字段级 @AttributeOverride，规范 Example 2 的 {@code zipcode.zip}）；</li>
+     *   <li>裸属性名（既有形态，T-J18 用例不回归）。</li>
+     * </ul></p>
+     *
+     * <p>T-EmbeddedColPrefix：兜底命名由 {@code naming} 决定——{@link EmbeddedColumnNaming#NONE} 用内层字段名本身
+     * （JPA 默认），{@link EmbeddedColumnNaming#COMPONENT_PATH} 把嵌入段路径并进列名（Hibernate
+     * component-path）。两档<b>只影响既无 @AttributeOverride 也无内层 @Column(name) 的兜底档</b>。</p>
+     *
+     * @param rootKeyPrefix 实体根起算的键前缀（顶层嵌入字段名 + {@code .}，如 {@code address.}）——类级覆写键
+     *   相对实体根，而展平内部按嵌入对象相对路径查找，靠它把两个键空间对上
+     * @param naming 嵌入列命名约定（默认无前缀，保持既有行为）
+     */
+    public static List<EmbeddedColumnSpec> flattenEmbeddedColumns(
+            PsiField field, Map<String, String> overrides, EmbeddedColumnNaming naming) {
         PsiClass clazz;
         try {
             clazz = field.getType() instanceof PsiClassType ct ? ct.resolve() : null;
@@ -995,13 +1051,18 @@ public final class JpaMetadataReader {
         } catch (Throwable ignored) {
             rootFieldName = null;
         }
-        String rootKeyPrefix = rootFieldName != null ? rootFieldName + "." : "";
-        return flattenEmbeddableClass(clazz, overrides, new LinkedHashSet<>(), rootKeyPrefix, "");
+        if (rootFieldName == null) rootFieldName = "";
+        String rootKeyPrefix = rootFieldName.isEmpty() ? "" : rootFieldName + ".";
+        // camelPathPrefix：实体根起的驼峰路径累积（顶层嵌入字段名起算），逐段拼给末端列
+        // snakePathPrefix：同一条路径的「下划线连接」形态，仅 COMPONENT_PATH 档用于拼列名前缀
+        return flattenEmbeddableClass(clazz, overrides, new LinkedHashSet<>(), rootKeyPrefix, "",
+                rootFieldName, rootFieldName.isEmpty() ? "" : rootFieldName + "_", naming);
     }
 
     private static List<EmbeddedColumnSpec> flattenEmbeddableClass(
             PsiClass clazz, Map<String, String> overrides, Set<PsiClass> seen,
-            String rootKeyPrefix, String pathPrefix) {
+            String rootKeyPrefix, String pathPrefix, String camelPathPrefix, String snakePathPrefix,
+            EmbeddedColumnNaming naming) {
         if (!seen.add(clazz)) return List.of();
         List<EmbeddedColumnSpec> result = new ArrayList<>();
         for (PsiField field : clazz.getAllFields()) {
@@ -1035,15 +1096,18 @@ public final class JpaMetadataReader {
                 Map<String, String> merged = new LinkedHashMap<>(overrides);
                 merged.putAll(attributeOverrides(field));
                 result.addAll(flattenEmbeddableClass(
-                        nestedClass, merged, seen, rootKeyPrefix, pathPrefix + fieldName + "."));
+                        nestedClass, merged, seen, rootKeyPrefix, pathPrefix + fieldName + ".",
+                        camelPathPrefix + upperFirst(fieldName), snakePathPrefix + fieldName + "_", naming));
                 continue;
             }
             PsiAnnotation columnAnnotation = findFlex(field, FQN_COLUMN);
-            String columnName = overrides.get(rootKeyPrefix + pathPrefix + fieldName);
-            if (columnName == null) columnName = overrides.get(pathPrefix + fieldName);
-            if (columnName == null) columnName = overrides.get(fieldName);
+            // 覆写查找三级兜底（实体根点路径 → 嵌入对象相对点路径 → 裸名）；命中即 JPA 轨最终列名
+            String override = overrides.get(rootKeyPrefix + pathPrefix + fieldName);
+            if (override == null) override = overrides.get(pathPrefix + fieldName);
+            if (override == null) override = overrides.get(fieldName);
+            String columnName = override;
             if (columnName == null && columnAnnotation != null) columnName = attrString(columnAnnotation, "name");
-            if (columnName == null) columnName = NamingStrategy.INSTANCE.toSnakeCase(fieldName);
+            if (columnName == null) columnName = embeddedFallbackColumnName(snakePathPrefix, fieldName, naming);
             String fieldType;
             try {
                 fieldType = field.getType().getCanonicalText();
@@ -1053,9 +1117,40 @@ public final class JpaMetadataReader {
             Boolean insertable = columnAnnotation != null ? attrBoolean(columnAnnotation, "insertable") : null;
             Boolean updatable = columnAnnotation != null ? attrBoolean(columnAnnotation, "updatable") : null;
             result.add(new EmbeddedColumnSpec(field, fieldName, columnName, fieldType,
-                    insertable != null ? insertable : true, updatable != null ? updatable : true));
+                    insertable != null ? insertable : true, updatable != null ? updatable : true,
+                    camelPathPrefix + upperFirst(fieldName), override != null));
         }
         return result;
+    }
+
+    /**
+     * 嵌入列的<b>兜底</b>列名（既无 @AttributeOverride、也无内层 @Column(name) 时，T-EmbeddedColPrefix）。
+     *
+     * <ul>
+     *   <li>{@link EmbeddedColumnNaming#NONE}（JPA 默认）：内层字段名本身（{@code baseQty} → {@code base_qty}）；</li>
+     *   <li>{@link EmbeddedColumnNaming#COMPONENT_PATH}：把嵌入段路径并进列名
+     *       （{@code qty} + {@code baseQty} → {@code qty_base_qty}；多级嵌入逐段累积 {@code a} + {@code b} +
+     *       {@code c} → {@code a_b_c}）。</li>
+     * </ul>
+     *
+     * <p>COMPONENT_PATH 的形态与 Hibernate 一致：hibernate-core 5.6.4
+     * {@code ImplicitNamingStrategyComponentPathImpl.transformAttributePath} 用<b>原始属性名</b>按 {@code _}
+     * 递归连接父路径，下划线化由 PhysicalNamingStrategy 完成；此处对连接后的整串做一次 snake 化，
+     * 结果等价（{@code toSnakeCase("qty_baseQty") = qty_base_qty}）。</p>
+     *
+     * @param snakePathPrefix 自实体根起的嵌入段路径（原始字段名以 {@code _} 连接，含尾随 {@code _}；顶层为空串时无前缀）
+     */
+    private static String embeddedFallbackColumnName(String snakePathPrefix, String fieldName,
+                                                     EmbeddedColumnNaming naming) {
+        if (naming == EmbeddedColumnNaming.COMPONENT_PATH) {
+            return NamingStrategy.INSTANCE.toSnakeCase(snakePathPrefix + fieldName);
+        }
+        return NamingStrategy.INSTANCE.toSnakeCase(fieldName);
+    }
+
+    /** Kotlin {@code replaceFirstChar { it.uppercaseChar() }} 等价（空串安全）。 */
+    private static String upperFirst(String s) {
+        return s.isEmpty() ? s : Character.toUpperCase(s.charAt(0)) + s.substring(1);
     }
 
     // ------------------------------------------------------------------

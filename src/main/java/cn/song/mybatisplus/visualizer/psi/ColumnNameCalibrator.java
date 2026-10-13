@@ -7,6 +7,7 @@ import cn.song.mybatisplus.visualizer.model.ColumnInfo;
 import cn.song.mybatisplus.visualizer.model.JoinColumnRef;
 import cn.song.mybatisplus.visualizer.model.TableInfo;
 import cn.song.mybatisplus.visualizer.ui.highlight.DatabaseSchemaResolver;
+import cn.song.mybatisplus.visualizer.util.NamingStrategy;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.project.ProjectManager;
@@ -129,7 +130,10 @@ public final class ColumnNameCalibrator {
         Set<String> ambiguousOldNames = new HashSet<>();
         boolean changed = false;
         for (ColumnInfo column : table.getColumns()) {
+            // 嵌入列多一道兜底（T-EmbeddedColPrefix）：工程用「组件路径」命名策略且实体无显式注解时，
+            // 猜测值差的是整段前缀（`base_qty` vs `qty_base_qty`），归一化比不出，改用嵌入段路径作候选
             String real = resolveName(column.getColumnName(), column.getFieldName(), realColumns, index);
+            if (real == null) real = resolveEmbeddedPathName(column, realColumns, index);
             if (real == null) {
                 calibrated.add(column);
                 continue;
@@ -328,6 +332,44 @@ public final class ColumnNameCalibrator {
         if (key.isEmpty()) return List.of();
         List<String> found = byNormalized.get(key);
         return found != null ? found : List.of();
+    }
+
+    /**
+     * 嵌入列的最后一档候选（T-EmbeddedColPrefix）：用 {@code ColumnInfo.embeddedPath}（实体根起的嵌入段
+     * 驼峰路径，{@code qty.baseQty} → {@code qtyBaseQty}）的 snake 形态作候选列名，<b>唯一命中才改写</b>。
+     *
+     * <p>存在理由：工程用 Hibernate 组件路径命名策略（{@code ImplicitNamingStrategyComponentPathImpl}）时，
+     * 真实列名比「内层字段名」多一整段前缀（{@code base_qty} vs {@code qty_base_qty}）——{@link #normalize}
+     * 只去下划线，两者归一化后仍不同（{@code baseqty} vs {@code qtybaseqty}），既有三步算法必然 0 候选。
+     * 而本类 KDoc 列的适用场景里正有「工程自定义命名策略」一条，嵌入列此前是那条的盲区。</p>
+     *
+     * <p>安全口径照既有「宁缺不错」：
+     * <ul>
+     *   <li>只对 {@code embedded == true} 的列生效；</li>
+     *   <li>当前列名<b>已精确存在于真实列集合</b>时该列在第 1 步就已按「无需改写」返回，走不到这里；</li>
+     *   <li>候选名要<b>唯一</b>命中（精确命中，或归一化键唯一），0 候选 / ≥2 候选一律不动；</li>
+     *   <li>命中值与当前列名相同也返回 null（不制造无意义改动，保住「无改动返回入参实例」不变量）。</li>
+     * </ul></p>
+     */
+    @Nullable
+    private static String resolveEmbeddedPathName(@NotNull ColumnInfo column,
+                                                   @NotNull Set<String> realColumns,
+                                                   @NotNull Function0<Map<String, List<String>>> index) {
+        if (!column.isEmbedded()) return null;
+        // 当前列名已是库中真名（resolveName 第 1 步的「无需改写」）→ 路径候选不得把它抢走
+        if (realColumns.contains(column.getColumnName())) return null;
+        String path = column.getEmbeddedPath();
+        if (path == null || path.isBlank()) return null;
+        String candidate = NamingStrategy.INSTANCE.toSnakeCase(path);
+        if (candidate.isBlank() || candidate.equals(column.getColumnName())) return null;
+        // 精确命中：库里就是这个字符串
+        if (realColumns.contains(candidate)) return candidate;
+        List<String> byNormalized = candidatesOf(index.invoke(), normalize(candidate));
+        if (byNormalized.size() == 1) {
+            String hit = byNormalized.get(0);
+            return hit.equals(column.getColumnName()) ? null : hit;
+        }
+        return null;
     }
 
     /**

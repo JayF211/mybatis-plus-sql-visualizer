@@ -318,11 +318,17 @@ public class JpaEntityResolver {
     }
 
     /**
-     * 展平嵌入对象字段为列清单（T-J18）：@AttributeOverride 覆写 > 内部字段 @Column > 驼峰转下划线；
+     * 展平嵌入对象字段为列清单（T-J18）：@AttributeOverride 覆写 > 内部字段 @Column > 兜底命名；
      * @EmbeddedId 展平列全部标记主键。嵌入类型不可解析等异常场景降级为单列形态（字段名推断列名），不丢字段。
      *
      * <p>T-Embedded D2：{@code sdPrefix} 为 SD @Embedded(prefix) 前缀，官方语义拼在嵌入对象每一列之前
-     * （同一值对象多次嵌入防撞车）；非 SD 轨为空串，列名逐字节不变。
+     * （同一值对象多次嵌入防撞车）；非 SD 轨为空串，列名逐字节不变。</p>
+     *
+     * <p>G1 修复（prefix 不写重）：<b>@AttributeOverride 命中的列名是 JPA 轨最终列名</b>（Hibernate 运行期
+     * 实际使用的列），SD prefix 不再叠加——同型值对象二次嵌入的混合声明里，覆写名通常已按
+     * 「prefix + 列名」同口径书写（demo {@code CustomerEntity} 的 bizAddress：prefix=biz_ 且覆写
+     * street→biz_street），叠加会产出 {@code biz_biz_street} 这类两轨都不存在的列名。无覆写时 prefix
+     * 照旧拼在每一列之前（{@code shipping_street} 形态不回归）。</p>
      */
     @NotNull
     private List<ColumnInfo> flattenEmbeddedColumns(
@@ -334,9 +340,23 @@ public class JpaEntityResolver {
         // 字段级 @AttributeOverride 优先于类级（合并顺序：右侧覆盖左侧同名键）
         java.util.Map<String, String> overrides = new LinkedHashMap<>(classOverrides);
         overrides.putAll(JpaMetadataReader.attributeOverrides(field));
+        // T-EmbeddedColPrefix：嵌入列命名约定按「显式设置 > 所在模块的 Hibernate 命名配置探测 > 无前缀」解析
+        com.intellij.openapi.project.Project project;
+        try {
+            project = field.getProject();
+        } catch (Throwable ignored) {
+            project = null;
+        }
+        com.intellij.openapi.vfs.VirtualFile anchor;
+        try {
+            anchor = field.getContainingFile() != null ? field.getContainingFile().getVirtualFile() : null;
+        } catch (Throwable ignored) {
+            anchor = null;
+        }
+        EmbeddedColumnNaming naming = EmbeddedColumnNamingResolver.resolve(project, anchor);
         List<JpaMetadataReader.EmbeddedColumnSpec> specs;
         try {
-            specs = JpaMetadataReader.flattenEmbeddedColumns(field, overrides);
+            specs = JpaMetadataReader.flattenEmbeddedColumns(field, overrides, naming);
         } catch (Throwable ignored) {
             specs = List.of();
         }
@@ -354,10 +374,14 @@ public class JpaEntityResolver {
         }
         List<ColumnInfo> result = new ArrayList<>();
         for (JpaMetadataReader.EmbeddedColumnSpec spec : specs) {
-            result.add(new ColumnInfo(spec.getFieldName(), sdPrefix + spec.getColumnName(), isPrimaryKey, false,
+            String columnName = sdPrefix.isEmpty() || spec.isFromAttributeOverride()
+                    ? spec.getColumnName()
+                    : sdPrefix + spec.getColumnName();
+            result.add(new ColumnInfo(spec.getFieldName(), columnName, isPrimaryKey, false,
                     spec.getFieldType(), null, resolveComment(spec.getField()),
                     isPrimaryKey ? ColumnRole.PRIMARY : ColumnRole.BUSINESS,
-                    spec.isInsertable(), spec.isUpdatable(), null, true, false, fieldName));
+                    spec.isInsertable(), spec.isUpdatable(), null, true, false, fieldName,
+                    spec.getEmbeddedPath()));
         }
         return result;
     }

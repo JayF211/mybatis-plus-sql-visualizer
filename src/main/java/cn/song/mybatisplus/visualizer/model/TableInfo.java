@@ -221,15 +221,28 @@ public final class TableInfo {
     }
 
     /**
-     * T-Embedded：按「嵌入字段名 + 内部字段名」的驼峰拼接路径查展平列。
+     * T-Embedded：按嵌入段驼峰路径查展平列。
      *
      * <p>Spring Data 派生查询把 {@code updateInfo.createdTime} 穿透 @Embedded 的属性路径整体解析成单个
-     * 驼峰名 {@code updateInfoCreatedTime}（无点号；<b>内层字段首字母大写</b>——{@code UpdateInfo} +
+     * 驼峰名 {@code updateInfoCreatedTime}（无点号；<b>每段首字母大写</b>——{@code UpdateInfo} +
      * {@code CreatedTime} 驼峰化的产物），{@link #columnByField} 查不中（它不是任何字段的裸名），消费方
-     * 据 snake 兜底会产出 {@code update_info_created_time} 伪列。拼接匹配展平列（{@code embeddedParent +
-     * 首字母大写的 fieldName == path}）即可还原真实列名 {@code created_time}。
+     * 据 snake 兜底会产出 {@code update_info_created_time} 伪列。</p>
+     *
+     * <p>匹配按两条轨（G2 修复：两级嵌入链）：
+     * <ul>
+     *   <li><b>{@code ColumnInfo.embeddedPath} 全路径等值</b>——展平时逐段落盘（{@code address.zipcode.zip} →
+     *       {@code addressZipcodeZip}），两级以上嵌入链（address + zipcode + zip）由此命中覆写列
+     *       {@code cust_zip}，不再因「只认一层拼接」落 snake 兜底产出 {@code address_zipcode_zip} 伪列；</li>
+     *   <li>既有单层拼接兜底（{@code embeddedParent + 首字母大写的 fieldName == path}）——手搓 TableInfo
+     *       夹具 / 类型不可解析的降级单列形态仍按此命中，行为不回归。</li>
+     * </ul></p>
      */
     public ColumnInfo columnByEmbeddedPath(String path) {
+        for (ColumnInfo c : columns) {
+            if (c.isEmbedded() && path.equals(c.getEmbeddedPath())) {
+                return c;
+            }
+        }
         for (ColumnInfo c : columns) {
             if (!c.isEmbedded() || c.getEmbeddedParent() == null) {
                 continue;

@@ -431,9 +431,10 @@ public final class DerivedQueryConverter {
          *
          * 规则：
          *  - 先从 TableInfo 的列映射按实体字段名查找（驼峰形式）
-         *  - T-Embedded：嵌入段驼峰拼接路径（{@code updateInfoCreatedTime} = 嵌入字段名 + 展平列字段名，
-         *    PartTree 穿透 @Embedded 的解析形态）按展平列匹配，命中即用真实列名——否则 snake 兜底
-         *    会产出 {@code update_info_created_time} 伪列（demo 真机实测缺陷）
+         *  - T-Embedded：嵌入段驼峰路径按展平列匹配（{@code updateInfoCreatedTime} = 嵌入字段名 + 展平列
+         *    字段名，PartTree 穿透 @Embedded 的解析形态；两级以上链如 {@code addressZipcodeZip} 由
+         *    {@code TableInfo#columnByEmbeddedPath} 的全路径轨命中）——命中即用真实列名，否则 snake 兜底
+         *    会产出 {@code update_info_created_time} / {@code address_zipcode_zip} 伪列（demo 真机实测缺陷）
          *  - 找不到则使用驼峰转下划线作为列名
          */
         private ColumnRef resolveColumn(@NotNull String propertyPath, @NotNull List<JoinClause> joins) {

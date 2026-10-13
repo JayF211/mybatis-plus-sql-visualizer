@@ -301,7 +301,8 @@ public class EntityResolver {
             result.add(new ColumnInfo(spec.getFieldName(), spec.getColumnName(), isEmbeddedId, false,
                     spec.getFieldType(), null, resolveComment(spec.getField()),
                     isEmbeddedId ? ColumnRole.PRIMARY : ColumnRole.BUSINESS,
-                    spec.isInsertable(), spec.isUpdatable(), null, true, false, fieldName));
+                    spec.isInsertable(), spec.isUpdatable(), null, true, false, fieldName,
+                    spec.getEmbeddedPath()));
         }
         return result;
     }
