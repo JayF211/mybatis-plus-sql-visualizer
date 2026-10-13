@@ -132,6 +132,11 @@ class PluginSettingsPanel @JvmOverloads constructor(
         override fun toString(): String = label
     }
 
+    /** T-EmbeddedColPrefix：嵌入列命名约定下拉项（值 + 当前语言显示文案）。 */
+    internal data class EmbeddedNamingOption(val value: String, val label: String) {
+        override fun toString(): String = label
+    }
+
     internal fun crudColorStyleOptions(): Array<CrudColorStyleOption> = arrayOf(
         CrudColorStyleOption(PluginSettings.CRUD_COLOR_STYLE_BAR, MpSqlVisualizerBundle.message("settings.log.crudColor.style.bar")),
         CrudColorStyleOption(PluginSettings.CRUD_COLOR_STYLE_BACKGROUND, MpSqlVisualizerBundle.message("settings.log.crudColor.style.background")),
@@ -184,6 +189,16 @@ class PluginSettingsPanel @JvmOverloads constructor(
         ReverseFormatOption(PluginSettings.REVERSE_LAMBDA, MpSqlVisualizerBundle.message("settings.reverseWrapperFormat.lambda")),
         ReverseFormatOption(PluginSettings.REVERSE_WRAPPERS, MpSqlVisualizerBundle.message("settings.reverseWrapperFormat.wrappers")),
         ReverseFormatOption(PluginSettings.REVERSE_MPJ_LAMBDA, MpSqlVisualizerBundle.message("settings.reverseWrapperFormat.mpjLambda")),
+    )
+
+    /** 嵌入列命名约定选项（T-EmbeddedColPrefix）：AUTO 自动 / NONE 无前缀 / COMPONENT_PATH 组件路径前缀。 */
+    internal fun embeddedNamingOptions(): Array<EmbeddedNamingOption> = arrayOf(
+        EmbeddedNamingOption(PluginSettings.EMBEDDED_NAMING_AUTO, MpSqlVisualizerBundle.message("settings.embeddedColumnNaming.auto")),
+        EmbeddedNamingOption(PluginSettings.EMBEDDED_NAMING_NONE, MpSqlVisualizerBundle.message("settings.embeddedColumnNaming.none")),
+        EmbeddedNamingOption(
+            PluginSettings.EMBEDDED_NAMING_COMPONENT_PATH,
+            MpSqlVisualizerBundle.message("settings.embeddedColumnNaming.componentPath"),
+        ),
     )
 
     // T-TenantLine 诊断日志：输出 UI Apply 决策链路。
@@ -535,6 +550,9 @@ class PluginSettingsPanel @JvmOverloads constructor(
 
     /** 反向转换 Wrapper 形态下拉（T-M36.3：AUTO/QUERY/LAMBDA/MPJ_LAMBDA）。 */
     internal val reverseFormatCombo = JComboBox<ReverseFormatOption>()
+
+    /** 嵌入列命名约定下拉（T-EmbeddedColPrefix：AUTO/NONE/COMPONENT_PATH）。 */
+    internal val embeddedNamingCombo = JComboBox<EmbeddedNamingOption>()
 
     /** 反向转换手动选择实体类开关（自动推断未命中/多表 JOIN 时弹实体选择弹窗）。 */
     internal val manualEntityCheck = JBCheckBox()
@@ -1119,6 +1137,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             || removeTablePrefixField.text.trim() != s.removeTablePrefix
             || removeTableSuffixField.text.trim() != s.removeTableSuffix
             || columnCalibrationCheck.isSelected != s.columnCalibrationEnabled
+            || (embeddedNamingCombo.selectedItem as? EmbeddedNamingOption)?.value != s.embeddedColumnNaming
 
     private fun isModifiedCodeGen(s: PluginSettings.State): Boolean =
         (reverseFormatCombo.selectedItem as? ReverseFormatOption)?.value != s.reverseWrapperFormat
@@ -1243,6 +1262,8 @@ class PluginSettingsPanel @JvmOverloads constructor(
             s.removeTablePrefix = removeTablePrefixField.text.trim()
             s.removeTableSuffix = removeTableSuffixField.text.trim()
             s.columnCalibrationEnabled = columnCalibrationCheck.isSelected
+            s.embeddedColumnNaming = (embeddedNamingCombo.selectedItem as? EmbeddedNamingOption)?.value
+                ?: PluginSettings.EMBEDDED_NAMING_AUTO
         }
         if (SECTION_CODE_GEN in sections) {
             s.reverseWrapperFormat = (reverseFormatCombo.selectedItem as? ReverseFormatOption)?.value ?: PluginSettings.REVERSE_AUTO
@@ -1407,6 +1428,8 @@ class PluginSettingsPanel @JvmOverloads constructor(
             removeTablePrefixField.text = s.removeTablePrefix
             removeTableSuffixField.text = s.removeTableSuffix
             columnCalibrationCheck.isSelected = s.columnCalibrationEnabled
+            embeddedNamingCombo.selectedItem = embeddedNamingOptions().firstOrNull { it.value == s.embeddedColumnNaming }
+                ?: embeddedNamingOptions().first()
         }
         if (SECTION_CODE_GEN in sections) {
             reverseFormatCombo.selectedItem = reverseFormatOptions().firstOrNull { it.value == s.reverseWrapperFormat }
