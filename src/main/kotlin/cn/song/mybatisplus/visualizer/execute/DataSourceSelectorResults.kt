@@ -409,13 +409,21 @@ internal fun DataSourceSelector.reuseSharedConsole(
     val liveResult = runCatching {
         sharedUi?.javaClass?.getMethod("getComponent")?.invoke(sharedUi) as? javax.swing.JComponent
     }.getOrNull()
-    val full = when {
-        liveResult == null -> sharedFullComponent
-        // M36.5.43：swap 助手强制换入（不再返回 null）——结果区从 DBN 宿主摘入本 SplitPane
-        else -> swapResultIntoPersistentConsole(sharedFullComponent, liveResult, top, LOG)
-    } ?: return false
+    // ★A49：**无嵌入宿主（onConsole == null）时不重摘 DBN 结果组件**——prepare 侧已 gate，但复用链
+    // 若仍 swap 会再次把结果区组件从 DBN 原生宿主摘进我方永不展示的 SplitPane（`swapResultIntoPersistentConsole`
+    // 的强制换入分支会 remove 外部宿主 + 设 bottomComponent）→ 原生控制台结果网格停在 "0 rows of 0+"。
+    // 无宿主时沿用既有缓存（可能为 null）、保持原生渲染；有宿主（预览面板复用）时行为逐字不变。
+    val hasHost = onConsole != null
+    val composeNow = shouldComposeEmbedSplitPane(hasHost, liveResult != null)
+    val full: javax.swing.JComponent? = when {
+        composeNow && liveResult != null ->
+            // M36.5.43：swap 助手强制换入（不再返回 null）——结果区从 DBN 宿主摘入本 SplitPane
+            swapResultIntoPersistentConsole(sharedFullComponent, liveResult, top, LOG)
+        else -> sharedFullComponent
+    }
+    if (hasHost && full == null) return false
     if (liveResult != null) lastLiveResultSwapped = liveResult
-    sharedFullComponent = full
+    if (hasHost) sharedFullComponent = full
     preparedConsole = console
     preparedEditor = editor
     preparedScriptModel = refreshedModel ?: scriptModel
@@ -424,9 +432,9 @@ internal fun DataSourceSelector.reuseSharedConsole(
     preparedUi = sharedUi
     preparedTopBlock = top
     preparedResultComponent = liveResult
-    preparedFullComponent = full
+    if (hasHost) preparedFullComponent = full
     onEditor?.invoke(editor)
-    onConsole?.invoke(full)
+    full?.let { onConsole?.invoke(it) }
     // M36.5.55：预览（execute=false）复用 console 时也把结果区（bottom）折叠——divider 压到
     // 接近底部，bottom（DBN Output/Tx 结果区占位）收起不显示，满足"未执行不显示结果面板"。
     // T-FirstExecResultInvisible F3：折叠归口 embedMode——仅 PREVIEW 且结果区无内容才折叠
@@ -785,6 +793,19 @@ internal fun DataSourceSelector.afterSubmitted(
         val pre = resultContents(ui)
         val preExistingNames = pre.map { it.displayName }.toSet()
         LOG.info("[M36] result watch started (pre-existing-names=$preExistingNames, ids=${pre.map { System.identityHashCode(it) }})")
+        // ★A49 取证：提交时刻结果区组件的**宿主**——判「有没有被摘走」的决定性读数（无论本拍是否
+        // 发生 swap 都打）。`parent` 全类名是判别力所在：`…ServiceViewComponentWrapper` = 仍在 DBN
+        // 原生宿主（未摘）；`…buildConsoleSplitPane$1` = 已在我方容器（摘了）。
+        runCatching {
+            val liveNow = ui?.javaClass?.getMethod("getComponent")?.invoke(ui) as? javax.swing.JComponent
+            val mySp = sharedFullComponent ?: preparedFullComponent
+            val myBottom = (mySp as? javax.swing.JSplitPane)?.bottomComponent
+            LOG.info(
+                "[M36][A49] result host at submit: parent=${liveNow?.parent?.javaClass?.name ?: "null"}, " +
+                    "mySplitBottom=${myBottom?.javaClass?.name ?: "null"}, " +
+                    "stolen=${liveNow != null && mySp != null && liveNow === myBottom && liveNow.parent === mySp}",
+            )
+        }
         // ② 8s 连接等待监控（从提交时刻起算）。M36.5.44 放宽：原判定 `!newTab || !namespaceOk`
         // 双条件任一为假即报超时——但连接建立慢（首个 SQL，query 在 8s 后才完成）时
         // newTab=false 且 namespace 可能暂空，**误报"执行超时"**（用户截图红字实证）。
@@ -1454,6 +1475,11 @@ internal fun DataSourceSelector.swapResultIntoPersistentConsole(
 ): javax.swing.JComponent {
     val sp = full as? javax.swing.JSplitPane
         ?: return buildConsoleSplitPane(topBlock, liveResult)
+    // ★A49 取证修正：换入**前**记录结果组件的真实宿主。旧日志在 `sp.bottomComponent = liveResult`
+    // 之后才读 parent，恒打印本 SplitPane，证明不了「有没有从 DBN 宿主摘走」。改在改动前取，
+    // 并用**全类名**（判别力所在）：`…ServiceViewComponentWrapper` = 仍在 DBN 原生宿主；
+    // `…DataSourceSelectorResultsKt$buildConsoleSplitPane$1` = 已在我方容器。
+    val prevParent = liveResult.parent
     val current = sp.bottomComponent
     if (current === liveResult && liveResult.parent === sp) {
         // M36.5.45：同实例也要强制重绘——DBN 复用同一 Content 组件（DataGrid），实例不变
@@ -1495,7 +1521,7 @@ internal fun DataSourceSelector.swapResultIntoPersistentConsole(
     realignSplitDivider(sp, force = true)
     sp.revalidate()
     sp.repaint()
-    LOG.info("[M36] persistent console bottom swapped (result id=${System.identityHashCode(liveResult)}, prevParent=${liveResult.parent?.javaClass?.simpleName ?: "null"})")
+    LOG.info("[M36] persistent console bottom swapped (result id=${System.identityHashCode(liveResult)}, prevParent=${prevParent?.javaClass?.name ?: "null"}, fromExternalHost=${prevParent != null && prevParent !== sp})")
     return sp
 }
 
