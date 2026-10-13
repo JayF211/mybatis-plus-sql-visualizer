@@ -7,6 +7,7 @@ import cn.song.mybatisplus.visualizer.model.ColumnInfo
 import cn.song.mybatisplus.visualizer.model.JoinColumnRef
 import cn.song.mybatisplus.visualizer.model.TableInfo
 import cn.song.mybatisplus.visualizer.ui.highlight.DatabaseSchemaResolver
+import cn.song.mybatisplus.visualizer.util.NamingStrategy
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.project.ProjectManager
@@ -93,7 +94,10 @@ object ColumnNameCalibrator {
         val ambiguousOldNames = HashSet<String>()
         var changed = false
         for (column in table.columns) {
+            // 嵌入列多一道兜底（T-EmbeddedColPrefix）：工程用「组件路径」命名策略且实体无显式注解时，
+            // 猜测值差的是整段前缀（`base_qty` vs `qty_base_qty`），归一化比不出，改用嵌入段路径作候选
             val real = resolveName(column.columnName, column.fieldName, realColumns) { index.value }
+                ?: resolveEmbeddedPathName(column, realColumns) { index.value }
             if (real == null) {
                 calibrated += column
                 continue
@@ -247,6 +251,37 @@ object ColumnNameCalibrator {
     /** 归一化键的候选列（空键——全下划线等退化形态——不参与匹配，返回空表）。 */
     private fun candidatesOf(byNormalized: Map<String, List<String>>, key: String): List<String> =
         if (key.isEmpty()) emptyList() else byNormalized[key] ?: emptyList()
+
+    /**
+     * 嵌入列的最后一档候选（T-EmbeddedColPrefix）：用 [ColumnInfo.embeddedPath]（实体根起的嵌入段
+     * 驼峰路径，`qty.baseQty` → `qtyBaseQty`）的 snake 形态作候选列名，**唯一命中才改写**。
+     *
+     * 存在理由：工程用 Hibernate 组件路径命名策略（`ImplicitNamingStrategyComponentPathImpl`）时，
+     * 真实列名比「内层字段名」多一整段前缀（`base_qty` vs `qty_base_qty`）——[normalize] 只去下划线，
+     * 两者归一化后仍不同（`baseqty` vs `qtybaseqty`），既有三步算法必然 0 候选。而本类 KDoc 列的
+     * 适用场景里正有「工程自定义命名策略」一条，嵌入列此前是那条的盲区。
+     *
+     * 安全口径照既有「宁缺不错」：
+     *  - 只对 `embedded == true` 的列生效；
+     *  - 当前列名**已精确存在于真实列集合**时该列在第 1 步就已按「无需改写」返回，走不到这里；
+     *  - 候选名要**唯一**命中（精确命中，或归一化键唯一），0 候选 / ≥2 候选一律不动；
+     *  - 命中值与当前列名相同也返回 null（不制造无意义改动，保住「无改动返回入参实例」不变量）。
+     */
+    private fun resolveEmbeddedPathName(
+        column: ColumnInfo,
+        realColumns: Set<String>,
+        index: () -> Map<String, List<String>>,
+    ): String? {
+        if (!column.embedded) return null
+        // 当前列名已是库中真名（[resolveName] 第 1 步的「无需改写」）→ 路径候选不得把它抢走
+        if (column.columnName in realColumns) return null
+        val candidate = column.embeddedPath?.takeIf { it.isNotBlank() }?.let { NamingStrategy.toSnakeCase(it) }
+            ?: return null
+        if (candidate.isBlank() || candidate == column.columnName) return null
+        // 精确命中：库里就是这个字符串
+        if (candidate in realColumns) return candidate
+        return candidatesOf(index(), normalize(candidate)).singleOrNull()?.takeIf { it != column.columnName }
+    }
 
     /**
      * 归一化：小写 + 去 `_`/`-`（`order_i_d` / `orderID` / `order_id` / `ORDER-ID` → `orderid`）。
