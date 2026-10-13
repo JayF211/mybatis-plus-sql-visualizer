@@ -102,24 +102,28 @@ object XmlSynHiGate {
     fun occupiedRanges(project: Project?, host: PsiElement): List<TextRange> {
         if (!xmlSynHiEnabled()) return InjectRangePlan.yieldAll(host.textLength)
         return try {
-            foreignInjectionProbe?.let { seam ->
-                return if (seam(project, host)) InjectRangePlan.yieldAll(host.textLength) else emptyList()
-            }
             // F79 刀二（T-PerfSweep24）：per-host 探针结论 stamped memo——喂入面上探针是唯一重操作
-            //（EP 枚举 O(1) 之后的逐注入器试探链），结论按「宿主弱身份＋含文件 PSI 修改戳＋在册注入器
-            // 清单实例」缓存：修改戳变化 / 宿主重解析换对象 / 注入器清单换代 → 结论自动失效；探针异常
-            // 走外层 catch 的 fail-safe 全覆盖且**不入缓存**（瞬时故障不得跨修改残留，恢复后下一问重探）。
-            val file = host.containingFile ?: return foreignOccupiedRangesProbe(project, host)
-            val psiStamp = file.modificationStamp
+            //（EP 枚举 O(1) 之后的逐注入器试探链，成本三方决定不可控），结论按「宿主弱身份＋含文件
+            // PSI 修改戳＋在册注入器清单实例」缓存：修改戳变化 / 宿主重解析换对象 / 注入器清单换代
+            // → 结论自动失效；探针异常走外层 catch 的 fail-safe 全覆盖且**不入缓存**（瞬时故障不得
+            // 跨修改残留，恢复后下一问重探）。memo 覆盖布尔缝与区间探针**两条路径**（测试缝计数同口径）。
+            val file = host.containingFile
+            val psiStamp = file?.modificationStamp
             val injectorList = MultiHostInjector.MULTIHOST_INJECTOR_EP_NAME.getExtensions(project ?: host.project)
-            foreignProbeMemo[host]
-                ?.takeIf { it.psiStamp == psiStamp && it.injectorList === injectorList }
-                ?.let { return it.ranges }
-            val fresh = foreignOccupiedRangesProbe(project, host)
-            // 全覆盖哨兵可能是 fail-safe 形态（探测失败）——不入缓存，恢复后下一问重探
-            val failSafeShape =
-                fresh.size == 1 && fresh[0].startOffset == 0 && fresh[0].endOffset == host.textLength
-            if (!failSafeShape) foreignProbeMemo[host] = ProbeMemo(psiStamp, injectorList, fresh)
+            if (file != null) {
+                foreignProbeMemo[host]
+                    ?.takeIf { it.psiStamp == psiStamp && it.injectorList === injectorList }
+                    ?.let { return it.ranges }
+            }
+            val fresh = foreignInjectionProbe?.let { seam ->
+                if (seam(project, host)) InjectRangePlan.yieldAll(host.textLength) else emptyList()
+            } ?: foreignOccupiedRangesProbe(project, host)
+            if (file != null) {
+                // 全覆盖哨兵可能是 fail-safe 形态（探测失败）——不入缓存，恢复后下一问重探
+                val failSafeShape =
+                    fresh.size == 1 && fresh[0].startOffset == 0 && fresh[0].endOffset == host.textLength
+                if (!failSafeShape) foreignProbeMemo[host] = ProbeMemo(psiStamp!!, injectorList, fresh)
+            }
             fresh
         } catch (cancelled: ProcessCanceledException) {
             throw cancelled
