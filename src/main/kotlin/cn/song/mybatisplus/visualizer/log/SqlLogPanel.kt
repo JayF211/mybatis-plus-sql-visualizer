@@ -365,8 +365,11 @@ class SqlLogPanel(
     /** T-UiCoord F2：工具栏右侧控制组（类型 / 排序 / 去重勾选 / 慢查询徽章）——单行契约的主断言面。 */
     internal val toolbarControlsForTest: JPanel? get() = toolbarControls
 
-    /** T-UiCoord F2：工具栏动作图标组组件（结构断言：它必须挂在行宿主 CENTER）。 */
+    /** T-UiCoord F2：工具栏动作图标组组件（结构断言：它必须挂在行宿主组件树内——T-SqlListSortRight 起在左簇容器内）。 */
     internal val toolbarComponentForTest: JComponent? get() = toolbarComponent
+
+    /** T-SqlListSortRight：工具栏左侧按钮集容器（图标组 + 排序按钮同簇）——结构断言面。 */
+    internal val toolbarLeftClusterForTest: JPanel? get() = toolbarLeftCluster
     internal val moreActionGroupForTest: DefaultActionGroup get() = moreActionGroup
 
     /** T-UiCoord F2：下拉按钮显示文本的像素预算（测试按同一预算算期望的省略文本）。 */
@@ -481,8 +484,14 @@ class SqlLogPanel(
     /** 工具栏右侧控制组（EAST 宿主内那层 FlowLayout 面板）。 */
     private var toolbarControls: JPanel? = null
 
-    /** 工具栏动作图标组组件（CENTER）——结构断言用（曾因还原反向验证探针时误删 CENTER 挂载而漏）。 */
+    /** 工具栏动作图标组组件（挂左侧按钮集容器 CENTER）——结构断言用（曾因还原反向验证探针时误删挂载而漏）。 */
     private var toolbarComponent: JComponent? = null
+
+    /**
+     * T-SqlListSortRight（2026-10-14 用户令）：工具栏**左侧按钮集容器**——动作图标组与排序按钮同簇，
+     * 排序按钮排在图标组右侧（左簇最右端）。结构断言面（排序归位后「排序在左簇内、且在图标组右侧」）。
+     */
+    private var toolbarLeftCluster: JPanel? = null
 
     init {
         // 注册子面板到 Disposer 树：父面板 dispose 时级联释放子面板（及其 DocumentListener），
@@ -651,15 +660,25 @@ class SqlLogPanel(
         updateTypeFilterButton()
         updateSortButtonText()
         // T-UiCoord F2（2026-09-21 用户定案「不要两行」）：工具栏**恒为单行**——
-        // 左侧排序按钮（WEST）与动作图标组（CENTER，窄时交给平台溢出）+ 右侧列表控制组
+        // 左侧按钮集（动作图标组 + 排序按钮同簇）+ 右侧列表控制组
         // （EAST：慢查询徽章 / SQL类型 / 去重勾选，勾选仍在最右）。
+        // T-SqlListSortRight（2026-10-14 用户令）：排序按钮不再独占整行最左（原 WEST 槽），归位到
+        // 左侧按钮集（动作图标组所在的那一簇）的**最右端**——与图标组同簇、排在图标组右侧；
+        // 仍不进右侧控制组。左簇挂行 WEST：取理想宽（= 图标组理想宽 + 排序按钮理想宽），簇内
+        // 图标组走 CENTER、排序按钮走 EAST，两者均随行高拉伸（与归位前 WEST/CENTER 的垂直形态一致，
+        // 排序按钮不被挤成顶对齐）。WEST 恒取理想宽，故簇宽不因行宽变化而收窄、结构上不折行。
         // BorderLayout 结构上不存在折行可能，故任意宽度下都只有一行；原 WrapLayout 流式行退役
         // ——它按「谁最后谁折」处理放不下，2026-09-16 加排序单元、09-18 加第 5 枚图标后，
         // 460px 侧边栏下「排序」单元孤行到第二行（右留 300px 空档、两行左缘差 10px）。
         val row = JPanel(BorderLayout())
-        row.add(sortButton, BorderLayout.WEST)
-        row.add(toolbar.component, BorderLayout.CENTER)
+        val leftCluster = JPanel(BorderLayout()).apply {
+            isOpaque = false
+            add(toolbar.component, BorderLayout.CENTER)
+            add(sortButton, BorderLayout.EAST)
+        }
         toolbarComponent = toolbar.component
+        toolbarLeftCluster = leftCluster
+        row.add(leftCluster, BorderLayout.WEST)
 
         // O-1：慢查询计数徽章。T-UiCoord F2：由「慢查询: N」全文改短徽章（复用存量键
         // log.panel.slowQueryBadge）让出一行余量，全文进 tooltip（见 updateSlowQueryLabel）。

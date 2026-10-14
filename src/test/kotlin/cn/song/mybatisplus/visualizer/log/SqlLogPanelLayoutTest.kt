@@ -242,23 +242,39 @@ class SqlLogPanelLayoutTest : BasePlatformTestCase() {
             val row = panel.toolbarRowForTest!!
             val toolbarComponent = panel.toolbarComponentForTest
             assertNotNull("动作图标组组件应存在", toolbarComponent)
+            // T-SqlListSortRight：图标组不再是行的直接子件——它挂在「左侧按钮集容器」内，容器再挂行上。
+            // 故断言改为「行 → 左簇 → 图标组」逐层连通（漏挂任一层都必红）。
+            val leftCluster = panel.toolbarLeftClusterForTest
+            assertNotNull("左侧按钮集容器应存在（图标组与排序按钮同簇）", leftCluster)
+            assertTrue("左侧按钮集容器必须挂在行宿主上", row.components.any { it === leftCluster })
             assertTrue(
-                "动作图标组必须挂在行宿主上（曾漏挂且全绿）",
-                row.components.any { it === toolbarComponent },
+                "动作图标组必须挂在左簇容器内（曾漏挂且全绿）",
+                leftCluster!!.components.any { it === toolbarComponent },
             )
             val controls = panel.toolbarControlsForTest!!
             val children = controls.components.filter { it.isVisible }.toList()
             assertTrue("控制组应含 SQL类型按钮", children.contains(panel.typeFilterButtonForTest))
             assertFalse("排序按钮应从右侧控制组移出", children.contains(panel.sortButtonForTest))
-            assertEquals("排序按钮应挂在左侧 WEST 槽", panel.sortButtonForTest,
-                (row.layout as BorderLayout).getLayoutComponent(BorderLayout.WEST))
+            // T-SqlListSortRight：排序按钮归位到左簇最右端（动作图标组右侧），不再是整行最左 WEST 槽。
+            val sortButton = panel.sortButtonForTest
+            assertTrue(
+                "排序按钮应在左簇容器内（既不在整行最左，也不进右侧控制组）",
+                leftCluster.components.any { it === sortButton },
+            )
+            val iconIndex = leftCluster.components.indexOfFirst { it === toolbarComponent }
+            val sortIndex = leftCluster.components.indexOfFirst { it === sortButton }
+            assertTrue("动作图标组应在左簇内", iconIndex >= 0)
+            assertTrue(
+                "排序按钮应排在动作图标组右侧（图标组 idx=$iconIndex / 排序 idx=$sortIndex）",
+                sortIndex > iconIndex,
+            )
             assertTrue("控制组应含 去重勾选（仍在最右）", children.contains(panel.dedupeCheckBoxForTest))
             assertEquals(
                 "去重勾选应在控制组最右",
                 panel.dedupeCheckBoxForTest,
                 children.last(),
             )
-            assertFalse("动作图标组不应混进控制组（单行定构下它在 CENTER）", children.any { it === toolbarComponent })
+            assertFalse("动作图标组不应混进控制组（单行定构下它在左簇）", children.any { it === toolbarComponent })
         } finally {
             panel.dispose()
         }
@@ -269,9 +285,11 @@ class SqlLogPanelLayoutTest : BasePlatformTestCase() {
         try {
             panel.applyTypeFilterForTest(setOf(StatementType.SELECT, StatementType.UPDATE, StatementType.DELETE))
             waitForEdt()
-            val left = panel.sortButtonForTest.preferredSize.width
+            // T-SqlListSortRight：左簇 = 动作图标组 + 排序按钮（同簇）。取**左簇整体理想宽**为 left
+            // ——headless 下图标组理想宽为 0，故左簇宽 ≈ 排序按钮宽，与归位前取值等价；判据不放宽。
+            val left = panel.toolbarLeftClusterForTest!!.preferredSize.width
             val right = panel.toolbarControlsForTest!!.preferredSize.width
-            assertTrue("排序左簇 $left + 控制组 $right + 图标组 $ICON_GROUP_WIDTH_MIN 不能超出 $USER_SIDEBAR_WIDTH",
+            assertTrue("左侧按钮集 $left + 控制组 $right + 图标组 $ICON_GROUP_WIDTH_MIN 不能超出 $USER_SIDEBAR_WIDTH",
                 left + right + ICON_GROUP_WIDTH_MIN <= USER_SIDEBAR_WIDTH)
         } finally {
             panel.dispose()
