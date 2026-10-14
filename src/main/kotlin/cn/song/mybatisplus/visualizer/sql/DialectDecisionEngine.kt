@@ -51,7 +51,15 @@ object DialectDecisionEngine {
                 return resolved(it, Confidence.STRONG, Source.LEARNED_MODULE, listOf(candidate.id))
             }
         }
-        fromCandidates(input.projectCandidates, Source.PROJECT_CONSENSUS, null)?.let { return it }
+        fromCandidates(input.projectCandidates, Source.PROJECT_CONSENSUS, null)?.let { projectDecision ->
+            val agent = if (input.singleModuleProven) knownName(input.lastAgentDialect) else null
+            if (agent != null && projectDecision.status == Status.RESOLVED &&
+                projectDecision.dialectName != agent) {
+                return Decision(Status.CONFLICT, null, Confidence.FALLBACK, Source.PROJECT_CONSENSUS,
+                    projectDecision.dataSourceIds, projectDecision.evidence + Source.PROJECT_AGENT)
+            }
+            return projectDecision
+        }
         if (input.singleModuleProven) {
             knownName(input.lastAgentDialect)?.let {
                 return resolved(it, Confidence.STRONG, Source.PROJECT_AGENT)

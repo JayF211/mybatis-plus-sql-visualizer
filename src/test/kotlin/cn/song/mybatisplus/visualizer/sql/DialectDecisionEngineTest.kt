@@ -97,6 +97,20 @@ class DialectDecisionEngineTest {
     }
 
     @Test
+    fun singleModuleRuntimeAndConfiguredSourceConflictIsNotSilentlyResolved() {
+        val decision = DialectDecisionEngine.decide(DialectDecisionEngine.Input(
+            projectCandidates = listOf(ds("my", "MySQL")),
+            lastAgentDialect = "PostgreSQL", singleModuleProven = true,
+        ))
+        assertEquals(DialectDecisionEngine.Status.CONFLICT, decision.status)
+        assertNull(decision.dialectName)
+        assertTrue(decision.evidence.containsAll(listOf(
+            DialectDecisionEngine.Source.PROJECT_CONSENSUS,
+            DialectDecisionEngine.Source.PROJECT_AGENT,
+        )))
+    }
+
+    @Test
     fun moduleLearningBeatsProjectWideGuessButNotExplicitIdeaDialect() {
         val learned = DialectDecisionEngine.decide(DialectDecisionEngine.Input(
             learnedModule = ds("module-pg", "PostgreSQL"),
