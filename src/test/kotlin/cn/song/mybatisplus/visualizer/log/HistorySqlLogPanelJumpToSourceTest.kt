@@ -33,6 +33,18 @@ class HistorySqlLogPanelJumpToSourceTest : BasePlatformTestCase() {
             sourceLine = sourceLine,
         )
 
+    /**
+     * 清理默认历史目录：本类用例共享同一临时项目目录，方法间/分片内别的类留下的历史文件会让
+     * 「恰好 1 个历史文件」的断言假红（2026-10-14 分片重排后实测命中：expected 1 but was 2）。
+     */
+    private fun cleanHistoryDir() {
+        val dir = File(
+            project.basePath!! + File.separator + ".idea" + File.separator +
+                SqlLogAutoSaver.DATA_DIR_NAME + File.separator + "sql-history",
+        )
+        if (dir.isDirectory) dir.listFiles()?.forEach { it.delete() }
+    }
+
     /** 在项目根目录写出真实源文件并刷新 VFS，使其可被 LocalFileSystem 解析到。 */
     private fun writeRealSource(relativePath: String, content: String): File {
         val f = File(project.basePath!!, relativePath)
@@ -101,6 +113,7 @@ class HistorySqlLogPanelJumpToSourceTest : BasePlatformTestCase() {
         writeRealSource("UserMapper.java", "public class UserMapper {\n  void selectById(Long id) {}\n}\n")
 
         // 模拟自动保存写入历史文件：-- source: UserMapper.java:10 | time: 3ms | ts --\nSQL
+        cleanHistoryDir()
         val dir = File(project.basePath!!, ".idea${File.separator}${SqlLogAutoSaver.DATA_DIR_NAME}${File.separator}sql-history")
         dir.mkdirs()
         val histFile = File(dir, "sql-history-2026-08-31.sql")
@@ -113,7 +126,11 @@ class HistorySqlLogPanelJumpToSourceTest : BasePlatformTestCase() {
         val panel = HistorySqlLogPanel(project); panel.refreshForTest()
         try {
             assertTrue("默认一级", panel.isShowingFiles)
-            assertEquals("应读到 1 个历史文件", 1, panel.fileListEntries.size)
+            assertEquals(
+                "应读到 1 个历史文件（实际目录内容=${dir.listFiles()?.map { it.name }}）",
+                1,
+                panel.fileListEntries.size,
+            )
             panel.openFileForTest(panel.fileListEntries.first())
 
             val entry = panel.sqlListEntries.first()
