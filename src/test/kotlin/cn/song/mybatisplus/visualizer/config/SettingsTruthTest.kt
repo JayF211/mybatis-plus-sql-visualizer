@@ -91,6 +91,16 @@ class SettingsTruthTest {
         assertTrue(java.io.File("README.md").readText().contains("两者均在 IDE 应用配置目录"))
     }
 
+    @Test
+    fun testP1_全局方言状态不得取首项目首数据源() {
+        val section = mainSrc("cn/song/mybatisplus/visualizer/config/PluginSettingsPanel.kt")
+            .substringAfter("internal fun refreshInferredLabel()")
+            .substringBefore("private fun isModifiedPreview(")
+        assertFalse("全局设置不能把首个项目冒充当前项目", section.contains("openProjects.firstOrNull()"))
+        assertFalse("全局状态不能取数据源首个 URL", section.contains("DataSourceUrlProbe.firstUrl("))
+        assertTrue("状态应消费项目候选共识决策", section.contains("DialectRegistry.decision("))
+    }
+
     // ---------- P2 / T-CaptureTruth T-CT-01/02：接线源码守卫（语义走 AgentStatusTextTest） ----------
 
     private fun mainSrc(rel: String) = java.io.File("src/main/kotlin/$rel").readText()

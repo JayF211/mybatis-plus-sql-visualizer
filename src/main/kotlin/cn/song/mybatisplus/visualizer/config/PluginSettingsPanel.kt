@@ -1080,29 +1080,13 @@ class PluginSettingsPanel @JvmOverloads constructor(
             || (SECTION_UPDATE_DIAGNOSTICS in sections && updateSection.autoCheckCheck.isSelected != s.autoCheckUpdate)
     }
 
-    /**
-     * T-DialectAutoInfer：刷新推断状态行——推断模式显示当前推断结果（含依据 URL），
-     * 手动模式显示手动值。惰性调用（reset/选中哨兵项时），不做监听器常驻。
-     */
+    /** 全局设置不把首个打开项目的方言冒充其他项目；项目唯一时展示决策状态。 */
     internal fun refreshInferredLabel() {
         dialectInferredLabel.text = when (dialectCombo.selectedItem as? String) {
             autoDialectItem -> {
-                // T-PS5-04：agentUrl 读轻量持有者（不再经 AgentManager.getInstance 实例化服务——
-                // 设置页仅显示推断状态，不该顺带把增强捕获的守护线程带起来）
-                val agentUrl = cn.song.mybatisplus.visualizer.log.agent.AgentUrlRegistry.lastConnectionUrl(
-                    ProjectManager.getInstance().openProjects.firstOrNull() ?: return run {
-                        dialectInferredLabel.text = MpSqlVisualizerBundle.message("settings.dialect.inferred.none")
-                    },
-                )
-                val dataSourceUrl = runCatching {
-                    cn.song.mybatisplus.visualizer.sql.DataSourceUrlProbe.firstUrl(
-                        ProjectManager.getInstance().openProjects.firstOrNull(),
-                    )
-                }.getOrNull()
-                val inferred = cn.song.mybatisplus.visualizer.sql.DialectInference.infer(agentUrl, dataSourceUrl)
-                val name = inferred.dialectName
-                    ?: MpSqlVisualizerBundle.message("settings.dialect.inferred.none")
-                MpSqlVisualizerBundle.message("settings.dialect.inferred", name)
+                val projects = ProjectManager.getInstance().openProjects.filterNot { it.isDisposed }
+                val decision = projects.singleOrNull()?.let { DialectRegistry.decision(it) }
+                DialectSettingsStatusText.describe(projects.size, decision)
             }
             else -> MpSqlVisualizerBundle.message("settings.dialect.manual", dialectCombo.selectedItem as? String ?: "")
         }
