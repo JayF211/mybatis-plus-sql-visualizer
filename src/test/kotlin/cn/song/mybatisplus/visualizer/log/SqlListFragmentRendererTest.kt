@@ -114,7 +114,7 @@ class SqlListFragmentRendererTest {
     fun testSemanticFragmentsProjectUsingCurrentSchemeAndCanonicalOverrideFirst() {
         val semantic = SqlListFragmentRenderer.semanticFragments("SELECT 1")
         val canonical = SqlHighlightColors.KEYWORD
-        val legacy = canonical.fallbackAttributeKey
+        val legacy = requireNotNull(canonical.fallbackAttributeKey)
         val first = scheme(mapOf(legacy to Color.BLUE))
         val second = scheme(mapOf(legacy to Color.GREEN, canonical to Color.RED))
         assertEquals(Color.BLUE, SqlListFragmentRenderer.projectFragments(semantic, first).first().attributes.fgColor)

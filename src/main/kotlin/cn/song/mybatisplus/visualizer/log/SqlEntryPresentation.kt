@@ -3,6 +3,9 @@ package cn.song.mybatisplus.visualizer.log
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.util.MpvsUiColors
 import com.intellij.ui.SimpleTextAttributes
+import java.awt.Font
+import javax.swing.JList
+import javax.swing.JPanel
 
 internal object SqlEntryPresentation {
     private val secondaryAttributes = SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, MpvsUiColors.META_GRAY)
@@ -39,6 +42,35 @@ internal object SqlEntryPresentation {
         }
         addFragment(formatTemplateCountFragment(entry, templateCounts, selected))
         addFragment(formatSourceFragment(entry, selected))
+    }
+}
+
+internal fun visibleSqlLines(
+    lines: List<List<SqlTextFragment>>,
+    mode: SqlListDisplayMode,
+): List<List<SqlTextFragment>> {
+    if (mode != SqlListDisplayMode.KEYWORD_WRAP || lines.size <= 3) return lines
+    val more = SqlTextFragment("… (+${lines.size - 2})", SimpleTextAttributes.REGULAR_ATTRIBUTES)
+    return lines.take(2) + listOf(listOf(more))
+}
+
+internal fun selectedAttributes(attributes: SimpleTextAttributes, foreground: java.awt.Color): SimpleTextAttributes =
+    SimpleTextAttributes(attributes.style, foreground)
+
+internal fun clipForList(
+    fragments: List<SqlTextFragment>,
+    list: JList<*>?,
+    cell: JPanel,
+    colorBarWidth: Int,
+): List<SqlTextFragment> {
+    if (list == null || list.width <= 0) return fragments
+    val width = list.width - cell.insets.left - cell.insets.right - colorBarWidth - list.insets.left - list.insets.right
+    val baseFont = list.font ?: return fragments
+    val metrics = HashMap<Int, java.awt.FontMetrics>(3)
+    return clipSqlFragments(fragments, width) { text, attributes ->
+        val style = (if (attributes.style and SimpleTextAttributes.STYLE_BOLD != 0) Font.BOLD else 0) or
+            (if (attributes.style and SimpleTextAttributes.STYLE_ITALIC != 0) Font.ITALIC else 0)
+        metrics.getOrPut(style) { list.getFontMetrics(baseFont.deriveFont(style)) }.stringWidth(text)
     }
 }
 

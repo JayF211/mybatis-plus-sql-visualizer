@@ -27,6 +27,9 @@ import com.intellij.openapi.actionSystem.DefaultActionGroup
 import javax.swing.Action
 import javax.swing.JComponent
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ModalityState
+import com.intellij.openapi.editor.colors.EditorColorsListener
+import com.intellij.openapi.editor.colors.EditorColorsManager
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.options.ShowSettingsUtil
 import com.intellij.notification.Notification
@@ -537,6 +540,15 @@ class SqlLogPanel(
             }
         }
         project.messageBus.connect(this).subscribe(PluginSettings.SETTINGS_CHANGE_TOPIC, settingsListener)
+        ApplicationManager.getApplication().messageBus.connect(this).subscribe(
+            EditorColorsManager.TOPIC,
+            EditorColorsListener {
+                ApplicationManager.getApplication().invokeLater(
+                    { list.repaint() },
+                    ModalityState.any(),
+                )
+            },
+        )
 
         // T-Perf-15（自 dev 移植）：监听器改命名引用——dispose 时精确注销（此前 addUiListener/addCapturingListener
         // 只加不减，面板随 tool window content 销毁重建逐次累积）

@@ -36,6 +36,16 @@ class SqlEntryPresentationTest : BasePlatformTestCase() {
         }
     }
 
+    fun test子句概览最多三行且标记剩余行数() {
+        val lines = (1..5).map { listOf(SqlTextFragment("line $it", SimpleTextAttributes.REGULAR_ATTRIBUTES)) }
+        val preview = visibleSqlLines(lines, SqlListDisplayMode.KEYWORD_WRAP)
+        assertEquals(3, preview.size)
+        assertEquals("line 1", preview[0].single().text)
+        assertEquals("line 2", preview[1].single().text)
+        assertEquals("… (+3)", preview[2].single().text)
+        assertSame(lines, visibleSqlLines(lines, SqlListDisplayMode.FORMATTED))
+    }
+
     fun test宽度裁切保留片段属性与完整模型内容() {
         val attrs = SimpleTextAttributes(SimpleTextAttributes.STYLE_BOLD, Color.BLUE)
         val entry = LogSqlEntry(rawSql = "SELECT 😀 FROM t", restoredSql = "SELECT 😀 FROM t", params = emptyList())

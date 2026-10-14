@@ -424,7 +424,7 @@ class SqlSyntaxHighlighterTest {
             assertSame(canonical, highlighter.getTokenHighlights(type).single())
             assertSame(canonical, SqlListSyntaxHighlighter().getTokenHighlights(type).single())
             assertTrue(canonical.externalName.startsWith("MP_SQL."))
-            val legacy = canonical.fallbackAttributeKey
+            val legacy = requireNotNull(canonical.fallbackAttributeKey)
             assertEquals(canonical.externalName.replace('.', '_'), legacy.externalName)
             assertNotNull("legacy key must fall back to platform colors", legacy.fallbackAttributeKey)
         }

@@ -13,7 +13,7 @@ class SqlSyntaxHighlighter : SyntaxHighlighterBase() {
 
     override fun getTokenHighlights(tokenType: IElementType?): Array<TextAttributesKey> = when (tokenType) {
         TokenType.BAD_CHARACTER -> pack(BAD_CHARACTER)
-        else -> tokenType?.let { SqlListSyntaxHighlighter.ATTR_BY_TYPE[it] }?.let(::pack) ?: emptyArray()
+        else -> tokenType?.let { SqlListSyntaxHighlighter.ATTR_BY_TYPE[it] }?.let { pack(it) } ?: emptyArray()
     }
 
     private companion object {
