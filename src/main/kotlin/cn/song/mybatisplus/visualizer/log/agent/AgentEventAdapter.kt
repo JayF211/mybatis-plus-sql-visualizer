@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.log.agent
 
+import cn.song.mybatisplus.visualizer.log.CaptureProvenance
 import cn.song.mybatisplus.visualizer.log.LogSqlEntry
 import cn.song.mybatisplus.visualizer.log.LogSqlParam
 import cn.song.mybatisplus.visualizer.log.SqlSource
@@ -57,6 +58,8 @@ object AgentEventAdapter {
             // R32 弱形态：连接 URL → 目标库标注（方言名 · 库名@host:port url 解析真值；
             // 凭据在 JdbcUrlDialects.targetOf 解析期剔除；未知/畸形 URL 为 null，面板不显示角标）
             databaseName = JdbcUrlDialects.badgeName(event.url),
+            // O-147 W0：通道归因打标——agent 事件适配产物恒为 AGENT
+            captureProvenance = CaptureProvenance.AGENT,
         )
     }
 

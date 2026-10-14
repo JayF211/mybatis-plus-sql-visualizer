@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.log.agent
 
+import cn.song.mybatisplus.visualizer.log.CaptureProvenance
 import cn.song.mybatisplus.visualizer.log.LogSqlEntry
 import cn.song.mybatisplus.visualizer.log.LogSqlParam
 import cn.song.mybatisplus.visualizer.log.SqlSource
@@ -120,6 +121,7 @@ class AgentEventAdapterTest {
             ),
         )
         assertEquals(SqlSource.AGENT, entry.source)
+        assertEquals("通道归因恒为 AGENT（O-147 W0 打标）", CaptureProvenance.AGENT, entry.captureProvenance)
         assertEquals(5L, entry.executionTimeMs)
         assertEquals(1L, entry.updateCount)
         assertEquals("SQLException: boom", entry.errorText)

@@ -430,7 +430,8 @@ open class SqlLogConsoleBridge(
 
     /** 条目入队（桥的两条产出路径共用：逐行与轮询静默冲刷）。 */
     private fun emitEntries(entries: List<LogSqlEntry>) {
-        entries.forEach { buffer.addEntry(it) }
+        // O-147 W0：桥轮询通道打标（EP 路径同款在 SqlConsoleBridgeFilterProvider）
+        entries.forEach { buffer.addEntry(it.copy(captureProvenance = CaptureProvenance.CONSOLE_BRIDGE)) }
     }
 
     /**

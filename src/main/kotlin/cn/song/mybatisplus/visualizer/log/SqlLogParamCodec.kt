@@ -48,6 +48,11 @@ object SqlLogParamCodec {
     private const val STACK_DIGEST_FIELD = "sd"
     /** R10 T-ShardingSphereCompat：Actual SQL 折叠附注（仅非默认落键；旧 payload 无此键 → null）。 */
     private const val ACTUAL_SQL_FIELD = "a"
+    /**
+     * T-AgentCaptureProvenance（O-147）：捕获路径（[CaptureProvenance] 常量名，仅非 UNKNOWN 落键）。
+     * 旧 payload 无此键 → 解码 null → 读回 UNKNOWN（向前兼容不迁移）；不认识的值同样降级 UNKNOWN。
+     */
+    private const val PROVENANCE_FIELD = "pv"
 
     private val gson = Gson()
 
@@ -71,6 +76,8 @@ object SqlLogParamCodec {
         val source: SqlSource? = null,
         /** R10 T-ShardingSphereCompat：Actual SQL 折叠附注；旧 payload 为 null。 */
         val actualSql: String? = null,
+        /** O-147：捕获路径（旧 payload / 未打标条目为 null → 读端回退 UNKNOWN）。 */
+        val captureProvenance: CaptureProvenance? = null,
     )
 
     /** 编码 rawSql + params 为 Base64 载荷（无 M56 扩展字段形态，等价 [encodeEntry] 全默认条目）。 */
@@ -126,6 +133,10 @@ object SqlLogParamCodec {
             }
             entry.stackDigest?.let { addProperty(STACK_DIGEST_FIELD, it) }
             entry.actualSql?.let { addProperty(ACTUAL_SQL_FIELD, it) }
+            // O-147：捕获路径仅非 UNKNOWN 落键（枚举名非序号，新增常量不使旧文件失效）
+            if (entry.captureProvenance != CaptureProvenance.UNKNOWN) {
+                addProperty(PROVENANCE_FIELD, entry.captureProvenance.name)
+            }
             // T-McpAuditTrail T-MAT-03：来源标记——仅 MCP 落键（本任务范围：其余来源的读回口径
             // 维持 UNKNOWN 不变，不做未立项的行为扩张）。枚举名而非序号：新增常量不使旧文件失效。
             // R10：SHARDINGSPHERE 同样落键——控制台解析产出的来源若无键，历史读回退化为 UNKNOWN。
@@ -185,6 +196,9 @@ object SqlLogParamCodec {
             source = json.get(SOURCE_FIELD)?.takeIf { it.isJsonPrimitive }?.asString
                 ?.let { name -> SqlSource.values().firstOrNull { it.name == name } },
             actualSql = json.get(ACTUAL_SQL_FIELD)?.takeIf { it.isJsonPrimitive }?.asString?.takeIf { it.isNotBlank() },
+            // O-147：键缺失 / 值非本版本枚举名 → null（读端回退 UNKNOWN，不因扩展键损坏丢弃整条）
+            captureProvenance = json.get(PROVENANCE_FIELD)?.takeIf { it.isJsonPrimitive }?.asString
+                ?.let { name -> CaptureProvenance.values().firstOrNull { it.name == name } },
         )
     }.getOrNull()
 

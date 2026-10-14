@@ -1414,6 +1414,22 @@ class AgentManager(private val project: Project) : Disposable {
             sqlLogManagerIfCreated(project)?.entries?.resetDedupeIndexOnChannelHandoff()
             LOG.info("增强捕获接管沿（桥让位）：去重索引按通道纪元重置——桥纪元旧索引不再吞 agent 首批事件")
         }
+        // O-147 W2（V180-2）：回落沿补日志——此前 true→false **完全静默**（只有在线态整跳才留痕，
+        // 而 online 翻转不等于闸门翻转：ACK 清空窗口、确认态单会话变化都只动闸门），20261014 现场
+        // （增强事件持续在收、列表却混入控制台无源码条目）无法从日志裁决「闸门何时/为何放开」。
+        // 回落沿带闸门判据实况快照：健康会话 + 各会话 ACK 确认态，与既有「接管沿」「CONFIG 已生效」
+        // 行配对后 V180-2 可离线裁决。只读内存集合，任意线程安全；回落沿本就低频。
+        if (!gateNow && gateWas) {
+            val healthy = sessions.filter { isSessionHealthy(it) }.joinToString { "pid=${it.pid}" }
+            val ackStates = sessions.joinToString {
+                "pid=${it.pid}:" + when {
+                    !it.alive -> "已断"
+                    it.configAckDisabled == null -> "待确认"
+                    else -> "disabled=${it.configAckDisabled}"
+                }
+            }
+            LOG.info("增强捕获闸门回落（桥恢复解析）：online=$online, 健康会话=[$healthy], 确认态=[$ackStates]")
+        }
         // 回落沿（true→false）**不**重置，三条理由：
         // ① 语义不对称——上升沿吞的是 agent 纪元的「首批证据」（用户开增强跑同端点验证，吞掉即
         //    「attach 即生效」零正向证明，12:54 现场根因）；回落沿即使吞，吞的是桥回归后的首条，

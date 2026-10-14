@@ -35,6 +35,35 @@ enum class SqlSource {
 }
 
 /**
+ * T-AgentCaptureProvenance（O-147）：条目捕获路径（进入插件的**传输通道**）。
+ *
+ * 与 [SqlSource] 分工：SqlSource 是 ORM 日志**形态**（MyBatis/Hibernate/JDBC/agent 结构化事件…），
+ * 本枚举是「这条条目从哪条链路进的面板」——agent 事件、控制台 EP 过滤器、控制台桥轮询，
+ * 或融合条目（同去重桶先后收到多通道观测，字段级合并后的产物）。
+ *
+ * 用途有二：
+ *  1. **归因诊断**（W0）——「增强已开启却出现无源码条目」时，idea.log 能直接读出该条来自哪条
+ *     通道（历史上只能靠 UI 形态反推，V180-1/V180-2 现场无法裁决的根因）；
+ *  2. **反馈分流**（W3）——跳转 MissingSource 时，控制台回落条目不再弹「开启源码捕获」笼统引导
+ *     （增强已在跑时是误导），改走轻提示。
+ *
+ * UNKNOWN = 旧版本条目 / 历史读回缺 `pv` 键 / MCP 审计等未打标通道（向前兼容，不迁移）。
+ * 主构造字段：参与 data class equals——同通道纯重复不融合（见 [mergedProvenance]）依赖该语义。
+ */
+enum class CaptureProvenance {
+    /** agent 事件通道（[cn.song.mybatisplus.visualizer.log.agent.AgentEventAdapter] 适配产出）。 */
+    AGENT,
+    /** 控制台 EP 过滤器通道（SqlConsoleBridgeFilterProvider，平台自动装配的主控制台通道）。 */
+    CONSOLE_EP,
+    /** 控制台桥轮询通道（SqlLogConsoleBridge 逐行 / 静默冲刷兜底）。 */
+    CONSOLE_BRIDGE,
+    /** 融合条目：同去重桶先后收到不同通道的观测，字段级合并后替换原位（O-147 W1）。 */
+    MERGED,
+    /** 未打标（旧条目 / 历史读回缺键 / MCP 审计）。 */
+    UNKNOWN,
+}
+
+/**
  * 日志 SQL 条目模型（T-M31）：一条 SQL 语句 + 其参数列表。
  *
  * 来源：MyBatis 控制台日志（MP 前缀 `==>  Preparing:` / 原生 `Preparing:`）或
@@ -141,6 +170,12 @@ data class LogSqlEntry(
      * 展示性字段：随 pd 载荷键 `a` 落盘（仅非默认落键），不入去重指纹。
      */
     val actualSql: String? = null,
+    /**
+     * T-AgentCaptureProvenance（O-147）：捕获路径（见 [CaptureProvenance]）。默认 UNKNOWN，
+     * 全部既有构造点零改动；生产链路在三条产出点显式打标（agent 适配 / EP 过滤器 / 桥轮询）。
+     * 主构造字段——参与 equals：同通道纯重复不融合的判定依赖它（[mergedProvenance]）。
+     */
+    val captureProvenance: CaptureProvenance = CaptureProvenance.UNKNOWN,
 ) {
     /**
      * T-CrudColor：条目语句类型（渲染热路径缓存，惰性计算一次）。
@@ -330,6 +365,103 @@ internal fun logTimeKey(entry: LogSqlEntry): String = sqlFingerprint(normalizeSq
  */
 internal fun logTimeParamSignature(params: List<LogSqlParam>): String =
     params.joinToString("\u0001") { (it.value ?: "\u0000").take(PARAM_SIGNATURE_MAX_CHARS) }
+
+// ---------- T-AgentCaptureProvenance（O-147）：同去重桶字段级融合与归因诊断 ----------
+
+/**
+ * 同去重桶的**字段级信息融合**（O-147 W1 纯函数；调用方 = [cn.song.mybatisplus.visualizer.log.SqlLogEntryBuffer]
+ * 去重命中分支）。
+ *
+ * 背景：混合通道期（增强确认前后回落窗、心跳抖动窗、闸门误开）同一条 SQL 可能先由控制台通道
+ * 入库（无源码/无耗时/无库标），随后 agent 事件同指纹落窗内被「先到即留」去重丢弃——用户看到的
+ * 保留条目缺跳转元数据，右键只剩 MissingSource 引导（20261014 真机截图形态：同屏 #9 无源码
+ * `—` 条目与 #8 带 `[PostgreSQL] [RefundOrderService.java:67]` 的 agent 条目并存）。本函数把
+ * 「后到者仅丢弃」升级为「后到者的更完整事实补齐保留条目」，规则：
+ *
+ *  - **桶身份不动**：rawSql/restoredSql/params/timestamp/sequenceNumber/summary 全部保留 existing
+ *    ——列表位置与行号稳定，正在选中/复制的行不跳；捕获时间不因升级后移（排序不跳行）；
+ *  - **只补空不覆盖**：耗时/影响行数/库标/mapper 语句/请求标签/报错/日志时间一律 `existing ?: incoming`
+ *    ——后到事实只填缺失位，绝不改写已有非空值（agent 先到、控制台后到不得降级）；
+ *  - **源码位置真实值优先**：existing 有真实文件（非 MP 分页标记）→ 保留；existing 为空或 MP
+ *    分页标记而 incoming 有真实文件 → 升级（分页 COUNT 由此获得可跳转调用点，对应现场 #6→#7
+ *    的形态）；反向（existing 真实、incoming 为标记/空）不劣化；
+ *  - **候选帧/类名/栈快照只增不删**：仅 incoming 非空且 existing 为空时补（三者仅 agent 通道产出）；
+ *  - **通道归并**见 [mergedProvenance]：跨通道 → MERGED；同通道纯重复 → 保持原值
+ *    （返回值与 existing 全等，调用方据此跳过替换，不制造假刷新）。
+ *
+ * 不改变去重语义本身：窗口判定、指纹口径、`×N` 计数（一次升级同样计一次丢弃）均由调用方按
+ * 既有路径处理。
+ */
+internal fun mergeDuplicateEntry(existing: LogSqlEntry, incoming: LogSqlEntry): LogSqlEntry {
+    val existingFileReal = existing.sourceFile != null && !SourceMarkers.isMpPaginationCount(existing.sourceFile)
+    val incomingFileReal = incoming.sourceFile != null && !SourceMarkers.isMpPaginationCount(incoming.sourceFile)
+    val takeIncomingSource = !existingFileReal && incomingFileReal
+    return existing.copy(
+        sourceFile = when {
+            takeIncomingSource -> incoming.sourceFile
+            existing.sourceFile != null -> existing.sourceFile
+            else -> incoming.sourceFile
+        },
+        sourceLine = when {
+            takeIncomingSource -> incoming.sourceLine
+            existing.sourceFile != null -> existing.sourceLine
+            else -> incoming.sourceLine
+        },
+        sourceCandidates = if (existing.sourceCandidates.isEmpty()) incoming.sourceCandidates else existing.sourceCandidates,
+        candidateClasses = if (existing.candidateClasses.isEmpty()) incoming.candidateClasses else existing.candidateClasses,
+        stackDigest = existing.stackDigest ?: incoming.stackDigest,
+        executionTimeMs = existing.executionTimeMs ?: incoming.executionTimeMs,
+        updateCount = existing.updateCount ?: incoming.updateCount,
+        databaseName = existing.databaseName ?: incoming.databaseName,
+        mapperStatement = existing.mapperStatement ?: incoming.mapperStatement,
+        requestTag = existing.requestTag ?: incoming.requestTag,
+        errorText = existing.errorText ?: incoming.errorText,
+        logTimestamp = existing.logTimestamp ?: incoming.logTimestamp,
+        captureProvenance = mergedProvenance(existing.captureProvenance, incoming.captureProvenance),
+    )
+}
+
+/**
+ * 融合后的通道归并：existing 未打标（旧条目）→ 取 incoming；两侧已知且不同（跨通道观测）
+ * → [CaptureProvenance.MERGED]；同通道重复 / 两侧都未知 → 保持 existing（不制造假融合）。
+ */
+internal fun mergedProvenance(existing: CaptureProvenance, incoming: CaptureProvenance): CaptureProvenance = when {
+    existing == CaptureProvenance.UNKNOWN -> incoming
+    incoming != CaptureProvenance.UNKNOWN && incoming != existing -> CaptureProvenance.MERGED
+    else -> existing
+}
+
+/** 融合升级了哪些信息面（诊断文本用；O-147 W0）。 */
+internal fun mergeUpgradedAspects(existing: LogSqlEntry, merged: LogSqlEntry): List<String> = buildList {
+    if (existing.sourceFile != merged.sourceFile || existing.sourceLine != merged.sourceLine) add("源码")
+    if (existing.sourceCandidates != merged.sourceCandidates) add("候选帧")
+    if (existing.executionTimeMs != merged.executionTimeMs) add("耗时")
+    if (existing.updateCount != merged.updateCount) add("行数")
+    if (existing.databaseName != merged.databaseName) add("库标")
+    if (existing.logTimestamp != merged.logTimestamp) add("日志时间")
+    if (existing.stackDigest != merged.stackDigest) add("栈快照")
+}
+
+/**
+ * 缺源码条目的归因诊断行（O-147 W0，[cn.song.mybatisplus.visualizer.log.SqlLogEntryBuffer] 成功
+ * 入队路径限频输出）。**内容红线**：只有指纹前缀 / 布尔位 / 通道 / 闸门快照——绝不含 SQL 原文、
+ * 参数值与连接凭据（诊断行进 idea.log，泄露面与用户偏好红线）。
+ */
+internal fun provenanceDiagText(entry: LogSqlEntry, gatePaused: Boolean): String =
+    "捕获归因: 通道=${entry.captureProvenance} 来源=${entry.source} 指纹=${entry.dedupeKey.take(8)} " +
+        "有源码=${entry.sourceFile != null} 有候选=${entry.sourceCandidates.isNotEmpty()} " +
+        "有耗时=${entry.executionTimeMs != null} 有库标=${entry.databaseName != null} 桥封停=$gatePaused"
+
+/**
+ * 跳转反馈分流判据（O-147 W3）：控制台回落通道产出（含融合后仍无位置）且不带任何源码线索的
+ * 条目——增强已在跑时弹「开启源码捕获」引导是误导，调用方改走轻提示。
+ * UNKNOWN（旧条目/历史读回）维持既有引导不变（保守：不基于猜测改行为）。
+ */
+internal fun isConsoleFallbackWithoutSource(entry: LogSqlEntry): Boolean =
+    entry.sourceFile == null && entry.sourceCandidates.isEmpty() && when (entry.captureProvenance) {
+        CaptureProvenance.CONSOLE_EP, CaptureProvenance.CONSOLE_BRIDGE, CaptureProvenance.MERGED -> true
+        else -> false
+    }
 
 /**
  * T-PS4-05：签名单值截断上限（256 字符）。两侧（桥嗅探 put 与 agent take）走同一函数天然等价；
