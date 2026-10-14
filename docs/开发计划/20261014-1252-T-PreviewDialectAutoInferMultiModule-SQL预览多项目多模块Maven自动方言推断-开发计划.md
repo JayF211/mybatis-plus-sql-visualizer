@@ -3,7 +3,7 @@
 - 占号：**O-145 / R95 / D155 / V178**（2026-10-14 13:44 再次全仓复核；O-144 已由 T-XmlGap 占用，本组仅本计划在用）
 - 日期：2026-10-14
 - 基线：`master@760f4670`（`release: v2026.10.13 发行面纳入当前 HEAD 增量`）
-- 状态：W0 跨版本签名门已实施；W3 纯决策核先行但尚未接生产推断入口。W1/W2/W3 接线/W4~W8 未完成；本轮不启动沙盒真机，实际 SQL PSI/Runner 的 V178 项继续待验。
+- 状态：W0 跨版本签名门已实施；W3 项目候选共识已接 `DialectRegistry`，不再按数据源列表首项决定方言。W1/W2 的实际 SQL PSI/IDE scope、W3 模块来源、W4 剩余入口、W5~W8 未完成；本轮不启动沙盒真机，V178 实际 Runner 项待验。
 - 用户目标：插件应做到“真智能”，默认不要求用户主动配置 SQL Visualizer 方言；优先复用 IDEA 已有 SQL 方言、SQL 解析作用域与运行时上下文，只有证据缺失或冲突时才让用户介入
 - 关联：`T-DialectAutoInfer` 已实现基础 URL 推断；`T-PreviewExecDsDialect`（O-136）解决预览执行 Runner 的方言过滤。二者都没有解决“按原始源文件/注入 SQL/模块上下文求有效方言”的问题
 
@@ -382,3 +382,4 @@ mapOwnedFile(project, ownedVirtualFile, languageId)
 - 2026-10-15 W4 补 JPA CRUD：Repository 声明/调用、EntityManager、HibernateTemplate 四条当前方言读取改用实际 `PsiElement.project`，`existsById` 的首行截断从硬编码 `LIMIT 1` 改走 `Dialect.renderLimit`；原生 MySQL 输出保持原样，仅语义说明注释改为方言中性。项目级 Oracle 覆盖全局 auto 的端到端 PSI 用例改前 23 例中 1 红（错误 `LIMIT 1`），改后 **23/0/0**，本条不代表其他批量与 Wrapper 路径已对齐。
 - 2026-10-15 W4 补实体类右键生成：`GenerateCrudSqlFromEntityAction.entitySpec` 已持有实体 `PsiClass.project`，原 `toCrudSpec()` 无参方言在项目级 Oracle、全局 auto=true 时回退 MySQL；现显式传实体项目。headless 真 PSI 定向改前 5 例中 1 红（期望 Oracle 实得 MySQL），改后 **5/0/0**。仅此实体入口，批量模板等其余无项目调用仍在册。
 - 2026-10-15 W4 批量模板补位：`BatchOperationConverter` 以实际 `PsiMethodCallExpression.project` 统一模型构建、CRUD 主键/列引用、Map 等值条件与 upsert 的方言读取，去掉 `renderIdCondition` 的无项目默认值。项目级 PostgreSQL + 全局 auto 的真实 PSI `saveOrUpdate` 定向改前 **13 例中 1 红**（错误 `ON DUPLICATE KEY UPDATE`），改后 **13/0/0**（`ON CONFLICT`）；仍未证明基于 IDEA 原始 SQL PSI 的多模块自动判定。
+- 2026-10-15 W3 项目候选入口：`DataSourceUrlProbe.candidateDialects` 按项目枚举候选方言，5 秒弱项目缓存只存会话内候选，不存 URL 或凭据；`DialectRegistry.decision(project)` 使用纯决策核，显式手动模式不触探测、异方言集合返回 `AMBIGUOUS`、同方言多库保留全体身份，仅能证明单模块且无候选时参考最近 agent URL。`DialectProbeCacheTest` **8/0/0**＋纯决策核 **11/0/0**；临时恢复「取首个候选」后 8 例中恰 2 红，还原复绿。三代 `ModuleManager.getInstance/getModules` 入签名门并在 243/253/262 检查 **1/0/0**。**候选 ID 目前只是会话内位置键，不可持久化为数据源 UUID；渲染 `effective()` 在未知/冲突态仍用兼容 MySQL，UI 尚未显式标来源、也无执行目标闸，不得宣称真智能闭环。**

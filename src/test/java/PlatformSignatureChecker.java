@@ -95,6 +95,7 @@ public class PlatformSignatureChecker {
         missing += checkPerHostProbeApis(loader);
         missing += checkEditorColorsTopic(loader);
         missing += checkSqlContextApis(loader, dbnLib.isDirectory());
+        missing += checkModuleCountApi(loader);
 
         if (missing > 0) {
             System.out.println("RESULT MISSING " + missing);
@@ -220,6 +221,24 @@ public class PlatformSignatureChecker {
                     "EditorColorsListener.globalSchemeChange(EditorColorsScheme)");
         } catch (Throwable t) {
             System.out.println("MISS editor color scheme change topic: " + t);
+            return 1;
+        }
+    }
+
+    private static int checkModuleCountApi(ClassLoader loader) {
+        try {
+            Class<?> project = Class.forName("com.intellij.openapi.project.Project", false, loader);
+            Class<?> manager = Class.forName("com.intellij.openapi.module.ModuleManager", false, loader);
+            int missing = check(manager.getMethod("getInstance", project), "ModuleManager.getInstance(Project)");
+            Method modules = manager.getMethod("getModules");
+            missing += check(modules, "ModuleManager.getModules()");
+            if (!modules.getReturnType().isArray()) {
+                System.out.println("MISS ModuleManager.getModules() return type is not an array");
+                missing++;
+            }
+            return missing;
+        } catch (Throwable t) {
+            System.out.println("MISS ModuleManager module count API: " + t);
             return 1;
         }
     }
