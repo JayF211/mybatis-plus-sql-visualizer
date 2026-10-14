@@ -18,13 +18,13 @@ import com.intellij.openapi.vfs.VirtualFile
 
 /**
  * `${table}` 快捷模板三动作（T-PreviewUx-Pack #3，吸收 DBX sqlShortcutActions 口径）：
- * mapper 编辑器 / SQL 预览编辑器内**选中文本**（表名或片段）一键套模板送原生 Database 控制台执行——
+ * mapper 编辑器 / SQL 预览编辑器内**经整串校验的表名**一键套模板送原生 Database 控制台执行——
  * EXPLAIN 执行计划 / COUNT 行数 / 抽样 10 行。三动作共享一个 action group 注册 EditorPopupMenu
  * （plugin.xml），与「生成 CRUD SQL」右键入口并存不合并菜单（目标互补：CRUD 生成 vs 诊断三动作）。
  *
- * T-SqlTemplateCaret：目标文本**不再要求先划选区**——有非空选区时原样用选区文本（逐字节不变），
- * 无选区（或选区为空白）时退化为**光标处的标识符**（[identifierAtCaret]，表名/片段），
- * 两路都取不到才禁用。理由是「光标停在表名上就能用」录制与使用都更顺手；光标退化分支
+ * T-SqlTemplateCaret：目标文本**不再要求先划选区**——有非空选区时优先取选区，
+ * 无选区（或选区为空白）时退化为**光标处的标识符**（[identifierAtCaret]）；
+ * 两路都须通过单个表标识符整串校验，否则动作禁用且点击时再次拒绝。理由是「光标停在表名上就能用」录制与使用都更顺手；光标退化分支
  * 只做词边界扫描、不依赖具体语言/SQL 注入，故在 mapper XML / `.sql` / Java / 预览弹窗文本区
  * 等任意编辑器里都成立。
  *
@@ -40,15 +40,13 @@ abstract class SelectedTableSqlTemplateAction(
 
     override fun update(e: AnActionEvent) {
         e.presentation.text = MpSqlVisualizerBundle.message(textKey)
-        // 非空选区或光标处标识符至少有一即可用；两者都没有即禁用
-        // （不增加低价值打断；右键菜单常态可看不可点）
-        e.presentation.isEnabled = selectedOrCaretText(e) != null
+        e.presentation.isEnabled = validatedTableIdentifier(selectedOrCaretText(e)) != null
     }
 
     override fun actionPerformed(e: AnActionEvent) {
         val project = e.project ?: return
-        val text = selectedOrCaretText(e) ?: return
-        val sql = template(text.trim())
+        val tableName = validatedTableIdentifier(selectedOrCaretText(e)) ?: return
+        val sql = template(tableName)
         // T-SqlTemplateUx P2：失败反馈与预览面板拉平——除气泡外挂「定位到出错语句」「复制错误信息」
         // 两个可操作项（做法②：不新建面板，直接给 Notification 挂 NotificationAction）。
         // 定位锚点在动作触发时（EDT）从**触发编辑器**捕获（用户选中表名处即语句来源）；
@@ -60,11 +58,13 @@ abstract class SelectedTableSqlTemplateAction(
         )?.let { anchor ->
             { OpenFileDescriptor(project, anchor.file, anchor.line0, 0).navigate(true) }
         }
+        executeTemplate(project, sql, locate)
+    }
+
+    protected open fun executeTemplate(project: Project, sql: String, locate: (() -> Unit)?) {
         SqlExecutor.execute(
             project, sql, null, true,
             onError = { errorMsg -> notifySqlTemplateError(project, errorMsg, locate) },
-            // 富通道优先（execute/DataSourceSelector.deliverError 二选一）：与面板同走 onErrorRich，
-            // 只是此处通知面不再需要 positionChar/lineInSql，故取 message 即可。
             onErrorRich = { info -> notifySqlTemplateError(project, info.message, locate) },
         )
     }
@@ -104,6 +104,53 @@ internal fun editorTemplateText(editor: Editor): String? {
 internal fun resolveTemplateText(selectedText: String?, caretIdentifier: String?): String? {
     if (selectedText != null && selectedText.isNotBlank()) return selectedText
     return caretIdentifier?.takeIf { it.isNotBlank() }
+}
+
+private val NON_TABLE_KEYWORDS = setOf(
+    "select", "insert", "update", "delete", "drop", "truncate", "alter", "create",
+    "from", "where", "join", "with", "limit", "explain",
+)
+
+/** 只接受一个表名或以点连接的标识符段；不截取候选前缀来掩盖多语句输入。 */
+internal fun validatedTableIdentifier(candidate: String?): String? {
+    val text = candidate?.trim() ?: return null
+    if (text.isEmpty() || text.length > 512 || text.any { Character.isISOControl(it) }) return null
+    if (';' in text || "--" in text || "/*" in text || "*/" in text) return null
+    var index = 0
+    while (index < text.length) {
+        val closer = QUOTE_OPENERS[text[index]]
+        if (closer != null) {
+            index++
+            var content = false
+            var closed = false
+            while (index < text.length) {
+                if (text[index] == closer) {
+                    if (index + 1 < text.length && text[index + 1] == closer) {
+                        content = true
+                        index += 2
+                        continue
+                    }
+                    index++
+                    closed = true
+                    break
+                }
+                content = true
+                index++
+            }
+            if (!content || !closed) return null
+        } else {
+            val start = index
+            while (index < text.length && isIdentifierChar(text[index])) index++
+            if (start == index || text.substring(start, index).lowercase() in NON_TABLE_KEYWORDS) return null
+        }
+        while (index < text.length && text[index].isWhitespace()) index++
+        if (index == text.length) return text
+        if (text[index] != '.') return null
+        index++
+        while (index < text.length && text[index].isWhitespace()) index++
+        if (index == text.length) return null
+    }
+    return null
 }
 
 /** 标识符字符：字母/数字/下划线（与 log/LiteralParamRecovery、sql/ExplainGate 等既有 `isWordChar` 同族）。 */

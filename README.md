@@ -133,7 +133,7 @@ MyBatis-Plus / MyBatis-Plus-Join / JPA / Hibernate / JdbcTemplate 的 SQL 调试
 
 **其他**
 
-- SQL 执行（IntelliJ IDEA Ultimate + Database 插件）：预览面板内嵌原生 Database 控制台，选数据源后即可执行并查看真实结果表格与错误信息；Community 版优雅降级提示。执行 UPDATE / DELETE 前的确认框在命中无界写特征（无 WHERE 全表 / 恒真条件 / 纯通配 LIKE 等）时列出发现清单；mapper / 预览编辑器选中文本可套 `${table}` 快捷模板一键 EXPLAIN / COUNT / 抽样 10 行（右键菜单「SQL 快捷模板」组，默认不占键位，可在插件设置页或 Keymap 自行录制）
+- SQL 执行（IntelliJ IDEA Ultimate + Database 插件）：预览面板内嵌原生 Database 控制台，选数据源后即可执行并查看真实结果表格与错误信息；Community 版优雅降级提示。执行 UPDATE / DELETE 前的确认框在命中无界写特征（无 WHERE 全表 / 恒真条件 / 纯通配 LIKE 等）时列出发现清单；mapper / 预览编辑器选中单个表标识符或将光标停在表名上，可用 `${table}` 快捷模板 EXPLAIN / COUNT / 抽样 N 行（多语句、注释和整段 SQL 不会送往控制台；EXPLAIN/抽样的方言语法仍须核对目标数据源。入口为右键菜单「SQL 快捷模板」，默认不占键位）
 - JOIN 关系图：联表查询在预览面板「关系图」tab 由 IDE 原生 Diagrams 框架渲染（Community 降级自绘渲染），打开默认自适应居中，支持 PNG / SVG 导出
 - 性能建议与复杂度：预览时按规则集给出 `SELECT *`、无索引列等性能提示与 SQL 复杂度评分
 - 对比与分享：当前 SQL 与上次预览并排 Diff（IDEA 原生 Diff）；一键复制可执行 SQL；分享为 Markdown / HTML 报告

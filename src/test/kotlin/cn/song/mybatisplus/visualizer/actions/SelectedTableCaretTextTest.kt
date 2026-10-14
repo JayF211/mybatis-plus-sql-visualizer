@@ -1,7 +1,15 @@
 package cn.song.mybatisplus.visualizer.actions
 
+import com.intellij.openapi.actionSystem.ActionManager
+import com.intellij.openapi.actionSystem.ActionPlaces
+import com.intellij.openapi.actionSystem.AnActionEvent
+import com.intellij.openapi.actionSystem.CommonDataKeys
+import com.intellij.openapi.actionSystem.Presentation
+import com.intellij.testFramework.MapDataContext
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Assert.assertNull
 
 /**
@@ -126,6 +134,55 @@ class SelectedTableCaretTextTest : BasePlatformTestCase() {
         assertNull(resolveTemplateText(null, null))
         assertNull(resolveTemplateText("   ", null))
         assertNull(resolveTemplateText("   ", "  "))
+    }
+
+    private fun eventForSelection(text: String): AnActionEvent {
+        val editor = myFixture.configureByText("T.txt", text).let { myFixture.editor }
+        editor.selectionModel.setSelection(0, text.length)
+        val context = MapDataContext().apply {
+            put(CommonDataKeys.EDITOR.name, editor)
+            put(CommonDataKeys.PROJECT.name, project)
+        }
+        return AnActionEvent(null, context, ActionPlaces.UNKNOWN, Presentation(), ActionManager.getInstance(), 0)
+    }
+
+    fun `test 快捷模板拒绝非单个表标识符选区`() {
+        for (action in listOf(ExplainSelectedTableAction(), CountSelectedTableAction(), SampleSelectedTableAction())) {
+            for (text in listOf("t; SELECT 1", "t -- comment", "t/*comment*/", "SELECT", "t JOIN u", "t.", ".t", "t..x", "[unclosed", "t\nSELECT 1", "t\u0000")) {
+                val event = eventForSelection(text)
+                action.update(event)
+                assertFalse("无效表名不应进入执行入口：$text", event.presentation.isEnabled)
+            }
+            for (text in listOf("t_order", "schema.t_order", "`db`.`table`", "\"my table\"", "[db].[table]", "\"we\"\"ird\"", "[tab]]le]", "`we``ird`")) {
+                val event = eventForSelection(text)
+                action.update(event)
+                assertTrue("有效限定表名应保留入口：$text", event.presentation.isEnabled)
+            }
+        }
+    }
+
+    fun `test 点击前重验选区且非法输入不能到达执行器`() {
+        val submitted = mutableListOf<String>()
+        val action = object : SelectedTableSqlTemplateAction(
+            "action.cn.song.mybatisplus.visualizer.SampleSelectedTable.text", { "SELECT * FROM $it" },
+        ) {
+            override fun executeTemplate(project: com.intellij.openapi.project.Project, sql: String, locate: (() -> Unit)?) {
+                submitted += sql
+            }
+        }
+        action.actionPerformed(eventForSelection("t; SELECT 1"))
+        assertTrue("直接调用动作也不得提交第二条语句", submitted.isEmpty())
+        action.actionPerformed(eventForSelection("db.tbl"))
+        assertEquals(listOf("SELECT * FROM db.tbl"), submitted)
+
+        val stale = eventForSelection("safe t; SELECT 1")
+        val editor = stale.getData(CommonDataKeys.EDITOR)!!
+        editor.selectionModel.setSelection(0, 4)
+        action.update(stale)
+        assertTrue(stale.presentation.isEnabled)
+        editor.selectionModel.setSelection(0, editor.document.textLength)
+        action.actionPerformed(stale)
+        assertEquals("选区在 update 后变坏也不得提交", listOf("SELECT * FROM db.tbl"), submitted)
     }
 
     // ---------- 第 3 层：editorTemplateText 接到真编辑器 ----------
