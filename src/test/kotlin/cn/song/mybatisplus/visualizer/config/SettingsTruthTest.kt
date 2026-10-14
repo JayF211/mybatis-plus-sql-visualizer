@@ -92,6 +92,18 @@ class SettingsTruthTest {
     }
 
     @Test
+    fun testP1_旧方言状态键不能被新键前缀伪装为已消费() {
+        listOf("MpSqlVisualizerBundle.properties", "MpSqlVisualizerBundle_zh.properties").forEach { name ->
+            val lines = javaClass.getResourceAsStream("/messages/$name")!!
+                .bufferedReader(Charsets.UTF_8).use { it.readLines() }
+            assertFalse("$name: 父键已无人消费，不能因新键前缀而假绿",
+                lines.any { it.startsWith("settings.dialect.inferred=") })
+            assertFalse("$name: 旧空态键已被有证据的分类状态取代",
+                lines.any { it.startsWith("settings.dialect.inferred.none=") })
+        }
+    }
+
+    @Test
     fun testP1_执行超时说明不能冒充原生控制台取消护栏() {
         fun read(resource: String) = java.util.Properties().apply {
             this@SettingsTruthTest.javaClass.getResourceAsStream("/messages/$resource")!!.bufferedReader(Charsets.UTF_8).use(::load)
