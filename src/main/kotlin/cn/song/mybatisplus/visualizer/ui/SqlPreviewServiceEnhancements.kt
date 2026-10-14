@@ -280,6 +280,7 @@ internal fun SqlPreviewService.buildJpaPreviewResult(
         warning = buildJpaWarning(statement),
         columns = (statement.table as? TableInfo)?.allColumnNames ?: emptyList(),
         previewModel = if (views.isEmpty()) null else SqlPreviewModel(statement, dialect, formatSql(), views),
+        renderedDialect = dialect,
         // F-1 修复：JPA 联表派生查询同款缺口——图 Tab 判据与 previewModel 解耦
         diagramStatement = (statement as? SelectStatement)?.takeIf { it.joins.isNotEmpty() },
         placeholderParamNames = usableNamedSources,
@@ -323,6 +324,7 @@ internal fun SqlPreviewService.buildPreviewResult(
         }.toMap(),
         tableComment = table.comment,
         previewModel = if (views.isEmpty()) null else SqlPreviewModel(statement, dialect, formatSql(), views),
+        renderedDialect = dialect,
         // F-1 修复：JOIN 图判据独立于 previewModel（无条件联表链 previewModel 为 null，但仍含 JOIN 可画图）
         diagramStatement = (statement as? SelectStatement)?.takeIf { it.joins.isNotEmpty() },
         paramHints = generated.paramHints,

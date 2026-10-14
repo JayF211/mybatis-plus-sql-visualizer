@@ -87,7 +87,7 @@ internal fun SqlPreviewPanel.showRollbackSql() {
      */
     internal fun SqlPreviewPanel.exportReplayScript() {
         val sql = currentEditorSql()?.takeIf { it.isNotBlank() } ?: return
-        val dialect = current?.previewModel?.dialect ?: MySqlDialect
+        val dialect = current?.effectiveDialect ?: MySqlDialect
         val options = ReplayExportDialog(project, dialect.name, dialect.transactionBegin)
         if (!options.showAndGet()) return
         val mask = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.displayMaskEnabled
@@ -141,7 +141,7 @@ internal fun SqlPreviewPanel.showRollbackSql() {
     internal fun SqlPreviewPanel.estimateDmlImpact() {
         val proj = project ?: return
         val sql = currentEditorSql() ?: return
-        val dialect = current?.previewModel?.dialect ?: MySqlDialect
+        val dialect = current?.effectiveDialect ?: MySqlDialect
         when (val plan = cn.song.mybatisplus.visualizer.execute.DmlImpactEstimator.plan(sql, dialect)) {
             is cn.song.mybatisplus.visualizer.execute.DmlImpactEstimator.Plan.NotApplicable -> {
                 notifyDmlImpact(
@@ -196,7 +196,7 @@ internal fun SqlPreviewPanel.showRollbackSql() {
      */
     internal fun SqlPreviewPanel.copyAsAiContext() {
         val sql = currentEditorSql() ?: return
-        val dialect = current?.previewModel?.dialect?.name
+        val dialect = current?.effectiveDialect?.name
         val result = cn.song.mybatisplus.visualizer.util.AiContextExport.build(sql, dialect)
         cn.song.mybatisplus.visualizer.util.UiTextClipboard.copy(result.block)
         showDiffToast(MpSqlVisualizerBundle.message("panel.aiContext.copied", result.maskedCount))
@@ -204,7 +204,7 @@ internal fun SqlPreviewPanel.showRollbackSql() {
 
 internal fun SqlPreviewPanel.exportPortableSql() {
     val sql = currentEditorSql()?.let { SqlCommentStripper.strip(it) }?.takeIf { it.isNotBlank() } ?: return
-    val dialect = current?.previewModel?.dialect ?: MySqlDialect
+    val dialect = current?.effectiveDialect ?: MySqlDialect
     val rows = cn.song.mybatisplus.visualizer.log.PortableSqlExport
         .collectRows(sql, dialect, current?.batchModel)
     if (rows.isEmpty()) return
@@ -308,7 +308,7 @@ internal fun SqlPreviewPanel.executeAdhocSql(
             cn.song.mybatisplus.visualizer.execute.ExecuteConfirmMessages.build(
                 sql,
                 keyword,
-                current?.previewModel?.dialect,
+                current?.effectiveDialect,
                 cn.song.mybatisplus.visualizer.execute.SchemaValidationGate.renderLines(schemaIssues),
             ),
             MpSqlVisualizerBundle.message("execute.confirm.dml"),
@@ -704,7 +704,7 @@ internal fun SqlPreviewPanel.explainSql() {
     val proj = project ?: return
     val sql = nativeEditorDoc?.text?.takeIf { it.isNotBlank() }
         ?: editor?.document?.text?.takeIf { it.isNotBlank() } ?: return
-    val dialect = current?.previewModel?.dialect ?: MySqlDialect
+    val dialect = current?.effectiveDialect ?: MySqlDialect
     // T-ECH-01：提交判定（幂等 → 首关键字白名单 → 方言支持面），两类拒绝理由分别提示
     val explainSql = when (val plan = ExplainGate.planExplainSubmit(dialect, sql)) {
         is ExplainGate.SubmitPlan.NotExplainable -> {

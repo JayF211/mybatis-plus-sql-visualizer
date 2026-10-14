@@ -700,7 +700,8 @@ internal fun SqlPreviewPanel.appendFillSection(sql: String): String {
     val result = current ?: return sql
     val fills = result.fillClauses ?: return sql
     if (fills.isEmpty()) return sql
-    val dialect = result.previewModel?.dialect ?: MySqlDialect
+        val dialect = result.effectiveDialect ?: MySqlDialect
+
     val sb = StringBuilder(sql)
     sb.append("\n\n-- ").append(MpSqlVisualizerBundle.message("panel.fill.section")).append("\n")
     fills.forEach { fill ->

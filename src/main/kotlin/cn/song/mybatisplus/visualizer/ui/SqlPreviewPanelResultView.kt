@@ -100,11 +100,11 @@ internal fun SqlPreviewPanel.moreActions(): List<Pair<String, () -> Unit>> = lis
      *
      * 悬停而非可见行：meta 可见行受 F3 宽度预算中段省略（[applyMetaTruncation]），把四行矩阵
      * 塞进可见行会挤掉表名/调用栈摘要——矩阵信息密度高、按需查看即可，故落 tooltip（同仓
-     * 惯例：完整信息进悬停、可见行留摘要）。方言取预览结果自带的 `previewModel.dialect`
-     * （与渲染/EXPLAIN 同源），无预览模型时返回空串（不加段落）。
+     * 惯例：完整信息进悬停、可见行留摘要）。方言取预览结果的实际生成方言，
+     * 未记录方言时返回空串（不加段落）。
      */
     private fun dialectCapabilityTooltipSection(result: PreviewResult): String {
-        val dialect = result.previewModel?.dialect ?: return ""
+        val dialect = result.effectiveDialect ?: return ""
         return "\n\n" + MpSqlVisualizerBundle.message(
             "panel.meta.dialectCapabilities",
             dialect.name,

@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.model
 
+import cn.song.mybatisplus.visualizer.sql.Dialect
 import cn.song.mybatisplus.visualizer.sql.ParamHint
 import cn.song.mybatisplus.visualizer.sql.perf.PerfWarning
 import cn.song.mybatisplus.visualizer.xml.PagesColumn
@@ -121,4 +122,7 @@ data class PreviewResult(
      * 使开关切换不再影响参数历史归属。null = 回落 [sql]（存量行为零变化）。
      */
     val historyFingerprintSeed: String? = null,
-)
+    val renderedDialect: Dialect? = null,
+) {
+    val effectiveDialect: Dialect? get() = previewModel?.dialect ?: renderedDialect
+}

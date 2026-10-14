@@ -105,6 +105,16 @@ class InjectionGateTest : BasePlatformTestCase() {
         tableName = "t_biz",
     )
 
+    fun test静态结果没有动态模型仍展示实际生成方言() {
+        val result = plainResult("SELECT * FROM t_biz").copy(
+            renderedDialect = cn.song.mybatisplus.visualizer.sql.OracleDialect,
+        )
+        assertNull(result.previewModel)
+        val p = newPanel()
+        p.showResult(result)
+        assertEquals("Oracle", p.currentDialect())
+    }
+
     private fun panelState(): String = panel!!.resultPanelForTest().stateForTest()
 
     /**

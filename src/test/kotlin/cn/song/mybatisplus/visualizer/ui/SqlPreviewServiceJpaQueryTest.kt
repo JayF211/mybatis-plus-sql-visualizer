@@ -264,6 +264,8 @@ class SqlPreviewServiceJpaQueryTest : BasePlatformTestCase() {
             assertNotNull(result)
             assertTrue("源文件的 Oracle 方言须进入生成器：${result!!.sql}", result.sql.contains("FETCH FIRST 3 ROWS ONLY"))
             assertTrue("不得回退 MySQL LIMIT：${result.sql}", !result.sql.contains("LIMIT 3"))
+            assertNull("静态条件没有开关时不应虚构动态模型", result.previewModel)
+            assertEquals("无动态模型仍须保留生成方言供 EXPLAIN 使用", "Oracle", result.effectiveDialect?.name)
         } finally {
             IdeaSourceDialectProbe.languageIdForTest = null
             settings.loadState(snapshot)

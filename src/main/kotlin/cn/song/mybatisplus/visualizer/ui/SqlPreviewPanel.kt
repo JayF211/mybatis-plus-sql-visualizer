@@ -981,7 +981,7 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
     fun currentTableName(): String? = current?.tableName
 
     /** F-8：当前预览的方言名称（可 null）。 */
-    fun currentDialect(): String? = current?.previewModel?.dialect?.name
+    fun currentDialect(): String? = current?.effectiveDialect?.name
     internal fun paramFieldForTest(index: Int): JBTextField? = paramFields.getOrNull(index)
     /** T-M24-04：元信息标签文本（警告断言用）。 */
     internal fun metaLabelForTest(): String = metaLabel.text
