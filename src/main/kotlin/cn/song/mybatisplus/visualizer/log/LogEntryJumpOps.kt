@@ -107,7 +107,19 @@ object LogEntryJumpOps {
                     "log.panel.jumpToSource",
                     MpSqlVisualizerBundle.message("log.panel.jumpToSource.notFound", target.sourceFile),
                 )
-            SourceTarget.MissingSource -> showMissingSourceGuide(project)
+            // O-147 W3：控制台回落条目（含融合后仍无位置）不弹「开启源码捕获」引导——
+            // 增强捕获已在跑时该引导是误导（用户现场：增强在线、条目却来自桥回落窗），改走轻提示
+            // 说明该条未携带源码位置。判据 = [isConsoleFallbackWithoutSource]（同文件级纯函数）。
+            SourceTarget.MissingSource ->
+                if (isConsoleFallbackWithoutSource(entry)) {
+                    showToast(
+                        project,
+                        "log.panel.jumpToSource",
+                        MpSqlVisualizerBundle.message("log.panel.jumpToSource.consoleFallback"),
+                    )
+                } else {
+                    showMissingSourceGuide(project)
+                }
         }
     }
 }

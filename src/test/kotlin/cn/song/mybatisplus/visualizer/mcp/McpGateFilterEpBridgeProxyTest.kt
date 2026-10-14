@@ -1,7 +1,7 @@
 package cn.song.mybatisplus.visualizer.mcp
 
-import com.intellij.mcpserver.McpToolFilterProvider
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 
@@ -13,9 +13,9 @@ import org.junit.Assert.fail
  *
  * T-MarketCompatProxy 后实现形态改为**动态代理**（[McpGateFilterEpBridge] 全反射分发，字节码
  * 零平台类型引用），空源性风险**结构性消除**（handler 对 args 判空 + runCatching 兜底）。本用例
- * 经反射取桥的 handler、以 null 环境实参直调 applyFilters 分发：测试环境命中桩哨兵
- * （IllegalStateException "stub…"——updateState 桩体未接平台真类）属预期，**唯独不允许出现
- * 空源性 NPE**——代理分发对 null clientInfo/invocationMode 的容忍度由此钉住。
+ * 经反射取桥的 handler、以 null 环境实参直调 applyFilters 分发。测试使用本地同签名
+ * context 替身，不静态链接仅在新平台运行时提供的 MCP 接口；验证 updateState 真正被调用，
+ * 且 null clientInfo/invocationMode 不导致空源性 NPE。
  */
 class McpGateFilterEpBridgeProxyTest : BasePlatformTestCase() {
 
@@ -30,28 +30,33 @@ class McpGateFilterEpBridgeProxyTest : BasePlatformTestCase() {
     }
 
     fun test空clientInfo与会话选项的分发路径不得抛空源性NPE() {
-        val context = McpToolFilterProvider.McpToolFilterContext(emptyList())
+        val context = FakeFilterContext()
         try {
-            bridgeHandler().invoke(ANY_PROXY, applyFiltersMethod(), arrayOf(context, null, null, null))
+            bridgeHandler().invoke(Any(), FakeFilter::class.java.methods.first { it.name == "applyFilters" },
+                arrayOf(context, null, null, null))
         } catch (e: NullPointerException) {
             if (e.message?.contains("non-null") == true) {
                 fail("分发路径必须容忍 null 环境参数（平台无会话枚举路径传 null，真机 NPE 实证）")
             }
             throw e
-        } catch (e: IllegalStateException) {
-            assertTrue("测试环境命中桩哨兵属预期：${e.message}", e.message.orEmpty().startsWith("stub"))
         }
+        assertTrue("分发必须调用 context.updateState", context.called)
+        assertFalse("过滤状态应关闭默认路由", context.enabled ?: true)
     }
 
-    /** applyFilters 反射 Method（桩接口上取签名即可，handler 按名分发不看声明类）。 */
-    private fun applyFiltersMethod(): java.lang.reflect.Method =
-        McpToolFilterProvider::class.java.methods.first { it.name == "applyFilters" }
+    interface FakeFilter {
+        fun applyFilters(context: FakeFilterContext?, clientInfo: Any?, invocationMode: Any?, options: Any?)
+    }
 
-    private companion object {
-        /** handler.invoke 的 proxy 形参只用于 equals 分支，任意实现即可。 */
-        val ANY_PROXY = ProxyOf(McpToolFilterProvider::class.java)
+    class FakeFilterContext {
+        var called = false
+        var enabled: Boolean? = null
 
-        fun ProxyOf(iface: Class<*>) =
-            java.lang.reflect.Proxy.newProxyInstance(McpGateFilterEpBridgeProxyTest::class.java.classLoader, arrayOf(iface)) { _, _, _ -> null }
+        fun updateState(enabled: Boolean?, routerOnly: Boolean?, predicate: (Any?) -> Boolean) {
+            called = true
+            this.enabled = enabled
+            check(routerOnly == null)
+            check(!predicate(null))
+        }
     }
 }

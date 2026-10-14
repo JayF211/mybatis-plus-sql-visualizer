@@ -94,7 +94,8 @@ class SqlConsoleBridgeFilterProvider : com.intellij.execution.filters.ConsoleFil
             if (produced.isNotEmpty() && !SqlCaptureGate.epActive) {
                 SqlCaptureGate.epActive = true
             }
-            produced.forEach { manager.entries.addEntry(it) }
+            // O-147 W0：EP 通道打标（桥轮询路径同款在 SqlLogConsoleBridge.emitEntries）
+            produced.forEach { manager.entries.addEntry(it.copy(captureProvenance = CaptureProvenance.CONSOLE_EP)) }
             return null // 不做高亮/链接——纯捕获通道
         }
 

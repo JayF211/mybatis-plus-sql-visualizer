@@ -30,7 +30,8 @@ final class WovenEvents {
      * 到宿主应用控制台。现场复盘：attach 后面板零条目时，无法区分「agent 没产事件」与「IDE 消费链
      * 丢事件」（对端 AgentManager 的 markReceived 计数没有宿主侧出口）；本行让「织入钩子真在产」
      * 在宿主侧可见，与 IDE 侧首条到达 INFO 行配对即可三分故障域（agent 侧 / 传输 / 消费链）。
-     * 只打首条（AtomicBoolean 一次），后续事件零开销零噪音。
+     * 只打首条（AtomicBoolean 一次），后续事件零开销零噪音。行内只有 op / sqlLen / registryUnresolved
+     * 三个判读字段，**不含 SQL 原文**（2026-10-14 起；本行不过脱敏开关，故从源头不带业务文本）。
      */
     private static final java.util.concurrent.atomic.AtomicBoolean FIRST_FIRE =
             new java.util.concurrent.atomic.AtomicBoolean();
@@ -46,8 +47,11 @@ final class WovenEvents {
             return;
         }
         if (FIRST_FIRE.compareAndSet(false, true)) {
+            // 2026-10-14：不再打印 SQL 片段（原 sqlHead=前 80 字符）。本行的用途只是「钩子在产」
+            // （见上方 KDoc），SQL 原文对判读无贡献；而本行不过脱敏开关（脱敏只作用于事件载荷），
+            // Statement 路径的 sql 可能含字面量——改打长度，判读能力不变、宿主日志不留业务文本。
             System.err.println("[SqlVisAgent] 织入通道首条事件已产出 op=" + op
-                    + " sqlHead=" + (sql.length() > 80 ? sql.substring(0, 80) : sql)
+                    + " sqlLen=" + sql.length()
                     + " registryUnresolved=" + StatementRegistry.unresolvedCount()
                     + " ——本行即「钩子在产」的宿主侧证据（仅此一条）");
         }

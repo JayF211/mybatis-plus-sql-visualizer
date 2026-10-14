@@ -1453,10 +1453,29 @@ class AgentManager(private val project: Project) : Disposable {
         // 索引不得再吞 agent 纪元的首批事件（现场：接管前 60s 内桥刚捕过同端点，接管后同 SQL 的
         // agent 事件全落窗口内被当重复丢弃，面板零新条目、「attach 即生效」看似失效）。
         // 放 AgentManager 侧而非 SqlCaptureGate 对象内：闸门是进程级单例、缓冲是项目级——上升沿由
-        // 本项目的会话确认引发，重置只该落本项目缓冲；闸门对象保持哑标志位（「桥链路本身零改动」）。
+        // 本项目的会话确认引发，重建只该落本项目缓冲；闸门对象保持哑标志位（「桥链路本身零改动」）。
+        // O-147 W2-补（2026-10-14 真机复验）：由「全清」改「只清陈旧键、保留新鲜键」——全清会把接管沿
+        // 前几毫秒入库的控制台条目也切断（实测 6ms 窗口），随后同一条 SQL 的 agent 副本不再判重、新开
+        // 一行，用户看到「一行带源码、一行无源码」的原始报障形态；保留 5s 内键后该副本按融合升级。
         if (gateNow && !gateWas) {
-            sqlLogManagerIfCreated(project)?.entries?.resetDedupeIndexOnChannelHandoff()
-            LOG.info("增强捕获接管沿（桥让位）：去重索引按通道纪元重置——桥纪元旧索引不再吞 agent 首批事件")
+            sqlLogManagerIfCreated(project)?.entries?.rebuildDedupeIndexAfterHandoff()
+            LOG.info("增强捕获接管沿（桥让位）：去重索引按通道纪元重建——陈旧桥纪元键清掉（不吞 agent 首批），近 5s 内键保留（同一次执行的双通道副本按融合升级）")
+        }
+        // O-147 W2（V180-2）：回落沿补日志——此前 true→false **完全静默**（只有在线态整跳才留痕，
+        // 而 online 翻转不等于闸门翻转：ACK 清空窗口、确认态单会话变化都只动闸门），20261014 现场
+        // （增强事件持续在收、列表却混入控制台无源码条目）无法从日志裁决「闸门何时/为何放开」。
+        // 回落沿带闸门判据实况快照：健康会话 + 各会话 ACK 确认态，与既有「接管沿」「CONFIG 已生效」
+        // 行配对后 V180-2 可离线裁决。只读内存集合，任意线程安全；回落沿本就低频。
+        if (!gateNow && gateWas) {
+            val healthy = sessions.filter { isSessionHealthy(it) }.joinToString { "pid=${it.pid}" }
+            val ackStates = sessions.joinToString {
+                "pid=${it.pid}:" + when {
+                    !it.alive -> "已断"
+                    it.configAckDisabled == null -> "待确认"
+                    else -> "disabled=${it.configAckDisabled}"
+                }
+            }
+            LOG.info("增强捕获闸门回落（桥恢复解析）：online=$online, 健康会话=[$healthy], 确认态=[$ackStates]")
         }
         // 回落沿（true→false）**不**重置，三条理由：
         // ① 语义不对称——上升沿吞的是 agent 纪元的「首批证据」（用户开增强跑同端点验证，吞掉即

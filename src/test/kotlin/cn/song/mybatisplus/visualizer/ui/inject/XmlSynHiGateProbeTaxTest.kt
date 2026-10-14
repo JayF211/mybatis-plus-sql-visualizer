@@ -219,4 +219,45 @@ class XmlSynHiGateProbeTaxTest : BasePlatformTestCase() {
         }
         assertEquals("恢复后的第二问须真实探针", 1, consulted[0])
     }
+
+    // ------------------------------------------------------------------
+    // V38 计数缝（T-PerfSweep25 通道 1 ③）：开关翻转后每问分计（真机量级实测的读数载体）
+    // ------------------------------------------------------------------
+
+    /** 开关开启：首问实探计入 probeRuns、次问 memo 命中计入 memoHits；关闭时零计数。 */
+    @Test
+    fun testV38_计数缝_实探与命中分计() {
+        myFixture.configureByText(
+            "ProbeTaxMapper.xml",
+            "<mapper namespace=\"m\"><select id=\"a\">SELECT 1 FROM t</select><select id=\"b\">SELECT 2 FROM t</select></mapper>",
+        )
+        // 两阶段各用独立宿主：关闭态那次问询会填充该宿主 memo，不能与开启态共用
+        // （否则开启态两问全命中，实探计数恒 0——本用例首版即栽于此）。
+        val hosts = PsiTreeUtil.collectElementsOfType(myFixture.file, XmlText::class.java).toList()
+        val hostOff = hosts.first { it.text.contains("SELECT 1") }
+        val hostOn = hosts.first { it.text.contains("SELECT 2") }
+        val originalFlag = XmlSynHiGate.probeTraceEnabled
+        try {
+            // 关闭态：问询不计数（零成本路径的行为锚点）
+            XmlSynHiGate.probeTraceEnabled = false
+            XmlSynHiGate.resetProbeTraceForTest()
+            withProbeSeam({ _, _ -> false }) { XmlSynHiGate.occupiedRanges(project, hostOff) }
+            assertEquals("开关关闭时零计数", 0L, XmlSynHiGate.probeTraceSnapshot()[0])
+
+            // 开启态：首问实探、次问 memo 命中
+            XmlSynHiGate.probeTraceEnabled = true
+            XmlSynHiGate.resetProbeTraceForTest()
+            withProbeSeam({ _, _ -> false }) {
+                XmlSynHiGate.occupiedRanges(project, hostOn)
+                XmlSynHiGate.occupiedRanges(project, hostOn)
+            }
+            val snap = XmlSynHiGate.probeTraceSnapshot()
+            assertEquals("两问都计入 calls", 2L, snap[0])
+            assertEquals("首问为实探", 1L, snap[2])
+            assertEquals("次问为 memo 命中", 1L, snap[1])
+        } finally {
+            XmlSynHiGate.probeTraceEnabled = originalFlag
+            XmlSynHiGate.resetProbeTraceForTest()
+        }
+    }
 }

@@ -721,4 +721,124 @@ class SqlLogEntryBufferTest {
         assertEquals(listOf("SELECT 2", "SELECT 3"), snap.map { it.restoredSql })
         assertEquals(listOf(2L, 3L), snap.map { it.sequenceNumber })
     }
+
+    // ---------- T-AgentCaptureProvenance（O-147）W1：同去重桶字段级融合 ----------
+
+    /** 控制台回落形态条目（无源码/无耗时/无库标——20261014 现场截图的「—」行形态）。 */
+    private fun consoleProvEntry(sql: String, ts: Long) = LogSqlEntry(
+        rawSql = sql,
+        restoredSql = sql,
+        params = emptyList(),
+        timestamp = ts,
+        source = SqlSource.MYBATIS,
+        captureProvenance = CaptureProvenance.CONSOLE_BRIDGE,
+    )
+
+    /** agent 通道形态条目（源码 + 候选 + 耗时 + 库标齐备）。 */
+    private fun agentProvEntry(
+        sql: String,
+        ts: Long,
+        sourceFile: String? = "src/main/java/com/example/RefundOrderService.java",
+        durationMs: Long? = 20L,
+    ) = LogSqlEntry(
+        rawSql = sql,
+        restoredSql = sql,
+        params = emptyList(),
+        timestamp = ts,
+        source = SqlSource.AGENT,
+        executionTimeMs = durationMs,
+        sourceFile = sourceFile,
+        sourceLine = if (sourceFile == null) 0 else 67,
+        sourceCandidates = if (sourceFile == null) emptyList() else listOf(sourceFile!! to 67),
+        databaseName = "PostgreSQL · cyzc@localhost:5432",
+        captureProvenance = CaptureProvenance.AGENT,
+    )
+
+    @Test
+    fun `O147 控制台先到 agent后到 融合升级为可跳转`() {
+        val buf = SqlLogEntryBuffer(maxEntries = 10)
+        buf.dedupeWindowMs = 60_000L
+        val sql = "SELECT COUNT(*) AS total FROM t WHERE station_id IN (250,205)"
+        assertTrue(buf.addEntry(consoleProvEntry(sql, 1_000L)))
+        // 融合仍视为重复观测：返回 false、不入新行（onEntryAccepted 语义 = 新捕获，不触发）
+        assertFalse(buf.addEntry(agentProvEntry(sql, 2_000L)))
+        val snap = buf.snapshot()
+        assertEquals("同桶仍只保留一条", 1, snap.size)
+        val merged = snap.single()
+        assertEquals("列表序号稳定（保留首条行号）", 1L, merged.sequenceNumber)
+        assertEquals("捕获时间保留首条", 1_000L, merged.timestamp)
+        assertEquals("源码位置升级为真实文件", "src/main/java/com/example/RefundOrderService.java", merged.sourceFile)
+        assertEquals(67, merged.sourceLine)
+        assertEquals("耗时补齐", 20L, merged.executionTimeMs)
+        assertEquals("库标补齐", "PostgreSQL · cyzc@localhost:5432", merged.databaseName)
+        assertEquals(
+            "候选帧补齐",
+            listOf("src/main/java/com/example/RefundOrderService.java" to 67),
+            merged.sourceCandidates,
+        )
+        assertEquals("跨通道融合标 MERGED", CaptureProvenance.MERGED, merged.captureProvenance)
+        assertEquals("升级计一次折叠", 1, buf.dedupeCount(sql))
+    }
+
+    @Test
+    fun `O147 agent先到 控制台后到 不降级`() {
+        val buf = SqlLogEntryBuffer(maxEntries = 10)
+        buf.dedupeWindowMs = 60_000L
+        val sql = "SELECT * FROM t WHERE id = 7"
+        assertTrue(buf.addEntry(agentProvEntry(sql, 1_000L)))
+        assertFalse(buf.addEntry(consoleProvEntry(sql, 2_000L)))
+        val merged = buf.snapshot().single()
+        assertEquals("真实源码不被空值覆盖", "src/main/java/com/example/RefundOrderService.java", merged.sourceFile)
+        assertEquals("耗时保留 agent 事实", 20L, merged.executionTimeMs)
+        assertEquals(CaptureProvenance.MERGED, merged.captureProvenance)
+    }
+
+    @Test
+    fun `O147 融合只补空不覆盖既有值`() {
+        val buf = SqlLogEntryBuffer(maxEntries = 10)
+        buf.dedupeWindowMs = 60_000L
+        assertTrue(buf.addEntry(agentProvEntry("SELECT 1", 1_000L, durationMs = 20L)))
+        // 同为 agent 通道的重复：无任何空位可补 → 与保留条目全等 → 不替换（同通道不制造假融合）
+        assertFalse(buf.addEntry(agentProvEntry("SELECT 1", 2_000L, durationMs = 50L)))
+        val merged = buf.snapshot().single()
+        assertEquals("已有耗时不被后到值改写", 20L, merged.executionTimeMs)
+        assertEquals("同通道重复保持原通道标记", CaptureProvenance.AGENT, merged.captureProvenance)
+    }
+
+    @Test
+    fun `O147 MP分页伪标记被真实源码升级`() {
+        val buf = SqlLogEntryBuffer(maxEntries = 10)
+        buf.dedupeWindowMs = 60_000L
+        val sql = "SELECT COUNT(*) FROM biz"
+        assertTrue(
+            buf.addEntry(
+                LogSqlEntry(
+                    rawSql = sql,
+                    restoredSql = sql,
+                    params = emptyList(),
+                    timestamp = 1_000L,
+                    sourceFile = SourceMarkers.MP_PAGINATION_COUNT,
+                    captureProvenance = CaptureProvenance.CONSOLE_EP,
+                ),
+            ),
+        )
+        assertFalse(buf.addEntry(agentProvEntry(sql, 2_000L)))
+        val merged = buf.snapshot().single()
+        assertEquals("分页 COUNT 的伪标记让位于真实调用点", "src/main/java/com/example/RefundOrderService.java", merged.sourceFile)
+    }
+
+    @Test
+    fun `O147 融合条目随淘汰回收后同键新观测正常入库`() {
+        val buf = SqlLogEntryBuffer(maxEntries = 2)
+        buf.dedupeWindowMs = 60_000L
+        buf.addEntry(consoleProvEntry("A", 1_000L))
+        buf.addEntry(agentProvEntry("A", 2_000L)) // 融合
+        buf.addEntry(consoleProvEntry("B", 3_000L))
+        buf.addEntry(consoleProvEntry("C", 4_000L)) // 触发淘汰 A 融合条目
+        assertEquals(listOf("B", "C"), buf.snapshot().map { it.restoredSql })
+        // 融合条目被淘汰后索引已随队回收：窗口内 A 再次到达不得被旧索引误判重复。
+        // （maxEntries=2 下 A 入库会把队首 B 挤出——上限语义照旧，本用例判别点在 A 是否入库。）
+        assertTrue(buf.addEntry(consoleProvEntry("A", 5_000L)))
+        assertEquals(listOf("C", "A"), buf.snapshot().map { it.restoredSql })
+    }
 }

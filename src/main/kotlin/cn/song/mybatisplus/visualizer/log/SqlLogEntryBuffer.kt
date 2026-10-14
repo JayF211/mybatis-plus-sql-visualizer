@@ -58,40 +58,65 @@ class SqlLogEntryBuffer(
         }
 
     /**
-     * T-SqlLogPerf P6（20261006-1020 计划）：dedupeKey → 队内**最近**时间戳索引——isDuplicate
+     * T-SqlLogPerf P6（20261006-1020 计划）：dedupeKey → 队内**保留实例**索引——isDuplicate
      * 从锁内 O(n) 全表扫描（65 条/秒压测下每条线性扫 200 条 + 三通道写线程与 EDT snapshot 抢锁）
-     * 降为 O(1) 查表。窗口判定取每键最大时间戳与旧 firstOrNull 全扫逐字等价：
+     * 降为 O(1) 查表。窗口判定取每键**最大时间戳实例**与旧 firstOrNull 全扫逐字等价：
      * 「存在同键条目使 now-timestamp < 窗口」⟺ 最大时间戳落窗口内。
+     * T-AgentCaptureProvenance O-147 W1：值由时间戳升级为**保留实例**本身——同桶信息融合需要
+     * O(1) 定位被保留的条目（时间戳随实例可读，两者恒一致）。
      *
-     * 维护面（全部须在 `synchronized(entries)` 内）：入队 upsert / 头部淘汰回扫 / dedupeExisting
-     * 与 dedupeEnabled 翻 true 全量重建 / clear 清空 / removeEntry 单键重算。dedupeEnabled=false
-     * 期间不维护（不触 dedupeKey lazy——T-PerfSweep9 同款口径），重开时补账。
+     * 维护面（全部须在 `synchronized(entries)` 内）：入队 upsert / 头部淘汰回扫 / 融合原位替换 /
+     * dedupeExisting 与 dedupeEnabled 翻 true 全量重建 / clear 清空 / removeEntry 单键重算。
+     * dedupeEnabled=false 期间不维护（不触 dedupeKey lazy——T-PerfSweep9 同款口径），重开时补账。
      */
-    private val dedupeIndex = HashMap<String, Long>()
+    private val dedupeIndex = HashMap<String, LogSqlEntry>()
 
     private fun rebuildDedupeIndexLocked() {
         dedupeIndex.clear()
         for (e in entries) {
             val latest = dedupeIndex[e.dedupeKey]
-            if (latest == null || e.timestamp > latest) dedupeIndex[e.dedupeKey] = e.timestamp
+            if (latest == null || e.timestamp > latest.timestamp) dedupeIndex[e.dedupeKey] = e
         }
     }
 
     /**
-     * T-AttachZeroEvent P3（2026-10-09 现场复盘）：**通道纪元重置**——增强捕获接管沿（桥让位、
-     * agent 接管，`SqlCaptureGate.paused` false→true）由 [AgentManager.updateOnline] 调用。
+     * T-AttachZeroEvent P3（2026-10-09 现场复盘）+ T-AgentCaptureProvenance O-147 W2-补（2026-10-14 真机复验）：
+     * **通道纪元重建**——增强捕获接管沿（桥让位、agent 接管，`SqlCaptureGate.paused` false→true）由
+     * [AgentManager.updateOnline] 调用。
      *
-     * 为什么重置：dedupeKey 跨通道统一（agent 与桥同 SQL 产出同指纹，AgentEventAdapter 契约），
-     * 目的是折叠接管/回落**重叠期**的双通道双报；桥一旦封停，重叠窗语义即结束——接管前桥纪元的
-     * 索引不得再吞 agent 纪元的首批同键事件。现场：接管前 60s 内桥刚捕过同端点，接管后同 SQL 的
-     * agent 事件全部落窗口内被当重复丢弃，面板零新条目、「attach 即生效」看似失效。
+     * 为什么重建：dedupeKey 跨通道统一（agent 与桥同 SQL 产出同指纹，AgentEventAdapter 契约），目的是
+     * 折叠接管/回落**重叠期**的双通道双报；桥一旦封停，重叠窗语义即结束——接管前桥纪元的索引不得再吞
+     * agent 纪元的首批同键事件（现场：接管前 60s 内桥刚捕过同端点，接管后同 SQL 的 agent 事件全部落窗口
+     * 内被当重复丢弃，面板零新条目、「attach 即生效」看似失效）。
      *
-     * 只清索引，**不清条目、不清 ⨉N 徽章计数**（历史留痕）；此后 agent↔agent 短窗重复照常折叠
-     * （索引由新纪元条目在入队 upsert 面重建）。O(1)（清 map），entries 锁内执行。
+     * **O-147 W2-补：由「全清」改为「只清陈旧键、保留新鲜键」**。全清会把**同一次执行的双通道副本**也一起
+     * 切断：控制台条目在接管沿前几毫秒入库（2026-10-14 真机复验实测 6ms 窗口——`捕获归因: 通道=CONSOLE_EP`
+     * 入库 → 接管沿清索引 → 随后同一条 SQL 的 agent 事件不再判重、新开一行）⇒ 用户看到「一行带源码、
+     * 一行 `—` 无源码」的原始报障形态。改为：`timestamp >= now - graceMs` 的键保留（同一次执行的控制台
+     * 副本，agent 副本到达时按 [mergeDuplicateEntry] 融合升级为可跳转行），更旧的键清掉（P3 原意保留——
+     * 陈旧桥纪元条目不得吞 agent 首批，agent 新观测照常成为新行）。
+     *
+     * 只动索引，**不清条目、不清 ⨉N 徽章计数**（历史留痕）；此后 agent↔agent 短窗重复照常折叠。
      * 回落沿（true→false）**不**调用本方法——理由见 [AgentManager.updateOnline] 尾注。
+     *
+     * @param graceMs 保留窗（默认 [HANDOFF_MERGE_GRACE_MS]）：同一次执行的双通道副本间隔为毫秒级，
+     *   而 60s 去重窗内的陈旧条目不得入窗（否则 P3 症状回归）。
+     * @param nowMs 判定基准（默认系统时钟；测试注入合成时间戳，保持与既有合成时间戳用例的确定性）。
      */
-    fun resetDedupeIndexOnChannelHandoff() {
-        synchronized(entries) { dedupeIndex.clear() }
+    fun rebuildDedupeIndexAfterHandoff(
+        graceMs: Long = HANDOFF_MERGE_GRACE_MS,
+        nowMs: Long = System.currentTimeMillis(),
+    ) {
+        synchronized(entries) {
+            dedupeIndex.clear()
+            if (!dedupeEnabled) return
+            val cutoff = nowMs - graceMs
+            for (e in entries) {
+                if (e.timestamp < cutoff) continue
+                val latest = dedupeIndex[e.dedupeKey]
+                if (latest == null || e.timestamp > latest.timestamp) dedupeIndex[e.dedupeKey] = e
+            }
+        }
     }
 
     /**
@@ -217,11 +242,32 @@ class SqlLogEntryBuffer(
             }
         }
         var duplicate = false
+        var mergeChanged = false
+        var mergeDiagExisting: LogSqlEntry? = null
+        var mergeDiagMerged: LogSqlEntry? = null
         val evictedEntries = mutableListOf<LogSqlEntry>()
         var storedEntry: LogSqlEntry? = null
         synchronized(entries) {
             if (dedupeEnabled && isDuplicate(entry)) {
                 duplicate = true
+                // 【反向验证探针锚点】T-AgentCaptureProvenance O-147 W1：注释掉下方 if 块 =
+                // 摘除「同桶信息融合」——SqlLogEntryBufferTest 的「控制台先到_agent后到_融合升级」
+                // 用例必红（保留条目缺源码/耗时/库标，跳转仍 MissingSource），恢复后转绿。
+                val storedExisting = dedupeIndex[entry.dedupeKey]
+                if (storedExisting != null) {
+                    val merged = mergeDuplicateEntry(storedExisting, entry)
+                    if (merged != storedExisting) {
+                        // java.util.ArrayDeque 无按下标替换：按同一性重建（融合低频，O(n) 锁内可接受）
+                        val rebuilt = ArrayDeque<LogSqlEntry>(entries.size)
+                        for (e in entries) rebuilt.add(if (e === storedExisting) merged else e)
+                        entries.clear()
+                        entries.addAll(rebuilt)
+                        dedupeIndex[entry.dedupeKey] = merged
+                        mergeChanged = true
+                        mergeDiagExisting = storedExisting
+                        mergeDiagMerged = merged
+                    }
+                }
             } else {
                 // T-LogRowNumber：入队时分配捕获序号（去重丢弃/暂停/过滤不占号，列表不跳号）
                 val added = addNumbered(entry)
@@ -230,19 +276,17 @@ class SqlLogEntryBuffer(
                 if (dedupeEnabled) {
                     // T-SqlLogPerf P6：索引 upsert（dedupeKey lazy 首触与旧版 isDuplicate 同价，
                     // 仅去重开启时支付）
-                    val k = added.dedupeKey
-                    val latest = dedupeIndex[k]
-                    if (latest == null || added.timestamp > latest) dedupeIndex[k] = added.timestamp
+                    dedupeIndex[added.dedupeKey] = added
                 }
                 while (entries.size > maxEntries) {
                     val evicted = entries.removeFirst()
                     if (dedupeEnabled) {
-                        // T-SqlLogPerf P6：淘汰回扫——索引存的是「最近」时间戳，仅当被淘汰者恰为
+                        // T-SqlLogPerf P6：淘汰回扫——索引存的是「最近」实例，仅当被淘汰者恰为
                         // 该键最新时才需要重算（队内同键余条 = 超窗重复入队形态，低频）
                         val k = evicted.dedupeKey
-                        if (dedupeIndex[k] == evicted.timestamp) {
+                        if (dedupeIndex[k] === evicted) {
                             val stillThere = entries.lastOrNull { it.dedupeKey == k }
-                            if (stillThere != null) dedupeIndex[k] = stillThere.timestamp else dedupeIndex.remove(k)
+                            if (stillThere != null) dedupeIndex[k] = stillThere else dedupeIndex.remove(k)
                         }
                     }
                     evictedEntries.add(evicted)
@@ -253,7 +297,26 @@ class SqlLogEntryBuffer(
         if (duplicate) {
             recordDedupeDrop(entry.dedupeKey)
             onDedupeCountsChanged?.invoke() // 徽章计数变了 → 即时刷新（不走内容节流）
+            // O-147 W1：融合改变了保留条目的可见元数据 → 走内容通道（列表须重绘）；仍非「新 SQL」
+            // （不触发 onEntryAccepted——accepted 语义 = 新捕获），返回值保持 false 不变。
+            if (mergeChanged) {
+                notifyContentChangedThrottled()
+                val diagExisting = mergeDiagExisting
+                val diagMerged = mergeDiagMerged
+                if (diagExisting != null && diagMerged != null) {
+                    logAttributionThrottled {
+                        "重复观测跨通道融合: 指纹=${entry.dedupeKey.take(8)} " +
+                            "通道=${diagExisting.captureProvenance}+${entry.captureProvenance}" +
+                            "→${diagMerged.captureProvenance} 升级=${mergeUpgradedAspects(diagExisting, diagMerged)}"
+                    }
+                }
+            }
             return false
+        }
+        // O-147 W0：缺源码条目的通道归因诊断（限频）——「增强已开启却无法跳转」现场的直接证据行
+        // （V180-1：通道=AGENT 缺源码 → 查 agent 侧栈定位；通道=CONSOLE_* → 查桥闸门为何回落）。
+        if (entry.sourceFile == null && entry.sourceCandidates.isEmpty()) {
+            logAttributionThrottled { provenanceDiagText(entry, SqlCaptureGate.paused.get()) }
         }
         // T-Perf-12（自 dev 移植）：onEvicted 回调移出 synchronized(entries)——回调链（自动保存磁盘写）
         // 在锁内同步执行会阻塞 EDT snapshot() 抢同一把锁（控制台输出热路径互相卡）
@@ -331,7 +394,7 @@ class SqlLogEntryBuffer(
      * ⟺ 该键最近时间戳落窗口内（最大时间戳是窗口判定的唯一有效候选，逐字等价）。 */
     private fun isDuplicate(entry: LogSqlEntry): Boolean {
         val latest = dedupeIndex[entry.dedupeKey] ?: return false
-        return entry.timestamp - latest < dedupeWindowMs
+        return entry.timestamp - latest.timestamp < dedupeWindowMs
     }
 
     /** 最早在前的快照（正序）。 */
@@ -407,7 +470,7 @@ class SqlLogEntryBuffer(
             if (removed && dedupeEnabled) {
                 val k = entry.dedupeKey
                 val stillThere = entries.lastOrNull { it.dedupeKey == k }
-                if (stillThere != null) dedupeIndex[k] = stillThere.timestamp else dedupeIndex.remove(k)
+                if (stillThere != null) dedupeIndex[k] = stillThere else dedupeIndex.remove(k)
             }
         }
         notifyChanged()
@@ -472,6 +535,33 @@ class SqlLogEntryBuffer(
         this.paused = paused
     }
 
+    // ---------- T-AgentCaptureProvenance（O-147）W0：归因诊断限频出口 ----------
+
+    /**
+     * 归因诊断限频（缺源码入队与跨通道融合两条共用）：[ATTRIB_DIAG_INTERVAL_NANOS] 窗内首条
+     * 即时输出、其余累计抑制数随下次输出带上。message 为惰性——被抑制时不构造字符串。
+     * 平台 Logger 用 `by lazy` 延迟到首条诊断才初始化（纯 JUnit 不触发诊断的用例零平台触达）。
+     */
+    private val attributionLogNanos = AtomicLong(Long.MIN_VALUE / 2)
+    private val attributionSuppressed = AtomicLong()
+
+    private fun logAttributionThrottled(message: () -> String) {
+        val now = System.nanoTime()
+        val last = attributionLogNanos.get()
+        if (now - last >= ATTRIB_DIAG_INTERVAL_NANOS && attributionLogNanos.compareAndSet(last, now)) {
+            val suppressed = attributionSuppressed.getAndSet(0)
+            val text = message()
+            LOG.info(if (suppressed > 0L) "$text（期间另有 $suppressed 条同形态未逐条记）" else text)
+        } else {
+            attributionSuppressed.incrementAndGet()
+        }
+    }
+
+    /** O-147 W0：诊断用（懒加载，见 [logAttributionThrottled]）。 */
+    private val LOG: com.intellij.openapi.diagnostic.Logger by lazy {
+        com.intellij.openapi.diagnostic.Logger.getInstance(SqlLogEntryBuffer::class.java)
+    }
+
     fun addListener(listener: () -> Unit) {
         listeners += listener
     }
@@ -520,5 +610,15 @@ class SqlLogEntryBuffer(
 
         /** T-PerfSweep F3：去重丢弃计数键上限——超限淘汰最旧（见 [dedupeCounts] KDoc）。 */
         private const val MAX_DEDUPE_COUNT_KEYS = 4096
+
+        /** O-147 W0：归因诊断限频窗（10s）。 */
+        private const val ATTRIB_DIAG_INTERVAL_NANOS = 10_000_000_000L
+
+        /**
+         * O-147 W2-补：接管沿重建索引时保留的「同一次执行双通道副本」窗（5s）。
+         * 取 5s 的依据：同一次执行被两通道各捕一次，间隔是毫秒级（真机实测 6ms）；而 P3 现场要挡的是
+         * 「接管前 60s 内」的陈旧桥纪元条目——5s 窗两者兼顾（陈旧键照清，新鲜键保留供融合）。
+         */
+        private const val HANDOFF_MERGE_GRACE_MS = 5_000L
     }
 }

@@ -10,6 +10,18 @@
   - `bright_band_y()` —— 像素剖面：逐行取均值找最亮连续段（按钮行/工具条这类亮文字带）。
 
 坐标系：全部是**屏幕物理像素**，与 `pyautogui` 的点击坐标同一坐标系（本模块已声明 DPI 感知）。
+
+**更高一档的定位（2026-10-13 新增，见同目录两个模块）**——本模块是**几何推断**（窗口矩形 /
+底部偏移 / 像素剖面），控件一换布局就失效；下面两条改成**按外观/按组件身份**找：
+
+  - `anchor.py`  —— **图像锚点**：把目标控件截成小模板，`find()`/`click_anchor()` 用
+    `cv2.matchTemplate`（灰度 + 多尺度）在屏上找回来。零 IDE 侧改动，**立即可用**；
+    注意：需要 `opencv-python`（本机原先没装，`pyautogui.locateCenterOnScreen(confidence=)` 也因此一直不可用）。
+  - `robot.py`   —— **组件树定位**：直连 IDE 内 robot-server 的 HTTP/JSON（`POST /xpath/component`），
+    按 XPath/类名/文本找到 Swing 组件，**服务端直接给出该组件的屏幕矩形**，再交给 pyautogui 点。
+    精确但需先给沙盒装上 `robot-server` 插件（装法与端口见该模块 docstring）。
+
+选型与实测对比见 `docs/调研报告/20261013-2130-演示录制点击定位提效工具调研-调研报告.md`。
 """
 import ctypes
 from ctypes import wintypes

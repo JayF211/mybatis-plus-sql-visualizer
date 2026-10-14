@@ -274,6 +274,7 @@ object SqlLogFileReader {
                 candidateClasses = decodedExt?.candidateClasses ?: emptyList(),
                 stackDigest = decodedExt?.stackDigest,
                 actualSql = decodedExt?.actualSql,
+                captureProvenance = decodedExt?.captureProvenance ?: CaptureProvenance.UNKNOWN,
             )
         }
 
@@ -295,6 +296,7 @@ object SqlLogFileReader {
                 candidateClasses = decodedExt?.candidateClasses ?: emptyList(),
                 stackDigest = decodedExt?.stackDigest,
                 actualSql = decodedExt?.actualSql,
+                captureProvenance = decodedExt?.captureProvenance ?: CaptureProvenance.UNKNOWN,
             )
         }
 
