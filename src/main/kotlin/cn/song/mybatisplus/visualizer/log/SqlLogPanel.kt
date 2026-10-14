@@ -154,6 +154,16 @@ class SqlLogPanel(
     /** 当前激活的类型过滤集合（默认全选 = 「全部」，含 OTHER 透传）。 */
     private val activeFilter = FILTERABLE_TYPES.toMutableSet()
 
+    /**
+     * 「只看慢查询」筛选（用户 2026-10-14 补）：true 时只保留耗时 ≥ 当前慢查询阈值的条目。
+     * 判定走 [durationOf]（结构化字段优先、缺失回退日志文本解析），与「慢查询徽章」同口径。
+     * 性能：一次 O(n) 遍历，位于刷新管线（非渲染热路径）。
+     */
+    private var slowOnly = false
+
+    /** 「只看慢查询」勾选框（弹窗首次构建后非 null；仅用于状态回填，测试另有 [setSlowOnlyForTest]）。 */
+    private var slowOnlyCheckBox: JCheckBox? = null
+
     /** 排序模式（T-LogSortModes：默认时间升序 = 捕获顺序）。 */
     private var sortMode = SortMode.TIME_ASC
 
@@ -372,6 +382,18 @@ class SqlLogPanel(
 
     /** 当前排序方式显示名（测试断言；与动作 presentation.text 同源）。 */
     internal val sortButtonTextForTest: String get() = currentSortLabel()
+
+    /** 「只看慢查询」筛选态（测试驱动：等价用户勾选弹窗内该勾选框）。 */
+    internal var slowOnlyForTest: Boolean
+        get() = slowOnly
+        set(value) {
+            slowOnly = value
+            slowOnlyCheckBox?.isSelected = value
+            refreshList()
+        }
+
+    /** 「只看慢查询」勾选框（弹窗构建后非 null；测试断言文案/勾选态）。 */
+    internal val slowOnlyCheckBoxForTest: JCheckBox? get() = slowOnlyCheckBox
     internal val listScrollPaneForTest: JBScrollPane? get() = listScrollPane
     internal fun resumeTailFollowForTest() = scrollToBottom(resume = true)
 
@@ -455,10 +477,10 @@ class SqlLogPanel(
      * 工具栏动作组（T-M39：internal 供测试断言帮助入口存在性；
      * update 由工具栏生命周期驱动，headless 测试手动触发；须在 init 前声明）。
      *
-     * 全部动作直接入组、按用户原顺序排列；**不设自建「更多」弹层**——用户 2026-10-14 明确：
-     * 「不要这个更多，之前是侧边栏不够宽时自动折叠、鼠标放上去能显示全部，那个交互更好」。
-     * 窄宽折叠交给平台 ActionToolbar 自带的溢出（`»`），悬停/点击即列出被折叠的动作。
-     * 排序（[sortModeAction]）排在组末，与其余动作一起参与折叠。
+     * 全部动作直接入组、按用户 2026-10-14 选定的「方案 A」排列：
+     * 操作在前、工具在后、**帮助收尾**（`?` 是纯信息性动作，平台惯例放末尾；溢出从右端折叠，
+     * 帮助最先让位）。**不设自建「更多」弹层**——窄宽折叠交给平台 ActionToolbar 自带的溢出（`»`），
+     * 悬停/点击即列出被折叠的动作。
      */
     internal val toolbarGroup = DefaultActionGroup(
         captureToggleAction,
@@ -466,9 +488,9 @@ class SqlLogPanel(
         SettingsAction(),
         ManageSuppressAction(),
         ShowSearchAction(),
-        HelpAction(),
         scrollToEndAction,
         sortModeAction,
+        HelpAction(),
     )
 
     // ---------- T-Perf-15：manager 监听器命名引用（init 注册 / dispose 注销） ----------
@@ -888,6 +910,21 @@ class SqlLogPanel(
         typePopupCheckBoxes = checkBoxes
         content.add(Box.createVerticalStrut(6))
         content.add(JSeparator().apply { alignmentX = Component.LEFT_ALIGNMENT })
+        content.add(Box.createVerticalStrut(6))
+        // 用户 2026-10-14 补：与「慢查询徽章」呼应的快捷筛选——只看慢查询（按当前慢查询阈值判定）。
+        // 放在类型弹窗内、与类型勾选同一入口，避免往右侧控制组加控件（控制组有最坏宽预算锁）。
+        val slowOnlyBox = JCheckBox(MpSqlVisualizerBundle.message("log.filter.slowOnly"), slowOnly).apply {
+            isOpaque = false
+            alignmentX = Component.LEFT_ALIGNMENT
+            isFocusable = false
+            toolTipText = MpSqlVisualizerBundle.message("log.filter.slowOnly.tip")
+            addActionListener {
+                slowOnly = isSelected
+                refreshList()
+            }
+        }
+        slowOnlyCheckBox = slowOnlyBox
+        content.add(slowOnlyBox)
         content.add(Box.createVerticalStrut(6))
         val toggleButton = JButton(typePopupToggleLabel()).apply {
             isFocusable = false
@@ -1373,8 +1410,7 @@ class SqlLogPanel(
         // T-SqlSuppress：屏蔽存量过滤插管线最前（与类型过滤同级；键集经 SqlLogManager 订阅同步）
         val filtered = filterByFocus(
             filterByType(
-                filterBySuppress(snapshot, manager.entries.suppressKeys),
-                activeFilter,
+                applySlowOnlyFilter(filterBySuppress(snapshot, manager.entries.suppressKeys)),                activeFilter,
             ),
             activeFocus,
         )
@@ -1563,10 +1599,30 @@ class SqlLogPanel(
         SortMode.DURATION_DESC -> entries.sortedByDescending { durationOf(it) ?: Long.MIN_VALUE }
         // 行号：无行号（历史读回/round-trip）沉底
         SortMode.SEQUENCE -> entries.sortedBy { if (it.sequenceNumber > 0) it.sequenceNumber else Long.MAX_VALUE }
+        // 同结构聚类（用户 2026-10-14 补）：按结构指纹分组、组内保持时间升序——排查 N+1 时同形状条目相邻。
+        // structureKey 为条目级 lazy（每条只算一次指纹），故比较器是纯字段读取。
+        SortMode.STRUCTURE_CLUSTER -> entries.sortedWith(
+            compareBy({ it.structureKey }, { displayTimeOf(it) }),
+        )
+        // 按目标库分组（用户 2026-10-14 补）：库名升序、未知（null）沉底，组内保持时间升序。
+        SortMode.DATABASE_GROUP -> entries.sortedWith(
+            compareBy({ it.databaseName ?: DATABASE_UNKNOWN_SORT_KEY }, { displayTimeOf(it) }),
+        )
     }
 
-    /** 条目耗时（毫秒）：结构化 executionTimeMs 优先，缺失时回退日志文本解析。 */
-    private fun durationOf(entry: LogSqlEntry): Long? =
+    /**
+     * 「只看慢查询」过滤接线（阈值取当前设置；判定走 [durationOf]，与慢查询徽章同口径）。
+     * 纯逻辑在 [cn.song.mybatisplus.visualizer.log.filterBySlowOnly]，便于独立单测。
+     */
+    private fun applySlowOnlyFilter(entries: List<LogSqlEntry>): List<LogSqlEntry> =
+        cn.song.mybatisplus.visualizer.log.filterBySlowOnly(
+            entries,
+            slowOnly,
+            PluginSettings.getInstance().state.slowQueryThresholdMs,
+            ::durationOf,
+        )
+
+    /** 条目耗时（毫秒）：结构化 executionTimeMs 优先，缺失时回退日志文本解析。 */    private fun durationOf(entry: LogSqlEntry): Long? =
         entry.executionTimeMs ?: LogDurationParser.parse(entry)
 
     /**

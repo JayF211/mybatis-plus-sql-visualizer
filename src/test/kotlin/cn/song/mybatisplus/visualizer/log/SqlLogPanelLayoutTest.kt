@@ -59,9 +59,11 @@ class SqlLogPanelLayoutTest : BasePlatformTestCase() {
             assertTrue("设置应直达", main.any { it is SqlLogPanel.SettingsAction })
             assertTrue("屏蔽管理应直达", main.any { it is SqlLogPanel.ManageSuppressAction })
             assertTrue("帮助应直达", main.any { it is SqlLogPanel.HelpAction })
-            assertEquals("八个动作应全部在组内（捕捉/清空/设置/屏蔽/搜索/帮助/滚底/排序）",
+            assertEquals("八个动作应全部在组内（捕捉/清空/设置/屏蔽/搜索/滚底/排序/帮助）",
                 8, main.size)
-            assertEquals("排序应为组内末项（其余保持原相对序）", panel.sortActionForTest, main.last())
+            // 用户 2026-10-14 选定「方案 A」：操作在前、工具在后、帮助收尾（溢出从右端折叠，帮助最先让位）。
+            assertEquals("帮助应为组内末项（方案 A）", main.last(), main.first { it is SqlLogPanel.HelpAction })
+            assertTrue("排序应在帮助之前", main.indexOfFirst { it === panel.sortActionForTest } < main.size - 1)
         } finally {
             panel.dispose()
         }
@@ -265,8 +267,8 @@ class SqlLogPanelLayoutTest : BasePlatformTestCase() {
             val sortIndex = mainActions.indexOfFirst { it === panel.sortActionForTest }
             assertTrue("排序动作应在工具栏动作组内", sortIndex >= 0)
             assertTrue(
-                "排序应为组内末项（其余动作保持原相对序，idx=$sortIndex / size=${mainActions.size}）",
-                sortIndex == mainActions.size - 1,
+                "排序应排在滚动到底部之后、帮助之前（方案 A 中排序为操作组末位，idx=$sortIndex / size=${mainActions.size}）",
+                sortIndex > 0 && sortIndex < mainActions.size - 1,
             )
             assertTrue(
                 "滚动到底部动作应排在排序之前",
