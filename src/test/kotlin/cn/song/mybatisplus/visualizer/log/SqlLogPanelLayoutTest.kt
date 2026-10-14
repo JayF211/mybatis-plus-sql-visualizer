@@ -225,7 +225,9 @@ class SqlLogPanelLayoutTest : BasePlatformTestCase() {
             val controls = panel.toolbarControlsForTest!!
             val children = controls.components.filter { it.isVisible }.toList()
             assertTrue("控制组应含 SQL类型按钮", children.contains(panel.typeFilterButtonForTest))
-            assertTrue("控制组应含 排序按钮", children.contains(panel.sortButtonForTest))
+            assertFalse("排序按钮应从右侧控制组移出", children.contains(panel.sortButtonForTest))
+            assertEquals("排序按钮应挂在左侧 WEST 槽", panel.sortButtonForTest,
+                (row.layout as BorderLayout).getLayoutComponent(BorderLayout.WEST))
             assertTrue("控制组应含 去重勾选（仍在最右）", children.contains(panel.dedupeCheckBoxForTest))
             assertEquals(
                 "去重勾选应在控制组最右",
@@ -233,6 +235,20 @@ class SqlLogPanelLayoutTest : BasePlatformTestCase() {
                 children.last(),
             )
             assertFalse("动作图标组不应混进控制组（单行定构下它在 CENTER）", children.any { it === toolbarComponent })
+        } finally {
+            panel.dispose()
+        }
+    }
+
+    fun test排序归位后左右簇合计保留图标组预算() {
+        val panel = SqlLogPanel(project, manager)
+        try {
+            panel.applyTypeFilterForTest(setOf(StatementType.SELECT, StatementType.UPDATE, StatementType.DELETE))
+            waitForEdt()
+            val left = panel.sortButtonForTest.preferredSize.width
+            val right = panel.toolbarControlsForTest!!.preferredSize.width
+            assertTrue("排序左簇 $left + 控制组 $right + 图标组 $ICON_GROUP_WIDTH_MIN 不能超出 $USER_SIDEBAR_WIDTH",
+                left + right + ICON_GROUP_WIDTH_MIN <= USER_SIDEBAR_WIDTH)
         } finally {
             panel.dispose()
         }

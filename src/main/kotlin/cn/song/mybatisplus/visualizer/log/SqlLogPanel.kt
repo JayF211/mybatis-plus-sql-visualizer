@@ -231,29 +231,22 @@ class SqlLogPanel(
     /**
      * T-SqlLogPerf（20261006-1020 计划 + 用户点名）：「滚动到底部」动作 + 尾部跟随。
      *
-     * 背景：log 包原没有任何滚动控制——并发灌入时新条目只进模型、视口原地不动，用户体感
-     * 「监听加载有延迟」。本动作一键跳列表底并恢复跟随；跟随态下新条目到达自动贴底，
-     * 用户向上滚动阅读即自动停跟随（滚回底部/点动作恢复），与 IDE 控制台「滚动到底」习惯一致。
+     * 本动作一键跳列表底并恢复跟随；跟随态下新条目到达自动贴底。
+     * 手动滚轮、滚动条或键盘导航立即暂停，只有再次点击本动作才恢复跟随。
      * 形态走左侧动作图标组（AnAction）而非右侧控制组 JButton——控制组最坏宽有预算锁
      * （SqlLogPanelLayoutTest 防「又往控制组加控件」），图标组窄了由平台溢出承接。
      */
     internal val scrollToEndAction: AnAction = ScrollToEndAction()
 
-    /** 尾部跟随开关（EDT 读写：滚动监听 / 刷新尾部 / 动作点击）。默认开——日志语义以「最新」为锚点。 */
-    private var autoFollowTail = true
+    private val tailFollow = TailFollowState()
+    private var listScrollPane: JBScrollPane? = null
+    internal val tailFollowModeForTest: TailFollowMode get() = tailFollow.mode
 
-    /** 跟随判定松量（px）：视口底沿距列表底沿小于该值视为「在底部」。 */
-    private val tailFollowSlackPx = 48
-
-    /** 滚动事件归因基线（区分程序性追加与用户滚动；见 buildListPane 的 adjustment 监听）。 */
-    private var lastScrollMax = 0
-    private var lastScrollValue = 0
-
-    /** 跳列表底；follow=true 同时恢复跟随态。 */
-    private fun scrollToBottom(follow: Boolean) {
-        if (follow) autoFollowTail = true
+    private fun scrollToBottom(resume: Boolean) {
+        if (resume) tailFollow.onScrollToEnd()
         if (listModel.isEmpty) return
         list.ensureIndexIsVisible(listModel.size() - 1)
+        listScrollPane?.verticalScrollBar?.let { it.value = it.maximum }
     }
 
     // ---------- T-ListMode：SQL 显示模式（T-DisplayModeToSettings：入口迁设置页「列表显示」，两列表共享一键） ----------
@@ -345,6 +338,8 @@ class SqlLogPanel(
 
     /** 当前排序方式按钮文案（测试断言）。 */
     internal val sortButtonTextForTest: String get() = sortButton.text
+    internal val listScrollPaneForTest: JBScrollPane? get() = listScrollPane
+    internal fun resumeTailFollowForTest() = scrollToBottom(resume = true)
 
     /** 去重勾选框（F-44-2 测试驱动：模拟用户勾选「移除重复的sql」验证既有条目立即去重）。 */
     internal val dedupeCheckBoxForTest: JCheckBox get() = dedupeCheckBox
@@ -649,12 +644,13 @@ class SqlLogPanel(
         updateTypeFilterButton()
         updateSortButtonText()
         // T-UiCoord F2（2026-09-21 用户定案「不要两行」）：工具栏**恒为单行**——
-        // 左侧动作图标组（CENTER，拿剩余宽度；窄了交给平台图标溢出）+ 右侧列表控制组
-        // （EAST：慢查询徽章 / SQL类型 / 排序 / 去重勾选，勾选仍在最右）。
+        // 左侧排序按钮（WEST）与动作图标组（CENTER，窄时交给平台溢出）+ 右侧列表控制组
+        // （EAST：慢查询徽章 / SQL类型 / 去重勾选，勾选仍在最右）。
         // BorderLayout 结构上不存在折行可能，故任意宽度下都只有一行；原 WrapLayout 流式行退役
         // ——它按「谁最后谁折」处理放不下，2026-09-16 加排序单元、09-18 加第 5 枚图标后，
         // 460px 侧边栏下「排序」单元孤行到第二行（右留 300px 空档、两行左缘差 10px）。
         val row = JPanel(BorderLayout())
+        row.add(sortButton, BorderLayout.WEST)
         row.add(toolbar.component, BorderLayout.CENTER)
         toolbarComponent = toolbar.component
 
@@ -672,7 +668,6 @@ class SqlLogPanel(
             isOpaque = false
             add(slowQueryLabel)
             add(typeFilterButton)
-            add(sortButton)
             add(dedupeCheckBox)
         }
         toolbarControls = controls
@@ -951,6 +946,7 @@ class SqlLogPanel(
         }
 
         override fun actionPerformed(e: AnActionEvent) {
+            tailFollow.onClear()
             manager.entries.clear()
         }
     }
@@ -963,11 +959,13 @@ class SqlLogPanel(
         override fun update(e: AnActionEvent) {
             e.presentation.icon = AllIcons.General.ArrowDown
             e.presentation.text = MpSqlVisualizerBundle.message("log.panel.scrollBottom")
-            e.presentation.description = MpSqlVisualizerBundle.message("log.panel.scrollBottom.tip")
+            e.presentation.description = MpSqlVisualizerBundle.message(
+                if (tailFollow.shouldFollow) "log.panel.scrollBottom.tip" else "log.panel.scrollBottom.paused.tip",
+            )
         }
 
         override fun actionPerformed(e: AnActionEvent) {
-            scrollToBottom(follow = true)
+            scrollToBottom(resume = true)
         }
     }
 
@@ -1245,21 +1243,27 @@ class SqlLogPanel(
                 if (e.isPopupTrigger) showContextMenu(e)
             }
         })
-        // T-SqlLogPerf：尾部跟随的用户意图归因——滚动条事件里「程序性追加」（max 增大且 value 未动，
-        // 新条目进模型所致）不改跟随态；其余变化按「是否在底部」判定：滚离底部=停跟随，滚回底部=恢复。
         val scrollPane = JBScrollPane(list).apply {
             horizontalScrollBarPolicy = javax.swing.ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER
         }
-        scrollPane.verticalScrollBar.addAdjustmentListener { e ->
-            val bar = e.adjustable
-            val grew = bar.maximum > lastScrollMax
-            val value = bar.value
-            val valueUnmoved = value == lastScrollValue
-            lastScrollMax = bar.maximum
-            lastScrollValue = value
-            if (grew && valueUnmoved) return@addAdjustmentListener // 新条目进模型的程序性增长，非用户滚动
-            autoFollowTail = bar.maximum - (value + bar.visibleAmount) <= tailFollowSlackPx
+        listScrollPane = scrollPane
+        scrollPane.addMouseWheelListener { event ->
+            if (event.wheelRotation != 0) tailFollow.onUserScroll()
         }
+        scrollPane.verticalScrollBar.addMouseListener(object : MouseAdapter() {
+            override fun mousePressed(e: MouseEvent) {
+                tailFollow.onUserScroll()
+            }
+        })
+        val navigationKeys = setOf(KeyEvent.VK_UP, KeyEvent.VK_DOWN, KeyEvent.VK_PAGE_UP,
+            KeyEvent.VK_PAGE_DOWN, KeyEvent.VK_HOME, KeyEvent.VK_END)
+        val navigationListener = object : KeyAdapter() {
+            override fun keyPressed(e: KeyEvent) {
+                if (e.keyCode in navigationKeys) tailFollow.onUserScroll()
+            }
+        }
+        list.addKeyListener(navigationListener)
+        scrollPane.verticalScrollBar.addKeyListener(navigationListener)
         return scrollPane
     }
 
@@ -1345,8 +1349,8 @@ class SqlLogPanel(
             applyFullRebuild(newVisible, gen)
         }
         // T-SqlLogPerf：尾部跟随——仅当列表真的长高（新条目追加）才贴底；搜索/过滤收窄不打扰浏览位置
-        if (autoFollowTail && listModel.size() > modelSizeBefore) {
-            list.ensureIndexIsVisible(listModel.size() - 1)
+        if (tailFollow.shouldFollow && listModel.size() > modelSizeBefore) {
+            scrollToBottom(resume = false)
         }
 
         // 聚焦隐藏计数提示（聚焦层单独度量：输入 filtered → 输出 focused）
@@ -1436,6 +1440,7 @@ class SqlLogPanel(
         val chunk = mutableListOf<LogSqlEntry>()
         repeat(REFRESH_CHUNK_SIZE) { if (remaining.hasNext()) chunk.add(remaining.next()) }
         listModel.addAll(chunk)
+        if (chunk.isNotEmpty() && tailFollow.shouldFollow) scrollToBottom(resume = false)
         rebuildRemaining = if (remaining.hasNext()) remaining else null
         if (rebuildRemaining != null) {
             ApplicationManager.getApplication().invokeLater { appendRebuildChunk() }
