@@ -539,7 +539,7 @@ class SqlPreviewService(internal val project: Project) {
             }
             .map { it.name } + (pageSort?.extraParamNames ?: emptyList())
         // DerivedQueryConverter 解析条件树，SqlGenerator 生成的 SQL 含 ? 占位符
-        val sql = cn.song.mybatisplus.visualizer.sql.SqlGenerator.generate(statement)
+        val sql = cn.song.mybatisplus.visualizer.sql.SqlGenerator.generate(statement, compact = false, dialect = dialect)
         // T-J4：IN/NOT IN 条件参数接线——inClauseParameterOrdinals 序号对齐方法参数名
         // （过滤 Pageable 后的 paramNames 序），把 IN 参数挂进 buildJpaPreviewResult 的
         // inClauseParams（面板回填按逗号分割多值，对齐 JPQL/HQL 路径的 Result.inClauseParams 惯例）
@@ -815,7 +815,7 @@ class SqlPreviewService(internal val project: Project) {
             if (limited != null) statement = limited
         }
         // CriteriaQueryConverter 解析条件树，SqlGenerator 生成的 SQL 含 ? 占位符
-        val sql = cn.song.mybatisplus.visualizer.sql.SqlGenerator.generate(statement)
+        val sql = cn.song.mybatisplus.visualizer.sql.SqlGenerator.generate(statement, compact = false, dialect = dialect)
         val resolvedTable = model.entityClass?.let { JpaEntityResolver().resolve(it) }
         val tableName = model.entityClassName?.let { JpaEntityResolver.inferDecoratedTableName(it, project) } ?: ""
         // T-J10/J15/J22：方法级增强（Sort ORDER BY/锁/hints/返回类型 notes；LIMIT 已在语句模型级挂载，

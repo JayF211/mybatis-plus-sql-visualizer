@@ -201,6 +201,38 @@ class SqlPreviewServiceJpaQueryTest : BasePlatformTestCase() {
     /**
      * T-J10 负例：无分页/排序参数的派生查询不追加 LIMIT/ORDER BY（存量行为零变化）。
      */
+    fun testOracleDerivedLimitUsesResolvedDialectAtFinalGeneration() {
+        val settings = PluginSettings.getInstance()
+        val snapshot = settings.getState().copy()
+        try {
+            settings.state.dialectAuto = false
+            settings.state.dialect = "Oracle"
+            myFixture.configureByText(
+                "UserRepository.java",
+                """
+                public interface UserRepository extends JpaRepository<UserEntity, Long> {
+                    java.util.List<UserEntity> findTop3ByStatus(Integer status, Limit limit);
+                }
+                interface JpaRepository<T, ID> {}
+                class Limit {}
+                @javax.persistence.Entity
+                @javax.persistence.Table(name = "t_user")
+                class UserEntity {
+                    @javax.persistence.Id private Long id;
+                    private Integer status;
+                }
+                """.trimIndent(),
+            )
+            val result = newService().previewDerivedQuery(method("findTop3ByStatus"))
+            assertNotNull(result)
+            assertTrue("手动 Oracle 方言必须走生成器而非仅增强器：${result!!.sql}",
+                result.sql.contains("FETCH FIRST ? ROWS ONLY"))
+            assertTrue("Oracle 不得残留 MySQL LIMIT：${result.sql}", !result.sql.contains("LIMIT ?"))
+        } finally {
+            settings.loadState(snapshot)
+        }
+    }
+
     fun testJ10NoPageParamsKeepsSqlUnchanged() {
         myFixture.configureByText(
             "UserRepository.java",
