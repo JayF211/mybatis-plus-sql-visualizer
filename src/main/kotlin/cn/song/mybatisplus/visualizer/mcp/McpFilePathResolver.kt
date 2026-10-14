@@ -3,6 +3,8 @@ package cn.song.mybatisplus.visualizer.mcp
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VirtualFile
+import java.nio.file.Files
+import java.nio.file.Path
 
 /**
  * MCP 工具 filePath 统一解析（T-McpFilePathUnify，O-70）。
@@ -40,10 +42,10 @@ object McpFilePathResolver {
         val trimmed = rawPath.trim()
         if (trimmed.isEmpty()) return null
         val unified = trimmed.replace('\\', '/')
-        if (unified.contains("..")) return null
+        if (unified.contains("..") || unified.startsWith("//")) return null
         val base = projectBasePath?.replace('\\', '/')?.trimEnd('/')?.takeIf { it.isNotEmpty() } ?: return null
 
-        if (WINDOWS_DRIVE.containsMatchIn(unified)) {
+        if (WINDOWS_DRIVE.containsMatchIn(unified) || (base.startsWith('/') && unified.startsWith('/'))) {
             // 绝对路径：必须落在项目根之下（含项目根本身的情况由 findFileByPath 判目录后自然失败）
             return if (unified.startsWith("$base/")) unified else null
         }
@@ -52,7 +54,19 @@ object McpFilePathResolver {
         return if (rel.isEmpty()) null else "$base/$rel"
     }
 
+    /** 先解析实际磁盘目标，项目内符号链接若指向外部则不能成为 MCP 文件入口。 */
+    internal fun canonicalProjectFile(projectBasePath: String, resolvedPath: String): String? = runCatching {
+        val root = Path.of(projectBasePath).toRealPath()
+        val target = Path.of(resolvedPath).toRealPath()
+        if (!target.startsWith(root) || !Files.isRegularFile(target)) null
+        else target.toString().replace('\\', '/')
+    }.getOrNull()
+
     /** 平台：解析并取文件；null = 形态非法 / 越出项目 / 不存在（调用方统一给 SOURCE_NOT_FOUND）。 */
-    fun resolveFile(project: Project, rawPath: String): VirtualFile? =
-        resolveInsideProject(project.basePath, rawPath)?.let { LocalFileSystem.getInstance().findFileByPath(it) }
+    fun resolveFile(project: Project, rawPath: String): VirtualFile? {
+        val base = project.basePath ?: return null
+        val resolved = resolveInsideProject(base, rawPath) ?: return null
+        val canonical = canonicalProjectFile(base, resolved) ?: return null
+        return LocalFileSystem.getInstance().findFileByPath(canonical)
+    }
 }

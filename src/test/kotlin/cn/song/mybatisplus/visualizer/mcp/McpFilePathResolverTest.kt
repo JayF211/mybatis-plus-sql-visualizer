@@ -2,7 +2,9 @@ package cn.song.mybatisplus.visualizer.mcp
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assume.assumeTrue
 import org.junit.Test
+import java.nio.file.Files
 
 /**
  * T-McpFilePathUnify（O-70）filePath 统一解析单测（纯逻辑层，testFast 桶）。
@@ -31,6 +33,21 @@ class McpFilePathResolverTest {
     }
 
     @Test
+    fun `POSIX项目内绝对路径可用_项目外和相似前缀拒绝`() {
+        val posixRoot = "/home/dev/project"
+        assertEquals("$posixRoot/src/a.xml", McpFilePathResolver.resolveInsideProject(posixRoot, "/home/dev/project/src/a.xml"))
+        assertEquals("$posixRoot/src/a.xml", McpFilePathResolver.resolveInsideProject(posixRoot, "src/a.xml"))
+        assertNull(McpFilePathResolver.resolveInsideProject(posixRoot, "/home/dev/project-other/src/a.xml"))
+        assertNull(McpFilePathResolver.resolveInsideProject(posixRoot, "/etc/passwd"))
+        assertNull(McpFilePathResolver.resolveInsideProject(posixRoot, "/src/a.xml"))
+    }
+
+    @Test
+    fun `UNC绝对路径不可伪装项目相对路径`() {
+        assertNull(McpFilePathResolver.resolveInsideProject(base, "//server/share/a.xml"))
+    }
+
+    @Test
     fun `项目外绝对路径_拒绝`() {
         assertNull(McpFilePathResolver.resolveInsideProject(base, "C:/Windows/system32/drivers/etc/hosts"))
         assertNull(McpFilePathResolver.resolveInsideProject(base, "F:/other-project/src/a.xml"))
@@ -51,5 +68,40 @@ class McpFilePathResolverTest {
         assertNull(McpFilePathResolver.resolveInsideProject(null, "F:/proj/demo/src/a.xml"))
         assertNull(McpFilePathResolver.resolveInsideProject(base, ""))
         assertNull(McpFilePathResolver.resolveInsideProject(base, "   "))
+    }
+
+    @Test
+    fun `真实文件路径只接受项目目录内的常规文件`() {
+        val root = Files.createTempDirectory("mcp-project-")
+        val source = Files.createDirectory(root.resolve("src"))
+        val inside = Files.writeString(source.resolve("a.xml"), "<mapper/>")
+        val outside = Files.createTempFile("mcp-outside-", ".xml")
+        try {
+            assertEquals(inside.toRealPath().toString().replace('\\', '/'),
+                McpFilePathResolver.canonicalProjectFile(root.toString(), inside.toString()))
+            assertNull(McpFilePathResolver.canonicalProjectFile(root.toString(), outside.toString()))
+            assertNull(McpFilePathResolver.canonicalProjectFile(root.toString(), source.toString()))
+        } finally {
+            Files.deleteIfExists(inside)
+            Files.deleteIfExists(source)
+            Files.deleteIfExists(root)
+            Files.deleteIfExists(outside)
+        }
+    }
+
+    @Test
+    fun `项目内链接指向项目外时拒绝`() {
+        val root = Files.createTempDirectory("mcp-project-")
+        val outside = Files.createTempFile("mcp-outside-", ".xml")
+        val link = root.resolve("linked.xml")
+        try {
+            val created = runCatching { Files.createSymbolicLink(link, outside) }
+            assumeTrue("当前系统无法创建符号链接：${created.exceptionOrNull()?.javaClass?.simpleName}", created.isSuccess)
+            assertNull(McpFilePathResolver.canonicalProjectFile(root.toString(), link.toString()))
+        } finally {
+            Files.deleteIfExists(link)
+            Files.deleteIfExists(root)
+            Files.deleteIfExists(outside)
+        }
     }
 }
