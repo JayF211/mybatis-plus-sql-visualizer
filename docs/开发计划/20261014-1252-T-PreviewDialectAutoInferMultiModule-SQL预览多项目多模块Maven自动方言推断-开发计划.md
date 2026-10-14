@@ -3,7 +3,7 @@
 - 占号：**O-145 / R95 / D155 / V178**（2026-10-14 13:44 再次全仓复核；O-144 已由 T-XmlGap 占用，本组仅本计划在用）
 - 日期：2026-10-14
 - 基线：`master@760f4670`（`release: v2026.10.13 发行面纳入当前 HEAD 增量`）
-- 状态：调研完成、方案定案、待实施；本轮只更新开发计划，不改生产代码
+- 状态：W0 跨版本签名门已实施并反向验红；W1~W8 尚未完成。本轮不启动沙盒真机，涉及实际 SQL PSI/Runner 的 V178 项继续待验。
 - 用户目标：插件应做到“真智能”，默认不要求用户主动配置 SQL Visualizer 方言；优先复用 IDEA 已有 SQL 方言、SQL 解析作用域与运行时上下文，只有证据缺失或冲突时才让用户介入
 - 关联：`T-DialectAutoInfer` 已实现基础 URL 推断；`T-PreviewExecDsDialect`（O-136）解决预览执行 Runner 的方言过滤。二者都没有解决“按原始源文件/注入 SQL/模块上下文求有效方言”的问题
 
@@ -166,12 +166,12 @@ PreviewSourceContext
   sqlPsiFile                  // 普通 SQL 或 injected SQL；可空
   module / canonicalModuleKey
   origin                      // PSI、XML、LOG、HISTORY、MANUAL、MCP
-  capturedJdbcUrl             // 仅日志条目精确 URL；可空
+  capturedJdbcUrl             // 仅本次确有 URL 的新事件；旧历史只存库标，不得反推；可空
   selectedDataSourceId        // 本次明确选择/绑定；可空
 ```
 
 - Java/Kotlin/Mapper/XML gutter 与快捷键入口直接携带原始 PSI，不再只传 `文件名:行号`。
-- 日志/历史通过 `sourceFile` 尝试恢复宿主文件，同时单独携带条目 JDBC URL；恢复失败不伪造模块。
+- 日志/历史通过 `sourceFile` 尝试恢复宿主文件，但同路径多模块命中时不得任取第一个模块。现有条目和旧历史仅持久化脱敏数据库角标，**没有精确 JDBC URL**；仅新事件确实携带且安全保留 URL 时才可赋 `capturedJdbcUrl`，凭据/持久化策略须另行定案，旧历史一律按缺失证据降级。
 - `PreviewResult` 仍保持纯结果模型；上下文由对话框/面板瞬态持有，避免污染历史序列化和复制语义。
 
 ### 5.2 DialectDecision
@@ -227,7 +227,7 @@ ExecutionDialectCheck
 
 #### E. 执行目标校验（不参与既有渲染投票）
 
-10. 本次执行选择的数据源/已绑定活控制台是**目标事实**，由 `ExecutionDialectCheck` 与当前 `DialectDecision` 比较：
+10. 本次执行选择的数据源/已绑定活控制台是**目标事实**，由 `ExecutionDialectCheck` 与当前 `DialectDecision` 比较。校验落点必须位于 `DataSourceSelector` 确定实际 Runner/活控制台后、提交前；现有 `SqlExecutor.execute(dataSource=…)` 并未使用该参数，面板侧提前比较上次使用数据源不能充当闸门：
     - 自动模式且目标方言不同：以目标数据源重新求一次自动决策，重渲染、更新临时文件映射、重建 PSI/Runner，用户确认新 SQL 后再提交；
     - 手动模式且目标方言不同：返回 `MANUAL_CONFLICT`，不得静默覆盖用户手动方言，也不得直接执行；提示改方言或换数据源；
     - 目标方言未知：SELECT 可提示后继续，DML/EXPLAIN 按安全策略要求显式确认或阻断。
@@ -289,7 +289,7 @@ mapOwnedFile(project, ownedVirtualFile, languageId)
 | 编号 | 待验证项 | 成功判据 | 失败时降级 |
 |---|---|---|---|
 | V178-1 | 253/262 的 `SqlDataSourceMappings` 精确签名与返回元素类型 | 跨版本检查器三目标均解析成功，真实 SQL PSI 返回与 IDEA 设置页一致的候选集合 | 该版本只读 `SqlDialectMappings`，解析作用域证据记不可用 |
-| V178-2 | Java/Kotlin 字符串和 Mapper XML 的 injected SQL PSI 覆盖率，以及 243/253 的 `SqlDialectMappings` 对 `VirtualFileWindow`/original-file 继承 | 仅在内置/框架/项目注入真实存在时取得 SQL PsiFile；三版本读取 scope/dialect 与 IDEA 编辑器一致；无注入时明确返回 null | 官方文档只证明可注入位置，不保证这些宿主自动形成 SQL PSI；不得伪造 injection，改走宿主文件有效 dialect、日志 URL、自动学习和共识层 |
+| V178-2 | Java/Kotlin 字符串和 Mapper XML 的 injected SQL PSI 覆盖率，以及 243/253 的 `SqlDialectMappings` 对 `VirtualFileWindow`/original-file 继承；同路径在多个模块存在时的来源歧义 | 仅在真实注入在场时取得 SQL PsiFile；三版本 scope/dialect 与编辑器一致；同相对路径命中多个模块不取首个 | 不伪造 injection；宿主文件和模块均无法唯一确定时不借当前跳转路径猜方言，改走明确绑定或证据不足 |
 | V178-3 | 数据源对象到稳定 UUID、URL、平台 DBMS/dialect 的 243/253/262 取值 | 重命名 UUID 不变、改 URL 可感知、删除后绑定失效 | UUID 不可用时不持久学习，仅保留本次会话精确证据 |
 | V178-4 | 执行目标选择后能在提交前安全重渲染/重建 PSI 与 Runner | 方言变化后预览文本、IDE mapping、Runner、console model 四者一致 | 已知冲突时阻止执行并要求手动方言/换数据源 |
 | V178-5 | mapping/scope 变更后的低成本刷新 | 短 TTL、PSI/VFS 变化、设置页重开和显式刷新均能更新结果 | 不引入常驻轮询；保留“重新检测”动作 |
@@ -299,7 +299,7 @@ mapOwnedFile(project, ownedVirtualFile, languageId)
 | 波次 | 任务 | 内容 | 验证 |
 |---|---|---|---|
 | W0 | 跨版本签名门 | 扩展 `PlatformSignatureChecker`，先锁定 243/253/262 方言/解析作用域/数据源身份入口 | 三目标签名绿；临时改错方法名必须红 |
-| W1 | 源上下文贯通 | 新增 `PreviewSourceContext`；Java/Kotlin/XML/日志/历史/手工入口传原始 PSI、SQL PSI、模块与精确 URL | 各入口上下文矩阵；摘掉 SQL PSI 传递，IDE scope 用例必红 |
+| W1 | 源上下文贯通 | 新增瞬态 `PreviewSourceContext`；Java/XML 等入口传原始 PSI、可得的 SQL PSI 与模块。Kotlin Wrapper 在表/列/参数解析未完成前不冒认；旧历史不含精确 URL，按证据缺失处理，新事件携带 URL 需先过凭据/持久化授权 | 各入口缺失/歧义矩阵；摘掉 SQL PSI 传递，IDE scope 用例必红 |
 | W2 | IDEA 上下文桥 | 实现 `IdeaSqlContextBridge`：平台求有效 dialect、datasource scope、ID/URL；DatabaseTools 缺失降级 | 243/253/262 定向测试 + Community 缺类用例 |
 | W3 | 统一决策器 | `DialectDecision`、证据融合、冲突/歧义/共识模型；移除 auto 分支的 `firstUrl` 单值决策 | 纯函数表驱动；候选换序结果不变 |
 | W4 | 生成链收口 | `DialectRegistry`、`SqlPreviewService`、XML/JPA/批量/CRUD/PSI 方言入口统一消费决策 | 现有方言语法测试 + 新上下文端到端测试 |
@@ -325,7 +325,7 @@ mapOwnedFile(project, ownedVirtualFile, languageId)
 - Java/Kotlin `// language=SQL`、`@Language("SQL")`、框架自动注入；
 - Mapper XML tag/attribute injected SQL；
 - 无 injection 的 Wrapper/JPA 链；
-- SQL 日志/历史的精确 JDBC URL；
+- 仅确实保存精确 URL 的新日志；旧历史仅存脱敏角标，精确 URL 缺席须返回 `UNAVAILABLE`/低置信度；
 - 来源文件已删除、路径无法恢复、手工 SQL。
 
 每类都要断言证据来源，不只断言最终方言名。
@@ -369,9 +369,11 @@ mapOwnedFile(project, ownedVirtualFile, languageId)
 - `SqlResolveMappings` / `SqlDataSourceMappings` 属 DatabaseTools 实现层，必须反射隔离并纳入跨版本签名门。
 - `setMapping` 会触发属性推送和 PSI 重解析，写操作继续只在 EDT，读取放后台/ReadAction；禁止在设置 `apply` 阻塞扫描。
 - 收口期间主控不得在权威全量测试后继续修改 `src/main`；若修复触达生产代码必须重跑。
-- 子任务只跑定向测试；全部完成后单派只读收口位跑一次 `testShards --no-configuration-cache`。本功能新增平台反射入口，属于大改动，最终必须跑 `verifyGate`/`verifyPlugin` 三目标和 243/253/262 runIde 走查。
+- 子任务只跑定向测试；全部生产改动冻结后统一跑一次 `testShards --no-configuration-cache`。新增平台反射入口属于大改动，最终还须跑 `verifyGate`/`verifyPlugin` 三目标。本轮用户明确禁止启动沙盒真机验收，243/253/262 的 runIde 走查单列「本轮未验证」，不得用 headless 测试冒充完成。
 
 ## 十三、实施记录
 
 - 2026-10-14 12:52：初版立项，确认当前第一项目/第一数据源推断不适用于多项目多模块。
 - 2026-10-14 13:44：按用户“真智能、无需主动配置插件方言”的目标完成第二轮调研并重写方案。证据来源为 JetBrains IDEA 2026.2 官方文档、本机 IDEA 2026.2.3、缓存中的 2026.2.1/2025.3.5/2024.3.7.1 DatabaseTools 二进制反编译及当前仓库调用链。定案为“手动显式值/当前条目的精确事实 → 实际 SQL PSI 的 configured Resolution Scope + IDEA 有效 Dialect → 模块被动学习 → 项目候选共识”的渲染证据融合模式，并把执行目标单列为提交前一致性校验；默认 `ALL_DATA_SOURCES` 明确降为候选目录，不冒充用户绑定；模块绑定降为冲突修复工具；本轮未修改生产代码、未运行构建测试、未提交。
+- 2026-10-15 实施前提勘误：现有 `AgentEventAdapter` 将 URL 归约为脱敏库标，`LogSqlEntry`/自动保存/历史读回未保留完整 URL，旧历史不可能给 `EXACT`；同一路径命中多个模块时 `SourcePathResolver` 取首个也不能作为模块证据。新 URL 的凭据过滤与持久化格式属于另行授权事项，本轮先按缺失证据降级，不伪造精确来源。执行目标需在实际 Runner/活控制台确定后校验，`SqlExecutor.execute` 的 dataSource 参数当前未参与选择。
+- 2026-10-15 W0 阶段性落地：`PlatformSignatureChecker` 新增 DatabaseTools SQL dialect/scope/dataSource 三组反射签名，补上 262 独立类加载器缺失的 `libraries-misc-plugin` XStream jar。`testExternal --tests PlatformSignatureCrossVersionTest --no-configuration-cache` **1/0/0**，打印覆盖 **243/253/262**；临时将 `getProvidedDataSources` 改成不存在的方法名，三目标均报 `NoSuchMethodException` 且测试 1 红，恢复后复绿。仍未验证 `DbDataSource` 到稳定 URL/UUID 的桥、243/253 注入 SQL PSI 的继承语义以及实际 Runner 拦截点；本条不是 W1~W8 完成声明。

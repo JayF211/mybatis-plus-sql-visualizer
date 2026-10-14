@@ -29,6 +29,9 @@ public class PlatformSignatureChecker {
         File dbnLib = new File(distroRoot, "plugins/DatabaseTools/lib");
         collectJars(dbnLib, urls);
         collectJars(new File(dbnLib, "modules"), urls);
+        File miscLib = new File(distroRoot, "plugins/libraries-misc-plugin/lib");
+        collectJars(miscLib, urls);
+        collectJars(new File(miscLib, "modules"), urls);
         URLClassLoader loader = new URLClassLoader(urls.toArray(new URL[0]), null);
 
         int missing = 0;
@@ -91,6 +94,7 @@ public class PlatformSignatureChecker {
         //    URLClassLoader 不具备，true 形态会 NoClassDefFoundError 假红）。
         missing += checkPerHostProbeApis(loader);
         missing += checkEditorColorsTopic(loader);
+        missing += checkSqlContextApis(loader, dbnLib.isDirectory());
 
         if (missing > 0) {
             System.out.println("RESULT MISSING " + missing);
@@ -216,6 +220,45 @@ public class PlatformSignatureChecker {
                     "EditorColorsListener.globalSchemeChange(EditorColorsScheme)");
         } catch (Throwable t) {
             System.out.println("MISS editor color scheme change topic: " + t);
+            return 1;
+        }
+    }
+
+    private static int checkSqlContextApis(ClassLoader loader, boolean databaseToolsPresent) {
+        if (!databaseToolsPresent) {
+            System.out.println("SKIP DatabaseTools SQL context APIs (bundled plugin absent)");
+            return 0;
+        }
+        try {
+            Class<?> project = Class.forName("com.intellij.openapi.project.Project", false, loader);
+            Class<?> psiFile = Class.forName("com.intellij.psi.PsiFile", false, loader);
+            Class<?> virtualFile = Class.forName("com.intellij.openapi.vfs.VirtualFile", false, loader);
+            Class<?> dataSources = Class.forName("com.intellij.sql.dialects.SqlDataSourceMappings", false, loader);
+            Class<?> dialects = Class.forName("com.intellij.sql.dialects.SqlDialectMappings", false, loader);
+            Class<?> scopes = Class.forName("com.intellij.sql.dialects.SqlResolveMappings", false, loader);
+            int missing = 0;
+            missing += check(dataSources.getMethod("getInstance", project), "SqlDataSourceMappings.getInstance(Project)");
+            for (String name : new String[] {"getDataSources", "getProvidedDataSources"}) {
+                Method m = dataSources.getMethod(name, psiFile);
+                missing += check(m, "SqlDataSourceMappings." + name + "(PsiFile)");
+                if (!List.class.isAssignableFrom(m.getReturnType())) {
+                    System.out.println("MISS " + name + " does not return List: " + m.getReturnType());
+                    missing++;
+                }
+            }
+            missing += check(dialects.getMethod("getInstance", project), "SqlDialectMappings.getInstance(Project)");
+            missing += check(dialects.getMethod("getMapping", project, virtualFile), "SqlDialectMappings.getMapping(Project,VirtualFile)");
+            missing += check(dialects.getMethod("getMapping", virtualFile), "SqlDialectMappings.getMapping(VirtualFile)");
+            missing += check(dialects.getMethod("getAvailableValues"), "SqlDialectMappings.getAvailableValues()");
+            missing += check(scopes.getMethod("getInstance", project), "SqlResolveMappings.getInstance(Project)");
+            missing += check(scopes.getMethod("getMapping", virtualFile), "SqlResolveMappings.getMapping(VirtualFile)");
+            missing += check(scopes.getMethod("getConfiguredMapping", virtualFile), "SqlResolveMappings.getConfiguredMapping(VirtualFile)");
+            return missing;
+        } catch (ClassNotFoundException e) {
+            System.out.println("MISS DatabaseTools SQL context API class: " + e.getMessage());
+            return 1;
+        } catch (Throwable t) {
+            System.out.println("MISS DatabaseTools SQL context API: " + t);
             return 1;
         }
     }
