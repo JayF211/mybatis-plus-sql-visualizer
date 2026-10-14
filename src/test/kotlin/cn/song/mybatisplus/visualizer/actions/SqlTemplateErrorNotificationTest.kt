@@ -26,15 +26,23 @@ import org.junit.Assert.assertTrue
  */
 class SqlTemplateErrorNotificationTest : BasePlatformTestCase() {
 
+    private fun noopRunnable(): Runnable = object : Runnable {
+        override fun run() = Unit
+    }
+
+    private fun runnable(block: () -> Unit): Runnable = object : Runnable {
+        override fun run() = block()
+    }
+
     fun `test P2_有锚点_挂定位与复制两动作`() {
-        val actions = SelectedTableSqlTemplateActionsKt.sqlTemplateErrorActions(Runnable {}, Runnable {})
+        val actions = SelectedTableSqlTemplateActionsKt.sqlTemplateErrorActions(noopRunnable(), noopRunnable())
         assertEquals(2, actions.size)
         assertEquals("execute.error.locate", actions[0].titleKey)
         assertEquals("panel.copyError", actions[1].titleKey)
     }
 
     fun `test P2_无锚点_退化为只挂复制`() {
-        val actions = SelectedTableSqlTemplateActionsKt.sqlTemplateErrorActions(null, Runnable {})
+        val actions = SelectedTableSqlTemplateActionsKt.sqlTemplateErrorActions(null, noopRunnable())
         assertEquals(1, actions.size)
         assertEquals("panel.copyError", actions.single().titleKey)
     }
@@ -42,7 +50,7 @@ class SqlTemplateErrorNotificationTest : BasePlatformTestCase() {
     fun `test P2_复制动作写入剪贴板`() {
         val msg = "Table 'mpj_demo.t_order' doesn't exist"
         val copyAction =
-            SelectedTableSqlTemplateActionsKt.sqlTemplateErrorActions(null, Runnable { UiTextClipboard.copy(msg) }).single()
+            SelectedTableSqlTemplateActionsKt.sqlTemplateErrorActions(null, runnable { UiTextClipboard.copy(msg) }).single()
         // k2j 适配：run 是 Java 公共字段（Runnable），裸 .run() 会解析到 kotlin.run{} 扩展——字段取值后再调
         copyAction.run.run()
         assertEquals(msg, UiTextClipboard.readText())
@@ -50,7 +58,7 @@ class SqlTemplateErrorNotificationTest : BasePlatformTestCase() {
 
     fun `test P2_定位动作执行锚点跳转回调`() {
         var jumped = false
-        val locateAction = SelectedTableSqlTemplateActionsKt.sqlTemplateErrorActions(Runnable { jumped = true }, Runnable {}).first()
+        val locateAction = SelectedTableSqlTemplateActionsKt.sqlTemplateErrorActions(runnable { jumped = true }, noopRunnable()).first()
         locateAction.run.run()
         assertTrue("定位动作点击应触发锚点跳转回调", jumped)
     }
@@ -58,8 +66,8 @@ class SqlTemplateErrorNotificationTest : BasePlatformTestCase() {
     fun `test P2_通知接线_动作数量与文案与面板一致`() {
         val notification = SelectedTableSqlTemplateActionsKt.buildSqlTemplateErrorNotification(
             "Table 'mpj_demo.t_order' doesn't exist",
-            Runnable {},
-            Runnable {},
+            noopRunnable(),
+            noopRunnable(),
         )
         assertEquals(2, notification.actions.size)
         assertEquals(

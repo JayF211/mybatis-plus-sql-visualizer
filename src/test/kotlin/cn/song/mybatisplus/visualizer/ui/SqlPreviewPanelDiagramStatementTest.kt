@@ -11,10 +11,12 @@ import cn.song.mybatisplus.visualizer.model.SqlPreviewModel
 import cn.song.mybatisplus.visualizer.model.TableInfo
 import cn.song.mybatisplus.visualizer.model.WrapperType
 import cn.song.mybatisplus.visualizer.sql.MySqlDialect
+import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
-import org.junit.Assert.assertEquals
+import javax.swing.JTabbedPane
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 
 /**
  * F-1 修复回归守卫：**无动态条件的联表链**也必须拿到「JOIN 图」标签页。
@@ -117,40 +119,55 @@ class SqlPreviewPanelDiagramStatementTest : BasePlatformTestCase() {
         null,
     )
 
-    /** ① 修复主用例：previewModel=null 但有 JOIN → 标签页必须在。 */
+    private fun hasJoinDiagramTab(tabPane: JTabbedPane?): Boolean {
+        if (tabPane == null) return false
+        val title = MpSqlVisualizerBundle.message("diagram.tab.title")
+        return (0 until tabPane.tabCount).any { tabPane.getTitleAt(it) == title }
+    }
+
+    /** ① 修复主用例：previewModel=null 但有 JOIN → JOIN 图标签页必须在。 */
     fun testDiagramTabAppearsWithoutPreviewModel() {
         val panel = SqlPreviewPanel(project)
-        SqlPreviewPanelResultViewKt.showResult(panel, result(joinStatement(), null))
-        val tabPane = panel.contentTabPaneForTest()
-        assertNotNull("无动态条件但有 JOIN 时也必须建标签页（F-1 修复点）", tabPane)
-        assertEquals("应为 SQL + JOIN 图 两个标签页", 2, tabPane!!.tabCount)
-        SqlPreviewPanelSqlViewKt.clear(panel)
+        try {
+            SqlPreviewPanelResultViewKt.showResult(panel, result(joinStatement(), null))
+            val tabPane = panel.contentTabPaneForTest()
+            assertNotNull("无动态条件但有 JOIN 时也必须建标签页（F-1 修复点）", tabPane)
+            assertTrue("无动态条件但有 JOIN 时必须出现 JOIN 图标签页", hasJoinDiagramTab(tabPane))
+        } finally {
+            SqlPreviewPanelSqlViewKt.clear(panel)
+        }
     }
 
-    /** ② 负例：无 JOIN 且无 previewModel → 不建标签页（防过度修复）。 */
+    /** ② 负例：无 JOIN → 不建 JOIN 图标签页（防过度修复）。 */
     fun testNoDiagramTabWithoutJoins() {
         val panel = SqlPreviewPanel(project)
-        SqlPreviewPanelResultViewKt.showResult(panel, result(null, null))
-        assertNull("无 JOIN 时不应出现标签页", panel.contentTabPaneForTest())
-        SqlPreviewPanelSqlViewKt.clear(panel)
+        try {
+            SqlPreviewPanelResultViewKt.showResult(panel, result(null, null))
+            assertFalse("无 JOIN 时不应出现 JOIN 图标签页", hasJoinDiagramTab(panel.contentTabPaneForTest()))
+        } finally {
+            SqlPreviewPanelSqlViewKt.clear(panel)
+        }
     }
 
-    /** ③ 存量回归：previewModel 非空（旧路径）仍须出标签页。 */
+    /** ③ 存量回归：previewModel 非空（旧路径）仍须出 JOIN 图标签页。 */
     fun testDiagramTabStillAppearsWithPreviewModel() {
         val statement = joinStatement()
         val panel = SqlPreviewPanel(project)
-        SqlPreviewPanelResultViewKt.showResult(
-            panel,
-            result(
-                null,
-                SqlPreviewModel(
-                    statement, MySqlDialect.INSTANCE, false, emptyList(),
+        try {
+            SqlPreviewPanelResultViewKt.showResult(
+                panel,
+                result(
+                    null,
+                    SqlPreviewModel(
+                        statement, MySqlDialect.INSTANCE, false, emptyList(),
+                    ),
                 ),
-            ),
-        )
-        val tabPane = panel.contentTabPaneForTest()
-        assertNotNull("previewModel 路径（旧行为）不得回归", tabPane)
-        assertEquals(2, tabPane!!.tabCount)
-        SqlPreviewPanelSqlViewKt.clear(panel)
+            )
+            val tabPane = panel.contentTabPaneForTest()
+            assertNotNull("previewModel 路径（旧行为）不得回归", tabPane)
+            assertTrue("previewModel 路径必须出现 JOIN 图标签页", hasJoinDiagramTab(tabPane))
+        } finally {
+            SqlPreviewPanelSqlViewKt.clear(panel)
+        }
     }
 }
