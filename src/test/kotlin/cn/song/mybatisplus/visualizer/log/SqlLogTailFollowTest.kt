@@ -129,6 +129,43 @@ class SqlLogTailFollowTest : BasePlatformTestCase() {
         }
     }
 
+    fun test缓冲已满并淘汰头部时仍跟随新SQL() {
+        val manager = SqlLogManager(project)
+        val panel = SqlLogPanel(project, manager)
+        try {
+            manager.entries.maxEntries = 80
+            panel.setSize(460, 420)
+            fun layout(component: java.awt.Component) {
+                if (component is java.awt.Container) {
+                    component.doLayout()
+                    component.components.forEach(::layout)
+                }
+            }
+            layout(panel)
+            for (index in 1..80) {
+                manager.entries.addEntry(LogSqlEntry("SELECT $index", "SELECT $index", emptyList(), timestamp = index.toLong()))
+            }
+            com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+            layout(panel)
+            val bar = requireNotNull(panel.listScrollPaneForTest).verticalScrollBar
+            assertTrue("夹具须有可滚动内容", bar.maximum > bar.visibleAmount + 100)
+            assertEquals(80, panel.list.model.size)
+            panel.resumeTailFollowForTest()
+            bar.value = 0
+            assertEquals(TailFollowMode.FOLLOWING, panel.tailFollowModeForTest)
+
+            manager.entries.addEntry(LogSqlEntry("SELECT 81", "SELECT 81", emptyList(), timestamp = 81L))
+            com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+            layout(panel)
+            assertEquals("新 SQL 淘汰旧行后列表长度不变", 80, panel.list.model.size)
+            assertTrue("跟随态仍须贴底（value=${bar.value}, max=${bar.maximum}, extent=${bar.visibleAmount}）",
+                bar.value + bar.visibleAmount >= bar.maximum - 1)
+        } finally {
+            panel.dispose()
+            manager.dispose()
+        }
+    }
+
     fun test程序性列表刷新不改变用户暂停状态() {
         val manager = SqlLogManager(project)
         val panel = SqlLogPanel(project, manager)

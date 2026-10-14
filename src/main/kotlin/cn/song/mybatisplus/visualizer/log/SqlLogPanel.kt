@@ -1605,11 +1605,14 @@ class SqlLogPanel(
         val evicted = manager.entries.drainEvictedCount()
 
         val modelSizeBefore = listModel.size()
+        val visibleTailSequenceBefore = lastRendered.lastOrNull()?.sequenceNumber ?: 0L
         if (!applyIncremental(newVisible, evicted)) {
             applyFullRebuild(newVisible, gen)
         }
-        // T-SqlLogPerf：尾部跟随——仅当列表真的长高（新条目追加）才贴底；搜索/过滤收窄不打扰浏览位置
-        if (tailFollow.shouldFollow && listModel.size() > modelSizeBefore) {
+        val tailAdvancedAtCapacity = evicted > 0 &&
+            (newVisible.lastOrNull()?.sequenceNumber ?: 0L) > visibleTailSequenceBefore
+        // 缓冲区满时头部淘汰与尾部追加相抵，模型长度不变；只随确有新可见条目时贴底。
+        if (tailFollow.shouldFollow && (listModel.size() > modelSizeBefore || tailAdvancedAtCapacity)) {
             scrollToBottom(resume = false)
         }
 
