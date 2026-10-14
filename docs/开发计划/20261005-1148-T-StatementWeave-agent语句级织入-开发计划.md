@@ -202,3 +202,11 @@ IDE 侧既有地基：`AgentEventAdapter` 事件消费、`AgentUrlRegistry`/`Jdb
 - premain 路线（增强开着启动）：`premain 会话建立：pid=35260（启动即捕获）` → 面板 #3「[18:34:15] 11ms [DM（达梦）]」。
 - 截图存 `F:/code/Java/Gitee/SongRenShuo/mpsv-walk/`：`ide-21-attach.png`（安装读数行）、`ide-23-list.png`（面板三条目）、`ide-34-crop.png`（补全候选）。
 - 收工核对：8082 closed、无残留 java/fsnotifier、demo 仓与 dev-bak 工作树零改动。
+
+## 七D、首条事件取证行去 SQL 原文（2026-10-14）
+
+- **背景**：用户报障宿主控制台有插件打点噪音，逐行核到本计划落的「织入通道首条事件已产出」行——原带 `sqlHead=`（SQL 前 80 字符，见上文 §七C 的读数实例）。
+- **判据**：该行的用途是「钩子在产」的宿主侧证据（与 IDE 侧「首条事件已到达」配对三分故障域），SQL 原文对判读无贡献；而它**不过 agent 的脱敏开关**（脱敏只作用于事件载荷），Statement 路径的 SQL 可能含字面量（PreparedStatement 路径虽是占位符版也无打印必要）。
+- **处置**：`sqlHead=` → `sqlLen=`（只留长度）。行内判读字段 = op / sqlLen / registryUnresolved，宿主日志不再留业务文本，三分故障域能力不变。
+- **回归**：`WovenEventsFirstFireDiagTest` 增 `sqlLen=15` 正断言 + 「不得含 SELECT/FROM t」负断言（后者即本改动的守卫，回退 `sqlHead` 必红）。同批核过 `AttachPoolWarmGateTest` 只按行首前缀摘行、不解析 `sqlHead`，不受影响。
+- **同批核过但未改**：`[SqlVisAgent] attach retransform:` 行已由 `install` 的幂等闸（`installed` 静态位 + `sqlvis.agent.active` 系统属性，两闸都在打印之前）保证**每 JVM 至多一行**，无需另加去重；每个新 JVM（应用重启）各一行属预期。

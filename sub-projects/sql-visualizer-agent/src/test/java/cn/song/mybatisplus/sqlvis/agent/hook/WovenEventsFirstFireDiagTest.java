@@ -9,6 +9,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 /**
@@ -17,7 +18,7 @@ import static org.junit.Assert.assertTrue;
  * 现场：attach 后面板零条目时，「agent 没产事件」与「IDE 消费链丢事件」无从区分（对端
  * markReceived 计数无宿主侧出口）。本守卫锁定首条 stderr 行行为：
  * <ul>
- *   <li>首条 emit 恰打一行（含 op / sqlHead / registryUnresolved），宿主应用控制台可见；</li>
+ *   <li>首条 emit 恰打一行（含 op / sqlLen / registryUnresolved，**不含 SQL 原文**），宿主应用控制台可见；</li>
  *   <li>第二条起零输出（AtomicBoolean 一次，不刷屏宿主日志）；</li>
  *   <li>disabled / 空 SQL 短路路径不打点（未产事件的路径保持零噪音）。</li>
  * </ul>
@@ -56,6 +57,9 @@ public class WovenEventsFirstFireDiagTest {
         assertTrue("取证行须带 op（现场按 op 分流 execute 族形态）", first.contains("op=execute"));
         assertTrue("取证行须带盲区计数（与 registryUnresolved 现场对账）",
                 first.contains("registryUnresolved=0"));
+        // 2026-10-14：行内改带长度、不带原文——本行不过脱敏开关，故从源头不许落业务文本
+        assertTrue("取证行须带 SQL 长度（取代原 sqlHead 的判读位）", first.contains("sqlLen=15"));
+        assertFalse("取证行不得含 SQL 原文: " + first, first.contains("SELECT") || first.contains("FROM t"));
         final int linesAfterFirst = captured.size();
         WovenEvents.emit(stmt, "executeQuery", "SELECT 1", null, null, System.nanoTime(), null);
         assertEquals("只打首条——后续事件零输出（防宿主日志刷屏）", linesAfterFirst, captured.size());
