@@ -172,6 +172,8 @@ W0 的验收是能从单条诊断判断 V180-1/2，而不是仅靠 UI 猜测。�
 - **反向验证探针 1（摘融合分支）**：`REVERSE_PROBE_MERGE_DISABLED=true` 使融合分支短路 → 59 例 **恰 3 红**（控制台先到_agent 后到_融合升级 / MP 分页伪标记升级 / agent 先到_控制台后到_不降级），其余 56 例保绿（含「只补空不覆盖」「融合条目淘汰回收」两条——其判别点不依赖融合本身，如实登记）→ 还原后复跑绿。
 - **反向验证探针 2（强制空值覆盖）**：`mergeDuplicateEntry` 的源码规则临时改为无条件取 incoming → 59 例 **恰 1 红**（agent 先到_控制台后到_不降级，即「真实源码不被空值覆盖」断言）→ 还原后复跑绿。
 - 探针残留复核：`rg REVERSE_PROBE src/` = 0 命中；探针常量与注释均已删除。
+- **被改文件的守护测试复跑**（本次改动触达 `AgentManager.updateOnline` 与桥/EP 入队点，补跑其守护类）：`AgentManagerIntakeGateTest` 20（含既有「在线且确认采集_桥封」/「接管沿_项目缓冲去重索引按通道纪元重置」用例）+ `SqlLogManagerBehaviorTest` 35 + `SqlLogConsoleBridgeMarkerTest` 13 + `SqlLogCaptureRealtimeScenarioTest` 9 + `EpBridgeSinglePathTest` 7 + `SqlConsoleBridgeFilterProviderTest` 3 = **87 例 0 失败 0 错误 0 跳过**（BUILD SUCCESSFUL）。
+- **计划 §六 反向验证第 3 条（撤去 ACK 后桥让位判据）未执行**——W2 经取证后未改闸门语义（仅补回落沿日志），该探针的靶点（闸门封停/回落判据）在本轮零改动，其覆盖由上述 `AgentManagerIntakeGateTest` 既有用例承担（本轮已复跑绿），如实登记不做无靶探针。
 - 未跑全量 `testShards`（改动面 = log 包 + 两个消息资源，不触 build.gradle.kts/plugin.xml EP/依赖版本；按验证三档分层交下轮收口批）。
 
 ### 遗留（真机复验，用户执行）
