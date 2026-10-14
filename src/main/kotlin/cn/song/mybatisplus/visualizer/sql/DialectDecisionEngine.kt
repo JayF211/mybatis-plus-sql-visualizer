@@ -1,0 +1,106 @@
+package cn.song.mybatisplus.visualizer.sql
+
+/** 方言证据只携带已归一的方言名与稳定候选身份，不保存 JDBC URL 或凭据。 */
+object DialectDecisionEngine {
+    enum class Status { MANUAL, RESOLVED, AMBIGUOUS, CONFLICT, UNAVAILABLE }
+    enum class Confidence { EXACT, STRONG, CONSENSUS, FALLBACK }
+    enum class Source { MANUAL, CAPTURED_URL, IDEA_SCOPE, IDEA_DIALECT, LEARNED_MODULE, PROJECT_CONSENSUS, PROJECT_AGENT }
+    enum class TargetStatus { MATCH, AUTO_RERENDER_REQUIRED, MANUAL_CONFLICT, TARGET_UNKNOWN }
+
+    data class Candidate(val id: String, val dialectName: String?)
+
+    data class Input(
+        val manualDialect: String? = null,
+        val capturedDialect: String? = null,
+        val explicitScope: Boolean = false,
+        val scopeCandidates: List<Candidate> = emptyList(),
+        val ideaDialect: String? = null,
+        val learnedModule: Candidate? = null,
+        val projectCandidates: List<Candidate> = emptyList(),
+        val lastAgentDialect: String? = null,
+        val singleModuleProven: Boolean = false,
+    )
+
+    data class Decision(
+        val status: Status,
+        val dialectName: String?,
+        val confidence: Confidence,
+        val source: Source?,
+        val dataSourceIds: List<String> = emptyList(),
+        val evidence: List<Source> = emptyList(),
+        val compatibilityFallbackName: String? = null,
+    )
+
+    data class TargetCheck(val status: TargetStatus, val renderDialect: String?, val targetDialect: String?)
+
+    fun decide(input: Input): Decision {
+        knownName(input.manualDialect)?.let {
+            return resolved(it, Confidence.STRONG, Source.MANUAL)
+                .copy(status = Status.MANUAL)
+        }
+        knownName(input.capturedDialect)?.let {
+            return resolved(it, Confidence.EXACT, Source.CAPTURED_URL)
+        }
+        val idea = knownName(input.ideaDialect)
+        if (input.explicitScope) {
+            fromCandidates(input.scopeCandidates, Source.IDEA_SCOPE, idea)?.let { return it }
+        }
+        idea?.let { return resolved(it, Confidence.STRONG, Source.IDEA_DIALECT) }
+        input.learnedModule?.let { candidate ->
+            knownName(candidate.dialectName)?.let {
+                return resolved(it, Confidence.STRONG, Source.LEARNED_MODULE, listOf(candidate.id))
+            }
+        }
+        fromCandidates(input.projectCandidates, Source.PROJECT_CONSENSUS, null)?.let { return it }
+        if (input.singleModuleProven) {
+            knownName(input.lastAgentDialect)?.let {
+                return resolved(it, Confidence.STRONG, Source.PROJECT_AGENT)
+            }
+        }
+        return unavailable()
+    }
+
+    fun checkTarget(decision: Decision, targetDialect: String?): TargetCheck {
+        val target = knownName(targetDialect)
+            ?: return TargetCheck(TargetStatus.TARGET_UNKNOWN, decision.dialectName, null)
+        val rendered = decision.dialectName
+            ?: return TargetCheck(TargetStatus.AUTO_RERENDER_REQUIRED, null, target)
+        if (rendered == target) return TargetCheck(TargetStatus.MATCH, rendered, target)
+        val status = if (decision.status == Status.MANUAL) TargetStatus.MANUAL_CONFLICT
+            else TargetStatus.AUTO_RERENDER_REQUIRED
+        return TargetCheck(status, rendered, target)
+    }
+
+    private fun fromCandidates(raw: List<Candidate>, source: Source, idea: String?): Decision? {
+        val candidates = raw.filter { it.id.isNotBlank() }
+            .distinct().sortedWith(compareBy(Candidate::id, { it.dialectName.orEmpty() }))
+        if (candidates.isEmpty()) return null
+        val ids = candidates.map(Candidate::id).distinct()
+        val names = candidates.map { knownName(it.dialectName) }
+        val distinct = names.toSet()
+        val evidence = if (idea != null && source == Source.IDEA_SCOPE) listOf(source, Source.IDEA_DIALECT)
+            else listOf(source)
+        if (distinct.size > 1) {
+            return Decision(Status.AMBIGUOUS, null, Confidence.FALLBACK, source, ids, evidence)
+        }
+        val name = names.first() ?: return unavailable(source, ids, evidence)
+        if (idea != null && idea != name && source == Source.IDEA_SCOPE) {
+            return Decision(Status.CONFLICT, null, Confidence.FALLBACK, source, ids, evidence)
+        }
+        return resolved(name, if (ids.size == 1) Confidence.STRONG else Confidence.CONSENSUS,
+            source, ids, evidence)
+    }
+
+    private fun resolved(name: String, confidence: Confidence, source: Source,
+                         ids: List<String> = emptyList(), evidence: List<Source> = listOf(source)): Decision =
+        Decision(if (source == Source.MANUAL) Status.MANUAL else Status.RESOLVED,
+            name, confidence, source, ids, evidence)
+
+    private fun unavailable(source: Source? = null, ids: List<String> = emptyList(),
+                            evidence: List<Source> = emptyList()): Decision =
+        Decision(Status.UNAVAILABLE, null, Confidence.FALLBACK, source, ids, evidence, "MySQL")
+
+    private fun knownName(value: String?): String? = value?.let { candidate ->
+        DialectRegistry.dialects.firstOrNull { it.name.equals(candidate, ignoreCase = true) }?.name
+    }
+}
