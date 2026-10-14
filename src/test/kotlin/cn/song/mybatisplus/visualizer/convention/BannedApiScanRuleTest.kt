@@ -589,14 +589,14 @@ class BannedApiScanRuleTest : BannedApiScanSupport() {
      * 「站点全部带判定」判据对落地文件**全量站点**生效（ConsoleKt 61 站点/ResultsKt 47 站点等
      * 内含大量 `runCatching` 落成的降级捕获）——与 master 的 Kotlin 树「74 站点逐站点判定」不同，
      * k2j 逐站点判定面只对**判定数与登记数精确相等**的落地集口径负责（BannedApiSourceScanTest
-     * 的两段式已按文件精确计数 1/7/14/10/8/2），本表的保鲜职责收窄为「文件在扫描面内 + 存在
+     * 的两段式已按文件精确计数 1/8/15/10/8/2），本表的保鲜职责收窄为「文件在扫描面内 + 存在
      * 站点 + 站点判定数与 BannedApiSourceScanTest.fatalPassthroughGuardedFiles 登记一致」。
      */
     internal val landedFatalPassthroughFiles = setOf(
         // T-M53-II（2026-10-10）：原 `execute/DataSourceSelector.kt` 的 13 处已落地站点随组合式重构
-        // 分布到同包协作文件（`Selector.java` 1 + `ConsoleKt.java` 7 + `ResultsKt.java` 14，合计 22——
-        // k2j 两段式登记口径，见 BannedApiSourceScanTest.fatalPassthroughGuardedFiles）；T-M482 生产
-        // 翻译把 Selector 拆三件，站点随拆分迁移，本表按「站点真正所在文件」登记。
+        // 分布到同包协作文件（`Selector.java` 1 + `ConsoleKt.java` 7 + `ResultsKt.java` 14）；
+        // T-M482 生产翻译把 Selector 拆三件，站点随拆分迁移；T-M104 随 ★A49 取证块新增
+        // ConsoleKt +1、ResultsKt +1（Console 8 / Results 15），本表按「站点真正所在文件」登记。
         "src/main/java/cn/song/mybatisplus/visualizer/execute/DataSourceSelector.java",
         "src/main/java/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorConsoleKt.java",
         "src/main/java/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResultsKt.java",
@@ -611,11 +611,11 @@ class BannedApiScanRuleTest : BannedApiScanSupport() {
     /** k2j 落地文件判定数登记（与 BannedApiSourceScanTest.fatalPassthroughGuardedFiles 同源，漂移即红）。
      *  判定数口径 = maskNonCode 后 `FatalErrors.isFatal(` 出现次数（含 catch(Exception) 形态内的判定——
      *  正则只认 catch(Throwable)，但 Exception 捕获链的 invoke 反射同样可能透传 Error，见
-     *  BannedApiSourceScanTest 落地集表注），故 ConsoleKt 为 7（站点体含 6 + Exception 块 1）。 */
+     *  BannedApiSourceScanTest 落地集表注），T-M104 后 ConsoleKt 为 8、ResultsKt 为 15。 */
     internal val landedFatalJudgmentCounts = mapOf(
         "src/main/java/cn/song/mybatisplus/visualizer/execute/DataSourceSelector.java" to 1,
-        "src/main/java/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorConsoleKt.java" to 7,
-        "src/main/java/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResultsKt.java" to 14,
+        "src/main/java/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorConsoleKt.java" to 8,
+        "src/main/java/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResultsKt.java" to 15,
         "src/main/java/cn/song/mybatisplus/visualizer/log/agent/AgentManager.java" to 10,
         "src/main/java/cn/song/mybatisplus/visualizer/log/RunConfigurationProcessListener.java" to 8,
         "src/main/java/cn/song/mybatisplus/visualizer/ui/SqlPreviewService.java" to 2,
@@ -765,10 +765,10 @@ class BannedApiScanRuleTest : BannedApiScanSupport() {
         // 继续（第八轮报告 §7.2 Z-21）。
         //
         // C11f-3（k2j 生产树 .java 口径，两段式）：Java 只能把每个 Kotlin `runCatching` 落成
-        // try/catch(Throwable)（全树 730 站点——逐站点判定不可行，k2j 全量基线与落地集精确计数
+        // try/catch(Throwable)（全树 777 站点——逐站点判定不可行，k2j 全量基线与落地集精确计数
         // 由 BannedApiSourceScanTest.fatalCatchSiteTotalBaseline / fatalPassthroughGuardedFiles 负责）。
         // 本类保鲜职责收窄为：① 落地文件在扫描面内 + 判定数与登记一致；② 未判定总量基线
-        // （豁免表 + 落地判定数 + 其余未判定站点 = 全量 730）；③ 反射解包锚点。
+        // （豁免表 + 落地判定数 + 其余未判定站点 = 全量 777）；③ 反射解包锚点。
         val sources = rawMainSources()
 
         // 已落地文件：在扫描面内、有站点、判定数与登记精确相等（防「加白名单把落地缺失藏掉」/回潮）
@@ -816,8 +816,8 @@ class BannedApiScanRuleTest : BannedApiScanSupport() {
             assertTrue("豁免理由不得为空：$path", exemption.reason.isNotBlank())
         }
 
-        // 未判定总量基线（其余未落地/未豁免文件的站点体无判定数）：2026-10-11 实测 392（Java 注释语义掩码）。
-        // 全量对账（Kotlin 守卫读数）：全量 730 = 豁免 107 + 落地文件站点与判定 + 其余未判定 392 + 其余已判定。
+        // 未判定总量基线（其余未落地/未豁免文件的站点体无判定数）：2026-10-14 实测 428（Java 注释语义掩码）。
+        // 全量对账（Kotlin 守卫读数）：全量 777 = 豁免登记 + 落地文件站点与判定 + 其余未判定 + 其余已判定。
         val exemptSites = throwableCatchExemptions.values.sumOf { it.sites }
         val judgedInLanded = landedFatalJudgmentCounts.values.sum()
         val allSites = sources.sumOf { (path, raw) -> throwableCatchSites(maskNonCode(raw)).size }
@@ -829,12 +829,12 @@ class BannedApiScanRuleTest : BannedApiScanSupport() {
         assertEquals(
             "未落地/未豁免文件的无判定 catch (Throwable …) 站点基线漂移（须与 " +
                 "BannedApiSourceScanTest.fatalCatchSiteTotalBaseline 同步重登或补判定）",
-            392,
+            428,
             unjudgedOutside,
         )
         assertEquals(
             "k2j 全量 catch (Throwable …) 站点基线漂移（须与 BannedApiSourceScanTest.fatalCatchSiteTotalBaseline 同步重登）",
-            730,
+            777,
             allSites,
         )
         // 全量对账恒等式（口径说明）：全量 = 豁免登记 + 其余未判定 + 落地判定（regex 口径，含
