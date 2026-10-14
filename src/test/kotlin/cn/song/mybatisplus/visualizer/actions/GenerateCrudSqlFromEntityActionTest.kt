@@ -1,5 +1,8 @@
 package cn.song.mybatisplus.visualizer.actions
 
+import cn.song.mybatisplus.visualizer.config.PluginSettings
+import cn.song.mybatisplus.visualizer.config.ProjectPluginSettings
+import cn.song.mybatisplus.visualizer.sql.OracleDialect
 import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.psi.PsiClass
 import com.intellij.psi.PsiClassOwner
@@ -82,5 +85,32 @@ class GenerateCrudSqlFromEntityActionTest : BasePlatformTestCase() {
         assertEquals("t_order", spec!!.tableName)
         assertTrue("列应含 id 且识别为主键", spec.columns.any { it.columnName == "id" && it.isPrimaryKey })
         assertTrue("列应含 remark", spec.columns.any { it.columnName == "remark" })
+    }
+
+    fun `test实体右键规格读取实体所在项目的手动方言`() {
+        val global = PluginSettings.getInstance()
+        val oldGlobal = global.getState().copy()
+        val settings = ProjectPluginSettings.getInstance(project)
+        val oldProject = settings.state.copy()
+        try {
+            global.state.dialectAuto = true
+            settings.state.useProjectSettings = true
+            settings.state.dialectAuto = false
+            settings.state.dialect = "Oracle"
+            val entity = classesOf(
+                """
+                public class Demo {
+                    @com.baomidou.mybatisplus.annotation.TableName("t_order")
+                    static class OrderEntity {
+                        @com.baomidou.mybatisplus.annotation.TableId private Long id;
+                    }
+                }
+                """.trimIndent(),
+            ).single()
+            assertEquals(OracleDialect, action.entitySpec(entity)!!.dialect)
+        } finally {
+            settings.loadState(oldProject)
+            global.loadState(oldGlobal)
+        }
     }
 }

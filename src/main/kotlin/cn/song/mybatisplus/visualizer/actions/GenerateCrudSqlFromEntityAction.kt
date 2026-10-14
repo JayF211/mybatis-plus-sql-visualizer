@@ -123,10 +123,10 @@ class GenerateCrudSqlFromEntityAction : AnAction() {
     internal fun entitySpec(clazz: PsiClass): CrudTableSpec? {
         val table = EntityResolver().resolve(clazz)
         if (table.tableName.isBlank()) return null
-        return table.toCrudSpec()
+        return table.toCrudSpec(clazz.project)
     }
 
-    private fun TableInfo.toCrudSpec(): CrudTableSpec = CrudTableSpec(
+    private fun TableInfo.toCrudSpec(project: Project): CrudTableSpec = CrudTableSpec(
         tableName = tableName,
         columns = columns.map { col ->
             CrudColumn(
@@ -141,7 +141,7 @@ class GenerateCrudSqlFromEntityAction : AnAction() {
         },
         logicDeleteColumn = logicDeleteColumn,
         versionColumn = versionColumn,
-        dialect = currentDialect(),
+        dialect = currentDialect(project),
     )
 
     internal companion object {
