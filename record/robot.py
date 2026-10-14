@@ -3,21 +3,23 @@
 
 **为什么要有这个**：像素坐标点不准（弹窗高度随内容变、悬停才渲染、CJK 双宽、独立窗口遮挡）。
 robot-server 是 JetBrains 官方 UI 测试框架的**服务端插件**，跑在 IDE 进程内，提供 HTTP/JSON 接口：
-按 XPath/类名/文本找到组件，**直接把该组件当前的屏幕矩形算给你**。于是「定位」与「点击」解耦：
-定位靠组件身份（稳），点击仍用现有 pyautogui（不用改管线）。
+按 XPath/类名/文本找到组件；返回的 x/y 是**相对父组件**的，客户端需沿 XPath 祖先链累加
+到屏幕物理坐标，再交给 pyautogui。定位靠组件身份，点击仍用现有管线。
 
 **协议（从 remote-robot.jar / robot-server 插件 jar 反查核实，非猜测）**：
-- `POST /xpath/component`  请求 `{"xpath": "..."}` → 响应 `{"elementList": [{id?, className, name, x, y, width, height}, ...]}`
-- `POST /js/execute`       请求 `{"script": "..."}`
-- `GET  /screenshot`       截图
+- `POST /xpath/components` 请求 `{"xpath": "..."}` → 响应 `{"status":"SUCCESS","elementList":[{id?,className,name,x,y,width,height},...]}`
+- `POST /xpath/component` 仅限恰好一项；多项或零项会返回 `status: ERROR`，不可当作列表接口。
+- `GET /screenshot` 返回 JSON 的 `bytes` 有符号整数数组（PNG），不是原始二进制。
 - 端口由 IDE 系统属性 `robot-server.port` 决定，**默认 8580**，只监听本机。
 
-**把 robot-server 装进录制沙盒（两种方式）**：
-1. 官方 DSL（只覆盖**测试**沙盒，不覆盖 `runIde` 的沙盒）：`intellijPlatformTesting { plugins { robotServerPlugin("0.11.23") } }`；
-2. 本仓录制用的 `runIde` 沙盒：把 `robot-server-plugin-<ver>.zip` 解包到某稳定目录
-   （本仓放 `record/robot-plugins/`），再给沙盒 `config/idea64.exe.vmoptions` 加一行
-   `-Didea.plugins.path=<该目录绝对路径>`（`runIde` 会合并这个文件，见 skill 坑表 32），
-   于是它不会被 `prepareSandbox` 重建 `plugins/` 冲掉。
+**在录制沙盒安装（已验证三款插件共存）**：
+1. `python record/bootstrap-robot-server.py` 下载并校验到被忽略的本地目录；
+2. `./gradlew runIde -PgifRecord=true -PgifRobotServer=true --args=<demo工程路径>`：
+   `build.gradle.kts` 仅在录制态且显式开关打开时声明 `localPlugin(...)`，
+   交给 `prepareSandbox` 与主插件、AI Assistant 一起安装，正常录制和发行构建不受影响。
+**严禁**设置 `-Didea.plugins.path=<robot目录>`：该属性**替换整个插件目录**，
+会让主插件和 AI Assistant 消失。IPGP 的 `robotServerPlugin(...)` DSL 则只属于
+`intellijPlatformTesting`，不接在普通 `runIde` 的依赖块里。
 
 **用法**：
     python robot.py probe                 # 探活 + 打印根节点，确认端口/协议
@@ -25,7 +27,7 @@ robot-server 是 JetBrains 官方 UI 测试框架的**服务端插件**，跑在
     python robot.py click "<xpath>"
     # 脚本里：
     from robot import click_component, find_components
-    click_component("//div[@accessiblename='执行 SQL']")
+    click_component("(//div[@accessiblename='SQL 历史'])[1]")  # 必须唯一；多命中拒绝盲点
 """
 import json
 import os
@@ -68,26 +70,47 @@ def _request(path, body=None, base=DEFAULT_BASE, timeout=20, method=None):
 
 def find_components(xpath, base=DEFAULT_BASE, timeout=20, **kw):
     """按 XPath 找组件，返回原始组件 dict 列表（字段见模块 docstring）。"""
-    resp = _request("/xpath/component", {"xpath": xpath}, base=base, timeout=timeout, **kw)
-    if isinstance(resp, dict):
-        return resp.get("elementList") or []
-    return []
+    resp = _request("/xpath/components", {"xpath": xpath}, base=base, timeout=timeout, **kw)
+    if not isinstance(resp, dict):
+        raise RobotServerError("组件查询响应不是 JSON 对象：%r" % type(resp))
+    if resp.get("status") != "SUCCESS":
+        raise RobotServerError("组件查询失败：%s" % resp.get("message", resp.get("status")))
+    return resp.get("elementList") or []
 
 
 def find_one(xpath, base=DEFAULT_BASE, timeout=20, **kw):
-    """找第一个命中的组件；没有则 None。"""
+    """要求恰好命中一个可见组件；零项返回 None，多项拒绝盲点。"""
     hits = find_components(xpath, base=base, timeout=timeout, **kw)
-    return hits[0] if hits else None
+    visible = [c for c in hits if c.get("width", 0) > 0 and c.get("height", 0) > 0]
+    if len(visible) > 1:
+        raise RobotServerError("XPath 匹配 %d 个可见组件，请缩小范围：%s" % (len(visible), xpath))
+    return visible[0] if visible else None
 
 
 def component_center(comp, offset=(0, 0)):
-    """组件 dict → 屏幕中心点。字段缺失时抛错（**不猜坐标**）。"""
+    """只算父组件内的相对中心；不要把返回值直接交给 pyautogui。"""
     need = ("x", "y", "width", "height")
     miss = [k for k in need if comp.get(k) is None]
     if miss:
         raise RobotServerError("组件缺少坐标字段 %s：%s" % (miss, comp))
+    if int(comp["width"]) <= 0 or int(comp["height"]) <= 0:
+        raise RobotServerError("组件不可见或尺寸为零，拒绝点击：%s" % comp)
     return (int(comp["x"]) + int(comp["width"]) // 2 + offset[0],
             int(comp["y"]) + int(comp["height"]) // 2 + offset[1])
+
+
+def component_screen_center(xpath, comp=None, base=DEFAULT_BASE, offset=(0, 0), timeout=20):
+    """XPath 唯一组件的父链累加，得到可用于点击的屏幕物理像素坐标。"""
+    comp = comp or find_one(xpath, base=base, timeout=timeout)
+    if comp is None:
+        return None
+    local_x, local_y = component_center(comp, offset=offset)
+    chain = find_components("(%s)/ancestor::div" % xpath, base=base, timeout=timeout)
+    if not chain or not any(c.get("className", "").endswith("IdeFrameImpl") for c in chain):
+        raise RobotServerError("没有 IDE 主窗口到组件的完整祖先链，拒绝猜坐标：%s" % xpath)
+    screen_x = local_x + sum(int(parent["x"]) for parent in chain)
+    screen_y = local_y + sum(int(parent["y"]) for parent in chain)
+    return screen_x, screen_y
 
 
 def click_component(xpath, base=DEFAULT_BASE, offset=(0, 0), button="left",
@@ -96,7 +119,7 @@ def click_component(xpath, base=DEFAULT_BASE, offset=(0, 0), button="left",
     comp = find_one(xpath, base=base, timeout=timeout)
     if not comp:
         return False
-    x, y = component_center(comp, offset=offset)
+    x, y = component_screen_center(xpath, comp=comp, base=base, offset=offset, timeout=timeout)
     import pyautogui
     if move_first:
         pyautogui.moveTo(x, y, duration=0.25)
@@ -117,18 +140,19 @@ def require_component(xpath, base=DEFAULT_BASE, offset=(0, 0), retries=3, interv
 
 def screenshot(base=DEFAULT_BASE, out=None, timeout=30):
     """取 IDE 侧截图（返回 bytes；给了 out 就落盘）。"""
-    raw = _request("/screenshot", base=base, timeout=timeout)
-    if not isinstance(raw, (bytes, bytearray)):
-        raise RobotServerError("截图接口返回的不是二进制：%r" % type(raw))
+    resp = _request("/screenshot", base=base, timeout=timeout)
+    if not isinstance(resp, dict) or resp.get("status") != "SUCCESS":
+        raise RobotServerError("截图接口失败：%s" % (resp.get("message") if isinstance(resp, dict) else type(resp)))
+    values = resp.get("bytes")
+    if not isinstance(values, list):
+        raise RobotServerError("截图缺少 bytes 数组：%s" % list(resp))
+    raw = bytes(value & 0xFF for value in values)
+    if not raw.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise RobotServerError("截图并非 PNG")
     if out:
         with open(out, "wb") as f:
             f.write(raw)
     return raw
-
-
-def execute_js(script, base=DEFAULT_BASE, timeout=30):
-    """在 IDE 进程里跑一段脚本（robot-server 的 /js/execute）。"""
-    return _request("/js/execute", {"script": script}, base=base, timeout=timeout)
 
 
 def _cli(argv):
