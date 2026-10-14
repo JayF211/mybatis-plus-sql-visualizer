@@ -3,7 +3,7 @@
 - 占号：**O-146 / R96 / D156 / V179**（2026-10-14 14:53 全仓检索未发现占用）
 - 日期：2026-10-14
 - 基线：`master@647c9ce1`
-- 状态：需求分析完成、方案定案、待实施；本轮只生成开发计划，不改生产代码
+- 状态：独立工作树已实施，权威全量 7153/0/0/9；IDE 真机视觉走查与 V179 剩余前提待验（§十四）
 - 用户触发：SQL 日志面板和 SQL 历史中的 SQL 高亮颜色过多、层级杂乱，希望接近 SQL 预览编辑器的原生高亮，并进一步优化列表布局
 - 关联任务：T-LogListFreeze04、T-ClickPreview、T-ListMode、T-CrudColor、T-PreviewDialectAutoInferMultiModule（O-145）
 
@@ -486,3 +486,7 @@ SqlEntryPresentation
 ## 十四、实施记录
 
 - 2026-10-14 14:53：完成需求分析与代码链复核。确认当前“花乱”由固定 One Dark token 色、彩色元信息、CRUD 标记、选中和搜索多层叠加造成；当前“布局乱”由默认关键字换行、可变行高、超宽元信息和水平滚动共同造成。定案为“平台配色语义 + 轻量列表片段 + 紧凑概览 + 单实例详情 Editor”，不在列表单元格中复用重型 Editor。本轮仅新增计划和索引，未修改生产代码、未运行构建测试、未提交。
+- 2026-10-14 实施（独立工作树 `mpsv-sql-list-native-tail`，分支 `t-sql-list-native-tail`，基线 `master@ab167790`）：`2f5423e9` 建紧凑视口与共享展示基础件（提交时标明未验证）；`443c86de` 统一八类高亮键与平台 fallback、保留旧键兼容链，缓存改为语义 token；`c6f5b531` 两页 Renderer 共享元信息 Presentation、scheme 变化即时重绘、选中态走平台前景、按像素宽度截断（模型/复制/预览仍全文），新配置默认单行、历史/日志禁水平滚动；子句概览最多三行、格式化模式使用完整 SQL。定向 Gradle `test --tests`（SqlEntryPresentationTest、SqlLogPanelRendererUiTest、HistoryCellRendererTest、SqlLogListFreezeGuardTest、SqlListFragmentRendererTest、SqlSyntaxHighlighterTest、PluginSettingsPanelBindingTest）最终 `BUILD SUCCESSFUL`；**反向验证**：临时将 `SqlSyntaxHighlighter` 的 KEYWORD 改回 `MP_SQL_KEYWORD`，`SqlSyntaxHighlighterTest.testEightTokensShareCanonicalKeysAndPlatformFallbacks` 精准红（AssertionError :424）；还原后 `git diff --exit-code` 为零。243/253/262 的 `EditorColorsManager.TOPIC` / `EditorColorsListener` 签名探针已纳入 PlatformSignatureChecker，定向跨版本测试成功。权威全量门禁与 runIde 视觉走查另行回填，本条不宣称已经通过。
+- 方案偏离：未新增单独的 `SqlUiTokenAttributes` 文件，直接用现有 `SqlHighlightColors` 作唯一 canonical key 表；排序归位与尾部跟随按 O-148 独立实施。已持久化 `KEYWORD_WRAP` 的用户保留原选择，不作无法判别用户意图的静默迁移。工具栏低频动作整体溢出重排没有随 O-146 实施：当前工具栏仍保留原动作组，待真机 517px 宽度走查后才能裁决是否另立细化任务。
+- 权威全量门禁（只读收口位，`HEAD=cf34a9c7`，Docker 29.6.2，`testShards --no-configuration-cache -Pkotlin.compiler.execution.strategy=in-process`）：Gradle 退出码 0；shard1–5 **7129/0/0/8**，testExternal **24/0/0/1**，合计 **7153/0/0/9**；另 agent 子项目测试 155/0/0。新类入场回读：`SqlEntryPresentationTest` 3、`SqlSyntaxHighlighterTest` 32、同批 O-148 的 `SqlLogTailFollowTest` 4；本轮文档并行回填期间 `src/main` 未改、HEAD 未变。该读数覆盖源代码单元/集成回归，不覆盖 IDE 真机视觉与鼠标输入体感。
+- 262 沙盒走查受限：`runIde -PgifRecord=true` 正常启动 IU 2026.2.1，成功打开 `mybatis-plus-sql-visualizer-demo`；但当前 Computer Use 只暴露顶层窗口节点，SQL Visualizer 工具窗不可经 accessibility 定位，截图坐标点击与 `Ctrl+Shift+A` 未改变 IDE 界面（与已知的沙盒进程输入权限边界同形态）。没有看到改版列表的真机画面，故 §十三 1~9 项**全部记为环境受限未验证**，不得以启动成功或 headless 测试代替视觉验收。沙盒已由窗口的退出对话框关闭，未触碰日常 IDE。
