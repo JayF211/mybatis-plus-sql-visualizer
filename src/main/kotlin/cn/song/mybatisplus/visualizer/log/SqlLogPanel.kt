@@ -367,6 +367,7 @@ class SqlLogPanel(
 
     /** T-UiCoord F2：工具栏动作图标组组件（结构断言：它必须挂在行宿主 CENTER）。 */
     internal val toolbarComponentForTest: JComponent? get() = toolbarComponent
+    internal val moreActionGroupForTest: DefaultActionGroup get() = moreActionGroup
 
     /** T-UiCoord F2：下拉按钮显示文本的像素预算（测试按同一预算算期望的省略文本）。 */
     internal val dropdownTextBudgetForTest: Int get() = JBUI.scale(DROPDOWN_TEXT_BUDGET_PX)
@@ -417,18 +418,24 @@ class SqlLogPanel(
     /**
      * 工具栏动作组（T-M39：internal 供测试断言帮助入口存在性；
      * update 由工具栏生命周期驱动，headless 测试手动触发；须在 init 前声明）。
-     * T-CaptureBack：捕捉开关回迁首位（捕捉/清空/设置/屏蔽管理/搜索/帮助；搜索在帮助左侧为用户指定排序）。
-     * T-SqlSuppress：屏蔽管理入口插设置旁（D1 主入口；D7 图标 AllIcons.General.Filter 漏斗）。
+     * 捕捉、搜索、滚底、清空保持直达；设置、屏蔽管理和帮助由平台弹层承接，窄宽交给 ActionToolbar 溢出。
      */
+    private val moreActionGroup = DefaultActionGroup(MpSqlVisualizerBundle.message("panel.more"), true).apply {
+        templatePresentation.icon = AllIcons.Actions.More
+        add(SettingsAction())
+        add(ManageSuppressAction())
+        add(HelpAction())
+    }
+
     internal val toolbarGroup = DefaultActionGroup(
-        captureToggleAction, // 捕捉开关（回迁面板工具栏首位，T-CaptureBack）
+        captureToggleAction,
+        ShowSearchAction(),
+        scrollToEndAction,
         ClearAction(),
-        SettingsAction(),
-        ManageSuppressAction(), // T-SqlSuppress：屏蔽管理（设置旁，D1 主入口 + D7 漏斗图标）
-        ShowSearchAction(), // 搜索在帮助左侧（用户指定排序）
-        HelpAction(),
-        scrollToEndAction, // T-SqlLogPerf：滚动到底部（尾部跟随；追加在用户指定排序之后）
-    )
+    ).apply {
+        addSeparator()
+        add(moreActionGroup)
+    }
 
     // ---------- T-Perf-15：manager 监听器命名引用（init 注册 / dispose 注销） ----------
 

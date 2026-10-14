@@ -41,6 +41,30 @@ class SqlLogPanelLayoutTest : BasePlatformTestCase() {
 
     private fun waitForEdt() = com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
 
+    fun test低频动作由平台更多弹层承接_主操作保持直达() {
+        val panel = SqlLogPanel(project, manager)
+        try {
+            val main = panel.toolbarGroup.getChildren(null).toList()
+            val more = panel.moreActionGroupForTest
+            assertTrue("更多必须是平台 popup ActionGroup", more.isPopup)
+            assertEquals("更多应为动作组末项", more, main.last())
+            assertTrue("捕捉必须保留直接入口", main.contains(panel.captureToggleAction))
+            assertTrue("滚动到底部必须保留直接入口", main.contains(panel.scrollToEndAction))
+            assertTrue("清空必须保留直接入口", main.any { it is SqlLogPanel.ClearAction })
+            assertTrue("搜索必须保留直接入口", main.any { it is SqlLogPanel.ShowSearchAction })
+            assertFalse("设置不应占据窄栏主操作位置", main.any { it is SqlLogPanel.SettingsAction })
+            assertFalse("屏蔽管理不应占据窄栏主操作位置", main.any { it is SqlLogPanel.ManageSuppressAction })
+            assertFalse("帮助不应占据窄栏主操作位置", main.any { it is SqlLogPanel.HelpAction })
+            val extras = more.getChildren(null).toList()
+            assertEquals("设置、屏蔽管理、帮助三个入口均需保留", 3, extras.size)
+            assertTrue(extras.any { it is SqlLogPanel.SettingsAction })
+            assertTrue(extras.any { it is SqlLogPanel.ManageSuppressAction })
+            assertTrue(extras.any { it is SqlLogPanel.HelpAction })
+        } finally {
+            panel.dispose()
+        }
+    }
+
     fun test工具栏关键组件存在_默认可见性正确() {
         val panel = SqlLogPanel(project, manager)
         try {

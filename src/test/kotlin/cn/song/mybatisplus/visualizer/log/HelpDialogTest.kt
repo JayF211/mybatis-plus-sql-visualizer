@@ -22,11 +22,9 @@ class HelpDialogTest : BasePlatformTestCase() {
         // 直接构造（对齐 SqlLogManagerBehaviorTest——测试环境 project.getService 不可用）
         val panel = SqlLogPanel(project, SqlLogManager(project))
         try {
-            val children = panel.toolbarGroup.getChildren(null).toList()
-            // T-CaptureBack：捕捉开关回归面板工具栏首位；O-69 增「管理屏蔽规则」（设置旁，漏斗图标）；
-            // T-SqlLogPerf 增「滚动到底部」（追加在用户指定排序之后）
-            // 工具栏组 7 项（捕捉/清空/设置/管理/搜索/帮助/滚动到底部）
-            assertEquals("工具栏组应有 7 项（捕捉/清空/设置/管理/搜索/帮助/滚动到底部）", 7, children.size)
+            assertTrue("主工具栏应有更多入口", panel.toolbarGroup.getChildren(null).contains(panel.moreActionGroupForTest))
+            val children = panel.moreActionGroupForTest.getChildren(null).toList()
+            assertEquals("设置、屏蔽管理与帮助由更多弹层承接", 3, children.size)
             // update 由工具栏生命周期驱动（headless 不布局不触发），手动走一次——
             // 图标/文案写入 event.presentation（2024.3 AnAction 无 getPresentation()）
             val events = children.map {

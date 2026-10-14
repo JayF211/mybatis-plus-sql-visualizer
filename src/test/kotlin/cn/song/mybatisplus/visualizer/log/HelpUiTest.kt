@@ -38,7 +38,7 @@ class HelpUiTest : BasePlatformTestCase() {
     fun test帮助动作入口展示文案与图标() {
         val panel = SqlLogPanel(project, SqlLogManager(project))
         try {
-            val children = panel.toolbarGroup.getChildren(null).toList()
+            val children = panel.moreActionGroupForTest.getChildren(null).toList()
             val events = children.map {
                 AnActionEvent.createFromAnAction(it, null, ActionPlaces.TOOLBAR, DataContext.EMPTY_CONTEXT)
             }
@@ -58,7 +58,7 @@ class HelpUiTest : BasePlatformTestCase() {
     fun test帮助动作回退路径_本插件代码不崩溃() {
         val panel = SqlLogPanel(project, SqlLogManager(project))
         try {
-            val children = panel.toolbarGroup.getChildren(null).toList()
+            val children = panel.moreActionGroupForTest.getChildren(null).toList()
             val events = children.map {
                 AnActionEvent.createFromAnAction(it, null, ActionPlaces.TOOLBAR, DataContext.EMPTY_CONTEXT)
             }
