@@ -1,5 +1,8 @@
 package cn.song.mybatisplus.visualizer.log
 
+import com.intellij.openapi.actionSystem.ActionPlaces
+import com.intellij.openapi.actionSystem.AnActionEvent
+import com.intellij.openapi.actionSystem.DataContext
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import java.awt.event.KeyEvent
 import java.awt.event.MouseEvent
@@ -78,6 +81,48 @@ class SqlLogTailFollowTest : BasePlatformTestCase() {
             manager.entries.addEntry(LogSqlEntry("SELECT 81", "SELECT 81", emptyList(), timestamp = 81L))
             com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
             assertEquals("新增条目后用户视口不能被拉回底部", anchored, bar.value)
+        } finally {
+            panel.dispose()
+            manager.dispose()
+        }
+    }
+
+    fun test滚底动作对象能从暂停态恢复并真正贴底() {
+        val manager = SqlLogManager(project)
+        val panel = SqlLogPanel(project, manager)
+        try {
+            panel.setSize(460, 420)
+            fun layout(component: java.awt.Component) {
+                if (component is java.awt.Container) {
+                    component.doLayout()
+                    component.components.forEach(::layout)
+                }
+            }
+            layout(panel)
+            for (index in 1..80) {
+                manager.entries.addEntry(LogSqlEntry("SELECT $index", "SELECT $index", emptyList(), timestamp = index.toLong()))
+            }
+            com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+            layout(panel)
+            val scroll = requireNotNull(panel.listScrollPaneForTest)
+            val bar = scroll.verticalScrollBar
+            assertTrue("夹具必须有真实可滚动内容", bar.maximum > bar.visibleAmount + 100)
+            bar.value = 0
+            scroll.mouseWheelListeners.forEach {
+                it.mouseWheelMoved(MouseWheelEvent(scroll, MouseEvent.MOUSE_WHEEL, 9L, 0, 5, 5, 0,
+                    false, MouseWheelEvent.WHEEL_UNIT_SCROLL, 1, -1))
+            }
+            assertEquals(TailFollowMode.PAUSED, panel.tailFollowModeForTest)
+
+            val action = panel.scrollToEndAction
+            action.actionPerformed(
+                AnActionEvent.createFromAnAction(action, null, ActionPlaces.TOOLBAR, DataContext.EMPTY_CONTEXT),
+            )
+            assertEquals("滚底动作应把状态恢复为跟随", TailFollowMode.FOLLOWING, panel.tailFollowModeForTest)
+            assertTrue(
+                "滚底动作应真正把视口贴到列表底（value=${bar.value} max=${bar.maximum} extent=${bar.visibleAmount}）",
+                bar.value + bar.visibleAmount >= bar.maximum - 1,
+            )
         } finally {
             panel.dispose()
             manager.dispose()

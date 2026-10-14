@@ -158,7 +158,7 @@ JList Renderer 会在布局、滚动和重绘时反复调用，没有稳定的�
 
 ### 3.2 布局目标
 
-1. 默认采用“元信息一行 + SQL 一行”的紧凑概览，固定行高，完整 SQL 交给单击/双击预览。
+1. 默认沿用「元信息一行 + 关键字换行 SQL」的概览形态（用户 2026-10-14 追加确认：与以往一致，便于扫读 SQL 大致形态），完整 SQL 交给单击/双击预览。
 2. 元信息分三级：
    - 一级状态：错误、慢查询、同结构/N+1 等需要立即处理的信息，可使用强调色；
    - 二级上下文：数据库类型、耗时，使用有限状态色；
@@ -300,15 +300,14 @@ SqlEntryPresentation
 
 | 现有值 | 用户文案 | 行为 |
 |---|---|---|
-| `SINGLE_LINE` | 紧凑概览 | 元信息一行 + SQL 一行；默认 |
-| `KEYWORD_WRAP` | 子句概览 | 最多 3 行；超出显示剩余行数 |
+| `KEYWORD_WRAP` | 子句概览 | 最多 3 行；超出显示剩余行数。**默认**（用户 2026-10-14 追加确认与以往一致） |
+| `SINGLE_LINE` | 紧凑概览 | 元信息一行 + SQL 一行；用户可选 |
 | `FORMATTED` | 格式化展开 | 完整格式化；仅用户主动选择 |
 
 持久化兼容：
 
-- 旧值原样识别；
-- 是否把已有默认 `KEYWORD_WRAP` 用户自动迁到 `SINGLE_LINE` 列入 V179-4；
-- 推荐做法是增加布局版本，只迁移从未明确修改过显示模式的用户；若现有状态无法区分“默认值”与“用户主动选择”，则不静默迁移，在工具栏提供一次性“推荐紧凑布局”提示，由用户确认后切换。
+- 旧值原样识别，不静默改写用户已保存的显示模式；
+- V179-4 收敛为「不迁移」：既然默认回到 `KEYWORD_WRAP`，已持久化该值的用户与默认一致，无需迁移；已选 `SINGLE_LINE`/`FORMATTED` 的用户保持其选择。
 
 ### 5.6 工具栏整理
 
@@ -356,7 +355,7 @@ SqlEntryPresentation
 - `config/PluginSettingsPanel.kt` / `PluginSettingsPanelSections.kt`
 - 中英文 bundle
 
-目标：默认紧凑模式、最大预览行数、水平滚动策略、工具栏分组和设置文案。若 V179-4 判定不能安全迁移旧默认，则不新增隐式迁移，只更新设置说明和推荐入口。
+目标：显示模式默认与文案、最大预览行数、水平滚动策略、工具栏分组和设置文案。默认回到 `KEYWORD_WRAP`（用户追加确认），不再做显示模式迁移。
 
 ### 6.5 测试
 
@@ -423,7 +422,7 @@ SqlEntryPresentation
 ### 8.4 性能
 
 1. Renderer 内不得创建 Editor、Document、PSI 或 HTML 文档。
-2. 默认紧凑模式保持固定行高和 O(1) 布局快路径。
+2. 默认 `KEYWORD_WRAP` 走条目级语义缓存的可变行高路径，不重复词法分析；`SINGLE_LINE` 仍保持固定行高与 O(1) 快路径。
 3. 200 条日志连续滚动、搜索和排序无可感知冻结。
 4. 历史文件首批 30 条与滚动追加批次不因新 Presentation 增加重复词法分析。
 5. 缓存内容不持有 `EditorColorsScheme`、Editor、Project 或 Swing 组件，避免历史条目长期引用 UI 对象。
@@ -487,6 +486,7 @@ SqlEntryPresentation
 
 - 2026-10-14 14:53：完成需求分析与代码链复核。确认当前“花乱”由固定 One Dark token 色、彩色元信息、CRUD 标记、选中和搜索多层叠加造成；当前“布局乱”由默认关键字换行、可变行高、超宽元信息和水平滚动共同造成。定案为“平台配色语义 + 轻量列表片段 + 紧凑概览 + 单实例详情 Editor”，不在列表单元格中复用重型 Editor。本轮仅新增计划和索引，未修改生产代码、未运行构建测试、未提交。
 - 2026-10-14 实施（独立工作树 `mpsv-sql-list-native-tail`，分支 `t-sql-list-native-tail`，基线 `master@ab167790`）：`2f5423e9` 建紧凑视口与共享展示基础件（提交时标明未验证）；`443c86de` 统一八类高亮键与平台 fallback、保留旧键兼容链，缓存改为语义 token；`c6f5b531` 两页 Renderer 共享元信息 Presentation、scheme 变化即时重绘、选中态走平台前景、按像素宽度截断（模型/复制/预览仍全文），新配置默认单行、历史/日志禁水平滚动；子句概览最多三行、格式化模式使用完整 SQL。定向 Gradle `test --tests`（SqlEntryPresentationTest、SqlLogPanelRendererUiTest、HistoryCellRendererTest、SqlLogListFreezeGuardTest、SqlListFragmentRendererTest、SqlSyntaxHighlighterTest、PluginSettingsPanelBindingTest）最终 `BUILD SUCCESSFUL`；**反向验证**：临时将 `SqlSyntaxHighlighter` 的 KEYWORD 改回 `MP_SQL_KEYWORD`，`SqlSyntaxHighlighterTest.testEightTokensShareCanonicalKeysAndPlatformFallbacks` 精准红（AssertionError :424）；还原后 `git diff --exit-code` 为零。243/253/262 的 `EditorColorsManager.TOPIC` / `EditorColorsListener` 签名探针已纳入 PlatformSignatureChecker，定向跨版本测试成功。权威全量门禁与 runIde 视觉走查另行回填，本条不宣称已经通过。
-- 方案偏离：未新增单独的 `SqlUiTokenAttributes` 文件，直接用现有 `SqlHighlightColors` 作唯一 canonical key 表；排序归位与尾部跟随按 O-148 独立实施。已持久化 `KEYWORD_WRAP` 的用户保留原选择，不作无法判别用户意图的静默迁移。工具栏低频动作整体溢出重排没有随 O-146 实施：当前工具栏仍保留原动作组，待真机 517px 宽度走查后才能裁决是否另立细化任务。
+- 方案偏离：未新增单独的 `SqlUiTokenAttributes` 文件，直接用现有 `SqlHighlightColors` 作唯一 canonical key 表；排序归位与尾部跟随按 O-148 独立实施。已持久化 `KEYWORD_WRAP` 的用户保留原选择，不作无法判别用户意图的静默迁移。工具栏低频动作收纳由后续 `b8fcf96a` 补齐，见下一条实施记录；真机 517px 宽度下的平台溢出效果仍需走查。
 - 权威全量门禁（只读收口位，`HEAD=cf34a9c7`，Docker 29.6.2，`testShards --no-configuration-cache -Pkotlin.compiler.execution.strategy=in-process`）：Gradle 退出码 0；shard1–5 **7129/0/0/8**，testExternal **24/0/0/1**，合计 **7153/0/0/9**；另 agent 子项目测试 155/0/0。新类入场回读：`SqlEntryPresentationTest` 3、`SqlSyntaxHighlighterTest` 32、同批 O-148 的 `SqlLogTailFollowTest` 4；本轮文档并行回填期间 `src/main` 未改、HEAD 未变。该读数覆盖源代码单元/集成回归，不覆盖 IDE 真机视觉与鼠标输入体感。
-- 262 沙盒走查受限：`runIde -PgifRecord=true` 正常启动 IU 2026.2.1，成功打开 `mybatis-plus-sql-visualizer-demo`；但当前 Computer Use 只暴露顶层窗口节点，SQL Visualizer 工具窗不可经 accessibility 定位，截图坐标点击与 `Ctrl+Shift+A` 未改变 IDE 界面（与已知的沙盒进程输入权限边界同形态）。没有看到改版列表的真机画面，故 §十三 1~9 项**全部记为环境受限未验证**，不得以启动成功或 headless 测试代替视觉验收。沙盒已由窗口的退出对话框关闭，未触碰日常 IDE。
+- 262 沙盒真机走查（2026-10-14 续轮，推翻了先前的「环境受限」判断）：先用只读进程探针实测 `ZCode`、`GradleDaemon`、沙盒 IDE 三者 `TokenElevation=0` 且完整性级别同为 `S-1-16-8192`，**提权/UIPI 假设不成立**；随后在 `runIde -PgifRecord=true`（IU 2026.2.1）中打开 `mybatis-plus-sql-visualizer-demo`，用 Computer Use 的坐标点击确认 IDE 主窗**可以**接收合成输入（项目树可展开、工具窗可打开、面板按钮可点、`⋮` 更多菜单可展开并进入设置页）。注意 UIA 常把成功的点击误报为「状态未变化」，故一律以截图为准。真机已确认：①默认跟随把最新 SQL 贴在列表底部；②手动上滚后继续灌入新条目，视口停在原位置（实测 `#54–#62` 保持不动，同结构计数由 65 涨到 70）；③手动滚回底部**不会**自动恢复跟随（`#62–#70` 保持不动，计数 70→75）；④`⋮` 更多菜单可展开、设置入口可达。沙盒内残留的屏蔽规则（`已屏蔽 1,137 行`）与按钮几何间距让「滚动到底部」按钮的单独点击无法在此环境中隔离判定，故该项改由定向测试驱动真实 `ScrollToEndAction` 对象端到端验证（暂停态→动作→恢复跟随且 `value+extent ≥ maximum-1` 真正贴底）。仍未做：真实 517px 宽度下的图标溢出观感、`KEYWORD_WRAP` 默认在新构建上的截图复核——随最终构建再走一次。
+- 2026-10-14 续轮补齐 W5 工具栏收纳：`b8fcf96a` 将捕捉、搜索、滚底、清空保留主栏直达，设置、屏蔽管理、帮助放进平台 `DefaultActionGroup(..., true)` 的「更多」弹层，主栏 separator 分组并由 ActionToolbar 处理不足宽度的溢出。`SqlLogPanelLayoutTest` 补结构/可达性守卫，`HelpDialogTest`/`HelpUiTest` 改为对真实更多子菜单验帮助链；定向四类 `BUILD SUCCESSFUL`，临时摘掉更多入口后新守卫精准红，恢复并复绿。该笔之后的权威全量与 262 真实可见性另行回填，未提前宣称通过。

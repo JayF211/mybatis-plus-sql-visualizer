@@ -410,15 +410,15 @@ class PluginSettingsPanelBindingTest : BasePlatformTestCase() {
         }
     }
 
-    fun testListDisplayModeDefaultsToCompactButPreservesSavedMode() {
+    fun testListDisplayModeDefaultsToKeywordWrapAndPreservesSavedMode() {
         val settings = PluginSettings.getInstance()
         val saved = settings.state.logListSqlDisplayMode
         try {
-            assertEquals("SINGLE_LINE", PluginSettings.State().logListSqlDisplayMode)
-            settings.state.logListSqlDisplayMode = "KEYWORD_WRAP"
-            assertEquals(cn.song.mybatisplus.visualizer.log.SqlListDisplayMode.KEYWORD_WRAP, settings.sqlListDisplayMode())
+            assertEquals("KEYWORD_WRAP", PluginSettings.State().logListSqlDisplayMode)
+            settings.state.logListSqlDisplayMode = "FORMATTED"
+            assertEquals(cn.song.mybatisplus.visualizer.log.SqlListDisplayMode.FORMATTED, settings.sqlListDisplayMode())
             settings.state.logListSqlDisplayMode = "not-a-display-mode"
-            assertEquals(cn.song.mybatisplus.visualizer.log.SqlListDisplayMode.SINGLE_LINE, settings.sqlListDisplayMode())
+            assertEquals(cn.song.mybatisplus.visualizer.log.SqlListDisplayMode.KEYWORD_WRAP, settings.sqlListDisplayMode())
         } finally {
             settings.state.logListSqlDisplayMode = saved
         }
