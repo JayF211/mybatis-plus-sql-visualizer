@@ -523,6 +523,10 @@ internal fun SqlPreviewPanel.hasTabTitle(tabPane: JTabbedPane, title: String): B
  *  M34 回归修复：原生 SQL 高亮迁移后 Editor/PSI 对象在预览切换间复用（文档不变），
  *  三级回退的 Document→Context 映射需随上下文刷新同步更新，否则落入旧预览的过期表/列。 */
 
+internal fun mergePreviewWarnings(initial: String?, current: List<String>): String? =
+    (listOfNotNull(initial?.takeIf { it.isNotBlank() }) + current.filter { it.isNotBlank() })
+        .distinct().joinToString("；").ifEmpty { null }
+
 internal fun SqlPreviewPanel.updateMeta(result: PreviewResult) {
     val meta = buildList {
         result.wrapperType?.let { add("${MpSqlVisualizerBundle.message("panel.meta.type")}: ${it.name}") }
@@ -533,11 +537,7 @@ internal fun SqlPreviewPanel.updateMeta(result: PreviewResult) {
             xml.parameterType?.let { add("parameterType: $it") }
         }
     }.joinToString("   ")
-    // T-M24-04：XML 渲染期错误并入警示（解析期错误在 PreviewResult.warning）
-    val xmlWarning = result.xmlModel?.let { xml ->
-        (xmlErrors).joinToString("；").ifEmpty { null }
-    }
-    currentWarning = xmlWarning ?: result.warning
+    currentWarning = mergePreviewWarnings(result.warning, if (result.xmlModel != null) xmlErrors else emptyList())
     val warningLine = currentWarning?.let { "   ⚠ $it" } ?: ""
     // T-SourceJumpFunnel P2-2：调用栈快照并入 meta 提示行（截断展示；T-StackHoverUi 起
     // 完整链归悬停弹层）。

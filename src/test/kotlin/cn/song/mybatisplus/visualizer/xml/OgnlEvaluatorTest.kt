@@ -130,6 +130,19 @@ class OgnlEvaluatorTest {
     }
 
     @Test
+    fun `对象属性无法静态读取时只登记不猜值`() {
+        data class Dto(val name: String)
+        assertEquals(setOf("u.name"), OgnlEvaluator.unsupportedPropertyPaths(
+            "u.name != null", mapOf("u" to Dto("x"))))
+        assertEquals(setOf("outer.u.name"), OgnlEvaluator.unsupportedPropertyPaths(
+            "outer.u.name != null", mapOf("outer" to mapOf("u" to Dto("x")))))
+        assertTrue(OgnlEvaluator.unsupportedPropertyPaths(
+            "u.name != null", mapOf("u" to MockObject(mapOf("name" to "x")))).isEmpty())
+        assertTrue(OgnlEvaluator.unsupportedPropertyPaths(
+            "u.name != null", mapOf("u" to mapOf("name" to "x"))).isEmpty())
+    }
+
+    @Test
     fun `方法白名单_size_length_contains等`() {
         assertEquals(2, (eval("list.size()", bindings) as Number).toInt())
         assertEquals(2, (eval("list.size", bindings) as Number).toInt()) // 属性形态等价
