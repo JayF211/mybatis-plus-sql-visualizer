@@ -68,10 +68,13 @@ object XmlPreviewService {
         } catch (e: XmlScriptException) {
             return emptyResult(e.message ?: "SQL 脚本解析失败。")
         }
-        val ref = parsedRef ?: return toResult(model, staticWarnings, entityContext)
+        val result = toResult(model, staticWarnings, entityContext).let { preview ->
+            if (project == null) preview else preview.copy(renderedDialect = DialectRegistry.effective(project))
+        }
+        val ref = parsedRef ?: return result
 
         return applyPagination(
-            toResult(model, staticWarnings, entityContext),
+            result,
             project = project,
             namespace = ref.first,
             statementId = ref.second,
@@ -120,7 +123,7 @@ object XmlPreviewService {
         if (kind != XmlStatementKind.SELECT) return@runCatching result
         if (PaginationSimulator.hasExistingLimit(result.sql)) return@runCatching result
         val limitClause = PaginationSimulator.placeholderLimitClause(pageParamName)
-        val limitLine = DialectRegistry.effective(project = project).renderLimit(limitClause)
+        val limitLine = (result.effectiveDialect ?: DialectRegistry.effective(project = project)).renderLimit(limitClause)
         val countSql = if (paginationCountEnabled()) {
             PaginationSimulator.wrapCountSql(result.sql.replace(WHITESPACE_REGEX, " ").trim())
         } else {
