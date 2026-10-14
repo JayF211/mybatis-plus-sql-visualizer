@@ -47,7 +47,6 @@ import com.intellij.ui.speedSearch.SpeedSearchUtil
 import com.intellij.ui.SimpleTextAttributes
 import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBScrollPane
-import com.intellij.ui.components.JBTabbedPane
 import java.awt.BorderLayout
 import java.awt.Color
 import java.awt.Component
@@ -157,8 +156,7 @@ class SqlLogPanel(
      *  T-HistoryTabAlways：**常驻**——不再由 logAutoSaveEnabled 或「.idea 里已存在历史文件」决定
      *  （未开启自动保存的新用户此前看不到入口）；无数据时面板显示空态并指路设置页。 */
     private val historyPanel: HistorySqlLogPanel by lazy { HistorySqlLogPanel(project) }
-    /** F-44：历史 tab 在 JBTabbedPane 中的索引（-1 表示未添加；常驻后恒为末位）。 */
-    /** 历史 tab 句柄（替代原索引语义；TabInfo 为 JBTabs 的身份）。 */
+    /** F-44 / O-149：历史 tab 句柄（TabInfo 为 JBTabs 的身份；替代原 JTabbedPane 索引语义，常驻后恒为末位）。 */
     private val dedupeCheckBox = JCheckBox(MpSqlVisualizerBundle.message("log.panel.dedupe")).apply {
         isSelected = manager.entries.dedupeEnabled
         addActionListener {
