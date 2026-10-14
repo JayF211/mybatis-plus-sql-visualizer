@@ -94,3 +94,5 @@ JBTabsFactory.createTabs(project, this)      // 产出 JBTabsImpl
 
 - 2026-10-14 第一轮：定位根因（`JBTabbedPane()` 未设 `tabLayoutPolicy`，默认 `WRAP_TAB_LAYOUT`），双版本 `javap` 实证 `setTabComponentInsets` 在 243/262 均可用；**错误定案**为「SCROLL 策略 + 紧凑内边距」并实施（提交 `22a74acf`）。
 - 2026-10-14 第二轮（用户报「严重问题」后）：先回退第一轮（页签重新可见），再用无头探针量出各宽度下的页签几何（原文案 WRAP：230/260/300px 折 2 行、≥360px 一行；所需宽度 ~321px），确认第一轮的 8px 内边距把所需宽度推到 ~385px 是压垮点。随后按用户「反编译看 IDEA 怎么复用」的指引查平台源码（`javap` 243/262），改用 `JBTabsFactory.createTabs` + `setSingleRow(true)` + `setSupportsCompression(true)`，即平台自带的单行＋压缩＋`MorePopupAware` 下拉；页签身份迁移到 `TabInfo` 句柄。`SqlLogPanelLayoutTest` 15/15 绿。
+- 2026-10-14 真机复看（262 沙盒，HEAD `faf46ba0`）：四个页签**一行显示**且为编辑器式样式（选中项带框）；点「SQL 历史」正常切到历史面板（其搜索栏与空态引导就位）；工具栏八个动作图标同时可见。
+- 2026-10-14 权威全量（`HEAD=faf46ba0`，Docker 29.6.2，`testShards --no-configuration-cache`）：`BUILD SUCCESSFUL in 14m 6s`，退出码 0，合计 **7159/0/0/9**；`SqlLogPanelLayoutTest` 15/0、`SqlLogPanelTypePopupToggleTest` 6/0、`SqlLogTailFollowTest` 5/0、`BundleParityGuardTest` 5/0。期间未改工作树。
