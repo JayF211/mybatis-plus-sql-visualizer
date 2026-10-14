@@ -215,18 +215,36 @@ class SqlLogPanel(
     }
 
     /**
-     * 排序方式按钮（T-LogSortModes）：点击弹单选菜单，文案显示当前方式；与「SQL类型」按钮同款式
-     * （原生 LaF 扁平按钮 + 右侧下箭头），默认时间升序。取代原「耗时排序」双态切换按钮——
-     * 排序恒有确定方式，不再依赖「是否检测到耗时」决定显隐。
+     * 排序方式动作（T-LogSortModes / 用户 2026-10-14 校正）：点击弹单选菜单，当前方式进
+     * 动作 tooltip 与菜单选中态。
      *
-     * T-UiCoord F2：原「排序：」标签控件同样退役（标签键转 tooltip 前缀），文本同样截尾封顶。
+     * 形态改为 **动作图标组内的 AnAction**（原为固定宽度 JButton）：用户指出「排序按钮没被左侧
+     * 按钮集归入、过窄时应当自动折叠」——JButton 不参与 ActionToolbar 的溢出机制，宽度不足时会
+     * 压住相邻控件；改为 AnAction 后与捕捉/清空/搜索/滚底同簇，窄宽一起折进平台溢出菜单。
+     * 代价：工具窗工具栏按惯例只渲染图标，当前排序方式不再常显于按钮文字，改由 tooltip
+     * （`排序：<当前方式>`）与菜单选中态承载。
      */
-    private val sortButton = JButton().apply {
-        isFocusable = false
-        icon = AllIcons.General.ArrowDown
-        horizontalTextPosition = SwingConstants.LEFT // 图标在文字右侧（下拉按钮惯例，同 SQL类型）
-        addActionListener { showSortPopup() }
+    internal val sortModeAction: AnAction = object : AnAction() {
+        init {
+            templatePresentation.icon = AllIcons.General.ArrowDown
+        }
+
+        override fun update(e: AnActionEvent) {
+            val label = currentSortLabel()
+            e.presentation.icon = AllIcons.General.ArrowDown
+            e.presentation.text = label
+            e.presentation.description = MpSqlVisualizerBundle.message("log.sort.label") + label
+        }
+
+        override fun actionPerformed(e: AnActionEvent) {
+            showSortPopup(e.inputEvent?.component)
+        }
     }
+
+    /** 当前排序方式显示名（默认回退时间升序）。 */
+    private fun currentSortLabel(): String =
+        sortOptions().firstOrNull { it.mode == sortMode }?.label
+            ?: MpSqlVisualizerBundle.message("log.sort.time.asc")
 
     /**
      * T-SqlLogPerf（20261006-1020 计划 + 用户点名）：「滚动到底部」动作 + 尾部跟随。
@@ -331,13 +349,29 @@ class SqlLogPanel(
     internal fun selectSortModeForTest(mode: SortMode) = applySortMode(mode)
 
     /** 排序按钮（测试断言文案/可见性）。 */
-    internal val sortButtonForTest: JButton get() = sortButton
+    internal val sortActionForTest: AnAction get() = sortModeAction
+    internal fun sortActionTextForTest(): String {
+        val event = AnActionEvent.createFromAnAction(
+            sortModeAction, null, com.intellij.openapi.actionSystem.ActionPlaces.TOOLBAR,
+            com.intellij.openapi.actionSystem.DataContext.EMPTY_CONTEXT,
+        )
+        sortModeAction.update(event)
+        return event.presentation.text ?: ""
+    }
+    internal fun sortActionTooltipForTest(): String? {
+        val event = AnActionEvent.createFromAnAction(
+            sortModeAction, null, com.intellij.openapi.actionSystem.ActionPlaces.TOOLBAR,
+            com.intellij.openapi.actionSystem.DataContext.EMPTY_CONTEXT,
+        )
+        sortModeAction.update(event)
+        return event.presentation.description
+    }
 
     /** 排序菜单项文案列表（测试断言选项齐备；构建菜单但不 show）。 */
     internal fun sortMenuLabelsForTest(): List<String> = buildSortMenuItems().map { it.text }
 
-    /** 当前排序方式按钮文案（测试断言）。 */
-    internal val sortButtonTextForTest: String get() = sortButton.text
+    /** 当前排序方式显示名（测试断言；与动作 presentation.text 同源）。 */
+    internal val sortButtonTextForTest: String get() = currentSortLabel()
     internal val listScrollPaneForTest: JBScrollPane? get() = listScrollPane
     internal fun resumeTailFollowForTest() = scrollToBottom(resume = true)
 
@@ -365,11 +399,9 @@ class SqlLogPanel(
     /** T-UiCoord F2：工具栏右侧控制组（类型 / 排序 / 去重勾选 / 慢查询徽章）——单行契约的主断言面。 */
     internal val toolbarControlsForTest: JPanel? get() = toolbarControls
 
-    /** T-UiCoord F2：工具栏动作图标组组件（结构断言：它必须挂在行宿主组件树内——T-SqlListSortRight 起在左簇容器内）。 */
+    /** T-UiCoord F2：工具栏动作图标组组件（结构断言：它必须挂在行宿主 CENTER；排序已并入该动作组）。 */
     internal val toolbarComponentForTest: JComponent? get() = toolbarComponent
 
-    /** T-SqlListSortRight：工具栏左侧按钮集容器（图标组 + 排序按钮同簇）——结构断言面。 */
-    internal val toolbarLeftClusterForTest: JPanel? get() = toolbarLeftCluster
     internal val moreActionGroupForTest: DefaultActionGroup get() = moreActionGroup
 
     /** T-UiCoord F2：下拉按钮显示文本的像素预算（测试按同一预算算期望的省略文本）。 */
@@ -432,9 +464,10 @@ class SqlLogPanel(
 
     internal val toolbarGroup = DefaultActionGroup(
         captureToggleAction,
+        ClearAction(),
         ShowSearchAction(),
         scrollToEndAction,
-        ClearAction(),
+        sortModeAction,
     ).apply {
         addSeparator()
         add(moreActionGroup)
@@ -484,14 +517,8 @@ class SqlLogPanel(
     /** 工具栏右侧控制组（EAST 宿主内那层 FlowLayout 面板）。 */
     private var toolbarControls: JPanel? = null
 
-    /** 工具栏动作图标组组件（挂左侧按钮集容器 CENTER）——结构断言用（曾因还原反向验证探针时误删挂载而漏）。 */
+    /** 工具栏动作图标组组件（挂行宿主 CENTER）——结构断言用（曾因还原反向验证探针时误删挂载而漏）。 */
     private var toolbarComponent: JComponent? = null
-
-    /**
-     * T-SqlListSortRight（2026-10-14 用户令）：工具栏**左侧按钮集容器**——动作图标组与排序按钮同簇，
-     * 排序按钮排在图标组右侧（左簇最右端）。结构断言面（排序归位后「排序在左簇内、且在图标组右侧」）。
-     */
-    private var toolbarLeftCluster: JPanel? = null
 
     init {
         // 注册子面板到 Disposer 树：父面板 dispose 时级联释放子面板（及其 DocumentListener），
@@ -660,28 +687,16 @@ class SqlLogPanel(
         updateTypeFilterButton()
         updateSortButtonText()
         // T-UiCoord F2（2026-09-21 用户定案「不要两行」）：工具栏**恒为单行**——
-        // 左侧按钮集（动作图标组 + 排序按钮同簇）+ 右侧列表控制组
-        // （EAST：慢查询徽章 / SQL类型 / 去重勾选，勾选仍在最右）。
-        // T-SqlListSortRight（2026-10-14 用户令）：排序按钮不再独占整行最左（原 WEST 槽），归位到
-        // 左侧按钮集（动作图标组所在的那一簇）的**最右端**——与图标组同簇、排在图标组右侧；
-        // 仍不进右侧控制组。左簇挂行 WEST：取理想宽（= 图标组理想宽 + 排序按钮理想宽），簇内
-        // 图标组走 CENTER、排序按钮走 EAST，两者均随行高拉伸（与归位前 WEST/CENTER 的垂直形态一致，
-        // 排序按钮不被挤成顶对齐）。
-        // 左簇挂 **CENTER**（不是 WEST）：簇内图标组在 CENTER，窄宽时由 ActionToolbar 自身溢出吸收挤压，
-        // 排序按钮始终钉在簇的右缘；若挂 WEST，左簇与右侧控制组各取理想宽，宽度不足时 BorderLayout
-        // 会让两侧互相压盖（排序按钮压到 SQL类型按钮上）。
+        // 左侧动作图标组（CENTER）+ 右侧列表控制组（EAST：慢查询徽章 / SQL类型 / 去重勾选，勾选在最右）。
+        // T-SqlListSortRight（2026-10-14 用户两轮校正）：排序**并入左侧动作组**（组内最后一个动作），
+        // 与捕捉/清空/搜索/滚底一起由 ActionToolbar 折叠；不再用固定宽 JButton（它不参与溢出，
+        // 窄宽会压住 SQL类型按钮，用户也反馈「没被左侧按钮集归入」）。
         // BorderLayout 结构上不存在折行可能，故任意宽度下都只有一行；原 WrapLayout 流式行退役
         // ——它按「谁最后谁折」处理放不下，2026-09-16 加排序单元、09-18 加第 5 枚图标后，
         // 460px 侧边栏下「排序」单元孤行到第二行（右留 300px 空档、两行左缘差 10px）。
         val row = JPanel(BorderLayout())
-        val leftCluster = JPanel(BorderLayout()).apply {
-            isOpaque = false
-            add(toolbar.component, BorderLayout.CENTER)
-            add(sortButton, BorderLayout.EAST)
-        }
         toolbarComponent = toolbar.component
-        toolbarLeftCluster = leftCluster
-        row.add(leftCluster, BorderLayout.CENTER)
+        row.add(toolbar.component, BorderLayout.CENTER)
 
         // O-1：慢查询计数徽章。T-UiCoord F2：由「慢查询: N」全文改短徽章（复用存量键
         // log.panel.slowQueryBadge）让出一行余量，全文进 tooltip（见 updateSlowQueryLabel）。
@@ -1497,11 +1512,12 @@ class SqlLogPanel(
     /** 按当前排序模式排序条目。 */
     // ---------- 排序方式（T-LogSortModes） ----------
 
-    /** 弹出排序方式单选菜单（与 SQL类型弹窗同款交互；当前项打勾）。 */
-    private fun showSortPopup() {
+    /** 弹出排序方式单选菜单（与 SQL类型弹窗同款交互；当前项打勾）。锚点＝触发动作的按钮。 */
+    private fun showSortPopup(anchor: java.awt.Component?) {
         val popup = JPopupMenu()
         buildSortMenuItems().forEach { popup.add(it) }
-        popup.show(sortButton, 0, sortButton.height + 2)
+        val target = anchor ?: toolbarComponent
+        if (target != null) popup.show(target, 0, target.height + 2) else popup.show(toolbarComponent, 0, 0)
     }
 
     /**
@@ -1516,27 +1532,28 @@ class SqlLogPanel(
             }
         }
 
-    /** 应用排序方式：更新模式 → 刷新列表 → 同步按钮文案。 */
+    /** 应用排序方式：更新模式 → 刷新列表 → 刷新动作 presentation（当前方式进 tooltip 与菜单选中态）。 */
     private fun applySortMode(mode: SortMode) {
         if (sortMode == mode) {
-            updateSortButtonText()
+            refreshSortAction()
             return
         }
         sortMode = mode
         refreshList()
-        updateSortButtonText()
+        refreshSortAction()
+    }
+
+    /** 刷新排序动作的 presentation（工具窗工具栏只渲染图标，当前方式由 tooltip 承载）。 */
+    private fun refreshSortAction() {
+        _toolbarRef?.updateActionsImmediately()
     }
 
     /**
-     * 排序按钮文案 = 当前方式标签。
-     *
-     * T-UiCoord F2：与 SQL类型按钮同构——显示文本截尾封顶，tooltip 恒为「排序：」+ 完整方式。
+     * 排序动作文案 = 当前方式标签（见 [sortModeAction] 的 update：进 presentation.text 与 tooltip）。
+     * 工具窗工具栏按惯例只渲染图标，故当前方式实际由 tooltip「排序：<方式>」与菜单选中态承载。
      */
     private fun updateSortButtonText() {
-        val label = sortOptions().firstOrNull { it.mode == sortMode }?.label
-            ?: MpSqlVisualizerBundle.message("log.sort.time.asc")
-        sortButton.text = clipToDropdownBudget(label, sortButton)
-        sortButton.toolTipText = MpSqlVisualizerBundle.message("log.sort.label") + label
+        refreshSortAction()
     }
 
     private fun applySort(entries: List<LogSqlEntry>): List<LogSqlEntry> = when (sortMode) {

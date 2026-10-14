@@ -113,8 +113,12 @@ class SqlLogPanelSortAndSlowQueryTest : BasePlatformTestCase() {
             // 无任何耗时信息时排序方式仍可见（默认时间升序恒可用，不再按耗时显隐）
             manager.entries.addEntry(LogSqlEntry(rawSql = "SELECT 1", restoredSql = "SELECT 1", params = emptyList(), timestamp = 1L))
             waitForEdt()
-            assertTrue("排序方式按钮应恒可见", panel.sortButtonForTest.isVisible)
-            assertEquals("默认按钮文案应为时间升序", "时间升序", panel.sortButtonTextForTest)
+            // 无任何耗时信息时排序动作仍恒在工具栏动作组内（默认时间升序恒可用，不再按耗时显隐）
+            assertTrue(
+                "排序动作应恒在工具栏动作组内（并入左侧按钮集，窄宽随组折叠）",
+                panel.toolbarGroup.getChildren(null).contains(panel.sortActionForTest),
+            )
+            assertEquals("默认排序方式显示名应为时间升序", "时间升序", panel.sortButtonTextForTest)
             assertEquals(
                 "菜单应含五种排序方式且时间升序居首",
                 listOf("时间升序", "时间降序", "耗时升序", "耗时降序", "行号"),
