@@ -6,6 +6,10 @@ import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import cn.song.mybatisplus.visualizer.util.UiTextClipboard
+import java.awt.Component
+import java.awt.Container
+import javax.swing.JButton
 
 /**
  * T-PreviewUx-Pack #2/#4：日志转 SQL 面板——诚实降级横幅显隐 + 多语句执行拆分。
@@ -29,6 +33,33 @@ class LogToSqlPanelExecuteTest : BasePlatformTestCase() {
     }
 
     private fun banner(): DegradationBanner = panel.degradationBannerForTest()
+
+    private fun descendants(root: Component): List<Component> =
+        listOf(root) + (root as? Container)?.components.orEmpty().flatMap(::descendants)
+
+    fun testExecutionErrorHasReachableFullCopyAndClearsOnConversion() {
+        // Directly drive the panel's execution-error sink, not a synthetic standalone result model.
+        // Reflection keeps this test red at runtime on the old panel without adding a production test-only API.
+        val onError = panel.javaClass.getDeclaredMethod("showExecutionError", String::class.java)
+            .apply { isAccessible = true }
+        val fullError = "Syntax error near <column> & value\nDriver detail: line 7"
+        onError.invoke(panel, fullError)
+        assertEquals(fullError, panel.statusForTest())
+
+        val copyButtons = descendants(panel).filterIsInstance<JButton>().filter {
+            it.text == MpSqlVisualizerBundle.message("panel.copyError") && it.isVisible
+        }
+        assertEquals("执行失败时复制完整错误按钮必须在真实面板组件树中可见", 1, copyButtons.size)
+        assertFalse("日志没有 mapper 源定位锚点，不得虚构定位按钮", descendants(panel)
+            .filterIsInstance<JButton>().any { it.isVisible && it.text == MpSqlVisualizerBundle.message("execute.error.locate") })
+        UiTextClipboard.copy("clipboard sentinel")
+        copyButtons.single().doClick()
+        assertEquals("按钮须复制未截断的原始错误，不是状态行显示摘录", fullError, UiTextClipboard.readText())
+
+        panel.setInputForTest("Preparing: SELECT 1")
+        panel.convertForTest()
+        assertFalse("下次转换成功后不留陈旧错误动作", copyButtons.single().isVisible)
+    }
 
     // ---------- #2：诚实降级横幅 ----------
 

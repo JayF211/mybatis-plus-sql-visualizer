@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.log
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
+import cn.song.mybatisplus.visualizer.ui.SqlResultPanel
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.util.UiTextClipboard
@@ -60,6 +61,9 @@ class LogToSqlPanel(
     private val statusLabel = JBLabel(" ").apply {
         border = JBUI.Borders.empty(2, 6, 2, 6)
     }
+
+    // 执行失败复用预览结果面板的完整错误/复制动作；日志无 mapper 源锚点，不提供定位动作。
+    private val executionErrorPanel = SqlResultPanel()
 
     // T-PreviewUx-Pack #2：诚实降级横幅（面板内嵌非模态提示，不算弹窗）——还原失败/参数缺失
     // 不再仅靠单行状态红字，横幅承载三要素（哪段没还原/为什么/用户能做什么）
@@ -122,6 +126,7 @@ class LogToSqlPanel(
         // 恢复即隐藏（不占高度），状态行语义不变
         val southHost = JPanel(BorderLayout())
         southHost.add(degradationBanner, BorderLayout.NORTH)
+        southHost.add(executionErrorPanel, BorderLayout.CENTER)
         southHost.add(statusLabel, BorderLayout.SOUTH)
         add(southHost, BorderLayout.SOUTH)
 
@@ -351,7 +356,7 @@ class LogToSqlPanel(
         status(MpSqlVisualizerBundle.message("logToSql.execute.submitted"), error = false)
         cn.song.mybatisplus.visualizer.execute.SqlExecutor.execute(
             project, sql, null, isQuery,
-            onError = { errorMsg -> status(errorMsg, error = true) },
+            onError = { errorMsg -> showExecutionError(errorMsg) },
         )
     }
 
@@ -548,8 +553,23 @@ class LogToSqlPanel(
         }
     }
 
-    /** 状态行（错误红字 / 提示主题色）。 */
+    /** 执行链回调有 EDT 与后台两条路径；只在 EDT 更新面板，不弹窗。 */
+    private fun showExecutionError(message: String) {
+        if (!ApplicationManager.getApplication().isDispatchThread) {
+            ApplicationManager.getApplication().invokeLater({ showExecutionError(message) },
+                com.intellij.openapi.application.ModalityState.any())
+            return
+        }
+        if (disposed || project.isDisposed) return
+        status(message, error = true)
+        statusLabel.isVisible = false
+        executionErrorPanel.showError(message)
+    }
+
+    /** 状态行（错误红字 / 提示主题色）；普通状态恢复时撤销上次执行错误动作。 */
     private fun status(message: String, error: Boolean) {
+        executionErrorPanel.showEmpty()
+        statusLabel.isVisible = true
         statusLabel.foreground = if (error) {
             // IDE 标准错误前景命名色（亮暗主题自适应；243 HighlighterColors 无 ERROR 常量）
             JBColor.namedColor("ErrorForeground", JBColor.RED)
