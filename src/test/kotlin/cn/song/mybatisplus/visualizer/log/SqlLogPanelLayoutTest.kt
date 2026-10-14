@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.log
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import com.intellij.openapi.actionSystem.DefaultActionGroup
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -43,25 +44,24 @@ class SqlLogPanelLayoutTest : BasePlatformTestCase() {
 
     private fun waitForEdt() = com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
 
-    fun test低频动作由平台更多弹层承接_主操作保持直达() {
+    fun test全部动作直达工具栏_无自建更多弹层() {
         val panel = SqlLogPanel(project, manager)
         try {
             val main = panel.toolbarGroup.getChildren(null).toList()
-            val more = panel.moreActionGroupForTest
-            assertTrue("更多必须是平台 popup ActionGroup", more.isPopup)
-            assertEquals("更多应为动作组末项", more, main.last())
-            assertTrue("捕捉必须保留直接入口", main.contains(panel.captureToggleAction))
-            assertTrue("滚动到底部必须保留直接入口", main.contains(panel.scrollToEndAction))
-            assertTrue("清空必须保留直接入口", main.any { it is SqlLogPanel.ClearAction })
-            assertTrue("搜索必须保留直接入口", main.any { it is SqlLogPanel.ShowSearchAction })
-            assertFalse("设置不应占据窄栏主操作位置", main.any { it is SqlLogPanel.SettingsAction })
-            assertFalse("屏蔽管理不应占据窄栏主操作位置", main.any { it is SqlLogPanel.ManageSuppressAction })
-            assertFalse("帮助不应占据窄栏主操作位置", main.any { it is SqlLogPanel.HelpAction })
-            val extras = more.getChildren(null).toList()
-            assertEquals("设置、屏蔽管理、帮助三个入口均需保留", 3, extras.size)
-            assertTrue(extras.any { it is SqlLogPanel.SettingsAction })
-            assertTrue(extras.any { it is SqlLogPanel.ManageSuppressAction })
-            assertTrue(extras.any { it is SqlLogPanel.HelpAction })
+            // 用户 2026-10-14：「不要这个更多，之前是侧边栏不够宽时自动折叠、悬停能看全部」。
+            // 故组内不得出现自建 popup 分组；窄宽折叠交给平台 ActionToolbar 自带的溢出。
+            assertFalse("工具栏不应再有自建「更多」弹层", main.any { it is DefaultActionGroup })
+            assertTrue("捕捉应直达", main.contains(panel.captureToggleAction))
+            assertTrue("滚动到底部应直达", main.contains(panel.scrollToEndAction))
+            assertTrue("排序应直达（并入左侧动作组）", main.contains(panel.sortActionForTest))
+            assertTrue("清空应直达", main.any { it is SqlLogPanel.ClearAction })
+            assertTrue("搜索应直达", main.any { it is SqlLogPanel.ShowSearchAction })
+            assertTrue("设置应直达", main.any { it is SqlLogPanel.SettingsAction })
+            assertTrue("屏蔽管理应直达", main.any { it is SqlLogPanel.ManageSuppressAction })
+            assertTrue("帮助应直达", main.any { it is SqlLogPanel.HelpAction })
+            assertEquals("八个动作应全部在组内（捕捉/清空/设置/屏蔽/搜索/帮助/滚底/排序）",
+                8, main.size)
+            assertEquals("排序应为组内末项（其余保持原相对序）", panel.sortActionForTest, main.last())
         } finally {
             panel.dispose()
         }
@@ -263,14 +263,13 @@ class SqlLogPanelLayoutTest : BasePlatformTestCase() {
             // 排序归位到动作组内：既不在整行最左（原 WEST 槽），也不进右侧控制组（原位置）。
             val mainActions = panel.toolbarGroup.getChildren(null).toList()
             val sortIndex = mainActions.indexOfFirst { it === panel.sortActionForTest }
-            val moreIndex = mainActions.indexOfFirst { it === panel.moreActionGroupForTest }
             assertTrue("排序动作应在工具栏动作组内", sortIndex >= 0)
             assertTrue(
-                "排序动作应排在「更多」弹层之前（属左侧按钮集，idx=$sortIndex / more=$moreIndex）",
-                sortIndex in 0 until moreIndex,
+                "排序应为组内末项（其余动作保持原相对序，idx=$sortIndex / size=${mainActions.size}）",
+                sortIndex == mainActions.size - 1,
             )
             assertTrue(
-                "滚动到底部动作应排在排序之前（排序是组内最后一个直接动作）",
+                "滚动到底部动作应排在排序之前",
                 mainActions.indexOfFirst { it === panel.scrollToEndAction } < sortIndex,
             )
             assertTrue("控制组应含 去重勾选（仍在最右）", children.contains(panel.dedupeCheckBoxForTest))

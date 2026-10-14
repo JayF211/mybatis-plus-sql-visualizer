@@ -226,12 +226,12 @@ class SqlLogPanel(
      */
     internal val sortModeAction: AnAction = object : AnAction() {
         init {
-            templatePresentation.icon = AllIcons.General.ArrowDown
+            templatePresentation.icon = AllIcons.RunConfigurations.SortbyDuration
         }
 
         override fun update(e: AnActionEvent) {
             val label = currentSortLabel()
-            e.presentation.icon = AllIcons.General.ArrowDown
+            e.presentation.icon = AllIcons.RunConfigurations.SortbyDuration
             e.presentation.text = label
             e.presentation.description = MpSqlVisualizerBundle.message("log.sort.label") + label
         }
@@ -402,7 +402,8 @@ class SqlLogPanel(
     /** T-UiCoord F2：工具栏动作图标组组件（结构断言：它必须挂在行宿主 CENTER；排序已并入该动作组）。 */
     internal val toolbarComponentForTest: JComponent? get() = toolbarComponent
 
-    internal val moreActionGroupForTest: DefaultActionGroup get() = moreActionGroup
+    /** 工具栏动作组内的直接动作个数（测试断言：全部动作直达、无自建「更多」弹层）。 */
+    internal val toolbarActionCountForTest: Int get() = toolbarGroup.getChildren(null).size
 
     /** T-UiCoord F2：下拉按钮显示文本的像素预算（测试按同一预算算期望的省略文本）。 */
     internal val dropdownTextBudgetForTest: Int get() = JBUI.scale(DROPDOWN_TEXT_BUDGET_PX)
@@ -453,25 +454,22 @@ class SqlLogPanel(
     /**
      * 工具栏动作组（T-M39：internal 供测试断言帮助入口存在性；
      * update 由工具栏生命周期驱动，headless 测试手动触发；须在 init 前声明）。
-     * 捕捉、搜索、滚底、清空保持直达；设置、屏蔽管理和帮助由平台弹层承接，窄宽交给 ActionToolbar 溢出。
+     *
+     * 全部动作直接入组、按用户原顺序排列；**不设自建「更多」弹层**——用户 2026-10-14 明确：
+     * 「不要这个更多，之前是侧边栏不够宽时自动折叠、鼠标放上去能显示全部，那个交互更好」。
+     * 窄宽折叠交给平台 ActionToolbar 自带的溢出（`»`），悬停/点击即列出被折叠的动作。
+     * 排序（[sortModeAction]）排在组末，与其余动作一起参与折叠。
      */
-    private val moreActionGroup = DefaultActionGroup(MpSqlVisualizerBundle.message("panel.more"), true).apply {
-        templatePresentation.icon = AllIcons.Actions.More
-        add(SettingsAction())
-        add(ManageSuppressAction())
-        add(HelpAction())
-    }
-
     internal val toolbarGroup = DefaultActionGroup(
         captureToggleAction,
         ClearAction(),
+        SettingsAction(),
+        ManageSuppressAction(),
         ShowSearchAction(),
+        HelpAction(),
         scrollToEndAction,
         sortModeAction,
-    ).apply {
-        addSeparator()
-        add(moreActionGroup)
-    }
+    )
 
     // ---------- T-Perf-15：manager 监听器命名引用（init 注册 / dispose 注销） ----------
 
