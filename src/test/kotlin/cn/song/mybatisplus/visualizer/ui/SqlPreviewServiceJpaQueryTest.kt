@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.ui
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
+import cn.song.mybatisplus.visualizer.sql.IdeaSourceDialectProbe
 import cn.song.mybatisplus.visualizer.converter.jpa.SpecificationQueryConverter
 import cn.song.mybatisplus.visualizer.ui.gutter.JpaGutterLineMarkerProvider
 import com.intellij.codeInsight.daemon.LineMarkerInfo
@@ -230,6 +231,70 @@ class SqlPreviewServiceJpaQueryTest : BasePlatformTestCase() {
             assertTrue("Oracle 不得残留 MySQL LIMIT：${result.sql}", !result.sql.contains("LIMIT ?"))
         } finally {
             settings.loadState(snapshot)
+        }
+    }
+
+    fun testDerivedQueryUsesExplicitIdeaDialectOnItsSourceFile() {
+        val settings = PluginSettings.getInstance()
+        val snapshot = settings.getState().copy()
+        try {
+            settings.state.dialectAuto = true
+            myFixture.configureByText(
+                "MappedRepository.java",
+                """
+                public interface MappedRepository extends JpaRepository<UserEntity, Long> {
+                    java.util.List<UserEntity> findTop3ByStatus(Integer status);
+                }
+                interface JpaRepository<T, ID> {}
+                @javax.persistence.Entity
+                @javax.persistence.Table(name = "t_user")
+                class UserEntity {
+                    @javax.persistence.Id private Long id;
+                    private Integer status;
+                }
+                """.trimIndent(),
+            )
+            val source = myFixture.file.virtualFile
+            IdeaSourceDialectProbe.languageIdForTest = { p, file ->
+                assertEquals(project, p)
+                assertEquals(source, file)
+                "Oracle"
+            }
+            val result = newService().previewDerivedQuery(method("findTop3ByStatus"))
+            assertNotNull(result)
+            assertTrue("源文件的 Oracle 方言须进入生成器：${result!!.sql}", result.sql.contains("FETCH FIRST 3 ROWS ONLY"))
+            assertTrue("不得回退 MySQL LIMIT：${result.sql}", !result.sql.contains("LIMIT 3"))
+        } finally {
+            IdeaSourceDialectProbe.languageIdForTest = null
+            settings.loadState(snapshot)
+        }
+    }
+
+    fun testExplicitManualDialectDoesNotReadIdeaSourceMapping() {
+        val settings = PluginSettings.getInstance()
+        val snapshot = settings.getState().copy()
+        try {
+            settings.state.dialectAuto = false
+            settings.state.dialect = "MySQL"
+            myFixture.configureByText("ManualRepository.java", "interface ManualRepository {}")
+            IdeaSourceDialectProbe.languageIdForTest = { _, _ -> error("手动方言不应探测 IDE 映射") }
+            assertEquals("MySQL", cn.song.mybatisplus.visualizer.sql.DialectRegistry
+                .effective(project, myFixture.file.virtualFile).name)
+        } finally {
+            IdeaSourceDialectProbe.languageIdForTest = null
+            settings.loadState(snapshot)
+        }
+    }
+
+    fun testGenericIdeaMappingDoesNotClaimKnownDialect() {
+        myFixture.configureByText("GenericRepository.java", "interface GenericRepository {}")
+        try {
+            IdeaSourceDialectProbe.languageIdForTest = { _, _ -> "GenericSQL" }
+            assertNull(IdeaSourceDialectProbe.dialectName(project, myFixture.file.virtualFile))
+            IdeaSourceDialectProbe.languageIdForTest = { _, _ -> "TSQL" }
+            assertEquals("SQL Server", IdeaSourceDialectProbe.dialectName(project, myFixture.file.virtualFile))
+        } finally {
+            IdeaSourceDialectProbe.languageIdForTest = null
         }
     }
 

@@ -939,7 +939,10 @@ object DialectRegistry {
      *
      * @param project 数据源探测与项目级设置读取用项目（null=无项目上下文，见上「边界」）
      */
-    fun decision(project: com.intellij.openapi.project.Project? = null): DialectDecisionEngine.Decision {
+    fun decision(
+        project: com.intellij.openapi.project.Project? = null,
+        sourceFile: com.intellij.openapi.vfs.VirtualFile? = null,
+    ): DialectDecisionEngine.Decision {
         val settings = runCatching {
             cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state
         }.getOrNull()
@@ -955,12 +958,15 @@ object DialectRegistry {
             cn.song.mybatisplus.visualizer.log.agent.AgentUrlRegistry.lastConnectionUrl(project),
         )
         return DialectDecisionEngine.decide(DialectDecisionEngine.Input(
+            ideaDialect = sourceFile?.let { IdeaSourceDialectProbe.dialectName(project, it) },
             projectCandidates = candidates, lastAgentDialect = agentDialect, singleModuleProven = singleModule,
         ))
     }
 
-    fun effective(project: com.intellij.openapi.project.Project? = null): Dialect =
-        decision(project).dialectName?.let { byName(it) } ?: MySqlDialect
+    fun effective(
+        project: com.intellij.openapi.project.Project? = null,
+        sourceFile: com.intellij.openapi.vfs.VirtualFile? = null,
+    ): Dialect = decision(project, sourceFile).dialectName?.let { byName(it) } ?: MySqlDialect
 
     /**
      * T-TS-FixC：项目级有效方言模式（null=无项目上下文/项目级服务不可用，调用方按全局判定）。

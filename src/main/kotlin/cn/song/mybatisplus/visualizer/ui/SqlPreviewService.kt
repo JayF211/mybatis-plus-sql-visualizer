@@ -518,7 +518,7 @@ class SqlPreviewService(internal val project: Project) {
         val partTree = PartTreeParser.parse(methodInfo.methodName)
         var statement = DerivedQueryConverter.convert(partTree, table)
         // T-PS5-03：入口求一次方言（分页分析/方法级增强/结果构建共用同一实例，不再各求一次）
-        val dialect = currentDialect()
+        val dialect = DialectRegistry.effective(project, method.containingFile?.virtualFile)
         // T-J10：Pageable/Page/Sort/Limit 参数全路径——Pageable/Page → LIMIT 占位（调用点形态静态求值）、
         // Sort → ORDER BY（Sort.by 字面量内联）、Limit（3.2） → 仅 LIMIT 无 OFFSET
         val pageSort = JpaQueryEnhancer.evaluatePageSort(method, callArgs, dialect, table)
