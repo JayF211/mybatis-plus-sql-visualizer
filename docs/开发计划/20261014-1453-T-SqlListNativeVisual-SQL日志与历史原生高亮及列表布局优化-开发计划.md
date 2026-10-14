@@ -3,7 +3,7 @@
 - 占号：**O-146 / R96 / D156 / V179**（2026-10-14 14:53 全仓检索未发现占用）
 - 日期：2026-10-14
 - 基线：`master@647c9ce1`
-- 状态：独立工作树已实施，权威全量 7153/0/0/9；IDE 真机视觉走查与 V179 剩余前提待验（§十四）
+- 状态：独立工作树（分支 `t-sql-list-native-tail`）**已实施并交付**；权威全量 **7159/0/0/9**（HEAD `f5a9018f`）；O-148/O-149 两项后续计划在同分支一并落地；用户真机确认功能无问题，V179 视觉矩阵剩余项待走查（§十四）
 - 用户触发：SQL 日志面板和 SQL 历史中的 SQL 高亮颜色过多、层级杂乱，希望接近 SQL 预览编辑器的原生高亮，并进一步优化列表布局
 - 关联任务：T-LogListFreeze04、T-ClickPreview、T-ListMode、T-CrudColor、T-PreviewDialectAutoInferMultiModule（O-145）
 
@@ -494,3 +494,4 @@ SqlEntryPresentation
 - 权威全量门禁（最终定稿轮，`HEAD=f5a9018f`，Docker 29.6.2，`testShards --no-configuration-cache -Pkotlin.compiler.execution.strategy=in-process`）：`BUILD SUCCESSFUL in 10m 49s`，退出码 0；shard1–5 + testExternal 合计 **7159/0/0/9**（shard1 1379、shard2 1381、shard3 1626、shard4 1283、shard5 1466、external 24）。目标类全绿：`SqlLogPanelLayoutTest` 15/0、`SqlLogTailFollowTest` 5/0、`SqlEntryPresentationTest` 3/0、`BundleParityGuardTest` 5/0、`SqlLogPanelSortAndSlowQueryTest` 11/0、`SqlLogPanelTypePopupToggleTest` 6/0（后两类是本轮新增/修好的）。工具栏最终形态：方案 A 排列（捕捉 → 清空 → 设置 → 屏蔽管理 → 搜索 → 滚动到底部 → 排序 → 帮助），全部动作直达、无自建「更多」，窄宽由平台溢出折叠；排序用 `RunConfigurations.SortbyDuration` 图标。
 - 本轮门禁抓到并修掉一个真实回归：`SqlLogPanelTypePopupToggleTest` 按组件树收集弹窗内全部勾选框、断言数量等于可筛选类型数，新增的「只看慢查询」勾选框打破了该契约（`f5a9018f` 修正：先构建内容再按身份剔除该实例，并补「该勾选框必须在弹窗树内」的正向断言，判据未放宽）。教训：给共用弹窗加控件前先查该弹窗的既有结构契约测试。
 - 2026-10-14 续轮补齐 W5 工具栏收纳：`b8fcf96a` 将捕捉、搜索、滚底、清空保留主栏直达，设置、屏蔽管理、帮助放进平台 `DefaultActionGroup(..., true)` 的「更多」弹层，主栏 separator 分组并由 ActionToolbar 处理不足宽度的溢出。`SqlLogPanelLayoutTest` 补结构/可达性守卫，`HelpDialogTest`/`HelpUiTest` 改为对真实更多子菜单验帮助链；定向四类 `BUILD SUCCESSFUL`，临时摘掉更多入口后新守卫精准红，恢复并复绿。该笔之后的权威全量与 262 真实可见性另行回填，未提前宣称通过。
+- 2026-10-14 用户验收（定稿）：用户在自有 IDE 中复看本轮交付——默认关键字换行、排序归位与排序图标、工具栏平台式溢出（无自建「更多」）、页签恒单行——回复「功能没问题了」。据此关闭 O-146 的功能面与 O-149 的窄栏页签形态；**不在本次确认范围**：V179 的 Light 主题对比度、200 条滚动卡顿、多层状态叠加组合，以及真实 460px 极限窄栏下的图标溢出观感（§十三仍列为待走查项，不得据本条宣称视觉矩阵全通过）。
