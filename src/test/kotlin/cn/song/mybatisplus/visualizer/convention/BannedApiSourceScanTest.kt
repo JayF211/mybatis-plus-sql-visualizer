@@ -1243,9 +1243,12 @@ class BannedApiSourceScanTest {
         // （Selector 主体 / ConsoleKt 控制台准备+执行链 / ResultsKt 结果面板链），fatal 透传站点随拆分
         // 迁移——22 处自 Selector 主体迁出，按守卫口径（maskSource 后 `FatalErrors.isFatal(` 计数）实测：
         // Selector 主体 1 + ConsoleKt 7 + ResultsKt 14 = 22（与拆分前总数守恒）。
+        // T-SyncK2JMaster104（2026-10-14）：ConsoleKt 随 ★A49 executeOnConsole 提交排障块
+        // 新增 1 处外层 fatal 透传判定，实测 ConsoleKt 7→8；ResultsKt 随 ★A49 afterSubmitted
+        // 取证块新增 1 处外层 fatal 透传判定，实测 ResultsKt 14→15。
         "src/main/java/cn/song/mybatisplus/visualizer/execute/DataSourceSelector.java" to 1,
-        "src/main/java/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorConsoleKt.java" to 7,
-        "src/main/java/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResultsKt.java" to 14,
+        "src/main/java/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorConsoleKt.java" to 8,
+        "src/main/java/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResultsKt.java" to 15,
         // 9→10 处（T-SyncK2JMaster482 C9a-1 本轮重登记）：agent 采集/attach 链随 482 轮
         // AgentManager 主体同步（会话/探活/通知链翻译）净增 1 处 fatal 透传判定，实测口径计数 10。
         "src/main/java/cn/song/mybatisplus/visualizer/log/agent/AgentManager.java" to 10,
@@ -1306,12 +1309,19 @@ class BannedApiSourceScanTest {
      * 各 +1，见 [fatalPassthroughGuardedFiles] 注记），其余为未判定降级站点，按既定流程重新登记基线。
      *
      * **674 → 730（T-SyncK2JMaster482 C9a-1，2026-10-11，本轮重登记净增 +56）**：482 轮
-     * 生产翻译五波（log 捕获链/execute/mcp/SqlPreviewPanel 拆分/ui 第二批）把 master 侧
+     * 生产翻译五波（log 捕获链/execute+mcp/SqlPreviewPanel 拆分/ui 第二批）把 master 侧
      * `runCatching{}.getOrElse{}/onFailure{}` 形态落成 try/catch(Throwable)（671 个 .java 文件
      * 实测口径 730 站点）；全部为降级语义（可选能力探测/候选收集/渲染回落/面板兜底），与
      * master 同源，无一覆盖 fatal 面；按守卫既定流程重新登记基线。
+     *
+     * **730 → 777（T-SyncK2JMaster104，2026-10-14，本轮重登记净增 +47）**：104 轮生产翻译
+     * T-XmlGap / T-DialectQuoteWarn / T-HqlBufConcat+HelperReturn / T-EmbeddedColPrefix / ★A47~A49 /
+     * T-PerfSweep25 等增量，把 master 侧 `runCatching` 与可选平台 API 探测继续落成 Java
+     * try/catch(Throwable)（700 个 .java 文件实测口径 777 站点）。新增站点集中在 XML 补全/引用导航、
+     * 方言与嵌入列探测、执行结果宿主取证、MCP 方言解析与预览降级链，均为降级/探测/兜底语义；
+     * 外层 fatal 透传判定新增两处已登记到 [fatalPassthroughGuardedFiles]（ConsoleKt 7→8、ResultsKt 14→15）。
      */
-    private val fatalCatchSiteTotalBaseline = 730
+    private val fatalCatchSiteTotalBaseline = 777
 
     /**
      * 原生执行链里「解包了 `InvocationTargetException` 但未对解包结果判 fatal」的站点数基线
