@@ -94,6 +94,31 @@ class DmlImpactEstimatorTest {
         assertEquals("dml.impact.reason.unparseable", reason("DELETE FROM WHERE"))
     }
 
+    @Test
+    fun `长WHERE_试算使用完整谓词而提示仍有界`() {
+        val predicate = (1..30).joinToString(" AND ") { "col_$it = $it" }
+        assertTrue(predicate.length > 200)
+        val p = probe("UPDATE t_user SET status = 1 WHERE $predicate")
+        assertEquals("SELECT COUNT(*) FROM t_user WHERE $predicate", p.probeSql)
+        assertTrue("提示文本不得无界增长", p.whereText.length <= 200)
+    }
+
+    @Test
+    fun `长字符串值_截断提示不能截断试算引号`() {
+        val value = "a".repeat(240)
+        val p = probe("DELETE FROM t_user WHERE token = '$value'")
+        assertEquals("SELECT COUNT(*) FROM t_user WHERE token = '$value'", p.probeSql)
+        assertTrue("试算必须仍是合法只读语句", McpSelectGuard.checkSingleSelect(p.probeSql).allowed)
+    }
+
+    @Test
+    fun `DELETE带LIMIT_尾部高选择性条件必须留在试算中`() {
+        val prefix = (1..20).joinToString(" AND ") { "flag_$it = $it" }
+        val p = probe("DELETE FROM t_user WHERE $prefix AND tenant_id = 42 LIMIT 10")
+        assertTrue(p.probeSql, p.probeSql.contains("tenant_id = 42 LIMIT 10"))
+        assertTrue("试算必须仍是合法只读语句", McpSelectGuard.checkSingleSelect(p.probeSql).allowed)
+    }
+
     /**
      * V60 只读护栏联动：**每条试算语句必过 MCP 只读白名单**——即含 LIMIT 子查询/普通 COUNT
      * 两种形态都不得被判为写（否则 R42 的「只读试算」承诺不成立）。

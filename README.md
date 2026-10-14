@@ -2,18 +2,18 @@
 
 > **服务未启，SQL 先知**
 
-MyBatis-Plus / MyBatis-Plus-Join / JPA / Hibernate / JdbcTemplate 的 SQL 调试利器——IntelliJ IDEA 插件：写代码时就看见最终 SQL（Wrapper 链、XML/注解/HQL 动态 SQL，含 MPJ 联表 JOIN）；跑起来后真实参数与耗时自动捕获，慢查询标红、EXPLAIN 看计划、一键跳回源码；SQL 也能反向转成 Java 代码。不启服务、不翻日志、不手拼参数。支持 IDEA 2024.3 及以上版本，[功能矩阵与在线文档](https://sql-visualizer.jvtools.cn)见官网。
-> **别的插件给你文本，我们给你可执行的 SQL。**
+MyBatis-Plus / MyBatis-Plus-Join / JPA / Hibernate / JdbcTemplate 的 SQL 调试利器——IntelliJ IDEA 插件：写代码时预览静态可推导的 SQL（Wrapper 链、XML/注解/HQL 动态 SQL，含 MPJ 联表 JOIN）；跑起来后真实参数与耗时自动捕获，慢查询标红、EXPLAIN 看计划、一键跳回源码；SQL 也能反向转成 Java 代码。不启服务、不翻日志、不手拼参数。支持 IDEA 2024.3 及以上版本，[功能矩阵与在线文档](https://sql-visualizer.jvtools.cn)见官网。
+> **写前预览，运行后对照；无法静态确定的条件先核实再执行。**
 > 支持 IntelliJ IDEA 2024.3~2026.x 全版本（含 2025.1–2025.3）。
-> 四条理由：Wrapper 链静态生成 SQL 预览（无需运行代码，市场上唯一）；JPA/Hibernate 全家桶支持（派生查询 / JPQL / Criteria / HQL / NamedQuery / Specification / QBE）；预览即可一键执行验证（内嵌 IDEA 原生数据库控制台）；支持达梦/人大金仓/OceanBase/openGauss 等 11 种数据库方言（含信创场景）。
+> 四条理由：Wrapper 链静态生成 SQL 预览（无需运行代码）；JPA/Hibernate 全家桶支持（派生查询 / JPQL / Criteria / HQL / NamedQuery / Specification / QBE）；预览即可一键执行验证（内嵌 IDEA 原生数据库控制台）；支持达梦/人大金仓/OceanBase/openGauss 等 11 种数据库方言（含信创场景）。
 
 ## 能力全景：覆盖调试的两个阶段
 
-**编码期（写代码时，静态预览）**：Wrapper 链（Lambda / Query / Update / Delete / MPJ 联表 / 服务链）、XML 动态 SQL（if/foreach/OGNL，自研框架自定义标签内嵌 SQL 兜底识别）、注解 SQL、JPA 派生方法 / JPQL / Criteria、HQL —— gutter 图标一键预览最终 SQL（含逻辑删除、乐观锁、多租户拦截器模拟渲染），并支持 SQL 反向转 Java 代码、实体类 / 数据库表右键生成 CRUD SQL。
+**编码期（写代码时，静态预览）**：Wrapper 链（Lambda / Query / Update / Delete / MPJ 联表 / 服务链）、XML 动态 SQL（if/foreach/OGNL，自研框架自定义标签内嵌 SQL 兜底识别）、注解 SQL、JPA 派生方法 / JPQL / Criteria、HQL —— gutter 图标一键预览可静态推导的 SQL（含逻辑删除、乐观锁、多租户拦截器模拟渲染；动态条件须核对运行时），并支持 SQL 反向转 Java 代码、实体类 / 数据库表右键生成 CRUD SQL。
 
-**运行期（跑起来后，动态捕获）**：字节码增强捕获为默认通道——无需应用开启 SQL 日志，即得真实参数、执行耗时、影响行数与执行报错，慢查询标红并给出静态性能建议；日志条目与源码双向跳转（自研框架、JAR 形态业务工具库的调用自动定位到业务代码行），预览面板的调用栈可悬停展开、逐帧跳转；控制台日志（MyBatis / Hibernate / JdbcTemplate 三族，并发多线程交错按线程分桶还原）作为不改工程的回落通道；保活心跳类刷屏 SQL 一键屏蔽，历史 SQL 全量落盘与两级导航。
+**运行期（跑起来后，动态捕获）**：字节码增强捕获为默认通道——无需应用开启 SQL 日志即可捕获 SQL、耗时、影响行数与报错；连接包装可采集绑定参数，运行中 attach 的语句级织入可能缺少参数，慢查询标红并给出静态性能建议；日志条目与源码双向跳转（自研框架、JAR 形态业务工具库的调用自动定位到业务代码行），预览面板的调用栈可悬停展开、逐帧跳转；控制台日志（MyBatis / Hibernate / JdbcTemplate 三族，并发多线程交错按线程分桶还原）作为不改工程的回落通道；保活心跳类刷屏 SQL 一键屏蔽，可选 SQL 日志落盘与两级导航。
 
-**验证（随时）**：预览结果内嵌原生数据库控制台一键执行，EXPLAIN 执行计划覆盖 11 种方言（9 种真机 / 引擎级实证、OceanBase 文档级验证、SQL Server 按官方文法落地待真机），SQL 性能规则引擎与静态标注对照，JOIN 关系图可视化；执行前有 `${}` 注入确认与无界写发现清单两道闸、执行超时护栏兜底，UPDATE / DELETE 预览可一键生成回滚 SQL。
+**验证（随时）**：预览结果内嵌原生数据库控制台一键执行，EXPLAIN 执行计划覆盖 11 种方言（9 种真机 / 引擎级实证、OceanBase 文档级验证、SQL Server 按官方文法落地待真机），SQL 性能规则引擎与静态标注对照，JOIN 关系图可视化；执行前有 `${}` 注入确认与无界写发现清单两道闸；MCP 直连执行有超时护栏，IDE 原生控制台不在该护栏覆盖面。UPDATE / DELETE 可生成回滚预案，可靠恢复须提供写入前的行快照。
 
 本插件原名为 MyBatis-Plus SQL Visualizer，现更名 SQL Visualizer——仍全面支持 MyBatis-Plus / MyBatis-Plus-Join / JPA / Hibernate，插件 ID 与升级链路不变。
 
@@ -155,7 +155,7 @@ IntelliJ IDEA 2024.3 起全版本兼容（含 2025.1–2025.3 与 2026.x）。
 
 ## 预览 SQL 与运行时 SQL 的差异
 
-> 预览目标是对齐 MP 运行时语义；以下差异是静态求值的固有特性，语义等价、仅文本不同。
+> 预览以贴近运行时 SQL 为目标，但静态分析不保证所有动态条件都与真引擎语义等价。下表只列已知的常见差异；例如 DTO 对象属性参与 XML `test` 时，现有真引擎对照用例 P20 已证实预览可能漏掉条件且未给警示。涉及写入或动态值时，请先核对实际 SQL 和目标数据源，不把预览当作已验证的执行结果。
 
 | 差异 | 说明 |
 |------|------|
@@ -228,14 +228,14 @@ ORDER BY t1.create_time DESC
 
 | 配置项 | 默认值 | 作用 |
 |--------|--------|------|
-| 数据库方言 | 智能推断（跟随数据源） | 分页 / upsert 子句按方言渲染（MySQL / PostgreSQL / Oracle / SQL Server / H2 / SQLite / MariaDB / DM / KingBase / OceanBase / openGauss）。默认「智能推断」：增强捕获连接的 JDBC URL 优先、IDE 数据源配置次之、均未命中回退 MySQL，状态行显示推断结果与依据；手动选定后按手动值生效、可随时切回（升级时从未动过该设置的老用户自动进入推断模式，手动值原样保留） |
+| 数据库方言 | 智能推断（跟随数据源） | 分页 / upsert 子句按方言渲染（MySQL / PostgreSQL / Oracle / SQL Server / H2 / SQLite / MariaDB / DM / KingBase / OceanBase / openGauss）。当前「智能推断」为项目级最佳努力：最近增强捕获连接 URL 优先、其次取 IDE 枚举中的首个数据源 URL，均缺失则兼容回退 MySQL；多模块或多数据源时这不能证明当前语句绑定的真实方言，执行前请核对目标库；手动选定后按手动值生效、可随时切回（升级时从未动过该设置的老用户自动进入推断模式，手动值原样保留） |
 | 替换 ? 占位符 | 开 | 关闭后变量也渲染为 `?`，在左栏输入框手动填值；代码字面量恒内联 |
 | 空参数填充策略 | 占位符 `?` | 带签名信息的参数输入行留空时的填充方式，占位符 `?`（默认）/ NULL 字面量 / 空字符串三选一；默认保留 `?` 待填提示，避免 NULL 静默过滤行（如 `amount >= NULL` 恒不匹配），需要可直接执行的 SQL 时切 NULL / 空字符串档，已持久化过 NULL / 空字符串的老用户保持原档 |
 | 格式化输出 | 开 | 多行缩进（关 = 单行） |
 | 逻辑删除注入 | 开 | 实体含 `@TableLogic` 时自动追加 `AND deleted = 值` |
 | 逻辑删除值 | 0 | 逻辑删除条件的值（对齐 MP `logic-delete-value`） |
 | 字段列表自动折叠 | 关 | SELECT / INSERT 列清单、VALUES 组、UPDATE SET 超过阈值时折叠为「... N columns」占位，点击即展开（阈值可配，默认 10） |
-| 执行超时 | 30 秒 | 执行 / EXPLAIN 单语句超时兜底（0 = 不限），超时先请求取消再报错——锁等待、笛卡尔积等挂死查询不再永久 loading |
+| 执行超时 | 30 秒 | MCP 直连执行的单语句超时预算（0 = 不限），驱动支持时先请求取消再报错；IDE 原生数据库控制台由平台托管，不受插件的这道超时保护 |
 | 按数据源校正列名 | 开 | 实体字段名与库真实列名不一致时（字段 `orderID` / 列 `order_id` 这类非标准命名）用数据源的真实列集合纠正预览 SQL 的列名——仅在能唯一确定是哪一列时改写，0 列或多列歧义保持原样；覆盖列清单、逻辑删除 / 乐观锁 / 复合主键列与 JOIN ON 外键列，项目级可覆盖。无可用数据源（社区版 / 未配置 / 未连接 / 表看不见）时与关闭本项完全等价 |
 
 **表名映射**

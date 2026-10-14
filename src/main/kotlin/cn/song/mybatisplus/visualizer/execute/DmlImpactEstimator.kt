@@ -107,16 +107,17 @@ object DmlImpactEstimator {
     ): Plan {
         if (joins || multiTable) return Plan.NotApplicable("dml.impact.reason.multiTable")
         if (where == null) return Plan.NotApplicable("dml.impact.reason.noWhere")
-        if (containsSubqueryFailSafe(where) && where.toString().length > SUBQUERY_WHERE_LIMIT) {
+        val fullWhereText = where.toString().replace('\n', ' ')
+        if (containsSubqueryFailSafe(where) && fullWhereText.length > SUBQUERY_WHERE_LIMIT) {
             // 超长子查询谓词：试算语句会非常长且成本不可控，诚实降级
             return Plan.NotApplicable("dml.impact.reason.complexWhere")
         }
-        val whereText = where.toString().replace('\n', ' ').take(WHERE_LIMIT)
+        val whereText = fullWhereText.take(WHERE_LIMIT)
         val cap = limitRows?.takeIf { dialect.supportsDeleteLimit && it > 0 }
         val probeSql = if (cap != null) {
-            "SELECT COUNT(*) FROM (SELECT 1 FROM $tableText WHERE $whereText LIMIT $cap) mpsv_impact_probe"
+            "SELECT COUNT(*) FROM (SELECT 1 FROM $tableText WHERE $fullWhereText LIMIT $cap) mpsv_impact_probe"
         } else {
-            "SELECT COUNT(*) FROM $tableText WHERE $whereText"
+            "SELECT COUNT(*) FROM $tableText WHERE $fullWhereText"
         }
         return Plan.Applicable(Probe(probeSql, tableText, cap, whereText))
     }
