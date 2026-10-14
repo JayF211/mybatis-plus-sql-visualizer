@@ -113,6 +113,7 @@ class InjectionGateTest : BasePlatformTestCase() {
         val p = newPanel()
         p.showResult(result)
         assertEquals("Oracle", p.currentDialect())
+        assertEquals("预览临时 PSI 应消费同一实际生成方言", "Oracle", p.previewDesiredDialectName)
     }
 
     private fun panelState(): String = panel!!.resultPanelForTest().stateForTest()

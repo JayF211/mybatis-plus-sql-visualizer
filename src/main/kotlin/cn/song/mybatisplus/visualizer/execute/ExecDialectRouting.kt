@@ -186,6 +186,15 @@ internal object ExecDialectRouting {
         return runCatching { DialectPreMapping.languageById(project, targetId) }.getOrNull()
     }
 
+    /** 插件渲染方言 → 平台 SQL Language。按候选顺序命中；平台无对应方言时诚实返回 null。 */
+    internal fun resolvePluginDialectLanguage(project: Project, dialectName: String?): Any? {
+        if (dialectName.isNullOrBlank()) return null
+        for (id in PLUGIN_DIALECT_TO_SQL_LANGUAGE_IDS[dialectName].orEmpty()) {
+            runCatching { DialectPreMapping.languageById(project, id) }.getOrNull()?.let { return it }
+        }
+        return null
+    }
+
     /**
      * 目标数据源解析（生产链）：last-used 记忆（UUID→显示名）→ 插件默认数据源 → null。
      */

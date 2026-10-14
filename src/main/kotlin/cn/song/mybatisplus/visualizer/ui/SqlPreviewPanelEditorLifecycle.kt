@@ -147,6 +147,8 @@ internal fun SqlPreviewPanel.prewarmPreviewTempFile() {
                 return@executeOnPooledThread
             }
             previewTempFile = vf
+            // 结果可能恰在首次映射与 PSI 创建之间到达；再走一次幂等同步，避免早期 MySQL 映射赢竞态。
+            if (previewDesiredDialectName != null) mapPreviewDialectBeforePsi(proj, vf)
             publishPrewarmProduct(await, vf to psi, prewarmStartedAt, round)
         }.onFailure { e ->
             prewarmFailed = true
@@ -327,11 +329,10 @@ internal fun SqlPreviewPanel.projectPreviewFile(): java.io.File? {
 }
 
 /**
- * T-PreviewExecDs-01c：预览文件方言预映射（exec 路径 DataSourceSelector.mapDialectBeforePsi 同款）——
- * PSI 创建时即按映射方言解析，Generic SQL 下 Database 补全不触发。映射匹配与 exec 一致：
- * SqlDialectMappings.getAvailableValues() 里 language.id == "MySQL" 的实例（MyBatis-Plus 预览
- * 场景即 MySQL；插件自定义 Dialect 与 Database 方言映射无现成对应，硬编码与 exec 对齐）。
- * 同对象已映射过即幂等短路（避免每次预览点 setMapping 触发 SqlDialectPusher push all dumb）。
+ * T-PreviewExecDs-01c / O-145 W5：预览文件方言预映射——PSI 创建时即按本次 SQL 的实际生成方言解析，
+ * 让编辑器语言、补全和渲染保持一致。结果尚未到达时先用兼容 MySQL；结果到达后按
+ * [SqlPreviewPanel.previewDesiredDialectName] 重映射。同目录幂等同时比较 language id，避免早到的
+ * MySQL 映射阻断后到的 Oracle/PostgreSQL；平台缺对应 Language 时保留现状，不反向冒充 MySQL。
  *
  * T-ExecSlowOps F1：反射段收编进 [DialectPreMapping]，本方法仅保留「面板级进程内幂等短路」语义 +
  * 成功回写 [previewDialectMappedVf]。真机实锤：本方法在 [prewarmPreviewTempFile] 后台线程内调用，
@@ -353,10 +354,34 @@ internal fun SqlPreviewPanel.projectPreviewFile(): java.io.File? {
 
 internal fun SqlPreviewPanel.mapPreviewDialectBeforePsi(proj: Project, vf: com.intellij.openapi.vfs.VirtualFile) {
     val target = previewDialectMappingTarget(vf)
-    val inProcessMapped = previewDialectMappedVf?.isValid == true && previewDialectMappedVf === target
-    if (cn.song.mybatisplus.visualizer.execute.DialectPreMapping.ensureMapped(proj, target, inProcessMapped)) {
-        previewDialectMappedVf = target
+    val desiredName = previewDesiredDialectName
+    val targetLanguage = desiredName?.let {
+        cn.song.mybatisplus.visualizer.execute.ExecDialectRouting.resolvePluginDialectLanguage(proj, it)
     }
+    // 已明确生成非 MySQL 方言、但当前平台没有对应 Language 时不反向强写 MySQL。
+    if (desiredName != null && targetLanguage == null) {
+        com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+            .warn("[O-145] preview dialect '$desiredName' has no platform SQL Language; keep existing mapping")
+        return
+    }
+    val targetId = (targetLanguage as? com.intellij.lang.Language)?.id
+        ?: cn.song.mybatisplus.visualizer.execute.ExecDialectRouting.MYSQL_LANGUAGE_ID
+    val inProcessMapped = previewDialectMappedVf?.isValid == true && previewDialectMappedVf === target &&
+        previewDialectMappedLanguageId.equals(targetId, ignoreCase = true)
+    if (cn.song.mybatisplus.visualizer.execute.DialectPreMapping.ensureMapped(
+            proj, target, targetLanguage, inProcessMapped,
+        )) {
+        previewDialectMappedVf = target
+        previewDialectMappedLanguageId = targetId
+    }
+}
+
+/** 结果已到达时把实际生成方言同步到预览目录；预热尚在途时由其稍后读取同一字段。 */
+internal fun SqlPreviewPanel.syncPreviewDialectMapping(result: cn.song.mybatisplus.visualizer.model.PreviewResult) {
+    previewDesiredDialectName = result.effectiveDialect?.name
+    val vf = previewTempFile ?: prewarmedTempFile?.first ?: return
+    val proj = project ?: return
+    mapPreviewDialectBeforePsi(proj, vf)
 }
 
 /**

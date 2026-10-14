@@ -153,6 +153,8 @@ internal fun SqlPreviewPanel.moreActionsStep(actions: List<Pair<String, () -> Un
 
 internal fun SqlPreviewPanel.showResult(result: PreviewResult) {
     current = result
+    // O-145 W5：渲染方言与临时 PSI 使用同一事实；必须先于 renderSql/createEditor。
+    syncPreviewDialectMapping(result)
     // 参数值按 source 初始化（T-M42：优先取预填初始值——日志识别 `param1` → 日志参数值；
     // 其余空字符串；多条件复用同一 source 共享一个值）
     paramValues.clear()

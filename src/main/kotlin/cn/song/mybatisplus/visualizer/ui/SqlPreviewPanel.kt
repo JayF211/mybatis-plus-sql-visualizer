@@ -343,6 +343,12 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
      *  T-FixN2 起该 vf 是**预览目录**（不再是单个文件）——见 [mapPreviewDialectBeforePsi]。 */
     @Volatile
     internal var previewDialectMappedVf: com.intellij.openapi.vfs.VirtualFile? = null
+    /** 本次预览 SQL 的实际生成方言；预热线程与结果到达后的重映射共用。null=兼容 MySQL。 */
+    @Volatile
+    internal var previewDesiredDialectName: String? = null
+    /** [previewDialectMappedVf] 当前已映射的平台 language id，防同目录误把 MySQL 当成 Oracle/PG 幂等命中。 */
+    @Volatile
+    internal var previewDialectMappedLanguageId: String? = null
     /** F-46：当前代码位置（文件名:行号），来源列默认值；null 表示未知（日志/历史等无锚点场景）。 */
     private var sourceLocation: String? = null
     internal val editorHolder = JBPanel<JBPanel<*>>(java.awt.GridLayout(1, 1)).apply {

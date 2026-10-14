@@ -254,6 +254,26 @@ class ExecDialectRoutingTest {
     }
 
     @Test
+    fun `接线守卫_预览临时PSI消费实际生成方言`() {
+        val panel = mainSource("cn/song/mybatisplus/visualizer/ui/SqlPreviewPanel.kt")
+        val lifecycle = mainSource("cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelEditorLifecycle.kt")
+        val resultView = mainSource("cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelResultView.kt")
+        assertTrue("面板须保存本次预览的目标方言，供早到和晚到预热共同读取",
+            panel.contains("previewDesiredDialectName"))
+        assertTrue("预览结果进入面板后须在渲染前同步临时 PSI 方言",
+            resultView.contains("syncPreviewDialectMapping(result)"))
+        assertTrue("预热映射不得继续无条件写死 MySQL，须解析插件实际生成方言",
+            lifecycle.contains("resolvePluginDialectLanguage") &&
+                lifecycle.contains("previewDesiredDialectName"))
+        assertTrue("同目录幂等必须同时比较 language id，不能让先映射的 MySQL 阻断 Oracle/PG 重映射",
+            panel.contains("previewDialectMappedLanguageId") &&
+                lifecycle.contains("previewDialectMappedLanguageId"))
+        assertTrue("结果在首次映射与 PSI 创建之间到达时，发布预热产物前须补一次方言同步",
+            Regex("previewTempFile = vf[\\s\\S]{0,300}previewDesiredDialectName[\\s\\S]{0,200}mapPreviewDialectBeforePsi")
+                .containsMatchIn(lifecycle))
+    }
+
+    @Test
     fun `接线守卫_弹窗前展开组Runner`() {
         val results = mainSource("cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResults.kt")
         assertTrue(
