@@ -92,6 +92,18 @@ class SettingsTruthTest {
     }
 
     @Test
+    fun testP1_执行超时说明不能冒充原生控制台取消护栏() {
+        fun read(resource: String) = java.util.Properties().apply {
+            this@SettingsTruthTest.javaClass.getResourceAsStream("/messages/$resource")!!.bufferedReader(Charsets.UTF_8).use(::load)
+        }.getProperty("settings.preview.executionTimeout.tip")
+        val zh = read("MpSqlVisualizerBundle_zh.properties")
+        val en = read("MpSqlVisualizerBundle.properties")
+        assertTrue("中文设置须明确原生控制台不受插件超时保护", zh.contains("原生控制台") && zh.contains("不受"))
+        assertTrue("英文设置须明确原生控制台不受插件超时保护", en.contains("native console") && en.contains("not"))
+        assertTrue("适用的 MCP 通道仍须在文案中可见", zh.contains("MCP") && en.contains("MCP"))
+    }
+
+    @Test
     fun testP1_全局方言状态不得取首项目首数据源() {
         val section = mainSrc("cn/song/mybatisplus/visualizer/config/PluginSettingsPanel.kt")
             .substringAfter("internal fun refreshInferredLabel()")
