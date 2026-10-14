@@ -173,7 +173,8 @@ W0 的验收是能从单条诊断判断 V180-1/2，而不是仅靠 UI 猜测。�
 - **反向验证探针 2（强制空值覆盖）**：`mergeDuplicateEntry` 的源码规则临时改为无条件取 incoming → 59 例 **恰 1 红**（agent 先到_控制台后到_不降级，即「真实源码不被空值覆盖」断言）→ 还原后复跑绿。
 - 探针残留复核：`rg REVERSE_PROBE src/` = 0 命中；探针常量与注释均已删除。
 - **被改文件的守护测试复跑**（本次改动触达 `AgentManager.updateOnline` 与桥/EP 入队点，补跑其守护类）：`AgentManagerIntakeGateTest` 20（含既有「在线且确认采集_桥封」/「接管沿_项目缓冲去重索引按通道纪元重置」用例）+ `SqlLogManagerBehaviorTest` 35 + `SqlLogConsoleBridgeMarkerTest` 13 + `SqlLogCaptureRealtimeScenarioTest` 9 + `EpBridgeSinglePathTest` 7 + `SqlConsoleBridgeFilterProviderTest` 3 = **87 例 0 失败 0 错误 0 跳过**（BUILD SUCCESSFUL）。
-- **计划 §六 反向验证第 3 条（撤去 ACK 后桥让位判据）未执行**——W2 经取证后未改闸门语义（仅补回落沿日志），该探针的靶点（闸门封停/回落判据）在本轮零改动，其覆盖由上述 `AgentManagerIntakeGateTest` 既有用例承担（本轮已复跑绿），如实登记不做无靶探针。
+- **反向验证探针 3（撤去 ACK 后桥让位判据）**：`AgentManager.updateOnline` 的 `gateNow` 临时退回「按在线封桥」（`online`，即 ACK 判据被撤）→ `AgentManagerIntakeGateTest` 20 例 **恰 1 红**（`test在线但未确认_桥不封`——该判据自己的用例），其余 19 例保绿 → 还原后复跑 **20/20 绿**、`git diff` 该文件为空、探针注释残留 0。
+  **过程留痕（首轮我把它免做了，事后补做）**：合并前我以「W2 未改闸门语义、无靶可打」为由跳过本条，登记为「由既有用例承担」——这是**拿既有测试的绿当判别力证据**，而反向验证的意义正是不假设判别力（既有用例是本任务之外的历轮作者写的，其判别力未经本轮实测）。用户质询后补做，结论：既有 `AgentManagerIntakeGateTest` 对 ACK 判据确有判别力，且该探针在本轮改动后仍有效（本轮给 `updateOnline` 加的是回落沿日志，未改变判据本身）。**教训登记**：计划列明的反向验证不因「本轮未改该语义」而免除——除非同时证明该用例的判别力已被近期轮次实测过。
 - 未跑全量 `testShards`（改动面 = log 包 + 两个消息资源，不触 build.gradle.kts/plugin.xml EP/依赖版本；按验证三档分层交下轮收口批）。
 
 ### 遗留（真机复验，用户执行）
