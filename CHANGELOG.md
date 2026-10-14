@@ -59,6 +59,7 @@
 - **数据源上下文角标默认仅显示数据库类型（T-DataSourceBadgeMode）**：SQL 日志/历史两页的目标库角标此前恒显全量「方言 · 库名@host:port」，条目元信息行信息密度偏高。现默认仅显示数据库类型（如 `[MySQL]`）；设置页「SQL 日志 → 数据源角标显示完整上下文（库名@主机:端口）」打开后恢复全量形态。门控做在显示侧——生产/落盘/历史读回/MCP 检索链零改动，开关即时生效（含已读回的历史条目），后开开关不丢任何信息；方言解析失败仅存连接事实的条目关闭态原样保留
 
 ### Fixed
+- **历史与 XML 编辑性能收敛（T-PerfSweep25）**：历史日志面板由「打开即后台扫描历史文件」改为首次切入「SQL 历史」页签才触发首扫；空查询的同模板聚合只随条目快照换代重算；resultMap 列补全、XML 高亮共存探针与 SQL 切分器补上病态输入熔断与缓存，避免大文件 / 无配对 BEGIN 等形态拖慢编辑响应
 
 - **`@Embedded` 展平列的预览列名丢了嵌入段前缀，与真库列名不符（T-EmbeddedColPrefix）**：实体 `@Embedded private WmsInventoryQty qty;` + HQL `inv.qty.baseQty` 被预览成 `AND inv.base_qty > 0`，而真库列是 `qty_base_qty`（同句 `inv.moveTool.palletNo` 同样被预览成 `inv.pallet_no`）。根因是展平嵌入列时把「列名 = 内层字段名」写死（`@AttributeOverride` > 内层 `@Column(name)` > 驼峰转下划线），而列名怎么拼其实由工程的 Hibernate 隐式命名策略决定——`ImplicitNamingStrategyComponentPathImpl`（配置关键字 `component-path`，Hibernate 4 的 `DefaultComponentSafeNamingStrategy` 同源）会把属性路径并进列名。现已按 hibernate-core 源码核实的语义支持这一约定：默认自动读工程 `application*.yml/properties` 判定（判不出按 JPA 默认「无前缀」），设置页「嵌入列命名」亦可显式指定「无前缀 / 组件路径前缀」；两档都只作用于兜底档，显式 `@AttributeOverride` 与内层 `@Column(name)` 依旧优先。同一处列名推导同时喂 WHERE 段属性映射与 SELECT 子句展开，故一处修正、两处产物同时正确。另补一条不依赖配置的兜底：既有的「按数据源校正列名」此前对嵌入列失效（它按归一化比对，`base_qty` 与 `qty_base_qty` 差的是一整段前缀，必然 0 候选），现对嵌入列在 0 命中后追加「用嵌入段路径的 snake 形态唯一命中」这一档——绑定了数据源时这类场景零设置自愈，0 候选/歧义/当前列名本就是库中真名时一律不改写；嵌入列命名的配置探测按**实体所在模块**取范围（命名策略是每个持久化单元各自的事），多模块工程里兄弟模块的配置不会外溢
 - **用 `StringBuffer`·`StringBuilder` 逐句 `append` 拼出的 SQL 传给自定义 DAO 时无法预览（T-HqlBufConcat）**：把 HQL 累积在 `StringBuffer sb` 里（`sb.append("SELECT …")` …）再经 `sb.toString()` 传给自研 DAO（如 `commonDao.findByQueryMaxNum(sb.toString(), new String[]{}, new Object[]{}, 0, 10)`）时，该行既不亮预览图标、手动触发动作也只弹「未找到可预览 SQL 源」。根因是定位器只认字面量 / `+` 拼接 / 变量引用三种承载，而 `sb.toString()` 是方法调用表达式、落进「无法静态取得字符串」的兜底返回 null，内容启发失败即不认领（与 DAO 实现是否在 jar 里无关——认领走 qualifier 后缀 + 方法名关键字 + 内容正则，全程不解析 DAO 实现体）。现把 JdbcTemplate 通道已在用的 StringBuilder 聚合器 `SqlStringConcatenator` 提为共享入口（并补 `.toString()` / `.append(x).toString()` 解包），自定义 DAO（`CustomDaoHqlLocator`）与 Hibernate `session.createQuery(...)`（`HqlQueryLocator`）两条通道共用；拼接中嵌入的运行时值（`param.get(...)`）沿用既有 `/*运行时值*/` 占位降级。顺带收敛两处同族口径：`HqlQueryLocator` 的兜底不再把表达式源码文本当 HQL（对齐 T-GutterDupFreeze），`handleNewExpression` 只认大写 `NEW` 的问题改为大小写不敏感的单一实现 `NewExpressionStripper`（小写 `new Map(...)` 此前会被原样留在产物里产出非法 SQL，「`RENEW(`」之类不再误命中）
@@ -95,6 +96,9 @@
 - **个别增强捕获条目源码位置显示 `[<generated>]`（T-SrcGenFrame）**：增强捕获下经 Spring 代理调用 MyBatis-Plus `ServiceImpl` 继承方法（`list`/`getOne`/`saveBatch` 等，真实方法体所在类被框架前缀跳过）时，栈上最深非框架帧是 CGLIB 增强类帧（`$$EnhancerBySpringCGLIB$$` 族）——其 SourceFile 属性是 Enhancer 字节码硬编码的 `<generated>`（spring-core javap 实证）、行号恒 -1，而类名前缀即业务包名、codeSource 随宿主类落业务目录，agent 侧 `StackLocator` 的 L1 来源判据与上顶收敛都把它当业务帧选中，面板遂渲染 `[<generated>]`（真机实证：同批条目直调 mapper 接口的拿到真实业务行、经代理调 Service 继承方法的全部中招）。现主位置选择（L1/上顶收敛/判定缓存命中深帧探测/候选列）一律要求真实源文件，生成类帧让位给池中真实业务帧（=触发本次调用的调用方行）；仅池内无任何真实源文件帧（调度器直发/框架回调等真无主形态）时安全网原样采用，`[<generated>]` 保留作真无主信号
 
 - **预览编辑器行注释前缀统一为 `--` 双横线（T-PreviewLineCommentDash）**：预览/控制台编辑器内 Ctrl+/ 此前插入 `#` 前缀——预览文件被方言预映射强制为 MySQL 方言，平台注释动作经 commenter 链取到 MySQL 的 `#`，对 PostgreSQL 执行报 `[42601] syntax error`。现对预览自建编辑器与原生控制台编辑器接管行注释快捷键：插入一律 `-- `、再按一次剥除，修复前残留的 `#` 行同样可剥（缩进保留、多行选区整段切换、一步撤销）；未打标编辑器直通平台原行为零变化，块注释 Ctrl+Shift+/ 不接管（MySQL/PG 语义本就一致）
+- **预览执行结果 / 原生控制台结果网格不渲染（★A49）**：结果区在嵌入宿主与原生控制台间换入 / 复用时没有正确摘回 DBN 结果组件，出现「执行已完成但网格空白」；现按宿主形态收敛组件挂载与结果回收，内嵌预览、原生控制台与复用链均可显示结果
+- **SQL 快捷模板失败反馈偶发静默（T-SqlTemplateUx P2）**：EXPLAIN / COUNT / 抽样三动作的晚检失败会被宿主门控挡住，气泡与「定位到出错语句 / 复制错误信息」两个反馈入口都不出现；现失败链在门控后正确送达反馈面板
+- **增强捕获「已挂载」气泡重复出现**：同一项目会话内多次触发挂载提示会反复打扰，现收敛为每项目会话一次
 
 ## [2026.10.9] - 2026-10-09
 
