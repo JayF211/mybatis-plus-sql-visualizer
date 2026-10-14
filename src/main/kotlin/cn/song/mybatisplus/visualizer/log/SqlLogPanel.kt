@@ -666,7 +666,10 @@ class SqlLogPanel(
         // 左侧按钮集（动作图标组所在的那一簇）的**最右端**——与图标组同簇、排在图标组右侧；
         // 仍不进右侧控制组。左簇挂行 WEST：取理想宽（= 图标组理想宽 + 排序按钮理想宽），簇内
         // 图标组走 CENTER、排序按钮走 EAST，两者均随行高拉伸（与归位前 WEST/CENTER 的垂直形态一致，
-        // 排序按钮不被挤成顶对齐）。WEST 恒取理想宽，故簇宽不因行宽变化而收窄、结构上不折行。
+        // 排序按钮不被挤成顶对齐）。
+        // 左簇挂 **CENTER**（不是 WEST）：簇内图标组在 CENTER，窄宽时由 ActionToolbar 自身溢出吸收挤压，
+        // 排序按钮始终钉在簇的右缘；若挂 WEST，左簇与右侧控制组各取理想宽，宽度不足时 BorderLayout
+        // 会让两侧互相压盖（排序按钮压到 SQL类型按钮上）。
         // BorderLayout 结构上不存在折行可能，故任意宽度下都只有一行；原 WrapLayout 流式行退役
         // ——它按「谁最后谁折」处理放不下，2026-09-16 加排序单元、09-18 加第 5 枚图标后，
         // 460px 侧边栏下「排序」单元孤行到第二行（右留 300px 空档、两行左缘差 10px）。
@@ -678,7 +681,7 @@ class SqlLogPanel(
         }
         toolbarComponent = toolbar.component
         toolbarLeftCluster = leftCluster
-        row.add(leftCluster, BorderLayout.WEST)
+        row.add(leftCluster, BorderLayout.CENTER)
 
         // O-1：慢查询计数徽章。T-UiCoord F2：由「慢查询: N」全文改短徽章（复用存量键
         // log.panel.slowQueryBadge）让出一行余量，全文进 tooltip（见 updateSlowQueryLabel）。

@@ -7,6 +7,8 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import java.awt.BorderLayout
 import java.awt.Dimension
@@ -275,6 +277,22 @@ class SqlLogPanelLayoutTest : BasePlatformTestCase() {
                 children.last(),
             )
             assertFalse("动作图标组不应混进控制组（单行定构下它在左簇）", children.any { it === toolbarComponent })
+
+            // 窄宽不许两侧压盖：左簇必须挂 CENTER、控制组挂 EAST —— 这样 CENTER 只吃剩余宽度，
+            // 结构上不可能互相压盖。左簇曾挂 WEST：两侧各取理想宽，宽度不足时 BorderLayout 会让
+            // 排序按钮直接压住 SQL类型按钮（用户真机提出的重叠疑问）。headless 读不到稳定几何，
+            // 故按布局约束做判据（比像素比较更可靠）。
+            val layout = row.layout as BorderLayout
+            assertSame(
+                "左簇必须挂 CENTER（挂 WEST 时两侧各取理想宽会互相压盖）",
+                leftCluster,
+                layout.getLayoutComponent(BorderLayout.CENTER),
+            )
+            assertNull(
+                "行宿主 WEST 不应再挂任何组件（它是压盖的来源）",
+                layout.getLayoutComponent(BorderLayout.WEST),
+            )
+            assertNotNull("控制组应挂在行宿主 EAST", layout.getLayoutComponent(BorderLayout.EAST))
         } finally {
             panel.dispose()
         }
