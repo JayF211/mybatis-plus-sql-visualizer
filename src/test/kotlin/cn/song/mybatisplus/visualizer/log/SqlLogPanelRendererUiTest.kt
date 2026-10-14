@@ -558,6 +558,23 @@ class SqlLogPanelRendererUiTest : BasePlatformTestCase() {
         }
     }
 
+    fun test摘要截断在敏感字面量中间_日志展示仍须脱敏() {
+        val state = PluginSettings.getInstance().state
+        val saved = state.displayMaskEnabled
+        try {
+            state.displayMaskEnabled = true
+            val secret = "PRIVATE_MARKER_" + "x".repeat(200)
+            val entry = entry("SELECT * FROM account WHERE password = '$secret'")
+            assertTrue("夹具须在闭合引号前截断", entry.summary.contains("PRIVATE_MARKER_"))
+            assertFalse(entry.summary.contains("'$secret'"))
+            val displayed = joinedText(render(entry).sqlLine)
+            assertTrue("密码应按完整字面量打码：$displayed", displayed.contains("password = '***'"))
+            assertFalse("截断的敏感片段不得泄漏：$displayed", displayed.contains("PRIVATE_MARKER_"))
+        } finally {
+            state.displayMaskEnabled = saved
+        }
+    }
+
     // ---------- T-DataSourceBadgeMode：数据源角标默认仅显示数据库类型（显示侧门控） ----------
 
     /** 构造带目标库的 agent 条目（badgeName 全量形态：方言 · 连接事实）。 */

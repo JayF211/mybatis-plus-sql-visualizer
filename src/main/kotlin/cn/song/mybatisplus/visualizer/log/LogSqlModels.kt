@@ -85,19 +85,7 @@ data class LogSqlEntry(
      * 摘要（列表展示用，智能截断：在第一行末尾或 MAX_SUMMARY_LENGTH 处取较小值，
      * 避免 mid-line 截断导致 multiline SQL 列表展示不完整）。
      */
-    val summary: String = run {
-        val newlineIdx = restoredSql.indexOf('\n')
-        val endIdx = when {
-            newlineIdx in 0 until MAX_SUMMARY_LENGTH -> newlineIdx  // 在第一行末尾截断
-            else -> minOf(restoredSql.length, MAX_SUMMARY_LENGTH)
-        }
-        // 160 UTF-16 code unit 边界可能落在 emoji 的代理对中间；只在此情形前移，避免输出半个字符。
-        val safeEndIdx = if (endIdx in 1 until restoredSql.length &&
-            Character.isHighSurrogate(restoredSql[endIdx - 1]) && Character.isLowSurrogate(restoredSql[endIdx])) {
-            endIdx - 1
-        } else endIdx
-        if (safeEndIdx < restoredSql.length) restoredSql.substring(0, safeEndIdx) + "…" else restoredSql
-    },
+    val summary: String = summarizeSql(restoredSql),
     /** 条目来源（MyBatis / Hibernate / 未知）。 */
     val source: SqlSource = SqlSource.UNKNOWN,
     /**
@@ -240,8 +228,24 @@ data class LogSqlEntry(
      */
     var cachedListLineFragmentsMasked: Boolean = false
 
+    /** 脱敏展示前先处理完整 SQL，避免旧摘要在字面量引号中间截断后漏打码。 */
+    var cachedMaskedSummary: String? = null
+
     companion object {
         private const val MAX_SUMMARY_LENGTH = 160
+
+        internal fun summarizeSql(sql: String): String {
+            val newlineIdx = sql.indexOf('\n')
+            val endIdx = when {
+                newlineIdx in 0 until MAX_SUMMARY_LENGTH -> newlineIdx
+                else -> minOf(sql.length, MAX_SUMMARY_LENGTH)
+            }
+            val safeEndIdx = if (endIdx in 1 until sql.length &&
+                Character.isHighSurrogate(sql[endIdx - 1]) && Character.isLowSurrogate(sql[endIdx])) {
+                endIdx - 1
+            } else endIdx
+            return if (safeEndIdx < sql.length) sql.substring(0, safeEndIdx) + "…" else sql
+        }
     }
 }
 

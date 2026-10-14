@@ -4,7 +4,6 @@ import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService
 import cn.song.mybatisplus.visualizer.ui.diff.SqlDiffer
-import cn.song.mybatisplus.visualizer.util.DisplayMasker
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.util.MpvsUiColors
 import cn.song.mybatisplus.visualizer.util.UiTextClipboard
@@ -1442,8 +1441,7 @@ internal class HistoryCellRenderer : JPanel(BorderLayout()), javax.swing.ListCel
         val mode = PluginSettings.getInstance().sqlListDisplayMode()
         // R60：只在展示投影脱敏；FORMATTED 使用完整 SQL，其他模式沿用摘要。
         val maskOn = PluginSettings.getInstance().state.displayMaskEnabled
-        val original = if (mode == SqlListDisplayMode.FORMATTED) entry.restoredSql else entry.summary
-        val sql = withTerminator(DisplayMasker.maskDisplay(original, maskOn))
+        val sql = withTerminator(displaySqlForList(entry, mode, maskOn))
         if (mode == SqlListDisplayMode.SINGLE_LINE) {
             return listOf(SqlListFragmentRenderer.renderFragments(sql))
         }

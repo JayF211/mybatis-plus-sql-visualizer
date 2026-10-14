@@ -87,7 +87,6 @@ import javax.swing.border.Border
 import javax.swing.border.EmptyBorder
 import javax.swing.event.DocumentEvent
 import javax.swing.event.DocumentListener
-import cn.song.mybatisplus.visualizer.util.DisplayMasker
 
 // SQL 日志条目的单元格渲染片段与列表渲染器
 // （T-M53-II 2026-10-10：由 SqlLogPanel.kt 原样搬出，同包同可见性，零行为改动。）
@@ -437,8 +436,7 @@ internal class LogEntryListCellRenderer : JPanel(BorderLayout()), javax.swing.Li
         val mode = PluginSettings.getInstance().sqlListDisplayMode()
         // R60：展示文本打码、原始条目不动；缓存同时以模式和脱敏态为键，防切换后复用旧语义片段。
         val maskOn = PluginSettings.getInstance().state.displayMaskEnabled
-        val original = if (mode == SqlListDisplayMode.FORMATTED) entry.restoredSql else entry.summary
-        val sql = withTerminator(DisplayMasker.maskDisplay(original, maskOn))
+        val sql = withTerminator(displaySqlForList(entry, mode, maskOn))
         if (mode == SqlListDisplayMode.SINGLE_LINE) {
             return listOf(SqlListFragmentRenderer.renderFragments(sql))
         }
