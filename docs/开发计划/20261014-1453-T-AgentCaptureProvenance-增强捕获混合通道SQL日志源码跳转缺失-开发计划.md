@@ -177,9 +177,30 @@ W0 的验收是能从单条诊断判断 V180-1/2，而不是仅靠 UI 猜测。�
   **过程留痕（首轮我把它免做了，事后补做）**：合并前我以「W2 未改闸门语义、无靶可打」为由跳过本条，登记为「由既有用例承担」——这是**拿既有测试的绿当判别力证据**，而反向验证的意义正是不假设判别力（既有用例是本任务之外的历轮作者写的，其判别力未经本轮实测）。用户质询后补做，结论：既有 `AgentManagerIntakeGateTest` 对 ACK 判据确有判别力，且该探针在本轮改动后仍有效（本轮给 `updateOnline` 加的是回落沿日志，未改变判据本身）。**教训登记**：计划列明的反向验证不因「本轮未改该语义」而免除——除非同时证明该用例的判别力已被近期轮次实测过。
 - 未跑全量 `testShards`（改动面 = log 包 + 两个消息资源，不触 build.gradle.kts/plugin.xml EP/依赖版本；按验证三档分层交下轮收口批）。
 
+### W2-补（2026-10-14 真机复验发现并修复）：接管沿「全清索引」切断同一次执行的双通道副本
+
+**真机现场（沙盒 IDE + `mybatis-plus-demo` 8081，两轮并发压测）**：
+
+- 第一轮（约 2340 请求 + 2 次 storm，agent 事件 2800+）：闸门全程封停、无回落，控制台只在启动后 13s 窗口产 1 条条目（`捕获归因: 通道=CONSOLE_BRIDGE 指纹=846aa9aa`）——**设计预期内的正常态**；融合诊断出现 1 次（`AGENT+AGENT→AGENT 升级=[日志时间]`）。
+- 第二轮（重启应用 + 4 路并发约 4300 请求）暴露缺陷，时间线（同一日志、毫秒级）：
+
+  | 时刻 | 事件 |
+  |---|---|
+  | 16:10:38,697 | 用户手动点「捕捉」→ `startCapture: manual=true`，capturing=true |
+  | 16:10:38,842 | 控制台通道（EP）入库一条**无源码**条目：`捕获归因: 通道=CONSOLE_EP 指纹=d359b6d2 有源码=false 有耗时=false 有库标=false` |
+  | 16:10:38,848 | agent ACK 到位 → **接管沿触发「去重索引按通道纪元重置」**（旧语义＝清空整个索引） |
+  | 16:10:39,057+ | 同一条 SQL 的 agent 事件涌入，此后 45s 内该 SQL 又被执行 4000+ 次 |
+
+  控制台副本入库后 **6ms** 索引被清空 ⇒ 随后 agent 对同一条 SQL 的观测不再判重、**新开一行**——正是用户报障的「一行带源码、一行 `—` 无源码」形态。根因是 P3（2026-10-09）为防「陈旧桥纪元条目吞 agent 首批」而做的**全清**语义，与本计划的融合机制在接管沿上互相抵消。
+
+**修复**：`resetDedupeIndexOnChannelHandoff()` → [`rebuildDedupeIndexAfterHandoff(graceMs = 5_000, nowMs)`](../../../src/main/kotlin/cn/song/mybatisplus/visualizer/log/SqlLogEntryBuffer.kt)：重建时**只清陈旧键、保留 `now - 5s` 内的键**——新鲜键（同一次执行的控制台副本）留下供 `mergeDuplicateEntry` 融合升级为可跳转行，陈旧键照旧清掉（P3 原意保留）。`nowMs` 可注入以保持既有合成时间戳用例的确定性。接线与日志文案同步（`AgentManager.updateOnline` 接管沿）。
+
+**读数**：定向 `SqlLogEntryBufferDedupeIndexTest` 10 + `SqlLogEntryBufferTest` 59 + `SqlLogParamCodecTest` 15 + `LogEntryJumpOpsConsoleFallbackTest` 4 + `AgentEventAdapterTest` 13 + `AgentManagerIntakeGateTest` 21 + `SqlLogManagerBehaviorTest` 35 = **157 例 0 失败 0 错误 0 跳过**；**反向验证**：把 `HANDOFF_MERGE_GRACE_MS` 置 0（等价旧全清）→ `AgentManagerIntakeGateTest` 恰 1 红（`test接管沿_新鲜桥纪元键按同一次执行融合`），还原后复跑绿、探针残留 0（缓冲层用例显式传 grace，故对默认常量不敏感——判别力分工：缓冲用例钉机制、网关用例钉生产默认接线）。
+
 ### 遗留（真机复验，用户执行）
 
 1. 复现原报障路径（增强捕获开启 + 应用控制台有 SQL 输出）：确认同一条 SQL 最终**只保留一行且可跳转**（融合生效），或仅控制台一条时右键得到「该条来自控制台日志捕获，未携带源码位置」轻提示（不再是笼统引导）。
 2. 若仍出现无源码条目，取 `idea.log` 中 `捕获归因:` 行（新诊断）与 `增强捕获闸门回落（桥恢复解析）` 行回填 **V180-1/V180-2** 裁决：通道=AGENT 缺源码 → 转查 agent 侧栈定位（`StackLocator`）；通道=CONSOLE_* → 按回落行给出的健康会话/ACK 快照定位闸门放开原因。
 3. **V180-3**（同 SQL 两路观测的指纹是否相等）沿用现场比对：若控制台与 agent 条目因还原口径差异未被折叠（各自成行），属既有指纹口径边界，本计划未扩大匹配范围，如需收敛另立计划。
 4. 历史文件回环：新写入条目读回后 `pv` 通道保留（旧文件读回 UNKNOWN 属预期）。
+5. **W2-补 需在新构建上复验接管沿窗口**（本轮真机跑的是修复前构建）：重启应用或点「捕捉」后，若控制台条目与 agent 条目在 5s 内相遇，应看到 `重复观测跨通道融合: … 通道=CONSOLE_EP+AGENT→MERGED 升级=[源码,耗时,库标…]`，且面板同一条 SQL 只留一行、带 `[Xxx.java:行号]`。
