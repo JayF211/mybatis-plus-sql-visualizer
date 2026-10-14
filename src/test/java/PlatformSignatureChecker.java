@@ -90,6 +90,7 @@ public class PlatformSignatureChecker {
         //    注：initialize=false——仅核签名不触发静态初始化（EP 常量构造依赖平台引导态，裸
         //    URLClassLoader 不具备，true 形态会 NoClassDefFoundError 假红）。
         missing += checkPerHostProbeApis(loader);
+        missing += checkEditorColorsTopic(loader);
 
         if (missing > 0) {
             System.out.println("RESULT MISSING " + missing);
@@ -198,6 +199,25 @@ public class PlatformSignatureChecker {
             System.out.println("INFO SqlTypeBasedInjector absent in this distro（Community/裁剪包形态，探针按 EP 空清单判不让位）");
         }
         return missing;
+    }
+
+    private static int checkEditorColorsTopic(ClassLoader loader) {
+        try {
+            Class<?> manager = Class.forName("com.intellij.openapi.editor.colors.EditorColorsManager", false, loader);
+            Class<?> listener = Class.forName("com.intellij.openapi.editor.colors.EditorColorsListener", false, loader);
+            Class<?> scheme = Class.forName("com.intellij.openapi.editor.colors.EditorColorsScheme", false, loader);
+            java.lang.reflect.Field topic = manager.getField("TOPIC");
+            if (!java.lang.reflect.Modifier.isStatic(topic.getModifiers()) ||
+                    !"com.intellij.util.messages.Topic".equals(topic.getType().getName())) {
+                System.out.println("MISS EditorColorsManager.TOPIC type or modifiers");
+                return 1;
+            }
+            return check(listener.getMethod("globalSchemeChange", scheme),
+                    "EditorColorsListener.globalSchemeChange(EditorColorsScheme)");
+        } catch (Throwable t) {
+            System.out.println("MISS editor color scheme change topic: " + t);
+            return 1;
+        }
     }
 
     private static int check(Method m, String label) {

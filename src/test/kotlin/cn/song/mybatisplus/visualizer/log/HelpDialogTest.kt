@@ -22,12 +22,11 @@ class HelpDialogTest : BasePlatformTestCase() {
         // 直接构造（对齐 SqlLogManagerBehaviorTest——测试环境 project.getService 不可用）
         val panel = SqlLogPanel(project, SqlLogManager(project))
         try {
+            // 用户 2026-10-14：「不要这个更多」——全部动作直达工具栏，帮助也在组内（窄宽由平台溢出折叠）
             val children = panel.toolbarGroup.getChildren(null).toList()
-            // T-CaptureBack：捕捉开关回归面板工具栏首位；O-69 增「管理屏蔽规则」（设置旁，漏斗图标）；
-            // T-SqlLogPerf 增「滚动到底部」（追加在用户指定排序之后）；
-            // R53 增「暂停/恢复增强捕获」（插在捕捉开关之后，增强未开启时隐藏）
-            // 工具栏组 8 项（捕捉/暂停恢复/清空/设置/管理/搜索/帮助/滚动到底部）
-            assertEquals("工具栏组应有 8 项（捕捉/暂停恢复/清空/设置/管理/搜索/帮助/滚动到底部）", 8, children.size)
+            assertEquals("工具栏组应包含增强捕获暂停与全部直达动作", 9, children.size)
+            assertTrue(children[0] === panel.captureToggleAction)
+            assertTrue(children[1] === panel.agentPauseAction)
             // update 由工具栏生命周期驱动（headless 不布局不触发），手动走一次——
             // 图标/文案写入 event.presentation（2024.3 AnAction 无 getPresentation()）
             val events = children.map {
@@ -35,7 +34,7 @@ class HelpDialogTest : BasePlatformTestCase() {
             }
             children.forEachIndexed { i, action -> action.update(events[i]) }
             val helpIndex = events.indexOfFirst { it.presentation.icon === AllIcons.Actions.Help }
-            assertTrue("工具栏组应含帮助入口（? 图标，设置按钮旁）", helpIndex >= 0)
+            assertEquals("帮助动作应位于工具栏末尾", children.lastIndex, helpIndex)
             assertEquals(
                 MpSqlVisualizerBundle.message("log.panel.help"),
                 events[helpIndex].presentation.text,

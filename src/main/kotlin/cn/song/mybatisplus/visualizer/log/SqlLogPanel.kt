@@ -29,6 +29,9 @@ import com.intellij.openapi.actionSystem.DefaultActionGroup
 import javax.swing.Action
 import javax.swing.JComponent
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ModalityState
+import com.intellij.openapi.editor.colors.EditorColorsListener
+import com.intellij.openapi.editor.colors.EditorColorsManager
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.options.ShowSettingsUtil
 import com.intellij.notification.Notification
@@ -45,7 +48,6 @@ import com.intellij.ui.speedSearch.SpeedSearchUtil
 import com.intellij.ui.SimpleTextAttributes
 import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBScrollPane
-import com.intellij.ui.components.JBTabbedPane
 import java.awt.BorderLayout
 import java.awt.Color
 import java.awt.Component
@@ -60,6 +62,8 @@ import java.awt.Insets
 import java.awt.Point
 import java.awt.event.ComponentAdapter
 import java.awt.event.ComponentEvent
+import java.awt.event.KeyAdapter
+import java.awt.event.KeyEvent
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import java.text.SimpleDateFormat
@@ -102,7 +106,7 @@ class SqlLogPanel(
 ) : JPanel(BorderLayout()), Disposable {
 
     private val listModel = DefaultListModel<LogSqlEntry>()
-    internal val list = SqlEntryList(listModel)
+    internal val list = ViewportWidthSqlEntryList(listModel)
     /** 列表条目单元格渲染器（internal 供 UI 测试直接渲染、断言 HTML 输出）。 */
     private lateinit var entryCellRenderer: LogEntryListCellRenderer
     /** T-ClickPreview：单击出轻量预览弹窗（点击时按行捕获 SQL，锚点在行下缘不遮行），双击走 openPreview 完整弹窗；悬停 tooltip 已移除（卡顿根因）。
@@ -115,7 +119,41 @@ class SqlLogPanel(
             PluginSettings.getInstance().state.displayMaskEnabled,
         )
     }
-    private val tabs = JBTabbedPane()
+    /**
+     * 页签容器（T-SqlLogTabsSingleRow / O-149，用户 2026-10-14）。
+     *
+     * 折行根因：`JTabbedPane` 默认 `tabLayoutPolicy` 是 **WRAP_TAB_LAYOUT**——页签总宽超过容器宽度时
+     * 按行折，窄侧栏下四个页签会变成两行（用户截图形态）。改为 **SCROLL_TAB_LAYOUT** 后页签**永不折行**，
+     * 宽度不足时由平台按滚动/溢出处理。
+     *
+     * 再用 `setTabComponentInsets` 收紧页签内边距（243 与 262 本机 jar `javap` 均实证该 API 存在），
+     * 让四个页签在用户侧栏宽度下正好一行、通常不需要滚动。
+     *
+     * 备选（本期不做，见计划 §2.2 / V182）：换平台 `JBTabs` + `TabLayout.SHRINK` 取编辑器页签那种
+     * 「缩到最小 + 下拉列出全部」的交互——该容器跨 243/253/262 构造签名有漂移面，须先补签名门禁。
+     */
+    /**
+     * 页签容器（T-SqlLogTabsSingleRow / O-149，用户 2026-10-14 两轮校正后定稿）。
+     *
+     * 折行根因：`JTabbedPane` 默认 `WRAP_TAB_LAYOUT`——页签总宽超过容器宽就按行折，窄侧栏下变两行。
+     * 用户要求「参考 IDEA 打开多个类时的交互」，故**复用平台自己的页签实现**而不是自造策略：
+     * `JBTabsFactory.createTabs` 产出的 `JBTabsImpl` 实现 `MorePopupAware`（`canShowMorePopup()` /
+     * `showMorePopup()` / `getMoreToolbar()`），配合 `setSingleRow(true)`（恒单行、不折行）与
+     * `setSupportsCompression(true)`（页签可压缩）即得到编辑器页签那套交互：**一行 + 放不下时压缩 +
+     * 再放不下就出「显示全部页签」下拉**。243 与 262 两个发行版 jar 均已 `javap` 实证这些 API 存在
+     * （`JBTabsPresentation.setSingleRow/setSupportsCompression`、`JBTabsImpl.canShowMorePopup`）。
+     */
+    private val tabs: com.intellij.ui.tabs.JBTabs = com.intellij.ui.tabs.JBTabsFactory.createTabs(project, this).apply {
+        presentation.setSingleRow(true)
+        presentation.setSupportsCompression(true)
+        presentation.setTabDraggingEnabled(false)
+    }
+
+    /** 各页签句柄（JBTabs 以 TabInfo 为身份，替代原 JTabbedPane 的索引语义）。 */
+    private var logsTab: com.intellij.ui.tabs.TabInfo? = null
+    private var logToSqlTab: com.intellij.ui.tabs.TabInfo? = null
+    private var sqlToJavaTab: com.intellij.ui.tabs.TabInfo? = null
+    private var historyTab: com.intellij.ui.tabs.TabInfo? = null
     /** T-M38：日志转 SQL 转换 tab（粘贴日志 → 批量还原可执行 SQL；原「SQL 预览」被动展示改造）。 */
     private val logToSqlPanel = LogToSqlPanel(project)
     /** T-M36.4：SQL → Java 转换 tab（粘贴 SQL → 格式化/补全 → 转换 → 可编辑 Java 高亮结果区）。 */
@@ -124,8 +162,7 @@ class SqlLogPanel(
      *  T-HistoryTabAlways：**常驻**——不再由 logAutoSaveEnabled 或「.idea 里已存在历史文件」决定
      *  （未开启自动保存的新用户此前看不到入口）；无数据时面板显示空态并指路设置页。 */
     private val historyPanel: HistorySqlLogPanel by lazy { HistorySqlLogPanel(project) }
-    /** F-44：历史 tab 在 JBTabbedPane 中的索引（-1 表示未添加；常驻后恒为末位）。 */
-    private var historyTabIndex = -1
+    /** F-44 / O-149：历史 tab 句柄（TabInfo 为 JBTabs 的身份；替代原 JTabbedPane 索引语义，常驻后恒为末位）。 */
     private val dedupeCheckBox = JCheckBox(MpSqlVisualizerBundle.message("log.panel.dedupe")).apply {
         isSelected = manager.entries.dedupeEnabled
         addActionListener {
@@ -154,6 +191,16 @@ class SqlLogPanel(
 
     /** 当前激活的类型过滤集合（默认全选 = 「全部」，含 OTHER 透传）。 */
     private val activeFilter = FILTERABLE_TYPES.toMutableSet()
+
+    /**
+     * 「只看慢查询」筛选（用户 2026-10-14 补）：true 时只保留耗时 ≥ 当前慢查询阈值的条目。
+     * 判定走 [durationOf]（结构化字段优先、缺失回退日志文本解析），与「慢查询徽章」同口径。
+     * 性能：一次 O(n) 遍历，位于刷新管线（非渲染热路径）。
+     */
+    private var slowOnly = false
+
+    /** 「只看慢查询」勾选框（弹窗首次构建后非 null；仅用于状态回填，测试另有 [setSlowOnlyForTest]）。 */
+    private var slowOnlyCheckBox: JCheckBox? = null
 
     /** 排序模式（T-LogSortModes：默认时间升序 = 捕获顺序）。 */
     private var sortMode = SortMode.TIME_ASC
@@ -216,45 +263,56 @@ class SqlLogPanel(
     }
 
     /**
-     * 排序方式按钮（T-LogSortModes）：点击弹单选菜单，文案显示当前方式；与「SQL类型」按钮同款式
-     * （原生 LaF 扁平按钮 + 右侧下箭头），默认时间升序。取代原「耗时排序」双态切换按钮——
-     * 排序恒有确定方式，不再依赖「是否检测到耗时」决定显隐。
+     * 排序方式动作（T-LogSortModes / 用户 2026-10-14 校正）：点击弹单选菜单，当前方式进
+     * 动作 tooltip 与菜单选中态。
      *
-     * T-UiCoord F2：原「排序：」标签控件同样退役（标签键转 tooltip 前缀），文本同样截尾封顶。
+     * 形态改为 **动作图标组内的 AnAction**（原为固定宽度 JButton）：用户指出「排序按钮没被左侧
+     * 按钮集归入、过窄时应当自动折叠」——JButton 不参与 ActionToolbar 的溢出机制，宽度不足时会
+     * 压住相邻控件；改为 AnAction 后与捕捉/清空/搜索/滚底同簇，窄宽一起折进平台溢出菜单。
+     * 代价：工具窗工具栏按惯例只渲染图标，当前排序方式不再常显于按钮文字，改由 tooltip
+     * （`排序：<当前方式>`）与菜单选中态承载。
      */
-    private val sortButton = JButton().apply {
-        isFocusable = false
-        icon = AllIcons.General.ArrowDown
-        horizontalTextPosition = SwingConstants.LEFT // 图标在文字右侧（下拉按钮惯例，同 SQL类型）
-        addActionListener { showSortPopup() }
+    internal val sortModeAction: AnAction = object : AnAction() {
+        init {
+            templatePresentation.icon = AllIcons.RunConfigurations.SortbyDuration
+        }
+
+        override fun update(e: AnActionEvent) {
+            val label = currentSortLabel()
+            e.presentation.icon = AllIcons.RunConfigurations.SortbyDuration
+            e.presentation.text = label
+            e.presentation.description = MpSqlVisualizerBundle.message("log.sort.label") + label
+        }
+
+        override fun actionPerformed(e: AnActionEvent) {
+            showSortPopup(e.inputEvent?.component)
+        }
     }
+
+    /** 当前排序方式显示名（默认回退时间升序）。 */
+    private fun currentSortLabel(): String =
+        sortOptions().firstOrNull { it.mode == sortMode }?.label
+            ?: MpSqlVisualizerBundle.message("log.sort.time.asc")
 
     /**
      * T-SqlLogPerf（20261006-1020 计划 + 用户点名）：「滚动到底部」动作 + 尾部跟随。
      *
-     * 背景：log 包原没有任何滚动控制——并发灌入时新条目只进模型、视口原地不动，用户体感
-     * 「监听加载有延迟」。本动作一键跳列表底并恢复跟随；跟随态下新条目到达自动贴底，
-     * 用户向上滚动阅读即自动停跟随（滚回底部/点动作恢复），与 IDE 控制台「滚动到底」习惯一致。
+     * 本动作一键跳列表底并恢复跟随；跟随态下新条目到达自动贴底。
+     * 手动滚轮、滚动条或键盘导航立即暂停，只有再次点击本动作才恢复跟随。
      * 形态走左侧动作图标组（AnAction）而非右侧控制组 JButton——控制组最坏宽有预算锁
      * （SqlLogPanelLayoutTest 防「又往控制组加控件」），图标组窄了由平台溢出承接。
      */
     internal val scrollToEndAction: AnAction = ScrollToEndAction()
 
-    /** 尾部跟随开关（EDT 读写：滚动监听 / 刷新尾部 / 动作点击）。默认开——日志语义以「最新」为锚点。 */
-    private var autoFollowTail = true
+    private val tailFollow = TailFollowState()
+    private var listScrollPane: JBScrollPane? = null
+    internal val tailFollowModeForTest: TailFollowMode get() = tailFollow.mode
 
-    /** 跟随判定松量（px）：视口底沿距列表底沿小于该值视为「在底部」。 */
-    private val tailFollowSlackPx = 48
-
-    /** 滚动事件归因基线（区分程序性追加与用户滚动；见 buildListPane 的 adjustment 监听）。 */
-    private var lastScrollMax = 0
-    private var lastScrollValue = 0
-
-    /** 跳列表底；follow=true 同时恢复跟随态。 */
-    private fun scrollToBottom(follow: Boolean) {
-        if (follow) autoFollowTail = true
+    private fun scrollToBottom(resume: Boolean) {
+        if (resume) tailFollow.onScrollToEnd()
         if (listModel.isEmpty) return
         list.ensureIndexIsVisible(listModel.size() - 1)
+        listScrollPane?.verticalScrollBar?.let { it.value = it.maximum }
     }
 
     // ---------- T-ListMode：SQL 显示模式（T-DisplayModeToSettings：入口迁设置页「列表显示」，两列表共享一键） ----------
@@ -339,13 +397,43 @@ class SqlLogPanel(
     internal fun selectSortModeForTest(mode: SortMode) = applySortMode(mode)
 
     /** 排序按钮（测试断言文案/可见性）。 */
-    internal val sortButtonForTest: JButton get() = sortButton
+    internal val sortActionForTest: AnAction get() = sortModeAction
+    internal fun sortActionTextForTest(): String {
+        val event = AnActionEvent.createFromAnAction(
+            sortModeAction, null, com.intellij.openapi.actionSystem.ActionPlaces.TOOLBAR,
+            com.intellij.openapi.actionSystem.DataContext.EMPTY_CONTEXT,
+        )
+        sortModeAction.update(event)
+        return event.presentation.text ?: ""
+    }
+    internal fun sortActionTooltipForTest(): String? {
+        val event = AnActionEvent.createFromAnAction(
+            sortModeAction, null, com.intellij.openapi.actionSystem.ActionPlaces.TOOLBAR,
+            com.intellij.openapi.actionSystem.DataContext.EMPTY_CONTEXT,
+        )
+        sortModeAction.update(event)
+        return event.presentation.description
+    }
 
     /** 排序菜单项文案列表（测试断言选项齐备；构建菜单但不 show）。 */
     internal fun sortMenuLabelsForTest(): List<String> = buildSortMenuItems().map { it.text }
 
-    /** 当前排序方式按钮文案（测试断言）。 */
-    internal val sortButtonTextForTest: String get() = sortButton.text
+    /** 当前排序方式显示名（测试断言；与动作 presentation.text 同源）。 */
+    internal val sortButtonTextForTest: String get() = currentSortLabel()
+
+    /** 「只看慢查询」筛选态（测试驱动：等价用户勾选弹窗内该勾选框）。 */
+    internal var slowOnlyForTest: Boolean
+        get() = slowOnly
+        set(value) {
+            slowOnly = value
+            slowOnlyCheckBox?.isSelected = value
+            refreshList()
+        }
+
+    /** 「只看慢查询」勾选框（弹窗构建后非 null；测试断言文案/勾选态）。 */
+    internal val slowOnlyCheckBoxForTest: JCheckBox? get() = slowOnlyCheckBox
+    internal val listScrollPaneForTest: JBScrollPane? get() = listScrollPane
+    internal fun resumeTailFollowForTest() = scrollToBottom(resume = true)
 
     /** 去重勾选框（F-44-2 测试驱动：模拟用户勾选「移除重复的sql」验证既有条目立即去重）。 */
     internal val dedupeCheckBoxForTest: JCheckBox get() = dedupeCheckBox
@@ -371,8 +459,11 @@ class SqlLogPanel(
     /** T-UiCoord F2：工具栏右侧控制组（类型 / 排序 / 去重勾选 / 慢查询徽章）——单行契约的主断言面。 */
     internal val toolbarControlsForTest: JPanel? get() = toolbarControls
 
-    /** T-UiCoord F2：工具栏动作图标组组件（结构断言：它必须挂在行宿主 CENTER）。 */
+    /** T-UiCoord F2：工具栏动作图标组组件（结构断言：它必须挂在行宿主 CENTER；排序已并入该动作组）。 */
     internal val toolbarComponentForTest: JComponent? get() = toolbarComponent
+
+    /** 工具栏动作组内的直接动作个数（测试断言：全部动作直达、无自建「更多」弹层）。 */
+    internal val toolbarActionCountForTest: Int get() = toolbarGroup.getChildren(null).size
 
     /** T-UiCoord F2：下拉按钮显示文本的像素预算（测试按同一预算算期望的省略文本）。 */
     internal val dropdownTextBudgetForTest: Int get() = JBUI.scale(DROPDOWN_TEXT_BUDGET_PX)
@@ -430,18 +521,22 @@ class SqlLogPanel(
     /**
      * 工具栏动作组（T-M39：internal 供测试断言帮助入口存在性；
      * update 由工具栏生命周期驱动，headless 测试手动触发；须在 init 前声明）。
-     * T-CaptureBack：捕捉开关回迁首位（捕捉/清空/设置/屏蔽管理/搜索/帮助；搜索在帮助左侧为用户指定排序）。
-     * T-SqlSuppress：屏蔽管理入口插设置旁（D1 主入口；D7 图标 AllIcons.General.Filter 漏斗）。
+     *
+     * 全部动作直接入组、按用户 2026-10-14 选定的「方案 A」排列：
+     * 操作在前、工具在后、**帮助收尾**（`?` 是纯信息性动作，平台惯例放末尾；溢出从右端折叠，
+     * 帮助最先让位）。**不设自建「更多」弹层**——窄宽折叠交给平台 ActionToolbar 自带的溢出（`»`），
+     * 悬停/点击即列出被折叠的动作。
      */
     internal val toolbarGroup = DefaultActionGroup(
-        captureToggleAction, // 捕捉开关（回迁面板工具栏首位，T-CaptureBack）
-        agentPauseAction, // R53：增强捕获暂停/恢复（只停 agent 通道，控制台通道照常；增强未开启时隐藏）
+        captureToggleAction,
+        agentPauseAction,
         ClearAction(),
         SettingsAction(),
-        ManageSuppressAction(), // T-SqlSuppress：屏蔽管理（设置旁，D1 主入口 + D7 漏斗图标）
-        ShowSearchAction(), // 搜索在帮助左侧（用户指定排序）
+        ManageSuppressAction(),
+        ShowSearchAction(),
+        scrollToEndAction,
+        sortModeAction,
         HelpAction(),
-        scrollToEndAction, // T-SqlLogPerf：滚动到底部（尾部跟随；追加在用户指定排序之后）
     )
 
     // ---------- T-Perf-15：manager 监听器命名引用（init 注册 / dispose 注销） ----------
@@ -488,7 +583,7 @@ class SqlLogPanel(
     /** 工具栏右侧控制组（EAST 宿主内那层 FlowLayout 面板）。 */
     private var toolbarControls: JPanel? = null
 
-    /** 工具栏动作图标组组件（CENTER）——结构断言用（曾因还原反向验证探针时误删 CENTER 挂载而漏）。 */
+    /** 工具栏动作图标组组件（挂行宿主 CENTER）——结构断言用（曾因还原反向验证探针时误删挂载而漏）。 */
     private var toolbarComponent: JComponent? = null
 
     // ---------- R53：双通道捕获状态栏（字段须在 init 之前——init 里 buildStatusBar 会赋值） ----------
@@ -522,27 +617,35 @@ class SqlLogPanel(
         logPanel.add(buildStatusBar(), BorderLayout.SOUTH)
 
         // 标签 2：日志转 SQL（粘贴日志 → 批量还原可执行 SQL）
-        tabs.addTab(MpSqlVisualizerBundle.message("log.tab.logs"), logPanel)
-        tabs.addTab(MpSqlVisualizerBundle.message("log.tab.logToSql"), logToSqlPanel)
-        tabs.addTab(MpSqlVisualizerBundle.message("log.tab.sqlToJava"), sqlToJavaPanel)
+        logsTab = tabs.addTab(com.intellij.ui.tabs.TabInfo(logPanel).setText(MpSqlVisualizerBundle.message("log.tab.logs")))
+        logToSqlTab = tabs.addTab(com.intellij.ui.tabs.TabInfo(logToSqlPanel).setText(MpSqlVisualizerBundle.message("log.tab.logToSql")))
+        sqlToJavaTab = tabs.addTab(com.intellij.ui.tabs.TabInfo(sqlToJavaPanel).setText(MpSqlVisualizerBundle.message("log.tab.sqlToJava")))
         // R19（T-PerfSweep 批次 2）+ T-HistoryTabAlways：历史 tab 常驻——原 F-44 条件挂载
         // （「开启自动保存 或 .idea 中已有历史文件」）让未开启自动保存的干净项目没有入口，
         // 关掉设置页开关还会把已挂载的 tab 摘掉；文件列表空态已带「开启自动保存」引导文案，
         // tab 常驻即引导闭环，F-44 的移除分支随之废除、设置变更不再参与显隐。
         addHistoryTab()
-        add(tabs, BorderLayout.CENTER)
+        add(tabs.component, BorderLayout.CENTER)
 
         // T-M36.6：tab 重选时刷新形态下拉（设置页修改后切回即同步；不触发重生成）
-        tabs.addChangeListener {
-            if (tabs.selectedComponent == sqlToJavaPanel) {
-                sqlToJavaPanel.refreshFormatFromSettings()
-            }
-            // F-44：切换到历史 tab 时刷新数据；F87（T-PerfSweep25）起这里同时是**首扫唯一入口**
-            //（历史面板构造不再自带 refresh——开窗即扫回退为首次切换才扫）
-            if (historyTabIndex >= 0 && tabs.selectedIndex == historyTabIndex) {
-                historyPanel.refresh()
-            }
-        }
+        tabs.addListener(
+            object : com.intellij.ui.tabs.TabsListener {
+                override fun selectionChanged(
+                    current: com.intellij.ui.tabs.TabInfo?,
+                    previous: com.intellij.ui.tabs.TabInfo?,
+                ) {
+                    if (current === sqlToJavaTab) {
+                        sqlToJavaPanel.refreshFormatFromSettings()
+                    }
+                    // F-44：切换到历史 tab 时刷新数据；F87（T-PerfSweep25）起这里同时是**首扫唯一入口**
+                    //（历史面板构造不再自带 refresh——开窗即扫回退为首次切换才扫）
+                    if (current === historyTab) {
+                        historyPanel.refresh()
+                    }
+                }
+            },
+            this,
+        )
 
         // 设置变更后列表重排重绘（T-HistoryTabAlways 起历史 tab 无显隐逻辑，恒在）
         val settingsListener = SettingsChangeListener {
@@ -559,12 +662,21 @@ class SqlLogPanel(
                 refreshList()
                 // T-CrudColor：历史二级列表同样直读设置，重绘即生效（不重扫文件、不打断浏览位置）。
                 // 仅当历史 tab 已挂载时才取面板——避免仅为重绘而强制实例化（historyPanel 是 lazy）
-                if (tabs.indexOfTab(MpSqlVisualizerBundle.message("log.tab.history")) >= 0) {
+                if (historyTab != null) {
                     historyPanel.repaintSqlList()
                 }
             }
         }
         project.messageBus.connect(this).subscribe(PluginSettings.SETTINGS_CHANGE_TOPIC, settingsListener)
+        ApplicationManager.getApplication().messageBus.connect(this).subscribe(
+            EditorColorsManager.TOPIC,
+            EditorColorsListener {
+                ApplicationManager.getApplication().invokeLater(
+                    { list.repaint() },
+                    ModalityState.any(),
+                )
+            },
+        )
 
         // T-Perf-15（自 dev 移植）：监听器改命名引用——dispose 时精确注销（此前 addUiListener/addCapturingListener
         // 只加不减，面板随 tool window content 销毁重建逐次累积）
@@ -665,14 +777,16 @@ class SqlLogPanel(
         updateTypeFilterButton()
         updateSortButtonText()
         // T-UiCoord F2（2026-09-21 用户定案「不要两行」）：工具栏**恒为单行**——
-        // 左侧动作图标组（CENTER，拿剩余宽度；窄了交给平台图标溢出）+ 右侧列表控制组
-        // （EAST：慢查询徽章 / SQL类型 / 排序 / 去重勾选，勾选仍在最右）。
+        // 左侧动作图标组（CENTER）+ 右侧列表控制组（EAST：慢查询徽章 / SQL类型 / 去重勾选，勾选在最右）。
+        // T-SqlListSortRight（2026-10-14 用户两轮校正）：排序**并入左侧动作组**（组内最后一个动作），
+        // 与捕捉/清空/搜索/滚底一起由 ActionToolbar 折叠；不再用固定宽 JButton（它不参与溢出，
+        // 窄宽会压住 SQL类型按钮，用户也反馈「没被左侧按钮集归入」）。
         // BorderLayout 结构上不存在折行可能，故任意宽度下都只有一行；原 WrapLayout 流式行退役
         // ——它按「谁最后谁折」处理放不下，2026-09-16 加排序单元、09-18 加第 5 枚图标后，
         // 460px 侧边栏下「排序」单元孤行到第二行（右留 300px 空档、两行左缘差 10px）。
         val row = JPanel(BorderLayout())
-        row.add(toolbar.component, BorderLayout.CENTER)
         toolbarComponent = toolbar.component
+        row.add(toolbar.component, BorderLayout.CENTER)
 
         // O-1：慢查询计数徽章。T-UiCoord F2：由「慢查询: N」全文改短徽章（复用存量键
         // log.panel.slowQueryBadge）让出一行余量，全文进 tooltip（见 updateSlowQueryLabel）。
@@ -688,7 +802,6 @@ class SqlLogPanel(
             isOpaque = false
             add(slowQueryLabel)
             add(typeFilterButton)
-            add(sortButton)
             add(dedupeCheckBox)
         }
         toolbarControls = controls
@@ -888,6 +1001,21 @@ class SqlLogPanel(
         content.add(Box.createVerticalStrut(6))
         content.add(JSeparator().apply { alignmentX = Component.LEFT_ALIGNMENT })
         content.add(Box.createVerticalStrut(6))
+        // 用户 2026-10-14 补：与「慢查询徽章」呼应的快捷筛选——只看慢查询（按当前慢查询阈值判定）。
+        // 放在类型弹窗内、与类型勾选同一入口，避免往右侧控制组加控件（控制组有最坏宽预算锁）。
+        val slowOnlyBox = JCheckBox(MpSqlVisualizerBundle.message("log.filter.slowOnly"), slowOnly).apply {
+            isOpaque = false
+            alignmentX = Component.LEFT_ALIGNMENT
+            isFocusable = false
+            toolTipText = MpSqlVisualizerBundle.message("log.filter.slowOnly.tip")
+            addActionListener {
+                slowOnly = isSelected
+                refreshList()
+            }
+        }
+        slowOnlyCheckBox = slowOnlyBox
+        content.add(slowOnlyBox)
+        content.add(Box.createVerticalStrut(6))
         val toggleButton = JButton(typePopupToggleLabel()).apply {
             isFocusable = false
             addActionListener { applyAllTypes(!activeFilter.containsAll(FILTERABLE_TYPES)) }
@@ -943,12 +1071,13 @@ class SqlLogPanel(
             Disposer.register(this, historyPanel)
             historyPanelRegistered = true
         }
-        historyTabIndex = tabs.tabCount
-        tabs.addTab(MpSqlVisualizerBundle.message("log.tab.history"), historyPanel)
+        historyTab = tabs.addTab(
+            com.intellij.ui.tabs.TabInfo(historyPanel).setText(MpSqlVisualizerBundle.message("log.tab.history")),
+        )
     }
 
     /** 测试访问器：主 tab 容器（历史 tab 常驻断言用；T-HistoryTabAlways 起 tab 恒在，无显隐路径）。 */
-    internal val tabsForTest: javax.swing.JTabbedPane get() = tabs
+    internal val tabsForTest: com.intellij.ui.tabs.JBTabs get() = tabs
 
     /** 工具栏引用（capturing 变化时经平台更新机制刷新动作 presentation，T-UN-11）。 */
     private var _toolbarRef: ActionToolbar? = null
@@ -1014,6 +1143,7 @@ class SqlLogPanel(
         }
 
         override fun actionPerformed(e: AnActionEvent) {
+            tailFollow.onClear()
             manager.entries.clear()
         }
     }
@@ -1026,11 +1156,13 @@ class SqlLogPanel(
         override fun update(e: AnActionEvent) {
             e.presentation.icon = AllIcons.General.ArrowDown
             e.presentation.text = MpSqlVisualizerBundle.message("log.panel.scrollBottom")
-            e.presentation.description = MpSqlVisualizerBundle.message("log.panel.scrollBottom.tip")
+            e.presentation.description = MpSqlVisualizerBundle.message(
+                if (tailFollow.shouldFollow) "log.panel.scrollBottom.tip" else "log.panel.scrollBottom.paused.tip",
+            )
         }
 
         override fun actionPerformed(e: AnActionEvent) {
-            scrollToBottom(follow = true)
+            scrollToBottom(resume = true)
         }
     }
 
@@ -1370,19 +1502,27 @@ class SqlLogPanel(
                 if (e.isPopupTrigger) showContextMenu(e)
             }
         })
-        // T-SqlLogPerf：尾部跟随的用户意图归因——滚动条事件里「程序性追加」（max 增大且 value 未动，
-        // 新条目进模型所致）不改跟随态；其余变化按「是否在底部」判定：滚离底部=停跟随，滚回底部=恢复。
-        val scrollPane = JBScrollPane(list)
-        scrollPane.verticalScrollBar.addAdjustmentListener { e ->
-            val bar = e.adjustable
-            val grew = bar.maximum > lastScrollMax
-            val value = bar.value
-            val valueUnmoved = value == lastScrollValue
-            lastScrollMax = bar.maximum
-            lastScrollValue = value
-            if (grew && valueUnmoved) return@addAdjustmentListener // 新条目进模型的程序性增长，非用户滚动
-            autoFollowTail = bar.maximum - (value + bar.visibleAmount) <= tailFollowSlackPx
+        val scrollPane = JBScrollPane(list).apply {
+            horizontalScrollBarPolicy = javax.swing.ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER
         }
+        listScrollPane = scrollPane
+        scrollPane.addMouseWheelListener { event ->
+            if (event.wheelRotation != 0) tailFollow.onUserScroll()
+        }
+        scrollPane.verticalScrollBar.addMouseListener(object : MouseAdapter() {
+            override fun mousePressed(e: MouseEvent) {
+                tailFollow.onUserScroll()
+            }
+        })
+        val navigationKeys = setOf(KeyEvent.VK_UP, KeyEvent.VK_DOWN, KeyEvent.VK_PAGE_UP,
+            KeyEvent.VK_PAGE_DOWN, KeyEvent.VK_HOME, KeyEvent.VK_END)
+        val navigationListener = object : KeyAdapter() {
+            override fun keyPressed(e: KeyEvent) {
+                if (e.keyCode in navigationKeys) tailFollow.onUserScroll()
+            }
+        }
+        list.addKeyListener(navigationListener)
+        scrollPane.verticalScrollBar.addKeyListener(navigationListener)
         return scrollPane
     }
 
@@ -1452,8 +1592,7 @@ class SqlLogPanel(
         // T-SqlSuppress：屏蔽存量过滤插管线最前（与类型过滤同级；键集经 SqlLogManager 订阅同步）
         val filtered = filterByFocus(
             filterByType(
-                filterBySuppress(snapshot, manager.entries.suppressKeys),
-                activeFilter,
+                applySlowOnlyFilter(filterBySuppress(snapshot, manager.entries.suppressKeys)),                activeFilter,
             ),
             activeFocus,
         )
@@ -1470,8 +1609,8 @@ class SqlLogPanel(
             applyFullRebuild(newVisible, gen)
         }
         // T-SqlLogPerf：尾部跟随——仅当列表真的长高（新条目追加）才贴底；搜索/过滤收窄不打扰浏览位置
-        if (autoFollowTail && listModel.size() > modelSizeBefore) {
-            list.ensureIndexIsVisible(listModel.size() - 1)
+        if (tailFollow.shouldFollow && listModel.size() > modelSizeBefore) {
+            scrollToBottom(resume = false)
         }
 
         // 聚焦隐藏计数提示（聚焦层单独度量：输入 filtered → 输出 focused）
@@ -1564,6 +1703,7 @@ class SqlLogPanel(
         val chunk = mutableListOf<LogSqlEntry>()
         repeat(REFRESH_CHUNK_SIZE) { if (remaining.hasNext()) chunk.add(remaining.next()) }
         listModel.addAll(chunk)
+        if (chunk.isNotEmpty() && tailFollow.shouldFollow) scrollToBottom(resume = false)
         rebuildRemaining = if (remaining.hasNext()) remaining else null
         if (rebuildRemaining != null) {
             ApplicationManager.getApplication().invokeLater { appendRebuildChunk() }
@@ -1607,11 +1747,12 @@ class SqlLogPanel(
     /** 按当前排序模式排序条目。 */
     // ---------- 排序方式（T-LogSortModes） ----------
 
-    /** 弹出排序方式单选菜单（与 SQL类型弹窗同款交互；当前项打勾）。 */
-    private fun showSortPopup() {
+    /** 弹出排序方式单选菜单（与 SQL类型弹窗同款交互；当前项打勾）。锚点＝触发动作的按钮。 */
+    private fun showSortPopup(anchor: java.awt.Component?) {
         val popup = JPopupMenu()
         buildSortMenuItems().forEach { popup.add(it) }
-        popup.show(sortButton, 0, sortButton.height + 2)
+        val target = anchor ?: toolbarComponent
+        if (target != null) popup.show(target, 0, target.height + 2) else popup.show(toolbarComponent, 0, 0)
     }
 
     /**
@@ -1626,27 +1767,28 @@ class SqlLogPanel(
             }
         }
 
-    /** 应用排序方式：更新模式 → 刷新列表 → 同步按钮文案。 */
+    /** 应用排序方式：更新模式 → 刷新列表 → 刷新动作 presentation（当前方式进 tooltip 与菜单选中态）。 */
     private fun applySortMode(mode: SortMode) {
         if (sortMode == mode) {
-            updateSortButtonText()
+            refreshSortAction()
             return
         }
         sortMode = mode
         refreshList()
-        updateSortButtonText()
+        refreshSortAction()
+    }
+
+    /** 刷新排序动作的 presentation（工具窗工具栏只渲染图标，当前方式由 tooltip 承载）。 */
+    private fun refreshSortAction() {
+        _toolbarRef?.updateActionsImmediately()
     }
 
     /**
-     * 排序按钮文案 = 当前方式标签。
-     *
-     * T-UiCoord F2：与 SQL类型按钮同构——显示文本截尾封顶，tooltip 恒为「排序：」+ 完整方式。
+     * 排序动作文案 = 当前方式标签（见 [sortModeAction] 的 update：进 presentation.text 与 tooltip）。
+     * 工具窗工具栏按惯例只渲染图标，故当前方式实际由 tooltip「排序：<方式>」与菜单选中态承载。
      */
     private fun updateSortButtonText() {
-        val label = sortOptions().firstOrNull { it.mode == sortMode }?.label
-            ?: MpSqlVisualizerBundle.message("log.sort.time.asc")
-        sortButton.text = clipToDropdownBudget(label, sortButton)
-        sortButton.toolTipText = MpSqlVisualizerBundle.message("log.sort.label") + label
+        refreshSortAction()
     }
 
     private fun applySort(entries: List<LogSqlEntry>): List<LogSqlEntry> = when (sortMode) {
@@ -1658,10 +1800,30 @@ class SqlLogPanel(
         SortMode.DURATION_DESC -> entries.sortedByDescending { durationOf(it) ?: Long.MIN_VALUE }
         // 行号：无行号（历史读回/round-trip）沉底
         SortMode.SEQUENCE -> entries.sortedBy { if (it.sequenceNumber > 0) it.sequenceNumber else Long.MAX_VALUE }
+        // 同结构聚类（用户 2026-10-14 补）：按结构指纹分组、组内保持时间升序——排查 N+1 时同形状条目相邻。
+        // structureKey 为条目级 lazy（每条只算一次指纹），故比较器是纯字段读取。
+        SortMode.STRUCTURE_CLUSTER -> entries.sortedWith(
+            compareBy({ it.structureKey }, { displayTimeOf(it) }),
+        )
+        // 按目标库分组（用户 2026-10-14 补）：库名升序、未知（null）沉底，组内保持时间升序。
+        SortMode.DATABASE_GROUP -> entries.sortedWith(
+            compareBy({ it.databaseName ?: DATABASE_UNKNOWN_SORT_KEY }, { displayTimeOf(it) }),
+        )
     }
 
-    /** 条目耗时（毫秒）：结构化 executionTimeMs 优先，缺失时回退日志文本解析。 */
-    private fun durationOf(entry: LogSqlEntry): Long? =
+    /**
+     * 「只看慢查询」过滤接线（阈值取当前设置；判定走 [durationOf]，与慢查询徽章同口径）。
+     * 纯逻辑在 [cn.song.mybatisplus.visualizer.log.filterBySlowOnly]，便于独立单测。
+     */
+    private fun applySlowOnlyFilter(entries: List<LogSqlEntry>): List<LogSqlEntry> =
+        cn.song.mybatisplus.visualizer.log.filterBySlowOnly(
+            entries,
+            slowOnly,
+            PluginSettings.getInstance().state.slowQueryThresholdMs,
+            ::durationOf,
+        )
+
+    /** 条目耗时（毫秒）：结构化 executionTimeMs 优先，缺失时回退日志文本解析。 */    private fun durationOf(entry: LogSqlEntry): Long? =
         entry.executionTimeMs ?: LogDurationParser.parse(entry)
 
     /**
@@ -1983,11 +2145,11 @@ class SqlLogPanel(
         when (tab) {
             LogEntryTab.LOG_TO_SQL -> {
                 logToSqlPanel.loadFromEntry(entry)
-                tabs.selectedComponent = logToSqlPanel
+                logToSqlTab?.let { tabs.select(it, true) }
             }
             LogEntryTab.SQL_TO_JAVA -> {
                 sqlToJavaPanel.setInputSql(entry.restoredSql)
-                tabs.selectedComponent = sqlToJavaPanel
+                sqlToJavaTab?.let { tabs.select(it, true) }
             }
         }
     }

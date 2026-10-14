@@ -389,31 +389,15 @@ internal class LogEntryListCellRenderer : JPanel(BorderLayout()), javax.swing.Li
         metaLine.foreground = fg
         metaLine.clear()
         val lineFragments = if (entry != null) {
-            // T-LogRowNumber：行号片段在最前（最高频引用锚点；0 = 无行号——历史文件/round-trip 条目）
-            if (entry.sequenceNumber > 0) {
-                metaLine.append("#${entry.sequenceNumber} ", LIST_META_GRAY)
+            val metadata = SqlEntryPresentation.metadata(
+                entry, isSelected, PluginSettings.getInstance().state.showDurationInLogList,
+                templateCounts, dedupeCounts, showLogDetails = true,
+            )
+            clipForList(metadata, list, this, SqlListTypeColor.BAR_WIDTH).forEach {
+                metaLine.append(it.text, if (isSelected) selectedAttributes(it.attributes, fg) else it.attributes)
             }
-            // T-TwoLine：元信息行（时间戳/耗时/来源/去重徽章）在上，段间距由尾随空格承担
-            formatTimestampFragment(entry)?.let { (t, a) -> metaLine.append(t, a) }
-            if (PluginSettings.getInstance().state.showDurationInLogList) {
-                val (t, a) = formatDurationFragment(entry.executionTimeMs, useSelectionFill)
-                metaLine.append(t, a)
-            }
-            // T-AgentDialectLoop：目标库角标（耗时后、来源前——与「这条 SQL 跑在哪」的阅读顺序一致）
-            formatDatabaseFragment(entry, useSelectionFill)?.let { (t, a) -> metaLine.append(t, a) }
-            // T-McpAuditTrail T-MAT-05：MCP 徽标（同落点：目标库后、来源前；非 MCP 返回 null 不显示）
-            formatMcpFragment(entry, useSelectionFill)?.let { (t, a) -> metaLine.append(t, a) }
-            formatSourceFragment(entry, useSelectionFill)?.let { (t, a) -> metaLine.append(t, a) }
-            // 注：原「[⚡增强]」来源角标已按用户要求移除（增强为默认捕获通道，逐行标来源属噪音）
-            formatUpdateCountFragment(entry, isSelected)?.let { (t, a) -> metaLine.append(t, a) }
-            formatErrorFragment(entry)?.let { (t, a) -> metaLine.append(t, a) }
-            dedupeCounts[entry.dedupeKey]?.takeIf { it > 0 }?.let { metaLine.append("⨉$it ", LIST_META_GRAY) }
-            // O-90：同模板 ×N 徽章（去重徽章后相邻；≥TEMPLATE_BADGE_MIN_COUNT 才显示）
-            formatTemplateCountFragment(entry, templateCounts, isSelected)?.let { (t, a) -> metaLine.append(t, a) }
             sqlLineFragmentsFor(entry)
-        } else {
-            null
-        }
+        } else null
         // SQL 高亮行在下（T-ListMode：行数随显示模式伸缩）；选中态保留 SQL 高亮原色
         ensureSqlLineCount(if (lineFragments != null) lineFragments.size else 1)
         // T-UiNative speed search 高亮：对元信息行与各 SQL 行施加匹配片段高亮（平台 applySpeedSearchHighlighting
@@ -422,7 +406,10 @@ internal class LogEntryListCellRenderer : JPanel(BorderLayout()), javax.swing.Li
         sqlLinePool.forEachIndexed { i, comp ->
             comp.foreground = fg
             comp.clear()
-            lineFragments?.getOrNull(i)?.forEach { f -> comp.append(f.text, f.attributes) }
+            lineFragments?.getOrNull(i)?.let { fragments ->
+                clipForList(fragments, list, this, SqlListTypeColor.BAR_WIDTH)
+                    .forEach { f -> comp.append(f.text, if (isSelected) selectedAttributes(f.attributes, fg) else f.attributes) }
+            }
             list?.let { l -> SpeedSearchUtil.applySpeedSearchHighlighting(l, comp, false, useSelectionFill) }
         }
         // T-ClickPreview：不设 toolTipText（悬停逐行弹气泡 = 条目多时卡顿根因），预览改单击触发
@@ -447,23 +434,22 @@ internal class LogEntryListCellRenderer : JPanel(BorderLayout()), javax.swing.Li
      * 多行模式走条目级缓存（键含模式自动失效）——可变行高布局逐条测量免重复分词。
      */
     private fun sqlLineFragmentsFor(entry: LogSqlEntry): List<List<SqlTextFragment>> {
-        // R60（T-LaneB D96）：日志列表链脱敏——displayMaskEnabled 开时**展示文本**先经
-        // [DisplayMasker.maskDisplay] 打码（数据层 entry 不动）；缓存键**加脱敏位**——设置翻转后
-        // 旧缓存（打码/未打码形态）自动失效重渲染（V112.3 回放发现的附带发现，防脏缓存）。
-        val maskOn = PluginSettings.getInstance().state.displayMaskEnabled
-        val sql = withTerminator(DisplayMasker.maskDisplay(entry.summary, maskOn))
         val mode = PluginSettings.getInstance().sqlListDisplayMode()
+        // R60：展示文本打码、原始条目不动；缓存同时以模式和脱敏态为键，防切换后复用旧语义片段。
+        val maskOn = PluginSettings.getInstance().state.displayMaskEnabled
+        val original = if (mode == SqlListDisplayMode.FORMATTED) entry.restoredSql else entry.summary
+        val sql = withTerminator(DisplayMasker.maskDisplay(original, maskOn))
         if (mode == SqlListDisplayMode.SINGLE_LINE) {
             return listOf(SqlListFragmentRenderer.renderFragments(sql))
         }
-        entry.cachedListLineFragments
+        val semantics = entry.cachedListLineFragments
             ?.takeIf { entry.cachedListLineFragmentsMode == mode && entry.cachedListLineFragmentsMasked == maskOn }
-            ?.let { return it }
-        return SqlListFragmentRenderer.renderLineFragments(sql, mode).also {
-            entry.cachedListLineFragments = it
-            entry.cachedListLineFragmentsMode = mode
-            entry.cachedListLineFragmentsMasked = maskOn
-        }
+            ?: SqlListFragmentRenderer.semanticLineFragments(sql, mode).also {
+                entry.cachedListLineFragments = it
+                entry.cachedListLineFragmentsMode = mode
+                entry.cachedListLineFragmentsMasked = maskOn
+            }
+        return visibleSqlLines(SqlListFragmentRenderer.projectLineFragments(semantics), mode)
     }
 }
 

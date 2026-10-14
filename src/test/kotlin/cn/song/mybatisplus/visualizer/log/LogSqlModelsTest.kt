@@ -67,6 +67,20 @@ class LogSqlModelsTest {
         assertNull("round-trip 后不应残留未闭合条目", parser.closePending())
     }
 
+    @Test
+    fun `summary 截断不拆开 UTF-16 surrogate pair 且保持首行边界`() {
+        val emoji = "\uD83D\uDE00"
+        val atLimit = "x".repeat(159) + emoji + "tail"
+        val entry = LogSqlEntry(rawSql = atLimit, restoredSql = atLimit, params = emptyList())
+        assertEquals("x".repeat(159) + "…", entry.summary)
+        val beforeLimit = "x".repeat(158) + emoji + "tail"
+        assertEquals("x".repeat(158) + emoji + "…",
+            LogSqlEntry(beforeLimit, beforeLimit, emptyList()).summary)
+        val firstLine = "x".repeat(10) + emoji + "\nnext"
+        assertEquals("x".repeat(10) + emoji + "…",
+            LogSqlEntry(firstLine, firstLine, emptyList()).summary)
+    }
+
     // ---------- T-LogRowNumber：捕获序号字段 ----------
 
     @Test

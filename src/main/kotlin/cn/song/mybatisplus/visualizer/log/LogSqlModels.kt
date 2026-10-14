@@ -91,7 +91,12 @@ data class LogSqlEntry(
             newlineIdx in 0 until MAX_SUMMARY_LENGTH -> newlineIdx  // 在第一行末尾截断
             else -> minOf(restoredSql.length, MAX_SUMMARY_LENGTH)
         }
-        if (endIdx < restoredSql.length) restoredSql.substring(0, endIdx) + "…" else restoredSql
+        // 160 UTF-16 code unit 边界可能落在 emoji 的代理对中间；只在此情形前移，避免输出半个字符。
+        val safeEndIdx = if (endIdx in 1 until restoredSql.length &&
+            Character.isHighSurrogate(restoredSql[endIdx - 1]) && Character.isLowSurrogate(restoredSql[endIdx])) {
+            endIdx - 1
+        } else endIdx
+        if (safeEndIdx < restoredSql.length) restoredSql.substring(0, safeEndIdx) + "…" else restoredSql
     },
     /** 条目来源（MyBatis / Hibernate / 未知）。 */
     val source: SqlSource = SqlSource.UNKNOWN,
@@ -220,11 +225,11 @@ data class LogSqlEntry(
     // ---------- T-ListMode：多行显示模式行片段缓存（体属性不入 equals/copy；仅 EDT 渲染路径读写） ----------
 
     /**
-     * 多行模式（KEYWORD_WRAP/FORMATTED）的行片段缓存：可变行高下每次布局状态更新会对全部条目
-     * 逐条调渲染器取首选尺寸（T-LogListFreeze-04 的 O(N) 因子），缓存词法片段后测量只剩轻量
-     * 组件布局。SINGLE_LINE 不走缓存（固定行高 + 渲染直读，主题切换实时生效）。
+     * 多行模式（KEYWORD_WRAP/FORMATTED）的语义行片段缓存：只存原文和 token 类型，
+     * 不存 SimpleTextAttributes/颜色；消费者每次绘制按当前 scheme 投影，切主题无需重新分词。
+     * SINGLE_LINE 不走缓存（固定行高 + 渲染直读）。
      */
-    var cachedListLineFragments: List<List<SqlTextFragment>>? = null
+    var cachedListLineFragments: List<List<SqlSemanticFragment>>? = null
 
     /** 缓存对应的显示模式——读取处按当前模式比对，模式变更自动失效（无需显式清缓存）。 */
     var cachedListLineFragmentsMode: SqlListDisplayMode? = null

@@ -151,6 +151,10 @@ internal open class SqlEntryList(model: ListModel<LogSqlEntry>) : TextCopyList<L
     internal fun textFor(element: LogSqlEntry): String = withTerminator(element.restoredSql)
 }
 
+internal class ViewportWidthSqlEntryList(model: ListModel<LogSqlEntry>) : SqlEntryList(model) {
+    override fun getScrollableTracksViewportWidth(): Boolean = true
+}
+
 /**
  * 空态文案写入（T-AgentDiagWrap T-04，独立成顶层函数以便单测）。
  *
@@ -176,9 +180,22 @@ internal fun applyEmptyTextLines(
 
 /**
  * 排序模式（P-06 / T-LogSortModes）：默认 [TIME_ASC]（时间升序 = 捕获顺序，与未排序时观感一致）；
- * 另支持时间降序、耗时升/降序、行号。耗时缺失的条目恒沉底（两个方向的升降序都不让空值顶到前面）。
+ * 另支持时间降序、耗时升/降序、行号、[STRUCTURE_CLUSTER]（同结构聚类）、[DATABASE_GROUP]（按目标库分组）。
+ * 耗时缺失的条目恒沉底（两个方向的升降序都不让空值顶到前面）。
+ *
+ * 性能：全部模式都是对「当前可见条目」的一次 `sortedWith`（O(n log n)，n ≤ 缓冲上限 200），
+ * 且发生在刷新管线里、不在渲染热路径；[STRUCTURE_CLUSTER] 用的 `structureKey` 是条目级 lazy 属性
+ * （每条只算一次指纹），[DATABASE_GROUP] 只做字符串比较。两个新模式的组内次序沿用时间升序（稳定）。
  */
-enum class SortMode { TIME_ASC, TIME_DESC, DURATION_ASC, DURATION_DESC, SEQUENCE }
+enum class SortMode {
+    TIME_ASC,
+    TIME_DESC,
+    DURATION_ASC,
+    DURATION_DESC,
+    SEQUENCE,
+    STRUCTURE_CLUSTER,
+    DATABASE_GROUP,
+}
 
 /** 排序方式下拉项（文案 + 模式）。 */
 internal data class SortOption(val label: String, val mode: SortMode)
@@ -190,7 +207,12 @@ internal fun sortOptions(): List<SortOption> = listOf(
     SortOption(MpSqlVisualizerBundle.message("log.sort.duration.asc"), SortMode.DURATION_ASC),
     SortOption(MpSqlVisualizerBundle.message("log.sort.duration.desc"), SortMode.DURATION_DESC),
     SortOption(MpSqlVisualizerBundle.message("log.sort.sequence"), SortMode.SEQUENCE),
+    SortOption(MpSqlVisualizerBundle.message("log.sort.structure"), SortMode.STRUCTURE_CLUSTER),
+    SortOption(MpSqlVisualizerBundle.message("log.sort.database"), SortMode.DATABASE_GROUP),
 )
+
+/** 「按目标库分组」排序里未知库名的哨兵键（U+FFFF 大于常规字符，未知库恒沉底）。 */
+internal const val DATABASE_UNKNOWN_SORT_KEY = "\uFFFF"
 
 /** 类型多选弹窗可勾选的类型（OTHER 不单列；全选时 OTHER 一并透传）。 */
 internal val FILTERABLE_TYPES: List<StatementType> = listOf(
@@ -209,6 +231,22 @@ internal fun filterByType(entries: List<LogSqlEntry>, activeTypes: Set<Statement
     // T-CrudColor：改用条目级缓存属性（行为等价）——避免每次刷新都重跑分类
     // （classify 内 Regex 每次编译 Pattern），与渲染器共用同一份结果。
     return entries.filter { it.statementType in activeTypes }
+}
+
+/**
+ * 「只看慢查询」过滤（用户 2026-10-14 补，纯逻辑可独立单测）：启用时只保留耗时 ≥ [thresholdMs] 的条目。
+ * 耗时未知（null）的条目**不算慢查询**、一并滤掉——「慢查询」是「已知且超阈值」，未知无从判定。
+ * 判定函数由调用方注入（面板用 [LogSqlPanel.durationOf]：结构化字段优先、缺失回退日志文本解析），
+ * 与「慢查询徽章」同口径。性能：一次 O(n) 遍历，位于刷新管线（非渲染热路径）。
+ */
+internal fun filterBySlowOnly(
+    entries: List<LogSqlEntry>,
+    enabled: Boolean,
+    thresholdMs: Long,
+    durationOf: (LogSqlEntry) -> Long?,
+): List<LogSqlEntry> {
+    if (!enabled) return entries
+    return entries.filter { (durationOf(it) ?: Long.MIN_VALUE) >= thresholdMs }
 }
 
 /**

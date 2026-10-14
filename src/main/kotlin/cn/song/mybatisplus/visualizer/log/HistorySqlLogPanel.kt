@@ -18,6 +18,9 @@ import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.DefaultActionGroup
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ModalityState
+import com.intellij.openapi.editor.colors.EditorColorsListener
+import com.intellij.openapi.editor.colors.EditorColorsManager
 import com.intellij.openapi.fileEditor.OpenFileDescriptor
 import com.intellij.openapi.progress.Task
 import com.intellij.openapi.project.Project
@@ -77,7 +80,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
 
     // ---------- 二级：SQL 列表（复用 SqlEntryList——Ctrl+C 复制纯 SQL 链路） ----------
     private val sqlListModel = DefaultListModel<LogSqlEntry>()
-    private val sqlList = SqlEntryList(sqlListModel)
+    private val sqlList = ViewportWidthSqlEntryList(sqlListModel)
 
     /**
      * 二级列表渲染器（面板直持引用）。**勿经 [sqlList.cellRenderer] 取回**：平台
@@ -363,6 +366,15 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
                 )
             },
         )
+        ApplicationManager.getApplication().messageBus.connect(this).subscribe(
+            EditorColorsManager.TOPIC,
+            EditorColorsListener {
+                ApplicationManager.getApplication().invokeLater(
+                    { sqlList.repaint() },
+                    ModalityState.any(),
+                )
+            },
+        )
 
         // 一级：文件列表
         updateFilesEmptyText()
@@ -403,7 +415,9 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
             }
         })
         // T-SqlLogPerf：二级列表滚动追加——滚动条逼近底部时续写下一批（fillSqlList 只写首屏）
-        sqlScrollPane = JBScrollPane(sqlList)
+        sqlScrollPane = JBScrollPane(sqlList).apply {
+            horizontalScrollBarPolicy = javax.swing.ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER
+        }
         sqlScrollPane.verticalScrollBar.addAdjustmentListener { maybeAppendOnScroll() }
         cards.add(sqlScrollPane, CARD_SQL)
         add(cards, BorderLayout.CENTER)
@@ -1384,38 +1398,12 @@ internal class HistoryCellRenderer : JPanel(BorderLayout()), javax.swing.ListCel
         metaLine.foreground = fg
         metaLine.clear()
         val lineFragments = if (entry != null) {
-            val source = when {
-                SourceMarkers.isMpPaginationCount(entry.sourceFile) -> "MP 分页计数"
-                entry.sourceFile != null -> {
-                    // F-44-7：标记路径始终使用正斜杠（与 CallerSourceLocator 一致），不能用 File.separatorChar
-                    val name = entry.sourceFile.substringAfterLast('/')
-                    if (entry.sourceLine > 0) "$name:${entry.sourceLine}" else name
-                }
-                else -> "unknown"
+            val metadata = SqlEntryPresentation.metadata(entry, isSelected, true, templateCounts)
+            clipForList(metadata, list, this, SqlListTypeColor.BAR_WIDTH).forEach {
+                metaLine.append(it.text, if (isSelected) selectedAttributes(it.attributes, fg) else it.attributes)
             }
-            // T-TwoLine：元信息行在上、SQL 高亮行在下。**片段与顺序与日志页完全一致**
-            // （行号 → 时间 → 耗时 → 目标库 → 来源；耗时复用日志页 formatDurationFragment，
-            // 按慢查询阈值着色、缺失占位「—」——勿再自拼 [xms]，两页同条目须逐字一致）
-            // T-LogHistoryRowNo：行号片段在最前（0 = 无行号——旧文件/未注入条目；与日志页守卫一致）
-            if (entry.sequenceNumber > 0) {
-                metaLine.append("#${entry.sequenceNumber} ", HISTORY_META_GRAY)
-            }
-            // T-JdbcThreadBucket F3 + 日志时间：跟随设置（对齐日志页 formatTimestampFragment），
-            // 含非法 pattern 回退默认、显示开关与时间来源（日志时间/捕获时间）语义
-            formatTimestampFragment(entry)?.let { (t, a) -> metaLine.append(t, a) }
-            val (durationText, durationAttrs) = formatDurationFragment(entry.executionTimeMs, useSelectionFill)
-            metaLine.append(durationText, durationAttrs)
-            // T-AgentDialectLoop：目标库角标（与日志页同款落点：时间/耗时后、来源前）
-            formatDatabaseFragment(entry, useSelectionFill)?.let { (t, a) -> metaLine.append(t, a) }
-            // T-McpAuditTrail T-MAT-05：MCP 徽标（与日志页同款落点与协议；非 MCP 返回 null 不显示）
-            formatMcpFragment(entry, useSelectionFill)?.let { (t, a) -> metaLine.append(t, a) }
-            // O-90：同模板 ×N 徽章（与日志页同款同落点；计数=当前文件全量条目聚合）
-            formatTemplateCountFragment(entry, templateCounts, useSelectionFill)?.let { (t, a) -> metaLine.append(t, a) }
-            metaLine.append("[$source] ", HISTORY_META_GRAY)
             sqlLineFragmentsFor(entry)
-        } else {
-            null
-        }
+        } else null
         // T-ListMode：SQL 行数随显示模式伸缩；T-ClickPreview 不设 toolTipText（预览改单击触发）
         ensureSqlLineCount(if (lineFragments != null) lineFragments.size else 1)
         // T-UiNative speed search 高亮：对元信息行与各 SQL 行施加匹配片段高亮（同主日志列表）
@@ -1423,7 +1411,10 @@ internal class HistoryCellRenderer : JPanel(BorderLayout()), javax.swing.ListCel
         sqlLinePool.forEachIndexed { i, comp ->
             comp.foreground = fg
             comp.clear()
-            lineFragments?.getOrNull(i)?.forEach { f -> comp.append(f.text, f.attributes) }
+            lineFragments?.getOrNull(i)?.let { fragments ->
+                clipForList(fragments, list, this, SqlListTypeColor.BAR_WIDTH)
+                    .forEach { f -> comp.append(f.text, if (isSelected) selectedAttributes(f.attributes, fg) else f.attributes) }
+            }
             list?.let { l -> SpeedSearchUtil.applySpeedSearchHighlighting(l, comp, false, useSelectionFill) }
         }
         return this
@@ -1448,21 +1439,22 @@ internal class HistoryCellRenderer : JPanel(BorderLayout()), javax.swing.ListCel
      * 历史条目为每次加载新建的实例，缓存随条目生命周期天然失效。
      */
     private fun sqlLineFragmentsFor(entry: LogSqlEntry): List<List<SqlTextFragment>> {
-        // R60（T-LaneB D96）：历史列表链脱敏——展示文本打码（entry 数据层不动）；缓存键加脱敏位防脏缓存
-        val maskOn = PluginSettings.getInstance().state.displayMaskEnabled
-        val sql = withTerminator(DisplayMasker.maskDisplay(entry.summary, maskOn))
         val mode = PluginSettings.getInstance().sqlListDisplayMode()
+        // R60：只在展示投影脱敏；FORMATTED 使用完整 SQL，其他模式沿用摘要。
+        val maskOn = PluginSettings.getInstance().state.displayMaskEnabled
+        val original = if (mode == SqlListDisplayMode.FORMATTED) entry.restoredSql else entry.summary
+        val sql = withTerminator(DisplayMasker.maskDisplay(original, maskOn))
         if (mode == SqlListDisplayMode.SINGLE_LINE) {
             return listOf(SqlListFragmentRenderer.renderFragments(sql))
         }
-        entry.cachedListLineFragments
+        val semantics = entry.cachedListLineFragments
             ?.takeIf { entry.cachedListLineFragmentsMode == mode && entry.cachedListLineFragmentsMasked == maskOn }
-            ?.let { return it }
-        return SqlListFragmentRenderer.renderLineFragments(sql, mode).also {
-            entry.cachedListLineFragments = it
-            entry.cachedListLineFragmentsMode = mode
-            entry.cachedListLineFragmentsMasked = maskOn
-        }
+            ?: SqlListFragmentRenderer.semanticLineFragments(sql, mode).also {
+                entry.cachedListLineFragments = it
+                entry.cachedListLineFragmentsMode = mode
+                entry.cachedListLineFragmentsMasked = maskOn
+            }
+        return visibleSqlLines(SqlListFragmentRenderer.projectLineFragments(semantics), mode)
     }
 }
 
