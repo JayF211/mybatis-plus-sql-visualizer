@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.ui
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
+import cn.song.mybatisplus.visualizer.config.ProjectPluginSettings
 import cn.song.mybatisplus.visualizer.psi.WrapperAnchorDetector
 import cn.song.mybatisplus.visualizer.psi.jpa.DerivedMethodLocator
 import com.intellij.psi.PsiMethod
@@ -287,10 +288,44 @@ class SqlPreviewServiceJpaCrudTest : BasePlatformTestCase() {
             FROM t_user
             WHERE id = 1001
             LIMIT 1
-            -- existsById：命中即真语义（Spring Data 运行时渲染 SELECT 1 ... LIMIT 1 形态）
+            -- existsById：命中即真语义（按当前方言只取首行，运行时语句以实际日志为准）
             """.trimIndent(),
             result.sql,
         )
+    }
+
+    fun testProjectOracleOverridesGlobalAutoForRepositoryExists() {
+        val global = PluginSettings.getInstance()
+        val savedGlobal = global.getState().copy()
+        val projectSettings = ProjectPluginSettings.getInstance(project)
+        val savedProject = projectSettings.state.copy()
+        try {
+            global.state.dialectAuto = true
+            projectSettings.state.useProjectSettings = true
+            projectSettings.state.dialectAuto = false
+            projectSettings.state.dialect = "Oracle"
+            myFixture.configureByText(
+                "Demo.java",
+                """
+                public class Demo {
+                    private UserRepository repository;
+                    public void query() { repository.existsById(1001L); }
+                }
+                interface UserRepository extends JpaRepository<UserEntity, Long> {}
+                interface JpaRepository<T, ID> {}
+                @javax.persistence.Entity
+                @javax.persistence.Table(name = "t_user")
+                class UserEntity { @javax.persistence.Id private Long id; }
+                """.trimIndent(),
+            )
+            val result = newService().preview(call("existsById"))
+            assertNotNull(result)
+            assertTrue("项目级 Oracle 不能遗留硬编码 LIMIT：${result!!.sql}",
+                result.sql.contains("FETCH FIRST 1 ROWS ONLY") && !result.sql.contains("LIMIT 1"))
+        } finally {
+            projectSettings.loadState(savedProject)
+            global.loadState(savedGlobal)
+        }
     }
 
     fun testRepositoryGetReferenceLazyAndDeprecatedNotes() {
