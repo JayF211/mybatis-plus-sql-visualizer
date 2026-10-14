@@ -65,10 +65,8 @@ object WrapperAnchorDetector {
      * @param element Line marker 快速路径传入的单个叶子元素（可空：调用方 PSI 接口可能返回 null）
      */
     fun anchorElement(element: PsiElement?): PsiElement? {
-        // F-4：Kotlin 文件快速路径（文本级匹配，O(1)，符合 M10 性能红线）
-        if (element != null && isKotlinFile(element)) {
-            return anchorElementKotlin(element)
-        }
+        // Kotlin 文本检测尚无可靠表名与列/值实参，不能给无法生成 SQL 的链挂预览图标。
+        if (element != null && isKotlinFile(element)) return null
 
         // 场景 B 优先：变量名（PsiLocalVariable / PsiField / PsiParameter 的 nameIdentifier）
         if (element is PsiIdentifier && element.parent is PsiVariable) {
@@ -276,110 +274,4 @@ object WrapperAnchorDetector {
         return ext == "kt" || ext == "kts"
     }
 
-    /**
-     * Kotlin 文件锚点检测（F-4 MVP）。
-     *
-     * 策略：按行文本匹配，检测元素所在行是否包含 Wrapper 链起点（ktQuery/ktUpdate/LambdaQueryWrapper 等），
-     * 若是则返回该元素作为锚点。O(1) 文本级，无 PSI resolve，符合 M10 性能红线。
-     */
-    private fun anchorElementKotlin(element: PsiElement): PsiElement? {
-        // 只处理叶子元素（标识符/方法名）
-        val elementText = element.text ?: return null
-        if (elementText.isEmpty()) return null
-
-        // 获取元素所在行文本
-        val lineText = getLineText(element) ?: return null
-
-        // 检查是否为 Wrapper 链起点方法名
-        val isChainStart = extensionFactoryMethodNames.contains(elementText) &&
-            lineText.contains(".${elementText}(")
-        val isConstructor = wrapperConstructorNames.contains(elementText) &&
-            (lineText.contains("$elementText<") || lineText.contains("$elementText("))
-
-        if (!isChainStart && !isConstructor) return null
-
-        // 检查该行是否包含 Wrapper 操作（eq/like/set 等），确认是 Wrapper 链
-        // T-Perf-23：单趟扫描 ".标识符(" 形态（24 个操作名的 contains 全是它的必要子形态），
-        // 替代每叶子 24 次 contains 全行扫描
-        if (!hasDotCallPattern(lineText)) return null
-
-        return element
-    }
-
-    /** 单趟扫描：行内是否存在 `.标识符(` 形态（Wrapper 操作调用的必要条件）。 */
-    private fun hasDotCallPattern(s: String): Boolean {
-        val n = s.length
-        var i = 0
-        while (i < n - 1) {
-            val c = s[i]
-            if (c == '.' && i + 1 < n) {
-                var j = i + 1
-                while (j < n && (s[j].isLetterOrDigit() || s[j] == '_')) j++
-                if (j > i + 1 && j < n && s[j] == '(') return true
-                i = j
-            } else {
-                i++
-            }
-        }
-        return false
-    }
-
-    /**
-     * 获取元素所在行文本。
-     *
-     * F71（T-PerfSweep22）：改 Document 行定位 + TextRange 一次取——原实现每 leaf 双向
-     * 逐字符扫行界（同一行 N 个 leaf 付 N 次全行扫描 + `file.text` 整取），Document 的
-     * 行号→行界是常量级索引，`getText(TextRange)` 只拷一次行文本。
-     * Document 取不到（无项目/已 dispose）回退原字符扫描路径，语义不变。
-     */
-    private fun getLineText(element: PsiElement): String? {
-        val file = element.containingFile ?: return null
-        val offset = element.textRange.startOffset
-        val document = runCatching {
-            com.intellij.psi.PsiDocumentManager.getInstance(file.project).getDocument(file)
-        }.getOrNull()
-        if (document != null && offset in 0..document.textLength) {
-            return runCatching {
-                val line = document.getLineNumber(offset)
-                document.getText(
-                    com.intellij.openapi.util.TextRange(
-                        document.getLineStartOffset(line),
-                        document.getLineEndOffset(line),
-                    ),
-                )
-            }.getOrNull() ?: legacyScanLineText(file, offset)
-        }
-        return legacyScanLineText(file, offset)
-    }
-
-    /** F71：原路径回退（Document 不可用时；逐字符扫行界）。 */
-    private fun legacyScanLineText(file: com.intellij.psi.PsiFile, offset: Int): String? {
-        val text = file.text ?: return null
-        if (offset < 0 || offset >= text.length) return null
-        var lineStart = offset
-        while (lineStart > 0 && text[lineStart - 1] != '\n') lineStart--
-        var lineEnd = offset
-        while (lineEnd < text.length && text[lineEnd] != '\n') lineEnd++
-        return text.substring(lineStart, lineEnd)
-    }
-
-    /** Kotlin 扩展函数工厂方法名（ktQuery/ktUpdate）。 */
-    private val extensionFactoryMethodNames: Set<String> = setOf("ktQuery", "ktUpdate")
-
-    /** Wrapper 构造函数名集合。 */
-    private val wrapperConstructorNames: Set<String> = setOf(
-        "LambdaQueryWrapper", "LambdaUpdateWrapper", "LambdaDeleteWrapper",
-        "QueryWrapper", "UpdateWrapper", "MPJLambdaWrapper", "MPJQueryWrapper",
-    )
-
-    /** Wrapper 操作条件方法名（用于确认是 Wrapper 链）。 */
-    private val wrapperOperationMethodNames: Set<String> = setOf(
-        "eq", "ne", "gt", "ge", "lt", "le",
-        "like", "notLike", "likeLeft", "likeRight",
-        "notIn", "in", "between", "notBetween",
-        "isNull", "isNotNull",
-        "groupBy", "orderByAsc", "orderByDesc", "orderBy",
-        "having", "or", "and", "apply", "last",
-        "select", "set", "setSql",
-    )
 }

@@ -76,7 +76,7 @@ MyBatis-Plus / MyBatis-Plus-Join / JPA / Hibernate / JdbcTemplate 的 SQL 调试
 
 **Wrapper 转 SQL 预览**
 
-- 支持 `LambdaQueryWrapper` / `LambdaUpdateWrapper` / `LambdaDeleteWrapper`、字符串版 `QueryWrapper` / `UpdateWrapper`、`MPJLambdaWrapper` / `MPJQueryWrapper` 联表查询，以及 `service.lambdaQuery()` 等服务链；Java 与 Kotlin 文件均支持
+- Java 文件支持 `LambdaQueryWrapper` / `LambdaUpdateWrapper` / `LambdaDeleteWrapper`、字符串版 `QueryWrapper` / `UpdateWrapper`、`MPJLambdaWrapper` / `MPJQueryWrapper` 联表查询，以及 `service.lambdaQuery()` 等服务链。Kotlin Wrapper 目前仅有文本识别实验件，尚不能可靠还原表和列/值，因此不显示可点击的预览图标；可运行后从 SQL 日志核对实际语句。
 - 其他 ORM / JDBC 写法同样行内 gutter 一键预览：JdbcTemplate 字符串 SQL（命名参数按名回填、`StringBuilder` 拼接自动聚合）、自研 DAO 字符串 SQL（调用行与方法定义行双锚点）、xbatis（原 mybatis-mp）、Easy-Query、MyBatis Dynamic SQL、Querydsl
 - Wrapper 锚点行 gutter 图标：左键直接弹出预览，右键菜单可选「预览 SQL」或「最近执行记录」，反查本会话捕获的该位置执行记录
 - 左侧面板可勾选动态条件（`.eq(true, ...)` 布尔重载）、回填 `?` 参数（LIKE 自动拼百分号、按字段类型决定是否加引号）、调整 foreach / bind 值
