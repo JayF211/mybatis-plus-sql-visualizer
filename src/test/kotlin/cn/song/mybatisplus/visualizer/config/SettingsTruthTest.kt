@@ -46,6 +46,51 @@ class SettingsTruthTest {
         assertTrue("en tooltip 应声明 does not persist", en!!.contains("does not persist"))
     }
 
+    @Test
+    fun testP1_本地存储披露双语与真实接线() {
+        fun messages(resource: String) = java.util.Properties().apply {
+            this@SettingsTruthTest.javaClass.getResourceAsStream("/messages/$resource")!!
+                .bufferedReader(Charsets.UTF_8).use(::load)
+        }
+        val zh = messages("MpSqlVisualizerBundle_zh.properties")
+        val en = messages("MpSqlVisualizerBundle.properties")
+        val keys = listOf(
+            "settings.storage.captureFiles", "settings.storage.previewHistory",
+            "settings.storage.paramHistory", "settings.storage.clearBoundary",
+        )
+        val sections = mainSrc("cn/song/mybatisplus/visualizer/config/PluginSettingsPanelSections.kt")
+        keys.forEach { key ->
+            assertTrue("设置页须可见地接线 $key", sections.contains("disclosure(\"$key\")"))
+            assertTrue("中文披露缺失 $key", !zh.getProperty(key).isNullOrBlank())
+            assertTrue("英文披露缺失 $key", !en.getProperty(key).isNullOrBlank())
+        }
+        assertTrue(zh.getProperty(keys[0]).contains("默认不自动保存"))
+        assertTrue(en.getProperty(keys[0]).contains("off by default"))
+        assertTrue(zh.getProperty(keys[1]).contains("mp-sql-visualizer.xml"))
+        assertTrue(en.getProperty(keys[2]).contains("plaintext JSON"))
+        assertTrue(zh.getProperty(keys[3]).contains("不会清除上述三类"))
+        assertTrue(en.getProperty(keys[3]).contains("not these three"))
+        listOf(zh, en).forEach { bundle ->
+            assertFalse("自动保存提示不应称仅淘汰时写文件", bundle.getProperty("settings.log.autoSave.tip").contains("被淘汰的 SQL") ||
+                bundle.getProperty("settings.log.autoSave.tip").contains("entries evicted"))
+            assertFalse("历史空态不应称仅淘汰时存档", bundle.getProperty("log.history.files.empty").contains("被淘汰的 SQL") ||
+                bundle.getProperty("log.history.files.empty").contains("evicted SQL"))
+        }
+        // 文案与真实写入/清理边界同时守卫，防止只改文字却漏掉实际独立持久化链。
+        assertTrue(mainSrc("cn/song/mybatisplus/visualizer/log/SqlLogManager.kt")
+            .contains("buffer.onEntryStored = { entry -> autoSaver.submit(entry) }"))
+        val settings = mainSrc("cn/song/mybatisplus/visualizer/config/PluginSettings.kt")
+        assertTrue(settings.contains("var logAutoSaveEnabled: Boolean = false"))
+        assertTrue(settings.contains("var paramHistoryJson: String"))
+        assertTrue(settings.contains("var paramSchemesJson: String"))
+        assertTrue(mainSrc("cn/song/mybatisplus/visualizer/history/SqlHistoryManager.kt")
+            .contains("Storage(\"mp-sql-visualizer.xml\""))
+        val clear = mainSrc("cn/song/mybatisplus/visualizer/util/PluginCacheManager.kt")
+        assertFalse(clear.contains("SqlHistoryManager.clear("))
+        assertFalse(clear.contains("ParamHistoryCache.clear("))
+        assertTrue(java.io.File("README.md").readText().contains("两者均在 IDE 应用配置目录"))
+    }
+
     // ---------- P2 / T-CaptureTruth T-CT-01/02：接线源码守卫（语义走 AgentStatusTextTest） ----------
 
     private fun mainSrc(rel: String) = java.io.File("src/main/kotlin/$rel").readText()
