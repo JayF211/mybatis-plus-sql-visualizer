@@ -104,35 +104,66 @@ class SqlLogEntryBufferDedupeIndexTest {
         assertTrue("now-latest == window（60s）不小于窗口 → 不丢", b.addEntry(entry(sql, 60_000)))
     }
 
-    // ---------- T-AttachZeroEvent P3：通道纪元重置面（2026-10-09 现场复盘） ----------
+    // ---------- T-AttachZeroEvent P3 + O-147 W2-补：接管沿的通道纪元重建面 ----------
 
     /**
-     * 接管沿重置面：桥纪元旧索引不得吞 agent 纪元首批同键事件。
+     * 接管沿重建面（陈旧键）：桥纪元旧索引不得吞 agent 纪元首批同键事件。
      * 12:54 现场：接管前 60s 内桥刚捕过同端点，接管后同 SQL 的 agent 事件全落窗口内被当重复
-     * 丢弃（面板零新条目、「attach 即生效」看似失效）——resetDedupeIndexOnChannelHandoff 后必须收。
-     * 反向验证锚点：摘掉方法体的 dedupeIndex.clear()（或摘掉 AgentManager.updateOnline 的接线）
-     * 本用例必红。
+     * 丢弃（面板零新条目、「attach 即生效」看似失效）——接管沿重建后必须收。
+     * 反向验证锚点：摘掉方法体的索引重建（或摘掉 AgentManager.updateOnline 的接线）本用例必红。
      */
     @Test
-    fun `通道纪元重置_接管沿后同键旧索引不吞首批`() {
+    fun `接管沿重建_陈旧桥纪元键清掉_同键首批不吞`() {
         val b = SqlLogEntryBuffer(maxEntries = 10)
         val sql = "SELECT * FROM handoff WHERE id = 1"
         assertTrue("桥纪元：接管前同键条目在队", b.addEntry(entry(sql, 0)))
-        b.resetDedupeIndexOnChannelHandoff() // 接管沿（SqlCaptureGate.paused false→true，生产由 updateOnline 接线）
-        assertTrue("接管沿后同键首批事件不得被旧索引吞（5s << 60s 窗口）", b.addEntry(entry(sql, 5_000)))
+        // 接管沿（SqlCaptureGate.paused false→true，生产由 updateOnline 接线）：now=100_000、grace=5s
+        // → ts=0 属陈旧键，清掉
+        b.rebuildDedupeIndexAfterHandoff(graceMs = 5_000, nowMs = 100_000)
+        assertTrue("接管沿后同键首批事件不得被陈旧索引吞（5s << 60s 窗口）", b.addEntry(entry(sql, 100_005)))
     }
 
-    /** 同面守卫之二：agent↔agent 短窗重复仍被折——重置只豁免纪元切换那一瞬，不豁免新纪元内部。 */
+    /** 同面守卫之二：agent↔agent 短窗重复仍被折——重建只豁免纪元切换那一瞬，不豁免新纪元内部。 */
     @Test
-    fun `通道纪元重置后_新纪元内部短窗重复仍折叠`() {
+    fun `接管沿重建后_新纪元内部短窗重复仍折叠`() {
         val b = SqlLogEntryBuffer(maxEntries = 10)
         val sql = "SELECT * FROM handoff2 WHERE id = 1"
-        assertTrue(b.addEntry(entry(sql, 0))) // 桥纪元
-        b.resetDedupeIndexOnChannelHandoff()
-        assertTrue(b.addEntry(entry(sql, 5_000))) // agent 纪元首批（纪元豁免）
-        assertFalse("agent 纪元内部短窗重复照常折叠", b.addEntry(entry(sql, 8_000)))
+        assertTrue(b.addEntry(entry(sql, 0))) // 桥纪元（陈旧）
+        b.rebuildDedupeIndexAfterHandoff(graceMs = 5_000, nowMs = 100_000)
+        assertTrue(b.addEntry(entry(sql, 100_005))) // agent 纪元首批（陈旧键已清 → 照常入队）
+        assertFalse("agent 纪元内部短窗重复照常折叠", b.addEntry(entry(sql, 100_008)))
         assertEquals("折叠计数照常累加", 1, b.dedupeCount(sql))
-        assertEquals("条目不被重置波及（清索引不清条目）", 2, b.snapshot().size)
+        assertEquals("条目不被重建波及（清索引不清条目）", 2, b.snapshot().size)
+    }
+
+    /**
+     * O-147 W2-补（2026-10-14 真机复验）：**新鲜键保留**——接管沿前几毫秒入库的控制台副本（实测 6ms
+     * 窗口）必须在索引里存活，agent 副本到达时按融合升级，而不是新开一行（那正是用户看到的
+     * 「一行带源码、一行无源码」）。
+     * 反向验证锚点：把 [SqlLogEntryBuffer.rebuildDedupeIndexAfterHandoff] 的 grace 置 0（等价旧「全清」）
+     * 本用例必红（rows.size == 2）。
+     */
+    @Test
+    fun `接管沿重建_新鲜键保留_同一次执行融合为一行`() {
+        val b = SqlLogEntryBuffer(maxEntries = 10)
+        val sql = "SELECT * FROM handoffFresh WHERE id = 1"
+        assertTrue("桥纪元：接管沿前毫秒级入库的控制台副本（无源码）", b.addEntry(entry(sql, 100_000)))
+        // 接管沿：now=100_010、grace=5s → ts=100_000 ≥ 95_010，保留
+        b.rebuildDedupeIndexAfterHandoff(graceMs = 5_000, nowMs = 100_010)
+        val agentCopy = LogSqlEntry(
+            rawSql = sql,
+            restoredSql = sql,
+            params = emptyList(),
+            timestamp = 100_030,
+            executionTimeMs = 3,
+            sourceFile = "a/A.java",
+            sourceLine = 7,
+            captureProvenance = CaptureProvenance.AGENT,
+        )
+        assertFalse("同一次执行的 agent 副本应融合（不新开行）", b.addEntry(agentCopy))
+        val rows = b.snapshot().filter { it.restoredSql == sql }
+        assertEquals("同一次执行只留一行", 1, rows.size)
+        assertEquals("且该行升级为带源码（可跳转）", "a/A.java", rows.single().sourceFile)
     }
 
     private fun entry(sql: String, ts: Long) = LogSqlEntry(

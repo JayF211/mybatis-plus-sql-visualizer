@@ -80,20 +80,43 @@ class SqlLogEntryBuffer(
     }
 
     /**
-     * T-AttachZeroEvent P3（2026-10-09 现场复盘）：**通道纪元重置**——增强捕获接管沿（桥让位、
-     * agent 接管，`SqlCaptureGate.paused` false→true）由 [AgentManager.updateOnline] 调用。
+     * T-AttachZeroEvent P3（2026-10-09 现场复盘）+ T-AgentCaptureProvenance O-147 W2-补（2026-10-14 真机复验）：
+     * **通道纪元重建**——增强捕获接管沿（桥让位、agent 接管，`SqlCaptureGate.paused` false→true）由
+     * [AgentManager.updateOnline] 调用。
      *
-     * 为什么重置：dedupeKey 跨通道统一（agent 与桥同 SQL 产出同指纹，AgentEventAdapter 契约），
-     * 目的是折叠接管/回落**重叠期**的双通道双报；桥一旦封停，重叠窗语义即结束——接管前桥纪元的
-     * 索引不得再吞 agent 纪元的首批同键事件。现场：接管前 60s 内桥刚捕过同端点，接管后同 SQL 的
-     * agent 事件全部落窗口内被当重复丢弃，面板零新条目、「attach 即生效」看似失效。
+     * 为什么重建：dedupeKey 跨通道统一（agent 与桥同 SQL 产出同指纹，AgentEventAdapter 契约），目的是
+     * 折叠接管/回落**重叠期**的双通道双报；桥一旦封停，重叠窗语义即结束——接管前桥纪元的索引不得再吞
+     * agent 纪元的首批同键事件（现场：接管前 60s 内桥刚捕过同端点，接管后同 SQL 的 agent 事件全部落窗口
+     * 内被当重复丢弃，面板零新条目、「attach 即生效」看似失效）。
      *
-     * 只清索引，**不清条目、不清 ⨉N 徽章计数**（历史留痕）；此后 agent↔agent 短窗重复照常折叠
-     * （索引由新纪元条目在入队 upsert 面重建）。O(1)（清 map），entries 锁内执行。
+     * **O-147 W2-补：由「全清」改为「只清陈旧键、保留新鲜键」**。全清会把**同一次执行的双通道副本**也一起
+     * 切断：控制台条目在接管沿前几毫秒入库（2026-10-14 真机复验实测 6ms 窗口——`捕获归因: 通道=CONSOLE_EP`
+     * 入库 → 接管沿清索引 → 随后同一条 SQL 的 agent 事件不再判重、新开一行）⇒ 用户看到「一行带源码、
+     * 一行 `—` 无源码」的原始报障形态。改为：`timestamp >= now - graceMs` 的键保留（同一次执行的控制台
+     * 副本，agent 副本到达时按 [mergeDuplicateEntry] 融合升级为可跳转行），更旧的键清掉（P3 原意保留——
+     * 陈旧桥纪元条目不得吞 agent 首批，agent 新观测照常成为新行）。
+     *
+     * 只动索引，**不清条目、不清 ⨉N 徽章计数**（历史留痕）；此后 agent↔agent 短窗重复照常折叠。
      * 回落沿（true→false）**不**调用本方法——理由见 [AgentManager.updateOnline] 尾注。
+     *
+     * @param graceMs 保留窗（默认 [HANDOFF_MERGE_GRACE_MS]）：同一次执行的双通道副本间隔为毫秒级，
+     *   而 60s 去重窗内的陈旧条目不得入窗（否则 P3 症状回归）。
+     * @param nowMs 判定基准（默认系统时钟；测试注入合成时间戳，保持与既有合成时间戳用例的确定性）。
      */
-    fun resetDedupeIndexOnChannelHandoff() {
-        synchronized(entries) { dedupeIndex.clear() }
+    fun rebuildDedupeIndexAfterHandoff(
+        graceMs: Long = HANDOFF_MERGE_GRACE_MS,
+        nowMs: Long = System.currentTimeMillis(),
+    ) {
+        synchronized(entries) {
+            dedupeIndex.clear()
+            if (!dedupeEnabled) return
+            val cutoff = nowMs - graceMs
+            for (e in entries) {
+                if (e.timestamp < cutoff) continue
+                val latest = dedupeIndex[e.dedupeKey]
+                if (latest == null || e.timestamp > latest.timestamp) dedupeIndex[e.dedupeKey] = e
+            }
+        }
     }
 
     /**
@@ -590,5 +613,12 @@ class SqlLogEntryBuffer(
 
         /** O-147 W0：归因诊断限频窗（10s）。 */
         private const val ATTRIB_DIAG_INTERVAL_NANOS = 10_000_000_000L
+
+        /**
+         * O-147 W2-补：接管沿重建索引时保留的「同一次执行双通道副本」窗（5s）。
+         * 取 5s 的依据：同一次执行被两通道各捕一次，间隔是毫秒级（真机实测 6ms）；而 P3 现场要挡的是
+         * 「接管前 60s 内」的陈旧桥纪元条目——5s 窗两者兼顾（陈旧键照清，新鲜键保留供融合）。
+         */
+        private const val HANDOFF_MERGE_GRACE_MS = 5_000L
     }
 }

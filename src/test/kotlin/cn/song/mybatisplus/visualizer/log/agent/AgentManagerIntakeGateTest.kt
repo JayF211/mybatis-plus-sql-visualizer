@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.log.agent
 
+import cn.song.mybatisplus.visualizer.log.CaptureProvenance
 import cn.song.mybatisplus.visualizer.log.LogSqlEntry
 import cn.song.mybatisplus.visualizer.log.SqlCaptureGate
 import cn.song.mybatisplus.visualizer.log.SqlLogFileReader
@@ -467,21 +468,22 @@ class AgentManagerIntakeGateTest : BasePlatformTestCase() {
         assertFalse("会话摘除后桥不得保持封着", SqlCaptureGate.paused.get())
     }
 
-    // ---------- ④ T-AttachZeroEvent P3：接管沿的通道纪元重置（2026-10-09 现场复盘） ----------
+    // ---------- ④ T-AttachZeroEvent P3：接管沿的通道纪元重建（2026-10-09 现场复盘 + O-147 W2-补） ----------
 
     /**
      * 12:54 现场：接管前 60s 内控制台桥刚捕过同端点 → 接管沿后同 SQL 的 agent 事件全部落
      * 去重窗口内被当重复丢弃 → 面板零新条目、「attach 即生效」看似失效。守卫：接管沿（桥让位）
-     * 必须重置**本项目**缓冲的去重索引——同键 agent 事件（窗口内）照常入队。
-     * 反向验证锚点：摘掉 [AgentManager.updateOnline] 的 resetDedupeIndexOnChannelHandoff 接线本用例必红。
+     * 必须重建**本项目**缓冲的去重索引——**陈旧**桥纪元键清掉，同键 agent 事件（窗口内）照常入队。
+     * 反向验证锚点：摘掉 [AgentManager.updateOnline] 的 rebuildDedupeIndexAfterHandoff 接线本用例必红。
      */
-    fun test接管沿_项目缓冲去重索引按通道纪元重置() {
+    fun test接管沿_陈旧桥纪元键不吞新纪元首批() {
         val manager = freshManager()
         val logManager = logManager()
         logManager.entries.paused = false
         logManager.entries.dedupeEnabled = true
         val sql = "select handoff_epoch_same_key"
-        val bridgeEraTs = System.currentTimeMillis()
+        // 陈旧：接管前 60s 内桥捕过同端点（P3 现场形态）
+        val bridgeEraTs = System.currentTimeMillis() - 60_000L
         assertTrue(
             "前置：桥纪元同键条目在队（接管前桥捕过同端点）",
             logManager.entries.addEntry(LogSqlEntry(rawSql = sql, restoredSql = sql, params = emptyList(), timestamp = bridgeEraTs)),
@@ -493,9 +495,53 @@ class AgentManagerIntakeGateTest : BasePlatformTestCase() {
         awaitTrue("确认在采集后桥应让位（接管沿）") { SqlCaptureGate.paused.get() }
 
         assertTrue(
-            "接管沿后同键 agent 事件（60s 窗口内）不得被桥纪元旧索引吞",
+            "接管沿后同键 agent 事件（60s 窗口内）不得被陈旧桥纪元索引吞",
             logManager.entries.addEntry(LogSqlEntry(rawSql = sql, restoredSql = sql, params = emptyList(), timestamp = System.currentTimeMillis())),
         )
+    }
+
+    /**
+     * O-147 W2-补（2026-10-14 真机复验现场）：接管沿前**几毫秒**控制台条目入库（实测 6ms 窗口：
+     * `捕获归因: 通道=CONSOLE_EP` 入库 → 接管沿 → 同一条 SQL 的 agent 副本），旧「全清」语义下 agent
+     * 副本不再判重、新开一行 ⇒ 用户看到「一行带源码、一行无源码」的原始报障形态。
+     * 守卫：新鲜键（5s 窗内）必须保留——agent 副本按融合升级为可跳转行，且同一次执行只留一行。
+     * 反向验证锚点：把接线换回「全清」或把 grace 置 0 本用例必红。
+     */
+    fun test接管沿_新鲜桥纪元键按同一次执行融合() {
+        val manager = freshManager()
+        val logManager = logManager()
+        logManager.entries.paused = false
+        logManager.entries.dedupeEnabled = true
+        val sql = "select handoff_fresh_same_key"
+        assertTrue(
+            "前置：接管沿前毫秒级入库的控制台副本在队（无源码/无耗时）",
+            logManager.entries.addEntry(LogSqlEntry(rawSql = sql, restoredSql = sql, params = emptyList(), timestamp = System.currentTimeMillis())),
+        )
+
+        val session = newSession(7606L, manager)
+        manager.sessions.add(session)
+        writeFrame(7606L, AgentProtocol.CMD_CONFIG_ACK, AgentProtocol.configAckBody(false, true, 0, 0))
+        awaitTrue("确认在采集后桥应让位（接管沿）") { SqlCaptureGate.paused.get() }
+
+        assertFalse(
+            "同一次执行的 agent 副本应融合（不新开行）",
+            logManager.entries.addEntry(
+                LogSqlEntry(
+                    rawSql = sql,
+                    restoredSql = sql,
+                    params = emptyList(),
+                    timestamp = System.currentTimeMillis(),
+                    executionTimeMs = 3,
+                    sourceFile = "a/A.java",
+                    sourceLine = 7,
+                    sourceCandidates = listOf("a/A.java" to 7),
+                    captureProvenance = CaptureProvenance.AGENT,
+                ),
+            ),
+        )
+        val rows = logManager.entries.snapshot().filter { it.restoredSql == sql }
+        assertEquals("同一次执行只留一行", 1, rows.size)
+        assertEquals("且该行已带源码（可跳转）", "a/A.java", rows.single().sourceFile)
     }
 }
 
