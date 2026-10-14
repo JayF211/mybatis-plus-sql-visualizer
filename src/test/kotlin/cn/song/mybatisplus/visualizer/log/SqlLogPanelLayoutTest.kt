@@ -445,59 +445,6 @@ class SqlLogPanelLayoutTest : BasePlatformTestCase() {
      * 判据取**等值**（历史 tab 在场 + tab 总数恰 4）：旧用例的 `tabCount >= 3` 对门禁无判别力
      * （关态 3、开态 4，两态皆过）——反向验证时把门禁改回去，本用例必须变红。
      */
-    /**
-     * T-SqlLogTabsSingleRow（O-149，用户 2026-10-14）：页签在窄侧栏下必须**恒为一行**。
-     *
-     * 折行根因＝`JTabbedPane` 默认 `WRAP_TAB_LAYOUT`（页签总宽超容器宽就按行折）。
-     * 判据两条互为冗余：①布局策略必须是 SCROLL（非 WRAP）；②按用户侧栏量级的窄宽度布局后，
-     * 四个页签的 bounds 必须同处一行（`y` 唯一）。只测策略会漏「策略对了但仍折」的实现差异，
-     * 只测几何会漏「碰巧放得下」的假绿。
-     */
-    fun test窄侧栏下页签恒单行不折行() {
-        val panel = SqlLogPanel(project, manager)
-        try {
-            waitForEdt()
-            val tabs = panel.tabsForTest
-            assertEquals(
-                "页签布局策略必须为 SCROLL（WRAP 会在窄宽度折行）",
-                javax.swing.JTabbedPane.SCROLL_TAB_LAYOUT,
-                tabs.tabLayoutPolicy,
-            )
-            // 按用户侧栏量级的窄宽度强制布局一次
-            tabs.size = Dimension(360, 240)
-            tabs.doLayout()
-            val bounds = (0 until tabs.tabCount).map { tabs.getBoundsAt(it) }
-            assertTrue(
-                "四个页签都应有可用 bounds（实际 $bounds）",
-                bounds.all { it != null && it.height > 0 },
-            )
-            val rows = bounds.map { it!!.y }.distinct()
-            assertEquals("窄宽度下四个页签必须同处一行（实测行 y 值=$rows）", 1, rows.size)
-
-            // 正对照：同一套页签文案放进 WRAP 策略的容器里，窄宽度下**必须**折行——
-            // 证明上面那条几何判据确实能看见折行，而不是恒绿的摆设。
-            val control = javax.swing.JTabbedPane(
-                javax.swing.JTabbedPane.TOP,
-                javax.swing.JTabbedPane.WRAP_TAB_LAYOUT,
-            )
-            listOf("log.tab.logs", "log.tab.logToSql", "log.tab.sqlToJava", "log.tab.history").forEach {
-                control.addTab(MpSqlVisualizerBundle.message(it), javax.swing.JPanel())
-            }
-            control.size = Dimension(200, 240)
-            control.doLayout()
-            val controlRows = (0 until control.tabCount)
-                .map { control.getBoundsAt(it)!!.y }
-                .distinct()
-                .size
-            assertTrue(
-                "正对照：WRAP 策略在窄宽度下应折行（实测 $controlRows 行）——否则本用例的几何判据无判别力",
-                controlRows > 1,
-            )
-        } finally {
-            panel.dispose()
-        }
-    }
-
     fun test历史Tab常驻_未开自动保存且无历史文件也存在() {
         cleanHistoryDir()
         val settings = PluginSettings.getInstance()
@@ -507,10 +454,10 @@ class SqlLogPanelLayoutTest : BasePlatformTestCase() {
         try {
             waitForEdt()
             val tabs = panel.tabsForTest
-            assertEquals("四个 tab：SQL 日志 / 日志转 SQL / SQL→Java / SQL 历史", 4, tabs.tabCount)
+            assertEquals("四个 tab：SQL 日志 / 日志转 SQL / SQL→Java / SQL 历史", 4, tabs.getTabCount())
             assertTrue(
                 "历史 tab 应恒定存在（未开自动保存、无历史文件）",
-                tabs.indexOfTab(MpSqlVisualizerBundle.message("log.tab.history")) >= 0,
+                tabs.getTabs().any { it.text == MpSqlVisualizerBundle.message("log.tab.history") },
             )
         } finally {
             panel.dispose()
@@ -525,11 +472,11 @@ class SqlLogPanelLayoutTest : BasePlatformTestCase() {
         try {
             waitForEdt()
             val tabs = panel.tabsForTest
-            val index = tabs.indexOfTab(MpSqlVisualizerBundle.message("log.tab.history"))
-            assertTrue("历史 tab 应在场", index >= 0)
-            tabs.selectedIndex = index
+            val historyInfo = tabs.getTabs().firstOrNull { it.text == MpSqlVisualizerBundle.message("log.tab.history") }
+            assertTrue("历史 tab 应在场", historyInfo != null)
+            tabs.select(historyInfo!!, true)
             waitForEdt()
-            assertTrue("切到历史 tab 后选中的应是历史面板", tabs.selectedComponent is HistorySqlLogPanel)
+            assertTrue("切到历史 tab 后选中的应是历史面板", tabs.selectedInfo?.component is HistorySqlLogPanel)
         } finally {
             panel.dispose()
         }
@@ -550,18 +497,17 @@ class SqlLogPanelLayoutTest : BasePlatformTestCase() {
         try {
             waitForEdt()
             val tabs = panel.tabsForTest
-            val index = tabs.indexOfTab(MpSqlVisualizerBundle.message("log.tab.history"))
-            assertTrue("前提：自动保存开启时历史 tab 在场", index >= 0)
+            val historyInfo = tabs.getTabs().firstOrNull { it.text == MpSqlVisualizerBundle.message("log.tab.history") }
+            assertTrue("前提：自动保存开启时历史 tab 在场", historyInfo != null)
             settings.state.logAutoSaveEnabled = false
             // 等价设置页 apply 后的广播（监听器经 invokeLater 处理）
             project.messageBus.syncPublisher(PluginSettings.SETTINGS_CHANGE_TOPIC).settingsChanged()
             waitForEdt()
-            assertEquals(
+            assertTrue(
                 "关闭自动保存后历史 tab 不得被移除（旧实现此处会摘掉它）",
-                index,
-                tabs.indexOfTab(MpSqlVisualizerBundle.message("log.tab.history")),
+                tabs.getTabs().any { it === historyInfo },
             )
-            assertEquals("tab 总数不应变化", 4, tabs.tabCount)
+            assertEquals("tab 总数不应变化", 4, tabs.getTabCount())
         } finally {
             panel.dispose()
             settings.state.logAutoSaveEnabled = prevAutoSave
@@ -576,11 +522,9 @@ class SqlLogPanelLayoutTest : BasePlatformTestCase() {
         val manager = SqlLogManager(project)
         val panel = SqlLogPanel(project, manager)
         try {
-            val tabs = panel.getComponent(0) as? javax.swing.JTabbedPane
-            org.junit.Assert.assertNotNull(tabs)
-            var found = false
-            for (i in 0 until tabs!!.tabCount) {
-                if (tabs.getTitleAt(i).contains("历史") || tabs.getTitleAt(i).contains("History")) found = true
+            val tabs = panel.tabsForTest
+            val found = tabs.getTabs().any {
+                it.text.contains("历史") || it.text.contains("History")
             }
             assertTrue("未开启自动保存时历史 tab 也应常驻（R19）", found)
         } finally {

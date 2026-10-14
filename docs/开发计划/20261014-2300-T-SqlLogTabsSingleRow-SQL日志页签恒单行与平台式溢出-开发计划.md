@@ -20,20 +20,41 @@ SQL 日志       日志 → SQL
 
 ## 二、方案
 
-### 2.1 定案：不折行 + 收紧页签内边距
+### 2.1 定案（第二轮修正后）：直接复用平台页签实现
 
-1. **`tabLayoutPolicy = SCROLL_TAB_LAYOUT`**：`JTabbedPane` 的另一档策略，页签**永不折行**；宽度不足时由平台按滚动/溢出处理（出现平台滚动箭头），不会把标题挤到第二行。
-2. **`setTabComponentInsets(...)` 收紧内边距**：`JBTabbedPane` 在 243 与 262 都提供该 API（本机 jar `javap` 双版本实证），把每个页签的内边距收到紧凑档，让四个页签在用户侧栏宽度下**正好一行、不需要滚动**。
+**第一轮尝试（已回退，留档）**：只改 `JTabbedPane` 的策略与内边距——`SCROLL_TAB_LAYOUT` + `setTabComponentInsets(2,8,2,8)`。
+实测失败：无头量得原文案四页签需 ~321px，我加的内边距又把所需宽度推到约 385px，用户侧栏（约 230~250px）
+一个都放不下，平台 ExpUI 遂把整排收进下拉箭头、页签全不可见（用户截图报「严重问题」）。**教训：改页签策略前先量所需宽度**。
 
-### 2.2 备选（本期不做，登记为 V182）
+**定案**：按用户要求「参考 IDEA 打开多个类时的交互」——**复用平台自己的页签实现**，不自造策略：
 
-换成平台的 `JBTabs`/`JBTabsImpl` + `TabLayout.SHRINK`，即**编辑器页签**那种「先缩到最小宽度、再在下拉里列出全部文件」的交互。不做的原因：
+```text
+JBTabsFactory.createTabs(project, this)      // 产出 JBTabsImpl
+  .presentation.setSingleRow(true)           // 恒单行（不折行）
+  .presentation.setSupportsCompression(true) // 页签可压缩
+  .presentation.setTabDraggingEnabled(false)
+```
 
-- 该容器是工具窗口/编辑器专用组件，构造签名在 243→253→262 间有过漂移（`JBTabsFactory`/`JBTabsImpl` 构造参数、`TabInfo` 链式 API），属反射/编译期双重风险面，须先补跨版本签名门禁；
-- 现面板的页签切换、懒加载、`tabsForTest` 断言全建立在 `JTabbedPane` API 上，换容器要连带重写这批用例；
-- 用户的核心诉求是「一行、别折」，`SCROLL_TAB_LAYOUT` 已经满足；下拉式溢出属观感增强。
+`JBTabsImpl` 实现 `MorePopupAware`（`canShowMorePopup()` / `showMorePopup()` / `getMoreToolbar()`）——
+这正是编辑器页签「一行 + 放不下时压缩 + 再放不下就出『显示全部页签』下拉」那套交互的平台机制，
+由平台按宽度自行调度，插件不再参与宽度决策。
 
-若后续仍想要编辑器那种下拉，按 V182 的判据先做签名门禁再换容器。
+**跨版本实证**（本机 jar `javap`，243 = `app-client.jar`，262 = `intellij.platform.ide.jar`）：
+`JBTabsFactory.createTabs/createEditorTabs`、`JBTabsPresentation.setSingleRow/setSupportsCompression`、
+`JBTabsImpl.canShowMorePopup/showMorePopup/getMoreToolbar`、`TabInfo` 链式 setter、
+`TabsListener.selectionChanged(TabInfo?, TabInfo?)` 两侧均在。
+
+### 2.2 迁移面
+
+页签身份由「索引」改为「TabInfo 句柄」：`logsTab/logToSqlTab/sqlToJavaTab/historyTab` 四个字段替代
+`historyTabIndex`；`selectedComponent = X` 改 `select(info, true)`；`indexOfTab(label)` 改按
+`getTabs()` 的 text 匹配；`addChangeListener` 改 `addListener(TabsListener, this)`（注意平台签名的两个
+参数**可为空**，Kotlin override 必须写成 `TabInfo?`）。
+
+### 2.3 不做（原备选，现已被 2.1 覆盖）
+
+自造「缩到最小宽度 + 自定义下拉」或换 `JBEditorTabs` 的 4 参构造器（需 `TabListOptions`/`CoroutineScope`，
+跨版本面更大）。既然 `createTabs` + 两个 presentation 开关已给出同款交互，不再自造。
 
 ## 三、改动清单
 
@@ -71,4 +92,5 @@ SQL 日志       日志 → SQL
 
 ## 八、实施记录
 
-- 2026-10-14：定位根因（`JBTabbedPane()` 未设 `tabLayoutPolicy`，默认 `WRAP_TAB_LAYOUT`），双版本 `javap` 实证 `setTabComponentInsets` 在 243/262 均可用；定案 SCROLL 策略 + 紧凑内边距，并登记 JBTabs 备选与三条 V182 前提。随本计划一并实施。
+- 2026-10-14 第一轮：定位根因（`JBTabbedPane()` 未设 `tabLayoutPolicy`，默认 `WRAP_TAB_LAYOUT`），双版本 `javap` 实证 `setTabComponentInsets` 在 243/262 均可用；**错误定案**为「SCROLL 策略 + 紧凑内边距」并实施（提交 `22a74acf`）。
+- 2026-10-14 第二轮（用户报「严重问题」后）：先回退第一轮（页签重新可见），再用无头探针量出各宽度下的页签几何（原文案 WRAP：230/260/300px 折 2 行、≥360px 一行；所需宽度 ~321px），确认第一轮的 8px 内边距把所需宽度推到 ~385px 是压垮点。随后按用户「反编译看 IDEA 怎么复用」的指引查平台源码（`javap` 243/262），改用 `JBTabsFactory.createTabs` + `setSingleRow(true)` + `setSupportsCompression(true)`，即平台自带的单行＋压缩＋`MorePopupAware` 下拉；页签身份迁移到 `TabInfo` 句柄。`SqlLogPanelLayoutTest` 15/15 绿。

@@ -127,10 +127,28 @@ class SqlLogPanel(
      * 备选（本期不做，见计划 §2.2 / V182）：换平台 `JBTabs` + `TabLayout.SHRINK` 取编辑器页签那种
      * 「缩到最小 + 下拉列出全部」的交互——该容器跨 243/253/262 构造签名有漂移面，须先补签名门禁。
      */
-    private val tabs = JBTabbedPane().apply {
-        tabLayoutPolicy = javax.swing.JTabbedPane.SCROLL_TAB_LAYOUT
-        setTabComponentInsets(Insets(2, 8, 2, 8))
+    /**
+     * 页签容器（T-SqlLogTabsSingleRow / O-149，用户 2026-10-14 两轮校正后定稿）。
+     *
+     * 折行根因：`JTabbedPane` 默认 `WRAP_TAB_LAYOUT`——页签总宽超过容器宽就按行折，窄侧栏下变两行。
+     * 用户要求「参考 IDEA 打开多个类时的交互」，故**复用平台自己的页签实现**而不是自造策略：
+     * `JBTabsFactory.createTabs` 产出的 `JBTabsImpl` 实现 `MorePopupAware`（`canShowMorePopup()` /
+     * `showMorePopup()` / `getMoreToolbar()`），配合 `setSingleRow(true)`（恒单行、不折行）与
+     * `setSupportsCompression(true)`（页签可压缩）即得到编辑器页签那套交互：**一行 + 放不下时压缩 +
+     * 再放不下就出「显示全部页签」下拉**。243 与 262 两个发行版 jar 均已 `javap` 实证这些 API 存在
+     * （`JBTabsPresentation.setSingleRow/setSupportsCompression`、`JBTabsImpl.canShowMorePopup`）。
+     */
+    private val tabs: com.intellij.ui.tabs.JBTabs = com.intellij.ui.tabs.JBTabsFactory.createTabs(project, this).apply {
+        presentation.setSingleRow(true)
+        presentation.setSupportsCompression(true)
+        presentation.setTabDraggingEnabled(false)
     }
+
+    /** 各页签句柄（JBTabs 以 TabInfo 为身份，替代原 JTabbedPane 的索引语义）。 */
+    private var logsTab: com.intellij.ui.tabs.TabInfo? = null
+    private var logToSqlTab: com.intellij.ui.tabs.TabInfo? = null
+    private var sqlToJavaTab: com.intellij.ui.tabs.TabInfo? = null
+    private var historyTab: com.intellij.ui.tabs.TabInfo? = null
     /** T-M38：日志转 SQL 转换 tab（粘贴日志 → 批量还原可执行 SQL；原「SQL 预览」被动展示改造）。 */
     private val logToSqlPanel = LogToSqlPanel(project)
     /** T-M36.4：SQL → Java 转换 tab（粘贴 SQL → 格式化/补全 → 转换 → 可编辑 Java 高亮结果区）。 */
@@ -140,7 +158,7 @@ class SqlLogPanel(
      *  （未开启自动保存的新用户此前看不到入口）；无数据时面板显示空态并指路设置页。 */
     private val historyPanel: HistorySqlLogPanel by lazy { HistorySqlLogPanel(project) }
     /** F-44：历史 tab 在 JBTabbedPane 中的索引（-1 表示未添加；常驻后恒为末位）。 */
-    private var historyTabIndex = -1
+    /** 历史 tab 句柄（替代原索引语义；TabInfo 为 JBTabs 的身份）。 */
     private val dedupeCheckBox = JCheckBox(MpSqlVisualizerBundle.message("log.panel.dedupe")).apply {
         isSelected = manager.entries.dedupeEnabled
         addActionListener {
@@ -571,27 +589,35 @@ class SqlLogPanel(
         logPanel.add(buildListPane(), BorderLayout.CENTER) // 条目列表铺满剩余空间
 
         // 标签 2：日志转 SQL（粘贴日志 → 批量还原可执行 SQL）
-        tabs.addTab(MpSqlVisualizerBundle.message("log.tab.logs"), logPanel)
-        tabs.addTab(MpSqlVisualizerBundle.message("log.tab.logToSql"), logToSqlPanel)
-        tabs.addTab(MpSqlVisualizerBundle.message("log.tab.sqlToJava"), sqlToJavaPanel)
+        logsTab = tabs.addTab(com.intellij.ui.tabs.TabInfo(logPanel).setText(MpSqlVisualizerBundle.message("log.tab.logs")))
+        logToSqlTab = tabs.addTab(com.intellij.ui.tabs.TabInfo(logToSqlPanel).setText(MpSqlVisualizerBundle.message("log.tab.logToSql")))
+        sqlToJavaTab = tabs.addTab(com.intellij.ui.tabs.TabInfo(sqlToJavaPanel).setText(MpSqlVisualizerBundle.message("log.tab.sqlToJava")))
         // R19（T-PerfSweep 批次 2）+ T-HistoryTabAlways：历史 tab 常驻——原 F-44 条件挂载
         // （「开启自动保存 或 .idea 中已有历史文件」）让未开启自动保存的干净项目没有入口，
         // 关掉设置页开关还会把已挂载的 tab 摘掉；文件列表空态已带「开启自动保存」引导文案，
         // tab 常驻即引导闭环，F-44 的移除分支随之废除、设置变更不再参与显隐。
         addHistoryTab()
-        add(tabs, BorderLayout.CENTER)
+        add(tabs.component, BorderLayout.CENTER)
 
         // T-M36.6：tab 重选时刷新形态下拉（设置页修改后切回即同步；不触发重生成）
-        tabs.addChangeListener {
-            if (tabs.selectedComponent == sqlToJavaPanel) {
-                sqlToJavaPanel.refreshFormatFromSettings()
-            }
-            // F-44：切换到历史 tab 时刷新数据；F87（T-PerfSweep25）起这里同时是**首扫唯一入口**
-            //（历史面板构造不再自带 refresh——开窗即扫回退为首次切换才扫）
-            if (historyTabIndex >= 0 && tabs.selectedIndex == historyTabIndex) {
-                historyPanel.refresh()
-            }
-        }
+        tabs.addListener(
+            object : com.intellij.ui.tabs.TabsListener {
+                override fun selectionChanged(
+                    current: com.intellij.ui.tabs.TabInfo?,
+                    previous: com.intellij.ui.tabs.TabInfo?,
+                ) {
+                    if (current === sqlToJavaTab) {
+                        sqlToJavaPanel.refreshFormatFromSettings()
+                    }
+                    // F-44：切换到历史 tab 时刷新数据；F87（T-PerfSweep25）起这里同时是**首扫唯一入口**
+                    //（历史面板构造不再自带 refresh——开窗即扫回退为首次切换才扫）
+                    if (current === historyTab) {
+                        historyPanel.refresh()
+                    }
+                }
+            },
+            this,
+        )
 
         // 设置变更后列表重排重绘（T-HistoryTabAlways 起历史 tab 无显隐逻辑，恒在）
         val settingsListener = SettingsChangeListener {
@@ -608,7 +634,7 @@ class SqlLogPanel(
                 refreshList()
                 // T-CrudColor：历史二级列表同样直读设置，重绘即生效（不重扫文件、不打断浏览位置）。
                 // 仅当历史 tab 已挂载时才取面板——避免仅为重绘而强制实例化（historyPanel 是 lazy）
-                if (tabs.indexOfTab(MpSqlVisualizerBundle.message("log.tab.history")) >= 0) {
+                if (historyTab != null) {
                     historyPanel.repaintSqlList()
                 }
             }
@@ -997,12 +1023,13 @@ class SqlLogPanel(
             Disposer.register(this, historyPanel)
             historyPanelRegistered = true
         }
-        historyTabIndex = tabs.tabCount
-        tabs.addTab(MpSqlVisualizerBundle.message("log.tab.history"), historyPanel)
+        historyTab = tabs.addTab(
+            com.intellij.ui.tabs.TabInfo(historyPanel).setText(MpSqlVisualizerBundle.message("log.tab.history")),
+        )
     }
 
     /** 测试访问器：主 tab 容器（历史 tab 常驻断言用；T-HistoryTabAlways 起 tab 恒在，无显隐路径）。 */
-    internal val tabsForTest: javax.swing.JTabbedPane get() = tabs
+    internal val tabsForTest: com.intellij.ui.tabs.JBTabs get() = tabs
 
     /** 工具栏引用（capturing 变化时经平台更新机制刷新动作 presentation，T-UN-11）。 */
     private var _toolbarRef: ActionToolbar? = null
@@ -1958,11 +1985,11 @@ class SqlLogPanel(
         when (tab) {
             LogEntryTab.LOG_TO_SQL -> {
                 logToSqlPanel.loadFromEntry(entry)
-                tabs.selectedComponent = logToSqlPanel
+                logToSqlTab?.let { tabs.select(it, true) }
             }
             LogEntryTab.SQL_TO_JAVA -> {
                 sqlToJavaPanel.setInputSql(entry.restoredSql)
-                tabs.selectedComponent = sqlToJavaPanel
+                sqlToJavaTab?.let { tabs.select(it, true) }
             }
         }
     }
