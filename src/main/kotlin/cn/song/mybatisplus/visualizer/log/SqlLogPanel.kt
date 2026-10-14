@@ -103,7 +103,7 @@ class SqlLogPanel(
 ) : JPanel(BorderLayout()), Disposable {
 
     private val listModel = DefaultListModel<LogSqlEntry>()
-    internal val list = SqlEntryList(listModel)
+    internal val list = ViewportWidthSqlEntryList(listModel)
     /** 列表条目单元格渲染器（internal 供 UI 测试直接渲染、断言 HTML 输出）。 */
     private lateinit var entryCellRenderer: LogEntryListCellRenderer
     /** T-ClickPreview：单击出轻量预览弹窗（点击时按行捕获 SQL，锚点在行下缘不遮行），双击走 openPreview 完整弹窗；悬停 tooltip 已移除（卡顿根因）。
@@ -1235,7 +1235,9 @@ class SqlLogPanel(
         })
         // T-SqlLogPerf：尾部跟随的用户意图归因——滚动条事件里「程序性追加」（max 增大且 value 未动，
         // 新条目进模型所致）不改跟随态；其余变化按「是否在底部」判定：滚离底部=停跟随，滚回底部=恢复。
-        val scrollPane = JBScrollPane(list)
+        val scrollPane = JBScrollPane(list).apply {
+            horizontalScrollBarPolicy = javax.swing.ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER
+        }
         scrollPane.verticalScrollBar.addAdjustmentListener { e ->
             val bar = e.adjustable
             val grew = bar.maximum > lastScrollMax

@@ -100,6 +100,36 @@ class SqlLogListFreezeGuardTest : BasePlatformTestCase() {
         }
     }
 
+    fun test日志与历史SQL列表跟随视口宽度且不横向滚动() {
+        val manager = SqlLogManager(project)
+        val logPanel = SqlLogPanel(project, manager)
+        val historyPanel = HistorySqlLogPanel(project)
+        try {
+            for ((panel, sqlList) in listOf(logPanel to logPanel.list, historyPanel to historyPanel.sqlListForTest)) {
+                assertTrue("SQL 条目列表应跟随视口宽度", sqlList.scrollableTracksViewportWidth)
+                val scroll = findScrollPane(panel, sqlList)
+                assertTrue("SQL 列表滚动宿主应存在", scroll != null)
+                assertTrue(
+                    "SQL 条目不能靠水平滚动阅读",
+                    scroll?.horizontalScrollBarPolicy == javax.swing.ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER,
+                )
+            }
+        } finally {
+            historyPanel.dispose()
+            logPanel.dispose()
+            manager.dispose()
+        }
+    }
+
+    private fun findScrollPane(root: JComponent, list: JList<*>): javax.swing.JScrollPane? {
+        fun walk(component: java.awt.Component): javax.swing.JScrollPane? {
+            if (component is javax.swing.JScrollPane && component.viewport.view === list) return component
+            if (component is JComponent) component.components.forEach { child -> walk(child)?.let { return it } }
+            return null
+        }
+        return walk(root)
+    }
+
     fun testSpeedSearch匹配高亮锚点_主列表与历史二级渲染器() {
         // T-UiNative f65d9ae：speed search 的匹配片段高亮是渲染器职责
         //（SpeedSearchUtil.applySpeedSearchHighlighting 施加在自定义渲染的 meta 行与 SQL 行上；

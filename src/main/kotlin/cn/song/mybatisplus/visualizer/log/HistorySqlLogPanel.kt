@@ -76,7 +76,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
 
     // ---------- 二级：SQL 列表（复用 SqlEntryList——Ctrl+C 复制纯 SQL 链路） ----------
     private val sqlListModel = DefaultListModel<LogSqlEntry>()
-    private val sqlList = SqlEntryList(sqlListModel)
+    private val sqlList = ViewportWidthSqlEntryList(sqlListModel)
 
     /**
      * 二级列表渲染器（面板直持引用）。**勿经 [sqlList.cellRenderer] 取回**：平台
@@ -397,7 +397,9 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
             }
         })
         // T-SqlLogPerf：二级列表滚动追加——滚动条逼近底部时续写下一批（fillSqlList 只写首屏）
-        sqlScrollPane = JBScrollPane(sqlList)
+        sqlScrollPane = JBScrollPane(sqlList).apply {
+            horizontalScrollBarPolicy = javax.swing.ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER
+        }
         sqlScrollPane.verticalScrollBar.addAdjustmentListener { maybeAppendOnScroll() }
         cards.add(sqlScrollPane, CARD_SQL)
         add(cards, BorderLayout.CENTER)

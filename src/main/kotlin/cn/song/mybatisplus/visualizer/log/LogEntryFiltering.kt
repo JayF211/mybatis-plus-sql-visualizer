@@ -143,6 +143,10 @@ internal open class SqlEntryList(model: ListModel<LogSqlEntry>) : TextCopyList<L
     internal fun textFor(element: LogSqlEntry): String = withTerminator(element.restoredSql)
 }
 
+internal class ViewportWidthSqlEntryList(model: ListModel<LogSqlEntry>) : SqlEntryList(model) {
+    override fun getScrollableTracksViewportWidth(): Boolean = true
+}
+
 /**
  * 空态文案写入（T-AgentDiagWrap T-04，独立成顶层函数以便单测）。
  *
