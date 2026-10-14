@@ -55,6 +55,9 @@ class PluginXmlExtensionPointResolutionTest {
         // （`<extensionPoint qualifiedName="com.intellij.database.modelRelationProvider" …>`，
         //  本机 IU 2024.3.7.1 安装目录实测命中 1 处）；测试沙盒 classpath 不含 Database 插件故缺席。
         "com.intellij.database.modelRelationProvider",
+        // DatabaseTools 未进入测试 classpath；243/253/262 的 database-plugin.jar 中
+        // META-INF/plugin.xml 分别于 1212/1498/1813 行声明此 EP。
+        "com.intellij.sql.dialect",
     )
 
     // ------------------------------------------------------------------
