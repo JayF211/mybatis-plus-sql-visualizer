@@ -1,5 +1,8 @@
 package cn.song.mybatisplus.visualizer.mcp
 
+import cn.song.mybatisplus.visualizer.execute.ErrorPositionExtractor
+import java.lang.reflect.InvocationTargetException
+
 /**
  * T-McpToolset EXPLAIN 计划文本格式化（纯逻辑层，无 IDE 类型）。
  *
@@ -101,4 +104,16 @@ object McpExplainFormatter {
      */
     fun formatErrorPosition(position: Triple<Int, Boolean, String>?): String =
         if (position == null) "" else "\nerrorPosition: ${if (position.second) "char" else "line"} ${position.first}"
+
+    /** 反射执行失败的 agent 文本：非超时异常先拆 InvocationTargetException，再提取驱动位置。 */
+    fun formatFailure(error: Throwable, dialectName: String, explainSql: String): String {
+        val cause = (error as? InvocationTargetException)?.targetException ?: error
+        val causeMsg = cause.message ?: cause.javaClass.simpleName
+        val pos = ErrorPositionExtractor.extractPosition(causeMsg, explainSql.length)
+        val firstLine = causeMsg.lineSequence().firstOrNull { it.isNotBlank() } ?: causeMsg
+        return McpToolErrors.code(
+            McpToolErrors.DATASOURCE_UNREACHABLE,
+            "EXPLAIN failed on '$dialectName' data source: $firstLine" + formatErrorPosition(pos),
+        )
+    }
 }
