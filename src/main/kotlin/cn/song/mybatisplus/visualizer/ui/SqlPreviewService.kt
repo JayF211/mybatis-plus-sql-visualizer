@@ -939,6 +939,8 @@ class SqlPreviewService(internal val project: Project) {
             if (hbm != null) {
                 return previewHbmNamedQuery(hbm, info.method)
             }
+            // 同名 hbm 定义歧义不能把首项 SQL 或查询名误当 HQL 发给用户。
+            if (HbmXmlEntityResolver.hasAmbiguousNamedQuery(info.hql, project)) return null
         }
 
         val table = resolveHqlTable(info.entityClass, info.entityClassName, info.hql)

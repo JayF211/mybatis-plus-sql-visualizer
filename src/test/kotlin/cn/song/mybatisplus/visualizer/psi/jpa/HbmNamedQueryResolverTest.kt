@@ -135,6 +135,39 @@ class HbmNamedQueryResolverTest : BasePlatformTestCase() {
         assertTrue(result.sql.contains("legacy_item"))
     }
 
+    fun testO145SameKindAndNameDifferentTextsMustNotClaimUniqueDefinition() {
+        val name = "LegacyItem.duplicateQuery"
+        val first = myFixture.addFileToProject("resources/hbm/DuplicateOne.hbm.xml", """
+            <hibernate-mapping>
+                <query name="$name">FROM LegacyItem li WHERE li.quantity &gt; :threshold</query>
+            </hibernate-mapping>
+        """.trimIndent())
+        assertNotNull("先查一次唯一查询，防止旧正缓存掩盖后续新重复",
+            HbmXmlEntityResolver.findNamedQuery(name, project))
+        myFixture.addFileToProject("resources/hbm/DuplicateTwo.hbm.xml", """
+            <hibernate-mapping>
+                <query name="$name">FROM LegacyItem li WHERE li.quantity &lt; :threshold</query>
+            </hibernate-mapping>
+        """.trimIndent())
+        // 构造一个与第一份 XML 文本完全相同的查询，钉住 owner 判断不是文本不匹配造成的空绿。
+        val text = cn.song.mybatisplus.visualizer.xml.directTextOf((first as XmlFile).rootTag!!.findFirstSubTag("query")!!)
+        val query = HbmXmlMapping.NamedQuery(name, HbmXmlMapping.QueryKind.HQL, text)
+        assertNull("同 kind/name 即视作重复；文本不同不能令首项虚构唯一 owner",
+            HbmXmlEntityResolver.findNamedQueryDefinition(query, project))
+        assertTrue("两文件命名查询应判歧义", HbmXmlEntityResolver.hasAmbiguousNamedQuery(name, project))
+        assertNull("上游不能首取任意一条 SQL", HbmXmlEntityResolver.findNamedQuery(name, project))
+        val caller = myFixture.configureByText("DuplicateCaller.java", """
+            class DuplicateCaller {
+                Object run(Session session) { return session.createNamedQuery("$name"); }
+            }
+            interface Session { Object createNamedQuery(String value); }
+        """.trimIndent())
+        val call = PsiTreeUtil.collectElementsOfType(caller, PsiMethodCallExpression::class.java)
+            .first { it.methodExpression.referenceName == "createNamedQuery" }
+        assertNull("调用点也不得将查询名或任一 XML 文本降级为猜测 SQL",
+            SqlPreviewService(project).previewHql(call))
+    }
+
     fun testClassMapping_stillResolved_alongsideNamedQueries() {
         // 命名查询解析不得破坏既有类映射链路（resolveHqlTable 路径 3 依赖）
         val mapping = HbmXmlEntityResolver.resolve("LegacyItem", project)

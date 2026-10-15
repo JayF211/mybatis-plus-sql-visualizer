@@ -39,9 +39,6 @@ object HbmXmlEntityResolver {
 
     private val cache = ConcurrentHashMap<String, HbmXmlMapping.ClassMapping>()
 
-    /** T-H1：命名查询索引（键=项目名+查询名）；负命中沿用 [negativeCache]（前缀区分键）。 */
-    private val namedQueryCache = ConcurrentHashMap<String, HbmXmlMapping.NamedQuery>()
-
     /**
      * T-Perf-18：负命中缓存（项目名+类名 → true 表示该实体无 hbm 映射）。
      * 此前每个无 hbm 实体每次预览都重跑 FilenameIndex 全量索引查询（heavy 热路径）；
@@ -90,11 +87,19 @@ object HbmXmlEntityResolver {
      * @param project   当前项目
      */
     fun findNamedQuery(queryName: String, project: Project): HbmXmlMapping.NamedQuery? {
-        if (queryName.isBlank()) return null
-        val cacheKey = "nq:${project.name}:$queryName"
-        namedQueryCache[cacheKey]?.let { return it }
-        if (cacheKey in negativeCache) return null
+        val matches = namedQueryMatches(queryName, project)
+        val first = matches.firstOrNull { it.queryText.isNotBlank() } ?: return null
+        // 同 kind/name 第二份定义即使文本不同也不能首取 SQL；不缓存以免新增重复后旧首项继续命中。
+        return first.takeUnless { selected -> matches.count { it.kind == selected.kind } > 1 }
+    }
 
+    /** 调用点区分「未找到」与「重名歧义」，后者禁止把名字再当 HQL 字面量预览。 */
+    fun hasAmbiguousNamedQuery(queryName: String, project: Project): Boolean =
+        namedQueryMatches(queryName, project).groupBy { it.kind }.any { (_, matches) -> matches.size > 1 }
+
+    private fun namedQueryMatches(queryName: String, project: Project): List<HbmXmlMapping.NamedQuery> {
+        if (queryName.isBlank()) return emptyList()
+        val matches = mutableListOf<HbmXmlMapping.NamedQuery>()
         for (file in findHbmXmlFiles(project)) {
             val rootTag = file.rootTag ?: continue
             if (rootTag.name != "hibernate-mapping") continue
@@ -104,19 +109,12 @@ object HbmXmlEntityResolver {
                     "sql-query" -> HbmXmlMapping.QueryKind.NATIVE
                     else -> continue
                 }
-                val name = tag.getAttributeValue("name") ?: continue
-                if (name != queryName) continue
+                if (tag.getAttributeValue("name") != queryName) continue
                 val text = extractNamedQueryText(tag)
-                if (text.isBlank()) continue
-                val query = HbmXmlMapping.NamedQuery(name = name, kind = kind, queryText = text)
-                namedQueryCache[cacheKey] = query
-                return query
+                matches += HbmXmlMapping.NamedQuery(name = queryName, kind = kind, queryText = text)
             }
         }
-
-        if (negativeCache.size >= NEGATIVE_CACHE_MAX) negativeCache.clear()
-        negativeCache.add(cacheKey)
-        return null
+        return matches
     }
 
     /** 仅为预览决策查找定义标签；不缓存 PSI/URI，避免把调用点误认成 XML owner。 */
@@ -131,9 +129,9 @@ object HbmXmlEntityResolver {
                     "sql-query" -> HbmXmlMapping.QueryKind.NATIVE
                     else -> continue
                 }
-                if (kind == query.kind && tag.getAttributeValue("name") == query.name &&
-                    directTextOf(tag) == query.queryText) {
-                    if (owner != null) return null // 同名同文跨文件重复定义：owner 不唯一
+                if (kind == query.kind && tag.getAttributeValue("name") == query.name) {
+                    // 上游 findNamedQuery 按名称首项命中；不同文本的第二份定义同样令 owner 歧义。
+                    if (owner != null || directTextOf(tag) != query.queryText) return null
                     owner = tag
                 }
             }
@@ -259,11 +257,10 @@ object HbmXmlEntityResolver {
     }
 
     /**
-     * 清除缓存（含负命中缓存与命名查询索引；PluginCacheManager.clearAll 接线，项目关闭时调用）。
+     * 清除实体正/负缓存；命名查询为防止新增同名定义后仍命中旧首项，不缓存。
      */
     fun clearCache() {
         cache.clear()
-        namedQueryCache.clear()
         negativeCache.clear()
     }
 
