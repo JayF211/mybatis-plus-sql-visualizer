@@ -27,13 +27,14 @@ import javax.swing.JRadioButton
 /**
  * 分享选项对话框（F-8）。
  *
- * 提供六种分享方式：
+ * 提供七种分享方式：
  *  - 复制为 Markdown 代码块
  *  - 复制为 Markdown 表格
  *  - 复制为可执行 SQL
  *  - 导出 HTML 报告文件
  *  - R50：复制诊断报告（Markdown，五段聚合：SQL+参数/perf/EXPLAIN 建议/无界写/回滚预案）
  *  - R50：导出诊断报告（HTML）
+ *  - R94：投影诊断草稿，逐段审阅后显式同意反馈
  *
  * 用户可填写来源位置（文件名:行号），附到分享内容中。
  */
@@ -50,6 +51,7 @@ class ShareDialog(
     // R50：诊断报告两档（Markdown 走剪贴板 / HTML 走文件——与既有分享两通道同形）
     private val diagnosticRadio = JRadioButton(MpSqlVisualizerBundle.message("share.dialog.diagnostic"))
     private val diagnosticHtmlRadio = JRadioButton(MpSqlVisualizerBundle.message("share.dialog.diagnosticHtml"))
+    private val diagnosticFeedbackRadio = JRadioButton(MpSqlVisualizerBundle.message("share.dialog.diagnosticFeedback"))
 
     private val shareManager = SqlShareManager(project)
 
@@ -94,16 +96,18 @@ class ShareDialog(
             add(htmlRadio)
             add(diagnosticRadio)
             add(diagnosticHtmlRadio)
+            add(diagnosticFeedbackRadio)
         }
         markdownRadio.isSelected = true
 
-        val optionsPanel = JBPanel<JBPanel<*>>(GridLayout(6, 1, 0, 4)).apply {
+        val optionsPanel = JBPanel<JBPanel<*>>(GridLayout(7, 1, 0, 4)).apply {
             add(markdownRadio)
             add(tableRadio)
             add(executableRadio)
             add(htmlRadio)
             add(diagnosticRadio)
             add(diagnosticHtmlRadio)
+            add(diagnosticFeedbackRadio)
             border = JBUI.Borders.emptyBottom(10)
         }
         root.add(optionsPanel)
@@ -131,8 +135,28 @@ class ShareDialog(
             htmlRadio.isSelected -> exportHtmlReport()
             diagnosticRadio.isSelected -> copyDiagnosticReport(source)
             diagnosticHtmlRadio.isSelected -> exportDiagnosticHtml(source)
+            diagnosticFeedbackRadio.isSelected -> {
+                val sql = panel.editorDocumentText()?.takeIf { it.isNotBlank() } ?: return
+                cn.song.mybatisplus.visualizer.feedback.FeedbackReporting.openDiagnosticDialog(
+                    project, feedbackDraft(sql),
+                )
+            }
         }
         super.doOKAction()
+    }
+
+    internal fun feedbackDraft(sql: String): cn.song.mybatisplus.visualizer.share.DiagnosticShareDraft {
+        val projected = cn.song.mybatisplus.visualizer.share.ShareContentProjection.sql(sql)
+        return cn.song.mybatisplus.visualizer.share.DiagnosticShareDraft(listOf(
+            cn.song.mybatisplus.visualizer.share.DiagnosticShareDraft.Section(
+                "summary", MpSqlVisualizerBundle.message("share.review.summary"),
+                MpSqlVisualizerBundle.message("share.review.summaryText"),
+            ),
+            cn.song.mybatisplus.visualizer.share.DiagnosticShareDraft.Section(
+                "sql", MpSqlVisualizerBundle.message("share.review.sql"),
+                projected.sql ?: MpSqlVisualizerBundle.message("share.review.omitted"),
+            ),
+        ))
     }
 
     /** R50：诊断报告输入（各诊断段由纯分析器聚合，IDE 侧只取 SQL/参数/方言/来源）。 */

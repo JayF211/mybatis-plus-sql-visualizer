@@ -107,6 +107,26 @@ internal object FeedbackReporting {
         }
     }
 
+    fun openDiagnosticDialog(project: Project?, draft: cn.song.mybatisplus.visualizer.share.DiagnosticShareDraft) {
+        ApplicationManager.getApplication().invokeLater {
+            if (project?.isDisposed == true) return@invokeLater
+            val dialog = ErrorReportDialog(
+                prefill = null,
+                stackText = null,
+                fingerprint = null,
+                ideVersion = ideVersion(),
+                pluginVersion = PluginVersion.current(),
+                diagnosticDraft = draft,
+            ) { submission, _, onResult ->
+                submitInBackground(submission) { outcome ->
+                    onResult(outcome)
+                    notifyOutcome(project, outcome)
+                }
+            }
+            dialog.show()
+        }
+    }
+
     /** 报告结果通知（对话框内联状态行的共用呈现，T-FeedbackErr）：成功/失败都落到项目通知组。 */
     fun notifyOutcome(project: Project?, outcome: FeedbackApi.SubmissionOutcome) {
         // 附件降级提醒只在成功语境成立（标题是「反馈已提交（未附堆栈）」）——失败时该提示

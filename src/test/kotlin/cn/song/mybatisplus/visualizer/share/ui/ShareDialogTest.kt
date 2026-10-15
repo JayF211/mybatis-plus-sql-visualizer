@@ -5,6 +5,8 @@ import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import com.intellij.ui.components.JBTextField
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import javax.swing.JRadioButton
@@ -26,14 +28,19 @@ class ShareDialogTest : BasePlatformTestCase() {
         return list
     }
 
-    fun test构造_六个分享选项且默认选中Markdown() {
+    fun test构造_七个分享选项且默认选中Markdown() {
         val panel = SqlPreviewPanel(myFixture.project)
         try {
             val dialog = ShareDialog(myFixture.project, panel)
             // DialogWrapper 的 rootPane/contentPane 仅在 show() 时构建，headless 下用测试缝取中心面板
             val pane = dialog.centerPanelForTest()
             val radios = allComponents(pane).filterIsInstance<JRadioButton>()
-            assertEquals("应有 6 个分享选项", 6, radios.size)
+            assertEquals("应有 7 个分享选项", 7, radios.size)
+            assertTrue(radios.any { it.text == MpSqlVisualizerBundle.message("share.dialog.diagnosticFeedback") })
+            val draft = dialog.feedbackDraft("SELECT private_name FROM private_table WHERE password='SENTINEL_SECRET'")
+            assertFalse(draft.body.contains("SENTINEL_SECRET"))
+            assertFalse(draft.body.contains("private_table"))
+            assertNull("新建诊断草稿不能直接取得可发送快照", draft.takeSubmission())
             val selected = radios.filter { it.isSelected }
             assertEquals("默认应仅选中 1 个", 1, selected.size)
             val markdownText = MpSqlVisualizerBundle.message("share.dialog.markdown")
