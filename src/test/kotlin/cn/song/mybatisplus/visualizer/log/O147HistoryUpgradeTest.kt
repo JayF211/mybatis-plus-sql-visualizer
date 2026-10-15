@@ -252,7 +252,8 @@ class O147HistoryUpgradeTest {
 
     @Test fun oversizedRevisionBudgetAgreesAcrossAllReaders() {
         val dir = dir(); val saver = SqlLogAutoSaver(); saver.configure(dir.path, "test.sql", null)
-        val old = entry(); saver.write(old); saver.submitMerge(old, merged(old)); saver.close()
+        // Known duration avoids the em dash in this large ASCII budget fixture; Unicode is covered separately.
+        val old = entry().copy(executionTimeMs = 0L); saver.write(old); saver.submitMerge(old, merged(old)); saver.close()
         val file = File(dir, "test.sql")
         val lines = file.readLines()
         val revision = lines.single { it.startsWith("-- pd: o147-revision:") }

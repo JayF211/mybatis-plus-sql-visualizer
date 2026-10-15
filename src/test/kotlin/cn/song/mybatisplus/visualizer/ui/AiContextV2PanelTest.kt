@@ -13,6 +13,9 @@ class AiContextV2PanelTest : BasePlatformTestCase() {
         val panel = SqlPreviewPanel(project)
         val history = cn.song.mybatisplus.visualizer.history.SqlHistoryManager.getInstance()
         history.clear()
+        val settings = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state
+        val previousRetention = settings.explainPlanRetentionEnabled
+        settings.explainPlanRetentionEnabled = true
         try {
             val sql = "SELECT private_column FROM private_table WHERE id = 42"
             panel.current = PreviewResult(sql, sql, emptyList(), null, null, "private_table", renderedDialect = MySqlDialect)
@@ -24,12 +27,13 @@ class AiContextV2PanelTest : BasePlatformTestCase() {
                 "eb03ba8b-a414-4453-b6e0-5bf55b34fed2", "MySQL", cn.song.mybatisplus.visualizer.sql.ExplainOutputFormat.TABLE, wrapped)
             var sameTarget = true
             val request = panel.captureExplainPlanHistory(history, key, Any()) { sameTarget }
-            panel.explainPlanHistorySession.complete(history, request, cn.song.mybatisplus.visualizer.mcp.McpExplainFormatter.RawResult(
+            panel.completeExplainPlanHistory(history, request, cn.song.mybatisplus.visualizer.mcp.McpExplainFormatter.RawResult(
                 listOf("type", "rows", "Extra"), listOf(listOf("ALL", "77", "private_extra"))))
             panel.copyAsAiContext()
             assertTrue(UiTextClipboard.readText()!!.contains("rows=77"))
             // In-memory acquisition also works without any persisted plan.
             history.entries.single().explainPlans.clear()
+            settings.explainPlanRetentionEnabled = false
             panel.captureAiContextPlan(history, key, cn.song.mybatisplus.visualizer.mcp.McpExplainFormatter.RawResult(
                 listOf("type", "rows"), listOf(listOf("ALL", "88"))))
             panel.copyAsAiContext()
@@ -48,7 +52,11 @@ class AiContextV2PanelTest : BasePlatformTestCase() {
             panel.current = panel.current!!.copy(renderedDialect = cn.song.mybatisplus.visualizer.sql.PostgreSQLDialect)
             panel.copyAsAiContext()
             assertTrue(UiTextClipboard.readText()!!.contains("EXPLAIN: not obtained"))
-        } finally { history.clear(); Disposer.dispose(panel) }
+        } finally {
+            settings.explainPlanRetentionEnabled = previousRetention
+            history.clear()
+            Disposer.dispose(panel)
+        }
     }
 
     fun testEditedSqlCannotBorrowStaticSchemaAndLegacyPlan() {

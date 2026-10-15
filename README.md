@@ -17,6 +17,14 @@ MyBatis-Plus / MyBatis-Plus-Join / JPA / Hibernate / JdbcTemplate 的 SQL 调试
 
 本插件原名为 MyBatis-Plus SQL Visualizer，现更名 SQL Visualizer——仍全面支持 MyBatis-Plus / MyBatis-Plus-Join / JPA / Hibernate，插件 ID 与升级链路不变。
 
+## dev 后续能力与验收边界
+
+- EXPLAIN 跨会话基线复用预览历史保存，按项目/数据源 UUID/方言/实际 SQL 隔离；“保留原始执行计划”独立默认关闭。计划可能含业务谓词或秘密，启用前应阅读应用级存储说明；清除预览历史同时清除计划。
+- “复制为 AI 上下文”v2 仅消费已取得且当前匹配的计划和静态元数据，不为复制触发网络或 JDBC；默认输出严格匿名诊断投影，不是可执行 SQL，也不保证代替用户完成隐私审查。
+- FieldFill 安全模拟只使用用户显式填写的字面量，默认关闭，不执行用户的 MetaObjectHandler；显式参数优先，WHERE条件与UPSERT不猜填，清除参数历史会清除模拟预设。
+- 诊断反馈增加审阅/删段/最终文本及逐次同意，只有用户最终提交才走已有公开需求池；编辑和重试均需重新同意，不自动附原SQL/参数/文件。本轮没有实际上传诊断。
+- 正式 [UI验收规程](docs/验收文档/20261015-2338-T-M19-UI增量正式验收文档.md) 与 [Runner/真库规程](docs/验收文档/20261015-2345-T-O145-V178-Runner与真库正式验收文档.md) 包含入口、操作、正反例和截图记录。本轮禁止启动沙盒IDE进行UI验收；非UI真库/真实agent/性能证据与UI结果严格分开，新增dev代码不表示已发版。
+
 ## 功能演示
 
 **Wrapper → SQL 预览**（动态条件勾选 / 参数回填 / 格式化 / 一键执行）
