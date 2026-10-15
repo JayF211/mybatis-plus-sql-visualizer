@@ -980,6 +980,14 @@ internal fun SqlPreviewPanel.submitExplainOrStructured(
             }
             resultPanel.showLoading()
             val generation = explainStructuredGeneration
+            // R90：提交时捕获原 SQL/历史条目/实际目标；回调不得再读 current 或当前数据源。
+            val history = cn.song.mybatisplus.visualizer.history.SqlHistoryManager.getInstance()
+            val planKey = cn.song.mybatisplus.visualizer.history.ExplainPlanKey.create(
+                cn.song.mybatisplus.visualizer.history.ExplainPlanKey.projectIdentity(proj.basePath),
+                cn.song.mybatisplus.visualizer.execute.DataSourceSettings.getUniqueId(ds),
+                dialect.name, outFormat, explainSql,
+            )
+            val historyRequest = explainPlanHistorySession.begin(history, current?.sql.orEmpty(), planKey, ds)
             cn.song.mybatisplus.visualizer.execute.ExplainPanelChannel.executeStructured(
                 proj, ds, explainSql,
                 timeoutSeconds = settings.executionTimeoutSeconds,
@@ -994,12 +1002,12 @@ internal fun SqlPreviewPanel.submitExplainOrStructured(
                             dialect.name, outcome.raw.headers, outcome.raw.rows,
                         )
                     }.getOrDefault(emptyList())
-                        // R61（V113②）：跨次对比——同 SQL 指纹的上一次结构化结果作基线，
-                        // 计算 diff 传入视图；随后滚动更新基线（会话级，不持久化）
-                        val planDiff = lastStructuredExplain?.let { (prevKey, prevRaw) ->
-                            if (prevKey == explainSql) ExplainPlanDiff.diff(prevRaw, outcome.raw, outFormat) else null
-                        }
-                        lastStructuredExplain = explainSql to outcome.raw
+                    val historyCompletion = explainPlanHistorySession.complete(history, historyRequest, outcome.raw)
+                    val planDiff = historyCompletion.baselines.firstOrNull()?.let {
+                        ExplainPlanDiff.diff(it.raw, outcome.raw, outFormat)
+                    }
+                    // R61 兼容观察值；比较决策由 R90 的目标隔离会话负责。
+                    lastStructuredExplain = explainSql to outcome.raw
                     embedExplainView(
                         ExplainPlanResultView(
                             dialectName = dialect.name,
@@ -1009,7 +1017,9 @@ internal fun SqlPreviewPanel.submitExplainOrStructured(
                             format = outFormat,
                             hints = hints,
                             onBackToConsole = { submitExplainDirect(proj, explainSql, dialectGateRequest) },
-                                diff = planDiff,
+                            diff = planDiff,
+                            baselines = historyCompletion.baselines,
+                            historyStatus = historyCompletion.saved,
                         ),
                     )
                     resultPanel.showIdle()

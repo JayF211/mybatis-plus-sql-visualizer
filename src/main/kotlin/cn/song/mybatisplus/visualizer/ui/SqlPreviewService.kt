@@ -1915,6 +1915,7 @@ class SqlPreviewService(internal val project: Project) {
                     sourceLine = sourceLine,
                     tableName = result.tableName ?: "",
                     executionTimeMs = executionTimeMs,
+                    projectIdentity = cn.song.mybatisplus.visualizer.history.ExplainPlanKey.projectIdentity(project.basePath),
                 ),
             )
         }

@@ -45,6 +45,8 @@ class ExplainPlanResultView(
     onBackToConsole: (() -> Unit)? = null,
     /** R61：与上一次结构化执行的对比（null=无基线/无可比——条不占位；isEmpty=计划无变化，显式告知）。 */
     diff: ExplainPlanDiff.PlanDiff? = null,
+    baselines: List<cn.song.mybatisplus.visualizer.history.ExplainPlanHistorySession.Baseline> = emptyList(),
+    historyStatus: cn.song.mybatisplus.visualizer.history.ExplainPlanSaveResult? = null,
 ) : JBPanel<ExplainPlanResultView>(BorderLayout()) {
 
     /** TABLE 格式的表格模型（其他格式 null）。 */
@@ -57,6 +59,8 @@ class ExplainPlanResultView(
     private val compareLabel: JBLabel?
     private val backButton: JButton
     private val headerLabel: JBLabel
+    private val baselineSelector = javax.swing.JComboBox<String>()
+    private val historyStatusLabel = JBLabel()
 
     init {
         border = JBUI.Borders.empty()
@@ -102,13 +106,30 @@ class ExplainPlanResultView(
         }
 
         // R61 跨次对比条（照抄索引建议条形态；null=无基线不占位——isEmpty 也要显式告知「计划无变化」）
-        compareLabel = diff?.let { d ->
-            JBLabel("<html><b>" + MpSqlVisualizerBundle.message("panel.explain.compare.title") + "</b><br>" +
-                renderCompareLines(d).joinToString("<br>") { escapeHtml(it) } + "</html>").apply {
-                foreground = JBColor.namedColor("Label.infoForeground", JBColor.GRAY)
-                border = JBUI.Borders.empty(1, 4)
+        compareLabel = if (diff != null || baselines.isNotEmpty()) JBLabel().apply {
+            foreground = JBColor.namedColor("Label.infoForeground", JBColor.GRAY)
+            border = JBUI.Borders.empty(1, 4)
+        } else null
+        fun showComparison(value: ExplainPlanDiff.PlanDiff?) {
+            compareLabel?.text = "<html><b>" + MpSqlVisualizerBundle.message("panel.explain.compare.title") + "</b><br>" +
+                (value?.let { renderCompareLines(it).joinToString("<br>") { line -> escapeHtml(line) } }
+                    ?: MpSqlVisualizerBundle.message("panel.explain.history.notComparable")) + "</html>"
+        }
+        showComparison(diff)
+        baselines.forEach { baselineSelector.addItem(it.label) }
+        baselineSelector.isVisible = baselines.isNotEmpty()
+        baselineSelector.toolTipText = MpSqlVisualizerBundle.message("panel.explain.history.baseline")
+        baselineSelector.addActionListener {
+            baselines.getOrNull(baselineSelector.selectedIndex)?.let {
+                showComparison(ExplainPlanDiff.diff(it.raw, raw, format))
             }
         }
+        if (baselines.isNotEmpty()) showComparison(ExplainPlanDiff.diff(baselines.first().raw, raw, format))
+        historyStatusLabel.text = historyStatus?.let {
+            MpSqlVisualizerBundle.message("panel.explain.history." + it.name)
+        }.orEmpty()
+        historyStatusLabel.isVisible = historyStatus != null
+        historyStatusLabel.border = JBUI.Borders.empty(1, 4)
 
         val north = JBPanel<JBPanel<*>>(BorderLayout()).apply {
             isOpaque = false
@@ -123,6 +144,11 @@ class ExplainPlanResultView(
             border = JBUI.Borders.empty()
             layout = javax.swing.BoxLayout(this, javax.swing.BoxLayout.Y_AXIS)
             add(north)
+            if (baselines.isNotEmpty()) {
+                add(JBLabel(MpSqlVisualizerBundle.message("panel.explain.history.baseline")))
+                add(baselineSelector)
+            }
+            add(historyStatusLabel)
             compareLabel?.let { add(it) }
         }
         add(northStrip, BorderLayout.NORTH)
@@ -226,4 +252,6 @@ class ExplainPlanResultView(
 
     /** R61 测试缝：对比条文本（null=无对比条——无基线不占位）。 */
     internal fun compareTextForTest(): String? = compareLabel?.text
+    internal fun baselineSelectorForTest(): javax.swing.JComboBox<String> = baselineSelector
+    internal fun historyStatusForTest(): String = historyStatusLabel.text
 }

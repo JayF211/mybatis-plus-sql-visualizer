@@ -397,6 +397,8 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
      * 不同 SQL 各自独立基线（按 SQL 指纹键控）。
      */
     internal var lastStructuredExplain: Pair<String, McpExplainFormatter.RawResult>? = null
+    /** R90：同目标会话基线与持久化历史协调；未知 UUID 仅按目标对象身份比较。 */
+    internal val explainPlanHistorySession = cn.song.mybatisplus.visualizer.history.ExplainPlanHistorySession()
     /**
      * R51（O-105 余半）测试缝：recall 回落源——ParamHistoryCache 未命中时按缓存键取历史
      * 参数快照（null = 单测态默认禁用真服务；生产走 [SqlHistoryManager.newestParamSnapshot]，

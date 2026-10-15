@@ -46,6 +46,9 @@ data class SqlHistoryEntry(
      * 用 LinkedHashMap 而非 Set 系（同 [tags] 注释口径，Set 不稳）。
      */
     var paramSnapshot: LinkedHashMap<String, String> = LinkedHashMap(),
+    /** R90：APP 历史域的项目归属；旧条目缺省空，不猜测归属。 */
+    var projectIdentity: String = "",
+    var explainPlans: MutableList<ExplainPlanSnapshot> = mutableListOf(),
 ) {
     /** 分配唯一 id（仅当当前为空白时）。 */
     fun ensureId() {

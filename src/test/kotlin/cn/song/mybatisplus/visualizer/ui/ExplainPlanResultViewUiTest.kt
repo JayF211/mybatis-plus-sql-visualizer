@@ -124,6 +124,37 @@ class ExplainPlanResultViewUiTest : BasePlatformTestCase() {
         assertTrue("头部应含数据源名", header.contains("prod@10.0.0.3"))
     }
 
+    fun testR90_任意历史基线切换不重新执行SQL() {
+        var executed = 0
+        fun baseline(rows: String) = cn.song.mybatisplus.visualizer.history.ExplainPlanHistorySession.Baseline(
+            rows, McpExplainFormatter.RawResult(mysqlHeaders, listOf(mysqlRows.first().toMutableList().apply { set(5, rows) })),
+        )
+        val view = ExplainPlanResultView(
+            "MySQL", null, 1, McpExplainFormatter.RawResult(mysqlHeaders, listOf(mysqlRows.first())),
+            ExplainOutputFormat.TABLE, onBackToConsole = { executed++ },
+            baselines = listOf(baseline("100"), baseline("200"), baseline("300")),
+            historyStatus = cn.song.mybatisplus.visualizer.history.ExplainPlanSaveResult.SAVED,
+        )
+        val selector = view.baselineSelectorForTest()
+        assertEquals(3, selector.itemCount)
+        selector.selectedIndex = 2
+        assertTrue(view.compareTextForTest()!!.contains("300"))
+        selector.selectedIndex = 1
+        assertTrue(view.compareTextForTest()!!.contains("200"))
+        assertEquals(0, executed)
+        assertEquals("99500", view.tableModelForTest()!!.getValueAt(0, 5))
+    }
+
+    fun testR90_超限拒绝明确显示且当前结果不截断() {
+        val cell = "x".repeat(270000)
+        val view = ExplainPlanResultView("MySQL", null, 1,
+            McpExplainFormatter.RawResult(listOf("plan"), listOf(listOf(cell))), ExplainOutputFormat.TABLE,
+            historyStatus = cn.song.mybatisplus.visualizer.history.ExplainPlanSaveResult.TOO_LARGE)
+        assertTrue(view.historyStatusForTest().contains("256 KiB"))
+        assertEquals(cell, view.tableModelForTest()!!.getValueAt(0, 0))
+        assertFalse(view.baselineSelectorForTest().isVisible)
+    }
+
     // ==== R61：跨次对比条（照抄索引建议条形态——null 不占位、有内容才可见） ====
 
     fun testR61_无基线无对比条() {
