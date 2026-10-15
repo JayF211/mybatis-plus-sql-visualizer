@@ -588,6 +588,9 @@ internal fun SqlPreviewPanel.rerenderForExecutionTarget(targetDialectName: Strin
         )
         else -> return false
     }
+    // R92: this is the same preview with a new dialect, not a fresh parameter session.
+    // Retain ownership of existing controls; storage-generation invalidation still applies.
+    if (fieldFillPreview === old) fieldFillPreview = updated
     current = updated
     syncPreviewDialectMapping(updated)
     renderSql()

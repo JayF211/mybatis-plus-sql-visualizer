@@ -170,6 +170,59 @@ class FieldFillSimulationPanelTest : BasePlatformTestCase() {
         p.clear()
     }
 
+    fun testTargetRerenderPreservesActiveSimulationEditingToggleAndPresetRecovery() {
+        val p = panel()
+        try {
+            val field = p.fieldFillFields.getValue("stamp")
+            val toggle = p.fieldFillCheckBox!!
+            field.text = "saved-simulation"
+            toggle.doClick()
+            val explicitBefore = p.paramValuesSnapshot()
+            val key = p.historyCacheKey()!!
+            assertEquals(ParamHistoryCache.SchemeOpResult.OK,
+                p.paramHistoryCache.saveAsScheme("target-fill", key, p.buildHistorySnapshot()))
+            val before = p.currentForTest()
+
+            assertTrue(p.rerenderForExecutionTarget("PostgreSQL"))
+            assertNotSame(before, p.currentForTest())
+            assertEquals("PostgreSQL", p.currentForTest()!!.batchModel!!.dialect.name)
+            assertSame("same preview retains input controls", field, p.fieldFillFields.getValue("stamp"))
+            assertTrue("target rerender must retain active simulation", toggle.isSelected)
+            assertEquals("saved-simulation", p.fieldFillValues["stamp"])
+            assertTrue(p.lastRenderedSqlForTest()!!.contains("'saved-simulation'"))
+
+            field.text = "edited-after-target"
+            assertTrue(p.lastRenderedSqlForTest()!!.contains("'edited-after-target'"))
+            assertEquals(explicitBefore, p.paramValuesSnapshot())
+            toggle.doClick()
+            val targetWithoutSimulation = p.lastRenderedSqlForTest()
+            assertFalse(targetWithoutSimulation!!.contains("edited-after-target"))
+            assertEquals("edited-after-target", field.text)
+            toggle.doClick()
+            assertTrue(p.lastRenderedSqlForTest()!!.contains("'edited-after-target'"))
+
+            p.switchToScheme("target-fill")
+            assertFalse(toggle.isSelected)
+            assertEquals("saved-simulation", field.text)
+            assertEquals("saved-simulation", p.fieldFillValues["stamp"])
+            toggle.doClick()
+            assertTrue(p.lastRenderedSqlForTest()!!.contains("'saved-simulation'"))
+            toggle.doClick()
+            assertEquals(targetWithoutSimulation, p.lastRenderedSqlForTest())
+
+            // Ownership transfer must not weaken storage invalidation at a subsequent target change.
+            toggle.doClick()
+            ParamHistoryCache.clearPersistedHistory()
+            assertTrue(p.rerenderForExecutionTarget("MySQL"))
+            assertFalse(p.fieldFillEnabled)
+            assertFalse(toggle.isSelected)
+            assertTrue(p.fieldFillValues.isEmpty())
+            assertFalse(p.lastRenderedSqlForTest()!!.contains("saved-simulation"))
+        } finally {
+            p.clear()
+        }
+    }
+
     fun testMpBatchPsiMetadataFlowsIntoActualPanelAndUpdateWhereRemainsUnfilled() {
         for (method in listOf("saveBatch", "updateBatchById", "saveOrUpdateBatch")) {
             myFixture.configureByText("FillDemo.java", """
