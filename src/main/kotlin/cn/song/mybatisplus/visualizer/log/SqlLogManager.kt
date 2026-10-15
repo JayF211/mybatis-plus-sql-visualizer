@@ -531,9 +531,11 @@ class SqlLogManager(private val project: Project) : Disposable {
                 state.logAutoSaveMaxFiles, // T-HistoryFileRetention：历史文件保留上限
             )
             buffer.onEntryStored = { entry -> autoSaver.submit(entry) }
+            buffer.onEntryMerged = { old, merged -> autoSaver.submitMerge(old, merged) }
             buffer.onEvicted = null
         } else {
             buffer.onEntryStored = null
+            buffer.onEntryMerged = null
             buffer.onEvicted = null
         }
     }
@@ -628,6 +630,7 @@ class SqlLogManager(private val project: Project) : Disposable {
         buffer.hasStructureKeys = false
         buffer.onEntryAccepted = null
         buffer.onEntryStored = null
+        buffer.onEntryMerged = null
         buffer.onDedupeCountsChanged = null
         buffer.onContentNotifySuppressed = null
         uiListeners.clear()

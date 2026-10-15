@@ -68,6 +68,58 @@ class SqlLogAutoSaver(
     /** 在途淘汰条目队列（控制台输出线程投递，写线程消费）。 */
     private val pendingEntries = java.util.concurrent.ConcurrentLinkedQueue<LogSqlEntry>()
 
+    // O-147：最多 2048 条身份索引，只认本写入器写出的实例，不靠 SQL/会话序号猜测归属。
+    private data class WrittenBlock(val file: File, val id: String, val key: Any, val identity: String)
+    private val writtenBlocks = java.util.IdentityHashMap<LogSqlEntry, WrittenBlock>()
+    private val pendingMerges = java.util.concurrent.ConcurrentLinkedQueue<Pair<LogSqlEntry, LogSqlEntry>>()
+
+    /** 元数据升级只追加修订注释，不重写旧字节，也不追加第二条可执行 SQL。 */
+    fun submitMerge(old: LogSqlEntry, merged: LogSqlEntry) {
+        pendingMerges.add(old to merged)
+        if (drainScheduled.compareAndSet(false, true)) ensureExecutor().execute { drainAndWrite() }
+    }
+
+    private fun fileKey(file: File): Any? {
+        val a = Files.readAttributes(file.toPath(), java.nio.file.attribute.BasicFileAttributes::class.java,
+            java.nio.file.LinkOption.NOFOLLOW_LINKS)
+        return (a.fileKey() ?: a.creationTime()).takeIf { a.isRegularFile && !a.isSymbolicLink }
+    }
+
+    private fun remember(entry: LogSqlEntry, block: WrittenBlock) {
+        if (writtenBlocks.size >= 2048) writtenBlocks.clear()
+        writtenBlocks[entry] = block
+    }
+
+    private fun drainMerges() {
+        while (true) {
+            val (old, merged) = pendingMerges.poll() ?: break
+            val block = writtenBlocks[old] ?: continue
+            if (old.sequenceNumber != merged.sequenceNumber || SqlLogParamCodec.historyIdentity(merged) != block.identity) continue
+            try {
+                // 不 CREATE：删除/替换/重配后的文件不恢复、不认领。非协作外写无法CAS，
+                // 但 APPEND 永不覆盖其字节；修订还须 ID + 原条目摘要匹配才在读取时生效。
+                check(fileKey(block.file) == block.key)
+                if (currentFile == block.file) writer?.flush()
+                val payload = java.util.Base64.getEncoder().encodeToString(renderEntry(merged).toByteArray(Charsets.UTF_8))
+                check(payload.length <= SqlLogFileReader.MAX_REVISION_PAYLOAD)
+                val line = "\n-- pd: o147-revision: ${block.id} ${block.identity} $payload --\n"
+                java.nio.channels.FileChannel.open(block.file.toPath(), StandardOpenOption.WRITE,
+                    StandardOpenOption.APPEND, java.nio.file.LinkOption.NOFOLLOW_LINKS).use { channel ->
+                    channel.lock().use {
+                        check(fileKey(block.file) == block.key)
+                        val bytes = java.nio.ByteBuffer.wrap(line.toByteArray(Charsets.UTF_8))
+                        while (bytes.hasRemaining()) channel.write(bytes)
+                    }
+                }
+                writtenBlocks.remove(old)
+                remember(merged, block)
+            } catch (_: Exception) {
+                writtenBlocks.remove(old)
+                LOG.warn("自动保存历史 SQL：融合修订未追加，保留原历史")
+            }
+        }
+    }
+
     /** 本轮已调度标志（幂等调度——风暴期 N 条投递 = 1 个写任务）。 */
     private val drainScheduled = java.util.concurrent.atomic.AtomicBoolean()
 
@@ -116,6 +168,7 @@ class SqlLogAutoSaver(
             // T-HistoryFileRetention：写批之后在同写线程裁剪超限历史文件（不阻塞捕获热路径；与写串行无竞态）
             pruneRetainedFiles()
         }
+        drainMerges()
     }
 
     /** T-HistoryFileRetention：历史文件保留上限裁剪——目录下**本插件名族**的逻辑历史文件（按基名归并滚动块）
@@ -237,6 +290,7 @@ class SqlLogAutoSaver(
     fun configure(customPath: String, pattern: String, projectBasePath: String?, maxFiles: Int = 0) {
         // T-PS4-13：configure 链调用线程常为 EDT（设置变更）——限批同步排水防长批磁盘写阻塞
         close(configureDrainLimit)
+        writtenBlocks.clear()
         saveDir = resolveHistoryDir(customPath, projectBasePath)
         fileNamePattern = pattern.ifBlank { PluginSettings.DEFAULT_LOG_AUTO_SAVE_FILE_NAME_PATTERN }
         this.maxFiles = maxFiles
@@ -291,7 +345,9 @@ class SqlLogAutoSaver(
 
     /** 静默 flush（写失败不阻断批次）。 */
     private fun flushQuietly() {
-        runCatching { writer?.flush() }.onFailure {
+        runCatching {
+            writer?.flush()
+        }.onFailure {
             LOG.warn("自动保存历史 SQL：flush 失败", it)
         }
     }
@@ -339,6 +395,17 @@ class SqlLogAutoSaver(
      */
     private fun writeEntry(w: BufferedWriter, entry: LogSqlEntry) {
         runCatching {
+            val id = if (entry.captureProvenance != CaptureProvenance.UNKNOWN) java.util.UUID.randomUUID().toString() else null
+            w.write(renderEntry(entry, id))
+            if (id != null) currentFile?.let { file ->
+                fileKey(file)?.let { key -> remember(entry, WrittenBlock(file, id, key, SqlLogParamCodec.historyIdentity(entry))) }
+            }
+        }.onFailure { LOG.warn("自动保存历史 SQL：写入失败", it) }
+    }
+
+    private fun renderEntry(entry: LogSqlEntry, historyId: String? = null): String {
+        val text = java.io.StringWriter()
+        val w = BufferedWriter(text)
             // 头部：源码位置 | 耗时 | 时间戳 | 日志原始时间（可选）
             val source = entry.sourceFile?.let { file ->
                 if (entry.sourceLine > 0) "$file:${entry.sourceLine}" else file
@@ -366,17 +433,16 @@ class SqlLogAutoSaver(
                 entry.mapperStatement != null || entry.errorText != null ||
                 entry.requestTag != null || entry.updateCount != null ||
                 entry.sourceCandidates.isNotEmpty() || entry.stackDigest != null ||
-                entry.actualSql != null ||
+                entry.actualSql != null || entry.captureProvenance != CaptureProvenance.UNKNOWN ||
                 entry.source == SqlSource.MCP || entry.source == SqlSource.SHARDINGSPHERE
             ) {
                 w.write("-- pd: ${SqlLogParamCodec.encodeEntry(entry)} --\n")
             }
+            historyId?.let { w.write("-- pd: o147-id: $it --\n") }
             w.write(withTerminator(entry.restoredSql))
             w.write("\n\n")
-            // T-Perf-12：flush 上移到批末（writeBatch）/同步 API（write）——写线程逐条 flush 磁盘已移除
-        }.onFailure {
-            LOG.warn("自动保存历史 SQL：写入失败", it)
-        }
+        w.flush()
+        return text.toString()
     }
 
     /**
@@ -425,6 +491,7 @@ class SqlLogAutoSaver(
     @Synchronized
     fun close(maxDrainEntries: Int = Int.MAX_VALUE) {
         drainPendingSync(maxDrainEntries)
+        drainMerges()
         executor?.shutdownNow()
         executor = null
         drainScheduled.set(false)

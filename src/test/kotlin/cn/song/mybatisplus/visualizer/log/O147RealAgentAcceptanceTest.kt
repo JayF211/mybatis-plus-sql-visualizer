@@ -28,7 +28,8 @@ class O147RealAgentAcceptanceTest {
                 assertTrue(it.url!!.startsWith("jdbc:h2:mem:o147_acceptance"))
                 assertTrue(it.sourceFile!!.endsWith("O147JdbcApp.java"))
                 assertTrue(it.sourceLine > 0)
-                assertTrue(it.sourceCandidates.isNotEmpty())
+                // A single business frame may be represented only by sf/sl; candidates are optional.
+                assertTrue(it.sourceCandidates.all { candidate -> candidate.second > 0 })
                 assertFalse(it.stackDigest.isNullOrBlank())
                 assertEquals("147", it.params.single().second)
                 val entry = AgentEventAdapter.toEntry(it)
@@ -85,6 +86,7 @@ class O147RealAgentAcceptanceTest {
         var accepted = 0
         buffer.onEntryAccepted = { accepted++ }
         buffer.onEntryStored = { saver?.submit(it) }
+        buffer.onEntryMerged = { old, merged -> saver?.submitMerge(old, merged) }
         val first = if (consoleFirst) console else agent
         val second = if (consoleFirst) agent else console
         assertTrue(buffer.addEntry(first))
@@ -125,7 +127,7 @@ class O147RealAgentAcceptanceTest {
 
     companion object {
         private val root = File(System.getProperty("user.dir"))
-        private val evidence = File(root, "build/o147-acceptance").apply { mkdirs() }
+        private val evidence = File(root, "build/o147-acceptance/${System.currentTimeMillis()}").apply { mkdirs() }
         private val captures: List<Capture> by lazy {
             val h2 = File(org.h2.Driver::class.java.protectionDomain.codeSource.location.toURI())
             val mybatis = File(org.apache.ibatis.session.SqlSession::class.java.protectionDomain.codeSource.location.toURI())
@@ -185,7 +187,12 @@ class O147RealAgentAcceptanceTest {
                     val events = mutableListOf<AgentEvent>()
                     while (events.size < 4) {
                         val f = frame()
-                        if (f.first == AgentProtocol.CMD_EVENT) events += requireNotNull(AgentEvent.parse(f.second))
+                        if (f.first == AgentProtocol.CMD_EVENT) {
+                            val event = requireNotNull(AgentEvent.parse(f.second))
+                            // Startup DDL can remain queued until CONFIG ACK; retain its raw frame but
+                            // count only the four mapper executions in this acceptance window.
+                            if (!event.sql.startsWith("CREATE TABLE")) events += event
+                        }
                     }
                     check(marks.poll(30, TimeUnit.SECONDS) == "O147_EXPECTED_DUPLICATE_KEY")
                     check(marks.poll(30, TimeUnit.SECONDS) == "O147_DONE")

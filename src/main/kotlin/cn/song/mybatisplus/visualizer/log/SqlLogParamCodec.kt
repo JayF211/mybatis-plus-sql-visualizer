@@ -56,6 +56,23 @@ object SqlLogParamCodec {
 
     private val gson = Gson()
 
+    /** 修订仅升级元数据：匹配首次 SQL/绑定值/捕获时间，不使用可重置的 UI 序号。 */
+    internal fun historyIdentity(entry: LogSqlEntry): String {
+        val original = JsonArray().apply {
+            add(entry.rawSql.trim().removeSuffix(";").trim())
+            add(entry.restoredSql.trim().removeSuffix(";").trim())
+            add(entry.timestamp)
+            add(JsonArray().apply { entry.params.forEach { p ->
+                add(JsonArray().apply {
+                    add(p.value?.let(::JsonPrimitive) ?: JsonNull.INSTANCE)
+                    add(p.type?.let(::JsonPrimitive) ?: JsonNull.INSTANCE)
+                })
+            } })
+        }
+        return java.security.MessageDigest.getInstance("SHA-256")
+            .digest(gson.toJson(original).toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
+    }
+
     /** pd 载荷解码结果。[mapperStatement] / [errorText] / [requestTag] / [updateCount] 为 M56 扩展字段，旧 payload 为 null。 */
     data class DecodedPayload(
         val rawSql: String,

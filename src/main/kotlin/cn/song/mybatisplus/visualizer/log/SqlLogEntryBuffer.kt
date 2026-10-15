@@ -183,6 +183,9 @@ class SqlLogEntryBuffer(
      */
     var onEntryStored: ((LogSqlEntry) -> Unit)? = null
 
+    /** O-147：已存条目的元数据升级，不是新捕获；锁外回调，不追加第二条历史。 */
+    var onEntryMerged: ((LogSqlEntry, LogSqlEntry) -> Unit)? = null
+
     /** T-PerfBatch：每次成功入队（非暂停/过滤/去重丢弃）即回调——「有新 SQL」语义（自动展开）
      * 的即时性出口；去重丢弃分支不回调（重复 SQL 不是新 SQL，且空缓冲不可能产生重复）。 */
     var onEntryAccepted: (() -> Unit)? = null
@@ -304,6 +307,7 @@ class SqlLogEntryBuffer(
                 val diagExisting = mergeDiagExisting
                 val diagMerged = mergeDiagMerged
                 if (diagExisting != null && diagMerged != null) {
+                    onEntryMerged?.invoke(diagExisting, diagMerged)
                     logAttributionThrottled {
                         "重复观测跨通道融合: 指纹=${entry.dedupeKey.take(8)} " +
                             "通道=${diagExisting.captureProvenance}+${entry.captureProvenance}" +
