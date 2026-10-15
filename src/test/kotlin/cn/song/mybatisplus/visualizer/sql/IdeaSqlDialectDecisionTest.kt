@@ -13,9 +13,10 @@ class IdeaSqlDialectDecisionTest {
         origin: IdeaSqlContextBridge.ScopeOrigin,
         candidates: List<IdeaSqlContextBridge.DataSourceCandidate>,
         effective: String? = null,
+        configured: Boolean = false,
     ) = IdeaSqlContextBridge.Snapshot(
         IdeaSqlContextBridge.Availability.AVAILABLE, true, origin,
-        configuredScopePresent = origin == IdeaSqlContextBridge.ScopeOrigin.CONFIGURED_RESOLUTION,
+        configuredScopePresent = configured,
         providerCandidateIds = if (origin == IdeaSqlContextBridge.ScopeOrigin.PROVIDED) candidates.map { it.stableId } else emptyList(),
         finalCandidates = candidates,
         effectiveDialectId = effective,
@@ -38,12 +39,13 @@ class IdeaSqlDialectDecisionTest {
     }
 
     @Test
-    fun `configured multi-source conflict never chooses first datasource`() {
+    fun `unverified configured multi-source scope remains unavailable`() {
         val decision = IdeaSqlDialectDecision.decide(snapshot = snapshot(
-            IdeaSqlContextBridge.ScopeOrigin.CONFIGURED_RESOLUTION,
+            IdeaSqlContextBridge.ScopeOrigin.UNAVAILABLE,
             listOf(candidate("a", "MySQL"), candidate("b", "Oracle")),
+            configured = true,
         ))
-        assertEquals(DialectDecisionEngine.Status.AMBIGUOUS, decision.status)
+        assertEquals(DialectDecisionEngine.Status.UNAVAILABLE, decision.status)
         assertEquals(DialectDecisionEngine.Source.IDEA_CONFIGURED_SCOPE, decision.source)
         assertNull(decision.dialectName)
     }
@@ -60,16 +62,18 @@ class IdeaSqlDialectDecisionTest {
     }
 
     @Test
-    fun `all unknown scope candidates can use effective IDEA dialect without inventing target dialect`() {
+    fun `unverified configured scope cannot borrow effective IDEA dialect`() {
         val decision = IdeaSqlDialectDecision.decide(snapshot = snapshot(
-            IdeaSqlContextBridge.ScopeOrigin.CONFIGURED_RESOLUTION,
+            IdeaSqlContextBridge.ScopeOrigin.UNAVAILABLE,
             listOf(candidate("unknown", null)),
             effective = "Oracle",
+            configured = true,
         ))
-        assertEquals(DialectDecisionEngine.Source.IDEA_EFFECTIVE_DIALECT, decision.source)
-        assertEquals("Oracle", decision.dialectName)
-        assertEquals(listOf("unknown"), decision.dataSourceIds)
-        assertTrue(decision.evidence.contains(DialectDecisionEngine.Source.IDEA_CONFIGURED_SCOPE))
+        assertEquals(DialectDecisionEngine.Status.UNAVAILABLE, decision.status)
+        assertEquals(DialectDecisionEngine.Source.IDEA_CONFIGURED_SCOPE, decision.source)
+        assertNull(decision.dialectName)
+        assertTrue(decision.dataSourceIds.isEmpty())
+        assertTrue(decision.evidence.isEmpty())
     }
 
     @Test

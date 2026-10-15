@@ -7,7 +7,7 @@ import com.intellij.psi.PsiFile
 /** DatabaseTools 只读上下文桥：反射隔离可选插件，不持久化 JDBC URL 或平台对象。 */
 internal object IdeaSqlContextBridge {
     enum class Availability { AVAILABLE, DATABASE_TOOLS_UNAVAILABLE, FAILED }
-    enum class ScopeOrigin { PROVIDED, CONFIGURED_RESOLUTION, DEFAULT_ALL_DATA_SOURCES, NONE, UNAVAILABLE }
+    enum class ScopeOrigin { PROVIDED, DEFAULT_ALL_DATA_SOURCES, NONE, UNAVAILABLE }
 
     data class DataSourceCandidate(
         val stableId: String,

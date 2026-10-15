@@ -29,14 +29,9 @@ internal object IdeaSqlDialectDecision {
             // 无 UUID 候选只以本次决策的临时键占位，既防虚假唯一，也绝不进入模块持久绑定。
             DialectDecisionEngine.Candidate("unidentified:$it", null)
         }
-        val explicit = snapshot?.scopeOrigin == IdeaSqlContextBridge.ScopeOrigin.PROVIDED ||
-            snapshot?.scopeOrigin == IdeaSqlContextBridge.ScopeOrigin.CONFIGURED_RESOLUTION
-        val scopeSource = when (snapshot?.scopeOrigin) {
-            IdeaSqlContextBridge.ScopeOrigin.PROVIDED -> DialectDecisionEngine.Source.IDEA_PROVIDER
-            IdeaSqlContextBridge.ScopeOrigin.CONFIGURED_RESOLUTION ->
-                DialectDecisionEngine.Source.IDEA_CONFIGURED_SCOPE
-            else -> DialectDecisionEngine.Source.IDEA_SCOPE
-        }
+        val explicit = snapshot?.scopeOrigin == IdeaSqlContextBridge.ScopeOrigin.PROVIDED
+        val scopeSource = if (explicit) DialectDecisionEngine.Source.IDEA_PROVIDER
+            else DialectDecisionEngine.Source.IDEA_SCOPE
         val projects = if (snapshot?.scopeOrigin == IdeaSqlContextBridge.ScopeOrigin.DEFAULT_ALL_DATA_SOURCES &&
             platformCandidates.isNotEmpty()) platformCandidates else fallbackProjectCandidates
         return DialectDecisionEngine.decide(DialectDecisionEngine.Input(
