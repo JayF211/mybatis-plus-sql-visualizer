@@ -100,6 +100,8 @@ class SqlLogAutoSaver(
                 // 但 APPEND 永不覆盖其字节；修订还须 ID + 原条目摘要匹配才在读取时生效。
                 check(fileKey(block.file) == block.key)
                 if (currentFile == block.file) writer?.flush()
+                // Windows 创建时间可能被文件系统隧道复用；必须再找到本实例写出的随机标识。
+                check(block.file.bufferedReader().useLines { lines -> lines.any { it == "-- pd: o147-id: ${block.id} --" } })
                 val payload = java.util.Base64.getEncoder().encodeToString(renderEntry(merged).toByteArray(Charsets.UTF_8))
                 check(payload.length <= SqlLogFileReader.MAX_REVISION_PAYLOAD)
                 val line = "\n-- pd: o147-revision: ${block.id} ${block.identity} $payload --\n"
