@@ -95,6 +95,7 @@ public class PlatformSignatureChecker {
         missing += checkPerHostProbeApis(loader);
         missing += checkEditorColorsTopic(loader);
         missing += checkSqlContextApis(loader, dbnLib.isDirectory());
+        missing += checkExecutionDialectGateApis(loader, dbnLib.isDirectory());
         missing += checkModuleCountApi(loader);
         missing += checkPreviewSourceContextApis(loader, dbnLib.isDirectory());
 
@@ -333,6 +334,62 @@ public class PlatformSignatureChecker {
             return 1;
         } catch (Throwable t) {
             System.out.println("MISS DatabaseTools SQL context API: " + t);
+            return 1;
+        }
+    }
+
+    /** O-145 W7：最终实际目标闸门反射面，三代平台任一漂移都必须在发布前变红。 */
+    private static int checkExecutionDialectGateApis(ClassLoader loader, boolean databaseToolsPresent) {
+        if (!databaseToolsPresent) {
+            System.out.println("SKIP DatabaseTools execution dialect gate APIs (bundled plugin absent)");
+            return 0;
+        }
+        try {
+            // 243/262 的 DatabaseSession/JdbcConsole 在裸 URLClassLoader 下会解析到发行包未带入的
+            // 可选 datagrid 类型，直接 Class#getMethod 会在目标方法检查前 NoClassDefFoundError 假红。
+            // 本组改读 classfile UTF-8 常量：方法名与参数/返回类型描述符都在常量池，既核真实发行物，
+            // 又不触发无关可选类型链接。
+            int missing = 0;
+            missing += checkClassBytes(loader, "com.intellij.database.console.session.DatabaseSession",
+                    "DatabaseSession.getConnectionPoint()", "getConnectionPoint", "DatabaseConnectionPoint");
+            missing += checkClassBytes(loader, "com.intellij.database.dataSource.DatabaseConnectionPoint",
+                    "DatabaseConnectionPoint.getDataSource()", "getDataSource", "LocalDataSource");
+            missing += checkClassBytes(loader, "com.intellij.database.console.JdbcConsole",
+                    "JdbcConsole.getDataSource()", "getDataSource", "LocalDataSource");
+            missing += checkClassBytes(loader, "com.intellij.database.dataSource.LocalDataSource",
+                    "LocalDataSource.getUniqueId/getUrl", "getUniqueId", "getUrl");
+            // getUrl 的声明所有者在三代间漂移（253 只在 LocalDataSource，AbstractDataSource 无该方法）；
+            // Abstract 侧只钉稳定身份方法，URL 由上面的 LocalDataSource 项覆盖。
+            missing += checkClassBytes(loader, "com.intellij.database.dataSource.AbstractDataSource",
+                    "AbstractDataSource.getUniqueId()", "getUniqueId");
+            missing += checkClassBytes(loader, "com.intellij.database.util.DbSqlUtilCore",
+                    "DbSqlUtilCore.findSqlDialect(LocalDataSource)", "findSqlDialect", "LocalDataSource");
+            return missing;
+        } catch (Throwable t) {
+            System.out.println("MISS DatabaseTools execution dialect gate API: " + t);
+            return 1;
+        }
+    }
+
+    private static int checkClassBytes(ClassLoader loader, String className, String label, String... tokens) {
+        String resource = className.replace('.', '/') + ".class";
+        try (java.io.InputStream in = loader.getResourceAsStream(resource)) {
+            if (in == null) {
+                System.out.println("MISS " + label + " class resource: " + resource);
+                return 1;
+            }
+            byte[] bytes = in.readAllBytes();
+            String raw = new String(bytes, java.nio.charset.StandardCharsets.ISO_8859_1);
+            for (String token : tokens) {
+                if (!raw.contains(token)) {
+                    System.out.println("MISS " + label + " token=" + token);
+                    return 1;
+                }
+            }
+            System.out.println("OK   " + label + " -> classfile tokens " + java.util.Arrays.toString(tokens));
+            return 0;
+        } catch (Throwable t) {
+            System.out.println("MISS " + label + " classfile read failed: " + t);
             return 1;
         }
     }
