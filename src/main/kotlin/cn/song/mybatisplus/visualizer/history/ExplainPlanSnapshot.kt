@@ -10,7 +10,11 @@ import java.nio.file.Paths
 import java.security.MessageDigest
 import java.util.UUID
 
-/** R90：只存值，不持有 PSI/Swing/JDBC、连接串、数据源显示名或凭据。旧 XML 缺字段即空。 */
+/**
+ * R90：仅值类型，不持有 PSI/Swing/JDBC；没有专门的连接串、数据源显示名或凭据字段。
+ * payload 是未脱敏的原始计划，谓词/业务字面量中仍可能包含秘密或凭据，必须独立授权保留。
+ * 旧 XML 缺字段即空。
+ */
 data class ExplainPlanSnapshot(
     var id: String = "",
     var capturedAt: Long = 0,
@@ -82,4 +86,4 @@ data class ExplainPlanKey(
 /** 仅本次提交持有；清空/重新加载会使 generation 失效，条目删除后也绝不复活。 */
 data class ExplainPlanCapture(val entryId: String, val generation: Long, val key: ExplainPlanKey)
 
-enum class ExplainPlanSaveResult { SAVED, SESSION_ONLY, TOO_LARGE, CLEARED_OR_REMOVED }
+enum class ExplainPlanSaveResult { SAVED, SESSION_ONLY, TOO_LARGE, CLEARED_OR_REMOVED, RETENTION_DISABLED }

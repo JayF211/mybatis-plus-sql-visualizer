@@ -936,9 +936,10 @@ internal fun SqlPreviewPanel.captureExplainPlanHistory(
     target: Any,
 ): cn.song.mybatisplus.visualizer.history.ExplainPlanHistorySession.Request {
     val originalPreview = current
+    val retentionEnabled = PluginSettings.getInstance().state.explainPlanRetentionEnabled
     // XML/日志纯文本预览没有经过 recordHistory；首次 EXPLAIN 复用同一历史域建条目。
     // 已有 ID 即使被用户删除也绝不补建，防删除后在途结果复活。
-    if (originalPreview != null && originalPreview.historyEntryId.isEmpty() && planKey.persistable) {
+    if (retentionEnabled && originalPreview != null && originalPreview.historyEntryId.isEmpty() && planKey.persistable) {
         originalPreview.historyEntryId = history.add(cn.song.mybatisplus.visualizer.history.SqlHistoryEntry(
             sql = originalPreview.sql, compactSql = originalPreview.compactSql,
             timestamp = System.currentTimeMillis(), tableName = originalPreview.tableName.orEmpty(),
@@ -946,9 +947,17 @@ internal fun SqlPreviewPanel.captureExplainPlanHistory(
         )).id
     }
     return explainPlanHistorySession.begin(
-        history, originalPreview?.sql.orEmpty(), planKey, target, originalPreview?.historyEntryId.orEmpty(),
+        history, originalPreview?.sql.orEmpty(), planKey, target, originalPreview?.historyEntryId.orEmpty(), retentionEnabled,
     )
 }
+
+/** 成功回调重新读取当前设置，不能使用提交前的 State 引用（期间可能 apply/loadState）。 */
+internal fun SqlPreviewPanel.completeExplainPlanHistory(
+    history: cn.song.mybatisplus.visualizer.history.SqlHistoryManager,
+    request: cn.song.mybatisplus.visualizer.history.ExplainPlanHistorySession.Request,
+    raw: cn.song.mybatisplus.visualizer.mcp.McpExplainFormatter.RawResult,
+): cn.song.mybatisplus.visualizer.history.ExplainPlanHistorySession.Completion =
+    explainPlanHistorySession.complete(history, request, raw, PluginSettings.getInstance().state.explainPlanRetentionEnabled)
 
 internal fun SqlPreviewPanel.submitExplainOrStructured(
     proj: Project,
@@ -1022,7 +1031,7 @@ internal fun SqlPreviewPanel.submitExplainOrStructured(
                             dialect.name, outcome.raw.headers, outcome.raw.rows,
                         )
                     }.getOrDefault(emptyList())
-                    val historyCompletion = explainPlanHistorySession.complete(history, historyRequest, outcome.raw)
+                    val historyCompletion = completeExplainPlanHistory(history, historyRequest, outcome.raw)
                     val planDiff = historyCompletion.baselines.firstOrNull()?.let {
                         ExplainPlanDiff.diff(it.raw, outcome.raw, outFormat)
                     }

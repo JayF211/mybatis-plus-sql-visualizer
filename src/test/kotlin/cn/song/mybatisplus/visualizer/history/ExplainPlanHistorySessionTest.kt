@@ -15,9 +15,9 @@ class ExplainPlanHistorySessionTest {
         val m = manager()
         val first = ExplainPlanHistorySession()
         val target = Any()
-        assertTrue(first.complete(m, first.begin(m, sql, key, target), raw(10)).baselines.isEmpty())
+        assertTrue(first.complete(m, first.begin(m, sql, key, target, null, true), raw(10), true).baselines.isEmpty())
         val reopened = ExplainPlanHistorySession()
-        val result = reopened.complete(m, reopened.begin(m, sql, key, target), raw(20))
+        val result = reopened.complete(m, reopened.begin(m, sql, key, target, null, true), raw(20), true)
         assertEquals(listOf(raw(10)), result.baselines.map { it.raw })
         assertEquals(2, m.matchingExplainPlans(key).size)
     }
@@ -30,7 +30,7 @@ class ExplainPlanHistorySessionTest {
         session.complete(m, session.begin(m, sql, unknown, target), raw(10))
         val same = session.complete(m, session.begin(m, sql, unknown, target), raw(20))
         assertEquals(listOf(raw(10)), same.baselines.map { it.raw })
-        assertEquals(ExplainPlanSaveResult.SESSION_ONLY, same.saved)
+        assertEquals(ExplainPlanSaveResult.RETENTION_DISABLED, same.saved)
         assertTrue(session.complete(m, session.begin(m, sql, unknown, Any()), raw(30)).baselines.isEmpty())
         assertTrue(m.matchingExplainPlans(key).isEmpty())
     }

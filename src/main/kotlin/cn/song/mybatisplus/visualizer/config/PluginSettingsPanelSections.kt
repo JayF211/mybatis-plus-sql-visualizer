@@ -202,6 +202,12 @@ internal fun PluginSettingsPanel.buildSections(panel: JPanel) {
                 text = MpSqlVisualizerBundle.message("settings.explain.structured")
                 toolTipText = MpSqlVisualizerBundle.message("settings.explain.structured.tip")
             })
+            addRow(p, g, "", explainPlanRetentionCheck.apply {
+                text = MpSqlVisualizerBundle.message("settings.explain.retention")
+            })
+            addRow(p, g, "", explainPlanRetentionDisclosure.apply {
+                text = MpSqlVisualizerBundle.message("settings.explain.retention.disclosure")
+            })
             addRow(p, g, MpSqlVisualizerBundle.message("settings.preview.executionTimeout"), executionTimeoutField.apply {
                 toolTipText = MpSqlVisualizerBundle.message("settings.preview.executionTimeout.tip")
             })

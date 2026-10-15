@@ -528,6 +528,9 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
          */
         var explainStructuredRender: Boolean = false,
 
+        /** R90：原始计划跨会话保留需独立同意；旧渲染开关不代表落盘授权，缺字段默认关闭。 */
+        var explainPlanRetentionEnabled: Boolean = false,
+
         // ---------- F-7 SQL 历史记录 ----------
 
         /**

@@ -521,6 +521,8 @@ class PluginSettingsPanel @JvmOverloads constructor(
 
     /** EXPLAIN 结构化渲染开关（R33）：面板执行计划按钮的结构化通道（默认开，失败自动回退原生控制台）。 */
     internal val explainStructuredCheck = JBCheckBox()
+    internal val explainPlanRetentionCheck = JBCheckBox()
+    internal val explainPlanRetentionDisclosure = JBLabel()
 
     /** T-ExecTimeoutGuard：执行超时（秒，0=不限）——JBIntSlider 过重，JBTextField + 数字容错。 */
     internal val executionTimeoutField = JBTextField(8)
@@ -1215,6 +1217,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             || paginationCountCheck.isSelected != s.paginationCountEnabled
             || jdbcSqlPreviewCheck.isSelected != s.jdbcSqlPreviewEnabled
             || explainStructuredCheck.isSelected != s.explainStructuredRender
+            || explainPlanRetentionCheck.isSelected != s.explainPlanRetentionEnabled
             || executionTimeoutField.text.trim().toIntOrNull() != s.executionTimeoutSeconds
 
     private fun isModifiedTableMapping(s: PluginSettings.State): Boolean =
@@ -1340,6 +1343,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             s.paginationCountEnabled = paginationCountCheck.isSelected
             s.jdbcSqlPreviewEnabled = jdbcSqlPreviewCheck.isSelected
             s.explainStructuredRender = explainStructuredCheck.isSelected
+            s.explainPlanRetentionEnabled = explainPlanRetentionCheck.isSelected
             s.executionTimeoutSeconds = executionTimeoutField.text.trim().toIntOrNull()
                 ?: PluginSettings.DEFAULT_EXECUTION_TIMEOUT_SECONDS
         }
@@ -1507,6 +1511,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             paginationCountCheck.isSelected = s.paginationCountEnabled
             jdbcSqlPreviewCheck.isSelected = s.jdbcSqlPreviewEnabled
             explainStructuredCheck.isSelected = s.explainStructuredRender
+            explainPlanRetentionCheck.isSelected = s.explainPlanRetentionEnabled
             executionTimeoutField.text = s.executionTimeoutSeconds.toString()
         }
         if (SECTION_TABLE_MAPPING in sections) {
