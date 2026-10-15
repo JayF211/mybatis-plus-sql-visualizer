@@ -1,4 +1,4 @@
-param([string]$Label = 'initial', [string]$Tests = 'cn.song.mybatisplus.visualizer.log.O147RealAgentAcceptanceTest', [switch]$AgentTests, [ValidatePattern('^[0-9]+[mg]$')][string]$TestHeap = '512m', [ValidateSet('testFast', ':test')][string]$TestTask = 'testFast')
+param([string]$Label = 'initial', [string]$Tests = 'cn.song.mybatisplus.visualizer.log.O147RealAgentAcceptanceTest', [switch]$AgentTests, [ValidatePattern('^[0-9]+[mg]$')][string]$TestHeap = '', [ValidateSet('testFast', ':test')][string]$TestTask = 'testFast')
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
 Set-Location $root
@@ -13,7 +13,7 @@ try {
         ':sql-visualizer-agent:agentFatJar :sql-visualizer-agent:childappClasses ' + $TestTask + ' ' + $filters
     }
     $command = '.\gradlew.bat ' + $argsText + ' -I dev-support/agent-capture-repro/o147-isolation.init.gradle -Pkotlin.compiler.execution.strategy=in-process --console=plain'
-    $command += ' -PtestHeapSize=' + $TestHeap
+    if ($TestHeap) { $command += ' -PtestHeapSize=' + $TestHeap }
     & (Join-Path $root 'dev-support/gradle-gate.ps1') -MaxConcurrent 2 -WaitTimeoutSeconds 10 -Command $command
     $code = $LASTEXITCODE
     Write-Output "O147 label=$Label exit=$code"

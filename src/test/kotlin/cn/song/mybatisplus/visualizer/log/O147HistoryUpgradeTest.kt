@@ -276,7 +276,7 @@ class O147HistoryUpgradeTest {
         )
         assertEquals(loaded, sequenceResult)
         // JDK compact UTF-8 read avoids Kotlin readText's full UTF-16 intermediate on this 129 MiB fixture.
-        assertEquals(loaded, SqlLogFileReader.parseContent(Files.readString(file.toPath())))
+        assertLargeStringInChild(file, loaded)
     }
 
     @Test fun exactRevisionLimitLfAgreesAcrossAllReaders() = assertRevisionLineBoundary("\n", 0)
@@ -304,20 +304,58 @@ class O147HistoryUpgradeTest {
             repeat(SqlLogFileReader.MAX_REVISIONS) { out.write(invalid); out.write(ending) }
             out.write(valid); out.write(ending)
         }
-        val fromString = SqlLogFileReader.parseContent(Files.readString(file.toPath()))
         val expected = if (excess == 0) CaptureProvenance.MERGED else CaptureProvenance.CONSOLE_BRIDGE
         // At the exact limit the 8 MiB budget admits only 127 invalid rows, leaving room for
         // the small valid revision; over-limit rows cost a prefix each and exhaust the count.
-        assertEquals(expected, fromString.single().captureProvenance)
         val fromSequence = SqlLogFileReader.parseContent(original.asSequence() +
             (0 until SqlLogFileReader.MAX_REVISIONS).asSequence().map { invalid } + sequenceOf(valid))
         val fromFile = SqlLogFileReader.readFromFile(file)
         val streamed = mutableListOf<LogSqlEntry>()
         SqlLogFileReader.forEachEntry(file) { streamed += it; true }
         assertEquals(1, SqlLogFileReader.countInFile(file))
-        assertEquals(fromString, fromSequence)
-        assertEquals(fromString, fromFile)
-        assertEquals(fromString, streamed)
+        assertEquals(expected, fromSequence.single().captureProvenance)
+        assertEquals(fromSequence, fromFile)
+        assertEquals(fromSequence, streamed)
+        assertLargeStringInChild(file, fromSequence)
+    }
+
+    private fun assertLargeStringInChild(file: File, expected: List<LogSqlEntry>) {
+        val root = File(System.getProperty("user.dir"))
+        val main = File(root, "build/classes/kotlin/main")
+        val tests = File(root, "build/classes/kotlin/test")
+        check(File(main, "cn/song/mybatisplus/visualizer/log/SqlLogFileReader.class").isFile)
+        check(File(tests, "cn/song/mybatisplus/visualizer/log/O147LargeStringProbe.class").isFile)
+        val dependencies = listOf(kotlin.Unit::class.java, com.google.gson.Gson::class.java).map { anchor ->
+            val resource = requireNotNull(anchor.getResource("/" + anchor.name.replace('.', '/') + ".class"))
+            val jar = resource.openConnection() as? java.net.JarURLConnection
+            // IntelliJ custom jar handler need not subclass JarURLConnection. Re-open the
+            // observed jar URL with the JDK handler; never infer a path from an artifact name.
+            val standardJar = if (resource.protocol == "jar") runCatching {
+                java.net.URI(resource.toExternalForm()).toURL().openConnection() as? java.net.JarURLConnection
+            }.getOrNull() else null
+            val resourceFile = if (resource.protocol == "jar" && resource.toExternalForm().contains("!/")) {
+                java.net.URI(resource.toExternalForm().removePrefix("jar:").substringBefore("!/")).toURL()
+                    .takeIf { it.protocol == "file" }
+            } else null
+            val url = anchor.protectionDomain?.codeSource?.location?.takeIf { it.protocol == "file" }
+                ?: jar?.jarFileURL ?: standardJar?.jarFileURL ?: resourceFile
+            val result = File(requireNotNull(url) { "No verified jar location for ${anchor.name}: $resource" }.toURI())
+            check(result.isFile)
+            java.util.jar.JarFile(result).use { check(it.getJarEntry(anchor.name.replace('.', '/') + ".class") != null) }
+            result
+        }
+        val javaBin = File(System.getProperty("java.home"), "bin/java.exe")
+        check(javaBin.isFile)
+        val output = File(file.parentFile, "string-child.log")
+        val args = listOf(javaBin.path, "-Xmx768m", "-cp", (listOf(main, tests) + dependencies).joinToString(File.pathSeparator),
+            O147LargeStringProbe::class.java.name, file.path, O147LargeStringProbe.fingerprint(expected))
+        File(file.parentFile, "string-child-command.txt").writeText(args.joinToString("\n"))
+        val process = ProcessBuilder(args).redirectErrorStream(true).redirectOutput(output).start()
+        try {
+            check(process.waitFor(90, java.util.concurrent.TimeUnit.SECONDS)) { "String child timeout: $output" }
+            assertEquals(output.readText(), 0, process.exitValue())
+            assertTrue(output.readText().contains("O147_STRING_OK"))
+        } finally { if (process.isAlive) process.destroyForcibly() }
     }
 
     @Test fun uuidSearchUsesFixedMemoryEvenForHugeExternalLine() {
@@ -381,4 +419,16 @@ class O147HistoryUpgradeTest {
         assertEquals(CaptureProvenance.CONSOLE_BRIDGE,
             SqlLogFileReader.readFromFile(File(dir, "test.sql")).single().captureProvenance)
     }
+}
+
+/** Runs the production String parser in one owned JVM; no platform stubs or weakened budget. */
+object O147LargeStringProbe {
+    @JvmStatic fun main(args: Array<String>) {
+        val entries = SqlLogFileReader.parseContent(Files.readString(File(args[0]).toPath()))
+        check(fingerprint(entries) == args[1]) { "String parser differs from parent sequence/file results" }
+        println("O147_STRING_OK count=${entries.size} reader=${SqlLogFileReader::class.java.protectionDomain.codeSource.location}")
+    }
+
+    fun fingerprint(entries: List<LogSqlEntry>): String = java.security.MessageDigest.getInstance("SHA-256")
+        .digest(entries.toString().toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
 }
