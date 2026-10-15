@@ -1,6 +1,9 @@
 package cn.song.mybatisplus.visualizer.ui
 
+import cn.song.mybatisplus.visualizer.context.ActualSqlPsiResolver
+import cn.song.mybatisplus.visualizer.context.SqlPsiResolution
 import cn.song.mybatisplus.visualizer.model.PreviewResult
+import cn.song.mybatisplus.visualizer.sql.DialectRegistry
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.xml.AnnotationSqlParser
 import cn.song.mybatisplus.visualizer.xml.ParamTypeInfo
@@ -99,7 +102,7 @@ object AnnotationSqlPreviewService {
         }
         val sql = values.joinToString(" ").trim()
         val method = PsiTreeUtil.getParentOfType(annotation, PsiMethod::class.java)
-        return buildResult(sql, shortName, previewParamTypes(method), warnings, project, method)
+        return buildResult(sql, shortName, previewParamTypes(method), warnings, project, method, annotation)
     }
 
     // ------------------------------------------------------------------
@@ -129,7 +132,7 @@ object AnnotationSqlPreviewService {
         if (sql == null) {
             return nullResult(MpSqlVisualizerBundle.message("annotation.provider.notSupported"))
         }
-        return buildResult(sql, shortName, previewParamTypes(mapperMethod), warnings, project, mapperMethod)
+        return buildResult(sql, shortName, previewParamTypes(mapperMethod), warnings, project, mapperMethod, providerMethod)
     }
 
     /** Provider type 解析：value/type 属性（PsiClassObjectAccessExpression）→ PsiClass。 */
@@ -237,6 +240,7 @@ object AnnotationSqlPreviewService {
         warnings: MutableList<String>,
         project: Project?,
         method: PsiMethod? = null,
+        sourceOwner: com.intellij.psi.PsiElement? = method,
     ): PreviewResult {
         val kind = when (shortName.removeSuffix("Provider")) {
             "Select" -> XmlStatementKind.SELECT
@@ -247,8 +251,9 @@ object AnnotationSqlPreviewService {
         return try {
             val staticValues = XmlPreviewService.resolveStaticFields(sql, project, warnings)
             val model = AnnotationSqlParser().parse(sql, kind, paramTypes.keys.toList(), staticValues, paramTypes)
+            val renderDialect = sourceDialect(project, sourceOwner)
             XmlPreviewService.applyPaginationShared(
-                XmlPreviewService.toResult(model, warnings),
+                XmlPreviewService.toResult(model, warnings).copy(renderedDialect = renderDialect),
                 project = project,
                 pageParamName = if (XmlPreviewService.paginationSimEnabled()) {
                     MapperPageParamLocator.fromMethod(method)
@@ -262,6 +267,22 @@ object AnnotationSqlPreviewService {
         } catch (e: XmlScriptException) {
             nullResult(e.message ?: "SQL 脚本解析失败。")
         }
+    }
+
+    private fun sourceDialect(project: Project?, owner: com.intellij.psi.PsiElement?): cn.song.mybatisplus.visualizer.sql.Dialect? {
+        if (project == null || owner == null) return null
+        val host = owner.containingFile ?: return null
+        val resolution = runCatching {
+            com.intellij.openapi.application.ReadAction.compute<SqlPsiResolution, RuntimeException> {
+                ActualSqlPsiResolver.resolve(host, owner, owner.textOffset)
+            }
+        }.getOrDefault(SqlPsiResolution.None)
+        val sqlPsi = when (resolution) {
+            is SqlPsiResolution.Exact -> resolution.file
+            is SqlPsiResolution.UniqueInOwner -> resolution.file
+            else -> null
+        }
+        return DialectRegistry.effective(project, host.virtualFile, sqlPsi)
     }
 
     private fun nullResult(message: String? = null): PreviewResult = PreviewResult(
