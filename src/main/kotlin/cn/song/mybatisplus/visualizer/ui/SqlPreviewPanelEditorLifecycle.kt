@@ -332,7 +332,7 @@ internal fun SqlPreviewPanel.projectPreviewFile(): java.io.File? {
  * T-PreviewExecDs-01c / O-145 W5：预览文件方言预映射——PSI 创建时即按本次 SQL 的实际生成方言解析，
  * 让编辑器语言、补全和渲染保持一致。结果尚未到达时先用兼容 MySQL；结果到达后按
  * [SqlPreviewPanel.previewDesiredDialectName] 重映射。同目录幂等同时比较 language id，避免早到的
- * MySQL 映射阻断后到的 Oracle/PostgreSQL；平台缺对应 Language 时保留现状，不反向冒充 MySQL。
+ * MySQL 映射阻断后到的 Oracle/PostgreSQL；平台缺对应方言时映射 GenericSQL，不反向冒充 MySQL。
  *
  * T-ExecSlowOps F1：反射段收编进 [DialectPreMapping]，本方法仅保留「面板级进程内幂等短路」语义 +
  * 成功回写 [previewDialectMappedVf]。真机实锤：本方法在 [prewarmPreviewTempFile] 后台线程内调用，
@@ -355,13 +355,18 @@ internal fun SqlPreviewPanel.projectPreviewFile(): java.io.File? {
 internal fun SqlPreviewPanel.mapPreviewDialectBeforePsi(proj: Project, vf: com.intellij.openapi.vfs.VirtualFile) {
     val target = previewDialectMappingTarget(vf)
     val desiredName = previewDesiredDialectName
-    val targetLanguage = desiredName?.let {
+    val resolvedLanguage = desiredName?.let {
         cn.song.mybatisplus.visualizer.execute.ExecDialectRouting.resolvePluginDialectLanguage(proj, it)
     }
-    // 已明确生成非 MySQL 方言、但当前平台没有对应 Language 时不反向强写 MySQL。
+    // 已明确生成方言但平台无对应 parser 时用 GenericSQL，绝不反向冒充 MySQL。
+    val targetLanguage = if (desiredName != null && resolvedLanguage == null) {
+        cn.song.mybatisplus.visualizer.execute.DialectPreMapping.languageById(
+            proj, cn.song.mybatisplus.visualizer.execute.ExecDialectRouting.GENERIC_LANGUAGE_ID,
+        )
+    } else resolvedLanguage
     if (desiredName != null && targetLanguage == null) {
         com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
-            .warn("[O-145] preview dialect '$desiredName' has no platform SQL Language; keep existing mapping")
+            .warn("[O-145] preview dialect '$desiredName' and GenericSQL platform Language are unavailable; keep existing mapping")
         return
     }
     val targetId = (targetLanguage as? com.intellij.lang.Language)?.id

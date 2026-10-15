@@ -28,6 +28,7 @@ internal object ExecDialectRouting {
 
     /** 平台 MySQL SQL 方言 language id（[DialectPreMapping.findMySql] 同款判定口径）。 */
     internal const val MYSQL_LANGUAGE_ID = "MySQL"
+    internal const val GENERIC_LANGUAGE_ID = "GenericSQL"
 
     /**
      * 插件方言名（[cn.song.mybatisplus.visualizer.sql.DialectRegistry] 命名空间，键须与

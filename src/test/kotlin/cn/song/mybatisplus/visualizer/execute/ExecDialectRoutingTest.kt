@@ -265,6 +265,10 @@ class ExecDialectRoutingTest {
         assertTrue("预热映射不得继续无条件写死 MySQL，须解析插件实际生成方言",
             lifecycle.contains("resolvePluginDialectLanguage") &&
                 lifecycle.contains("previewDesiredDialectName"))
+        assertTrue("平台没有对应方言时必须降到 GenericSQL，不得把已确定的厂商方言冒充 MySQL",
+            lifecycle.contains("GENERIC_LANGUAGE_ID") &&
+                mainSource("cn/song/mybatisplus/visualizer/execute/ExecDialectRouting.kt")
+                    .contains("GENERIC_LANGUAGE_ID = \"GenericSQL\""))
         assertTrue("同目录幂等必须同时比较 language id，不能让先映射的 MySQL 阻断 Oracle/PG 重映射",
             panel.contains("previewDialectMappedLanguageId") &&
                 lifecycle.contains("previewDialectMappedLanguageId"))
