@@ -2,9 +2,12 @@
 
 - 日期：2026-10-15
 - 任务码：T-PrewarmWilDeadlock
-- 工作树：`F:/code/Java/Gitee/SongRenShuo/mybatis-plus-sql-visualizer-prewarm-wil`
-- 分支：`t-prewarm-wil-deadlock`（自 master@3588b04c）
-- 状态：实施中
+- 工作树：`F:/code/Java/Gitee/SongRenShuo/mybatis-plus-sql-visualizer-prewarm-wil`（已删除，实施完毕）
+- 分支：`t-prewarm-wil-deadlock`（自 master@3588b04c，已 ff 并入 master `eae26483`，分支已删）
+- 状态：已实施、已验证、已合 master（实施记录见文末）
+- 合并说明：本档吸收了同日另一会话的排查档 `20261015-1830-T-SqlPreviewPrepareFreeze`（原文件已删除）。
+  该档立项早于线程转储到位，其主嫌疑（schema 遍历长读挡写锁）后被证伪；其中仍有长期价值的
+  现象取证、日志画像、证伪裁定与候选优化收录为附录 A，原档不再单独存在。
 
 ## 1. 现象与证据
 
@@ -126,3 +129,49 @@ W1 摘环后本路径不可能再自锁，但「同步 refresh/readAction/EDT �
 - 待真机复验（用户侧，262）：冷启动 IDE 首开预览弹窗应正常出 SQL、不再 not responding；
   极端挂死场景 30s 后 WARN 放弃（日志关键字 `[M36] exec prewarm exceeded`）。
 - 未做（本计划 §7 非目标）：面板预热生产者预算、K2J 移植（下一轮 T-SyncK2JMaster 同步）。
+
+## 附录 A：排查过程与真机取证（自 T-SqlPreviewPrepareFreeze 排查档合并）
+
+### A.1 现象与用户环境（真机取证，非猜测）
+
+- 用户 IDE：IU 2026.2（262.10968.63），同实例开双项目（业务 cyzc-platform + 本插件仓）；
+- 实装插件为 **2026.10.13 发行版**（`%APPDATA%\JetBrains\IntelliJIdea2026.2\plugins\...`，2026-10-15
+  12:39 装机重启）——嫌疑代码集合以 2026.10.13 发布内容为界，dev 未合并内容（O-146/147/148/149）
+  不在其列；本根因（WIRA 包装）恰在该版本在役；
+- 冻结形态：参数面板已渲染、右侧恒停「正在准备预览…」、底部 not responding 横幅——占位未被装配
+  回调换掉，说明 EDT 已跑过 showResult 大部分、冻结发生在装配回调能执行之前。
+
+### A.2 当日日志画像（idea.log，2026-10-15）
+
+- 12:42~12:43 三次预览打开均正常完成（预热 106~215ms，`createEditor`/`prewarm done` 埋点齐全）——
+  与本死锁不矛盾：自锁需要「exec 预热缓存未命中走真实链」的窗口，三次成功说明当时代价小或走了缓存；
+- 12:40:16 freeze 检测目录存在但为空（IDE 重启后 52 秒、无预览参与）——**独立事件**（项目重开+索引
+  窗口），不计入本插件，也非本次冻结；
+- 12:38/12:45 两条平台日志 `checkCancelled is invoked while write-action is pending`——写动作排队旁证；
+- 历史冻结（10-13 两份、10-14 一份转储）均系第三方插件（CoolRequest / GitStashTracker），与本插件
+  无关，但说明该机第三方有让 EDT 长期阻塞的前科（环境画像，参与共谋评估时须对照）。
+
+### A.3 主嫌疑证伪裁定（防重启旧排查线）
+
+排查档的主嫌疑：`DatabaseSchemaResolver` 两处无指示器 `ReadAction.compute` 的 DasModel 全量遍历
+（多数据源 × 大 schema 冷缓存可达秒级）挡住 EDT 写动作——写锁饥饿链。
+
+**裁定：证伪**。threadDump-20261015-181620 显示 EDT 等的是写意向锁，挡住它的是 exec 预热线程
+（756）持 WIL 自锁，与 schema 遍历读无因果。排查档「EDT 在等写锁」半句方向正确（转储 EDT 栈顶正是
+`acquireWriteIntentPermit`），「谁占着写锁」答错。两条待证事实随档撤销：262 无指示器读的可取消边界、
+用户真实 schema 规模实测——除非重启 A.5 第 1 条候选优化，否则不再需要。
+
+### A.4 取证方法教训
+
+冻结横幅的「Dump threads Ctrl+D」可能只建目录不出转储（12:40:16 即此形态）；拿不到产物时改用任务
+管理器取 PID + `jstack <pid>`。排查档立项时因缺 EDT 栈只能推嫌疑链并自设「栈未取得不得定案」闸门，
+转储到位后当场定案——「先拿栈再定案」纪律再次生效。
+
+### A.5 候选优化留档（与本冻结无因果，未排期）
+
+1. `DatabaseSchemaResolver.tableMeta/tableMetas` 长读可让路化（`ReadAction.nonBlocking` 优先 / 分片
+   短读 + 仓内既有 `withScanBudget` 接线）；实施前需以 243/262 sources 复核「无指示器 ReadAction
+   不可被 pending write 取消」的准确边界，243 缺 API 时回退分片方案；
+2. `onNativeEditorReady` 控制台就绪补刷与首拍 schema 预热的重复全扫收敛（首轮 `resolved==0` 才补刷）；
+3. 观测埋点：EDT 装配回调拿写锁的等待耗时、每次全量遍历的耗时/数据源数/元素数、控制台准备链各步耗时
+   （用户下次报障可直接凭 idea.log 定案）。
