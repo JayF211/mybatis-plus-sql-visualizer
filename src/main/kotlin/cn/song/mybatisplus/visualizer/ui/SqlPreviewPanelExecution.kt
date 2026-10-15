@@ -198,18 +198,35 @@ internal fun SqlPreviewPanel.showRollbackSql() {
         }
     }
 
-    /**
-     * R37：当前 SQL 组装为脱敏 AI 上下文块并复制到剪贴板。
-     *
-     * [AiContextExport.build] 敏感字面量参数化（`?` + 参数表恒 `***`，原值不出方法）；
-     * 方言取当前预览模型（XML/Wrapper/模型三源都带 dialect；缺失省略方言行）。
-     */
+    /** R91: only reads current editor/model and previously acquired history; never acquires a plan/schema. */
     internal fun SqlPreviewPanel.copyAsAiContext() {
         val sql = currentEditorSql() ?: return
-        val dialect = current?.effectiveDialect?.name
-        val result = cn.song.mybatisplus.visualizer.util.AiContextExport.build(sql, dialect)
+        val preview = current
+        val dialect = preview?.effectiveDialect
+        val target = aiContextTarget?.takeIf {
+            it.preview === preview && runCatching(it.stillCurrent).getOrDefault(false)
+        }
+        val wrapped = dialect?.let { ExplainGate.planExplainSubmit(it, sql) as? ExplainGate.SubmitPlan.Submit }
+        val format = dialect?.let { cn.song.mybatisplus.visualizer.sql.ExplainSupport.formatFor(it.name) }
+        val key = if (target != null && dialect != null && wrapped != null && format != null) {
+            cn.song.mybatisplus.visualizer.history.ExplainPlanKey.create(
+                cn.song.mybatisplus.visualizer.history.ExplainPlanKey.projectIdentity(project?.basePath),
+                target.key.dataSourceUuid, dialect.name, format, wrapped.statement,
+            ).takeIf { it == target.key }
+        } else null
+        val plans = key?.let {
+            val history = cn.song.mybatisplus.visualizer.history.SqlHistoryManager.getInstance()
+            history.matchingExplainPlans(it) + listOfNotNull(aiContextPlan?.takeIf { acquired ->
+                acquired.first == history.explainPlanGeneration() && acquired.second.key() == it
+            }?.second)
+        }.orEmpty()
+        // A manually edited SQL cannot borrow schema facts from the previous preview.
+        val schema = preview?.takeIf { sql == it.sql || sql == lastRenderedSql }?.let {
+            it.tableName?.let { table -> cn.song.mybatisplus.visualizer.util.AiContextExport.StaticSchema(table, it.columns) }
+        }
+        val result = cn.song.mybatisplus.visualizer.util.AiContextExport.buildV2(sql, dialect?.name, key, plans, schema)
         cn.song.mybatisplus.visualizer.util.UiTextClipboard.copy(result.block)
-        showDiffToast(MpSqlVisualizerBundle.message("panel.aiContext.copied", result.maskedCount))
+        showDiffToast(MpSqlVisualizerBundle.message("ai.context.v2.copied", result.maskedCount))
     }
 
 internal fun SqlPreviewPanel.exportPortableSql() {
@@ -934,9 +951,22 @@ internal fun SqlPreviewPanel.captureExplainPlanHistory(
     history: cn.song.mybatisplus.visualizer.history.SqlHistoryManager,
     planKey: cn.song.mybatisplus.visualizer.history.ExplainPlanKey,
     target: Any,
+): cn.song.mybatisplus.visualizer.history.ExplainPlanHistorySession.Request = captureExplainPlanHistory(history, planKey, target) {
+    // Pure bound-object lookup, not roster/last-used lookup and not a connection operation.
+    val bound = cn.song.mybatisplus.visualizer.execute.DataSourceSelector.boundConsoleDataSource()
+    bound === target && cn.song.mybatisplus.visualizer.execute.DataSourceSettings.getUniqueId(bound)
+        ?.equals(planKey.dataSourceUuid, ignoreCase = true) == true
+}
+
+internal fun SqlPreviewPanel.captureExplainPlanHistory(
+    history: cn.song.mybatisplus.visualizer.history.SqlHistoryManager,
+    planKey: cn.song.mybatisplus.visualizer.history.ExplainPlanKey,
+    target: Any,
+    targetStillCurrent: () -> Boolean,
 ): cn.song.mybatisplus.visualizer.history.ExplainPlanHistorySession.Request {
     val originalPreview = current
     val retentionEnabled = PluginSettings.getInstance().state.explainPlanRetentionEnabled
+    aiContextTarget = SqlPreviewPanel.AiContextTarget(originalPreview, planKey, targetStillCurrent)
     // XML/日志纯文本预览没有经过 recordHistory；首次 EXPLAIN 复用同一历史域建条目。
     // 已有 ID 即使被用户删除也绝不补建，防删除后在途结果复活。
     if (retentionEnabled && originalPreview != null && originalPreview.historyEntryId.isEmpty() && planKey.persistable) {
@@ -958,6 +988,16 @@ internal fun SqlPreviewPanel.completeExplainPlanHistory(
     raw: cn.song.mybatisplus.visualizer.mcp.McpExplainFormatter.RawResult,
 ): cn.song.mybatisplus.visualizer.history.ExplainPlanHistorySession.Completion =
     explainPlanHistorySession.complete(history, request, raw, PluginSettings.getInstance().state.explainPlanRetentionEnabled)
+
+/** R91: retain an already obtained value snapshot in memory, never write history from the copy action. */
+internal fun SqlPreviewPanel.captureAiContextPlan(
+    history: cn.song.mybatisplus.visualizer.history.SqlHistoryManager,
+    key: cn.song.mybatisplus.visualizer.history.ExplainPlanKey,
+    raw: cn.song.mybatisplus.visualizer.mcp.McpExplainFormatter.RawResult,
+) {
+    aiContextPlan = history.explainPlanGeneration() to
+        cn.song.mybatisplus.visualizer.history.ExplainPlanSnapshot.create(key, raw)
+}
 
 internal fun SqlPreviewPanel.submitExplainOrStructured(
     proj: Project,
@@ -1032,6 +1072,9 @@ internal fun SqlPreviewPanel.submitExplainOrStructured(
                         )
                     }.getOrDefault(emptyList())
                     val historyCompletion = completeExplainPlanHistory(history, historyRequest, outcome.raw)
+                    if (historyCompletion.saved != cn.song.mybatisplus.visualizer.history.ExplainPlanSaveResult.CLEARED_OR_REMOVED) {
+                        captureAiContextPlan(history, historyRequest.key, outcome.raw)
+                    }
                     val planDiff = historyCompletion.baselines.firstOrNull()?.let {
                         ExplainPlanDiff.diff(it.raw, outcome.raw, outFormat)
                     }

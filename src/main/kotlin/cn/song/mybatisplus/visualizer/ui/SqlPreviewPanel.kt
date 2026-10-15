@@ -399,6 +399,15 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
     internal var lastStructuredExplain: Pair<String, McpExplainFormatter.RawResult>? = null
     /** R90：同目标会话基线与持久化历史协调；未知 UUID 仅按目标对象身份比较。 */
     internal val explainPlanHistorySession = cn.song.mybatisplus.visualizer.history.ExplainPlanHistorySession()
+    /** R91: confirmed EXPLAIN target for this preview only; never infer from last-used project source. */
+    internal var aiContextTarget: AiContextTarget? = null
+    /** R91: only the last acquired plan in this panel, invalidated by history clear/load generation. */
+    internal var aiContextPlan: Pair<Long, cn.song.mybatisplus.visualizer.history.ExplainPlanSnapshot>? = null
+    internal data class AiContextTarget(
+        val preview: PreviewResult?,
+        val key: cn.song.mybatisplus.visualizer.history.ExplainPlanKey,
+        val stillCurrent: () -> Boolean,
+    )
     /**
      * R51（O-105 余半）测试缝：recall 回落源——ParamHistoryCache 未命中时按缓存键取历史
      * 参数快照（null = 单测态默认禁用真服务；生产走 [SqlHistoryManager.newestParamSnapshot]，

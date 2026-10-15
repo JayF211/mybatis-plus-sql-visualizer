@@ -25,6 +25,54 @@ object AiContextExport {
     /** 组装产物：[block] 完整文本块（可直接进剪贴板）；[maskedCount] 敏感字面量计数。 */
     data class Result(val block: String, val maskedCount: Int)
 
+    /** R91: static preview metadata only, not a database schema probe. Names never leave v2. */
+    data class StaticSchema(val table: String, val columns: List<String>)
+
+    /**
+     * Versioned, bounded local projection. v1 [build] intentionally remains byte-compatible.
+     * The caller supplies an exact key for the current editor SQL and its confirmed target.
+     * Missing context never borrows a different plan or causes acquisition.
+     */
+    fun buildV2(
+        sql: String,
+        dialect: String?,
+        currentKey: cn.song.mybatisplus.visualizer.history.ExplainPlanKey? = null,
+        plans: List<cn.song.mybatisplus.visualizer.history.ExplainPlanSnapshot> = emptyList(),
+        schema: StaticSchema? = null,
+    ): Result {
+        val projection = cn.song.mybatisplus.visualizer.share.ShareContentProjection.sql(sql)
+        val safeDialect = cn.song.mybatisplus.visualizer.sql.DialectRegistry.dialects
+            .firstOrNull { it.name == dialect }?.name ?: "not obtained"
+        val matching = currentKey?.takeIf { it.persistable }?.let { key ->
+            plans.filter { it.key() == key }.maxByOrNull { it.capturedAt }
+        }
+        val plan = matching?.let { snapshot ->
+            snapshot.raw()?.let { raw ->
+                runCatching { cn.song.mybatisplus.visualizer.sql.ExplainOutputFormat.valueOf(snapshot.format) }
+                    .getOrNull()?.let { AiContextPlanSummary.summarize(raw, it) }
+            }
+        }
+        val sections = linkedMapOf(
+            "SQL" to (projection.sql?.let { "-- SQL (strict projection)\n$it" }
+                ?: "-- SQL: omitted (unsupported syntax or budget)"),
+            "EXPLAIN" to (plan?.let { "-- EXPLAIN (already acquired; exact match)\n$it" }
+                ?: "-- EXPLAIN: not obtained (no matching structured summary)"),
+            "Static schema" to (schema?.takeIf { it.table.isNotBlank() && it.columns.isNotEmpty() }?.let {
+                "-- Static schema: tables=1; columns=${it.columns.distinct().size}; identifiers hidden; static preview metadata only"
+            } ?: "-- Static schema: not obtained"),
+        )
+        val header = "-- SQL Visualizer AI context v2\n-- dialect: $safeDialect\n" +
+            "-- identifiers hidden; values masked=${projection.maskedValues}; local-only; no acquisition\n"
+        fun block() = header + sections.values.joinToString("\n")
+        // Drop whole sections, never truncate into a raw fragment or restore the original SQL.
+        for (section in listOf("EXPLAIN", "Static schema", "SQL")) {
+            if (block().toByteArray(Charsets.UTF_8).size <=
+                cn.song.mybatisplus.visualizer.share.ShareContentProjection.MAX_OUTPUT_BYTES) break
+            sections[section] = "-- $section: omitted (16 KiB budget)"
+        }
+        return Result(block(), projection.maskedValues)
+    }
+
     /** 头部来源声明（固定，AI 可溯源到插件）。 */
     private const val HEADER = "-- SQL Visualizer AI context (sensitive literals masked)"
 
