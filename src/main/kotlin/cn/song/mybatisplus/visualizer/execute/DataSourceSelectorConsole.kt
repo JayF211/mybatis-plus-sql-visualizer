@@ -29,6 +29,8 @@ internal fun DataSourceSelector.prepareAfterEditorResolved(
     onErrorRich: ((ExecutionErrorInfo) -> Unit)? = null,
     wholeScriptExec: Boolean = false,
     ownsPrepareGate: Boolean = false,
+    dialectGateRequest: ExecutionDialectGate.Request? = null,
+    onDialectGate: ((ExecutionDialectGate.Verdict) -> Unit)? = null,
 ) {
     val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
     // T-FirstExecResultInvisible F1：排队执行意图在本链完成准备时消费（下方缓存落地后）。
@@ -146,6 +148,8 @@ internal fun DataSourceSelector.prepareAfterEditorResolved(
         preparedEditor = editor
         preparedScriptModel = effectiveScriptModel
         preparedExecOption = execOption
+        preparedDialectGateRequest = dialectGateRequest
+        preparedDialectGateCallback = onDialectGate
 
         // T-FirstExecResultInvisible F1：排队执行意图消费点——准备完成即取走（一次性）。
         // executeNow = 本链显式执行（selectAndExecute 全链）或排队意图就位；后者按
@@ -410,6 +414,8 @@ internal fun DataSourceSelector.prepareAfterEditorResolved(
         // 语义不变（见 shouldComposeEmbedSplitPane）。
         sharedFullComponent = fullComponent
         sharedDataSourceName = dataSourceName
+        sharedDialectGateRequest = dialectGateRequest
+        sharedDialectGateCallback = onDialectGate
         // T-SI-02：控制台已建，数据源 UUID 从此可取（LocalDataSource.getUniqueId）——
         // 记忆升级为「UUID + 显示名」双字段，下次预览按身份命中而非猜名字
         if (dataSourceName != null) rememberRunner(project, dataSourceName, consoleDataSourceId(console))
@@ -451,6 +457,8 @@ internal fun DataSourceSelector.prepareAfterEditorResolved(
                 onResultsReady = queuedIntent?.onConsole,
                 onError = queuedIntent?.onError ?: onError, onErrorRich = queuedIntent?.onErrorRich ?: onErrorRich,
                 wholeScriptExec = queuedIntent?.wholeScriptExec ?: wholeScriptExec,
+                dialectGateRequest = queuedIntent?.dialectGateRequest ?: dialectGateRequest,
+                onDialectGate = queuedIntent?.onDialectGate ?: onDialectGate,
             )
             if (queuedIntent != null) queuedExecuted = true
         }
@@ -504,8 +512,21 @@ internal fun DataSourceSelector.executeOnConsole(
     onErrorRich: ((ExecutionErrorInfo) -> Unit)? = null,
     dsName: String? = sharedDataSourceName,
     wholeScriptExec: Boolean = false,
+    dialectGateRequest: ExecutionDialectGate.Request? = null,
+    onDialectGate: ((ExecutionDialectGate.Verdict) -> Unit)? = null,
 ) {
     val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
+    // O-145 W7：真实提交总口再次从 JdbcConsole 取实际数据源；必须早于任何文档改写、失效、
+    // submitTransactionLater/executeQueries。准备后用户切换原生控制台数据源时，session 时判定已过期，
+    // 本闸负责第二次阻断，绝不按 runner 显示名或缓存名猜目标。
+    val actualTarget = ExecutionDialectGate.fromConsole(console)
+    if (!allowDialectGate(project, dialectGateRequest, actualTarget, onDialectGate, onError)) {
+        LOG.warn(
+            "[M36][O-145] submit blocked before console mutation: " +
+                "target=${actualTarget?.stableId}/${actualTarget?.dialectName}",
+        )
+        return
+    }
     // O-64/T-RollbackIdentityParse：identity 包装产物整批直跑——覆写本次执行的 ExecOption
     // （只造**副本**传下去，prepared/shared 缓存与用户全局设置一概不动），弹层不再出现、
     // 整批（SET…ON + INSERT + SET…OFF）全部执行，即「Statements 默认全选」的平台实现杠杆。
@@ -1065,6 +1086,8 @@ internal fun DataSourceSelector.prepareInConsole(
     onErrorRich: ((ExecutionErrorInfo) -> Unit)? = null,
     wholeScriptExec: Boolean = false,
     ownsPrepareGate: Boolean = false,
+    dialectGateRequest: ExecutionDialectGate.Request? = null,
+    onDialectGate: ((ExecutionDialectGate.Verdict) -> Unit)? = null,
 ) {
     val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
     runCatching {
@@ -1146,7 +1169,10 @@ internal fun DataSourceSelector.prepareInConsole(
             val ed = editor
             // M36.2：编辑器就绪回调（调用方注入插件补全上下文，与原生补全叠加）
             onEditor?.invoke(ed)
-            prepareAfterEditorResolved(project, vf, executeAfterPrepare, dataSourceName, onConsole, onError, console, document, ed, onErrorRich, wholeScriptExec, ownsPrepareGate)
+            prepareAfterEditorResolved(
+                project, vf, executeAfterPrepare, dataSourceName, onConsole, onError, console, document, ed,
+                onErrorRich, wholeScriptExec, ownsPrepareGate, dialectGateRequest, onDialectGate,
+            )
         } else {
             ApplicationManager.getApplication().executeOnPooledThread {
                 var editor: com.intellij.openapi.editor.Editor? = null
@@ -1165,7 +1191,11 @@ internal fun DataSourceSelector.prepareInConsole(
                     if (resolved != null) {
                         onEditor?.invoke(resolved)
                         runCatching {
-                            prepareAfterEditorResolved(project, vf, executeAfterPrepare, dataSourceName, onConsole, onError, console, document, resolved, onErrorRich, wholeScriptExec, ownsPrepareGate)
+                            prepareAfterEditorResolved(
+                                project, vf, executeAfterPrepare, dataSourceName, onConsole, onError, console,
+                                document, resolved, onErrorRich, wholeScriptExec, ownsPrepareGate,
+                                dialectGateRequest, onDialectGate,
+                            )
                         }.onFailure { e ->
                             LOG.warn("[M36] prepareInConsole(editor async wait) FAILED: ${e.javaClass.simpleName}: ${e.message}", e)
                             val cause = (e as? java.lang.reflect.InvocationTargetException)?.targetException ?: e

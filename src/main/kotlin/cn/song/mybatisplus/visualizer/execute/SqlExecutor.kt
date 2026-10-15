@@ -39,6 +39,8 @@ object SqlExecutor {
         onError: ((String) -> Unit)? = null,
         onErrorRich: ((ExecutionErrorInfo) -> Unit)? = null,
         wholeScriptExec: Boolean = false,
+        dialectGateRequest: ExecutionDialectGate.Request? = null,
+        onDialectGate: ((ExecutionDialectGate.Verdict) -> Unit)? = null,
     ) {
         DataSourceSelector.selectAndExecute(
             project, sql,
@@ -55,6 +57,8 @@ object SqlExecutor {
                 }
             },
             wholeScriptExec = wholeScriptExec,
+            dialectGateRequest = dialectGateRequest,
+            onDialectGate = onDialectGate,
         )
     }
 
@@ -69,6 +73,8 @@ object SqlExecutor {
         onEditor: ((com.intellij.openapi.editor.Editor) -> Unit)? = null,
         onError: ((String) -> Unit)? = null,
         callback: ((Boolean) -> Unit)? = null,
+        dialectGateRequest: ExecutionDialectGate.Request? = null,
+        onDialectGate: ((ExecutionDialectGate.Verdict) -> Unit)? = null,
     ) {
         if (!ExecuteSqlSupport.isAvailable()) {
             // 社区版：静默回退（不弹提示——自研编辑器已是回退态）
@@ -81,6 +87,8 @@ object SqlExecutor {
             onEditor = onEditor,
             onError = onError,
             callback = callback,
+            dialectGateRequest = dialectGateRequest,
+            onDialectGate = onDialectGate,
         )
     }
 
@@ -99,9 +107,14 @@ object SqlExecutor {
         onError: ((String) -> Unit)? = null,
         onErrorRich: ((ExecutionErrorInfo) -> Unit)? = null,
         wholeScriptExec: Boolean = false,
+        dialectGateRequest: ExecutionDialectGate.Request? = null,
+        onDialectGate: ((ExecutionDialectGate.Verdict) -> Unit)? = null,
     ): Boolean {
         if (!ExecuteSqlSupport.isAvailable()) return false
-        return DataSourceSelector.executePrepared(project, onResultsReady, onError, onErrorRich, wholeScriptExec)
+        return DataSourceSelector.executePrepared(
+            project, onResultsReady, onError, onErrorRich, wholeScriptExec,
+            dialectGateRequest, onDialectGate,
+        )
     }
 
     /** 控制台是否已就绪（[prepareConsole] 成功后 true）。 */

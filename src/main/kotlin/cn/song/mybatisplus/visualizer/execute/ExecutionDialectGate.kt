@@ -5,7 +5,7 @@ import cn.song.mybatisplus.visualizer.sql.IdeaSqlContextBridge
 import cn.song.mybatisplus.visualizer.sql.UrlSubprotocolDialects
 
 /** 最终执行目标方言安全闸的纯决策与反射隔离目标解析。 */
-internal object ExecutionDialectGate {
+object ExecutionDialectGate {
     enum class RenderMode { AUTO, MANUAL, UNKNOWN }
     enum class Intent { QUERY, DML, EXPLAIN, TEMPLATE }
     enum class Status {
@@ -37,6 +37,17 @@ internal object ExecutionDialectGate {
         val displayName: String?,
         val dialectName: String?,
         val platformLanguageId: String?,
+    )
+
+    /**
+     * O-145 W7 最小生产闭环之外仍未携带 Request 的入口。列表是诚实边界，不是完成声明；
+     * [ExecutionDialectGateTest] 的源码接线守卫钉住它，后续覆盖一条必须同步删一条。
+     */
+    internal val uncoveredEntryPoints: Set<String> = linkedSetOf(
+        "actions.SelectedTableSqlTemplateAction.executeTemplate",
+        "log.LogToSqlPanel.executeSql",
+        "ui.SqlPreviewPanel.estimateDmlImpact",
+        "ui.SqlPreviewPanel.executeAdhocSql",
     )
 
     fun evaluate(request: Request, targetDialectName: String?): Verdict {
@@ -89,8 +100,8 @@ internal object ExecutionDialectGate {
     fun fromDataSource(dataSource: Any): Target {
         val url = ExecDialectRouting.dataSourceUrl(dataSource)
         val platformId = ExecDialectRouting.platformDialectId(dataSource)
-        val dialectName = UrlSubprotocolDialects.dialectName(url)
-            ?: IdeaSqlContextBridge.pluginDialectName(platformId)
+        val dialectName = IdeaSqlContextBridge.pluginDialectName(platformId)
+            ?: UrlSubprotocolDialects.dialectName(url)
         return Target(
             dataSource = dataSource,
             stableId = DataSourceSettings.getUniqueId(dataSource),

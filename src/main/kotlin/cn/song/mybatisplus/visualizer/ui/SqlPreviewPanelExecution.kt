@@ -514,6 +514,79 @@ internal fun SqlPreviewPanel.warnOnPlaceholderMismatch() {
  * M36.5.4：入口/中止日志——沙盒排查执行问题时此前无任何面板侧日志（静默 return 难定位）。
  */
 
+internal fun SqlPreviewPanel.executionDialectGateRequest(
+    intent: cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Intent,
+): cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Request {
+    val result = current
+    val currentText = currentEditorSql()
+    val untouched = currentText != null && currentText == lastRenderedSql
+    // 只有模型/批量（CRUD）载体能按新方言从结构重新生成；XML/纯文本与分页后处理缺重建载体，
+    // 宁可报 RERENDER_UNAVAILABLE，也不做字符串替换冒充无损。
+    val canRerender = result != null && result.xmlModel == null && result.paginationLimitLine == null &&
+        (result.previewModel != null || result.batchModel != null)
+    return cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Request(
+        renderMode = executionDialectRenderMode,
+        renderedDialectName = result?.effectiveDialect?.name,
+        intent = intent,
+        canLosslesslyRerender = canRerender,
+        userTextUntouched = untouched,
+    )
+}
+
+internal fun SqlPreviewPanel.onExecutionDialectGate(
+    verdict: cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Verdict,
+) {
+    when (verdict.status) {
+        cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Status.MATCH,
+        cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Status.TARGET_UNKNOWN_QUERY_CONFIRM -> Unit
+        cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Status.AUTO_RERENDER_REQUIRED -> {
+            val target = verdict.targetDialectName
+            if (target != null && rerenderForExecutionTarget(target)) {
+                resultPanel.showStatus(cn.song.mybatisplus.visualizer.execute.DataSourceSelector.dialectGateMessage(verdict))
+            } else {
+                resultPanel.showError(cn.song.mybatisplus.visualizer.execute.DataSourceSelector.dialectGateMessage(
+                    verdict.copy(status = cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Status.RERENDER_UNAVAILABLE),
+                ))
+            }
+        }
+        else -> resultPanel.showError(
+            cn.song.mybatisplus.visualizer.execute.DataSourceSelector.dialectGateMessage(verdict),
+        )
+    }
+}
+
+/** 模型/批量 CRUD 载体的无损目标方言重渲染；成功只改预览，不提交当前点击。 */
+internal fun SqlPreviewPanel.rerenderForExecutionTarget(targetDialectName: String): Boolean {
+    val old = current ?: return false
+    val target = cn.song.mybatisplus.visualizer.sql.DialectRegistry.dialects
+        .firstOrNull { it.name.equals(targetDialectName, ignoreCase = true) } ?: return false
+    val updated = when {
+        old.xmlModel != null || old.paginationLimitLine != null -> return false
+        old.previewModel != null -> old.copy(
+            previewModel = old.previewModel.copy(dialect = target),
+            renderedDialect = target,
+        )
+        old.batchModel != null -> old.copy(
+            batchModel = old.batchModel.copy(dialect = target),
+            renderedDialect = target,
+        )
+        else -> return false
+    }
+    current = updated
+    syncPreviewDialectMapping(updated)
+    renderSql()
+    val proj = project
+    val sql = lastRenderedSql
+    if (proj != null && !sql.isNullOrBlank()) {
+        ApplicationManager.getApplication().executeOnPooledThread {
+            cn.song.mybatisplus.visualizer.execute.DataSourceSelector.prewarmExecTempFile(
+                proj, sql, target.name,
+            )
+        }
+    }
+    return true
+}
+
 internal fun SqlPreviewPanel.executeSql() {
     val proj = project ?: return
     // M36.4：优先取原生编辑器文档，兜底自研编辑器
@@ -550,6 +623,10 @@ internal fun SqlPreviewPanel.executeSql() {
     warnOnPlaceholderMismatch()
     // T-RollbackSql P2-F5/F6：UPDATE/DELETE 执行前登记快照条目（回滚弹窗据此提供粘贴回填工作流）
     registerRollbackSnapshotIfNeeded(sql, null)
+    val dialectGateRequest = executionDialectGateRequest(
+        if (isQuery) cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Intent.QUERY
+        else cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Intent.DML,
+    )
 
     // 2. 控制台已就绪（M36.5 默认展示）→ 同步 SQL 到控制台文档后直接执行；
     //    未就绪 → 走准备+执行合一全链（准备完成后控制台内嵌右侧）
@@ -575,6 +652,8 @@ internal fun SqlPreviewPanel.executeSql() {
                         resultPanel.showError(errorMsg)
                     },
                     onErrorRich = { info -> showErrorRichWithLocate(info) },
+                    dialectGateRequest = dialectGateRequest,
+                    onDialectGate = { verdict -> onExecutionDialectGate(verdict) },
                 )
                 return
             }
@@ -593,6 +672,8 @@ internal fun SqlPreviewPanel.executeSql() {
                 resultPanel.showError(errorMsg)
             },
             onErrorRich = { info -> showErrorRichWithLocate(info) },
+            dialectGateRequest = dialectGateRequest,
+            onDialectGate = { verdict -> onExecutionDialectGate(verdict) },
         )
         if (executed) return
     }
@@ -605,6 +686,8 @@ internal fun SqlPreviewPanel.executeSql() {
             resultPanel.showError(errorMsg)
         },
         onErrorRich = { info -> showErrorRichWithLocate(info) },
+        dialectGateRequest = dialectGateRequest,
+        onDialectGate = { verdict -> onExecutionDialectGate(verdict) },
     )
 }
 
@@ -756,7 +839,10 @@ internal fun SqlPreviewPanel.explainSql() {
     // fail-closed 回退直送通道，双通道并存不替换既有行为，见 submitExplainOrStructured）
     // 代际先递增（所有路径）——作废前一次提交的在途结构化回调
     explainStructuredGeneration++
-    submitExplainOrStructured(proj, dialect, explainSql)
+    submitExplainOrStructured(
+        proj, dialect, explainSql,
+        executionDialectGateRequest(cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Intent.EXPLAIN),
+    )
 }
 
 /**
@@ -785,7 +871,11 @@ internal fun SqlPreviewPanel.explainSql() {
         }
     }
 
-internal fun SqlPreviewPanel.submitExplainDirect(proj: Project, explainSql: String) {
+internal fun SqlPreviewPanel.submitExplainDirect(
+    proj: Project,
+    explainSql: String,
+    dialectGateRequest: cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Request,
+) {
         // R46：EXPLAIN 是执行旁路，同样过 Schema 校验（未识别对象走轻通知，不阻断）
         when (val outcome = cn.song.mybatisplus.visualizer.execute.SchemaValidationGate.check(proj, explainSql)) {
             is cn.song.mybatisplus.visualizer.execute.SchemaValidationGate.Outcome.Checked ->
@@ -802,6 +892,8 @@ internal fun SqlPreviewPanel.submitExplainDirect(proj: Project, explainSql: Stri
             resultPanel.showError(errorMsg)
         },
         onErrorRich = { info -> showErrorRichWithLocate(info) },
+        dialectGateRequest = dialectGateRequest,
+        onDialectGate = { verdict -> onExecutionDialectGate(verdict) },
     )
 }
 
@@ -819,11 +911,24 @@ internal fun SqlPreviewPanel.submitExplainDirect(proj: Project, explainSql: Stri
  * 换入结构化视图，代际计数防过期回调覆盖新预览。
  */
 
-internal fun SqlPreviewPanel.submitExplainOrStructured(proj: Project, dialect: cn.song.mybatisplus.visualizer.sql.Dialect, explainSql: String) {
+internal fun SqlPreviewPanel.submitExplainOrStructured(
+    proj: Project,
+    dialect: cn.song.mybatisplus.visualizer.sql.Dialect,
+    explainSql: String,
+    dialectGateRequest: cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Request,
+) {
     val settings = PluginSettings.getInstance().state
     val boundDs = runCatching {
         cn.song.mybatisplus.visualizer.execute.DataSourceSelector.boundConsoleDataSource()
     }.getOrNull()
+    // O-145 W7：结构化 EXPLAIN 不经过 SqlExecutor，必须在 JDBC 直连前用同一实际数据源闸门。
+    if (boundDs != null && !cn.song.mybatisplus.visualizer.execute.DataSourceSelector.allowDialectGate(
+            proj,
+            dialectGateRequest,
+            cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.fromDataSource(boundDs),
+            { verdict -> onExecutionDialectGate(verdict) },
+            { message -> resultPanel.showError(message) },
+        )) return
     val format = cn.song.mybatisplus.visualizer.sql.ExplainSupport.formatFor(dialect.name)
     // R33 真机走查修复：编辑器文本就是回填链的终点产物（参数击键防抖重渲染），此处残留
     // `?`（串感知位点，字符串/注释里的 `?` 不计）即真未填——不下发结构化探测（字面 `?`
@@ -839,11 +944,11 @@ internal fun SqlPreviewPanel.submitExplainOrStructured(proj: Project, dialect: c
         )
     ) {
         cn.song.mybatisplus.visualizer.execute.ExplainPanelChannel.Decision.DirectSilent ->
-            submitExplainDirect(proj, explainSql)
+            submitExplainDirect(proj, explainSql, dialectGateRequest)
 
         is cn.song.mybatisplus.visualizer.execute.ExplainPanelChannel.Decision.DirectFallback -> {
             notifyExplainStructuredFallback(proj, verdict.reason, detail = null)
-            submitExplainDirect(proj, explainSql)
+            submitExplainDirect(proj, explainSql, dialectGateRequest)
         }
 
         cn.song.mybatisplus.visualizer.execute.ExplainPanelChannel.Decision.Structured -> {
@@ -851,7 +956,7 @@ internal fun SqlPreviewPanel.submitExplainOrStructured(proj: Project, dialect: c
             val outFormat = format
             // 防御：判定与取值之间环境可能变化（数据源失效等）——缺一即回退，不硬解包
             if (ds == null || outFormat == null) {
-                submitExplainDirect(proj, explainSql)
+                submitExplainDirect(proj, explainSql, dialectGateRequest)
                 return
             }
             resultPanel.showLoading()
@@ -884,7 +989,7 @@ internal fun SqlPreviewPanel.submitExplainOrStructured(proj: Project, dialect: c
                             raw = outcome.raw,
                             format = outFormat,
                             hints = hints,
-                            onBackToConsole = { submitExplainDirect(proj, explainSql) },
+                            onBackToConsole = { submitExplainDirect(proj, explainSql, dialectGateRequest) },
                                 diff = planDiff,
                         ),
                     )
@@ -895,7 +1000,7 @@ internal fun SqlPreviewPanel.submitExplainOrStructured(proj: Project, dialect: c
                         return@executeStructured
                     }
                     notifyExplainStructuredFallback(proj, null, detail = errorText)
-                    submitExplainDirect(proj, explainSql)
+                    submitExplainDirect(proj, explainSql, dialectGateRequest)
                 },
             )
         }
@@ -1032,6 +1137,10 @@ internal fun SqlPreviewPanel.onNativeEditorReady(consoleEditor: com.intellij.ope
 internal fun SqlPreviewPanel.prepareDefaultConsole() {
     val proj = project ?: return
     val sql = editor?.document?.text?.takeIf { it.isNotBlank() } ?: return
+    val gateRequest = executionDialectGateRequest(
+        if (SqlTypeClassifier.isQuery(sql)) cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Intent.QUERY
+        else cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Intent.DML,
+    )
     SqlExecutor.prepareConsole(
         proj, sql,
         // M36.5.58：预览换入控制台组件后**清空状态栏**——预览是干净上下文，不应残留上次
@@ -1070,8 +1179,10 @@ internal fun SqlPreviewPanel.prepareDefaultConsole() {
             }, com.intellij.openapi.application.ModalityState.nonModal())
         },
         onEditor = { consoleEditor -> onNativeEditorReady(consoleEditor) },
-        // 默认准备失败（无数据源等）静默——不打扰预览；执行时再走全链提示
+        // 默认准备失败（无数据源等）静默——不打扰预览；方言冲突由专用回调诚实显示
         onError = null,
+        dialectGateRequest = gateRequest,
+        onDialectGate = { verdict -> onExecutionDialectGate(verdict) },
     )
 }
 

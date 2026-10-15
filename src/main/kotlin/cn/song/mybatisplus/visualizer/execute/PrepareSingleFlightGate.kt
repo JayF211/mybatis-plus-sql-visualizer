@@ -115,6 +115,8 @@ internal class QueuedExecuteIntent(
     val onError: ((String) -> Unit)?,
     val onErrorRich: ((ExecutionErrorInfo) -> Unit)?,
     val wholeScriptExec: Boolean,
+    val dialectGateRequest: ExecutionDialectGate.Request? = null,
+    val onDialectGate: ((ExecutionDialectGate.Verdict) -> Unit)? = null,
 )
 
 /**

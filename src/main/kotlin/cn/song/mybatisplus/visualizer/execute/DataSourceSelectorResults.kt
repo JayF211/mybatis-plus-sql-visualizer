@@ -177,6 +177,8 @@ internal fun DataSourceSelector.chooseAndPrepare(
     callback: ((Boolean) -> Unit)?,
     onErrorRich: ((ExecutionErrorInfo) -> Unit)? = null,
     wholeScriptExec: Boolean = false,
+    dialectGateRequest: ExecutionDialectGate.Request? = null,
+    onDialectGate: ((ExecutionDialectGate.Verdict) -> Unit)? = null,
 ) {
     val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
     if (!ExecuteSqlSupport.isAvailable()) {
@@ -192,7 +194,10 @@ internal fun DataSourceSelector.chooseAndPrepare(
     //（结果区空白、二击正常的 H1 根因）。单飞判定先于共享复用：冷启时 sharedConsole 尚未
     // 落地，复用必不命中，单飞是唯一闸门。
     val queuedIntent = if (executeAfterPrepare) {
-        QueuedExecuteIntent(onConsole, onEditor, onError, onErrorRich, wholeScriptExec)
+        QueuedExecuteIntent(
+            onConsole, onEditor, onError, onErrorRich, wholeScriptExec,
+            dialectGateRequest, onDialectGate,
+        )
     } else null
     var ownsGate = false
     when (prepareGate.tryEnter(executeAfterPrepare, queuedIntent)) {
@@ -215,7 +220,10 @@ internal fun DataSourceSelector.chooseAndPrepare(
     // M36.5.5：共享控制台命中（last-used 数据源一致且控制台仍有效）→ 直接复用——
     // 不同步 session/连接/临时文件/方言映射，规避"第二个会话连接永不发起"挂死（见字段注释）。
     // 显式执行路径同样复用（结果落在已嵌入面板）；用户切换数据源走弹窗 → 新建并替换共享缓存。
-    if (reuseSharedConsole(project, submitSql, executeAfterPrepare, onConsole, onEditor, onError, callback, onErrorRich, wholeScriptExec)) {
+    if (reuseSharedConsole(
+            project, submitSql, executeAfterPrepare, onConsole, onEditor, onError, callback, onErrorRich,
+            wholeScriptExec, dialectGateRequest, onDialectGate,
+        )) {
         // T-FirstExecResultInvisible F1：复用路径同步收敛（不建链、不经 prepareAfterEditorResolved）
         // ——门持有链就地终结复位；PASS_THROUGH 预览链不动门。
         if (ownsGate) prepareGate.finishPrepare()
@@ -223,7 +231,7 @@ internal fun DataSourceSelector.chooseAndPrepare(
     }
 
     // 临时文件 + VF + PsiFile：Runner 上下文 + 控制台挂载点（VF 须保持引用）
-    val temp = createTempPsiFile(project, submitSql)
+    val temp = createTempPsiFile(project, submitSql, dialectGateRequest?.renderedDialectName)
     if (temp == null) {
         // T-ExecCopyFix F2a：携带阶段原因（stage 标识/异常摘要），本地化文案——
         // 用户真机曾只见笼统英文 "Failed to create temporary SQL file"，无从归因
@@ -239,8 +247,23 @@ internal fun DataSourceSelector.chooseAndPrepare(
     // consumer：runner.run 建好 session 后回调 → 续接准备链（attachConsole → 拼合 → 可选执行）
     var chosenRunnerName: String? = null
     val sessionConsumer = com.intellij.util.Consumer<Any> { session ->
-        LOG.info("[M36] session created: ${session?.javaClass?.name}, attaching console (execute=$executeAfterPrepare, ds=$chosenRunnerName)")
-        prepareInConsole(project, session, vf, executeAfterPrepare, chosenRunnerName, onConsole, onEditor, onError, onErrorRich, wholeScriptExec, ownsPrepareGate = ownsGate)
+        val actualTarget = ExecutionDialectGate.fromSession(session)
+        LOG.info(
+            "[M36][O-145] session created: ${session?.javaClass?.name}, " +
+                "target=${actualTarget?.stableId}/${actualTarget?.dialectName}, execute=$executeAfterPrepare",
+        )
+        if (!allowDialectGate(project, dialectGateRequest, actualTarget, onDialectGate, onError)) {
+            abortPrepareGate(ownsGate, dialectGateRequest?.let {
+                dialectGateMessage(ExecutionDialectGate.evaluate(it, actualTarget?.dialectName))
+            }, LOG)
+            callback?.invoke(false)
+            return@Consumer
+        }
+        prepareInConsole(
+            project, session, vf, executeAfterPrepare, chosenRunnerName, onConsole, onEditor, onError,
+            onErrorRich, wholeScriptExec, ownsPrepareGate = ownsGate,
+            dialectGateRequest = dialectGateRequest, onDialectGate = onDialectGate,
+        )
     }
 
     val enumerated = getAttachDataSourceRunners(psiFile, submitSql, sessionConsumer)
@@ -347,6 +370,8 @@ internal fun DataSourceSelector.reuseSharedConsole(
     callback: ((Boolean) -> Unit)?,
     onErrorRich: ((ExecutionErrorInfo) -> Unit)? = null,
     wholeScriptExec: Boolean = false,
+    dialectGateRequest: ExecutionDialectGate.Request? = null,
+    onDialectGate: ((ExecutionDialectGate.Verdict) -> Unit)? = null,
 ): Boolean {
     val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
     val console = sharedConsole ?: return false
@@ -454,6 +479,10 @@ internal fun DataSourceSelector.reuseSharedConsole(
     preparedEditor = editor
     preparedScriptModel = refreshedModel ?: scriptModel
     preparedExecOption = execOption
+    preparedDialectGateRequest = dialectGateRequest ?: sharedDialectGateRequest
+    preparedDialectGateCallback = onDialectGate ?: sharedDialectGateCallback
+    sharedDialectGateRequest = dialectGateRequest ?: sharedDialectGateRequest
+    sharedDialectGateCallback = onDialectGate ?: sharedDialectGateCallback
     sharedScriptModel = refreshedModel ?: scriptModel
     preparedUi = sharedUi
     preparedTopBlock = top
@@ -485,7 +514,13 @@ internal fun DataSourceSelector.reuseSharedConsole(
     clearConsolePrompt(console, LOG)
     LOG.info("[M36] shared console reused (ds=$dsName, execute=$executeAfterPrepare, liveResult=${liveResult != null})")
     if (executeAfterPrepare) {
-        executeOnConsole(project, console, editor, refreshedModel ?: scriptModel, execOption, sharedUi, onResultsReady = null, onError = onError, onErrorRich = onErrorRich, wholeScriptExec = wholeScriptExec)
+        executeOnConsole(
+            project, console, editor, refreshedModel ?: scriptModel, execOption, sharedUi,
+            onResultsReady = null, onError = onError, onErrorRich = onErrorRich,
+            wholeScriptExec = wholeScriptExec,
+            dialectGateRequest = dialectGateRequest ?: sharedDialectGateRequest,
+            onDialectGate = onDialectGate ?: sharedDialectGateCallback,
+        )
     }
     callback?.invoke(true)
     return true
@@ -1185,7 +1220,11 @@ internal fun DataSourceSelector.installOutputHistoryFillLayout(root: java.awt.Co
  * 自证日志节流（每实例前 3 次 target 高度修正打点，教训 11）。
  */
 
-internal fun DataSourceSelector.createTempPsiFile(project: Project, sql: String): Pair<com.intellij.openapi.vfs.VirtualFile, PsiFile>? {
+internal fun DataSourceSelector.createTempPsiFile(
+    project: Project,
+    sql: String,
+    renderedDialectName: String? = null,
+): Pair<com.intellij.openapi.vfs.VirtualFile, PsiFile>? {
     val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
     // T-ExecCopyFix F2a：失败阶段记录（onError 文案携带，见 chooseAndPrepare）
     fun fail(stage: String, detail: String = ""): Nothing? {
@@ -1213,7 +1252,7 @@ internal fun DataSourceSelector.createTempPsiFile(project: Project, sql: String)
     consumeCachedTempPsiFile(project)?.let { pair ->
         // O-136：缓存命中路径同样对齐方言映射（幂等读探测稳态零写）——目标数据源方言切换后
         // 缓存复用不得携带旧映射进 Runner 枚举。
-        mapDialectBeforePsi(project, pair.first, LOG)
+        mapDialectBeforePsi(project, pair.first, LOG, renderedDialectName)
         return pair
     }
     // T-ExecDocSync2 F4：refresh 前强制收敛——写点之后、refresh 之前若被用户键入/其他写方
@@ -1247,7 +1286,7 @@ internal fun DataSourceSelector.createTempPsiFile(project: Project, sql: String)
         if (FatalErrors.isFatal(e)) throw e // T-FP-02：fatal 透传
         return fail("syncVfContent", "${e.javaClass.simpleName}: ${e.message}")
     }
-    mapDialectBeforePsi(project, vf, LOG)
+    mapDialectBeforePsi(project, vf, LOG, renderedDialectName)
     val psi = try {
         ReadAction.compute<PsiFile?, Throwable> {
             PsiManager.getInstance(project).findFile(vf)
@@ -1341,7 +1380,12 @@ internal fun DataSourceSelector.projectExecFile(project: Project, sql: String, n
  * 线程自适应——EDT 直调安全（本方法现调用点全在 EDT），BGT 调用自动走两段式派发。
  */
 
-internal fun DataSourceSelector.prewarmExecTempFileInner(project: Project, sql: String, LOG: com.intellij.openapi.diagnostic.Logger) {
+internal fun DataSourceSelector.prewarmExecTempFileInner(
+    project: Project,
+    sql: String,
+    LOG: com.intellij.openapi.diagnostic.Logger,
+    renderedDialectName: String? = null,
+) {
     lastTempFileFailure = null
     // T-ExecCopyFix F2b：refresh 段 WriteIntentReadAction（BGT 上 WIRA 合法；与 EDT 冷路径同款包装）
     val ioFile = runCatching { projectExecFile(project, sql) }.getOrElse { e ->
@@ -1386,9 +1430,8 @@ internal fun DataSourceSelector.prewarmExecTempFileInner(project: Project, sql: 
         return
     }
     // T-ExecSlowOps F1：BGT 两段式映射（读探测稳态跳过 / 首见派 EDT + 有界等待）。
-    // O-136：收口到 [mapDialectBeforePsi] 统一入口——目标方言按数据源路由（BGT 两段式语义在
-    // DialectPreMapping.ensureMapped 内保留），不再硬编码 MySQL。
-    mapDialectBeforePsi(project, vf, LOG)
+    // O-145 W7：预览提供了渲染方言时 exec PSI 同步该事实；旧调用仍走 O-136 数据源路由。
+    mapDialectBeforePsi(project, vf, LOG, renderedDialectName)
     val psi = try {
         ReadAction.compute<PsiFile?, Throwable> {
             PsiManager.getInstance(project).findFile(vf)

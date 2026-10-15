@@ -467,6 +467,10 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
     internal var nativeConsoleEditor: com.intellij.openapi.editor.Editor? = null
 
     internal var current: PreviewResult? = null
+
+    /** O-145 W7：结果到达时冻结的渲染模式；提交时不得重读设置冒充当初的渲染事实。 */
+    internal var executionDialectRenderMode =
+        cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.RenderMode.UNKNOWN
     internal var compactMode = false
 
     /**

@@ -1973,7 +1973,9 @@ class SqlPreviewService(internal val project: Project) {
                 ) {
                     ApplicationManager.getApplication().executeOnPooledThread {
                         runCatching {
-                            cn.song.mybatisplus.visualizer.execute.DataSourceSelector.prewarmExecTempFile(project, result.sql)
+                            cn.song.mybatisplus.visualizer.execute.DataSourceSelector.prewarmExecTempFile(
+                                project, result.sql, result.effectiveDialect?.name,
+                            )
                         }.onFailure {
                             // T-FatalPassthrough T-FP-02b（独立复核阻断 2 同族）：本 runCatching 包住整条
                             // 预热链——不放行 fatal 会让 DataSourceSelector 预热链的 6 处透传（缓存命中

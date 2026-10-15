@@ -71,6 +71,8 @@ object DataSourceSelector {
     internal var preparedScriptModel: Any? = null
     internal var preparedExecOption: Any? = null
     internal var preparedUi: Any? = null
+    internal var preparedDialectGateRequest: ExecutionDialectGate.Request? = null
+    internal var preparedDialectGateCallback: ((ExecutionDialectGate.Verdict) -> Unit)? = null
 
     // M36.5.4：已备控制台的 UI 块——顶部块（原生头部工具栏+编辑器 DataProvider 包装）、结果区、
     // 完整 SplitPane。内嵌统一为完整 SplitPane（三条执行路径结果都可见）；executeOnConsole 的
@@ -92,6 +94,8 @@ object DataSourceSelector {
     internal var sharedUi: Any? = null
     internal var sharedFullComponent: javax.swing.JComponent? = null
     internal var sharedDataSourceName: String? = null
+    internal var sharedDialectGateRequest: ExecutionDialectGate.Request? = null
+    internal var sharedDialectGateCallback: ((ExecutionDialectGate.Verdict) -> Unit)? = null
 
     /** T-PreviewFlash：mpsql-exec.sql 的 vf+psi 配对缓存（路径稳定，vf 有效即复用，吸收每次预览的 VFS refresh + findFile 慢操作）。
      *  T-ExecSlowOps F3：[prewarmExecTempFile] 后台线程成为第二写方后须 volatile 跨线程可见。 */
@@ -179,6 +183,73 @@ object DataSourceSelector {
     // （组合组件引用在面板分离/重挂后会过期：M36.5.5 复用面板空显示、M36.5.6 第二次预览
     // 结果栏消失、contentAdded 换入未写回共享缓存导致复用嵌了旧编辑器块，均是此类过期引用。）
     internal var sharedTopBlock: javax.swing.JComponent? = null
+
+    /** 未知查询目标的确认测试缝；生产为 null 时走本地化确认框。 */
+    @Volatile
+    internal var unknownTargetQueryConfirmationForTest: ((ExecutionDialectGate.Verdict) -> Boolean)? = null
+
+    /**
+     * O-145 W7：最终实际目标方言闸门统一处置。request 为空保持所有旧调用逐字行为；
+     * 非空时回调先收到判定，随后按状态继续、确认或阻断。AUTO_RERENDER_REQUIRED 必停当前点击，
+     * 由宿主无损重渲染后要求用户复核并再次点击，绝不在同一次点击里偷偷改写后提交。
+     */
+    internal fun allowDialectGate(
+        project: Project,
+        request: ExecutionDialectGate.Request?,
+        target: ExecutionDialectGate.Target?,
+        onDialectGate: ((ExecutionDialectGate.Verdict) -> Unit)?,
+        onError: ((String) -> Unit)?,
+    ): Boolean {
+        if (request == null) return true
+        val verdict = ExecutionDialectGate.evaluate(request, target?.dialectName)
+        onDialectGate?.invoke(verdict)
+        return when (verdict.status) {
+            ExecutionDialectGate.Status.MATCH -> true
+            ExecutionDialectGate.Status.TARGET_UNKNOWN_QUERY_CONFIRM -> {
+                unknownTargetQueryConfirmationForTest?.invoke(verdict) ?: runCatching {
+                    com.intellij.openapi.ui.Messages.showYesNoDialog(
+                        project,
+                        MpSqlVisualizerBundle.message("execute.dialectGate.unknownQuery.confirm"),
+                        MpSqlVisualizerBundle.message("execute.dialectGate.title"),
+                        com.intellij.openapi.ui.Messages.getWarningIcon(),
+                    ) == com.intellij.openapi.ui.Messages.YES
+                }.getOrDefault(false)
+            }
+            ExecutionDialectGate.Status.AUTO_RERENDER_REQUIRED -> {
+                if (onDialectGate == null) onError?.invoke(dialectGateMessage(verdict))
+                false
+            }
+            ExecutionDialectGate.Status.MANUAL_CONFLICT,
+            ExecutionDialectGate.Status.RERENDER_UNAVAILABLE,
+            ExecutionDialectGate.Status.TARGET_UNKNOWN_BLOCK -> {
+                onError?.invoke(dialectGateMessage(verdict))
+                false
+            }
+        }
+    }
+
+    internal fun dialectGateMessage(verdict: ExecutionDialectGate.Verdict): String = when (verdict.status) {
+        ExecutionDialectGate.Status.MATCH -> ""
+        ExecutionDialectGate.Status.AUTO_RERENDER_REQUIRED -> MpSqlVisualizerBundle.message(
+            "execute.dialectGate.rerendered",
+            verdict.renderedDialectName ?: MpSqlVisualizerBundle.message("execute.dialectGate.unknownDialect"),
+            verdict.targetDialectName ?: MpSqlVisualizerBundle.message("execute.dialectGate.unknownDialect"),
+        )
+        ExecutionDialectGate.Status.MANUAL_CONFLICT -> MpSqlVisualizerBundle.message(
+            "execute.dialectGate.manualConflict",
+            verdict.renderedDialectName ?: MpSqlVisualizerBundle.message("execute.dialectGate.unknownDialect"),
+            verdict.targetDialectName ?: MpSqlVisualizerBundle.message("execute.dialectGate.unknownDialect"),
+        )
+        ExecutionDialectGate.Status.RERENDER_UNAVAILABLE -> MpSqlVisualizerBundle.message(
+            "execute.dialectGate.rerenderUnavailable",
+            verdict.renderedDialectName ?: MpSqlVisualizerBundle.message("execute.dialectGate.unknownDialect"),
+            verdict.targetDialectName ?: MpSqlVisualizerBundle.message("execute.dialectGate.unknownDialect"),
+        )
+        ExecutionDialectGate.Status.TARGET_UNKNOWN_QUERY_CONFIRM ->
+            MpSqlVisualizerBundle.message("execute.dialectGate.unknownQuery.confirm")
+        ExecutionDialectGate.Status.TARGET_UNKNOWN_BLOCK ->
+            MpSqlVisualizerBundle.message("execute.dialectGate.unknownBlock")
+    }
 
     /** 控制台是否已就绪（prepareConsole 成功后 true）。 */
     @JvmStatic
@@ -298,6 +369,8 @@ object DataSourceSelector {
         preparedScriptModel = null
         preparedExecOption = null
         preparedUi = null
+        preparedDialectGateRequest = null
+        preparedDialectGateCallback = null
         preparedTopBlock = null
         preparedResultComponent = null
         preparedFullComponent = null
@@ -334,9 +407,12 @@ object DataSourceSelector {
         onEditor: ((com.intellij.openapi.editor.Editor) -> Unit)? = null,
         onError: ((String) -> Unit)? = null,
         callback: ((Boolean) -> Unit)? = null,
+        dialectGateRequest: ExecutionDialectGate.Request? = null,
+        onDialectGate: ((ExecutionDialectGate.Verdict) -> Unit)? = null,
     ) {
         chooseAndPrepare(project, sql, executeAfterPrepare = false,
-            onConsole = onConsole, onEditor = onEditor, onError = onError, callback = callback)
+            onConsole = onConsole, onEditor = onEditor, onError = onError, callback = callback,
+            dialectGateRequest = dialectGateRequest, onDialectGate = onDialectGate)
     }
 
     /**
@@ -352,12 +428,19 @@ object DataSourceSelector {
         onError: ((String) -> Unit)? = null,
         onErrorRich: ((ExecutionErrorInfo) -> Unit)? = null,
         wholeScriptExec: Boolean = false,
+        dialectGateRequest: ExecutionDialectGate.Request? = null,
+        onDialectGate: ((ExecutionDialectGate.Verdict) -> Unit)? = null,
     ): Boolean {
         val console = preparedConsole ?: return false
         val editor = preparedEditor ?: return false
         val scriptModel = preparedScriptModel ?: return false
         val execOption = preparedExecOption ?: return false
-        executeOnConsole(project, console, editor, scriptModel, execOption, preparedUi, onResultsReady, onError, onErrorRich, wholeScriptExec = wholeScriptExec)
+        executeOnConsole(
+            project, console, editor, scriptModel, execOption, preparedUi, onResultsReady, onError, onErrorRich,
+            wholeScriptExec = wholeScriptExec,
+            dialectGateRequest = dialectGateRequest ?: preparedDialectGateRequest,
+            onDialectGate = onDialectGate ?: preparedDialectGateCallback,
+        )
         return true
     }
 
@@ -382,10 +465,12 @@ object DataSourceSelector {
         callback: ((Boolean) -> Unit)? = null,
         onErrorRich: ((ExecutionErrorInfo) -> Unit)? = null,
         wholeScriptExec: Boolean = false,
+        dialectGateRequest: ExecutionDialectGate.Request? = null,
+        onDialectGate: ((ExecutionDialectGate.Verdict) -> Unit)? = null,
     ) {
         chooseAndPrepare(project, sql, executeAfterPrepare = true,
             onConsole = onConsole, onEditor = onEditor, onError = onError, callback = callback, onErrorRich = onErrorRich,
-            wholeScriptExec = wholeScriptExec)
+            wholeScriptExec = wholeScriptExec, dialectGateRequest = dialectGateRequest, onDialectGate = onDialectGate)
     }
 
     /**
@@ -403,6 +488,8 @@ object DataSourceSelector {
         sharedTopBlock = null
         sharedFullComponent = null
         sharedDataSourceName = null
+        sharedDialectGateRequest = null
+        sharedDialectGateCallback = null
     }
 
     /**
@@ -1473,14 +1560,25 @@ object DataSourceSelector {
      * （doc/vf 长度与 stamp、unsaved 态）：F1-F5 全上后若真机仍复发，idea.log 直出现场数据，
      * 替代人工复现排查。经项目 messageBus 连接（随项目 disposable 自动断开）。
      */
-    internal fun mapDialectBeforePsi(project: Project, vf: com.intellij.openapi.vfs.VirtualFile, LOG: com.intellij.openapi.diagnostic.Logger) {
-        // O-136 T-PreviewExecDsDialect：目标方言按数据源路由（last-used/默认数据源的方言；
-        // 解析不出 → null = 保持 MySQL 旧行为，零回归）。平台 Runner 枚举按 psiFile 方言过滤
-        // （DbImplUtil.getAppropriateDataSourcesForExec 字节码实证），草稿恒 MySQL 是 DM 等
-        // 非 MySQL 数据源从预览执行链隐形的根因。
-        val targetDs = ExecDialectRouting.resolveTargetDataSource(project)
-        val targetLanguage = ExecDialectRouting.resolveTargetLanguage(project, targetDs)
-        val targetId = (targetLanguage as? com.intellij.lang.Language)?.id ?: ExecDialectRouting.MYSQL_LANGUAGE_ID
+    internal fun mapDialectBeforePsi(
+        project: Project,
+        vf: com.intellij.openapi.vfs.VirtualFile,
+        LOG: com.intellij.openapi.diagnostic.Logger,
+        renderedDialectName: String? = null,
+    ) {
+        // O-145 W7：有渲染事实时 exec PSI 必须跟随渲染方言；没有 request 的旧调用继续沿用
+        // O-136 的 last-used/default 数据源路由。平台无对应 parser 时降级 GenericSQL，不冒充 MySQL。
+        val targetDs = if (renderedDialectName == null) ExecDialectRouting.resolveTargetDataSource(project) else null
+        val renderedLanguage = renderedDialectName?.let {
+            ExecDialectRouting.resolvePluginDialectLanguage(project, it)
+        }
+        val targetLanguage = when {
+            renderedDialectName == null -> ExecDialectRouting.resolveTargetLanguage(project, targetDs)
+            renderedLanguage != null -> renderedLanguage
+            else -> DialectPreMapping.languageById(project, ExecDialectRouting.GENERIC_LANGUAGE_ID)
+        }
+        val targetId = (targetLanguage as? com.intellij.lang.Language)?.id
+            ?: if (renderedDialectName == null) ExecDialectRouting.MYSQL_LANGUAGE_ID else ExecDialectRouting.GENERIC_LANGUAGE_ID
         // T-PreviewFlash：插件侧幂等短路——mpsql-exec.sql 路径稳定，同 vf 已映射过 MySQL 直接跳过，
         // 消除每次预览的点 setMapping（同值 setMapping 仍触发 SqlDialectPusher push all dumb 任务，见沙盒日志）。
         // O-136：短路收紧为「同 vf 且同方言」——目标数据源方言切换后同 vf 也必须重映射。
@@ -1526,7 +1624,7 @@ object DataSourceSelector {
      * Community/无 Database 插件场景安全：本方法不触任何 Database 类，纯 VFS/PSI。
      */
     @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
-    fun prewarmExecTempFile(project: Project, sql: String) {
+    fun prewarmExecTempFile(project: Project, sql: String, renderedDialectName: String? = null) {
         val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
         if (ApplicationManager.getApplication().isDispatchThread) {
             LOG.warn("[M36] prewarmExecTempFile called on EDT — refused (slow ops, T-ExecSlowOps F2)")
@@ -1537,7 +1635,7 @@ object DataSourceSelector {
         if (cachedVf != null && isCacheUsable(project, cachedVf)) {
             // O-136：缓存命中路径同样对齐方言映射（幂等读探测稳态零写）——否则目标数据源方言
             // 切换（MySQL↔DM）后预热仍按旧映射放行，Runner 枚举按旧方言过滤。
-            mapDialectBeforePsi(project, cachedVf, LOG)
+            mapDialectBeforePsi(project, cachedVf, LOG, renderedDialectName)
             // 缓存命中≠内容新鲜：连续预览 SQL 会变，而缓存命中路径不重写文件——只刷新文件
             // 内容（projectExecFile doc 驱动三方同步，vf/psi 身份不变），保证 attachConsole
             // 初始 document 与本条预览 SQL 一致；差量内容比较在 projectExecFile 内部短路。
@@ -1567,7 +1665,7 @@ object DataSourceSelector {
             return
         }
         try {
-            prewarmExecTempFileInner(project, sql, LOG)
+            prewarmExecTempFileInner(project, sql, LOG, renderedDialectName)
         } finally {
             execPrewarmInFlight.set(false)
         }

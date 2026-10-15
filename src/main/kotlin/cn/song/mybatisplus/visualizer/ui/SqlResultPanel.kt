@@ -208,6 +208,23 @@ class SqlResultPanel : JBPanel<SqlResultPanel>(BorderLayout()) {
         repaint()
     }
 
+    /** O-145 W7：显示不属于执行成功/失败的诚实状态（如已重渲染、需复核后二击）。 */
+    fun showStatus(message: String) {
+        state = State.EMPTY
+        currentError = null
+        errorCopyButton.isVisible = false
+        locateHandler = null
+        errorLocateButton.isVisible = false
+        setLoadingIconVisible(false)
+        val esc = message.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        infoLabel.text = "<html>$esc</html>"
+        infoLabel.toolTipText = message
+        infoLabel.foreground = JBColor.namedColor("Label.infoForeground", JBColor.GRAY)
+        showContent()
+        revalidate()
+        repaint()
+    }
+
     /**
      * 显示错误信息（M36.5.48：支持复制）。
      *

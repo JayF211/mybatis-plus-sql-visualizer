@@ -153,6 +153,14 @@ internal fun SqlPreviewPanel.moreActionsStep(actions: List<Pair<String, () -> Un
 
 internal fun SqlPreviewPanel.showResult(result: PreviewResult) {
     current = result
+    // O-145 W7：在结果/渲染时冻结 AUTO/MANUAL，执行点击时只读取此快照；设置随后变化不改写历史事实。
+    executionDialectRenderMode = project?.let {
+        if (cn.song.mybatisplus.visualizer.config.ProjectPluginSettings.getInstance(it).effectiveDialectAuto()) {
+            cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.RenderMode.AUTO
+        } else {
+            cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.RenderMode.MANUAL
+        }
+    } ?: cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.RenderMode.UNKNOWN
     // T-M19-StorageClear：新预览会从结果模型重新初始化全部参数态，此刻才允许旧面板接纳清理后的
     // 新存储代际；停留在原预览的面板始终保持旧代际，其防抖/管理方案写回全部被拒。
     paramHistoryCache.adoptCurrentGenerationForFreshPreview()

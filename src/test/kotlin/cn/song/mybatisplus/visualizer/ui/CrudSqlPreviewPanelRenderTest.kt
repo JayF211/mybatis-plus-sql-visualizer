@@ -83,4 +83,23 @@ class CrudSqlPreviewPanelRenderTest : BasePlatformTestCase() {
             disposeQuietly(panel)
         }
     }
+
+    fun testBatchCrudCarrierLosslesslyRerendersForActualTarget() {
+        val panel = renderOnEdt(CrudKind.INSERT)
+        try {
+            val before = panel.currentForTest()?.effectiveDialect?.name
+            assertTrue("expected MySQL baseline, got $before", before == "MySQL")
+            assertTrue(panel.rerenderForExecutionTarget("PostgreSQL"))
+            assertTrue(panel.currentForTest()?.batchModel?.dialect?.name == "PostgreSQL")
+            assertTrue(panel.currentForTest()?.effectiveDialect?.name == "PostgreSQL")
+            assertTrue(panel.lastRenderedSqlForTest()?.isNotBlank() == true)
+            val request = panel.executionDialectGateRequest(
+                cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Intent.DML,
+            )
+            assertTrue(request.canLosslesslyRerender)
+            assertTrue(request.userTextUntouched)
+        } finally {
+            disposeQuietly(panel)
+        }
+    }
 }

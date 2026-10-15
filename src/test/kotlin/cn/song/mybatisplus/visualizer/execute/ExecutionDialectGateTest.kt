@@ -1,9 +1,11 @@
 package cn.song.mybatisplus.visualizer.execute
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 
 class ExecutionDialectGateTest {
     private fun request(
@@ -86,5 +88,109 @@ class ExecutionDialectGateTest {
         } finally {
             ExecutionDialectGate.consoleDataSourceForTest = null
         }
+    }
+
+    @Test
+    fun `central handler keeps callers without request unchanged and blocks known conflicts`() {
+        val project = projectStub()
+        val target = ExecutionDialectGate.Target(Any(), "ds-1", "prod", "PostgreSQL", "PostgreSQL")
+        assertTrue(DataSourceSelector.allowDialectGate(project, null, target, null, null))
+
+        var callbackStatus: ExecutionDialectGate.Status? = null
+        var error: String? = null
+        val allowed = DataSourceSelector.allowDialectGate(
+            project,
+            request(ExecutionDialectGate.RenderMode.MANUAL, "MySQL", ExecutionDialectGate.Intent.DML),
+            target,
+            { callbackStatus = it.status },
+            { error = it },
+        )
+        assertFalse(allowed)
+        assertEquals(ExecutionDialectGate.Status.MANUAL_CONFLICT, callbackStatus)
+        assertTrue(error.orEmpty().contains("MySQL"))
+        assertTrue(error.orEmpty().contains("PostgreSQL"))
+    }
+
+    @Test
+    fun `central handler unknown target blocks explain but query needs explicit confirmation`() {
+        val project = projectStub()
+        assertFalse(
+            DataSourceSelector.allowDialectGate(
+                project,
+                request(ExecutionDialectGate.RenderMode.AUTO, intent = ExecutionDialectGate.Intent.EXPLAIN),
+                null,
+                null,
+                null,
+            ),
+        )
+        try {
+            DataSourceSelector.unknownTargetQueryConfirmationForTest = { true }
+            assertTrue(
+                DataSourceSelector.allowDialectGate(
+                    project,
+                    request(ExecutionDialectGate.RenderMode.AUTO, intent = ExecutionDialectGate.Intent.QUERY),
+                    null,
+                    null,
+                    null,
+                ),
+            )
+        } finally {
+            DataSourceSelector.unknownTargetQueryConfirmationForTest = null
+        }
+    }
+
+    @Test
+    fun `source wiring gates selected session before attach and active console before submit mutation`() {
+        val root = repoRoot()
+        val results = File(root, "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResults.kt").readText()
+        val console = File(root, "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorConsole.kt").readText()
+        val sessionGate = results.indexOf("ExecutionDialectGate.fromSession(session)")
+        val attach = results.indexOf("prepareInConsole(", sessionGate)
+        assertTrue("session gate must precede prepareInConsole/attach", sessionGate >= 0 && attach > sessionGate)
+        val consoleGate = console.indexOf("ExecutionDialectGate.fromConsole(console)")
+        val firstMutation = console.indexOf("stripGSuffixForSubmit", consoleGate)
+        assertTrue("console gate must precede any submit document mutation", consoleGate >= 0 && firstMutation > consoleGate)
+    }
+
+    @Test
+    fun `preview ordinary execute and both explain channels carry request while uncovered paths stay explicit`() {
+        val root = repoRoot()
+        val source = File(root, "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelExecution.kt").readText()
+        assertTrue(source.contains("ExecutionDialectGate.Intent.DML"))
+        assertTrue(source.contains("ExecutionDialectGate.Intent.EXPLAIN"))
+        val structuredGate = source.indexOf("DataSourceSelector.allowDialectGate")
+        val structuredSubmit = source.indexOf("ExplainPanelChannel.executeStructured")
+        assertTrue("structured EXPLAIN must gate before JDBC submit", structuredGate >= 0 && structuredSubmit > structuredGate)
+        assertEquals(
+            linkedSetOf(
+                "actions.SelectedTableSqlTemplateAction.executeTemplate",
+                "log.LogToSqlPanel.executeSql",
+                "ui.SqlPreviewPanel.estimateDmlImpact",
+                "ui.SqlPreviewPanel.executeAdhocSql",
+            ),
+            ExecutionDialectGate.uncoveredEntryPoints,
+        )
+    }
+
+    private fun projectStub(): com.intellij.openapi.project.Project =
+        java.lang.reflect.Proxy.newProxyInstance(
+            javaClass.classLoader,
+            arrayOf(com.intellij.openapi.project.Project::class.java),
+        ) { _, method, _ ->
+            when (method.returnType) {
+                java.lang.Boolean.TYPE -> false
+                java.lang.Integer.TYPE -> 0
+                java.lang.Long.TYPE -> 0L
+                else -> null
+            }
+        } as com.intellij.openapi.project.Project
+
+    private fun repoRoot(): File {
+        var dir: File? = File(System.getProperty("user.dir")).absoluteFile
+        while (dir != null) {
+            if (File(dir, "src/main/kotlin").isDirectory) return dir
+            dir = dir.parentFile
+        }
+        error("repository root not found")
     }
 }
