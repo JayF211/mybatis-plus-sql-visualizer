@@ -5,9 +5,12 @@ import cn.song.mybatisplus.visualizer.actions.ConvertToSqlAction
 import cn.song.mybatisplus.visualizer.actions.ExplainSelectedTableAction
 import cn.song.mybatisplus.visualizer.actions.CountSelectedTableAction
 import cn.song.mybatisplus.visualizer.actions.SampleSelectedTableAction
+import cn.song.mybatisplus.visualizer.history.SqlHistoryManager
 import cn.song.mybatisplus.visualizer.log.SourceCaptureGuide
 import cn.song.mybatisplus.visualizer.log.SqlListTypeColor
+import cn.song.mybatisplus.visualizer.log.SqlLogAutoSaver
 import cn.song.mybatisplus.visualizer.log.agent.AgentManager
+import cn.song.mybatisplus.visualizer.ui.ParamHistoryCache
 import cn.song.mybatisplus.visualizer.log.agent.AgentStatusListener
 import cn.song.mybatisplus.visualizer.util.PluginCacheManager
 import cn.song.mybatisplus.visualizer.sql.DialectRegistry
@@ -42,6 +45,7 @@ import java.awt.GridBagLayout
 import java.awt.Insets
 import java.awt.event.KeyAdapter
 import java.awt.event.KeyEvent
+import java.io.File
 import javax.swing.DefaultComboBoxModel
 import javax.swing.JButton
 import javax.swing.JComboBox
@@ -603,6 +607,45 @@ class PluginSettingsPanel @JvmOverloads constructor(
     /** T-HistoryFileRetention：历史文件保留上限（0 = 不限/全量）。 */
     internal val logAutoSaveMaxFilesField = JBTextField(12)
 
+    // ---------- T-M19-StorageClear：三类本地数据的分离动作 ----------
+
+    internal enum class StorageClearKind { PREVIEW_HISTORY, PARAM_HISTORY }
+
+    /** 破坏性动作确认缝：生产弹确认；headless 测试注入确定结果，不唤起原生对话框。 */
+    internal var storageClearConfirmation: (StorageClearKind) -> Boolean = { kind ->
+        val messageKey = when (kind) {
+            StorageClearKind.PREVIEW_HISTORY -> "settings.storage.previewHistory.clear.confirm"
+            StorageClearKind.PARAM_HISTORY -> "settings.storage.paramHistory.clear.confirm"
+        }
+        Messages.showYesNoDialog(
+            ProjectManager.getInstance().openProjects.firstOrNull(),
+            MpSqlVisualizerBundle.message(messageKey),
+            MpSqlVisualizerBundle.message("settings.storage.clear.title"),
+            Messages.getWarningIcon(),
+        ) == Messages.YES
+    }
+
+    /** 捕获目录打开缝：测试只观察目标路径；生产交给平台既有 BrowserUtil.open(file URI)。 */
+    internal var captureDirectoryOpener: (File) -> Unit = { dir ->
+        com.intellij.ide.BrowserUtil.open(dir.toURI().toString())
+    }
+
+    /** 默认目录需要项目根；无打开项目时 SqlLogAutoSaver 按既有契约回落 user.home。 */
+    internal var captureProjectBasePathProvider: () -> String? = {
+        ProjectManager.getInstance().openProjects.firstOrNull { !it.isDisposed }?.basePath
+    }
+
+    internal val openCaptureDirectoryButton = JButton().apply {
+        addActionListener { openCaptureHistoryDirectory() }
+    }
+    internal val clearPreviewHistoryButton = JButton().apply {
+        addActionListener { clearPreviewHistory() }
+    }
+    internal val clearParamHistoryButton = JButton().apply {
+        addActionListener { clearParamHistory() }
+    }
+    internal val storageActionStatusLabel = JBLabel(" ")
+
     // ---------- F-44-7 SqlSourceInterceptor 自动注入 ----------
     internal val autoInjectInterceptorCheck = JBCheckBox()
 
@@ -1001,6 +1044,64 @@ class PluginSettingsPanel @JvmOverloads constructor(
     internal fun setTenantColumnName(value: String) {
         tenantColumnNameField.text = value
     }
+
+    /**
+     * 打开捕获历史目录。只解析/创建并打开目录，绝不枚举或删除其中任何文件；自定义目录与默认目录
+     * 走 [SqlLogAutoSaver.resolveHistoryDir] 同一写端口径，避免设置页显示路径与真实落盘路径分叉。
+     */
+    private fun openCaptureHistoryDirectory() {
+        val path = SqlLogAutoSaver.resolveHistoryDir(
+            logAutoSavePathField.text,
+            captureProjectBasePathProvider(),
+        )
+        val dir = File(path)
+        runCatching {
+            java.nio.file.Files.createDirectories(dir.toPath())
+            captureDirectoryOpener(dir)
+        }.onSuccess {
+            storageActionStatusLabel.text = MpSqlVisualizerBundle.message(
+                "settings.storage.captureFiles.opened",
+                dir.absolutePath,
+            )
+            storageActionStatusLabel.toolTipText = dir.absolutePath
+        }.onFailure {
+            storageActionStatusLabel.text = MpSqlVisualizerBundle.message("settings.storage.captureFiles.open.failed")
+            storageActionStatusLabel.toolTipText = it.message
+        }
+    }
+
+    /** 清空预览 SQL 历史组件（普通/收藏条目及其标签、参数快照），不触碰共享 XML 的其他组件。 */
+    private fun clearPreviewHistory() {
+        if (!storageClearConfirmation(StorageClearKind.PREVIEW_HISTORY)) return
+        runCatching { SqlHistoryManager.getInstance().clear() }
+            .onSuccess {
+                storageActionStatusLabel.text = MpSqlVisualizerBundle.message("settings.storage.previewHistory.cleared")
+                storageActionStatusLabel.toolTipText = null
+            }
+            .onFailure {
+                storageActionStatusLabel.text = MpSqlVisualizerBundle.message("settings.storage.clear.failed")
+                storageActionStatusLabel.toolTipText = it.message
+            }
+    }
+
+    /** 清空默认参数历史、全部命名方案与激活指针，并立即失效所有已打开预览面板的缓存实例。 */
+    private fun clearParamHistory() {
+        if (!storageClearConfirmation(StorageClearKind.PARAM_HISTORY)) return
+        runCatching { ParamHistoryCache.clearPersistedHistory() }
+            .onSuccess {
+                storageActionStatusLabel.text = MpSqlVisualizerBundle.message("settings.storage.paramHistory.cleared")
+                storageActionStatusLabel.toolTipText = null
+            }
+            .onFailure {
+                storageActionStatusLabel.text = MpSqlVisualizerBundle.message("settings.storage.clear.failed")
+                storageActionStatusLabel.toolTipText = it.message
+            }
+    }
+
+    internal fun openCaptureDirectoryButtonForTest(): JButton = openCaptureDirectoryButton
+    internal fun clearPreviewHistoryButtonForTest(): JButton = clearPreviewHistoryButton
+    internal fun clearParamHistoryButtonForTest(): JButton = clearParamHistoryButton
+    internal fun storageActionStatusForTest(): JBLabel = storageActionStatusLabel
 
     /**
      * 刷新插件缓存信息（大小 + 条目数，所有打开项目汇总——含反查/解析/Wrapper 预览三类缓存；

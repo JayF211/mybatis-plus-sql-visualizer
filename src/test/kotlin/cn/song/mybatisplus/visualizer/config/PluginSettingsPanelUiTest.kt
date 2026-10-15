@@ -1,5 +1,8 @@
 package cn.song.mybatisplus.visualizer.config
 
+import cn.song.mybatisplus.visualizer.history.SqlHistoryEntry
+import cn.song.mybatisplus.visualizer.history.SqlHistoryManager
+import cn.song.mybatisplus.visualizer.ui.ParamHistoryCache
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import com.intellij.ui.TitledSeparator
 import com.intellij.ui.components.JBCheckBox
@@ -9,6 +12,7 @@ import com.intellij.util.ui.UIUtil
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import java.awt.Component
 import java.awt.Container
@@ -144,6 +148,82 @@ class PluginSettingsPanelUiTest : BasePlatformTestCase() {
         } finally {
             // 复位语言配置（pending 标记随面板实例 GC，不影响其他测试）
             settings.state.language = oldLang
+        }
+    }
+
+    fun test捕获历史动作_只打开当前自定义目录且不删除文件() {
+        val settings = PluginSettings.getInstance()
+        val oldPath = settings.state.logAutoSavePath
+        val dir = java.nio.file.Files.createTempDirectory("mpsv-storage-open-").toFile()
+        val sentinel = dir.resolve("user-owned.sql").apply { writeText("SELECT 1") }
+        try {
+            settings.state.logAutoSavePath = dir.absolutePath
+            val panel = PluginSettingsPanel(settings, setOf(PluginSettingsPanel.SECTION_SQL_LOG))
+            var opened: java.io.File? = null
+            panel.captureDirectoryOpener = { opened = it }
+
+            panel.openCaptureDirectoryButtonForTest().doClick()
+
+            assertEquals("应打开设置中的自定义目录", dir.canonicalFile, opened?.canonicalFile)
+            assertTrue("打开目录动作不得删除自定义目录", dir.isDirectory)
+            assertTrue("打开目录动作不得删除目录内用户文件", sentinel.isFile)
+            assertTrue("动作结果应有诚实反馈", panel.storageActionStatusForTest().text.isNotBlank())
+        } finally {
+            settings.state.logAutoSavePath = oldPath
+            sentinel.delete()
+            dir.delete()
+        }
+    }
+
+    fun test两类清理动作_分别确认分别清理且不删除共享设置() {
+        val settings = PluginSettings.getInstance()
+        val state = settings.state
+        val oldLanguage = state.language
+        val history = SqlHistoryManager.getInstance()
+        val cache = ParamHistoryCache()
+        try {
+            history.clear()
+            cache.clear()
+            state.language = "storage-clear-sentinel"
+
+            history.add(SqlHistoryEntry(
+                sql = "SELECT * FROM user WHERE id = ?",
+                compactSql = "SELECT * FROM user WHERE id = ?",
+                favorite = true,
+                tags = mutableListOf("保留标签"),
+                paramSnapshot = linkedMapOf("id" to "history-secret"),
+            ))
+            val key = cache.computeKey("user", "SELECT * FROM user WHERE id = ?")!!
+            cache.save(key, mapOf("id" to "param-secret"))
+            cache.saveAsScheme("命名方案", key, mapOf("id" to "scheme-secret"))
+
+            val panel = PluginSettingsPanel(settings, setOf(PluginSettingsPanel.SECTION_SQL_LOG))
+            assertFalse(
+                "预览历史与参数历史必须是两个标签明确不同的动作",
+                panel.clearPreviewHistoryButtonForTest().text == panel.clearParamHistoryButtonForTest().text,
+            )
+            panel.storageClearConfirmation = { false }
+            panel.clearPreviewHistoryButtonForTest().doClick()
+            assertEquals("取消确认不得清预览历史", 1, history.entries.size)
+
+            panel.storageClearConfirmation = { true }
+            panel.clearPreviewHistoryButtonForTest().doClick()
+            assertTrue("预览历史应连同收藏/标签/参数快照整条清空", history.entries.isEmpty())
+            assertEquals("预览历史动作不得越界清参数方案", mapOf("id" to "scheme-secret"), cache.recall(key))
+
+            history.add(SqlHistoryEntry(sql = "SELECT 2", compactSql = "SELECT 2"))
+            panel.clearParamHistoryButtonForTest().doClick()
+            assertNull("已打开缓存实例不得继续召回旧参数", cache.recall(key))
+            assertEquals("参数动作不得越界清预览历史", 1, history.entries.size)
+            assertEquals("不得删除共享 XML 中的无关设置", "storage-clear-sentinel", state.language)
+            assertEquals("默认参数历史字段应写空", "", state.paramHistoryJson)
+            assertEquals("命名方案字段应写空", "", state.paramSchemesJson)
+            assertEquals("激活方案字段应写空", "", state.paramActiveScheme)
+            assertEquals("按键激活指针字段应写空", "", state.paramActiveSchemeByKey)
+        } finally {
+            history.clear()
+            cache.clear()
+            state.language = oldLanguage
         }
     }
 }

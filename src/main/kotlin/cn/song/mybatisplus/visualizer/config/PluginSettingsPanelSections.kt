@@ -410,26 +410,37 @@ internal fun PluginSettingsPanel.buildSections(panel: JPanel) {
         sectionGroup("settings.log.tab.autoSave") { p, g ->
             // 三处本地持久化彼此独立；说明始终可见，不随文件自动保存开关禁用。
             // 包一层面板避免 sectionGroup 将长说明误当首列标签撑宽整个设置页。
-            fun disclosure(key: String) {
+            fun disclosure(key: String, action: JButton? = null) {
                 g.gridx = 0
                 g.gridwidth = 2
                 g.weightx = 1.0
                 g.fill = GridBagConstraints.HORIZONTAL
-                p.add(JPanel(BorderLayout()).apply {
+                p.add(JPanel(BorderLayout(8, 0)).apply {
                     isOpaque = false
                     add(JBLabel("<html><body style='width: 500px'>" +
                         MpSqlVisualizerBundle.message(key) + "</body></html>").apply {
                         foreground = JBUI.CurrentTheme.ContextHelp.FOREGROUND
                     }, BorderLayout.CENTER)
+                    if (action != null) add(action, BorderLayout.EAST)
                 }, g)
                 g.gridwidth = 1
                 g.fill = GridBagConstraints.NONE
                 g.gridy++
             }
-            disclosure("settings.storage.captureFiles")
-            disclosure("settings.storage.previewHistory")
-            disclosure("settings.storage.paramHistory")
+            disclosure("settings.storage.captureFiles", openCaptureDirectoryButton.apply {
+                text = MpSqlVisualizerBundle.message("settings.storage.captureFiles.open")
+                toolTipText = MpSqlVisualizerBundle.message("settings.storage.captureFiles.open.tip")
+            })
+            disclosure("settings.storage.previewHistory", clearPreviewHistoryButton.apply {
+                text = MpSqlVisualizerBundle.message("settings.storage.previewHistory.clear")
+                toolTipText = MpSqlVisualizerBundle.message("settings.storage.previewHistory.clear.tip")
+            })
+            disclosure("settings.storage.paramHistory", clearParamHistoryButton.apply {
+                text = MpSqlVisualizerBundle.message("settings.storage.paramHistory.clear")
+                toolTipText = MpSqlVisualizerBundle.message("settings.storage.paramHistory.clear.tip")
+            })
             disclosure("settings.storage.clearBoundary")
+            addRow(p, g, "", storageActionStatusLabel)
             addRow(p, g, "", logAutoSaveCheck.apply {
                 text = MpSqlVisualizerBundle.message("settings.log.autoSave")
                 toolTipText = MpSqlVisualizerBundle.message("settings.log.autoSave.tip")
