@@ -202,7 +202,8 @@ class SqlPreviewPanelHistorySnapshotFallbackTest : BasePlatformTestCase() {
         )
         assertTrue(
             "recall 链必须把回落源接进未命中分支",
-            source.contains("paramHistoryCache.recall(key) ?: historySnapshotFallback(key)"),
+            source.contains("val cached = paramHistoryCache.recall(key)") &&
+                source.contains("val history = cached ?: historySnapshotFallback(key) ?: return"),
         )
         assertTrue(
             "flush 链必须调用历史快照回写",
