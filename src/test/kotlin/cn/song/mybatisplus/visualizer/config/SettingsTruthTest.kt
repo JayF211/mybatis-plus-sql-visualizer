@@ -59,8 +59,15 @@ class SettingsTruthTest {
             "settings.storage.paramHistory", "settings.storage.clearBoundary",
         )
         val sections = mainSrc("cn/song/mybatisplus/visualizer/config/PluginSettingsPanelSections.kt")
+        val actionByKey = mapOf(
+            keys[0] to "openCaptureDirectoryButton",
+            keys[1] to "clearPreviewHistoryButton",
+            keys[2] to "clearParamHistoryButton",
+        )
         keys.forEach { key ->
-            assertTrue("设置页须可见地接线 $key", sections.contains("disclosure(\"$key\")"))
+            val call = actionByKey[key]?.let { "disclosure(\"$key\", $it.apply {" }
+                ?: "disclosure(\"$key\")"
+            assertTrue("设置页须可见地接线说明及独立动作 $key", sections.contains(call))
             assertTrue("中文披露缺失 $key", !zh.getProperty(key).isNullOrBlank())
             assertTrue("英文披露缺失 $key", !en.getProperty(key).isNullOrBlank())
         }

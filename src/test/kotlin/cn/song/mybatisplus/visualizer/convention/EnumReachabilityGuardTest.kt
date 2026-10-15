@@ -177,7 +177,7 @@ class EnumReachabilityGuardTest {
         if (tailMatches("when\\s*\\(\\s*", before)) return false // when 主语位
         // 赋值 / return / when 结果位 / 实参（`(` `,`）/ if-else 分支值（前随 `)`）/
         // 映射值（`to`）/ 块末表达式
-        if (tailMatches("(=|return|->|\\(|,|\\)|\\bto|\\bin|\\bby|\\belse|\\?:|\\+=|&&|\\|\\|)\\s*", before)) {
+        if (tailMatches("(=|return(?:@[A-Za-z_]\\w*)?|->|\\(|,|\\)|\\bto|\\bin|\\bby|\\belse|\\?:|\\+=|&&|\\|\\|)\\s*", before)) {
             return true
         }
         if (Regex("^\\s*[});,]").containsMatchIn(after)) return true // 块末表达式
@@ -264,7 +264,7 @@ class EnumReachabilityGuardTest {
 
             enum class SyntheticDefect { LIVE, DEAD }
 
-            enum class SyntheticProduced { P }
+            enum class SyntheticProduced { P, Q }
 
             object SyntheticConsumer {
                 fun use(kind: SyntheticKind): Boolean = kind == SyntheticKind.INSERT
@@ -272,6 +272,7 @@ class EnumReachabilityGuardTest {
                 fun useDefect(d: SyntheticDefect): Boolean = d == SyntheticDefect.DEAD
                 fun useProduced(p: SyntheticProduced): Boolean = p == SyntheticProduced.P
                 fun produce(): SyntheticProduced = SyntheticProduced.P
+                fun produceViaLabel(): SyntheticProduced = run { return@run SyntheticProduced.Q }
             }
         """.trimIndent()
         val sources = listOf("src/main/kotlin/Synthetic.kt" to synthetic)
@@ -291,6 +292,8 @@ class EnumReachabilityGuardTest {
         val dead = rows["SyntheticDefect.DEAD"]!!
         assertTrue("被比较且零产出的常量必须判为违规：$dead", dead.produced == 0 && dead.consumed > 0)
         assertTrue("被产出且被消费的常量不得判违规：${rows["SyntheticProduced.P"]}", rows["SyntheticProduced.P"]!!.produced > 0)
+        assertTrue("return@run 有标签返回必须算真实产出：${rows["SyntheticProduced.Q"]}",
+            rows["SyntheticProduced.Q"]!!.produced > 0)
         val consumedOnly = rows["SyntheticKind.INSERT"]!!
         assertTrue("被比较且零产出的常量应判为违规：$consumedOnly", consumedOnly.produced == 0 && consumedOnly.consumed > 0)
         assertTrue(

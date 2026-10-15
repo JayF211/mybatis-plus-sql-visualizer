@@ -247,9 +247,12 @@ class ExecDialectRoutingTest {
             "createTempPsiFile 缓存命中路径未对齐方言映射（缓存复用会跳过路由）",
             Regex("""consumeCachedTempPsiFile\(project\)[\s\S]{0,200}mapDialectBeforePsi""").containsMatchIn(results),
         )
+        val prewarmBody = results.substringAfter("internal fun DataSourceSelector.prewarmExecTempFileInner(")
+            .substringBefore("internal fun DataSourceSelector.buildConsoleSplitPane(")
+        assertTrue("prewarmExecTempFileInner 函数切片为空（扫描锚点漂移）", prewarmBody.contains("val ioFile"))
         assertTrue(
             "prewarmExecTempFileInner 未走统一方言映射入口（BGT 预热仍硬编码 MySQL）",
-            Regex("""prewarmExecTempFileInner[\s\S]{0,4000}mapDialectBeforePsi\(project, vf, LOG\)""").containsMatchIn(results),
+            prewarmBody.contains("mapDialectBeforePsi(project, vf, LOG, renderedDialectName)"),
         )
     }
 

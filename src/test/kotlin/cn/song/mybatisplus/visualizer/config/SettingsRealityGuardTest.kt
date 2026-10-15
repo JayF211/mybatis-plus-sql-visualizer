@@ -128,6 +128,10 @@ class SettingsRealityGuardTest {
             // label 纯展示（可见性随校验结果翻转）、button 纯动作（点击回写两栏后自隐），
             // 均无自身状态可存可回填，按本白名单既有口径豁免（20260927 T-TestPerf7 合流树首轮全量红补登记）
             "prefixValidationLabel", "prefixFixButton",
+            // T-M19-StorageClear：三按钮点击即执行本地动作，状态行只显示结果；
+            // PluginSettingsPanelUiTest 另验确认/清理，不属于 apply/reset 持久化字段。
+            "openCaptureDirectoryButton", "clearPreviewHistoryButton", "clearParamHistoryButton",
+            "storageActionStatusLabel",
             // ShortcutEditor 内部控件（随 shortcutEditor 整体进出 apply/reset）
             "textField", "editButton",
         )

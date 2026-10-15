@@ -37,7 +37,7 @@ internal object DialectPreviewStatusText {
             MpSqlVisualizerBundle.message("panel.meta.dialectStatus.ideaDialect")
         DialectDecisionEngine.Source.LEARNED_MODULE -> MpSqlVisualizerBundle.message("panel.meta.dialectStatus.module")
         DialectDecisionEngine.Source.PROJECT_AGENT -> MpSqlVisualizerBundle.message("panel.meta.dialectStatus.agent")
-        DialectDecisionEngine.Source.PROJECT_CONSENSUS, DialectDecisionEngine.Source.IDEA_DEFAULT_SCOPE ->
+        DialectDecisionEngine.Source.PROJECT_CONSENSUS ->
             MpSqlVisualizerBundle.message("panel.meta.dialectStatus.projectConsensus")
         null -> MpSqlVisualizerBundle.message("panel.meta.dialectStatus.unavailable")
     }

@@ -35,10 +35,6 @@ data class PreviewSourceContext(
 enum class PreviewSourceOrigin {
     PSI,
     XML,
-    LOG,
-    HISTORY,
-    MANUAL,
-    MCP,
 }
 
 /** 实际 SQL PSI 的解析结果；失败和歧义均为一等状态，不以 null 混淆。 */
