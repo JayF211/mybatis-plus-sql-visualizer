@@ -80,6 +80,29 @@ class McpErrorPositionTextTest {
         )
     }
 
+    /** T-M19-McpErrorMeta：反射包装不应吞掉驱动状态码和厂商码，首行与位置仍取解包后的错误。 */
+    @Test
+    fun `反射包装的 SQL 异常保留状态码厂商码和位置`() {
+        val driverError = SQLException("ERROR: column naem does not exist\n  Position: 42", "42703", 1049)
+        val reflected = InvocationTargetException(driverError)
+        assertEquals(
+            "[DATASOURCE_UNREACHABLE] EXPLAIN failed on 'PostgreSQL' data source: " +
+                "ERROR: column naem does not exist\nsqlState: 42703\nerrorCode: 1049\nerrorPosition: char 42",
+            McpExplainFormatter.formatFailure(reflected, "PostgreSQL", "EXPLAIN SELECT naem FROM some_table_with_a_longer_table_name"),
+        )
+    }
+
+    /** 状态码不存在时不伪造；厂商码独立存在仍必须保留。 */
+    @Test
+    fun `无 SQLState 时仅追加存在的厂商码`() {
+        val driverError = SQLException("syntax error at line 2", null, 1064)
+        assertEquals(
+            "[DATASOURCE_UNREACHABLE] EXPLAIN failed on 'MySQL' data source: " +
+                "syntax error at line 2\nerrorCode: 1064\nerrorPosition: line 2",
+            McpExplainFormatter.formatFailure(InvocationTargetException(driverError), "MySQL", "EXPLAIN SELECT 1\nFROM t"),
+        )
+    }
+
     /** 超时异常已由执行通道改写为带 timed out 的 SQLException，不得替换原有消息。 */
     @Test
     fun `超时错误文本仍保留超时标记与原错误码`() {

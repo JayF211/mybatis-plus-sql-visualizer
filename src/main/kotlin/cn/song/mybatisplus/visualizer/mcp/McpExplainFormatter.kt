@@ -105,15 +105,19 @@ object McpExplainFormatter {
     fun formatErrorPosition(position: Triple<Int, Boolean, String>?): String =
         if (position == null) "" else "\nerrorPosition: ${if (position.second) "char" else "line"} ${position.first}"
 
-    /** 反射执行失败的 agent 文本：非超时异常先拆 InvocationTargetException，再提取驱动位置。 */
+    /** T-M19-McpErrorMeta：先拆反射包装，再保留驱动状态码、厂商码与原有位置文案；缺失字段不追加。 */
     fun formatFailure(error: Throwable, dialectName: String, explainSql: String): String {
         val cause = (error as? InvocationTargetException)?.targetException ?: error
         val causeMsg = cause.message ?: cause.javaClass.simpleName
+        val info = ErrorPositionExtractor.buildInfo(cause, causeMsg, explainSql.length)
         val pos = ErrorPositionExtractor.extractPosition(causeMsg, explainSql.length)
         val firstLine = causeMsg.lineSequence().firstOrNull { it.isNotBlank() } ?: causeMsg
         return McpToolErrors.code(
             McpToolErrors.DATASOURCE_UNREACHABLE,
-            "EXPLAIN failed on '$dialectName' data source: $firstLine" + formatErrorPosition(pos),
+            "EXPLAIN failed on '$dialectName' data source: $firstLine" +
+                (info.sqlState?.let { "\nsqlState: $it" } ?: "") +
+                (info.errorCode?.let { "\nerrorCode: $it" } ?: "") +
+                formatErrorPosition(pos),
         )
     }
 }
