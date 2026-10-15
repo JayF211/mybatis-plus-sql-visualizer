@@ -1,6 +1,5 @@
 package cn.song.mybatisplus.visualizer.log
 
-import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.util.MpvsUiColors
 import com.intellij.ui.SimpleTextAttributes
 import java.awt.Font
@@ -24,13 +23,7 @@ internal object SqlEntryPresentation {
 
         if (entry.sequenceNumber > 0) add(SqlTextFragment("#${entry.sequenceNumber} ", secondaryAttributes))
         addFragment(formatTimestampFragment(entry))
-        if (showDuration) {
-            val duration = formatDurationFragment(entry.executionTimeMs, selected)
-            val threshold = PluginSettings.getInstance().state.slowQueryThresholdMs
-            addFragment(if (!selected && (entry.executionTimeMs ?: 0) < threshold / 2) {
-                duration.first to secondaryAttributes
-            } else duration)
-        }
+        if (showDuration) addFragment(formatDurationFragment(entry.executionTimeMs, selected))
         addFragment(formatDatabaseFragment(entry, selected))
         addFragment(formatMcpFragment(entry, selected))
         if (showLogDetails) {
