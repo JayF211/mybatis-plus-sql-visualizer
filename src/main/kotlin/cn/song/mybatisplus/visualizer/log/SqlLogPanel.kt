@@ -115,19 +115,6 @@ class SqlLogPanel(
     private lateinit var previewHost: SqlListPreviewHost
     private val dockedPreview = SqlDockedPreview(project, list) { previewHost.toggle() }
     /**
-     * 页签容器（T-SqlLogTabsSingleRow / O-149，用户 2026-10-14）。
-     *
-     * 折行根因：`JTabbedPane` 默认 `tabLayoutPolicy` 是 **WRAP_TAB_LAYOUT**——页签总宽超过容器宽度时
-     * 按行折，窄侧栏下四个页签会变成两行（用户截图形态）。改为 **SCROLL_TAB_LAYOUT** 后页签**永不折行**，
-     * 宽度不足时由平台按滚动/溢出处理。
-     *
-     * 再用 `setTabComponentInsets` 收紧页签内边距（243 与 262 本机 jar `javap` 均实证该 API 存在），
-     * 让四个页签在用户侧栏宽度下正好一行、通常不需要滚动。
-     *
-     * 备选（本期不做，见计划 §2.2 / V182）：换平台 `JBTabs` + `TabLayout.SHRINK` 取编辑器页签那种
-     * 「缩到最小 + 下拉列出全部」的交互——该容器跨 243/253/262 构造签名有漂移面，须先补签名门禁。
-     */
-    /**
      * 页签容器（T-SqlLogTabsSingleRow / O-149，用户 2026-10-14 两轮校正后定稿）。
      *
      * 折行根因：`JTabbedPane` 默认 `WRAP_TAB_LAYOUT`——页签总宽超过容器宽就按行折，窄侧栏下变两行。

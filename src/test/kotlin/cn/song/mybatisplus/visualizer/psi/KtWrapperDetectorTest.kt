@@ -121,6 +121,26 @@ class KtWrapperDetectorTest : BasePlatformTestCase() {
         assertTrue("应包含 LAMBDA_UPDATE", types.contains(WrapperType.LAMBDA_UPDATE))
     }
 
+    fun test主动入口只认光标或选区命中的KotlinWrapper行() {
+        configureKt(
+            """
+            fun query() {
+                println("not wrapper")
+                service.ktQuery().eq(User::name, "x").list()
+                service.ktUpdate().set(User::name, "y").update()
+            }
+            """,
+        )
+        val text = myFixture.file.text
+        val plain = text.indexOf("println")
+        val query = text.indexOf("ktQuery")
+        val update = text.indexOf("ktUpdate")
+        assertFalse(KtWrapperDetector.detectAt(myFixture.file, plain))
+        assertTrue(KtWrapperDetector.detectAt(myFixture.file, query))
+        assertTrue(KtWrapperDetector.detectInRange(myFixture.file, query, update + "ktUpdate".length))
+        assertFalse(KtWrapperDetector.detectInRange(myFixture.file, plain, plain + "println".length))
+    }
+
     fun test两条Kotlin链未能生成表列时不亮不可用图标也不冒认首链() {
         configureKt(
             """

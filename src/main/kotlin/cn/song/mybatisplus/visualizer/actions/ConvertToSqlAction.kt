@@ -1,5 +1,7 @@
 package cn.song.mybatisplus.visualizer.actions
 
+import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import cn.song.mybatisplus.visualizer.psi.KtWrapperDetector
 import cn.song.mybatisplus.visualizer.psi.WrapperLocator
 import cn.song.mybatisplus.visualizer.psi.jpa.CriteriaQueryLocator
 import cn.song.mybatisplus.visualizer.psi.jpa.CustomDaoHqlLocator
@@ -30,6 +32,8 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.ScrollType
+import com.intellij.notification.Notification
+import com.intellij.notification.NotificationType
 import com.intellij.openapi.project.Project
 import com.intellij.psi.PsiAnnotation
 import com.intellij.psi.PsiClass
@@ -110,24 +114,31 @@ class ConvertToSqlAction : AnAction() {
                 // 一并后台 ReadAction 预计算——SqlSelectionDialog 构造只做纯 UI 渲染（EDT 上 PSI 解析
                 // 会被 2025.3+ SlowOperations 守卫禁止，实测 SEVERE "Slow operations are prohibited on EDT"）
                 val payload = try {
-                    ReadAction.compute<Pair<List<PsiMethodCallExpression>, List<SqlSelectionDialog.Row>>, Throwable> {
+                    ReadAction.compute<Triple<List<PsiMethodCallExpression>, List<SqlSelectionDialog.Row>, Boolean>, Throwable> {
                         val heads = WrapperLocator.sqlCandidatesInRange(file, selStart, selEnd)
-                        heads to heads.map { head ->
-                            SqlSelectionDialog.Row.of(
-                                WrapperLocator.sqlCandidateSummary(head),
-                                WrapperLocator.sqlCandidateLineText(head),
-                            )
-                        }
+                        Triple(
+                            heads,
+                            heads.map { head ->
+                                SqlSelectionDialog.Row.of(
+                                    WrapperLocator.sqlCandidateSummary(head),
+                                    WrapperLocator.sqlCandidateLineText(head),
+                                )
+                            },
+                            kotlinWrapperUnavailableInRange(file, selStart, selEnd),
+                        )
                     }
                 } catch (t: Throwable) {
-                    emptyList<PsiMethodCallExpression>() to emptyList<SqlSelectionDialog.Row>()
+                    Triple(emptyList(), emptyList(), false)
                 }
-                val (chainHeads, displayTexts) = payload
+                val (chainHeads, displayTexts, kotlinWrapperUnavailable) = payload
                 ApplicationManager.getApplication().invokeLater {
                     if (project.isDisposed) return@invokeLater
                     when (chainHeads.size) {
                         // T-M29.6：选择区内无 Wrapper 候选 → 回落选择区内 SQL 注解候选（0/1/多分发）
-                        0 -> showAnnotationSelectionCandidates(project, file, editor, selStart, selEnd, sourceLocation)
+                        0 -> showAnnotationSelectionCandidates(
+                            project, file, editor, selStart, selEnd, sourceLocation,
+                            onEmpty = if (kotlinWrapperUnavailable) ({ notifyKotlinWrapperUnavailable(project) }) else null,
+                        )
                         1 -> preview(service, chainHeads[0], project, sourceLocation)
                         else -> SqlSelectionDialog(project, chainHeads, displayTexts) { head ->
                             // T-M23.8：选中确定 → 编辑器定位（光标到行首 + 滚动居中 + 整行选中）→ 预览 SQL
@@ -160,7 +171,9 @@ class ConvertToSqlAction : AnAction() {
 
         // PSI 转换在后台线程执行（EDT 上慢操作会被 2025.3+ 禁止），回调在 EDT 渲染
         val wrapperContext = java.util.concurrent.atomic.AtomicReference<cn.song.mybatisplus.visualizer.context.PreviewSourceContext?>()
+        val kotlinWrapperUnavailable = java.util.concurrent.atomic.AtomicBoolean(false)
         SqlPreviewService.previewAsync(project, {
+            kotlinWrapperUnavailable.set(kotlinWrapperUnavailableAt(file, offset))
             val context = service.resolveWrapperSourceContext(element)
             wrapperContext.set(context)
             service.preview(element, context)
@@ -174,7 +187,10 @@ class ConvertToSqlAction : AnAction() {
                 && !tryJpaFallback(service, project, element, sourceLocation)
                 && !tryMethodBodyStringSqlFallback(project, element, sourceLocation)) {
                 // 均未命中 → 回落文件级 SQL 注解候选（M26-A，Mapper 接口场景）
-                showAnnotationCandidates(project, file, editor, sourceLocation)
+                showAnnotationCandidates(
+                    project, file, editor, sourceLocation,
+                    onEmpty = if (kotlinWrapperUnavailable.get()) ({ notifyKotlinWrapperUnavailable(project) }) else null,
+                )
             }
             // 任一 tryXxxFallback 返回 true 时已在内部触发预览 + showResult，无需额外操作
         }
@@ -355,7 +371,13 @@ class ConvertToSqlAction : AnAction() {
      * T-M29.6：选中确定后编辑器定位（对齐选择区候选交互）。
      */
     @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
-    private fun showAnnotationCandidates(project: Project, file: com.intellij.psi.PsiFile, editor: Editor, sourceLocation: String?) {
+    private fun showAnnotationCandidates(
+        project: Project,
+        file: com.intellij.psi.PsiFile,
+        editor: Editor,
+        sourceLocation: String?,
+        onEmpty: (() -> Unit)? = null,
+    ) {
         ApplicationManager.getApplication().executeOnPooledThread {
             val payload = try {
                 ReadAction.compute<Pair<List<PsiAnnotation>, List<SqlSelectionDialog.Row>>, Throwable> {
@@ -375,7 +397,7 @@ class ConvertToSqlAction : AnAction() {
             ApplicationManager.getApplication().invokeLater {
                 if (project.isDisposed) return@invokeLater
                 when (annotations.size) {
-                    0 -> SqlPreviewService.showResult(project, null, sourceLocation)
+                    0 -> onEmpty?.invoke() ?: SqlPreviewService.showResult(project, null, sourceLocation)
                     1 -> previewAnnotation(project, annotations[0], sourceLocation)
                     else -> SqlSelectionDialog(project, annotations, displayTexts) { selected ->
                         locateEditorTo(editor, selected)
@@ -399,6 +421,7 @@ class ConvertToSqlAction : AnAction() {
         selStart: Int,
         selEnd: Int,
         sourceLocation: String? = null,
+        onEmpty: (() -> Unit)? = null,
     ) {
         ApplicationManager.getApplication().executeOnPooledThread {
             val payload = try {
@@ -419,7 +442,7 @@ class ConvertToSqlAction : AnAction() {
             ApplicationManager.getApplication().invokeLater {
                 if (project.isDisposed) return@invokeLater
                 when (annotations.size) {
-                    0 -> SqlPreviewService.showResult(project, null, sourceLocation)
+                    0 -> onEmpty?.invoke() ?: SqlPreviewService.showResult(project, null, sourceLocation)
                     1 -> previewAnnotation(project, annotations[0], sourceLocation)
                     else -> SqlSelectionDialog(project, annotations, displayTexts) { selected ->
                         locateEditorTo(editor, selected)
@@ -702,18 +725,49 @@ class ConvertToSqlAction : AnAction() {
         }
     }
 
+    private fun notifyKotlinWrapperUnavailable(project: Project) {
+        val notification = kotlinWrapperUnavailableNotification()
+        kotlinWrapperUnavailableNoticeForTest?.let {
+            it(notification)
+            return
+        }
+        if (ApplicationManager.getApplication().isUnitTestMode) return
+        notification.notify(project)
+    }
+
     // update() 读取 PSI，必须在后台线程执行（EDT 上请求 PSI_FILE 会抛异常）
     override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.BGT
 
     override fun update(e: AnActionEvent) {
-        // Java 文件（Wrapper 链）与 XML mapper 文件（T-M24-04：动态 SQL 语句）均可用
+        // Java/XML 可直接预览；Kotlin 主动入口保持可达，在尚不能可靠求表列时给诚实降级说明。
         val file = e.getData(CommonDataKeys.PSI_FILE)
-        e.presentation.isEnabledAndVisible = file is PsiJavaFile || file is XmlFile
+        val extension = file?.virtualFile?.extension
+        e.presentation.isEnabledAndVisible = file is PsiJavaFile || file is XmlFile || extension == "kt" || extension == "kts"
     }
 
     companion object {
         /** 插件动作 ID（plugin.xml 中注册）。 */
         const val ACTION_ID = "cn.song.mybatisplus.visualizer.ConvertToSql"
+        private const val NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview"
+
+        @Volatile
+        internal var kotlinWrapperUnavailableNoticeForTest: ((Notification) -> Unit)? = null
+
+        internal fun kotlinWrapperUnavailableAt(file: com.intellij.psi.PsiFile, offset: Int): Boolean =
+            KtWrapperDetector.detectAt(file, offset)
+
+        internal fun kotlinWrapperUnavailableInRange(
+            file: com.intellij.psi.PsiFile,
+            startOffset: Int,
+            endOffset: Int,
+        ): Boolean = KtWrapperDetector.detectInRange(file, startOffset, endOffset)
+
+        internal fun kotlinWrapperUnavailableNotification(): Notification = Notification(
+            NOTIFICATION_GROUP_ID,
+            MpSqlVisualizerBundle.message("action.kotlinWrapperUnsupported.title"),
+            MpSqlVisualizerBundle.message("action.kotlinWrapperUnsupported.message"),
+            NotificationType.INFORMATION,
+        )
     }
 }
 
