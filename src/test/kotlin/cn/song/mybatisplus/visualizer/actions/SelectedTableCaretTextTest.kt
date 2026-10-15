@@ -164,16 +164,22 @@ class SelectedTableCaretTextTest : BasePlatformTestCase() {
     fun `test 点击前重验选区且非法输入不能到达执行器`() {
         val submitted = mutableListOf<String>()
         val action = object : SelectedTableSqlTemplateAction(
-            "action.cn.song.mybatisplus.visualizer.SampleSelectedTable.text", { "SELECT * FROM $it" },
+            "action.cn.song.mybatisplus.visualizer.SampleSelectedTable.text",
+            SelectedTableTemplateKind.COUNT,
         ) {
-            override fun executeTemplate(project: com.intellij.openapi.project.Project, sql: String, locate: (() -> Unit)?) {
+            override fun executeTemplate(
+                project: com.intellij.openapi.project.Project,
+                sql: String,
+                locate: (() -> Unit)?,
+                request: cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Request,
+            ) {
                 submitted += sql
             }
         }
         action.actionPerformed(eventForSelection("t; SELECT 1"))
         assertTrue("直接调用动作也不得提交第二条语句", submitted.isEmpty())
         action.actionPerformed(eventForSelection("db.tbl"))
-        assertEquals(listOf("SELECT * FROM db.tbl"), submitted)
+        assertEquals(listOf("SELECT COUNT(*) FROM db.tbl"), submitted)
 
         val stale = eventForSelection("safe t; SELECT 1")
         val editor = stale.getData(CommonDataKeys.EDITOR)!!
@@ -182,7 +188,7 @@ class SelectedTableCaretTextTest : BasePlatformTestCase() {
         assertTrue(stale.presentation.isEnabled)
         editor.selectionModel.setSelection(0, editor.document.textLength)
         action.actionPerformed(stale)
-        assertEquals("选区在 update 后变坏也不得提交", listOf("SELECT * FROM db.tbl"), submitted)
+        assertEquals("选区在 update 后变坏也不得提交", listOf("SELECT COUNT(*) FROM db.tbl"), submitted)
     }
 
     // ---------- 第 3 层：editorTemplateText 接到真编辑器 ----------

@@ -1,6 +1,11 @@
 package cn.song.mybatisplus.visualizer.actions
 
+import cn.song.mybatisplus.visualizer.config.ProjectPluginSettings
+import cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate
 import cn.song.mybatisplus.visualizer.execute.SqlExecutor
+import cn.song.mybatisplus.visualizer.model.LimitClause
+import cn.song.mybatisplus.visualizer.sql.Dialect
+import cn.song.mybatisplus.visualizer.sql.DialectRegistry
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.util.UiTextClipboard
 import com.intellij.notification.Notification
@@ -33,9 +38,24 @@ import com.intellij.openapi.vfs.VirtualFile
  * 三动作产物均为查询类语句（EXPLAIN/COUNT/SELECT），免 DML 二次确认（与 EXPLAIN 既有口径一致，
  * SqlTypeClassifier.QUERY 同族）。
  */
+enum class SelectedTableTemplateKind { EXPLAIN, COUNT, SAMPLE }
+
+/** 按本次动作捕获的项目/来源方言渲染模板；null 表示该方言不支持对应形态。 */
+internal fun renderSelectedTableTemplate(
+    kind: SelectedTableTemplateKind,
+    tableName: String,
+    dialect: Dialect,
+    sampleLimit: Int,
+): String? = when (kind) {
+    SelectedTableTemplateKind.EXPLAIN -> dialect.renderExplainStatement("SELECT * FROM $tableName")
+    SelectedTableTemplateKind.COUNT -> "SELECT COUNT(*) FROM $tableName"
+    SelectedTableTemplateKind.SAMPLE ->
+        "SELECT * FROM $tableName ${dialect.renderLimit(LimitClause(count = sampleLimit.coerceIn(1, 10000).toLong()))}"
+}
+
 abstract class SelectedTableSqlTemplateAction(
     private val textKey: String,
-    private val template: (String) -> String,
+    private val templateKind: SelectedTableTemplateKind,
 ) : AnAction() {
 
     override fun update(e: AnActionEvent) {
@@ -46,7 +66,12 @@ abstract class SelectedTableSqlTemplateAction(
     override fun actionPerformed(e: AnActionEvent) {
         val project = e.project ?: return
         val tableName = validatedTableIdentifier(selectedOrCaretText(e)) ?: return
-        val sql = template(tableName)
+        val sourceFile = e.getData(CommonDataKeys.VIRTUAL_FILE)
+        val dialect = DialectRegistry.effective(project, sourceFile)
+        val sampleLimit = runCatching {
+            cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.sampleLimit
+        }.getOrDefault(10)
+        val sql = renderSelectedTableTemplate(templateKind, tableName, dialect, sampleLimit)
         // T-SqlTemplateUx P2：失败反馈与预览面板拉平——除气泡外挂「定位到出错语句」「复制错误信息」
         // 两个可操作项（做法②：不新建面板，直接给 Notification 挂 NotificationAction）。
         // 定位锚点在动作触发时（EDT）从**触发编辑器**捕获（用户选中表名处即语句来源）；
@@ -58,14 +83,42 @@ abstract class SelectedTableSqlTemplateAction(
         )?.let { anchor ->
             { OpenFileDescriptor(project, anchor.file, anchor.line0, 0).navigate(true) }
         }
-        executeTemplate(project, sql, locate)
+        if (sql == null) {
+            notifySqlTemplateError(
+                project,
+                MpSqlVisualizerBundle.message("panel.explain.unsupported", dialect.name),
+                locate,
+            )
+            return
+        }
+        val renderMode = if (ProjectPluginSettings.getInstance(project).effectiveDialectAuto()) {
+            ExecutionDialectGate.RenderMode.AUTO
+        } else {
+            ExecutionDialectGate.RenderMode.MANUAL
+        }
+        val request = ExecutionDialectGate.Request(
+            renderMode = renderMode,
+            renderedDialectName = dialect.name,
+            intent = ExecutionDialectGate.Intent.TEMPLATE,
+            // 实际目标只在原生选择器确认后可知，当前执行 API 无法把同一目标固定给二次提交；
+            // 因而目标不一致时诚实阻断，不把“可重新渲染模板”冒充为“可无损重提交通道”。
+            canLosslesslyRerender = false,
+            userTextUntouched = true,
+        )
+        executeTemplate(project, sql, locate, request)
     }
 
-    protected open fun executeTemplate(project: Project, sql: String, locate: (() -> Unit)?) {
+    protected open fun executeTemplate(
+        project: Project,
+        sql: String,
+        locate: (() -> Unit)?,
+        request: ExecutionDialectGate.Request,
+    ) {
         SqlExecutor.execute(
             project, sql, null, true,
             onError = { errorMsg -> notifySqlTemplateError(project, errorMsg, locate) },
             onErrorRich = { info -> notifySqlTemplateError(project, info.message, locate) },
+            dialectGateRequest = request,
         )
     }
 
@@ -341,7 +394,7 @@ internal fun notifySqlTemplateError(project: Project, errorMsg: String, locate: 
 /** EXPLAIN 执行计划：`EXPLAIN SELECT * FROM <选中表>`。 */
 class ExplainSelectedTableAction : SelectedTableSqlTemplateAction(
     "action.cn.song.mybatisplus.visualizer.ExplainSelectedTable.text",
-    { selected -> "EXPLAIN SELECT * FROM $selected" },
+    SelectedTableTemplateKind.EXPLAIN,
 ) {
     companion object {
         /** 动作 ID（plugin.xml 注册 id 与设置页 ShortcutEditor 共用）。 */
@@ -352,7 +405,7 @@ class ExplainSelectedTableAction : SelectedTableSqlTemplateAction(
 /** 行数统计：`SELECT COUNT(*) FROM <选中表>`。 */
 class CountSelectedTableAction : SelectedTableSqlTemplateAction(
     "action.cn.song.mybatisplus.visualizer.CountSelectedTable.text",
-    { selected -> "SELECT COUNT(*) FROM $selected" },
+    SelectedTableTemplateKind.COUNT,
 ) {
     companion object {
         const val ACTION_ID = "cn.song.mybatisplus.visualizer.CountSelectedTable"
@@ -362,12 +415,7 @@ class CountSelectedTableAction : SelectedTableSqlTemplateAction(
 /** 抽样 N 行（R5：LIMIT 值设置页可配，默认 10；范围钳制 1..10000 防 0/负数与误输入全表）：`SELECT * FROM <选中表> LIMIT N`。 */
 class SampleSelectedTableAction : SelectedTableSqlTemplateAction(
     "action.cn.song.mybatisplus.visualizer.SampleSelectedTable.text",
-    { selected ->
-        val limit = runCatching {
-            cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.sampleLimit
-        }.getOrDefault(10).coerceIn(1, 10000)
-        "SELECT * FROM $selected LIMIT $limit"
-    },
+    SelectedTableTemplateKind.SAMPLE,
 ) {
     companion object {
         const val ACTION_ID = "cn.song.mybatisplus.visualizer.SampleSelectedTable"

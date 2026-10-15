@@ -1,6 +1,8 @@
 package cn.song.mybatisplus.visualizer.actions
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
+import cn.song.mybatisplus.visualizer.sql.MySqlDialect
+import cn.song.mybatisplus.visualizer.sql.OracleDialect
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 
@@ -13,15 +15,12 @@ import org.junit.Assert.assertEquals
  */
 class SampleSelectedTableActionLimitTest : BasePlatformTestCase() {
 
-    private fun templateOf(selected: String): String {
-        // template 构造参数为 lambda 属性——经子类实例化直接驱动（与生产同一函数对象）
-        val action = SampleSelectedTableAction()
-        val field = SelectedTableSqlTemplateAction::class.java.getDeclaredField("template")
-        field.isAccessible = true
-        @Suppress("UNCHECKED_CAST")
-        val template = field.get(action) as (String) -> String
-        return template(selected)
-    }
+    private fun templateOf(selected: String): String = renderSelectedTableTemplate(
+        SelectedTableTemplateKind.SAMPLE,
+        selected,
+        MySqlDialect,
+        PluginSettings.getInstance().state.sampleLimit,
+    )!!
 
     private fun withLimit(limit: Int, block: () -> Unit) {
         val old = PluginSettings.getInstance().state.sampleLimit
@@ -45,5 +44,16 @@ class SampleSelectedTableActionLimitTest : BasePlatformTestCase() {
         withLimit(0) { assertEquals("SELECT * FROM t LIMIT 1", templateOf("t")) }
         withLimit(-5) { assertEquals("SELECT * FROM t LIMIT 1", templateOf("t")) }
         withLimit(99999) { assertEquals("SELECT * FROM t LIMIT 10000", templateOf("t")) }
+    }
+
+    fun `test 抽样与EXPLAIN按捕获方言渲染`() {
+        assertEquals(
+            "SELECT * FROM t FETCH FIRST 25 ROWS ONLY",
+            renderSelectedTableTemplate(SelectedTableTemplateKind.SAMPLE, "t", OracleDialect, 25),
+        )
+        assertEquals(
+            MySqlDialect.renderExplainStatement("SELECT * FROM t"),
+            renderSelectedTableTemplate(SelectedTableTemplateKind.EXPLAIN, "t", MySqlDialect, 10),
+        )
     }
 }

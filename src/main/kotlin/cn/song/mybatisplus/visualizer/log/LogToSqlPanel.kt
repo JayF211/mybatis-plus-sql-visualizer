@@ -298,7 +298,7 @@ class LogToSqlPanel(
             return
         }
         if (statements.size == 1) {
-            executeStatement(statements[0])
+            executeSql(statements[0])
             return
         }
         // 多条：候选勾选浮层（CrudSqlPreviewFlow.showCandidates 同款范式——无按钮、
@@ -319,7 +319,7 @@ class LogToSqlPanel(
                 // 执行延后到选择浮层关闭之后（T-CrudSql 真机修复同款：不在选择 UI 的事件栈内
                 // 同步开 modeless 链路，262 实测会被吞且零异常零日志）
                 ApplicationManager.getApplication().invokeLater {
-                    executeStatement(selected.sql)
+                    executeSql(selected.sql)
                 }
             }
             .apply {
@@ -336,7 +336,7 @@ class LogToSqlPanel(
      *  列出发现（不新增弹窗形态/步骤），无发现时文案逐字节不变。
      *  弹窗白名单依据（BannedApiSourceScanTest「模态弹窗只允许白名单内既有场景」）：非查询提交前
      *  的 YesNo 确认属「用户必须做选择」场景，与 SqlPreviewPanel 执行确认同类。 */
-    private fun executeStatement(sql: String) {
+    private fun executeSql(sql: String) {
         val isQuery = cn.song.mybatisplus.visualizer.execute.SqlTypeClassifier.isQuery(sql)
         if (!isQuery) {
             val keyword = cn.song.mybatisplus.visualizer.execute.SqlTypeClassifier.getFirstKeyword(sql) ?: "SQL"
@@ -353,10 +353,12 @@ class LogToSqlPanel(
             )
             if (confirm != com.intellij.openapi.ui.Messages.YES) return
         }
+        val dialectGateRequest = cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.rawSqlRequest(sql)
         status(MpSqlVisualizerBundle.message("logToSql.execute.submitted"), error = false)
         cn.song.mybatisplus.visualizer.execute.SqlExecutor.execute(
             project, sql, null, isQuery,
             onError = { errorMsg -> showExecutionError(errorMsg) },
+            dialectGateRequest = dialectGateRequest,
         )
     }
 

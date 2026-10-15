@@ -15,6 +15,8 @@ object ExecutionDialectGate {
         RERENDER_UNAVAILABLE,
         TARGET_UNKNOWN_QUERY_CONFIRM,
         TARGET_UNKNOWN_BLOCK,
+        RENDER_UNKNOWN_QUERY_CONFIRM,
+        RENDER_UNKNOWN_BLOCK,
     }
 
     data class Request(
@@ -41,19 +43,30 @@ object ExecutionDialectGate {
     )
 
     /**
-     * O-145 W7 最小生产闭环之外仍未携带 Request 的入口。列表是诚实边界，不是完成声明；
-     * [ExecutionDialectGateTest] 的源码接线守卫钉住它，后续覆盖一条必须同步删一条。
+     * O-145 W7 尚未携带 Request 的显式入口；完成态必须为空。
+     * [ExecutionDialectGateTest] 同时逐入口扫描调用参数，防止只清清单、不接生产链的空绿。
      */
-    internal val uncoveredEntryPoints: Set<String> = linkedSetOf(
-        "actions.SelectedTableSqlTemplateAction.executeTemplate",
-        "log.LogToSqlPanel.executeSql",
-        "ui.SqlPreviewPanel.estimateDmlImpact",
-        "ui.SqlPreviewPanel.executeAdhocSql",
-    )
+    internal val uncoveredEntryPoints: Set<String> = emptySet()
+
+    /** 原始日志/临时 SQL 没有可信渲染来源；查询必须显式确认，写入与 EXPLAIN 一律阻断。 */
+    fun rawSqlRequest(sql: String): Request {
+        val firstKeyword = SqlTypeClassifier.getFirstKeyword(sql)
+        val intent = when {
+            firstKeyword.equals("EXPLAIN", ignoreCase = true) -> Intent.EXPLAIN
+            SqlTypeClassifier.isQuery(sql) -> Intent.QUERY
+            else -> Intent.DML
+        }
+        return Request(RenderMode.UNKNOWN, null, intent)
+    }
 
     fun evaluate(request: Request, targetDialectName: String?): Verdict {
         val rendered = known(request.renderedDialectName)
         val target = known(targetDialectName)
+        if (request.renderMode == RenderMode.UNKNOWN && rendered == null) {
+            val status = if (request.intent == Intent.QUERY) Status.RENDER_UNKNOWN_QUERY_CONFIRM
+                else Status.RENDER_UNKNOWN_BLOCK
+            return Verdict(status, null, target)
+        }
         if (target == null) {
             val status = if (request.intent == Intent.QUERY) Status.TARGET_UNKNOWN_QUERY_CONFIRM
                 else Status.TARGET_UNKNOWN_BLOCK

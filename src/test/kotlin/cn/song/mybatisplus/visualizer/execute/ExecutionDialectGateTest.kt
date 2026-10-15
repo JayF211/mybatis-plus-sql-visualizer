@@ -42,6 +42,22 @@ class ExecutionDialectGateTest {
     }
 
     @Test
+    fun `generated template and DML impact query block known mismatch without a pinned rerender target`() {
+        val template = request(
+            ExecutionDialectGate.RenderMode.AUTO,
+            "MySQL",
+            ExecutionDialectGate.Intent.TEMPLATE,
+            rerender = false,
+            untouched = true,
+        )
+        assertEquals(ExecutionDialectGate.Status.RERENDER_UNAVAILABLE,
+            ExecutionDialectGate.evaluate(template, "Oracle").status)
+        val impactCount = template.copy(intent = ExecutionDialectGate.Intent.QUERY)
+        assertEquals(ExecutionDialectGate.Status.RERENDER_UNAVAILABLE,
+            ExecutionDialectGate.evaluate(impactCount, "Oracle").status)
+    }
+
+    @Test
     fun `unknown target query asks confirmation but DML and EXPLAIN block`() {
         assertEquals(ExecutionDialectGate.Status.TARGET_UNKNOWN_QUERY_CONFIRM,
             ExecutionDialectGate.evaluate(request(ExecutionDialectGate.RenderMode.AUTO), null).status)
@@ -50,6 +66,26 @@ class ExecutionDialectGateTest {
             assertEquals(intent.name, ExecutionDialectGate.Status.TARGET_UNKNOWN_BLOCK,
                 ExecutionDialectGate.evaluate(request(ExecutionDialectGate.RenderMode.AUTO, intent = intent), null).status)
         }
+    }
+
+    @Test
+    fun `raw query always asks confirmation while raw DML and EXPLAIN block`() {
+        val query = ExecutionDialectGate.rawSqlRequest("SELECT * FROM t")
+        assertEquals(ExecutionDialectGate.Intent.QUERY, query.intent)
+        assertEquals(ExecutionDialectGate.Status.RENDER_UNKNOWN_QUERY_CONFIRM,
+            ExecutionDialectGate.evaluate(query, "PostgreSQL").status)
+        assertEquals(ExecutionDialectGate.Status.RENDER_UNKNOWN_QUERY_CONFIRM,
+            ExecutionDialectGate.evaluate(query, null).status)
+
+        val dml = ExecutionDialectGate.rawSqlRequest("UPDATE t SET a = 1 WHERE id = 2")
+        assertEquals(ExecutionDialectGate.Intent.DML, dml.intent)
+        assertEquals(ExecutionDialectGate.Status.RENDER_UNKNOWN_BLOCK,
+            ExecutionDialectGate.evaluate(dml, "MySQL").status)
+
+        val explain = ExecutionDialectGate.rawSqlRequest("EXPLAIN SELECT * FROM t")
+        assertEquals(ExecutionDialectGate.Intent.EXPLAIN, explain.intent)
+        assertEquals(ExecutionDialectGate.Status.RENDER_UNKNOWN_BLOCK,
+            ExecutionDialectGate.evaluate(explain, "MySQL").status)
     }
 
     @Test
@@ -147,6 +183,37 @@ class ExecutionDialectGateTest {
     }
 
     @Test
+    fun `central handler confirms raw query and blocks raw writes even for known target`() {
+        val project = projectStub()
+        val target = ExecutionDialectGate.Target(Any(), "ds-1", "prod", "PostgreSQL", "PostgreSQL")
+        try {
+            var confirmations = 0
+            DataSourceSelector.unknownTargetQueryConfirmationForTest = {
+                confirmations++
+                true
+            }
+            assertTrue(DataSourceSelector.allowDialectGate(
+                project,
+                ExecutionDialectGate.rawSqlRequest("SELECT * FROM t"),
+                target,
+                null,
+                null,
+            ))
+            assertEquals(1, confirmations)
+            assertFalse(DataSourceSelector.allowDialectGate(
+                project,
+                ExecutionDialectGate.rawSqlRequest("DELETE FROM t WHERE id = 1"),
+                target,
+                null,
+                null,
+            ))
+            assertEquals("raw DML must block before any confirmation", 1, confirmations)
+        } finally {
+            DataSourceSelector.unknownTargetQueryConfirmationForTest = null
+        }
+    }
+
+    @Test
     fun `source wiring gates selected session before attach and active console before submit mutation`() {
         val root = repoRoot()
         val results = File(root, "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResults.kt").readText()
@@ -160,24 +227,62 @@ class ExecutionDialectGateTest {
     }
 
     @Test
-    fun `preview ordinary execute and both explain channels carry request while uncovered paths stay explicit`() {
+    fun `all explicit execution entry points carry requests and uncovered list is empty`() {
         val root = repoRoot()
-        val source = File(root, "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelExecution.kt").readText()
-        assertTrue(source.contains("ExecutionDialectGate.Intent.DML"))
-        assertTrue(source.contains("ExecutionDialectGate.Intent.EXPLAIN"))
-        val structuredGate = source.indexOf("DataSourceSelector.allowDialectGate")
-        val structuredSubmit = source.indexOf("ExplainPanelChannel.executeStructured")
+        val preview = File(root, "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelExecution.kt").readText()
+        val templates = File(root, "src/main/kotlin/cn/song/mybatisplus/visualizer/actions/SelectedTableSqlTemplateActions.kt").readText()
+        val logs = File(root, "src/main/kotlin/cn/song/mybatisplus/visualizer/log/LogToSqlPanel.kt").readText()
+
+        assertTrue(preview.contains("ExecutionDialectGate.Intent.DML"))
+        assertTrue(preview.contains("ExecutionDialectGate.Intent.EXPLAIN"))
+        val structuredGate = preview.indexOf("DataSourceSelector.allowDialectGate")
+        val structuredSubmit = preview.indexOf("ExplainPanelChannel.executeStructured")
         assertTrue("structured EXPLAIN must gate before JDBC submit", structuredGate >= 0 && structuredSubmit > structuredGate)
-        assertEquals(
-            linkedSetOf(
-                "actions.SelectedTableSqlTemplateAction.executeTemplate",
-                "log.LogToSqlPanel.executeSql",
-                "ui.SqlPreviewPanel.estimateDmlImpact",
-                "ui.SqlPreviewPanel.executeAdhocSql",
-            ),
-            ExecutionDialectGate.uncoveredEntryPoints,
+
+        assertTrue("selected-table EXPLAIN must use the captured dialect renderer",
+            templates.contains("renderExplainStatement"))
+        assertTrue("selected-table sample must use the captured dialect renderer",
+            templates.contains("renderLimit"))
+        assertTrue("selected-table rendering must capture the action source/project dialect",
+            templates.contains("DialectRegistry.effective(project, sourceFile)"))
+        val templateExecuteBody = sourceSlice(
+            templates,
+            "protected open fun executeTemplate(",
+            "/** 目标文本入口",
         )
+        assertEquals(1, templateExecuteBody.countOccurrences("dialectGateRequest = request"))
+        val logBody = sourceSlice(logs, "private fun executeSql(sql: String)", "/** T-Perf-14")
+        assertEquals(1, logBody.countOccurrences("ExecutionDialectGate.rawSqlRequest"))
+        assertEquals(1, logBody.countOccurrences("dialectGateRequest = dialectGateRequest"))
+        val impactBody = sourceSlice(
+            preview,
+            "internal fun SqlPreviewPanel.estimateDmlImpact()",
+            "/** R42：影响面预演的轻通知",
+        )
+        assertEquals(1, impactBody.countOccurrences("SqlExecutor.execute("))
+        assertEquals(1, impactBody.countOccurrences("dialectGateRequest = dialectGateRequest"))
+
+        val adhocBody = sourceSlice(
+            preview,
+            "internal fun SqlPreviewPanel.executeAdhocSql(",
+            "T-RollbackSql P2-F5/F6：UPDATE/DELETE 执行前登记快照条目",
+        )
+        assertEquals(2, adhocBody.countOccurrences("SqlExecutor.execute("))
+        assertEquals(1, adhocBody.countOccurrences("SqlExecutor.executePrepared("))
+        assertEquals(3, adhocBody.countOccurrences("dialectGateRequest = dialectGateRequest"))
+        assertTrue(ExecutionDialectGate.uncoveredEntryPoints.isEmpty())
     }
+
+    private fun sourceSlice(source: String, startMarker: String, endMarker: String): String {
+        val start = source.indexOf(startMarker)
+        assertTrue("missing source marker: $startMarker", start >= 0)
+        val end = source.indexOf(endMarker, start + startMarker.length)
+        assertTrue("missing source marker: $endMarker", end > start)
+        return source.substring(start, end)
+    }
+
+    private fun String.countOccurrences(needle: String): Int =
+        windowed(needle.length, 1).count { it == needle }
 
     private fun projectStub(): com.intellij.openapi.project.Project =
         java.lang.reflect.Proxy.newProxyInstance(

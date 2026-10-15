@@ -153,6 +153,15 @@ internal fun SqlPreviewPanel.showRollbackSql() {
 
             is cn.song.mybatisplus.visualizer.execute.DmlImpactEstimator.Plan.Applicable -> {
                 val probe = plan.probe
+                val dialectGateRequest = cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Request(
+                    renderMode = executionDialectRenderMode,
+                    renderedDialectName = dialect.name,
+                    intent = cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Intent.QUERY,
+                    // COUNT 试算可按目标方言重建，但现有选择器不能把同一实际目标固定给二次提交；
+                    // 已知不一致时必须阻断，绝不把当前方言生成的 COUNT 送进另一语法族。
+                    canLosslesslyRerender = false,
+                    userTextUntouched = true,
+                )
                 val capLine = if (probe.rowCap != null) {
                     MpSqlVisualizerBundle.message("dml.impact.probe.capped", probe.rowCap)
                 } else {
@@ -175,6 +184,7 @@ internal fun SqlPreviewPanel.showRollbackSql() {
                     onEditor = { consoleEditor -> onNativeEditorReady(consoleEditor) },
                     onError = { errorMsg -> resultPanel.showError(errorMsg) },
                     onErrorRich = { info -> showErrorRichWithLocate(info) },
+                    dialectGateRequest = dialectGateRequest,
                 )
             }
         }
@@ -289,6 +299,7 @@ internal fun SqlPreviewPanel.executeAdhocSql(
     val proj = project ?: return
     if (sql.isBlank()) return
     val isQuery = SqlTypeClassifier.isQuery(sql)
+    val dialectGateRequest = cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.rawSqlRequest(sql)
     // O-64/T-RollbackIdentityParse（P19/D2=A）：identity 包装产物整批直跑。识别特征=
     // 含 `SET IDENTITY_INSERT … ON|OFF` 语句（本插件自产回滚批次的封闭形态）；普通多语句
     // 产物保持现态（Statements 选择层默认行为不变），避免行为突变。生产入口仅本函数
@@ -334,8 +345,9 @@ internal fun SqlPreviewPanel.executeAdhocSql(
                     onConsole = { consoleComponent -> embedConsole(consoleComponent, embedMode = ConsoleEmbedMode.EXECUTE) },
                     onEditor = { consoleEditor -> onNativeEditorReady(consoleEditor) },
                     onError = { errorMsg -> resultPanel.showError(errorMsg) },
-        onErrorRich = { info -> showErrorRichWithLocate(info) },
+                    onErrorRich = { info -> showErrorRichWithLocate(info) },
                     wholeScriptExec = wholeScriptExec,
+                    dialectGateRequest = dialectGateRequest,
                 )
                 return
             }
@@ -351,8 +363,9 @@ internal fun SqlPreviewPanel.executeAdhocSql(
             proj,
             onResultsReady = { fullConsole -> embedConsole(fullConsole, embedMode = ConsoleEmbedMode.EXECUTE) },
             onError = { errorMsg -> resultPanel.showError(errorMsg) },
-        onErrorRich = { info -> showErrorRichWithLocate(info) },
+            onErrorRich = { info -> showErrorRichWithLocate(info) },
             wholeScriptExec = wholeScriptExec,
+            dialectGateRequest = dialectGateRequest,
         )
         if (executed) return
     }
@@ -363,6 +376,7 @@ internal fun SqlPreviewPanel.executeAdhocSql(
         onError = { errorMsg -> resultPanel.showError(errorMsg) },
         onErrorRich = { info -> showErrorRichWithLocate(info) },
         wholeScriptExec = wholeScriptExec,
+        dialectGateRequest = dialectGateRequest,
     )
 }
 
@@ -539,7 +553,8 @@ internal fun SqlPreviewPanel.onExecutionDialectGate(
 ) {
     when (verdict.status) {
         cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Status.MATCH,
-        cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Status.TARGET_UNKNOWN_QUERY_CONFIRM -> Unit
+        cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Status.TARGET_UNKNOWN_QUERY_CONFIRM,
+        cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Status.RENDER_UNKNOWN_QUERY_CONFIRM -> Unit
         cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Status.AUTO_RERENDER_REQUIRED -> {
             val target = verdict.targetDialectName
             if (target != null && rerenderForExecutionTarget(target)) {

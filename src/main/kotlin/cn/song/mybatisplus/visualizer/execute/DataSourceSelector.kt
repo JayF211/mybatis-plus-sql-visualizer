@@ -184,7 +184,7 @@ object DataSourceSelector {
     // 结果栏消失、contentAdded 换入未写回共享缓存导致复用嵌了旧编辑器块，均是此类过期引用。）
     internal var sharedTopBlock: javax.swing.JComponent? = null
 
-    /** 未知查询目标的确认测试缝；生产为 null 时走本地化确认框。 */
+    /** 查询的目标或原始渲染方言未知时的确认测试缝；生产为 null 时走本地化确认框。 */
     @Volatile
     internal var unknownTargetQueryConfirmationForTest: ((ExecutionDialectGate.Verdict) -> Boolean)? = null
 
@@ -205,11 +205,17 @@ object DataSourceSelector {
         onDialectGate?.invoke(verdict)
         return when (verdict.status) {
             ExecutionDialectGate.Status.MATCH -> true
-            ExecutionDialectGate.Status.TARGET_UNKNOWN_QUERY_CONFIRM -> {
+            ExecutionDialectGate.Status.TARGET_UNKNOWN_QUERY_CONFIRM,
+            ExecutionDialectGate.Status.RENDER_UNKNOWN_QUERY_CONFIRM -> {
                 unknownTargetQueryConfirmationForTest?.invoke(verdict) ?: runCatching {
+                    val messageKey = if (verdict.status == ExecutionDialectGate.Status.TARGET_UNKNOWN_QUERY_CONFIRM) {
+                        "execute.dialectGate.unknownQuery.confirm"
+                    } else {
+                        "execute.dialectGate.unknownRenderQuery.confirm"
+                    }
                     com.intellij.openapi.ui.Messages.showYesNoDialog(
                         project,
-                        MpSqlVisualizerBundle.message("execute.dialectGate.unknownQuery.confirm"),
+                        MpSqlVisualizerBundle.message(messageKey),
                         MpSqlVisualizerBundle.message("execute.dialectGate.title"),
                         com.intellij.openapi.ui.Messages.getWarningIcon(),
                     ) == com.intellij.openapi.ui.Messages.YES
@@ -221,7 +227,8 @@ object DataSourceSelector {
             }
             ExecutionDialectGate.Status.MANUAL_CONFLICT,
             ExecutionDialectGate.Status.RERENDER_UNAVAILABLE,
-            ExecutionDialectGate.Status.TARGET_UNKNOWN_BLOCK -> {
+            ExecutionDialectGate.Status.TARGET_UNKNOWN_BLOCK,
+            ExecutionDialectGate.Status.RENDER_UNKNOWN_BLOCK -> {
                 onError?.invoke(dialectGateMessage(verdict))
                 false
             }
@@ -249,6 +256,10 @@ object DataSourceSelector {
             MpSqlVisualizerBundle.message("execute.dialectGate.unknownQuery.confirm")
         ExecutionDialectGate.Status.TARGET_UNKNOWN_BLOCK ->
             MpSqlVisualizerBundle.message("execute.dialectGate.unknownBlock")
+        ExecutionDialectGate.Status.RENDER_UNKNOWN_QUERY_CONFIRM ->
+            MpSqlVisualizerBundle.message("execute.dialectGate.unknownRenderQuery.confirm")
+        ExecutionDialectGate.Status.RENDER_UNKNOWN_BLOCK ->
+            MpSqlVisualizerBundle.message("execute.dialectGate.unknownRenderBlock")
     }
 
     /** 控制台是否已就绪（prepareConsole 成功后 true）。 */
