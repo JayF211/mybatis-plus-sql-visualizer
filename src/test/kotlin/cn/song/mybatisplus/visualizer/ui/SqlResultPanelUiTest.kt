@@ -246,6 +246,26 @@ class SqlResultPanelUiTest : BasePlatformTestCase() {
         }
     }
 
+    fun testRichErrorPreservesMetadataInTooltipAndCopy() {
+        val panel = SqlResultPanel()
+        try {
+            val driver = java.sql.SQLException("Syntax <bad> & detail\nPosition: 12", "42601", 932)
+            val info = cn.song.mybatisplus.visualizer.execute.ErrorPositionExtractor.buildInfo(driver, driver.message!!, 80)
+            val expected = cn.song.mybatisplus.visualizer.execute.ExecutionErrorFormatter.format(info)
+            panel.showErrorRich(info, { })
+            waitForEdt()
+            val label = allComponents(panel).filterIsInstance<javax.swing.JLabel>()
+                .first { it.toolTipText == expected }
+            assertTrue(label.text.contains("sqlState: 42601"))
+            assertTrue(locateButton(panel)!!.isVisible)
+            cn.song.mybatisplus.visualizer.util.UiTextClipboard.copy("sentinel")
+            copyButton(panel)!!.doClick()
+            assertEquals(expected, cn.song.mybatisplus.visualizer.util.UiTextClipboard.readText())
+        } finally {
+            panel.clear()
+        }
+    }
+
     /** 富错误后再走普通 showError（无定位）→ 定位按钮必须收起（不残留可点却无动作的按钮）。 */
     fun testShowErrorRich_转普通错误后按钮收起() {
         val panel = SqlResultPanel()

@@ -2,6 +2,8 @@ package cn.song.mybatisplus.visualizer.actions
 
 import cn.song.mybatisplus.visualizer.config.ProjectPluginSettings
 import cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate
+import cn.song.mybatisplus.visualizer.execute.ExecutionErrorFormatter
+import cn.song.mybatisplus.visualizer.execute.ExecutionErrorInfo
 import cn.song.mybatisplus.visualizer.execute.SqlExecutor
 import cn.song.mybatisplus.visualizer.model.LimitClause
 import cn.song.mybatisplus.visualizer.sql.Dialect
@@ -117,7 +119,7 @@ abstract class SelectedTableSqlTemplateAction(
         SqlExecutor.execute(
             project, sql, null, true,
             onError = { errorMsg -> notifySqlTemplateError(project, errorMsg, locate) },
-            onErrorRich = { info -> notifySqlTemplateError(project, info.message, locate) },
+            onErrorRich = { info -> notifySqlTemplateError(project, info, locate) },
             dialectGateRequest = request,
         )
     }
@@ -389,6 +391,15 @@ internal fun buildSqlTemplateErrorNotification(
 /** T-SqlTemplateUx P2：投递失败反馈通知（复制动作走 [UiTextClipboard] 统一收口）。 */
 internal fun notifySqlTemplateError(project: Project, errorMsg: String, locate: (() -> Unit)?) {
     buildSqlTemplateErrorNotification(errorMsg, locate) { UiTextClipboard.copy(errorMsg) }.notify(project)
+}
+
+internal fun buildSqlTemplateErrorNotification(info: ExecutionErrorInfo, locate: (() -> Unit)?): Notification {
+    val text = ExecutionErrorFormatter.format(info)
+    return buildSqlTemplateErrorNotification(text, locate) { UiTextClipboard.copy(text) }
+}
+
+internal fun notifySqlTemplateError(project: Project, info: ExecutionErrorInfo, locate: (() -> Unit)?) {
+    buildSqlTemplateErrorNotification(info, locate).notify(project)
 }
 
 /** EXPLAIN 执行计划：`EXPLAIN SELECT * FROM <选中表>`。 */

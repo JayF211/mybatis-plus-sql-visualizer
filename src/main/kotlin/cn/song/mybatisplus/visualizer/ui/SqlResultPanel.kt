@@ -277,7 +277,7 @@ class SqlResultPanel : JBPanel<SqlResultPanel>(BorderLayout()) {
      * @param locate 定位动作；null = 不显示定位按钮
      */
     fun showErrorRich(info: cn.song.mybatisplus.visualizer.execute.ExecutionErrorInfo, locate: (() -> Unit)?) {
-        showError(info.message)
+        showError(cn.song.mybatisplus.visualizer.execute.ExecutionErrorFormatter.format(info))
         locateHandler = locate
         if (locate != null) {
             // T-Round10FU（独立复核 ㉕）：三态文案——字符位置 / 行号 / 两者皆无。

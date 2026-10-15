@@ -132,6 +132,24 @@ class ErrorPositionWiringGuardTest {
         )
     }
 
+    @Test
+    fun `三个 UI 入口都消费富错误且日志保留旧通道兜底`() {
+        val main = File(repoRoot(), "src/main/kotlin/cn/song/mybatisplus/visualizer")
+        val preview = File(main, "ui/SqlResultPanel.kt").readText()
+        val template = File(main, "actions/SelectedTableSqlTemplateActions.kt").readText()
+        val log = File(main, "log/LogToSqlPanel.kt").readText()
+        assertTrue(preview.contains("showError(cn.song.mybatisplus.visualizer.execute.ExecutionErrorFormatter.format(info))"))
+        assertTrue(template.contains("onErrorRich = { info -> notifySqlTemplateError(project, info, locate) }"))
+        assertTrue(template.contains("ExecutionErrorFormatter.format(info)"))
+        assertTrue(log.contains("onErrorRich = { info -> showExecutionErrorRich(info) }"))
+        assertTrue(log.contains("onError = { errorMsg -> showExecutionError(errorMsg) }"))
+        assertTrue(log.contains("executionErrorPanel.showErrorRich(info, null)"))
+        val results = File(main, "execute/DataSourceSelectorResults.kt").readText()
+        assertTrue(results.contains("rich(ErrorPositionExtractor.buildInfo(cause, message, sqlMaxLength))"))
+        assertTrue(results.contains("onError?.invoke(message)"))
+        assertTrue(results.contains("refreshResultsComponent(ui, LOG, forceSwapIn = true, generation = generation, onError = onError, onErrorRich = onErrorRich"))
+    }
+
     /** 取调用实参文本（从 `(` 之后开始做括号配对，跳过字符串字面量）。 */
     private fun readArguments(text: String, start: Int): String? {
         var depth = 0

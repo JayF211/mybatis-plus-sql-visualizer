@@ -358,6 +358,7 @@ class LogToSqlPanel(
         cn.song.mybatisplus.visualizer.execute.SqlExecutor.execute(
             project, sql, null, isQuery,
             onError = { errorMsg -> showExecutionError(errorMsg) },
+            onErrorRich = { info -> showExecutionErrorRich(info) },
             dialectGateRequest = dialectGateRequest,
         )
     }
@@ -553,6 +554,20 @@ class LogToSqlPanel(
         WriteCommandAction.runWriteCommandAction(project) {
             editor.document.setText(text)
         }
+    }
+
+    /** 日志没有 mapper 来源锚点：保留富错误与复制，但不提供虚假的定位动作。 */
+    private fun showExecutionErrorRich(info: cn.song.mybatisplus.visualizer.execute.ExecutionErrorInfo) {
+        if (!ApplicationManager.getApplication().isDispatchThread) {
+            ApplicationManager.getApplication().invokeLater({ showExecutionErrorRich(info) },
+                com.intellij.openapi.application.ModalityState.any())
+            return
+        }
+        if (disposed || project.isDisposed) return
+        val text = cn.song.mybatisplus.visualizer.execute.ExecutionErrorFormatter.format(info)
+        status(text, error = true)
+        statusLabel.isVisible = false
+        executionErrorPanel.showErrorRich(info, null)
     }
 
     /** 执行链回调有 EDT 与后台两条路径；只在 EDT 更新面板，不弹窗。 */

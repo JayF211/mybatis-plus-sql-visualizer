@@ -61,6 +61,25 @@ class LogToSqlPanelExecuteTest : BasePlatformTestCase() {
         assertFalse("下次转换成功后不留陈旧错误动作", copyButtons.single().isVisible)
     }
 
+    fun testRichErrorKeepsDriverMetadataAndCopyWithoutFalseLocate() {
+        val driver = java.sql.SQLException("Syntax <bad> & detail\nPosition: 12", "42601", 932)
+        val info = cn.song.mybatisplus.visualizer.execute.ErrorPositionExtractor.buildInfo(driver, driver.message!!, 80)
+        val expected = cn.song.mybatisplus.visualizer.execute.ExecutionErrorFormatter.format(info)
+        val rich = panel.javaClass.getDeclaredMethod("showExecutionErrorRich", cn.song.mybatisplus.visualizer.execute.ExecutionErrorInfo::class.java)
+            .apply { isAccessible = true }
+        rich.invoke(panel, info)
+        assertEquals(expected, panel.statusForTest())
+        assertFalse(descendants(panel).filterIsInstance<JButton>().any {
+            it.isVisible && it.text == MpSqlVisualizerBundle.message("execute.error.locate")
+        })
+        val copy = descendants(panel).filterIsInstance<JButton>().single {
+            it.isVisible && it.text == MpSqlVisualizerBundle.message("panel.copyError")
+        }
+        UiTextClipboard.copy("sentinel")
+        copy.doClick()
+        assertEquals(expected, UiTextClipboard.readText())
+    }
+
     // ---------- #2：诚实降级横幅 ----------
 
     fun test横幅_未识别到条目时显示三要素文案() {

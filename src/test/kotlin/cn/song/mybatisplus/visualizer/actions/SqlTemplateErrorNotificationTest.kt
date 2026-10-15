@@ -67,6 +67,19 @@ class SqlTemplateErrorNotificationTest : BasePlatformTestCase() {
         )
     }
 
+    fun testRichNotificationContainsAndCopiesFullDriverMetadata() {
+        val driver = java.sql.SQLException("Syntax <bad> & detail\nPosition: 12", "42601", 932)
+        val info = cn.song.mybatisplus.visualizer.execute.ErrorPositionExtractor.buildInfo(driver, driver.message!!, 80)
+        val expected = cn.song.mybatisplus.visualizer.execute.ExecutionErrorFormatter.format(info)
+        val notification = buildSqlTemplateErrorNotification(info, null)
+        assertEquals(expected, notification.content)
+        assertEquals(1, notification.actions.size)
+        // NotificationAction 的回调需平台事件；复制共用的捕获文本由此通知构造入口检验。
+        val withLocate = buildSqlTemplateErrorNotification(info, {})
+        assertEquals(2, withLocate.actions.size)
+        assertTrue(expected.contains("\nsqlState: 42601\nerrorCode: 932\nerrorPosition: char 12"))
+    }
+
     fun `test P2_锚点解析_取选区起始行`() {
         myFixture.configureByText(
             "OrderMapper.xml",
