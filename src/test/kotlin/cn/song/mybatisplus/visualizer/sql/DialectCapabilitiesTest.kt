@@ -38,6 +38,17 @@ class DialectCapabilitiesTest {
     }
 
     @Test
+    fun `EXPLAIN矩阵逐方言与唯一执行声明源一致`() {
+        for (dialect in DialectRegistry.dialects) {
+            assertEquals(
+                dialect.name,
+                ExplainSupport.entryFor(dialect.name)?.supported == true,
+                DialectCapabilities.isSupported(DialectCapabilities.Capability.EXPLAIN, dialect),
+            )
+        }
+    }
+
+    @Test
     fun `矩阵覆盖全注册方言且每方言四项`() {
         for (dialect in DialectRegistry.dialects) {
             val rows = DialectCapabilities.matrix(dialect)
