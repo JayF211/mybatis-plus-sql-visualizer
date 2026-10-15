@@ -171,6 +171,7 @@ object CrudSqlGenerator {
             paramHints = params.map { ParamHint(quote = it.quoteHint) },
             columns = spec.columns.map { it.columnName },
             columnComments = commentMap(spec),
+            renderedDialect = spec.dialect,
         )
 
     /** 批量形态（INSERT/UPDATE）：初始 SQL 与参数登记出自 [BatchModel]（唯一渲染源）。 */
@@ -187,6 +188,7 @@ object CrudSqlGenerator {
             columns = spec.columns.map { it.columnName },
             columnComments = commentMap(spec),
             batchModel = model,
+            renderedDialect = spec.dialect,
         )
     }
 

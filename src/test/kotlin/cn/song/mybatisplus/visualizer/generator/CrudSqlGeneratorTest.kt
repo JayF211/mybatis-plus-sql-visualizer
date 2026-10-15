@@ -95,6 +95,16 @@ class CrudSqlGeneratorTest {
         assertEquals(listOf("k1", "k2"), delete.result.unresolvedParams)
     }
 
+    @Test
+    fun allCrudResultsRetainTheDialectThatRenderedThem() {
+        val results = CrudSqlGenerator.generate(fullSpec().copy(dialect = OracleDialect))
+        assertTrue(results.isNotEmpty())
+        results.forEach { statement ->
+            assertEquals("${statement.kind} 丢失实际生成方言", "Oracle", statement.result.effectiveDialect?.name)
+        }
+        assertEquals("Oracle", results.first { it.result.batchModel != null }.result.batchModel?.dialect?.name)
+    }
+
     // ------------------------------------------------------------------
     // INSERT / UPDATE（BatchModel 复用）
     // ------------------------------------------------------------------

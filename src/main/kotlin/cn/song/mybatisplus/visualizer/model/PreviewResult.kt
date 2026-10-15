@@ -124,5 +124,5 @@ data class PreviewResult(
     val historyFingerprintSeed: String? = null,
     val renderedDialect: Dialect? = null,
 ) {
-    val effectiveDialect: Dialect? get() = previewModel?.dialect ?: renderedDialect
+    val effectiveDialect: Dialect? get() = previewModel?.dialect ?: batchModel?.dialect ?: renderedDialect
 }
