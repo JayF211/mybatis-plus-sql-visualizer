@@ -79,9 +79,23 @@ class ParamHistoryCache(private val maxSize: Int = MAX_HISTORY_SIZE) {
     @Volatile
     private var legacyActiveScheme: String = DEFAULT_SCHEME
 
+    /**
+     * T-M19-StorageClear：本实例已同步到的应用级存储代际。
+     *
+     * 设置页清理会递增全局代际并在同一互斥区清空所有存活实例；异步写回必须携带取快照时
+     * 的代际，代际不一致即拒绝，防止「用户确认清理 → 旧面板 500ms/pooled 写回迟到」把明文
+     * 参数重新写进 mp-sql-visualizer.xml。
+     */
+    @Volatile
+    private var observedStorageGeneration: Long = 0L
+
     init {
-        // 从持久化恢复（IDE 重启后加载历史）
-        restoreFromPersistence()
+        // 注册、取代际与持久化恢复必须和应用级清理串行：否则可能在清理刚写空后又恢复旧字段。
+        synchronized(storageMutationLock) {
+            observedStorageGeneration = storageGeneration.get()
+            liveInstances.add(this)
+            restoreFromPersistence()
+        }
     }
 
     /**
@@ -116,26 +130,42 @@ class ParamHistoryCache(private val maxSize: Int = MAX_HISTORY_SIZE) {
      * @param params 参数映射（source → value）
      */
     fun save(key: String, params: Map<String, String>) {
-        saveForScheme(activeSchemeFor(key), key, params)
+        val generation = generationToken()
+        saveForScheme(activeSchemeFor(key), key, params, generation)
     }
 
     /**
      * R22 T-04：把快照写入**指定方案**——调用方取快照时的方案名随行落库，
      * 防止「EDT 取快照 → 线程池写回」窗口内用户切换方案导致的串桶。
      *
+     * T-M19-StorageClear：异步调用方必须传取快照时的 [expectedGeneration]。设置页清理与写入
+     * 共用 [storageMutationLock]；清理后到达的旧代际任务直接拒绝，不得复活已清参数。
+     *
      * @param scheme 目标方案名（空串 = 默认方案）
      * @param key    缓存键
      * @param params 参数映射（source → value）
+     * @return 是否实际写入；空快照或代际已失效返回 false
      */
-    fun saveForScheme(scheme: String, key: String, params: Map<String, String>) {
-        if (params.isEmpty()) return
-        // F54：桶内容写 + 淘汰同一临界区（entries 捕获一次——旧实现两次 entriesForScheme 查表顺带收敛）
-        synchronized(bucketLock) {
-            val entries = entriesForScheme(scheme)
-            entries[key] = params
-            enforceMaxSize(entries)
+    fun saveForScheme(
+        scheme: String,
+        key: String,
+        params: Map<String, String>,
+        expectedGeneration: Long = generationToken(),
+    ): Boolean {
+        if (params.isEmpty()) return false
+        return synchronized(storageMutationLock) {
+            if (expectedGeneration != storageGeneration.get() || observedStorageGeneration != expectedGeneration) {
+                return@synchronized false
+            }
+            // F54：桶内容写 + 淘汰同一临界区（entries 捕获一次——旧实现两次 entriesForScheme 查表顺带收敛）
+            synchronized(bucketLock) {
+                val entries = entriesForScheme(scheme)
+                entries[key] = params
+                enforceMaxSize(entries)
+            }
+            persistToStorage()
+            true
         }
-        persistToStorage()
     }
 
     /**
@@ -156,16 +186,35 @@ class ParamHistoryCache(private val maxSize: Int = MAX_HISTORY_SIZE) {
         }
     }
 
-    /** 清空缓存（内存 + 持久化）。R22 T-04：含全部命名方案与激活方案复位（测试隔离边界）。 */
-    fun clear() {
+    /**
+     * 清空参数历史（全部存活实例 + 持久化字段）。R22 T-04：含全部命名方案与激活方案复位。
+     * T-M19-StorageClear：这是应用级失效动作，不再只清调用实例；仅把 PluginSettings 中四个参数
+     * 历史字段写空，绝不删除共享的 mp-sql-visualizer.xml，也不触碰其中其他设置组件。
+     */
+    fun clear() = clearPersistedHistory(this)
+
+    /** 当前实例的存储代际令牌；异步写回须在 EDT 取快照时一并捕获。 */
+    internal fun generationToken(): Long = observedStorageGeneration
+
+    /**
+     * 新预览开始时接纳最新代际。showResult 已先清空并重建面板参数状态，因此此时不再携带清理前
+     * 的 UI 快照；接纳后允许保存新输入。清理发生后仍停留在原预览的面板保持旧代际，任何写回均拒绝。
+     */
+    internal fun adoptCurrentGenerationForFreshPreview() {
+        synchronized(storageMutationLock) {
+            observedStorageGeneration = storageGeneration.get()
+        }
+    }
+
+    /** 清空本实例的全部桶；调用方须持 [storageMutationLock]。代际不在此更新，以封住旧面板后续写回。 */
+    private fun invalidateForClear() {
         synchronized(bucketLock) {
             cache.clear()
+            schemes.clear()
+            schemeOrder.clear()
+            activeSchemeByKey.clear()
+            legacyActiveScheme = DEFAULT_SCHEME
         }
-        schemes.clear()
-        schemeOrder.clear()
-        activeSchemeByKey.clear()
-        legacyActiveScheme = DEFAULT_SCHEME
-        persistToStorage()
     }
 
     // ---------------- R22 T-04：命名方案 API（D2 定案——旧数据自动成为默认方案） ----------------
@@ -244,14 +293,15 @@ class ParamHistoryCache(private val maxSize: Int = MAX_HISTORY_SIZE) {
      * legacy 字段属纯写放大，且发生在 EDT 同步路径（性能十七轮 §5.3）。
      * T-DevAcceptFix2 ①：指针按键记录（key 空 = 无预览上下文，仅更新回落值不建记录）。
      */
-    fun switchScheme(name: String, key: String?) {
-        if (name != DEFAULT_SCHEME && !schemes.containsKey(name)) return
+    fun switchScheme(name: String, key: String?) = synchronized(storageMutationLock) {
+        if (observedStorageGeneration != storageGeneration.get()) return@synchronized
+        if (name != DEFAULT_SCHEME && !schemes.containsKey(name)) return@synchronized
         if (key.isNullOrEmpty()) {
             legacyActiveScheme = name
             persistActiveSchemePointer()
-            return
+            return@synchronized
         }
-        if (activeSchemeByKey[key] == name && legacyActiveScheme == name) return
+        if (activeSchemeByKey[key] == name && legacyActiveScheme == name) return@synchronized
         activeSchemeByKey[key] = name
         legacyActiveScheme = name
         persistActiveSchemePointer()
@@ -266,20 +316,24 @@ class ParamHistoryCache(private val maxSize: Int = MAX_HISTORY_SIZE) {
      * T-DevAcceptFix2 ①：查重口径从「名字全局唯一」改为「**该键下**是否已有同名条目」——
      * 同名预设可在不同方法下各自存在、各存各值（D71 推荐案；重命名/删除维持名字级）。
      */
-    fun saveAsScheme(name: String, key: String, params: Map<String, String>): SchemeOpResult {
-        if (name.isBlank() || name == DEFAULT_SCHEME || params.isEmpty()) return SchemeOpResult.INVALID
-        if (!schemes.containsKey(name) && schemes.size >= MAX_SCHEME_COUNT) return SchemeOpResult.LIMIT_REACHED
-        // F54：桶内容写 + 淘汰入临界区（CHM 原子建桶后桶内 put/淘汰仍是裸结构操作）
-        synchronized(bucketLock) {
-            val entries = entriesForScheme(name)
-            entries[key] = params
-            enforceMaxSize(entries)
+    fun saveAsScheme(name: String, key: String, params: Map<String, String>): SchemeOpResult =
+        synchronized(storageMutationLock) {
+            if (observedStorageGeneration != storageGeneration.get()) return@synchronized SchemeOpResult.INVALID
+            if (name.isBlank() || name == DEFAULT_SCHEME || params.isEmpty()) return@synchronized SchemeOpResult.INVALID
+            if (!schemes.containsKey(name) && schemes.size >= MAX_SCHEME_COUNT) {
+                return@synchronized SchemeOpResult.LIMIT_REACHED
+            }
+            // F54：桶内容写 + 淘汰入临界区（CHM 原子建桶后桶内 put/淘汰仍是裸结构操作）
+            synchronized(bucketLock) {
+                val entries = entriesForScheme(name)
+                entries[key] = params
+                enforceMaxSize(entries)
+            }
+            activeSchemeByKey[key] = name
+            legacyActiveScheme = name
+            persistToStorage()
+            SchemeOpResult.OK
         }
-        activeSchemeByKey[key] = name
-        legacyActiveScheme = name
-        persistToStorage()
-        return SchemeOpResult.OK
-    }
 
     /** 召回指定方案的 [key] 快照（方案不存在/键未命中返回 null）。F54：get 读即回写 → 临界区。 */
     fun recallFromScheme(name: String, key: String): Map<String, String>? =
@@ -296,10 +350,13 @@ class ParamHistoryCache(private val maxSize: Int = MAX_HISTORY_SIZE) {
      * F50：CHM 化后不再整表重建——remove+put 保序（创建序由 [schemeOrder] 原位换名承载），
      * 语义与旧 LinkedHashMap 重建逐值等价（NOT_FOUND/DUPLICATE 判定次序不变）。
      */
-    fun renameScheme(oldName: String, newName: String): SchemeOpResult {
-        if (oldName == DEFAULT_SCHEME) return SchemeOpResult.DEFAULT_PROTECTED
-        val entries = schemes[oldName] ?: return SchemeOpResult.NOT_FOUND
-        if (newName.isBlank() || newName == DEFAULT_SCHEME || schemes.containsKey(newName)) return SchemeOpResult.DUPLICATE
+    fun renameScheme(oldName: String, newName: String): SchemeOpResult = synchronized(storageMutationLock) {
+        if (observedStorageGeneration != storageGeneration.get()) return@synchronized SchemeOpResult.INVALID
+        if (oldName == DEFAULT_SCHEME) return@synchronized SchemeOpResult.DEFAULT_PROTECTED
+        val entries = schemes[oldName] ?: return@synchronized SchemeOpResult.NOT_FOUND
+        if (newName.isBlank() || newName == DEFAULT_SCHEME || schemes.containsKey(newName)) {
+            return@synchronized SchemeOpResult.DUPLICATE
+        }
         schemes.remove(oldName)
         schemes[newName] = entries
         val idx = schemeOrder.indexOf(oldName)
@@ -316,18 +373,19 @@ class ParamHistoryCache(private val maxSize: Int = MAX_HISTORY_SIZE) {
         }
         if (legacyActiveScheme == oldName) legacyActiveScheme = newName
         persistToStorage()
-        return SchemeOpResult.OK
+        SchemeOpResult.OK
     }
 
     /** 删除方案（激活方案被删时归位默认方案）。T-DevAcceptFix2 ①：按键指针与回落值同步摘除。 */
-    fun deleteScheme(name: String): SchemeOpResult {
-        if (name == DEFAULT_SCHEME) return SchemeOpResult.DEFAULT_PROTECTED
-        if (schemes.remove(name) == null) return SchemeOpResult.NOT_FOUND
+    fun deleteScheme(name: String): SchemeOpResult = synchronized(storageMutationLock) {
+        if (observedStorageGeneration != storageGeneration.get()) return@synchronized SchemeOpResult.INVALID
+        if (name == DEFAULT_SCHEME) return@synchronized SchemeOpResult.DEFAULT_PROTECTED
+        if (schemes.remove(name) == null) return@synchronized SchemeOpResult.NOT_FOUND
         schemeOrder.remove(name)
         activeSchemeByKey.entries.removeIf { it.value == name }
         if (legacyActiveScheme == name) legacyActiveScheme = DEFAULT_SCHEME
         persistToStorage()
-        return SchemeOpResult.OK
+        SchemeOpResult.OK
     }
 
     /** 当前缓存条目数（默认方案；测试断言用）。 */
@@ -726,6 +784,54 @@ class ParamHistoryCache(private val maxSize: Int = MAX_HISTORY_SIZE) {
     }
 
     companion object {
+        /** T-M19-StorageClear：参数存储写与应用级清理共用互斥，保证「清理返回后旧写不复活」。 */
+        private val storageMutationLock = Any()
+
+        /** 应用级存储代际；每次确认清理递增。 */
+        private val storageGeneration = java.util.concurrent.atomic.AtomicLong()
+
+        /**
+         * 存活缓存实例弱集合：设置页清理时立即清掉已打开 SqlPreviewPanel 的内存桶；弱引用不延长
+         * 面板生命周期。所有访问均在 [storageMutationLock] 内。
+         */
+        private val liveInstances: MutableSet<ParamHistoryCache> =
+            java.util.Collections.newSetFromMap(java.util.WeakHashMap<ParamHistoryCache, Boolean>())
+
+        /**
+         * 设置页「清除参数历史与命名方案」的唯一入口。
+         *
+         * 仅清 [PluginSettings.State] 中四个参数字段与测试回落存储；共享 XML 中语言、日志、外观等
+         * 其他组件状态原样保留，绝不删除 mp-sql-visualizer.xml 文件。
+         */
+        @JvmStatic
+        fun clearPersistedHistory() = clearPersistedHistory(null)
+
+        /** 实例 clear 用于测试隔离/显式复位：发起实例可立即按新代际继续使用；其他已打开实例保持失效。 */
+        private fun clearPersistedHistory(origin: ParamHistoryCache?) {
+            synchronized(storageMutationLock) {
+                val nextGeneration = storageGeneration.incrementAndGet()
+                liveInstances.toList().forEach { it.invalidateForClear() }
+                origin?.observedStorageGeneration = nextGeneration
+
+                val stateWrite = runCatching {
+                    PluginSettings.getInstance().state.apply {
+                        paramHistoryJson = ""
+                        paramSchemesJson = ""
+                        paramActiveScheme = DEFAULT_SCHEME
+                        paramActiveSchemeByKey = ""
+                    }
+                }
+                val app = runCatching { com.intellij.openapi.application.ApplicationManager.getApplication() }.getOrNull()
+                if (app != null && !app.isUnitTestMode) stateWrite.getOrThrow()
+                synchronized(fallbackStorage) {
+                    fallbackStorage[STORAGE_KEY] = ""
+                    fallbackStorage[SCHEMES_STORAGE_KEY] = ""
+                    fallbackStorage[ACTIVE_SCHEME_STORAGE_KEY] = DEFAULT_SCHEME
+                    fallbackStorage[ACTIVE_BY_KEY_STORAGE_KEY] = ""
+                }
+            }
+        }
+
         /** 缓存上限（LRU 淘汰）。 */
         const val MAX_HISTORY_SIZE = 50
 

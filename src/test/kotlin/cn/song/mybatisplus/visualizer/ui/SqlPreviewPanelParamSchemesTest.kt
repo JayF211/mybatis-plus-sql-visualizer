@@ -15,6 +15,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNotSame
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 
@@ -95,6 +96,30 @@ class SqlPreviewPanelParamSchemesTest : BasePlatformTestCase() {
         p.showResult(buildProbePreviewResult())
         com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents() // EDT 排队的参数区构建（勾选框/字段列表）就位
         return p
+    }
+
+    /**
+     * T-M19-StorageClear：清理后仍停留在原预览的面板不得把当前参数态重新写回；同一面板进入
+     * 下一次新预览、参数态已重建后才接纳新代际并恢复记录。
+     */
+    fun test清理后旧预览写回失效_下一次新预览恢复记录() {
+        val p = openPanel()
+        val cache = p.paramHistoryCacheForTest()
+        val key = p.historyCacheKey()!!
+        p.paramValues["onlyActive"] = "stale-panel-value"
+
+        ParamHistoryCache.clearPersistedHistory()
+        p.flushHistoryToCache()
+        assertNull("清理后原预览的同步写回也必须被拒绝", cache.recall(key))
+
+        p.showResult(buildProbePreviewResult())
+        p.paramValues["onlyActive"] = "fresh-preview-value"
+        p.flushHistoryToCache()
+        assertEquals(
+            "下一次新预览重建参数态后恢复记录",
+            "fresh-preview-value",
+            cache.recall(key)?.get("onlyActive"),
+        )
     }
 
     /** T-02 快照编码：勾选态以 __chk__ 全量 1/0 入快照（关掉默认勾选的方案可复现）。 */

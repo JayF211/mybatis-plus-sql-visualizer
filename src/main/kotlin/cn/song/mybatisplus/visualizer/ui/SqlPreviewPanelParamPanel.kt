@@ -1361,16 +1361,19 @@ internal fun SqlPreviewPanel.saveToHistory() {
 internal fun SqlPreviewPanel.flushHistoryToCache() {
     val key = historyCacheKey() ?: return
     val snapshot = buildHistorySnapshot()
-        // R51（O-105 余半）：参数快照随 flush 链同步回写最新匹配历史条目（recordHistory 早于
-        // 参数输入，快照只能在此补进；历史条目因此携带当次预览实际使用的参数）
-        updateHistoryEntrySnapshot(key, snapshot)
+    // T-M19-StorageClear：与快照同刻捕获存储代际。清理动作若发生在 pooled 写回之前，旧代际
+    // saveForScheme 会被拒绝，已清参数不会被已打开面板的迟到任务复活。
+    val storageGeneration = paramHistoryCache.generationToken()
+    // R51（O-105 余半）：参数快照随 flush 链同步回写最新匹配历史条目（recordHistory 早于
+    // 参数输入，快照只能在此补进；历史条目因此携带当次预览实际使用的参数）
+    updateHistoryEntrySnapshot(key, snapshot)
     // headless 单测：同步执行保持既有测试语义
     if (ApplicationManager.getApplication().isUnitTestMode) {
-        paramHistoryCache.saveForScheme(ParamHistoryCache.DEFAULT_SCHEME, key, snapshot)
+        paramHistoryCache.saveForScheme(ParamHistoryCache.DEFAULT_SCHEME, key, snapshot, storageGeneration)
         return
     }
     ApplicationManager.getApplication().executeOnPooledThread {
-        paramHistoryCache.saveForScheme(ParamHistoryCache.DEFAULT_SCHEME, key, snapshot)
+        paramHistoryCache.saveForScheme(ParamHistoryCache.DEFAULT_SCHEME, key, snapshot, storageGeneration)
     }
 }
 

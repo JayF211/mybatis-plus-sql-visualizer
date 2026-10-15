@@ -146,6 +146,62 @@ class ParamHistoryCacheTest {
         assertNull("clear 后 recall 返回 null", cache.recall(key))
     }
 
+    /**
+     * T-M19-StorageClear：设置页清理是应用级动作，必须让已经打开的其他预览面板缓存同步失效。
+     * 反向锚：若 clear 只清调用实例与持久化字段，existingPanel 仍能召回清理前明文参数，本测试必红。
+     */
+    @Test
+    fun `clear_使已打开的其他缓存实例立即失效`() {
+        val clearer = ParamHistoryCache()
+        clearer.clear()
+        val key = clearer.computeKey("user", "SELECT * FROM user WHERE id = ?")!!
+        clearer.save(key, mapOf("id" to "before-clear"))
+        clearer.saveAsScheme("命名方案", key, mapOf("id" to "named-before-clear"))
+
+        val existingPanel = ParamHistoryCache()
+        assertEquals(mapOf("id" to "named-before-clear"), existingPanel.recall(key))
+        assertEquals(listOf("命名方案"), existingPanel.schemeNames())
+
+        clearer.clear()
+
+        assertNull("已打开面板不得继续召回清理前参数", existingPanel.recall(key))
+        assertEquals("已打开面板不得继续显示清理前命名方案", emptyList<String>(), existingPanel.schemeNames())
+    }
+
+    /**
+     * T-M19-StorageClear：500ms 防抖后转 pooled 的旧快照即使晚于清理到达，也不得重新落盘。
+     * 反向锚：移除 saveForScheme 的代际判定后，accepted=true 且 fresh 会召回 stale-value。
+     */
+    @Test
+    fun `clear_拒绝清理前捕获的迟到写回`() {
+        val panelCache = ParamHistoryCache()
+        panelCache.clear()
+        val key = panelCache.computeKey("user", "SELECT * FROM user WHERE id = ?")!!
+        val staleGeneration = panelCache.generationToken()
+
+        ParamHistoryCache.clearPersistedHistory()
+
+        val accepted = panelCache.saveForScheme(
+            ParamHistoryCache.DEFAULT_SCHEME,
+            key,
+            mapOf("id" to "stale-value"),
+            staleGeneration,
+        )
+        assertFalse("清理前捕获的异步写回必须被代际门拒绝", accepted)
+        panelCache.save(key, mapOf("id" to "still-stale-panel"))
+        assertNull("仍停留在原预览的面板不得用默认写入口复活旧参数", panelCache.recall(key))
+        assertNull("清理后新实例不得恢复迟到旧值", ParamHistoryCache().recall(key))
+
+        panelCache.adoptCurrentGenerationForFreshPreview()
+        panelCache.save(key, mapOf("id" to "fresh-preview-value"))
+        assertEquals(
+            "面板进入新预览并重建参数态后应能保存新输入",
+            mapOf("id" to "fresh-preview-value"),
+            panelCache.recall(key),
+        )
+        panelCache.clear()
+    }
+
     // ------------------------------------------------------------------
     // 持久化往返
     // ------------------------------------------------------------------
