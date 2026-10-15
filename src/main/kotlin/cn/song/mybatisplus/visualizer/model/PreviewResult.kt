@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.model
 
 import cn.song.mybatisplus.visualizer.sql.Dialect
+import cn.song.mybatisplus.visualizer.sql.DialectDecisionEngine
 import cn.song.mybatisplus.visualizer.sql.ParamHint
 import cn.song.mybatisplus.visualizer.sql.perf.PerfWarning
 import cn.song.mybatisplus.visualizer.xml.PagesColumn
@@ -123,6 +124,8 @@ data class PreviewResult(
      */
     val historyFingerprintSeed: String? = null,
     val renderedDialect: Dialect? = null,
+    /** 本次渲染瞬态证据快照，仅携带方言名/来源/候选 UUID；不保存 JDBC URL 或 PSI。 */
+    val dialectDecision: DialectDecisionEngine.Decision? = null,
 ) {
     val effectiveDialect: Dialect? get() = previewModel?.dialect ?: batchModel?.dialect ?: renderedDialect
 }

@@ -38,8 +38,8 @@ class AnnotationSqlPreviewDialectContextTest : BasePlatformTestCase() {
         val text = File(root,
             "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/AnnotationSqlPreviewService.kt").readText()
         assertTrue(text.contains("ActualSqlPsiResolver.resolve(host, owner, owner.textOffset)"))
-        assertTrue(text.contains("DialectRegistry.effective(it)"))
-        assertTrue(text.contains("copy(renderedDialect = renderDialect)"))
+        assertTrue(text.contains("DialectRegistry.decision(it)"))
+        assertTrue(text.contains("dialectDecision = dialectDecision"))
         val action = File(root,
             "src/main/kotlin/cn/song/mybatisplus/visualizer/actions/ConvertToSqlAction.kt").readText()
         val gutter = File(root,

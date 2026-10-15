@@ -283,9 +283,12 @@ object AnnotationSqlPreviewService {
         return try {
             val staticValues = XmlPreviewService.resolveStaticFields(sql, project, warnings)
             val model = AnnotationSqlParser().parse(sql, kind, paramTypes.keys.toList(), staticValues, paramTypes)
-            val renderDialect = sourceDialect(project, sourceContext)
+            val dialectDecision = sourceDecision(project, sourceContext)
             XmlPreviewService.applyPaginationShared(
-                XmlPreviewService.toResult(model, warnings).copy(renderedDialect = renderDialect),
+                XmlPreviewService.toResult(model, warnings).copy(
+                    renderedDialect = dialectDecision?.let { DialectRegistry.byName(it.dialectName) },
+                    dialectDecision = dialectDecision,
+                ),
                 project = project,
                 pageParamName = if (XmlPreviewService.paginationSimEnabled()) {
                     MapperPageParamLocator.fromMethod(method)
@@ -301,9 +304,10 @@ object AnnotationSqlPreviewService {
         }
     }
 
-    private fun sourceDialect(project: Project?, context: PreviewSourceContext?): cn.song.mybatisplus.visualizer.sql.Dialect? {
+    private fun sourceDecision(project: Project?, context: PreviewSourceContext?):
+        cn.song.mybatisplus.visualizer.sql.DialectDecisionEngine.Decision? {
         if (project == null) return null
-        return context?.let { DialectRegistry.effective(it) } ?: DialectRegistry.effective(project)
+        return context?.let { DialectRegistry.decision(it) } ?: DialectRegistry.decision(project)
     }
 
     private fun nullResult(message: String? = null): PreviewResult = PreviewResult(

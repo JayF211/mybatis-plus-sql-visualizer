@@ -564,15 +564,16 @@ internal fun SqlPreviewPanel.updateMeta(result: PreviewResult) {
     // metaLineDigest）：预算不足时先截摘要、主体仅在自身超预算时才中段省略（复核 20260920 修正
     // ——把摘要直接拼进单段文本会让 F3 的中段省略在窄窗下连主体一起挤掉，只剩「…」+ 栈底帧，
     // 优先级倒挂）。
-    // T-StackHoverUi：完整调用链不再进 tooltip（旧实现把截断摘要+全文重复拼进 tooltip，
-        // R52：方言能力矩阵进 meta 悬停（呈现层——O-106 双触点之一；可见行不动以保 F3 宽度预算）
-            metaPerfSegments.joinToString("；") { it.text } + dialectCapabilityTooltipSection(result)
-    metaLineHead = meta + warningLine
+    val dialectStatus = result.dialectDecision?.let { DialectPreviewStatusText.describe(it) }
+    metaLineHead = if (dialectStatus == null) meta + warningLine
+        else dialectStatus.visible + "   " + meta + warningLine
     metaLineDigest = stackInline
     metaLineText = metaLineHead + metaLineDigest
     metaPerfSegments = buildPerfSegments(result)
     metaTooltipBase = meta + warningLine +
-        metaPerfSegments.joinToString("；") { it.text }
+        metaPerfSegments.joinToString("；") { it.text } +
+        dialectStatus?.let { "\n\n${it.details}" }.orEmpty() +
+        dialectCapabilityTooltipSection(result)
     metaLabel.toolTipText = metaTooltipBase
     stackHover.updateDigest(result.stackDigest)
     metaLabel.foreground = if (currentWarning != null) {
