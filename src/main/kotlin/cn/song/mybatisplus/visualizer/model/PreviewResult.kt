@@ -126,6 +126,8 @@ data class PreviewResult(
     val renderedDialect: Dialect? = null,
     /** 本次渲染瞬态证据快照，仅携带方言名/来源/候选 UUID；不保存 JDBC URL 或 PSI。 */
     val dialectDecision: DialectDecisionEngine.Decision? = null,
+    /** R90：本次预览实际入库条目，recordHistory 在返回结果前设置；副本保留，未知为空。 */
+    var historyEntryId: String = "",
 ) {
     val effectiveDialect: Dialect? get() = previewModel?.dialect ?: batchModel?.dialect ?: renderedDialect
 }

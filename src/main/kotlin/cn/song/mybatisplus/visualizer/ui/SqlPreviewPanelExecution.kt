@@ -987,7 +987,9 @@ internal fun SqlPreviewPanel.submitExplainOrStructured(
                 cn.song.mybatisplus.visualizer.execute.DataSourceSettings.getUniqueId(ds),
                 dialect.name, outFormat, explainSql,
             )
-            val historyRequest = explainPlanHistorySession.begin(history, current?.sql.orEmpty(), planKey, ds)
+            val historyRequest = explainPlanHistorySession.begin(
+                history, current?.sql.orEmpty(), planKey, ds, current?.historyEntryId.orEmpty(),
+            )
             cn.song.mybatisplus.visualizer.execute.ExplainPanelChannel.executeStructured(
                 proj, ds, explainSql,
                 timeoutSeconds = settings.executionTimeoutSeconds,

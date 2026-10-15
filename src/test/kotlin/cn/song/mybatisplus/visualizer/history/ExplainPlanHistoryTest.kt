@@ -106,6 +106,17 @@ class ExplainPlanHistoryTest {
         assertTrue(m.findById("49")!!.explainPlans.isNotEmpty())
     }
 
+    @Test fun `explicit original id wins over newer identical SQL and survives rerender`() {
+        val m = manager()
+        m.add(SqlHistoryEntry(id = "new", sql = sql, timestamp = 1, projectIdentity = project))
+        val capture = m.beginExplainCapture(project, "select exists ($sql)", key, "original")!!
+        m.saveExplainPlan(capture, raw())
+        assertEquals(1, m.findById("original")!!.explainPlans.size)
+        assertTrue(m.findById("new")!!.explainPlans.isEmpty())
+        assertNull(m.beginExplainCapture(project, sql, key, ""))
+        assertNull(m.beginExplainCapture("other", sql, key.copy(projectIdentity = "other"), "original"))
+    }
+
     @Test fun `read snapshots are defensive and notices are not persisted`() {
         val m = manager()
         m.saveExplainPlan(m.capture(), raw().copy(notices = listOf("jdbc:mysql://private password=secret")))

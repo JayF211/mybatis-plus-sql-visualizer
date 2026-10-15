@@ -1906,7 +1906,7 @@ class SqlPreviewService(internal val project: Project) {
                 sqlLogManagerIfCreated(anchor.project)?.entries?.snapshot().orEmpty(),
                 result.sql,
             )
-            manager.add(
+            result.historyEntryId = manager.add(
                 SqlHistoryEntry(
                     sql = result.sql,
                     compactSql = result.compactSql,
@@ -1917,7 +1917,7 @@ class SqlPreviewService(internal val project: Project) {
                     executionTimeMs = executionTimeMs,
                     projectIdentity = cn.song.mybatisplus.visualizer.history.ExplainPlanKey.projectIdentity(project.basePath),
                 ),
-            )
+            ).id
         }
     }
 

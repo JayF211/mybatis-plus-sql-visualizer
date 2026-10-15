@@ -43,9 +43,12 @@ class SqlHistoryManager : PersistentStateComponent<SqlHistoryManager.State> {
 
     /** 提交前固定原条目；异步完成时禁止再按“最新 SQL”回查归属。 */
     @Synchronized
-    fun beginExplainCapture(projectIdentity: String, previewSql: String, key: ExplainPlanKey): ExplainPlanCapture? {
+    fun beginExplainCapture(projectIdentity: String, previewSql: String, key: ExplainPlanKey, entryId: String? = null): ExplainPlanCapture? {
         if (key.projectIdentity != projectIdentity) return null
-        val entry = entries.firstOrNull { it.projectIdentity == projectIdentity && it.sql == previewSql } ?: return null
+        val entry = if (entryId != null) findById(entryId)?.takeIf {
+            it.projectIdentity == projectIdentity
+        } else entries.firstOrNull { it.projectIdentity == projectIdentity && it.sql == previewSql }
+        if (entry == null) return null
         return ExplainPlanCapture(entry.id, planGeneration, key)
     }
 
