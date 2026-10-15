@@ -2,7 +2,7 @@
 
 - 日期：2026-10-15
 - 基线：`master@ab37ec3b`；仅做需求分析与方案决策，未修改功能代码，未运行测试
-- 状态：用户已选方案 B 并要求在 master 实施；迁移提示采用首次点选时的一次性就地引导。本计划不预占 O/R/D/V 编号
+- 状态：方案 B 已在 master `dc3a8f7f` 提交；用户截图指出分隔条白边、日志页文字预览按钮碍事，二轮定案日志页选左侧图标动作（方案 A），两项修复在途。本计划不预占 O/R/D/V 编号
 - 范围：SQL 日志主列表、SQL 历史的二级 SQL 列表；历史的一级文件列表不在本次范围
 - 关联：T-ClickPreview、T-ListPreviewCopy、T-ClickPreviewCopyRestore、T-SqlListNativeVisual
 
@@ -96,10 +96,25 @@ SQL 日志 / SQL 历史（二级）
 - 合格的主路径是：普通单击不会弹窗；主动打开预览后，从 SQL #1 切 #2/#3 不需要关闭预览；多选复制依旧从列表生效；编辑过的 SQL 不会因选择别行悄悄消失。
 - 方案 B 与迁移提示已获用户确认。实施结果见下节；当前验证以源码、headless 交互测试为主，尚未对真实 IDE 窄宽/窄高与键盘焦点做 GUI 验收。
 
-## 七、实施记录（2026-10-15，master 工作树，未提交）
+## 七、一轮实施记录（2026-10-15，master `dc3a8f7f`）
 
 - 日志与历史二级列表停止构建单击浮层：普通单击只选中，双击仍进入各自的完整 SQL 预览；悬停 tooltip 不恢复。旧 `SqlClickPreview` 的定时弹窗/锚点/关闭实现已去掉，保留同源高亮、可编辑 Editor 和复制动作构建器。
 - 共用 `SqlDockedPreview` + `SqlListPreviewHost`：两页各有默认关闭的底部分隔预览区；明确的“预览”文字入口开启后跟随单选，选中多条不猜某条 SQL；同一个 Editor 随选择换文，编辑后固定草稿，恢复原文才继续跟随。返回历史一级文件列表折叠并清空二级上下文；Editor 随面板释放。
 - 首次有效左键单击后延迟 300ms 显示一次非模态提示；双击第二击、空白区、右键、Ctrl/Shift 多选均不会触发。应用级标记在提示实际展示时持久化，提示含“开启预览”和“知道了”；中英文文案同补。独立复核指出日志页图标式 `ActionToolbar` 只设置 `AnAction.text` 不能保证可见文字，遂改成同一工具栏行内的常显文字切换按钮，提示直达开关会同步按钮选中态；布局测试核按钮实际几何宽度，不再只验模板文本。
 - 定向验证：`SqlDockedPreviewTest` 4、`SqlClickPreviewTest` 18、`SqlLogPanelLayoutTest` 15、`HistorySqlLogPanelPreviewTest` 5、`HistorySqlLogPanelNavigationTest` 17，合计 **59/0/0/0**；生产与测试 Kotlin 编译通过。运行时按登记表使用独立沙盒与 Gradle 闸门；可见文字按钮修正后的最终读数（2026-10-15 10:12）为准。
-- `testFast --no-configuration-cache` 广泛回归 **3740/0/0/6**（301 类，可见按钮修正后最终重跑至 2026-10-15 10:15）；`docker info` 预检失败，本机 Docker Desktop Linux Engine 命名管道不存在。因此未启动依赖 Docker 的权威全量 `testShards`，不能用定向/testFast 绿代称全量。243/262 真机视觉、键盘焦点与窄栏布局仍待 GUI 走查。临时构建沙盒配置已还原，并行任务登记已注销。
+- `testFast --no-configuration-cache` 广泛回归 **3740/0/0/6**（301 类，可见按钮修正后最终重跑至 2026-10-15 10:15）；`docker info` 预检失败，本机 Docker Desktop Linux Engine 命名管道不存在。因此一轮未启动 `testShards`；二轮按用户指示允许保持 Docker 测试默认关闭后跑全量（见 §八）。243/262 真机视觉、键盘焦点与窄栏布局仍待 GUI 走查。临时构建沙盒配置已还原，并行任务登记已注销。
+
+## 八、二轮修复：预览分隔条白边与日志页入口（2026-10-15）
+
+用户在 SQL 历史页截图指出列表与底部预览间出现白色点状横线；SQL 日志页截图指出预览文字按钮挤在右侧「全部/移除重复」之间碍事。用户选择日志页按钮方案 A：左侧动作图标，不保留右侧常显文字按钮；两项一起改，完成后再跑测试。
+
+- 白边落点是 `SqlListPreviewHost` 中未定制的 `JSplitPane`；同仓 `SqlSuppressManagerDialog` 已记录原生 `JSplitPane` 在深色主题下画白条的真机先例。改用项目已有的 `OnePixelSplitter(true, 独立比例键, 0.65f)`，日志与历史各有比例记忆；分隔条跟随面板背景、无额外分隔控件，保留拖动与上下两区最小高度。收起时解除 firstComponent，重开时挂回列表，避免列表被重父化后出现空白；不再每次展开强制回写 0.65 比例。
+- 日志页移除右侧常显 `JToggleButton`，把 `AllIcons.Actions.Preview` 图标的 `ToggleAction` 插入左侧图标动作组，位于搜索与滚底之间；动作文案/tooltip 明确说明在底部连续浏览，开关态与首次提示的「开启预览」直达入口同步。历史页原有文字按钮不动；日志页的一次性提示点明「工具栏预览图标」。243 基线 `javap` 实证 `Preview` 图标和 `ToggleAction`/`Toggleable` 的方法签名；262 真机发行 jar 再证 `Preview` 图标、`OnePixelSplitter(boolean, String, float)`、`ToggleAction(String, String, Icon)` 和 `Toggleable.setSelected(Presentation, boolean)` 均存在。
+- 测试补断言：共享容器展开后是 `OnePixelSplitter`、面板背景正确、收起再展开复用同一分隔实例且列表仍挂载；日志工具栏图标动作归组、图标/tooltip 非空，真实动作开关可开可关，右侧控制组宽度守卫与单行布局不放宽。真机深浅主题、极窄工具窗与鼠标拖条的像素验收仍需单独走查。
+- Docker 测试开关在 `buildSrc/src/main/kotlin/mpv-testing.gradle.kts:91-95` 已默认 `false`；二轮 `testShards --no-configuration-cache -PmpvDockerTests=false` 如实报告跳过数，不将 Docker 方言集成测试记为已通过。前两项定向 5 类 **34/0/0/0**（`SqlDockedPreviewTest` 5、`SqlLogPanelLayoutTest` 15、`HistorySqlLogPanelPreviewTest` 5、`BundleParityGuardTest` 5、`BundlePlaceholderArityTest` 4）；因用户追加以下第三项，正在运行的旧版 `testShards` 已停止，旧读数作废，三项落地后统一重跑。
+
+### 用户追加：SQL 历史首次打开为空、两页快速预览命名统一
+
+- 用户真机截图：项目的 `.idea/sql-visualizer/sql-history/` 已有多个 `.sql` 文件，初次进入「SQL 历史」却显示空态，点刷新后马上出现文件列表。当前历史面板构造只建空模型，第一次扫描只靠 `SqlLogPanel.tabs.selectionChanged`（回调装在四个 tab 添加之后），故漏掉初始选中/首次显示事件时没有第二条路径。不能拿目录不对解释「同一页面手动刷新立刻出现」。
+- 保留“构造不扫盘”的性能契约；历史面板在真正 `SHOWING_CHANGED` 后将幂等首扫排入 EDT（仅当前仍显示、项目未 dispose 时执行），已有页签选中回调仍负责后续切入刷新。`refresh()`/同步测试刷新把首扫状态标记为已发起，显示与切页同时到达也不叠加扫描；手动刷新始终可重扫。测试须分辨构造零扫描、首次保证恰一次、重复显示不重扫、页签切换自动触发刷新及已有历史文件确实能装入模型。
+- 统一名称选择 **「快速预览」**（英文 Quick Preview），不采用「单击预览」：开关关闭时单击只选中，只有开启后单击才更新下方内容，后者会误示旧版的“每次单击直接弹窗”。日志和历史均用相同图标动作，历史一级文件页隐藏该动作；tooltip/首次提示明确“开启后单击切换 SQL”，底部标题用「SQL 快速预览」。三项全部完成后定向 6 类 **48/0/0/0**（历史懒首扫 1、页签布局 15、历史预览 5、共享预览 5、历史导航 17、bundle 对账 5）。首次红读数：旧 `SqlLogPanelLayoutTest` 只断言 `selectedInfo`，新增“切页必扫”断言在 headless 下实得 **0**；说明选中并不等于实际显示，改用真实 `SHOWING_CHANGED` 的幂等兜底，并用可控显示判据测试隐藏零扫/首次一扫/重复不重扫。未从 headless 的模拟显示推断真实 IDE 像素验收已通过。首次关闭 Docker 的 `testShards` 五片执行至 shard5，唯一红＝`HelpDialogTest.testToolbarGroupContainsHelpAction` 仍把工具栏数量钉在旧值 8（新快速预览动作使实际为 9），非生产行为失败；已把该守卫更新为 9 并增加新动作在组断言。`HelpDialogTest` 定向 **3/0/0/0**；最终 `testShards -PmpvDockerTests=false --no-configuration-cache` 五片＋外部桶 **7158/0/0/9**，计划类 **654/654** 均有结果 XML（12:30，13m01s）。9 跳分别为 Docker 方言 5、未给外部 JDBC URL 1、测试 classpath 无 Database 插件 2、ACP impl 产物缺席 1；跳过项不冒充通过。新 UI 的深浅主题像素、拖拽与用户工程首次开页仍需真机复看，headless 模拟显示只证明兜底分派逻辑。

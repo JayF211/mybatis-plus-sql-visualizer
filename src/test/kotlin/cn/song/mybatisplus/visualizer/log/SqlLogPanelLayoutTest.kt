@@ -56,15 +56,16 @@ class SqlLogPanelLayoutTest : BasePlatformTestCase() {
             assertTrue("排序应直达（并入左侧动作组）", main.contains(panel.sortActionForTest))
             assertTrue("清空应直达", main.any { it is SqlLogPanel.ClearAction })
             assertTrue("搜索应直达", main.any { it is SqlLogPanel.ShowSearchAction })
-            assertFalse("预览不可仅以图标工具栏动作呈现", main.any {
-                it.templatePresentation.text == MpSqlVisualizerBundle.message("log.dockedPreview.toggle")
-            })
-            assertEquals(MpSqlVisualizerBundle.message("log.dockedPreview.toggle"), panel.previewToggleButton.text)
+            assertTrue("预览应归入左侧动作组", main.contains(panel.previewToggleAction))
+            assertSame("预览动作必须带平台图标，不能渲染占位圆圈",
+                com.intellij.icons.AllIcons.Actions.Preview, panel.previewToggleAction.templatePresentation.icon)
+            assertEquals(MpSqlVisualizerBundle.message("log.dockedPreview.toggle.tip"),
+                panel.previewToggleAction.templatePresentation.description)
             assertTrue("设置应直达", main.any { it is SqlLogPanel.SettingsAction })
             assertTrue("屏蔽管理应直达", main.any { it is SqlLogPanel.ManageSuppressAction })
             assertTrue("帮助应直达", main.any { it is SqlLogPanel.HelpAction })
-            assertEquals("八个图标动作应全部在组内（预览另由可见文字按钮承载）",
-                8, main.size)
+            assertEquals("九个图标动作应全部在组内（预览随组折叠）",
+                9, main.size)
             // 用户 2026-10-14 选定「方案 A」：操作在前、工具在后、帮助收尾（溢出从右端折叠，帮助最先让位）。
             assertEquals("帮助应为组内末项（方案 A）", main.last(), main.first { it is SqlLogPanel.HelpAction })
             assertTrue("排序应在帮助之前", main.indexOfFirst { it === panel.sortActionForTest } < main.size - 1)
@@ -197,11 +198,8 @@ class SqlLogPanelLayoutTest : BasePlatformTestCase() {
             waitForEdt()
 
             val row = layoutRowAt(panel, USER_SIDEBAR_WIDTH)
-            val previewButton = panel.previewToggleButton
-            assertEquals("预览必须是可见文字按钮", MpSqlVisualizerBundle.message("log.dockedPreview.toggle"), previewButton.text)
-            assertTrue("预览按钮应挂在当前工具栏行并有实际宽度",
-                previewButton.isVisible && previewButton.width >= previewButton.preferredSize.width &&
-                    previewButton.parent?.parent === row)
+            assertTrue("预览图标应参与左侧工具栏溢出布局",
+                panel.toolbarGroup.getChildren(null).contains(panel.previewToggleAction))
             val controls = panel.toolbarControlsForTest!!
             assertEquals(
                 "控制组应单行（实测 ${distinctRowCount(controls)} 行）",
@@ -485,7 +483,16 @@ class SqlLogPanelLayoutTest : BasePlatformTestCase() {
             assertTrue("历史 tab 应在场", historyInfo != null)
             tabs.select(historyInfo!!, true)
             waitForEdt()
-            assertTrue("切到历史 tab 后选中的应是历史面板", tabs.selectedInfo?.component is HistorySqlLogPanel)
+            val history = tabs.selectedInfo?.component as? HistorySqlLogPanel
+            assertNotNull("切到历史 tab 后应选中历史面板", history)
+            // headless 下 tabs.select 可能只更新 selectedInfo、没有真实 SHOWING_CHANGED；
+            // 等价模拟历史页实际显示，验证漏掉页签回调时仍能启动首扫。
+            if (history!!.refreshInvocationCountForTest == 0) {
+                history.scheduleInitialScanIfShowing { true }
+                waitForEdt()
+            }
+            assertEquals("真实显示后的首扫保障应恰好发起一次刷新",
+                1, history.refreshInvocationCountForTest)
         } finally {
             panel.dispose()
         }

@@ -24,6 +24,8 @@ import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.CommonShortcuts
 import com.intellij.openapi.actionSystem.DefaultActionGroup
+import com.intellij.openapi.actionSystem.ToggleAction
+import com.intellij.openapi.actionSystem.Toggleable
 import javax.swing.Action
 import javax.swing.JComponent
 import com.intellij.openapi.application.ApplicationManager
@@ -502,8 +504,16 @@ class SqlLogPanel(
      */
     val captureToggleAction: AnAction = CaptureAction()
 
-    internal val previewToggleButton = JToggleButton(MpSqlVisualizerBundle.message("log.dockedPreview.toggle")).apply {
-        addActionListener { previewHost.toggle() }
+    internal val previewToggleAction: ToggleAction = object : ToggleAction(
+        MpSqlVisualizerBundle.message("log.dockedPreview.toggle"),
+        MpSqlVisualizerBundle.message("log.dockedPreview.toggle.tip"),
+        AllIcons.Actions.Preview,
+    ) {
+        override fun isSelected(e: AnActionEvent): Boolean = dockedPreview.isOpen
+
+        override fun setSelected(e: AnActionEvent, state: Boolean) {
+            if (dockedPreview.isOpen != state) previewHost.toggle()
+        }
     }
 
     /**
@@ -521,6 +531,7 @@ class SqlLogPanel(
         SettingsAction(),
         ManageSuppressAction(),
         ShowSearchAction(),
+        previewToggleAction,
         scrollToEndAction,
         sortModeAction,
         HelpAction(),
@@ -585,8 +596,10 @@ class SqlLogPanel(
         // 标签 1：SQL 日志（工具栏行 + 搜索条 + 条目列表）
         val logPanel = JPanel(BorderLayout())
         logPanel.add(buildTopPanel(), BorderLayout.NORTH)
-        previewHost = SqlListPreviewHost(list, buildListPane(), dockedPreview) {
-            previewToggleButton.isSelected = it
+        previewHost = SqlListPreviewHost(
+            list, buildListPane(), dockedPreview, "mpvs.logs.preview.split", showIconHint = true,
+        ) {
+            Toggleable.setSelected(previewToggleAction.templatePresentation, it)
         }
         logPanel.add(previewHost.component, BorderLayout.CENTER)
 
@@ -786,11 +799,7 @@ class SqlLogPanel(
             add(controls)
             add(Box.createVerticalGlue())
         }
-        row.add(JPanel(BorderLayout()).apply {
-            isOpaque = false
-            add(previewToggleButton, BorderLayout.WEST)
-            add(right, BorderLayout.EAST)
-        }, BorderLayout.EAST)
+        row.add(right, BorderLayout.EAST)
         toolbarRow = row
         return row
     }

@@ -15,6 +15,8 @@ import com.intellij.openapi.actionSystem.ActionToolbar
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.DefaultActionGroup
+import com.intellij.openapi.actionSystem.ToggleAction
+import com.intellij.openapi.actionSystem.Toggleable
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ModalityState
@@ -49,7 +51,6 @@ import javax.swing.DefaultListModel
 import javax.swing.JComboBox
 import javax.swing.JPanel
 import javax.swing.SwingConstants
-import javax.swing.JToggleButton
 
 /**
  * 历史 SQL 面板（F-44-3 两级导航）：读取自动保存目录中的历史文件展示
@@ -137,6 +138,8 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     /** 后台刷新/加载代际：新任务启动即作废旧任务的 EDT apply。 */
     private var bgGeneration = 0
 
+    private var initialScanRequested = false
+
     /** T-Perf-05：搜索防抖（每击键 O(N) clear+add → 停顿 200ms 应用一次）。 */
     private val searchDebounceTimer =
         javax.swing.Timer(SEARCH_DEBOUNCE_MS) { applySearch() }.apply { isRepeats = false }
@@ -187,7 +190,22 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
 
     /** 导航工具栏引用（层级切换后即时刷新 Back 可见性；T-UN-10）。 */
     private var _navToolbarRef: ActionToolbar? = null
-    private lateinit var previewToggleButton: JToggleButton
+    internal val previewToggleAction: ToggleAction = object : ToggleAction(
+        MpSqlVisualizerBundle.message("log.dockedPreview.toggle"),
+        MpSqlVisualizerBundle.message("log.dockedPreview.toggle.tip"),
+        AllIcons.Actions.Preview,
+    ) {
+        override fun isSelected(e: AnActionEvent): Boolean = dockedPreview.isOpen
+
+        override fun setSelected(e: AnActionEvent, state: Boolean) {
+            if (dockedPreview.isOpen != state) previewHost.toggle()
+        }
+
+        override fun update(e: AnActionEvent) {
+            super.update(e)
+            e.presentation.isVisible = !isShowingFiles
+        }
+    }
 
     /** 返回一级（原 backButton）：图标 Back、tooltip 沿用 log.history.back.tip；可见性 = 二级列表（update 输出）。 */
     private inner class BackAction : AnAction() {
@@ -217,7 +235,6 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     /** 层级切换后即时刷新导航工具栏（Back 可见性走 update；组件不可见时平台跳过，无副作用）。 */
     private fun refreshNavToolbar() {
         _navToolbarRef?.updateActionsImmediately()
-        if (::previewToggleButton.isInitialized) previewToggleButton.isVisible = !isShowingFiles
     }
 
     /** 二级列表当前行高（测试断言行高随模式重设用）。 */
@@ -315,28 +332,35 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
 
     init {
         buildUI()
-        // F87（T-PerfSweep25）懒首扫：原「构造即 refresh」把后台扫盘成本从「用时才有」提前到
-        // 「工具窗开窗即付」（R19 历史 tab 常驻使本面板随 SqlLogPanel init 构造）。现首扫延迟到
-        // 首次切到历史 tab——SqlLogPanel 的 tab ChangeListener 已有「切到历史 tab 即 refresh」
-        // 接线（F-44 形态保留，见 SqlLogPanel），即首扫唯一入口；设置变更路径经
-        // [historyDirChangedSinceLastScan] 照旧。R19 引导闭环不受影响：空态引导文案由
-        // [buildUI] 渲染（updateFilesEmptyText），与扫描无关，开窗即见。
+        addHierarchyListener { event ->
+            if (event.changeFlags and java.awt.event.HierarchyEvent.SHOWING_CHANGED.toLong() != 0L) {
+                scheduleInitialScanIfShowing()
+            }
+        }
+    }
+
+    internal fun scheduleInitialScanIfShowing(showing: () -> Boolean = { isShowing }) {
+        if (!showing()) return
+        javax.swing.SwingUtilities.invokeLater {
+            if (showing() && !project.isDisposed) ensureInitialScan()
+        }
+    }
+
+    internal fun ensureInitialScan(): Boolean {
+        if (initialScanRequested) return false
+        refresh()
+        return true
     }
 
     private fun buildUI() {
         // 顶部工具栏：返回（仅二级可见）+ 刷新 + 搜索
         // T-UiNative T-UN-10：手摆按钮 → 平台 ActionToolbar（Back 可见性由 BackAction.update 按当前层级输出）
         val navToolbar = ActionManager.getInstance()
-            .createActionToolbar("mpvs.history.nav", DefaultActionGroup(BackAction(), RefreshAction()), true)
+            .createActionToolbar("mpvs.history.nav", DefaultActionGroup(BackAction(), RefreshAction(), previewToggleAction), true)
             .apply { targetComponent = this@HistorySqlLogPanel }
         _navToolbarRef = navToolbar
         val toolbar = JPanel(FlowLayout(FlowLayout.LEFT, 4, 0))
         toolbar.add(navToolbar.component)
-        previewToggleButton = JToggleButton(MpSqlVisualizerBundle.message("log.dockedPreview.toggle")).apply {
-            isVisible = false
-            addActionListener { previewHost.toggle() }
-        }
-        toolbar.add(previewToggleButton)
         // T-DisplayModeToSettings：显示模式入口迁设置页「列表显示」（工具栏按钮移除）
         searchField.textEditor.emptyText.text = MpSqlVisualizerBundle.message("log.history.search.files")
         searchField.textEditor.minimumSize = Dimension(200, searchField.textEditor.minimumSize.height)
@@ -414,8 +438,8 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
             horizontalScrollBarPolicy = javax.swing.ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER
         }
         sqlScrollPane.verticalScrollBar.addAdjustmentListener { maybeAppendOnScroll() }
-        previewHost = SqlListPreviewHost(sqlList, sqlScrollPane, dockedPreview) {
-            previewToggleButton.isSelected = it
+        previewHost = SqlListPreviewHost(sqlList, sqlScrollPane, dockedPreview, "mpvs.history.preview.split", showIconHint = true) {
+            Toggleable.setSelected(previewToggleAction.templatePresentation, it)
         }
         cards.add(previewHost.component, CARD_SQL)
         add(cards, BorderLayout.CENTER)
@@ -520,6 +544,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         private set
 
     fun refresh() {
+        initialScanRequested = true
         refreshInvocationCountForTest++
         // T-HistoryTabAlways：记录本次扫描所用目录（EDT 侧纯字段写），供设置变更时判定要不要重扫
         lastScannedDir = getHistoryDir()
@@ -544,6 +569,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
 
     /** 测试缝：同步刷新（生产路径 refresh() 已后台化；headless 测试需要确定性）。 */
     internal fun refreshForTest() {
+        initialScanRequested = true
         ++bgGeneration // 作废在途后台 apply（构造期 refresh() 的后台扫描可能尚未完成）
         val dir = getHistoryDir()
         lastScannedDir = dir

@@ -3,7 +3,9 @@ package cn.song.mybatisplus.visualizer.log
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import java.io.File
 
@@ -136,16 +138,29 @@ class HistorySqlLogPanelPreviewTest : BasePlatformTestCase() {
         val panel = HistorySqlLogPanel(project)
         panel.refreshForTest()
         try {
+            val actionEvent = com.intellij.openapi.actionSystem.AnActionEvent.createFromAnAction(
+                panel.previewToggleAction, null, com.intellij.openapi.actionSystem.ActionPlaces.TOOLBAR,
+                com.intellij.openapi.actionSystem.DataContext.EMPTY_CONTEXT,
+            )
+            panel.previewToggleAction.update(actionEvent)
+            assertFalse("历史文件列表无需单条快速预览图标", actionEvent.presentation.isVisible)
             panel.openFileForTest(panel.fileListEntries.single())
+            panel.previewToggleAction.update(actionEvent)
+            assertTrue("二级 SQL 列表应显示快速预览图标", actionEvent.presentation.isVisible)
+            assertSame(com.intellij.icons.AllIcons.Actions.Preview, actionEvent.presentation.icon)
             val list = panel.sqlListForTest
             list.selectedIndex = 0
-            panel.previewHostForTest.toggle()
+            panel.previewToggleAction.setSelected(actionEvent, true)
+            assertTrue(com.intellij.openapi.actionSystem.Toggleable.isSelected(panel.previewToggleAction.templatePresentation))
             assertEquals("SELECT 1;", panel.dockedPreviewForTest.displayedSqlForTest)
             list.selectedIndex = 1
             assertEquals("SELECT 2;", panel.dockedPreviewForTest.displayedSqlForTest)
             panel.backToFilesForTest()
             assertTrue(panel.isShowingFiles)
-            assertTrue(!panel.previewHostForTest.previewOpenForTest)
+            assertFalse(panel.previewHostForTest.previewOpenForTest)
+            assertFalse(com.intellij.openapi.actionSystem.Toggleable.isSelected(panel.previewToggleAction.templatePresentation))
+            panel.previewToggleAction.update(actionEvent)
+            assertFalse("返回文件列表时快速预览图标应隐藏", actionEvent.presentation.isVisible)
             assertNull(panel.dockedPreviewForTest.displayedSqlForTest)
             panel.openFileForTest(panel.fileListEntries.single())
             panel.previewHostForTest.toggle()

@@ -30,6 +30,27 @@ class SqlDockedPreviewTest : BasePlatformTestCase() {
         MouseEvent(list, MouseEvent.MOUSE_CLICKED, System.currentTimeMillis(), modifiers,
             5, row * 20 + 10, count, false, MouseEvent.BUTTON1)
 
+    fun test原生分隔条无白色默认皮肤_收合再开启仍挂着列表() {
+        val f = fixture("SELECT 1")
+        try {
+            f.list.selectedIndex = 0
+            f.host.toggle()
+            val split = f.host.component.components.filterIsInstance<com.intellij.ui.OnePixelSplitter>().single()
+            assertEquals(com.intellij.util.ui.UIUtil.getPanelBackground(), split.background)
+            assertTrue("展开后列表应仍挂在原生分隔组件中",
+                javax.swing.SwingUtilities.isDescendingFrom(f.list, split))
+            f.host.toggle()
+            f.host.toggle()
+            assertSame("重新展开须复用同一分隔条，保留用户拖拽的高度比例", split,
+                f.host.component.components.filterIsInstance<com.intellij.ui.OnePixelSplitter>().single())
+            assertTrue("重新展开不能只显示空白上半区",
+                javax.swing.SwingUtilities.isDescendingFrom(f.list, split))
+        } finally {
+            f.host.hideHint()
+            f.preview.dispose()
+        }
+    }
+
     fun test单击只选中_显式开启后随列表选中更新() {
         val f = fixture("SELECT 1", "SELECT 2", "SELECT 3")
         val settings = PluginSettings.getInstance()
@@ -105,8 +126,18 @@ class SqlDockedPreviewTest : BasePlatformTestCase() {
             panel.previewHostForTest.showPendingHintForTest()
             assertTrue(panel.previewHostForTest.hintVisibleForTest)
             panel.previewHostForTest.toggle()
-            assertTrue("引导入口开启后文字按钮应显选中态", panel.previewToggleButton.isSelected)
+            assertTrue("引导入口开启后预览图标应显选中态",
+                com.intellij.openapi.actionSystem.Toggleable.isSelected(panel.previewToggleAction.templatePresentation))
             assertEquals("SELECT 1;", panel.dockedPreviewForTest.displayedSqlForTest)
+            val actionEvent = com.intellij.openapi.actionSystem.AnActionEvent.createFromAnAction(
+                panel.previewToggleAction, null, com.intellij.openapi.actionSystem.ActionPlaces.TOOLBAR,
+                com.intellij.openapi.actionSystem.DataContext.EMPTY_CONTEXT,
+            )
+            panel.previewToggleAction.setSelected(actionEvent, false)
+            assertFalse("左侧预览图标应可关闭底部预览", panel.previewHostForTest.previewOpenForTest)
+            assertFalse(com.intellij.openapi.actionSystem.Toggleable.isSelected(panel.previewToggleAction.templatePresentation))
+            panel.previewToggleAction.setSelected(actionEvent, true)
+            assertTrue("左侧预览图标应可重新开启", panel.previewHostForTest.previewOpenForTest)
         } finally {
             panel.dispose()
             manager.dispose()

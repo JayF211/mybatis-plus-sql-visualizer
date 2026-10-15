@@ -24,7 +24,8 @@ class HelpDialogTest : BasePlatformTestCase() {
         try {
             // 用户 2026-10-14：「不要这个更多」——全部动作直达工具栏，帮助也在组内（窄宽由平台溢出折叠）
             val children = panel.toolbarGroup.getChildren(null).toList()
-            assertEquals("设置、屏蔽管理与帮助均直达工具栏（共 8 个动作）", 8, children.size)
+            assertEquals("快速预览归入左侧动作组后共 9 个动作", 9, children.size)
+            assertTrue("快速预览仍应是独立动作", children.contains(panel.previewToggleAction))
             // update 由工具栏生命周期驱动（headless 不布局不触发），手动走一次——
             // 图标/文案写入 event.presentation（2024.3 AnAction 无 getPresentation()）
             val events = children.map {
