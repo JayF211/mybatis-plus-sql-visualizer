@@ -10,7 +10,7 @@ internal object IdeaSourceDialectProbe {
 
     fun dialectName(project: Project, source: VirtualFile): String? {
         val id = languageIdForTest?.invoke(project, source)
-            ?: DialectPreMapping.configuredLanguageId(project, source)
+            ?: IdeaSqlContextBridge.resolveDialect(project, source).effectiveDialectId
         return when {
             id.equals("TSQL", ignoreCase = true) -> "SQL Server"
             else -> DialectRegistry.dialects.firstOrNull { it.name.equals(id, ignoreCase = true) }?.name
