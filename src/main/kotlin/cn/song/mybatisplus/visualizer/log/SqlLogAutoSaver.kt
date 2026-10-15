@@ -72,6 +72,22 @@ class SqlLogAutoSaver(
     private data class WrittenBlock(val file: File, val id: String, val key: Any, val identity: String)
     private val writtenBlocks = java.util.IdentityHashMap<LogSqlEntry, WrittenBlock>()
     private val pendingMerges = java.util.concurrent.ConcurrentLinkedQueue<Pair<LogSqlEntry, LogSqlEntry>>()
+    private val writtenOrder = java.util.ArrayDeque<LogSqlEntry>()
+    private data class WaitingMerge(val merged: LogSqlEntry, val expires: Long)
+    private val waitingMerges = java.util.IdentityHashMap<LogSqlEntry, WaitingMerge>()
+    private val waitingOrder = java.util.ArrayDeque<LogSqlEntry>()
+
+    private fun awaitStore(old: LogSqlEntry, merged: LogSqlEntry) {
+        waitingMerges[old] = WaitingMerge(merged, clock() + 60_000)
+        waitingOrder.removeIf { it === old }
+        waitingOrder.addLast(old)
+        while (waitingOrder.size > 2048) waitingMerges.remove(waitingOrder.removeFirst())
+    }
+
+    private fun forgetWritten(entry: LogSqlEntry) {
+        writtenBlocks.remove(entry)
+        writtenOrder.removeIf { it === entry }
+    }
 
     /** 元数据升级只追加修订注释，不重写旧字节，也不追加第二条可执行 SQL。 */
     fun submitMerge(old: LogSqlEntry, merged: LogSqlEntry) {
@@ -86,14 +102,27 @@ class SqlLogAutoSaver(
     }
 
     private fun remember(entry: LogSqlEntry, block: WrittenBlock) {
-        if (writtenBlocks.size >= 2048) writtenBlocks.clear()
         writtenBlocks[entry] = block
+        writtenOrder.removeIf { it === entry }
+        writtenOrder.addLast(entry)
+        while (writtenOrder.size > 2048) writtenBlocks.remove(writtenOrder.removeFirst())
+        waitingMerges.remove(entry)?.let { waiting ->
+            waitingOrder.removeIf { it === entry }
+            if (waiting.expires >= clock()) pendingMerges.add(entry to waiting.merged)
+        }
     }
 
     private fun drainMerges() {
+        val now = clock()
+        waitingMerges.entries.removeIf { it.value.expires < now }
+        waitingOrder.removeIf { !waitingMerges.containsKey(it) }
         while (true) {
             val (old, merged) = pendingMerges.poll() ?: break
-            val block = writtenBlocks[old] ?: continue
+            val block = writtenBlocks[old]
+            if (block == null) {
+                awaitStore(old, merged)
+                continue
+            }
             if (old.sequenceNumber != merged.sequenceNumber || SqlLogParamCodec.historyIdentity(merged) != block.identity) continue
             try {
                 // 不 CREATE：删除/替换/重配后的文件不恢复、不认领。非协作外写无法CAS，
@@ -113,10 +142,10 @@ class SqlLogAutoSaver(
                         while (bytes.hasRemaining()) channel.write(bytes)
                     }
                 }
-                writtenBlocks.remove(old)
+                forgetWritten(old)
                 remember(merged, block)
             } catch (_: Exception) {
-                writtenBlocks.remove(old)
+                forgetWritten(old)
                 LOG.warn("自动保存历史 SQL：融合修订未追加，保留原历史")
             }
         }
@@ -293,6 +322,7 @@ class SqlLogAutoSaver(
         // T-PS4-13：configure 链调用线程常为 EDT（设置变更）——限批同步排水防长批磁盘写阻塞
         close(configureDrainLimit)
         writtenBlocks.clear()
+        writtenOrder.clear()
         saveDir = resolveHistoryDir(customPath, projectBasePath)
         fileNamePattern = pattern.ifBlank { PluginSettings.DEFAULT_LOG_AUTO_SAVE_FILE_NAME_PATTERN }
         this.maxFiles = maxFiles
@@ -494,6 +524,8 @@ class SqlLogAutoSaver(
     fun close(maxDrainEntries: Int = Int.MAX_VALUE) {
         drainPendingSync(maxDrainEntries)
         drainMerges()
+        waitingMerges.clear()
+        waitingOrder.clear()
         executor?.shutdownNow()
         executor = null
         drainScheduled.set(false)

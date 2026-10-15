@@ -166,6 +166,90 @@ class O147HistoryUpgradeTest {
         assertEquals(old.rawSql, read.rawSql); assertEquals(CaptureProvenance.CONSOLE_BRIDGE, read.captureProvenance)
     }
 
+    @Test fun mergeCallbackBeforeStoreCallbackStillPersistsOneMergedEntry() {
+        val dir = dir(); val saver = SqlLogAutoSaver(); saver.configure(dir.path, "test.sql", null)
+        val buffer = SqlLogEntryBuffer(10)
+        val storedReached = java.util.concurrent.CountDownLatch(1)
+        val releaseStore = java.util.concurrent.CountDownLatch(1)
+        buffer.onEntryStored = {
+            storedReached.countDown()
+            check(releaseStore.await(10, java.util.concurrent.TimeUnit.SECONDS))
+            saver.submit(it)
+        }
+        buffer.onEntryMerged = saver::submitMerge
+        val old = entry()
+        val failure = java.util.concurrent.atomic.AtomicReference<Throwable?>()
+        val writer = Thread {
+            try { buffer.addEntry(old) } catch (t: Throwable) { failure.set(t) }
+        }
+        writer.start()
+        try {
+            assertTrue(storedReached.await(10, java.util.concurrent.TimeUnit.SECONDS))
+            buffer.addEntry(merged(old).copy(captureProvenance = CaptureProvenance.AGENT))
+            // Deterministic drain without sleep: force the first merge to be consumed before store.
+            val drain = SqlLogAutoSaver::class.java.getDeclaredMethod("drainAndWrite")
+            drain.isAccessible = true
+            drain.invoke(saver)
+        } finally { releaseStore.countDown(); writer.join(10000) }
+        failure.get()?.let { throw it }
+        assertFalse(writer.isAlive)
+        saver.close()
+        val result = SqlLogFileReader.readFromFile(File(dir, "test.sql"))
+        assertEquals(1, result.size)
+        assertEquals(CaptureProvenance.MERGED, result.single().captureProvenance)
+        assertEquals("Synthetic.java", result.single().sourceFile)
+        assertEquals(1, buffer.dedupeCount(old.restoredSql))
+    }
+
+    @Test fun unknownMergeWaitIsBoundedAndCloseOrConfigureDoesNotCreateHistory() {
+        val dir = dir(); val saver = SqlLogAutoSaver(); saver.configure(dir.path, "test.sql", null)
+        val drain = SqlLogAutoSaver::class.java.getDeclaredMethod("drainAndWrite").apply { isAccessible = true }
+        val waits = SqlLogAutoSaver::class.java.getDeclaredField("waitingMerges").apply { isAccessible = true }
+        synchronized(saver) {
+            repeat(2050) { val old = entry("SELECT $it", it.toLong()); saver.submitMerge(old, merged(old)) }
+            drain.invoke(saver)
+            assertEquals(2048, (waits.get(saver) as Map<*, *>).size)
+            assertFalse(File(dir, "test.sql").exists())
+            saver.close()
+            assertEquals(0, (waits.get(saver) as Map<*, *>).size)
+        }
+        val old = entry()
+        synchronized(saver) {
+            saver.submitMerge(old, merged(old)); drain.invoke(saver)
+            saver.configure(dir.path, "next.sql", null)
+            assertEquals(0, (waits.get(saver) as Map<*, *>).size)
+            saver.submit(old); saver.close()
+        }
+        assertEquals(CaptureProvenance.CONSOLE_BRIDGE,
+            SqlLogFileReader.readFromFile(File(dir, "next.sql")).single().captureProvenance)
+    }
+
+    @Test fun reverseChainOfTwoUpgradesResolvesAfterOriginalStore() {
+        val dir = dir(); val saver = SqlLogAutoSaver(); saver.configure(dir.path, "test.sql", null)
+        val old = entry(); val first = merged(old); val last = first.copy(stackDigest = "Synthetic#call:12")
+        val drain = SqlLogAutoSaver::class.java.getDeclaredMethod("drainAndWrite").apply { isAccessible = true }
+        synchronized(saver) {
+            saver.submitMerge(first, last); saver.submitMerge(old, first); drain.invoke(saver)
+            saver.submit(old); saver.close()
+        }
+        val read = SqlLogFileReader.readFromFile(File(dir, "test.sql")).single()
+        assertEquals(CaptureProvenance.MERGED, read.captureProvenance)
+        assertEquals(last.stackDigest, read.stackDigest)
+    }
+
+    @Test fun expiredWaitingMergeDoesNotUpgradeLaterStore() {
+        var now = 0L
+        val dir = dir(); val saver = SqlLogAutoSaver(clock = { now }); saver.configure(dir.path, "test.sql", null)
+        val old = entry()
+        val drain = SqlLogAutoSaver::class.java.getDeclaredMethod("drainAndWrite").apply { isAccessible = true }
+        synchronized(saver) {
+            saver.submitMerge(old, merged(old)); drain.invoke(saver)
+            now = 60001; saver.submit(old); saver.close()
+        }
+        assertEquals(CaptureProvenance.CONSOLE_BRIDGE,
+            SqlLogFileReader.readFromFile(File(dir, "test.sql")).single().captureProvenance)
+    }
+
     @Test fun bareProvenanceWithoutParametersIsPersisted() {
         val dir = dir(); val saver = SqlLogAutoSaver(); saver.configure(dir.path, "test.sql", null)
         saver.write(entry()); saver.close()
