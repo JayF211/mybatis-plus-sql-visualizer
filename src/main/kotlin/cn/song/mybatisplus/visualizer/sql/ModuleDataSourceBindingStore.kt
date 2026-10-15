@@ -29,7 +29,8 @@ class ModuleDataSourceBindingStore : PersistentStateComponent<ModuleDataSourceBi
 
     fun learnedCandidate(project: Project, moduleKey: String): DialectDecisionEngine.Candidate? {
         val id = dataSourceId(moduleKey) ?: return null
-        val ds = DataSourceSettings.getDataSourceById(project, id) ?: run {
+        val lookup = dataSourceByIdForTest
+        val ds = (if (lookup != null) lookup(project, id) else DataSourceSettings.getDataSourceById(project, id)) ?: run {
             forget(moduleKey)
             return null
         }
@@ -37,6 +38,9 @@ class ModuleDataSourceBindingStore : PersistentStateComponent<ModuleDataSourceBi
     }
 
     companion object {
+        /** Headless 夹具只替换 UUID→对象查找；生产恒走 DatabaseTools 存储。 */
+        @Volatile internal var dataSourceByIdForTest: ((Project, String) -> Any?)? = null
+
         fun getInstance(project: Project): ModuleDataSourceBindingStore = project.getService(ModuleDataSourceBindingStore::class.java)
     }
 }
