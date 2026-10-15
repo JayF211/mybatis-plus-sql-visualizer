@@ -134,6 +134,9 @@ abstract class McpToolsetSupport(private val toolName: String) {
         return suspendCoroutineUninterceptedOrReturn { cont ->
             val gate = AuditGate(token, cont)
             val outcome = try {
+                if (!McpToolGate.isEnabled(tool)) {
+                    throwExpected(McpToolErrors.code(McpToolErrors.TOOL_DISABLED, "tool $tool is disabled in SQL Visualizer settings."))
+                }
                 block.startCoroutineUninterceptedOrReturn(gate)
             } catch (e: Throwable) {
                 if (FatalErrors.isFatal(e)) throw e
