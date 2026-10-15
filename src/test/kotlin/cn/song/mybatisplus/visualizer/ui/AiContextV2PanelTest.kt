@@ -42,6 +42,9 @@ class AiContextV2PanelTest : BasePlatformTestCase() {
             panel.copyAsAiContext()
             assertTrue(UiTextClipboard.readText()!!.contains("EXPLAIN: not obtained"))
             panel.nativeEditorDoc = EditorFactory.getInstance().createDocument(sql)
+            history.clear()
+            panel.copyAsAiContext()
+            assertTrue(UiTextClipboard.readText()!!.contains("EXPLAIN: not obtained"))
             panel.current = panel.current!!.copy(renderedDialect = cn.song.mybatisplus.visualizer.sql.PostgreSQLDialect)
             panel.copyAsAiContext()
             assertTrue(UiTextClipboard.readText()!!.contains("EXPLAIN: not obtained"))
@@ -62,6 +65,62 @@ class AiContextV2PanelTest : BasePlatformTestCase() {
             assertTrue(copied.contains("Static schema: not obtained"))
             assertFalse(copied.contains("999"))
         } finally { Disposer.dispose(panel) }
+    }
+
+    @Suppress("DEPRECATION")
+    fun testCopyPerformsNoSocketOrJdbcAcquisitionWithLiveCanaries() {
+        val panel = SqlPreviewPanel(project)
+        val previous = System.getSecurityManager()
+        var armed = false
+        var networkCalls = 0
+        var jdbcCalls = 0
+        val thread = Thread.currentThread()
+        val guard = object : SecurityManager() {
+            override fun checkPermission(permission: java.security.Permission) { previous?.checkPermission(permission) }
+            override fun checkConnect(host: String, port: Int) {
+                if (armed && Thread.currentThread() === thread) {
+                    networkCalls++
+                    throw SecurityException("R91 network canary")
+                }
+                previous?.checkConnect(host, port)
+            }
+        }
+        val driver = object : java.sql.Driver {
+            override fun acceptsURL(url: String?) = url?.startsWith("jdbc:r91:") == true
+            override fun connect(url: String?, properties: java.util.Properties?): java.sql.Connection? {
+                if (!acceptsURL(url)) return null
+                jdbcCalls++
+                throw java.sql.SQLException("R91 JDBC canary")
+            }
+            override fun getPropertyInfo(url: String?, properties: java.util.Properties?) = emptyArray<java.sql.DriverPropertyInfo>()
+            override fun getMajorVersion() = 1
+            override fun getMinorVersion() = 0
+            override fun jdbcCompliant() = false
+            override fun getParentLogger(): java.util.logging.Logger = java.util.logging.Logger.getGlobal()
+        }
+        try {
+            panel.current = PreviewResult("SELECT 1", "SELECT 1", emptyList(), null, null, null, renderedDialect = MySqlDialect)
+            panel.nativeEditorDoc = EditorFactory.getInstance().createDocument("SELECT 1")
+            java.sql.DriverManager.registerDriver(driver)
+            System.setSecurityManager(guard)
+            armed = true
+            // Positive controls prove that these are live tripwires, not unavailable APIs.
+            assertTrue(runCatching { java.net.Socket("127.0.0.1", 9).close() }.exceptionOrNull() is SecurityException)
+            assertTrue(runCatching { java.sql.DriverManager.getConnection("jdbc:r91:probe") }.exceptionOrNull() is java.sql.SQLException)
+            assertTrue(networkCalls > 0)
+            assertEquals(1, jdbcCalls)
+            networkCalls = 0
+            jdbcCalls = 0
+            panel.copyAsAiContext()
+            assertTrue(UiTextClipboard.readText()!!.contains("AI context v2"))
+            assertEquals(0, networkCalls)
+            assertEquals(0, jdbcCalls)
+        } finally {
+            armed = false
+            System.setSecurityManager(previous)
+            java.sql.DriverManager.deregisterDriver(driver)
+            Disposer.dispose(panel)
+        }
     }
 
     fun testRealCopyUsesV2StrictProjectionAndStaticMetadata() {
