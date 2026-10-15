@@ -98,7 +98,16 @@ object ShareContentProjection {
                     while (i < input.length && (input[i].isLetterOrDigit() || input[i] == '_')) i++
                     val word = input.substring(start, i)
                     if (i < input.length && input[i] == '\'') return omitted()
-                    out.append(if (word.uppercase(java.util.Locale.ROOT) in KEYWORDS) word else identifier(word))
+                    val upper = word.uppercase(java.util.Locale.ROOT)
+                    if (upper in VALUE_KEYWORDS) {
+                        out.append('?')
+                        values++
+                    } else {
+                        // Without a dialect grammar, keyword-looking names can still be identifiers.
+                        // Preserve only the leading statement kind; remaining words become stable tokens.
+                        val statementKind = out.isBlank() && upper in STATEMENT_KINDS
+                        out.append(if (statementKind) upper else identifier(word))
+                    }
                 }
                 c in "(),.;?=<>!+-*/%|&^~" -> { out.append(c); i++ }
                 else -> return omitted()
@@ -116,12 +125,6 @@ object ShareContentProjection {
 
     private fun omitted() = SqlProjection(null, 0, 0, true)
     private val IDENTIFIER = Regex("[\\p{L}_][\\p{L}\\p{N}_.$]{0,127}")
-    private val KEYWORDS = setOf(
-        "SELECT", "FROM", "WHERE", "AND", "OR", "NOT", "NULL", "TRUE", "FALSE", "AS", "ON", "IN", "IS",
-        "JOIN", "LEFT", "RIGHT", "INNER", "OUTER", "FULL", "CROSS", "UNION", "ALL", "DISTINCT", "GROUP", "BY",
-        "ORDER", "HAVING", "ASC", "DESC", "LIMIT", "OFFSET", "FETCH", "FIRST", "NEXT", "ROWS", "ROW", "ONLY",
-        "INSERT", "INTO", "VALUES", "UPDATE", "SET", "DELETE", "WITH", "RECURSIVE", "CASE", "WHEN", "THEN",
-        "ELSE", "END", "EXISTS", "BETWEEN", "LIKE", "ILIKE", "ESCAPE", "RETURNING", "TOP", "OVER", "PARTITION",
-        "COUNT", "SUM", "AVG", "MIN", "MAX", "COALESCE", "CAST", "EXPLAIN", "FORMAT", "JSON", "VERBOSE",
-    )
+    private val VALUE_KEYWORDS = setOf("NULL", "TRUE", "FALSE")
+    private val STATEMENT_KINDS = setOf("SELECT", "INSERT", "UPDATE", "DELETE", "WITH", "EXPLAIN")
 }

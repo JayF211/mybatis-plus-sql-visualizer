@@ -41,6 +41,11 @@ class ShareDialogTest : BasePlatformTestCase() {
             assertFalse(draft.body.contains("SENTINEL_SECRET"))
             assertFalse(draft.body.contains("private_table"))
             assertNull("新建诊断草稿不能直接取得可发送快照", draft.takeSubmission())
+            val ambiguous = dialog.feedbackDraft("SELECT count FROM json WHERE private_flag = TRUE")
+            val sqlSection = ambiguous.sections.single { it.id == "sql" }.text
+            listOf("count", "json", "private_flag", "TRUE").forEach {
+                assertFalse("自动草稿不能泄漏同名标识符/布尔值：$sqlSection", sqlSection.contains(it, ignoreCase = true))
+            }
             val selected = radios.filter { it.isSelected }
             assertEquals("默认应仅选中 1 个", 1, selected.size)
             val markdownText = MpSqlVisualizerBundle.message("share.dialog.markdown")

@@ -65,6 +65,17 @@ class ShareContentProjectionTest {
     }
 
     @Test
+    fun `函数名同名表列与布尔值不能穿过结构白名单`() {
+        val projected = ShareContentProjection.sql("SELECT count, sum, first, next FROM json WHERE private_flag = TRUE AND private_other = FALSE")
+        assertFalse(projected.omitted)
+        val text = projected.sql!!
+        listOf("count", "sum", "first", "next", "json", "private_flag", "private_other", "TRUE", "FALSE").forEach {
+            assertFalse("同名标识符或布尔值泄漏：$text", text.contains(it, ignoreCase = true))
+        }
+        assertEquals(2, projected.maskedValues)
+    }
+
+    @Test
     fun `预算与空输入边界不回退原文`() {
         assertTrue(ShareContentProjection.sql("x".repeat(ShareContentProjection.MAX_INPUT_CHARS + 1)).omitted)
         assertTrue(ShareContentProjection.sql("SELECT " + "identifier,".repeat(3000)).omitted)

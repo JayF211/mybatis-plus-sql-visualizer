@@ -20,6 +20,7 @@ class DiagnosticFeedbackReviewTest : BasePlatformTestCase() {
             done(FeedbackApi.SubmissionOutcome(FeedbackApi.SubmitResult.Failure("Synthetic failure; no network request")))
         }
         try {
+            assertTrue("长隐私说明不能撑宽已有反馈表单", dialog.diagnosticReview!!.preferredSize.width <= 800)
             submit(dialog)
             assertTrue(sent.isEmpty())
             dialog.diagnosticReview!!.consent.doClick()

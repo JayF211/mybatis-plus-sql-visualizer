@@ -21,8 +21,8 @@ internal class DiagnosticReviewPanel(
 
     init {
         layout = BoxLayout(this, BoxLayout.Y_AXIS)
-        add(JBLabel(MpSqlVisualizerBundle.message("share.review.destination")))
-        add(JBLabel(MpSqlVisualizerBundle.message("share.review.sectionReset")))
+        add(explanation("share.review.destination"))
+        add(explanation("share.review.sectionReset"))
         draft.sections.forEach { section ->
             val box = JCheckBox(section.title, true)
             sections[section.id] = box
@@ -65,6 +65,16 @@ internal class DiagnosticReviewPanel(
         val snapshot = draft.takeSubmission()
         consent.isSelected = false
         return snapshot
+    }
+
+    private fun explanation(key: String): JTextArea = com.intellij.ui.components.JBTextArea(
+        MpSqlVisualizerBundle.message(key), 3, 40,
+    ).apply {
+        isEditable = false
+        isOpaque = false
+        lineWrap = true
+        wrapStyleWord = true
+        preferredSize = com.intellij.util.ui.JBUI.size(620, 52)
     }
 
     private fun refreshBytes() {
