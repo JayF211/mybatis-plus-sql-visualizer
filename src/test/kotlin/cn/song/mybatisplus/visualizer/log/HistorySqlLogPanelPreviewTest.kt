@@ -97,6 +97,64 @@ class HistorySqlLogPanelPreviewTest : BasePlatformTestCase() {
         }
     }
 
+    fun test历史二级真实鼠标监听只提示不自动预览() {
+        writeHistoryFile(
+            "sql-history-2026-09-16.sql",
+            "-- source: A.java:1 | time: 1ms | 2026-09-16 09:00:00.000 --\nSELECT 1\n\n",
+        )
+        val settings = PluginSettings.getInstance()
+        val before = settings.state
+        val panel = HistorySqlLogPanel(project)
+        panel.refreshForTest()
+        try {
+            settings.loadState(before.copy(sqlListPreviewHintSeen = false))
+            panel.openFileForTest(panel.fileListEntries.single())
+            val list = panel.sqlListForTest
+            list.fixedCellHeight = 20
+            list.setSize(320, 200)
+            list.selectedIndex = 0
+            val event = java.awt.event.MouseEvent(list, java.awt.event.MouseEvent.MOUSE_CLICKED,
+                System.currentTimeMillis(), 0, 5, 10, 1, false, java.awt.event.MouseEvent.BUTTON1)
+            list.mouseListeners.forEach { it.mouseClicked(event) }
+            assertTrue(panel.previewHostForTest.hintScheduledForTest)
+            assertTrue(!panel.previewHostForTest.previewOpenForTest)
+            assertNull(panel.dockedPreviewForTest.editorForTest)
+        } finally {
+            panel.dispose()
+            settings.loadState(before)
+        }
+    }
+
+    fun test历史二级预览随选择更新_返回文件列表清理旧内容() {
+        writeHistoryFile(
+            "sql-history-2026-09-15.sql",
+            "-- source: A.java:1 | time: 1ms | 2026-09-15 09:00:00.000 --\n" +
+                "SELECT 1\n\n" +
+                "-- source: A.java:2 | time: 1ms | 2026-09-15 09:00:01.000 --\n" +
+                "SELECT 2\n\n",
+        )
+        val panel = HistorySqlLogPanel(project)
+        panel.refreshForTest()
+        try {
+            panel.openFileForTest(panel.fileListEntries.single())
+            val list = panel.sqlListForTest
+            list.selectedIndex = 0
+            panel.previewHostForTest.toggle()
+            assertEquals("SELECT 1;", panel.dockedPreviewForTest.displayedSqlForTest)
+            list.selectedIndex = 1
+            assertEquals("SELECT 2;", panel.dockedPreviewForTest.displayedSqlForTest)
+            panel.backToFilesForTest()
+            assertTrue(panel.isShowingFiles)
+            assertTrue(!panel.previewHostForTest.previewOpenForTest)
+            assertNull(panel.dockedPreviewForTest.displayedSqlForTest)
+            panel.openFileForTest(panel.fileListEntries.single())
+            panel.previewHostForTest.toggle()
+            assertNull("重新进入历史文件时不显示上一文件的 SQL", panel.dockedPreviewForTest.displayedSqlForTest)
+        } finally {
+            panel.dispose()
+        }
+    }
+
     fun test预览构建跟随格式化设置开启时多行显示() {
         // T-ListPreviewCopy：默认开启 logFormatSql → 双击预览多行格式化（与日志 tab 一致）
         PluginSettings.getInstance().state.logFormatSql = true

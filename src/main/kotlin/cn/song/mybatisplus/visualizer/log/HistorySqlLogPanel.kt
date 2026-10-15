@@ -91,11 +91,8 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     /** 二级速度搜索是否已安装。构造于 CardLayout 隐藏卡时安装不生效（真机 key 流不达、焦点不在），
      *  故延后到 [showFileContent]/[loadFileContentSync] 切卡可见后安装（T-UiNative T-UN-05）。 */
     private var sqlSpeedSearchInstalled = false
-    /** T-ClickPreview：单击出轻量预览弹窗（点击时按行捕获 SQL，锚点在行下缘不遮行），双击走 openPreview 完整弹窗；悬停 tooltip 已移除（卡顿根因）。
-     *  T-ListPreviewCopy：预览文本经 clickPreviewSql——设置「预览时格式化还原 SQL」开启（默认）时多行格式化显示。 */
-    private val sqlClickPreview = SqlClickPreview(project, sqlList) {
-        i -> clickPreviewSql(sqlList.model.getElementAt(i).restoredSql, PluginSettings.getInstance().state.logFormatSql)
-    }
+    private lateinit var previewHost: SqlListPreviewHost
+    private val dockedPreview = SqlDockedPreview(project, sqlList) { previewHost.toggle() }
     private var currentFile: HistoryFileEntry? = null
     private var currentEntries: List<LogSqlEntry> = emptyList()
 
@@ -190,6 +187,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
 
     /** 导航工具栏引用（层级切换后即时刷新 Back 可见性；T-UN-10）。 */
     private var _navToolbarRef: ActionToolbar? = null
+    private lateinit var previewToggleButton: JToggleButton
 
     /** 返回一级（原 backButton）：图标 Back、tooltip 沿用 log.history.back.tip；可见性 = 二级列表（update 输出）。 */
     private inner class BackAction : AnAction() {
@@ -219,6 +217,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     /** 层级切换后即时刷新导航工具栏（Back 可见性走 update；组件不可见时平台跳过，无副作用）。 */
     private fun refreshNavToolbar() {
         _navToolbarRef?.updateActionsImmediately()
+        if (::previewToggleButton.isInitialized) previewToggleButton.isVisible = !isShowingFiles
     }
 
     /** 二级列表当前行高（测试断言行高随模式重设用）。 */
@@ -311,8 +310,8 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         searchField.text = ""
     }
 
-    /** 二级 SQL 列表单击预览控制器（T-ClickPreview 测试断言）。 */
-    internal val sqlClickPreviewForTest: SqlClickPreview get() = sqlClickPreview
+    internal val previewHostForTest: SqlListPreviewHost get() = previewHost
+    internal val dockedPreviewForTest: SqlDockedPreview get() = dockedPreview
 
     init {
         buildUI()
@@ -333,6 +332,11 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         _navToolbarRef = navToolbar
         val toolbar = JPanel(FlowLayout(FlowLayout.LEFT, 4, 0))
         toolbar.add(navToolbar.component)
+        previewToggleButton = JToggleButton(MpSqlVisualizerBundle.message("log.dockedPreview.toggle")).apply {
+            isVisible = false
+            addActionListener { previewHost.toggle() }
+        }
+        toolbar.add(previewToggleButton)
         // T-DisplayModeToSettings：显示模式入口迁设置页「列表显示」（工具栏按钮移除）
         searchField.textEditor.emptyText.text = MpSqlVisualizerBundle.message("log.history.search.files")
         searchField.textEditor.minimumSize = Dimension(200, searchField.textEditor.minimumSize.height)
@@ -392,12 +396,9 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         applySqlListCellHeight()
         sqlList.addMouseListener(object : MouseAdapter() {
             override fun mouseClicked(e: MouseEvent) {
-                // T-ClickPreview：先转发（仅左键；单击命中行才排程预览/双击停表并关旧预览），双击再开完整弹窗
-                // T-ClickPreviewCopyRestore：修饰键一并转发——Ctrl/Shift 单击（多选第一击）不排程预览
-                if (javax.swing.SwingUtilities.isLeftMouseButton(e)) {
-                    sqlClickPreview.onClick(e.clickCount, e.point, e.modifiersEx)
-                }
-                if (e.clickCount >= 2) {
+                previewHost.onRowClick(e)
+                if (javax.swing.SwingUtilities.isLeftMouseButton(e) && e.clickCount >= 2) {
+                    previewHost.hideHint()
                     sqlList.selectedValue?.let { openPreview(it) }
                 }
             }
@@ -413,7 +414,10 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
             horizontalScrollBarPolicy = javax.swing.ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER
         }
         sqlScrollPane.verticalScrollBar.addAdjustmentListener { maybeAppendOnScroll() }
-        cards.add(sqlScrollPane, CARD_SQL)
+        previewHost = SqlListPreviewHost(sqlList, sqlScrollPane, dockedPreview) {
+            previewToggleButton.isSelected = it
+        }
+        cards.add(previewHost.component, CARD_SQL)
         add(cards, BorderLayout.CENTER)
     }
 
@@ -423,7 +427,9 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         currentFile = null
         currentFileStamp = null
         currentEntries = emptyList()
-        sqlClickPreview.hide() // 返回一级时若二级预览弹窗还开着，一并关掉
+        if (dockedPreview.isOpen) previewHost.toggle()
+        dockedPreview.resetContext()
+        previewHost.hideHint()
         refreshNavToolbar() // T-UN-10：Back 可见性随层级即时刷新（原 backButton.isVisible = false）
         searchField.textEditor.emptyText.text = MpSqlVisualizerBundle.message("log.history.search.files")
         cardLayout.show(cards, CARD_FILES)
@@ -608,6 +614,9 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
             return
         }
         // 否则回一级（默认展示文件列表）
+        if (dockedPreview.isOpen) previewHost.toggle()
+        dockedPreview.resetContext()
+        previewHost.hideHint()
         currentFile = null
         currentFileStamp = null
         currentEntries = emptyList()
@@ -1147,7 +1156,8 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     override fun dispose() {
         // T-Perf-05：面板销毁停止防抖 Timer（防晚到 apply 触碰已销毁面板）
         searchDebounceTimer.stop()
-        sqlClickPreview.dispose()
+        previewHost.hideHint()
+        dockedPreview.dispose()
     }
 
     companion object {

@@ -56,10 +56,14 @@ class SqlLogPanelLayoutTest : BasePlatformTestCase() {
             assertTrue("排序应直达（并入左侧动作组）", main.contains(panel.sortActionForTest))
             assertTrue("清空应直达", main.any { it is SqlLogPanel.ClearAction })
             assertTrue("搜索应直达", main.any { it is SqlLogPanel.ShowSearchAction })
+            assertFalse("预览不可仅以图标工具栏动作呈现", main.any {
+                it.templatePresentation.text == MpSqlVisualizerBundle.message("log.dockedPreview.toggle")
+            })
+            assertEquals(MpSqlVisualizerBundle.message("log.dockedPreview.toggle"), panel.previewToggleButton.text)
             assertTrue("设置应直达", main.any { it is SqlLogPanel.SettingsAction })
             assertTrue("屏蔽管理应直达", main.any { it is SqlLogPanel.ManageSuppressAction })
             assertTrue("帮助应直达", main.any { it is SqlLogPanel.HelpAction })
-            assertEquals("八个动作应全部在组内（捕捉/清空/设置/屏蔽/搜索/滚底/排序/帮助）",
+            assertEquals("八个图标动作应全部在组内（预览另由可见文字按钮承载）",
                 8, main.size)
             // 用户 2026-10-14 选定「方案 A」：操作在前、工具在后、帮助收尾（溢出从右端折叠，帮助最先让位）。
             assertEquals("帮助应为组内末项（方案 A）", main.last(), main.first { it is SqlLogPanel.HelpAction })
@@ -193,6 +197,11 @@ class SqlLogPanelLayoutTest : BasePlatformTestCase() {
             waitForEdt()
 
             val row = layoutRowAt(panel, USER_SIDEBAR_WIDTH)
+            val previewButton = panel.previewToggleButton
+            assertEquals("预览必须是可见文字按钮", MpSqlVisualizerBundle.message("log.dockedPreview.toggle"), previewButton.text)
+            assertTrue("预览按钮应挂在当前工具栏行并有实际宽度",
+                previewButton.isVisible && previewButton.width >= previewButton.preferredSize.width &&
+                    previewButton.parent?.parent === row)
             val controls = panel.toolbarControlsForTest!!
             assertEquals(
                 "控制组应单行（实测 ${distinctRowCount(controls)} 行）",
