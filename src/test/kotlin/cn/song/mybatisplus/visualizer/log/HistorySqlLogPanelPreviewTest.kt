@@ -3,7 +3,9 @@ package cn.song.mybatisplus.visualizer.log
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import java.io.File
 
@@ -92,6 +94,77 @@ class HistorySqlLogPanelPreviewTest : BasePlatformTestCase() {
             assertEquals(listOf("param1"), result.unresolvedParams)
             assertEquals(mapOf("param1" to "3251"), result.initialParamValues)
             assertTrue(result.paramHints.single().quote == true)
+        } finally {
+            panel.dispose()
+        }
+    }
+
+    fun test历史二级真实鼠标监听只提示不自动预览() {
+        writeHistoryFile(
+            "sql-history-2026-09-16.sql",
+            "-- source: A.java:1 | time: 1ms | 2026-09-16 09:00:00.000 --\nSELECT 1\n\n",
+        )
+        val settings = PluginSettings.getInstance()
+        val before = settings.state
+        val panel = HistorySqlLogPanel(project)
+        panel.refreshForTest()
+        try {
+            settings.loadState(before.copy(sqlListPreviewHintSeen = false))
+            panel.openFileForTest(panel.fileListEntries.single())
+            val list = panel.sqlListForTest
+            list.fixedCellHeight = 20
+            list.setSize(320, 200)
+            list.selectedIndex = 0
+            val event = java.awt.event.MouseEvent(list, java.awt.event.MouseEvent.MOUSE_CLICKED,
+                System.currentTimeMillis(), 0, 5, 10, 1, false, java.awt.event.MouseEvent.BUTTON1)
+            list.mouseListeners.forEach { it.mouseClicked(event) }
+            assertTrue(panel.previewHostForTest.hintScheduledForTest)
+            assertTrue(!panel.previewHostForTest.previewOpenForTest)
+            assertNull(panel.dockedPreviewForTest.editorForTest)
+        } finally {
+            panel.dispose()
+            settings.loadState(before)
+        }
+    }
+
+    fun test历史二级预览随选择更新_返回文件列表清理旧内容() {
+        writeHistoryFile(
+            "sql-history-2026-09-15.sql",
+            "-- source: A.java:1 | time: 1ms | 2026-09-15 09:00:00.000 --\n" +
+                "SELECT 1\n\n" +
+                "-- source: A.java:2 | time: 1ms | 2026-09-15 09:00:01.000 --\n" +
+                "SELECT 2\n\n",
+        )
+        val panel = HistorySqlLogPanel(project)
+        panel.refreshForTest()
+        try {
+            val actionEvent = com.intellij.openapi.actionSystem.AnActionEvent.createFromAnAction(
+                panel.previewToggleAction, null, com.intellij.openapi.actionSystem.ActionPlaces.TOOLBAR,
+                com.intellij.openapi.actionSystem.DataContext.EMPTY_CONTEXT,
+            )
+            panel.previewToggleAction.update(actionEvent)
+            assertFalse("历史文件列表无需单条快速预览图标", actionEvent.presentation.isVisible)
+            panel.openFileForTest(panel.fileListEntries.single())
+            panel.previewToggleAction.update(actionEvent)
+            assertTrue("二级 SQL 列表应显示快速预览图标", actionEvent.presentation.isVisible)
+            assertSame(com.intellij.icons.AllIcons.Actions.Preview, actionEvent.presentation.icon)
+            val list = panel.sqlListForTest
+            list.selectedIndex = 0
+            panel.previewToggleAction.setSelected(actionEvent, true)
+            assertTrue(com.intellij.openapi.actionSystem.Toggleable.isSelected(panel.previewToggleAction.templatePresentation))
+            assertEquals("SELECT 1;", panel.dockedPreviewForTest.displayedSqlForTest)
+            list.selectedIndex = 1
+            assertEquals("SELECT 2;", panel.dockedPreviewForTest.displayedSqlForTest)
+            panel.backToFilesForTest()
+            assertTrue(panel.isShowingFiles)
+            assertFalse(panel.previewHostForTest.previewOpenForTest)
+            assertFalse(com.intellij.openapi.actionSystem.Toggleable.isSelected(panel.previewToggleAction.templatePresentation))
+            panel.previewToggleAction.update(actionEvent)
+            assertFalse("返回文件列表时快速预览图标应隐藏", actionEvent.presentation.isVisible)
+            assertNull(panel.dockedPreviewForTest.displayedSqlForTest)
+            panel.openFileForTest(panel.fileListEntries.single())
+            panel.previewHostForTest.toggle()
+            assertNull("重新进入历史文件时不显示上一文件的 SQL", panel.dockedPreviewForTest.displayedSqlForTest)
         } finally {
             panel.dispose()
         }

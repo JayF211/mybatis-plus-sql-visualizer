@@ -26,6 +26,8 @@ import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.CommonShortcuts
 import com.intellij.openapi.actionSystem.DefaultActionGroup
+import com.intellij.openapi.actionSystem.ToggleAction
+import com.intellij.openapi.actionSystem.Toggleable
 import javax.swing.Action
 import javax.swing.JComponent
 import com.intellij.openapi.application.ApplicationManager
@@ -39,6 +41,7 @@ import com.intellij.notification.NotificationAction
 import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.util.IconLoader
 import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.intellij.openapi.fileEditor.OpenFileDescriptor
@@ -109,16 +112,8 @@ class SqlLogPanel(
     internal val list = ViewportWidthSqlEntryList(listModel)
     /** 列表条目单元格渲染器（internal 供 UI 测试直接渲染、断言 HTML 输出）。 */
     private lateinit var entryCellRenderer: LogEntryListCellRenderer
-    /** T-ClickPreview：单击出轻量预览弹窗（点击时按行捕获 SQL，锚点在行下缘不遮行），双击走 openPreview 完整弹窗；悬停 tooltip 已移除（卡顿根因）。
-     *  T-ListPreviewCopy：预览文本经 clickPreviewSql——设置「预览时格式化还原 SQL」开启（默认）时多行格式化显示。 */
-    private val clickPreview = SqlClickPreview(project, list) {
-        i -> clickPreviewSql(
-            list.model.getElementAt(i).restoredSql,
-            PluginSettings.getInstance().state.logFormatSql,
-            // R60（T-LaneB D96）：预览浮层链脱敏（展示层文本级，数据层不动）
-            PluginSettings.getInstance().state.displayMaskEnabled,
-        )
-    }
+    private lateinit var previewHost: SqlListPreviewHost
+    private val dockedPreview = SqlDockedPreview(project, list) { previewHost.toggle() }
     /**
      * 页签容器（T-SqlLogTabsSingleRow / O-149，用户 2026-10-14）。
      *
@@ -498,8 +493,8 @@ class SqlLogPanel(
             searchBar.isVisible = value
         }
 
-    /** 单击预览控制器（T-ClickPreview 测试断言：排程/取消/弹窗残留）。 */
-    internal val clickPreviewForTest: SqlClickPreview get() = clickPreview
+    internal val previewHostForTest: SqlListPreviewHost get() = previewHost
+    internal val dockedPreviewForTest: SqlDockedPreview get() = dockedPreview
 
     /** 工具栏慢查询计数标签（测试断言显隐与文案）。 */
     internal val slowQueryLabelForTest: JLabel? get() = slowQueryLabel
@@ -510,6 +505,18 @@ class SqlLogPanel(
      * 按 manager.capturing 态输出；测试断言直接读 presentation，不依赖按钮刷新。
      */
     val captureToggleAction: AnAction = CaptureAction()
+
+    internal val previewToggleAction: ToggleAction = object : ToggleAction(
+        MpSqlVisualizerBundle.message("log.dockedPreview.toggle"),
+        MpSqlVisualizerBundle.message("log.dockedPreview.toggle.tip"),
+        AllIcons.Actions.Preview,
+    ) {
+        override fun isSelected(e: AnActionEvent): Boolean = dockedPreview.isOpen
+
+        override fun setSelected(e: AnActionEvent, state: Boolean) {
+            if (dockedPreview.isOpen != state) previewHost.toggle()
+        }
+    }
 
     /**
      * R53：增强捕获暂停/恢复动作（工具窗入口；图标/文案按 userPaused 态输出）。
@@ -534,8 +541,10 @@ class SqlLogPanel(
         SettingsAction(),
         ManageSuppressAction(),
         ShowSearchAction(),
+        previewToggleAction,
         scrollToEndAction,
         sortModeAction,
+        CommunityAction(),
         HelpAction(),
     )
 
@@ -612,7 +621,12 @@ class SqlLogPanel(
         // 标签 1：SQL 日志（工具栏行 + 搜索条 + 条目列表 + 底部双通道状态栏）
         val logPanel = JPanel(BorderLayout())
         logPanel.add(buildTopPanel(), BorderLayout.NORTH)
-        logPanel.add(buildListPane(), BorderLayout.CENTER) // 条目列表铺满剩余空间
+        previewHost = SqlListPreviewHost(
+            list, buildListPane(), dockedPreview, "mpvs.logs.preview.split", showIconHint = true,
+        ) {
+            Toggleable.setSelected(previewToggleAction.templatePresentation, it)
+        }
+        logPanel.add(previewHost.component, BorderLayout.CENTER)
         // R53：双通道捕获状态栏（捕捉期间常驻；非捕捉态清空隐藏——见 syncCaptureStatusBar）
         logPanel.add(buildStatusBar(), BorderLayout.SOUTH)
 
@@ -1195,6 +1209,16 @@ class SqlLogPanel(
         }
     }
 
+    internal inner class CommunityAction : AnAction(
+        MpSqlVisualizerBundle.message("log.community.action"),
+        MpSqlVisualizerBundle.message("log.community.action.tip"),
+        IconLoader.getIcon("/icons/communityChat.svg", SqlLogPanel::class.java),
+    ) {
+        override fun actionPerformed(e: AnActionEvent) {
+            CommunityDialog(project).apply { startLoading() }.show()
+        }
+    }
+
     /** T-M39：帮助入口（? 按钮，位于设置按钮旁）→ 内嵌浏览器打开本地 HTML 帮助文档。
      *  图标用 AllIcons.Actions.Help（纯灰 #6E6E6E 问号，与设置/清空按钮同色系；
      *  ContextHelp 为灰蓝圆圈 #9AA7B0，与旁边按钮色相不一致——用户反馈）。
@@ -1484,12 +1508,9 @@ class SqlLogPanel(
         ListSpeedSearch.installOn(list) { element -> withTerminator(element.restoredSql) }
         list.addMouseListener(object : MouseAdapter() {
             override fun mouseClicked(e: MouseEvent) {
-                // T-ClickPreview：先转发（仅左键；单击命中行才排程预览/双击停表并关旧预览），双击再开完整弹窗
-                // T-ClickPreviewCopyRestore：修饰键一并转发——Ctrl/Shift 单击（多选第一击）不排程预览
-                if (javax.swing.SwingUtilities.isLeftMouseButton(e)) {
-                    clickPreview.onClick(e.clickCount, e.point, e.modifiersEx)
-                }
-                if (e.clickCount >= 2) {
+                previewHost.onRowClick(e)
+                if (javax.swing.SwingUtilities.isLeftMouseButton(e) && e.clickCount >= 2) {
+                    previewHost.hideHint()
                     list.selectedValue?.let { openPreview(it) }
                 }
             }
@@ -2135,7 +2156,8 @@ class SqlLogPanel(
         manager.removeCapturingListener(capturingUiListener)
         // T-RecentExecMenu O-119：注销送页签通道（同一性判定——防误清他人注册）
         if (manager.onOpenEntryInTab === openEntryInTabCallback) manager.onOpenEntryInTab = null
-        clickPreview.dispose()
+        previewHost.hideHint()
+        dockedPreview.dispose()
         logToSqlPanel.dispose()
         sqlToJavaPanel.dispose()
     }

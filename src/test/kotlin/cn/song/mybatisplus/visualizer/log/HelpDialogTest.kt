@@ -24,9 +24,11 @@ class HelpDialogTest : BasePlatformTestCase() {
         try {
             // 用户 2026-10-14：「不要这个更多」——全部动作直达工具栏，帮助也在组内（窄宽由平台溢出折叠）
             val children = panel.toolbarGroup.getChildren(null).toList()
-            assertEquals("工具栏组应包含增强捕获暂停与全部直达动作", 9, children.size)
-            assertTrue(children[0] === panel.captureToggleAction)
-            assertTrue(children[1] === panel.agentPauseAction)
+            assertEquals("增强捕获暂停、快速预览与交流群入口合流后共 11 个动作", 11, children.size)
+            assertTrue("捕捉动作应位于工具栏首位", children[0] === panel.captureToggleAction)
+            assertTrue("增强捕获暂停动作应紧随捕捉动作", children[1] === panel.agentPauseAction)
+            assertTrue("快速预览仍应是独立动作", children.contains(panel.previewToggleAction))
+            assertTrue("工具栏组应包含交流群入口", children.any { it is SqlLogPanel.CommunityAction })
             // update 由工具栏生命周期驱动（headless 不布局不触发），手动走一次——
             // 图标/文案写入 event.presentation（2024.3 AnAction 无 getPresentation()）
             val events = children.map {

@@ -15,6 +15,8 @@ import com.intellij.openapi.actionSystem.ActionToolbar
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.DefaultActionGroup
+import com.intellij.openapi.actionSystem.ToggleAction
+import com.intellij.openapi.actionSystem.Toggleable
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ModalityState
@@ -49,7 +51,6 @@ import javax.swing.DefaultListModel
 import javax.swing.JComboBox
 import javax.swing.JPanel
 import javax.swing.SwingConstants
-import javax.swing.JToggleButton
 
 /**
  * 历史 SQL 面板（F-44-3 两级导航）：读取自动保存目录中的历史文件展示
@@ -91,16 +92,8 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     /** 二级速度搜索是否已安装。构造于 CardLayout 隐藏卡时安装不生效（真机 key 流不达、焦点不在），
      *  故延后到 [showFileContent]/[loadFileContentSync] 切卡可见后安装（T-UiNative T-UN-05）。 */
     private var sqlSpeedSearchInstalled = false
-    /** T-ClickPreview：单击出轻量预览弹窗（点击时按行捕获 SQL，锚点在行下缘不遮行），双击走 openPreview 完整弹窗；悬停 tooltip 已移除（卡顿根因）。
-     *  T-ListPreviewCopy：预览文本经 clickPreviewSql——设置「预览时格式化还原 SQL」开启（默认）时多行格式化显示。 */
-    private val sqlClickPreview = SqlClickPreview(project, sqlList) {
-        i -> clickPreviewSql(
-            sqlList.model.getElementAt(i).restoredSql,
-            PluginSettings.getInstance().state.logFormatSql,
-            // R60（T-LaneB D96）：预览浮层链脱敏（展示层文本级，数据层不动）
-            PluginSettings.getInstance().state.displayMaskEnabled,
-        )
-    }
+    private lateinit var previewHost: SqlListPreviewHost
+    private val dockedPreview = SqlDockedPreview(project, sqlList) { previewHost.toggle() }
     private var currentFile: HistoryFileEntry? = null
     private var currentEntries: List<LogSqlEntry> = emptyList()
 
@@ -144,6 +137,8 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
 
     /** 后台刷新/加载代际：新任务启动即作废旧任务的 EDT apply。 */
     private var bgGeneration = 0
+
+    private var initialScanRequested = false
 
     /** T-Perf-05：搜索防抖（每击键 O(N) clear+add → 停顿 200ms 应用一次）。 */
     private val searchDebounceTimer =
@@ -195,6 +190,22 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
 
     /** 导航工具栏引用（层级切换后即时刷新 Back 可见性；T-UN-10）。 */
     private var _navToolbarRef: ActionToolbar? = null
+    internal val previewToggleAction: ToggleAction = object : ToggleAction(
+        MpSqlVisualizerBundle.message("log.dockedPreview.toggle"),
+        MpSqlVisualizerBundle.message("log.dockedPreview.toggle.tip"),
+        AllIcons.Actions.Preview,
+    ) {
+        override fun isSelected(e: AnActionEvent): Boolean = dockedPreview.isOpen
+
+        override fun setSelected(e: AnActionEvent, state: Boolean) {
+            if (dockedPreview.isOpen != state) previewHost.toggle()
+        }
+
+        override fun update(e: AnActionEvent) {
+            super.update(e)
+            e.presentation.isVisible = !isShowingFiles
+        }
+    }
 
     /** 返回一级（原 backButton）：图标 Back、tooltip 沿用 log.history.back.tip；可见性 = 二级列表（update 输出）。 */
     private inner class BackAction : AnAction() {
@@ -316,24 +327,36 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         searchField.text = ""
     }
 
-    /** 二级 SQL 列表单击预览控制器（T-ClickPreview 测试断言）。 */
-    internal val sqlClickPreviewForTest: SqlClickPreview get() = sqlClickPreview
+    internal val previewHostForTest: SqlListPreviewHost get() = previewHost
+    internal val dockedPreviewForTest: SqlDockedPreview get() = dockedPreview
 
     init {
         buildUI()
-        // F87（T-PerfSweep25）懒首扫：原「构造即 refresh」把后台扫盘成本从「用时才有」提前到
-        // 「工具窗开窗即付」（R19 历史 tab 常驻使本面板随 SqlLogPanel init 构造）。现首扫延迟到
-        // 首次切到历史 tab——SqlLogPanel 的 tab ChangeListener 已有「切到历史 tab 即 refresh」
-        // 接线（F-44 形态保留，见 SqlLogPanel），即首扫唯一入口；设置变更路径经
-        // [historyDirChangedSinceLastScan] 照旧。R19 引导闭环不受影响：空态引导文案由
-        // [buildUI] 渲染（updateFilesEmptyText），与扫描无关，开窗即见。
+        addHierarchyListener { event ->
+            if (event.changeFlags and java.awt.event.HierarchyEvent.SHOWING_CHANGED.toLong() != 0L) {
+                scheduleInitialScanIfShowing()
+            }
+        }
+    }
+
+    internal fun scheduleInitialScanIfShowing(showing: () -> Boolean = { isShowing }) {
+        if (!showing()) return
+        javax.swing.SwingUtilities.invokeLater {
+            if (showing() && !project.isDisposed) ensureInitialScan()
+        }
+    }
+
+    internal fun ensureInitialScan(): Boolean {
+        if (initialScanRequested) return false
+        refresh()
+        return true
     }
 
     private fun buildUI() {
         // 顶部工具栏：返回（仅二级可见）+ 刷新 + 搜索
         // T-UiNative T-UN-10：手摆按钮 → 平台 ActionToolbar（Back 可见性由 BackAction.update 按当前层级输出）
         val navToolbar = ActionManager.getInstance()
-            .createActionToolbar("mpvs.history.nav", DefaultActionGroup(BackAction(), RefreshAction()), true)
+            .createActionToolbar("mpvs.history.nav", DefaultActionGroup(BackAction(), RefreshAction(), previewToggleAction), true)
             .apply { targetComponent = this@HistorySqlLogPanel }
         _navToolbarRef = navToolbar
         val toolbar = JPanel(FlowLayout(FlowLayout.LEFT, 4, 0))
@@ -397,12 +420,9 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         applySqlListCellHeight()
         sqlList.addMouseListener(object : MouseAdapter() {
             override fun mouseClicked(e: MouseEvent) {
-                // T-ClickPreview：先转发（仅左键；单击命中行才排程预览/双击停表并关旧预览），双击再开完整弹窗
-                // T-ClickPreviewCopyRestore：修饰键一并转发——Ctrl/Shift 单击（多选第一击）不排程预览
-                if (javax.swing.SwingUtilities.isLeftMouseButton(e)) {
-                    sqlClickPreview.onClick(e.clickCount, e.point, e.modifiersEx)
-                }
-                if (e.clickCount >= 2) {
+                previewHost.onRowClick(e)
+                if (javax.swing.SwingUtilities.isLeftMouseButton(e) && e.clickCount >= 2) {
+                    previewHost.hideHint()
                     sqlList.selectedValue?.let { openPreview(it) }
                 }
             }
@@ -418,7 +438,10 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
             horizontalScrollBarPolicy = javax.swing.ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER
         }
         sqlScrollPane.verticalScrollBar.addAdjustmentListener { maybeAppendOnScroll() }
-        cards.add(sqlScrollPane, CARD_SQL)
+        previewHost = SqlListPreviewHost(sqlList, sqlScrollPane, dockedPreview, "mpvs.history.preview.split", showIconHint = true) {
+            Toggleable.setSelected(previewToggleAction.templatePresentation, it)
+        }
+        cards.add(previewHost.component, CARD_SQL)
         add(cards, BorderLayout.CENTER)
     }
 
@@ -429,7 +452,9 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         currentFileStamp = null
         currentEntries = emptyList()
         pendingEntries = emptyList() // F85（T-PerfSweep24）：返回一级清挂起批次（有 showing 守卫不误消费，清掉免滞留）
-        sqlClickPreview.hide() // 返回一级时若二级预览弹窗还开着，一并关掉
+        if (dockedPreview.isOpen) previewHost.toggle()
+        dockedPreview.resetContext()
+        previewHost.hideHint()
         refreshNavToolbar() // T-UN-10：Back 可见性随层级即时刷新（原 backButton.isVisible = false）
         searchField.textEditor.emptyText.text = MpSqlVisualizerBundle.message("log.history.search.files")
         cardLayout.show(cards, CARD_FILES)
@@ -520,6 +545,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         private set
 
     fun refresh() {
+        initialScanRequested = true
         refreshInvocationCountForTest++
         // T-HistoryTabAlways：记录本次扫描所用目录（EDT 侧纯字段写），供设置变更时判定要不要重扫
         lastScannedDir = getHistoryDir()
@@ -544,6 +570,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
 
     /** 测试缝：同步刷新（生产路径 refresh() 已后台化；headless 测试需要确定性）。 */
     internal fun refreshForTest() {
+        initialScanRequested = true
         ++bgGeneration // 作废在途后台 apply（构造期 refresh() 的后台扫描可能尚未完成）
         val dir = getHistoryDir()
         lastScannedDir = dir
@@ -614,6 +641,9 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
             return
         }
         // 否则回一级（默认展示文件列表）
+        if (dockedPreview.isOpen) previewHost.toggle()
+        dockedPreview.resetContext()
+        previewHost.hideHint()
         currentFile = null
         currentFileStamp = null
         currentEntries = emptyList()
@@ -1156,7 +1186,8 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     override fun dispose() {
         // T-Perf-05：面板销毁停止防抖 Timer（防晚到 apply 触碰已销毁面板）
         searchDebounceTimer.stop()
-        sqlClickPreview.dispose()
+        previewHost.hideHint()
+        dockedPreview.dispose()
     }
 
     companion object {

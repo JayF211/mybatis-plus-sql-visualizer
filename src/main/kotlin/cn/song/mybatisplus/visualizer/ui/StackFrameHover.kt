@@ -14,24 +14,29 @@ import com.intellij.openapi.util.Computable
 import com.intellij.psi.JavaPsiFacade
 import com.intellij.psi.PsiClass
 import com.intellij.psi.search.GlobalSearchScope
-import com.intellij.ui.ColoredListCellRenderer
+import com.intellij.ui.ColoredTreeCellRenderer
 import com.intellij.ui.SimpleTextAttributes
 import com.intellij.ui.awt.RelativePoint
 import com.intellij.ui.components.ActionLink
-import com.intellij.ui.components.JBList
+import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBPanel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.util.ui.JBUI
 import java.awt.Dimension
-import java.awt.FontMetrics
+import java.awt.BorderLayout
+import java.awt.event.KeyEvent
+import javax.swing.AbstractAction
+import javax.swing.JTree
+import javax.swing.KeyStroke
+import javax.swing.tree.DefaultMutableTreeNode
+import javax.swing.tree.DefaultTreeModel
+import javax.swing.tree.TreePath
 import java.awt.MouseInfo
 import java.awt.Point
 import java.awt.Rectangle
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import javax.swing.JComponent
-import javax.swing.JList
-import javax.swing.ListSelectionModel
 import javax.swing.SwingUtilities
 
 /**
@@ -52,7 +57,10 @@ import javax.swing.SwingUtilities
  * 不再承载栈文本（旧实现把截断摘要+全文重复拼进 tooltip、超长单行折成文本墙——本类是栈文本
  * 在悬停面的唯一载体）。
  */
-internal class StackFrameHover(private val project: Project?) : Disposable {
+internal class StackFrameHover(
+    private val project: Project?,
+    private val popupOpener: (() -> Unit)? = null,
+) : Disposable {
 
     private var target: JComponent? = null
     private var digest: String? = null
@@ -61,7 +69,7 @@ internal class StackFrameHover(private val project: Project?) : Disposable {
     private var pendingAnchor: Point? = null
 
     /** 悬停延迟（ms）：防误触——meta 行是高频掠过区域，立即弹层会干扰正常阅读。 */
-    private val hoverTimer = javax.swing.Timer(HOVER_DELAY_MS) { showPopup() }.apply { isRepeats = false }
+    private val hoverTimer = javax.swing.Timer(HOVER_DELAY_MS) { openPopup() }.apply { isRepeats = false }
 
     /** 移出宽限（ms）：跨「meta 行 ↔ 弹层」边界的空档不立即关，宽限后按实时指针位置判定。 */
     private val hideTimer = javax.swing.Timer(HIDE_GRACE_MS) { hideIfPointerOutside() }.apply { isRepeats = false }
@@ -80,7 +88,7 @@ internal class StackFrameHover(private val project: Project?) : Disposable {
     /** 挂到 meta 行（悬停触发点）；面板 init 里调用一次。 */
     fun attach(target: JComponent) {
         this.target = target
-        target.addMouseListener(object : MouseAdapter() {
+        val listener = object : MouseAdapter() {
             override fun mouseEntered(e: MouseEvent) {
                 if (digest == null) return
                 if (popup != null && popup?.isDisposed == false) return
@@ -100,7 +108,17 @@ internal class StackFrameHover(private val project: Project?) : Disposable {
                 hoverTimer.stop()
                 if (popup != null && popup?.isDisposed == false) hideTimer.restart()
             }
-        })
+
+            override fun mouseClicked(e: MouseEvent) {
+                if (!SwingUtilities.isLeftMouseButton(e) || e.clickCount != 1 || digest.isNullOrBlank()) return
+                hoverTimer.stop()
+                hideTimer.stop()
+                pendingAnchor = e.point
+                openPopup()
+            }
+        }
+        target.addMouseListener(listener)
+        target.addMouseMotionListener(listener)
     }
 
     /** 每次预览更新栈数据；栈变化即关旧弹层（下次悬停按新数据重弹）。 */
@@ -122,19 +140,24 @@ internal class StackFrameHover(private val project: Project?) : Disposable {
     // 弹层构建与展示
     // ------------------------------------------------------------------
 
+    private fun openPopup() {
+        if (popup != null && popup?.isDisposed == false) return
+        if (popupOpener != null) popupOpener.invoke() else showPopup()
+    }
+
     private fun showPopup() {
         val anchor = pendingAnchor ?: return
         val d = digest ?: return
         val t = target ?: return
         if (popup != null && popup?.isDisposed == false) return
-        val frames = StackDigestFrames.parse(d)
-        if (frames.isEmpty()) return
+        val projection = StackFramesProjection.build(d)
+        if (projection.nodes.isEmpty()) return
 
-        val root = buildContent(frames, d)
+        val root = buildContent(projection, d)
         val builder = JBPopupFactory.getInstance().createComponentPopupBuilder(root, null)
             .setTitle(MpSqlVisualizerBundle.message("panel.stackPopup.title"))
             .setRequestFocus(false)
-            .setFocusable(false)
+            .setFocusable(true)
             .setCancelOnClickOutside(true)
         builder.addListener(object : JBPopupListener {
             override fun onClosed(event: LightweightWindowEvent) {
@@ -148,49 +171,110 @@ internal class StackFrameHover(private val project: Project?) : Disposable {
         p.show(RelativePoint(t, anchor))
     }
 
-    private fun buildContent(frames: List<StackFrameEntry>, fullDigest: String): JComponent {
-        val list = JBList(frames).apply {
-            selectionMode = ListSelectionModel.SINGLE_SELECTION
-            selectedIndex = 0
-            // 视口按全量帧数放开：JList 默认 visibleRowCount=8 会把链尾业务帧折叠进滚动区，
-            // 「弹层默认锚定最深的业务帧、一眼看到 Controller → Service 的调用路径」落空；
-            // 上限对齐栈帧预算钳位（64），超出才回退滚动
-            visibleRowCount = frames.size.coerceAtMost(MAX_VISIBLE_ROWS)
+    private fun buildContent(projection: StackFramesProjection, fullDigest: String): JComponent {
+        val rootNode = DefaultMutableTreeNode("stack")
+        projection.nodes.forEach { node ->
+            val branch = DefaultMutableTreeNode(node)
+            if (node is StackFramesNode.Internal) node.frames.forEach { branch.add(DefaultMutableTreeNode(it, false)) }
+            rootNode.add(branch)
         }
-        val fm = list.getFontMetrics(list.font)
-        var maxRow = 0
-        for (f in frames) {
-            val w = fm.stringWidth(f.method) + fm.stringWidth(ROW_GAP) + fm.stringWidth(f.fqcn) +
-                (if (f.line > 0) fm.stringWidth(":${f.line}") else 0)
-            if (w > maxRow) maxRow = w
-        }
-        val contentW = (maxRow + POPUP_WIDTH_PADDING).coerceIn(MIN_POPUP_WIDTH, MAX_POPUP_WIDTH)
-        list.cellRenderer = FrameRenderer(fm, contentW)
-        list.addMouseListener(object : MouseAdapter() {
-            override fun mouseClicked(e: MouseEvent) {
-                if (!SwingUtilities.isLeftMouseButton(e)) return
-                val idx = list.locationToIndex(e.point)
-                if (idx < 0) return
-                navigateTo(frames[idx])
-            }
-        })
+        val tree = JTree(DefaultTreeModel(rootNode)).apply {
+            isRootVisible = false
+            showsRootHandles = true
+            rowHeight = 0
+            cellRenderer = object : ColoredTreeCellRenderer() {
+                override fun customizeCellRenderer(
+                    tree: JTree, value: Any, selected: Boolean, expanded: Boolean,
+                    leaf: Boolean, row: Int, hasFocus: Boolean,
+                ) {
+                    val data = (value as DefaultMutableTreeNode).userObject
+                    toolTipText = null
+                    when (data) {
+                        is StackFramesNode.Internal -> append(
+                            MpSqlVisualizerBundle.message("panel.stackPopup.internal", data.frames.size),
+                            SimpleTextAttributes.GRAYED_ATTRIBUTES,
+                        )
+                        is StackFramesNode.Omission -> append(
+                            if (data.count == null) MpSqlVisualizerBundle.message("panel.stackPopup.omittedUnknown")
+                            else MpSqlVisualizerBundle.message("panel.stackPopup.omitted", data.count),
+                            SimpleTextAttributes.GRAYED_ATTRIBUTES,
+                        )
+                        is StackFramesNode.Visible -> renderFrame(data.frame, tree)
+                        is StackFrameEntry -> renderFrame(data, tree)
+                    }
+                }
 
+                private fun renderFrame(frame: StackFrameEntry, tree: JTree) {
+                    val line = if (frame.line > 0) ":${frame.line}" else ""
+                    val metrics = tree.getFontMetrics(tree.font)
+                    val classBudget = MAX_POPUP_WIDTH - 72 - metrics.stringWidth(frame.method + ROW_GAP + line)
+                    val clazz = ellipsizeMiddle(frame.fqcn, { metrics.stringWidth(it) }, classBudget.coerceAtLeast(24))
+                    append(frame.method, if (StackDigestFrames.isAgentFrame(frame))
+                        SimpleTextAttributes.GRAYED_ATTRIBUTES else SimpleTextAttributes.REGULAR_ATTRIBUTES)
+                    append(ROW_GAP + clazz, SimpleTextAttributes.GRAY_ATTRIBUTES)
+                    if (line.isNotEmpty()) append(line, SimpleTextAttributes.GRAY_ATTRIBUTES)
+                    toolTipText = "${frame.method}  ${frame.fqcn}$line"
+                }
+            }
+            addMouseListener(object : MouseAdapter() {
+                override fun mouseClicked(e: MouseEvent) {
+                    if (!SwingUtilities.isLeftMouseButton(e)) return
+                    requestFocusInWindow()
+                    val path = getPathForLocation(e.x, e.y) ?: return
+                    val data = (path.lastPathComponent as DefaultMutableTreeNode).userObject
+                    val frame = when (data) {
+                        is StackFramesNode.Visible -> data.frame
+                        is StackFrameEntry -> data
+                        else -> null
+                    }
+                    if (frame != null) navigateTo(frame)
+                }
+            })
+            inputMap.put(KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, 0), "stack.activate")
+            actionMap.put("stack.activate", object : AbstractAction() {
+                override fun actionPerformed(e: java.awt.event.ActionEvent) {
+                    val path = selectionPath ?: return
+                    val data = (path.lastPathComponent as DefaultMutableTreeNode).userObject
+                    when (data) {
+                        is StackFramesNode.Internal -> if (isExpanded(path)) collapsePath(path) else expandPath(path)
+                        is StackFramesNode.Visible -> navigateTo(data.frame)
+                        is StackFrameEntry -> navigateTo(data)
+                    }
+                }
+            })
+            if (rowCount > 0) setSelectionRow(0)
+        }
         val copyLink = ActionLink(MpSqlVisualizerBundle.message("panel.stackPopup.copy")) {
             UiTextClipboard.copy(fullDigest)
             cancelPopup()
         }
-        val south = JBPanel<JBPanel<*>>(java.awt.BorderLayout()).apply {
+        val expandLink = ActionLink(MpSqlVisualizerBundle.message("panel.stackPopup.expandAll")) {
+            for (i in 0 until rootNode.childCount) {
+                val child = rootNode.getChildAt(i) as DefaultMutableTreeNode
+                if (child.userObject is StackFramesNode.Internal) tree.expandPath(TreePath(child.path))
+            }
+        }
+        val collapseLink = ActionLink(MpSqlVisualizerBundle.message("panel.stackPopup.collapseAll")) {
+            for (i in 0 until rootNode.childCount) tree.collapsePath(TreePath((rootNode.getChildAt(i) as DefaultMutableTreeNode).path))
+        }
+        val south = JBPanel<JBPanel<*>>(BorderLayout()).apply {
             isOpaque = false
             border = JBUI.Borders.empty(4, 10, 6, 10)
-            add(copyLink, java.awt.BorderLayout.EAST)
+            add(JBPanel<JBPanel<*>>().apply {
+                isOpaque = false
+                add(expandLink)
+                add(collapseLink)
+            }, BorderLayout.WEST)
+            add(copyLink, BorderLayout.EAST)
         }
-        val root = JBPanel<JBPanel<*>>(java.awt.BorderLayout()).apply {
-            add(JBScrollPane(list), java.awt.BorderLayout.CENTER)
-            add(south, java.awt.BorderLayout.SOUTH)
+        val root = JBPanel<JBPanel<*>>(BorderLayout()).apply {
+            if (projection.noProjectFrames) add(JBLabel(MpSqlVisualizerBundle.message("panel.stackPopup.noProjectFrames")), BorderLayout.NORTH)
+            add(JBScrollPane(tree), BorderLayout.CENTER)
+            add(south, BorderLayout.SOUTH)
             addMouseListener(hideManager)
-            val w = maxOf(contentW + ROOT_WIDTH_PADDING, south.preferredSize.width + 20)
-            preferredSize = Dimension(w, preferredSize.height)
+            preferredSize = Dimension(MAX_POPUP_WIDTH, (tree.rowCount * tree.font.size * 2 + 56).coerceIn(120, 520))
         }
+        tree.addMouseListener(hideManager)
         return root
     }
 
@@ -246,43 +330,6 @@ internal class StackFrameHover(private val project: Project?) : Disposable {
             vf != null && frame.line > 0 -> OpenFileDescriptor(proj, vf, frame.line - 1, 0).navigate(true)
             vf != null -> OpenFileDescriptor(proj, vf).navigate(true)
             else -> psiClass.navigate(true)
-        }
-    }
-
-    // ------------------------------------------------------------------
-    // 调试器 Frames 风格行渲染
-    // ------------------------------------------------------------------
-
-    /**
-     * 行渲染：`method  fqcn:line` 三段着色——方法名前景（agent 自身帧淡灰降权）、类名灰、
-     * 行号灰；类名超宽按 [ellipsizeMiddle] 中段省略（保留头部包名与尾部类名），行号恒可见。
-     * 预算以弹层定宽 [contentW] 为准（与构建期测宽同字体同度量，保证逐行对齐不横向滚动）。
-     */
-    private inner class FrameRenderer(
-        private val fm: FontMetrics,
-        private val contentW: Int,
-    ) : ColoredListCellRenderer<StackFrameEntry>() {
-
-        override fun customizeCellRenderer(
-            list: JList<out StackFrameEntry>,
-            value: StackFrameEntry,
-            index: Int,
-            selected: Boolean,
-            hasFocus: Boolean,
-        ) {
-            val agent = StackDigestFrames.isAgentFrame(value)
-            append(value.method, if (agent) SimpleTextAttributes.GRAYED_ATTRIBUTES else SimpleTextAttributes.REGULAR_ATTRIBUTES)
-            append(ROW_GAP, SimpleTextAttributes.GRAYED_ATTRIBUTES)
-            val lineSuffix = if (value.line > 0) ":${value.line}" else ""
-            val classBudget = contentW - fm.stringWidth(value.method) - fm.stringWidth(ROW_GAP) -
-                fm.stringWidth(lineSuffix) - POPUP_WIDTH_PADDING
-            val classText = if (classBudget > 0) {
-                ellipsizeMiddle(value.fqcn, { fm.stringWidth(it) }, classBudget)
-            } else {
-                value.fqcn
-            }
-            append(classText, SimpleTextAttributes.GRAY_ATTRIBUTES)
-            if (lineSuffix.isNotEmpty()) append(lineSuffix, SimpleTextAttributes.GRAY_ATTRIBUTES)
         }
     }
 
