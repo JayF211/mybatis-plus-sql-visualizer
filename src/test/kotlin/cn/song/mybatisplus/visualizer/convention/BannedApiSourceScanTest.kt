@@ -155,6 +155,10 @@ class BannedApiSourceScanTest : BannedApiScanSupport() {
             // 条目变成「顺手弹个窗」的隐性许可）。
             "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelExecution.kt",
             "src/main/kotlin/cn/song/mybatisplus/visualizer/config/PluginSettingsPanel.kt",
+            // O-145 W6：清除本项目模块数据源绑定须用户确认，拒绝后不改变任何绑定。
+            "src/main/kotlin/cn/song/mybatisplus/visualizer/config/ProjectPluginSettingsConfigurable.kt",
+            // O-145 W7：仅未知方言的原始查询须用户确认；已知冲突和未知写操作直接阻断。
+            "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelector.kt",
             "src/main/kotlin/cn/song/mybatisplus/visualizer/log/LogToSqlPanel.kt",
             "src/main/kotlin/cn/song/mybatisplus/visualizer/config/McpConfigurable.kt",
             "src/main/kotlin/cn/song/mybatisplus/visualizer/log/SqlSuppressManagerDialog.kt",
@@ -181,6 +185,15 @@ class BannedApiSourceScanTest : BannedApiScanSupport() {
                 "确属「用户必须选择/知情确认」场景才可加白本守卫并在调用点注释依据",
             extra.isEmpty(),
         )
+        for ((path, owner) in mapOf(
+            "src/main/kotlin/cn/song/mybatisplus/visualizer/config/ProjectPluginSettingsConfigurable.kt" to "clearModuleBindings",
+            "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelector.kt" to "allowDialectGate",
+        )) {
+            val code = stripComments(repoRoot().resolve(path).readText())
+            assertTrue("确认动作应保留在 $owner", code.contains("fun $owner("))
+            assertEquals("$path 只允许一处已登记的知情确认", 1,
+                Regex("Messages\\.showYesNoDialog\\(").findAll(code).count())
+        }
     }
 
     @Test
