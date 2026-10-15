@@ -252,7 +252,7 @@ class O147HistoryUpgradeTest {
 
     @Test fun oversizedRevisionBudgetAgreesAcrossAllReaders() {
         val dir = dir(); val saver = SqlLogAutoSaver(); saver.configure(dir.path, "test.sql", null)
-        // Known duration avoids the em dash in this large ASCII budget fixture; Unicode is covered separately.
+        // 此大预算夹具用已知耗时避免头部破折号触发整串 UTF-16 膨胀；Unicode 另有用例。
         val old = entry().copy(executionTimeMs = 0L); saver.write(old); saver.submitMerge(old, merged(old)); saver.close()
         val file = File(dir, "test.sql")
         val lines = file.readLines()
@@ -277,6 +277,47 @@ class O147HistoryUpgradeTest {
         assertEquals(loaded, sequenceResult)
         // JDK compact UTF-8 read avoids Kotlin readText's full UTF-16 intermediate on this 129 MiB fixture.
         assertEquals(loaded, SqlLogFileReader.parseContent(Files.readString(file.toPath())))
+    }
+
+    @Test fun exactRevisionLimitLfAgreesAcrossAllReaders() = assertRevisionLineBoundary("\n", 0)
+
+    @Test fun exactRevisionLimitCrLfAgreesAcrossAllReaders() = assertRevisionLineBoundary("\r\n", 0)
+
+    @Test fun overRevisionLimitLfAgreesAcrossAllReaders() = assertRevisionLineBoundary("\n", 1)
+
+    @Test fun overRevisionLimitCrLfAgreesAcrossAllReaders() = assertRevisionLineBoundary("\r\n", 1)
+
+    private fun assertRevisionLineBoundary(ending: String, excess: Int) {
+        val dir = dir(); val saver = SqlLogAutoSaver(); saver.configure(dir.path, "test.sql", null)
+        // ASCII-only header preserves the coordinator's compact-string fixture correction.
+        val old = entry().copy(executionTimeMs = 0L)
+        saver.write(old); saver.submitMerge(old, merged(old)); saver.close()
+        val file = File(dir, "test.sql")
+        val lines = file.readLines()
+        val valid = lines.single { it.startsWith("-- pd: o147-revision:") }
+        val original = lines.filterNot { it.startsWith("-- pd: o147-revision:") }
+        val prefix = "-- pd: o147-revision: "
+        val invalid = prefix + "A".repeat(SqlLogFileReader.MAX_REVISION_PAYLOAD + 150 + excess - prefix.length)
+        assertEquals(65686 + excess, invalid.length)
+        file.bufferedWriter().use { out ->
+            original.forEach { out.write(it); out.write(ending) }
+            repeat(SqlLogFileReader.MAX_REVISIONS) { out.write(invalid); out.write(ending) }
+            out.write(valid); out.write(ending)
+        }
+        val fromString = SqlLogFileReader.parseContent(Files.readString(file.toPath()))
+        val expected = if (excess == 0) CaptureProvenance.MERGED else CaptureProvenance.CONSOLE_BRIDGE
+        // At the exact limit the 8 MiB budget admits only 127 invalid rows, leaving room for
+        // the small valid revision; over-limit rows cost a prefix each and exhaust the count.
+        assertEquals(expected, fromString.single().captureProvenance)
+        val fromSequence = SqlLogFileReader.parseContent(original.asSequence() +
+            (0 until SqlLogFileReader.MAX_REVISIONS).asSequence().map { invalid } + sequenceOf(valid))
+        val fromFile = SqlLogFileReader.readFromFile(file)
+        val streamed = mutableListOf<LogSqlEntry>()
+        SqlLogFileReader.forEachEntry(file) { streamed += it; true }
+        assertEquals(1, SqlLogFileReader.countInFile(file))
+        assertEquals(fromString, fromSequence)
+        assertEquals(fromString, fromFile)
+        assertEquals(fromString, streamed)
     }
 
     @Test fun uuidSearchUsesFixedMemoryEvenForHugeExternalLine() {

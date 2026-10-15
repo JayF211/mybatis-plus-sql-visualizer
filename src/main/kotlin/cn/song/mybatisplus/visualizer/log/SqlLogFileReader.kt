@@ -109,7 +109,10 @@ object SqlLogFileReader {
             } else if (!overLimit) {
                 text.append(c.toChar())
                 if (text.length == REVISION_PREFIX.length) revision = text.toString() == REVISION_PREFIX
-                if (revision && text.length > MAX_REVISION_PAYLOAD + 150) { text.setLength(0); overLimit = true }
+                // 最后一个 CR 暂不计入逻辑长度：若随后 LF/EOF，出行时剥除；
+                // 若随后仍有字符，它会重新计入。只宽限单个尾 CR，不截断普通 SQL。
+                val logicalLength = text.length - if (c == '\r'.code) 1 else 0
+                if (revision && logicalLength > MAX_REVISION_PAYLOAD + 150) { text.setLength(0); overLimit = true }
             }
         }
     }
