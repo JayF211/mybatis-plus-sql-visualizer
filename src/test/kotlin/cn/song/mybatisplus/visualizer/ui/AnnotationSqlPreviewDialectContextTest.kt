@@ -51,5 +51,10 @@ class AnnotationSqlPreviewDialectContextTest : BasePlatformTestCase() {
         val dialog = File(root,
             "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewDialog.kt").readText()
         assertTrue(dialog.contains("panel.setSourceContext(sourceContext)"))
+        val panel = File(root,
+            "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanel.kt").readText()
+        assertTrue("面板只应保留模块稳定键，不能持有真实 SQL/宿主 PSI 或 JDBC URL",
+            panel.contains("sourceModuleKey = context?.canonicalModuleKey") &&
+                !panel.contains("internal var sourceContext:"))
     }
 }

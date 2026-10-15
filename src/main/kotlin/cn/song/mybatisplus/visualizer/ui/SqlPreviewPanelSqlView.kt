@@ -521,7 +521,7 @@ internal fun SqlPreviewPanel.showDiffToast(message: String) {
 
 internal fun SqlPreviewPanel.clear() {
     current = null
-    sourceContext = null
+    sourceModuleKey = null
     // 下次预热在结果到达前使用兼容 MySQL；结果到达后再按实际生成方言重映射。
     previewDesiredDialectName = null
     enabledIds.clear()

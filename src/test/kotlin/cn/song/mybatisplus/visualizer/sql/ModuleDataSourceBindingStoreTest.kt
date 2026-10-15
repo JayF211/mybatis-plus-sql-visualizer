@@ -39,6 +39,6 @@ class ModuleDataSourceBindingStoreTest : BasePlatformTestCase() {
         val panel = File(root,
             "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelExecution.kt").readText()
         assertTrue("面板执行请求须携带当前来源模块稳定键",
-            panel.contains("moduleKey = sourceContext?.canonicalModuleKey"))
+            panel.contains("moduleKey = sourceModuleKey"))
     }
 }

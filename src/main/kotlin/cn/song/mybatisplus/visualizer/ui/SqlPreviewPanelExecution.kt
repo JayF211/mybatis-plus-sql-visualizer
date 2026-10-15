@@ -544,7 +544,7 @@ internal fun SqlPreviewPanel.executionDialectGateRequest(
         intent = intent,
         canLosslesslyRerender = canRerender,
         userTextUntouched = untouched,
-        moduleKey = sourceContext?.canonicalModuleKey,
+        moduleKey = sourceModuleKey,
     )
 }
 

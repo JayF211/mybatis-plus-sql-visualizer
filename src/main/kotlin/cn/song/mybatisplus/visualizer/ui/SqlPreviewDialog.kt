@@ -23,7 +23,7 @@ class SqlPreviewDialog(
     private val project: Project?,
     private val result: PreviewResult,
     private val sourceLocation: String? = null,
-    private val sourceContext: cn.song.mybatisplus.visualizer.context.PreviewSourceContext? = null,
+    sourceContext: cn.song.mybatisplus.visualizer.context.PreviewSourceContext? = null,
 ) : DialogWrapper(project, false, DialogWrapper.IdeModalityType.MODELESS) {
 
     private val panel = SqlPreviewPanel(project)
