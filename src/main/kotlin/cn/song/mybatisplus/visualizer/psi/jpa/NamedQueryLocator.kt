@@ -109,11 +109,22 @@ object NamedQueryLocator {
         val classes = runCatching {
             JavaPsiFacade.getInstance(project).findClasses(entitySimpleName, GlobalSearchScope.projectScope(project))
         }.getOrNull() ?: return null
+        return uniqueHit(classes.asIterable(), queryName)
+    }
+
+    /** 索引候选收口独立于测试框架的项目索引：跨文件歧义不能被空索引假绿掩盖。 */
+    internal fun uniqueHit(classes: Iterable<PsiClass>, queryName: String): NamedQueryInfo? {
+        // 同名实体可跨包/模块共存；没有唯一的定义 owner 就不能取索引返回的首项。
+        // 有界扫描：第二个命中即可判歧义，避免无谓枚举后续注解。
+        var unique: NamedQueryInfo? = null
         for (cls in classes) {
-            val hit = locate(cls).firstOrNull { it.name == queryName }
-            if (hit != null) return hit
+            for (hit in locate(cls)) {
+                if (hit.name != queryName) continue
+                if (unique != null) return null
+                unique = hit
+            }
         }
-        return null
+        return unique
     }
 
     // ------------------------------------------------------------------

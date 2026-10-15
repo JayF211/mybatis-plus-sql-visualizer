@@ -244,6 +244,7 @@ internal fun SqlPreviewService.buildJpaPreviewResult(
     method: PsiMethod?,
     inClauseParams: Set<String> = emptySet(),
     dialectOverride: Dialect? = null,
+    dialectDecision: cn.song.mybatisplus.visualizer.sql.DialectDecisionEngine.Decision? = null,
     placeholderParamNames: List<String> = emptyList(),
     duplicateParamNames: Set<String> = emptySet(),
     initialParamValues: Map<String, String> = emptyMap(),
@@ -281,6 +282,7 @@ internal fun SqlPreviewService.buildJpaPreviewResult(
         columns = (statement.table as? TableInfo)?.allColumnNames ?: emptyList(),
         previewModel = if (views.isEmpty()) null else SqlPreviewModel(statement, dialect, formatSql(), views),
         renderedDialect = dialect,
+        dialectDecision = dialectDecision,
         // F-1 修复：JPA 联表派生查询同款缺口——图 Tab 判据与 previewModel 解耦
         diagramStatement = (statement as? SelectStatement)?.takeIf { it.joins.isNotEmpty() },
         placeholderParamNames = usableNamedSources,

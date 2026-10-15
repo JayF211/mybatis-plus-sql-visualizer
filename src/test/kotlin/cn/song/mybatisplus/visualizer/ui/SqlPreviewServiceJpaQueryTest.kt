@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.ui
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.sql.IdeaSourceDialectProbe
+import cn.song.mybatisplus.visualizer.context.SqlPsiResolution
 import cn.song.mybatisplus.visualizer.converter.jpa.SpecificationQueryConverter
 import cn.song.mybatisplus.visualizer.ui.gutter.JpaGutterLineMarkerProvider
 import com.intellij.codeInsight.daemon.LineMarkerInfo
@@ -66,6 +67,48 @@ class SqlPreviewServiceJpaQueryTest : BasePlatformTestCase() {
     /** gutter 图标判定（锚点快速路径）。 */
     private fun marker(element: com.intellij.psi.PsiElement): LineMarkerInfo<*>? =
         JpaGutterLineMarkerProvider().getLineMarkerInfo(element)
+
+    fun testO145JpqlSourceSnapshotAndNativeQueryKeepOwnerWithoutSqlPsi() {
+        myFixture.configureByText("UserRepository.java", """
+            interface UserRepository {
+                @Query("SELECT u FROM UserEntity u WHERE u.id = :id")
+                Object find(Long id);
+                @Query(value = "SELECT * FROM t_user WHERE id = :id", nativeQuery = true)
+                Object nativeFind(Long id);
+            }
+            @interface Query { String value(); boolean nativeQuery() default false; }
+            class UserEntity {}
+        """.trimIndent())
+        val service = newService()
+        val method = method("find")
+        val context = service.jpaSourceContext(method)
+        assertEquals(myFixture.file, context.hostPsiFile)
+        assertEquals("JPQL 字符串并非实际 SqlFile", SqlPsiResolution.None, context.sqlPsiResolution)
+        val result = service.previewJpql(method)!!
+        val native = service.previewJpql(method("nativeFind"))!!
+        for (preview in listOf(result, native)) {
+            assertNotNull("方言非 URL 决策快照必须透传 UI", preview.dialectDecision)
+            assertEquals(preview.renderedDialect?.name,
+                preview.dialectDecision?.dialectName ?: "MySQL")
+        }
+    }
+
+    fun testO145HqlOrdinarySourceSnapshot() {
+        myFixture.configureByText("UserDao.java", """
+            class UserDao {
+                Object find(EntityManager session) {
+                    return session.createQuery("SELECT u FROM UserEntity u");
+                }
+            }
+            interface EntityManager { Object createQuery(String hql); }
+            class UserEntity {}
+        """.trimIndent())
+        val service = newService()
+        val result = service.previewHql(call("createQuery"))!!
+        assertEquals(SqlPsiResolution.None, service.jpaSourceContext(call("createQuery")).sqlPsiResolution)
+        assertNotNull(result.dialectDecision)
+        assertEquals(result.renderedDialect?.name, result.dialectDecision?.dialectName ?: "MySQL")
+    }
 
     // ------------------------------------------------------------------
     // T-J10：Pageable / Sort / Limit 全路径

@@ -1,6 +1,11 @@
 package cn.song.mybatisplus.visualizer.ui
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
+import cn.song.mybatisplus.visualizer.context.ModuleIdentityResolver
+import cn.song.mybatisplus.visualizer.context.ModuleIdentityResolution
+import cn.song.mybatisplus.visualizer.context.PreviewSourceContext
+import cn.song.mybatisplus.visualizer.context.PreviewSourceOrigin
+import cn.song.mybatisplus.visualizer.sql.DialectDecisionEngine
 import cn.song.mybatisplus.visualizer.config.ProjectPluginSettings
 import cn.song.mybatisplus.visualizer.converter.ConverterRegistry
 import cn.song.mybatisplus.visualizer.history.SqlHistoryEntry
@@ -602,6 +607,30 @@ class SqlPreviewService(internal val project: Project) {
      * @QueryHints 注释、@EntityGraph → LEFT JOIN、Page 返回 → count SQL 展示）见
      * [applyJpaMethodEnhancements]。
      */
+    /** JPQL/HQL 字符串的宿主是 Java 源文件，不是 DatabaseTools SqlFile。跨文件命名查询
+     * 使用定义所在文件；无文件/模块歧义时保留项目级兼容回退，不猜测调用点模块。 */
+    internal fun jpaSourceContext(owner: PsiElement?): PreviewSourceContext {
+        val host = owner?.containingFile
+        val file = host?.virtualFile
+        val module = file?.let {
+            ReadAction.compute<ModuleIdentityResolution, RuntimeException> {
+                ModuleIdentityResolver.resolve(project, it)
+            }
+        } ?: ModuleIdentityResolution.None
+        return PreviewSourceContext(
+            project = project,
+            origin = PreviewSourceOrigin.PSI,
+            hostPsiFile = host,
+            moduleResolution = module,
+        )
+    }
+
+    internal fun jpaSourceDecision(owner: PsiElement?): DialectDecisionEngine.Decision =
+        DialectRegistry.decision(jpaSourceContext(owner))
+
+    private fun dialectOf(decision: DialectDecisionEngine.Decision): Dialect =
+        decision.dialectName?.let(DialectRegistry::byName) ?: DialectRegistry.byName(null)
+
     fun previewJpql(method: PsiMethod): PreviewResult? {
         val info = method.containingFile?.let { file ->
             JpqlQueryLocator.locate(file, method.textRange.startOffset)
@@ -616,8 +645,9 @@ class SqlPreviewService(internal val project: Project) {
         } else {
             null
         }
-        // T-PS5-03：入口求一次方言（分页分析/方法级增强/结果构建共用）
-        val dialect = currentDialect()
+        // O-145：Java 方法宿主的非 URL 来源证据；不将 JPQL 字面量冒充 SqlFile。
+        val decision = jpaSourceDecision(method)
+        val dialect = dialectOf(decision)
         // T-J10：分页/排序参数占位名（无参数时空列表，存量行为零变化）
         val extraParamNames = JpaQueryEnhancer.evaluatePageSort(method, null, dialect, table)
             ?.extraParamNames ?: emptyList()
@@ -641,6 +671,8 @@ class SqlPreviewService(internal val project: Project) {
                 tableName = table?.tableName
                     ?: info.entityClass?.name?.let { JpaEntityResolver.inferDecoratedTableName(it, project) } ?: "",
                 columns = table?.allColumnNames ?: emptyList(),
+                renderedDialect = dialect,
+                dialectDecision = decision,
             )
         }
         // JPQL → JpqlConverter.convert → Result（转换后 SQL + 语句模型）
@@ -658,6 +690,7 @@ class SqlPreviewService(internal val project: Project) {
             method = method,
             inClauseParams = result.inClauseParams,
             dialectOverride = dialect,
+            dialectDecision = decision,
         )
     }
 
@@ -852,8 +885,9 @@ class SqlPreviewService(internal val project: Project) {
                 val table = entityClass?.let { JpaEntityResolver().resolve(it) }
                 val result = JpqlConverter.convert(named.query, table, project)
                 val paramNames = extractParamNamesFromHql(named.query)
-                // T-PS5-03：本分支入口求一次方言
-                val dialect = currentDialect()
+                // 命名查询以定义注解的文件为 owner，而非 createNamedQuery 的调用文件。
+                val decision = jpaSourceDecision(named.annotation)
+                val dialect = dialectOf(decision)
                 // T-J10/J15/J22：宿主方法级增强
                 val enhancedSql = applyJpaMethodEnhancements(info.method, result.sql, table, native = false, dialectOverride = dialect)
                 val extraParams = JpaQueryEnhancer.evaluatePageSort(info.method, null, dialect, table)
@@ -866,6 +900,7 @@ class SqlPreviewService(internal val project: Project) {
                     method = info.method,
                     inClauseParams = result.inClauseParams,
                     dialectOverride = dialect,
+                    dialectDecision = decision,
                 )
             }
             // T-H3：Java @NamedQuery 未命中 → hbm 命名查询 fallback（hbm 纯 POJO 项目无注解可查）
@@ -888,8 +923,8 @@ class SqlPreviewService(internal val project: Project) {
         val paramNames = info.parameters.map { if (it.isPositional) it.valueExpr else it.paramName }.ifEmpty {
             extractParamNamesFromHql(info.hql)
         }
-        // T-PS5-03：本分支入口求一次方言
-        val dialect = currentDialect()
+        val decision = jpaSourceDecision(info.method ?: anchor)
+        val dialect = dialectOf(decision)
         // T-J10/J15/J22：宿主方法级增强
         val enhancedSql = applyJpaMethodEnhancements(info.method, result.sql, table, native = false, dialectOverride = dialect)
         val extraParams = JpaQueryEnhancer.evaluatePageSort(info.method, null, dialect, table)
@@ -903,6 +938,7 @@ class SqlPreviewService(internal val project: Project) {
             method = info.method,
             inClauseParams = result.inClauseParams,
             dialectOverride = dialect,
+            dialectDecision = decision,
             placeholderParamNames = result.placeholderParamNames,
             duplicateParamNames = info.duplicateParamNames,
             // T-JpaParamOrder F6：字面量/枚举常量自动预填参数框（变量引用不入表，保持待填）
@@ -971,6 +1007,7 @@ class SqlPreviewService(internal val project: Project) {
         val table = JpaEntityResolver().resolve(cls)
         val result = JpqlConverter.convert(jpql, table, project)
         val paramNames = extractParamNamesFromHql(jpql)
+        val decision = jpaSourceDecision(info.annotation ?: annotation)
         return buildJpaPreviewResult(
             statement = result.statement,
             convertedSql = result.sql,
@@ -978,6 +1015,8 @@ class SqlPreviewService(internal val project: Project) {
             paramNames = paramNames,
             method = null,
             inClauseParams = result.inClauseParams,
+            dialectOverride = dialectOf(decision),
+            dialectDecision = decision,
         )
     }
 
@@ -1008,6 +1047,7 @@ class SqlPreviewService(internal val project: Project) {
                 val table = entityClass?.let { JpaEntityResolver().resolve(it) }
                 val result = JpqlConverter.convert(named.query, table, project)
                 val paramNames = extractParamNamesFromHql(named.query)
+                val decision = jpaSourceDecision(named.annotation)
                 return buildJpaPreviewResult(
                     statement = result.statement,
                     convertedSql = result.sql,
@@ -1015,6 +1055,8 @@ class SqlPreviewService(internal val project: Project) {
                     paramNames = paramNames,
                     method = info.method,
                     inClauseParams = result.inClauseParams,
+                    dialectOverride = dialectOf(decision),
+                    dialectDecision = decision,
                 )
             }
             // T-H3：Java @NamedQuery 未命中 → hbm 命名查询 fallback（与 previewHql 同款）
@@ -1043,6 +1085,7 @@ class SqlPreviewService(internal val project: Project) {
         val paramNames = info.parameters.map { if (it.isPositional) it.valueExpr else it.paramName }.ifEmpty {
             extractParamNamesFromHql(info.hql)
         }
+        val decision = jpaSourceDecision(info.method ?: anchor)
         return buildJpaPreviewResult(
             statement = result.statement,
             convertedSql = result.sql,
@@ -1050,6 +1093,8 @@ class SqlPreviewService(internal val project: Project) {
             paramNames = paramNames,
             method = info.method,
             inClauseParams = result.inClauseParams,
+            dialectOverride = dialectOf(decision),
+            dialectDecision = decision,
             placeholderParamNames = result.placeholderParamNames,
             // T-JpaParamOrder F6：自定义 DAO 链同样预填静态常量
             initialParamValues = staticParamValues(info.parameters),
