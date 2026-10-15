@@ -59,10 +59,13 @@ class AnnotationSqlGutterLineMarkerProvider : LineMarkerProvider {
         override fun navigate(e: MouseEvent?, elt: PsiElement) {
             val project: Project = elt.project
             val annotation = PsiTreeUtil.getParentOfType(elt, PsiAnnotation::class.java, false) ?: return
+            val contextRef = java.util.concurrent.atomic.AtomicReference<cn.song.mybatisplus.visualizer.context.PreviewSourceContext?>()
             SqlPreviewService.previewAsync(project, {
-                AnnotationSqlPreviewService.preview(annotation, project)
+                val context = AnnotationSqlPreviewService.resolveSourceContext(annotation, project)
+                contextRef.set(context)
+                AnnotationSqlPreviewService.preview(annotation, project, context)
             }) { result ->
-                SqlPreviewService.showResult(project, result)
+                SqlPreviewService.showResult(project, result, sourceContext = contextRef.get())
             }
         }
     }

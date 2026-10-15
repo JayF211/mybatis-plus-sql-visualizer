@@ -23,6 +23,7 @@ class SqlPreviewDialog(
     private val project: Project?,
     private val result: PreviewResult,
     private val sourceLocation: String? = null,
+    private val sourceContext: cn.song.mybatisplus.visualizer.context.PreviewSourceContext? = null,
 ) : DialogWrapper(project, false, DialogWrapper.IdeModalityType.MODELESS) {
 
     private val panel = SqlPreviewPanel(project)
@@ -30,6 +31,7 @@ class SqlPreviewDialog(
     init {
         title = MpSqlVisualizerBundle.message("dialog.preview.title")
         panel.setSourceLocation(sourceLocation)
+        panel.setSourceContext(sourceContext)
         panel.showResult(result)
         // 注册面板到弹窗 Disposer 树：弹窗 dispose 时级联释放面板及其 messageBus 连接
         Disposer.register(disposable, panel)

@@ -1887,7 +1887,12 @@ class SqlPreviewService(internal val project: Project) {
          * @param result null 表示未找到可转换的 Wrapper → 弹友好提示（不抛异常）
          * @param sourceLocation 当前代码位置（文件名:行号），来源列默认值；null 表示未知
          */
-        fun showResult(project: Project, result: PreviewResult?, sourceLocation: String? = null) {
+        fun showResult(
+            project: Project,
+            result: PreviewResult?,
+            sourceLocation: String? = null,
+            sourceContext: cn.song.mybatisplus.visualizer.context.PreviewSourceContext? = null,
+        ) {
             // T-PreviewFast P7：请求→弹窗耗时（第二段锚点；后续控制台可见由面板记）
             runCatching {
                 val req = lastPreviewRequestMs
@@ -1920,7 +1925,7 @@ class SqlPreviewService(internal val project: Project) {
                     runCatching { previous.doDispose() }
                 }
             }
-            val dialog = SqlPreviewDialog(project, result, sourceLocation)
+            val dialog = SqlPreviewDialog(project, result, sourceLocation, sourceContext)
             activePreviewDialogs[project] = java.lang.ref.WeakReference(dialog)
             dialog.show()
         }

@@ -22,7 +22,10 @@ class AnnotationSqlPreviewDialectContextTest : BasePlatformTestCase() {
             """.trimIndent())
             val annotation = PsiTreeUtil.collectElementsOfType(myFixture.file, PsiAnnotation::class.java)
                 .first { it.qualifiedName?.substringAfterLast('.') == "Select" }
-            val result = AnnotationSqlPreviewService.preview(annotation, project)
+            val context = AnnotationSqlPreviewService.resolveSourceContext(annotation, project)
+            assertEquals(cn.song.mybatisplus.visualizer.context.PreviewSourceOrigin.PSI, context.origin)
+            assertEquals(myFixture.file, context.hostPsiFile)
+            val result = AnnotationSqlPreviewService.preview(annotation, project, context)
             assertEquals("Oracle", result.effectiveDialect?.name)
         } finally {
             settings.loadState(snapshot)
@@ -35,7 +38,18 @@ class AnnotationSqlPreviewDialectContextTest : BasePlatformTestCase() {
         val text = File(root,
             "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/AnnotationSqlPreviewService.kt").readText()
         assertTrue(text.contains("ActualSqlPsiResolver.resolve(host, owner, owner.textOffset)"))
-        assertTrue(text.contains("DialectRegistry.effective(project, host.virtualFile, sqlPsi)"))
+        assertTrue(text.contains("DialectRegistry.effective(it)"))
         assertTrue(text.contains("copy(renderedDialect = renderDialect)"))
+        val action = File(root,
+            "src/main/kotlin/cn/song/mybatisplus/visualizer/actions/ConvertToSqlAction.kt").readText()
+        val gutter = File(root,
+            "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/gutter/AnnotationSqlGutterLineMarkerProvider.kt").readText()
+        assertTrue(action.contains("AnnotationSqlPreviewService.resolveSourceContext"))
+        assertTrue(action.contains("sourceLocation, contextRef.get()"))
+        assertTrue(gutter.contains("AnnotationSqlPreviewService.resolveSourceContext"))
+        assertTrue(gutter.contains("sourceContext = contextRef.get()"))
+        val dialog = File(root,
+            "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewDialog.kt").readText()
+        assertTrue(dialog.contains("panel.setSourceContext(sourceContext)"))
     }
 }

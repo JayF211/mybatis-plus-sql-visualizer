@@ -349,6 +349,8 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
     /** [previewDialectMappedVf] 当前已映射的平台 language id，防同目录误把 MySQL 当成 Oracle/PG 幂等命中。 */
     @Volatile
     internal var previewDialectMappedLanguageId: String? = null
+    /** O-145 W1：本次预览瞬态来源上下文，不进入历史、复制或设置持久化。 */
+    internal var sourceContext: cn.song.mybatisplus.visualizer.context.PreviewSourceContext? = null
     /** F-46：当前代码位置（文件名:行号），来源列默认值；null 表示未知（日志/历史等无锚点场景）。 */
     private var sourceLocation: String? = null
     internal val editorHolder = JBPanel<JBPanel<*>>(java.awt.GridLayout(1, 1)).apply {
@@ -952,6 +954,10 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
     // ------------------------------------------------------------------
     // F-46：来源位置（来源列默认值）
     // ------------------------------------------------------------------
+
+    fun setSourceContext(context: cn.song.mybatisplus.visualizer.context.PreviewSourceContext?) {
+        sourceContext = context
+    }
 
     /** 设置当前代码位置（文件名:行号），来源列默认显示此值。 */
     fun setSourceLocation(loc: String?) { sourceLocation = loc }

@@ -147,10 +147,13 @@ class ConvertToSqlAction : AnAction() {
         // T-M25-03：光标在 MyBatis SQL 注解内 → 注解预览（@Select/@Update/Provider 族）
         val annotation = PsiTreeUtil.getParentOfType(element, PsiAnnotation::class.java, false)
         if (annotation != null && AnnotationSqlPreviewService.isSqlAnnotation(annotation)) {
+            val contextRef = java.util.concurrent.atomic.AtomicReference<cn.song.mybatisplus.visualizer.context.PreviewSourceContext?>()
             SqlPreviewService.previewAsync(project, {
-                AnnotationSqlPreviewService.preview(annotation, project)
+                val context = AnnotationSqlPreviewService.resolveSourceContext(annotation, project)
+                contextRef.set(context)
+                AnnotationSqlPreviewService.preview(annotation, project, context)
             }) { result ->
-                SqlPreviewService.showResult(project, result, sourceLocation)
+                SqlPreviewService.showResult(project, result, sourceLocation, contextRef.get())
             }
             return
         }
