@@ -130,7 +130,6 @@ object HbmXmlEntityResolver {
                     else -> continue
                 }
                 if (kind == query.kind && tag.getAttributeValue("name") == query.name) {
-                    // 上游 findNamedQuery 按名称首项命中；不同文本的第二份定义同样令 owner 歧义。
                     if (owner != null || directTextOf(tag) != query.queryText) return null
                     owner = tag
                 }
