@@ -1,5 +1,7 @@
 package cn.song.mybatisplus.visualizer.ui
 
+import cn.song.mybatisplus.visualizer.config.PluginSettings
+import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.generator.*
 import cn.song.mybatisplus.visualizer.model.FieldFillSimulation
 import cn.song.mybatisplus.visualizer.model.PreviewResult
@@ -35,6 +37,64 @@ class FieldFillSimulationPanelTest : BasePlatformTestCase() {
         UIUtil.dispatchAllInvocationEvents()
     }
 
+    fun testSimulationMessagesFollowSettingsLanguageAndBothBundlesDefineEveryKey() {
+        val keys = listOf("enabled", "enabled.tooltip", "status", "annotation.tooltip",
+            "value.tooltip", "value.label", "invalid").map { "fieldFill.simulation.$it" }
+        val bundles = listOf("en" to "", "zh" to "_zh").associate { (language, suffix) ->
+            val path = "/messages/MpSqlVisualizerBundle$suffix.properties"
+            val stream = javaClass.getResourceAsStream(path) ?: error("Missing bundle $path")
+            language to stream.bufferedReader(Charsets.UTF_8).use { reader ->
+                java.util.Properties().apply { load(reader) }
+            }
+        }
+        keys.forEach { key ->
+            for ((language, properties) in bundles) {
+                assertTrue("$language must explicitly define $key", properties.getProperty(key)?.isNotBlank() == true)
+            }
+            assertFalse("translations must differ for $key",
+                bundles.getValue("en").getProperty(key) == bundles.getValue("zh").getProperty(key))
+        }
+        fun labels(component: java.awt.Component): List<javax.swing.JLabel> =
+            (if (component is javax.swing.JLabel) listOf(component) else emptyList()) +
+                (if (component is java.awt.Container) component.components.flatMap { labels(it) } else emptyList())
+        val settings = PluginSettings.getInstance().state
+        val previousLanguage = settings.language
+        try {
+            for (language in listOf("en", "zh")) {
+                settings.language = language
+                keys.filterNot { it.endsWith(".invalid") }.forEach { key ->
+                    assertEquals(bundles.getValue(language).getProperty(key), MpSqlVisualizerBundle.message(key))
+                }
+                val p = panel()
+                try {
+                    assertEquals(MpSqlVisualizerBundle.message("fieldFill.simulation.enabled"), p.fieldFillCheckBox!!.text)
+                    assertEquals(MpSqlVisualizerBundle.message("fieldFill.simulation.enabled.tooltip"), p.fieldFillCheckBox!!.toolTipText)
+                    assertEquals(MpSqlVisualizerBundle.message("fieldFill.simulation.status"), p.fieldFillStatus!!.text)
+                    assertEquals(p.fieldFillStatus!!.text, p.fieldFillStatus!!.toolTipText)
+                    val rowLabels = labels(p.paramPanel)
+                    assertTrue(rowLabels.any { it.text == MpSqlVisualizerBundle.message("fieldFill.simulation.value.label") })
+                    val badges = rowLabels.filter { it.text.startsWith("[fill=") }
+                    assertEquals(2, badges.size)
+                    badges.forEach { assertEquals(MpSqlVisualizerBundle.message("fieldFill.simulation.annotation.tooltip"), it.toolTipText) }
+                    p.fieldFillFields.values.forEach {
+                        assertEquals(MpSqlVisualizerBundle.message("fieldFill.simulation.value.tooltip"), it.toolTipText)
+                    }
+                    p.fieldFillFields.getValue("counter").text = "1; DELETE FROM t"
+                    p.fieldFillCheckBox!!.doClick()
+                    val invalid = MpSqlVisualizerBundle.message("fieldFill.simulation.invalid", "counter")
+                    assertEquals(java.text.MessageFormat.format(bundles.getValue(language).getProperty("fieldFill.simulation.invalid"), "counter"), invalid)
+                    assertEquals(invalid, p.fieldFillStatus!!.text)
+                    assertEquals(invalid, p.fieldFillStatus!!.toolTipText)
+                    assertFalse(p.lastRenderedSqlForTest()!!.contains("DELETE"))
+                } finally {
+                    p.clear()
+                }
+            }
+        } finally {
+            settings.language = previousLanguage
+        }
+    }
+
     fun testCrudRealRenderToggleLiteralValidationExplicitPriorityAndRestore() {
         val p = panel()
         val original = p.lastRenderedSqlForTest()
@@ -55,7 +115,7 @@ class FieldFillSimulationPanelTest : BasePlatformTestCase() {
         p.fieldFillFields.getValue("counter").text = "1; DELETE FROM t"
         assertFalse(p.lastRenderedSqlForTest()!!.contains("DELETE"))
         assertTrue(p.lastRenderedSqlForTest()!!.contains("?"))
-        assertTrue(p.fieldFillStatus!!.text.contains("counter"))
+        assertEquals(MpSqlVisualizerBundle.message("fieldFill.simulation.invalid", "counter"), p.fieldFillStatus!!.text)
         p.fieldFillCheckBox!!.doClick()
         assertEquals(original, p.lastRenderedSqlForTest())
         p.clear()

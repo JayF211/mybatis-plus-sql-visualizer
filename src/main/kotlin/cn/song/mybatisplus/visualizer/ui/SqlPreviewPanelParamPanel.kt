@@ -118,16 +118,16 @@ internal fun SqlPreviewPanel.rebuildLeftPanel(result: PreviewResult) {
     if (batchModel != null) {
         paramPanel.add(batchSectionHeader())
         if (batchModel.toggleColumns.any { it.fill != null && it.fill != "DEFAULT" }) {
-            fieldFillCheckBox = JCheckBox("FieldFill 安全模拟（默认关闭）", false).apply {
+            fieldFillCheckBox = JCheckBox(MpSqlVisualizerBundle.message("fieldFill.simulation.enabled"), false).apply {
                 name = "fieldFillEnabled"
-                toolTipText = "仅使用手填字面量；不执行 MetaObjectHandler，不等价真实 handler"
+                toolTipText = MpSqlVisualizerBundle.message("fieldFill.simulation.enabled.tooltip")
                 addActionListener {
                     fieldFillEnabled = isSelected
                     renderSql()
                 }
             }
             paramPanel.add(fieldFillCheckBox)
-            fieldFillStatus = JBLabel("仅手填字面量；不执行或等价真实 handler；UPSERT 不填").apply {
+            fieldFillStatus = JBLabel(MpSqlVisualizerBundle.message("fieldFill.simulation.status")).apply {
                 name = "fieldFillStatus"
                 toolTipText = text
             }
@@ -137,8 +137,8 @@ internal fun SqlPreviewPanel.rebuildLeftPanel(result: PreviewResult) {
         val labelWidth = labelColumnWidth(batchModel.fixedColumns.map { "#${it.source}" })
         batchModel.toggleColumns.forEach { paramPanel.add(buildBatchColumnRow(it, isToggle = true)) }
         batchModel.fixedColumns.forEach { paramPanel.add(buildBatchColumnRow(it, isToggle = false, labelWidth)) }
-        // showResult recalls ordinary parameters before building controls. Restore overlay only now,
-        // from the preset cache (never SQL history), after the fresh-preview reset and field creation.
+        // showResult 在构建控件前召回普通参数；模拟值须等新预览复位、输入框建好后，
+        // 才从参数预设缓存恢复，不从 SQL 历史回落恢复。
         if (paramHistoryCache.isCurrentGeneration()) {
             historyCacheKey()?.let { paramHistoryCache.recall(it) }?.forEach { (key, value) ->
                 if (key.startsWith(FieldFillSimulation.SNAPSHOT_PREFIX)) {
@@ -477,12 +477,12 @@ internal fun SqlPreviewPanel.buildBatchColumnRow(col: BatchColumn, isToggle: Boo
     row.add(field)
     if (col.fill != null && col.fill != "DEFAULT") {
         row.add(JBLabel("[fill=${col.fill}]").apply {
-            toolTipText = "注解元数据，不代表已执行 handler"
+            toolTipText = MpSqlVisualizerBundle.message("fieldFill.simulation.annotation.tooltip")
         })
         if (isToggle) {
             val simulation = JBTextField(8).apply {
                 name = "fieldFill:${col.source}"
-                toolTipText = "模拟字面量；显式参数优先；数值列仅接受数字；不接受分号或脚本"
+                toolTipText = MpSqlVisualizerBundle.message("fieldFill.simulation.value.tooltip")
                 document.addDocumentListener(object : DocumentListener {
                     private fun changed() {
                         if (fieldFillSyncing) return
@@ -496,7 +496,7 @@ internal fun SqlPreviewPanel.buildBatchColumnRow(col: BatchColumn, isToggle: Boo
                 })
             }
             fieldFillFields[col.source] = simulation
-            row.add(JBLabel("模拟值"))
+            row.add(JBLabel(MpSqlVisualizerBundle.message("fieldFill.simulation.value.label")))
             row.add(simulation)
         }
     }
@@ -504,7 +504,7 @@ internal fun SqlPreviewPanel.buildBatchColumnRow(col: BatchColumn, isToggle: Boo
     return row
 }
 
-/** R92: clear visual fields before the map, as document listeners write back. */
+/** R92：先清可见输入框再清状态表，并抑制文档监听器回写。 */
 internal fun SqlPreviewPanel.resetFieldFillSimulation() {
     fieldFillEnabled = false
     fieldFillCheckBox?.isSelected = false
@@ -519,7 +519,7 @@ internal fun SqlPreviewPanel.resetFieldFillSimulation() {
 
 internal fun SqlPreviewPanel.fieldFillOverlay(): FieldFillSimulation.Overlay {
     if (fieldFillPreview !== current || !paramHistoryCache.isCurrentGeneration()) {
-        // No component edits here: this can run inside a DocumentListener notification.
+        // 此处可能在 DocumentListener 通知内执行，不修改输入框文档。
         fieldFillEnabled = false
         fieldFillCheckBox?.isSelected = false
         fieldFillValues.clear()
@@ -528,9 +528,9 @@ internal fun SqlPreviewPanel.fieldFillOverlay(): FieldFillSimulation.Overlay {
     val overlay = FieldFillSimulation.overlay(model, enabledIds, paramValues, fieldFillValues, fieldFillEnabled)
     fieldFillStatus?.apply {
         text = if (overlay.invalidSources.isEmpty()) {
-            "仅手填字面量；不执行或等价真实 handler；UPSERT 不填"
+            MpSqlVisualizerBundle.message("fieldFill.simulation.status")
         } else {
-            "模拟值无效，保留占位符：${overlay.invalidSources.joinToString()}"
+            MpSqlVisualizerBundle.message("fieldFill.simulation.invalid", overlay.invalidSources.joinToString())
         }
         toolTipText = text
     }
@@ -1359,7 +1359,7 @@ internal fun SqlPreviewPanel.recallFromHistory() {
     history.forEach { (source, value) ->
         when {
             source.startsWith(FieldFillSimulation.SNAPSHOT_PREFIX) -> {
-                // Historical SQL snapshots are not an authority for simulation values.
+                // SQL 历史快照无权恢复模拟值；只接受当前代际的参数预设缓存。
                 val fieldSource = source.removePrefix(FieldFillSimulation.SNAPSHOT_PREFIX)
                 if (cached != null && fieldFillPreview === current && paramHistoryCache.isCurrentGeneration() &&
                     fieldSource in fieldFillFields && fieldFillValues[fieldSource].isNullOrEmpty()) {
