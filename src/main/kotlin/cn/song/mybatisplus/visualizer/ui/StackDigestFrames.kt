@@ -5,9 +5,8 @@ package cn.song.mybatisplus.visualizer.ui
  *
  * 快照串由 agent 侧 `StackDigest.build(StackTraceElement[])` 产出，格式
  * `pkg.Class#method:line<-pkg.Class#method:line<-…`（`<-` 连接、栈顶在左、行号负数不写、
- * ≤16 帧/总长 ≤2000 字符——帧数或长度触顶时追加 `…` 截断标记）。IDE 侧此前把它当
- * 整段纯文本塞 tooltip（T-SourceJumpFunnel P2-2 形态），本对象把它拆回帧列表，
- * 供 [StackFrameHover] 悬停弹层逐帧渲染。
+ * 帧数随配置钳位在 12～64；深栈采样时用独立的中段省略标记）。本对象保留已采集帧
+ * 与省略段的原始次序，供 [StackFrameHover] 展示与折叠。
  */
 internal data class StackFrameEntry(
     /** 全限定类名（`#` 之前；内嵌类/代理类 `$` 段原样保留）。 */
@@ -17,6 +16,62 @@ internal data class StackFrameEntry(
     /** 源码行号（agent 侧语义：负数不写 `:n`，此处 0 = 未知）。 */
     val line: Int,
 )
+
+internal sealed class StackDigestItem {
+    data class Frame(val entry: StackFrameEntry) : StackDigestItem()
+    data class Omitted(val count: Int?) : StackDigestItem()
+}
+
+/** Only proven library/agent frames are folded. Unknown namespaces remain visible. */
+internal sealed class StackFramesNode {
+    abstract fun frames(): List<StackFrameEntry>
+    data class Visible(val frame: StackFrameEntry) : StackFramesNode() {
+        override fun frames() = listOf(frame)
+    }
+    data class Internal(val entries: List<StackFrameEntry>) : StackFramesNode() {
+        val frames: List<StackFrameEntry> get() = entries
+        override fun frames() = entries
+    }
+    data class Omission(val count: Int?) : StackFramesNode() {
+        override fun frames(): List<StackFrameEntry> = emptyList()
+    }
+}
+
+internal data class StackFramesProjection(
+    val original: String?,
+    val nodes: List<StackFramesNode>,
+    val noProjectFrames: Boolean,
+) {
+    companion object {
+        fun build(digest: String?): StackFramesProjection {
+            val nodes = mutableListOf<StackFramesNode>()
+            val pending = mutableListOf<StackFrameEntry>()
+            fun flush() {
+                if (pending.isNotEmpty()) {
+                    nodes.add(StackFramesNode.Internal(pending.toList()))
+                    pending.clear()
+                }
+            }
+            for (item in StackDigestFrames.parseItems(digest)) {
+                when (item) {
+                    is StackDigestItem.Omitted -> {
+                        flush()
+                        nodes.add(StackFramesNode.Omission(item.count))
+                    }
+                    is StackDigestItem.Frame -> {
+                        if (StackDigestFrames.isKnownInternal(item.entry)) pending.add(item.entry)
+                        else {
+                            flush()
+                            nodes.add(StackFramesNode.Visible(item.entry))
+                        }
+                    }
+                }
+            }
+            flush()
+            return StackFramesProjection(digest, nodes, nodes.none { it is StackFramesNode.Visible })
+        }
+    }
+}
 
 internal object StackDigestFrames {
 
@@ -36,7 +91,10 @@ internal object StackDigestFrames {
      * 截断串（结尾 `…`）的末段一律丢弃：触顶末段要么是带标记的完整帧、要么是被 2000 字符
      * 硬截切出的半帧（后者解析后方法名是残缺前缀，展示会造假），丢 1 帧换来「不展示残帧」。
      */
-    internal fun parse(digest: String?): List<StackFrameEntry> {
+    internal fun parse(digest: String?): List<StackFrameEntry> =
+        parseItems(digest).filterIsInstance<StackDigestItem.Frame>().map { it.entry }
+
+    internal fun parseItems(digest: String?): List<StackDigestItem> {
         if (digest.isNullOrBlank()) return emptyList()
         val trimmedDigest = digest.trim()
         if (trimmedDigest.isEmpty()) return emptyList()
@@ -47,13 +105,42 @@ internal object StackDigestFrames {
         // 截断串末段一律丢弃：触顶末段要么是带标记的完整帧（丢 1/16 帧无伤）、要么是被 2000 字符
         // 硬截切出的半帧（解析后方法名是残缺前缀，展示会造假）——两者按「丢弃」统一处理。
         val usable = if (truncated && segments.isNotEmpty()) segments.dropLast(1) else segments
-        val frames = ArrayList<StackFrameEntry>(usable.size)
+        val items = ArrayList<StackDigestItem>(usable.size + 1)
         for (seg in usable) {
             val seg1 = seg.trim()
             if (seg1.isEmpty()) continue
-            parseFrame(seg1)?.let { frames.add(it) }
+            val omitted = Regex("^<…中间省略 ([0-9]+) 帧…>$").matchEntire(seg1)
+            if (omitted != null) {
+                items.add(StackDigestItem.Omitted(omitted.groupValues[1].toIntOrNull()))
+            } else {
+                parseFrame(seg1)?.let { items.add(StackDigestItem.Frame(it)) }
+            }
         }
-        return frames
+        // 旧版末尾省略号不区分完整帧与硬截半帧；末段仍不展示为帧，但让缺口可见。
+        if (truncated) items.add(StackDigestItem.Omitted(null))
+        return items
+    }
+
+    /** 只折叠明确来自平台/依赖的包；项目可能使用 framework 命名空间，未知包一律显示。 */
+    internal fun isKnownInternal(frame: StackFrameEntry): Boolean {
+        val name = frame.fqcn
+        val knownClasses = listOf(
+            "org.apache.catalina.core.ApplicationFilterChain",
+            "org.springframework.web.servlet.DispatcherServlet",
+            "org.springframework.web.servlet.FrameworkServlet",
+            "org.springframework.web.filter.OncePerRequestFilter",
+            "org.springframework.web.filter.FormContentFilter",
+            "org.springframework.web.filter.CharacterEncodingFilter",
+            "org.springframework.web.filter.RequestContextFilter",
+            "org.springframework.web.filter.DelegatingFilterProxy",
+            "org.springframework.security.web.FilterChainProxy",
+        )
+        return isAgentFrame(frame) || knownClasses.any { name == it || name.startsWith("$it\$") } || listOf(
+            "java.", "javax.", "jdk.", "sun.", "com.sun.",
+            "com.zaxxer.hikari.pool.", "org.apache.ibatis.executor.",
+            "org.apache.ibatis.session.", "org.apache.ibatis.plugin.",
+            "org.apache.coyote.", "org.apache.tomcat.", "cn.dev33.satoken.",
+        ).any { name.startsWith(it) }
     }
 
     /** agent 自身帧判定（采集埋点链，弹层降权用）。 */
@@ -75,7 +162,7 @@ internal object StackDigestFrames {
         if (colon > 0) {
             val linePart = rest.substring(colon + 1)
             if (linePart.isNotEmpty() && linePart.all { it.isDigit() }) {
-                return StackFrameEntry(fqcn, rest.substring(0, colon), linePart.toInt())
+                linePart.toIntOrNull()?.let { return StackFrameEntry(fqcn, rest.substring(0, colon), it) }
             }
         }
         return StackFrameEntry(fqcn, rest, 0)

@@ -351,12 +351,16 @@ public final class StackLocator {
      * 「候选池抽空」劣化。
      */
     private static boolean isBusinessOrigin(String className, ClassLoader loader) {
+        return isRegisteredBusinessFrame(className) || Boolean.FALSE.equals(loadedFromJar(className, loader));
+    }
+
+    static boolean isRegisteredBusinessFrame(String className) {
         for (String p : EXTRA_BIZ_PREFIXES) {
             if (className.startsWith(p)) {
                 return true;
             }
         }
-        return Boolean.FALSE.equals(loadedFromJar(className, loader));
+        return false;
     }
 
     /**
