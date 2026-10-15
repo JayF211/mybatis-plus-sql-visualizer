@@ -1,4 +1,4 @@
-param([string]$Label = 'initial', [string]$Tests = 'cn.song.mybatisplus.visualizer.log.O147RealAgentAcceptanceTest', [switch]$AgentTests, [ValidatePattern('^[0-9]+[mg]$')][string]$TestHeap = '512m')
+param([string]$Label = 'initial', [string]$Tests = 'cn.song.mybatisplus.visualizer.log.O147RealAgentAcceptanceTest', [switch]$AgentTests, [ValidatePattern('^[0-9]+[mg]$')][string]$TestHeap = '512m', [ValidateSet('testFast', ':test')][string]$TestTask = 'testFast')
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
 Set-Location $root
@@ -10,7 +10,7 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 try {
     $argsText = if ($AgentTests) { ':sql-visualizer-agent:test --tests cn.song.mybatisplus.sqlvis.agent.AgentArgsTest --tests cn.song.mybatisplus.sqlvis.agent.JsonsEventFormatTest --tests cn.song.mybatisplus.sqlvis.agent.AttachGateTest --tests cn.song.mybatisplus.sqlvis.agent.transport.ConfigApplyEndToEndTest --tests cn.song.mybatisplus.sqlvis.agent.transport.SenderLoopFrameTest --tests cn.song.mybatisplus.sqlvis.agent.StatementWeaverFramePatchVerifyTest' } else {
         $filters = ($Tests -split ',' | ForEach-Object { '--tests ' + $_ }) -join ' '
-        ':sql-visualizer-agent:agentFatJar :sql-visualizer-agent:childappClasses testFast ' + $filters
+        ':sql-visualizer-agent:agentFatJar :sql-visualizer-agent:childappClasses ' + $TestTask + ' ' + $filters
     }
     $command = '.\gradlew.bat ' + $argsText + ' -I dev-support/agent-capture-repro/o147-isolation.init.gradle -Pkotlin.compiler.execution.strategy=in-process --console=plain'
     $command += ' -PtestHeapSize=' + $TestHeap

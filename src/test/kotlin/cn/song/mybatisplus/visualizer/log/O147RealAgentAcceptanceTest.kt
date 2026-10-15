@@ -14,7 +14,6 @@ import java.security.MessageDigest
 import java.util.Collections
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
-import javax.tools.ToolProvider
 
 /** Real JVM + real JDBC + real MyBatis stdout; controlled replay order, NOT an IDE/Runner acceptance. */
 class O147RealAgentAcceptanceTest {
@@ -129,19 +128,95 @@ class O147RealAgentAcceptanceTest {
         private val root = File(System.getProperty("user.dir"))
         private val evidence = File(root, "build/o147-acceptance/${System.currentTimeMillis()}").apply { mkdirs() }
         private val captures: List<Capture> by lazy {
-            val h2 = File(org.h2.Driver::class.java.protectionDomain.codeSource.location.toURI())
-            val mybatis = File(org.apache.ibatis.session.SqlSession::class.java.protectionDomain.codeSource.location.toURI())
+            val h2 = locateArtifact(org.h2.Driver::class.java, "com.h2database", "h2", "2.3.232",
+                "8dae62d22db8982c3dcb3826edb9c727c5d302063a67eef7d63d82de401f07d3", "org/h2/Driver.class")
+            val mybatis = locateArtifact(org.apache.ibatis.session.SqlSession::class.java, "org.mybatis", "mybatis", "3.5.19",
+                "93eea616ae355751bd5fbabb57f0732713fbe79f3196f33c51a0aeeb4255862a", "org/apache/ibatis/session/SqlSession.class")
             val classes = File(evidence, "classes").apply { mkdirs() }
             val source = File(root, "dev-support/agent-capture-repro/O147JdbcApp.java")
-            val compiler = requireNotNull(ToolProvider.getSystemJavaCompiler())
-            check(compiler.run(null, null, null, "--release", "8", "-g", "-encoding", "UTF-8", "-cp",
-                listOf(h2, mybatis).joinToString(File.pathSeparator), "-d", classes.absolutePath, source.absolutePath) == 0)
-            val h2oldRoot = File(System.getProperty("user.home"), ".gradle/caches/modules-2/files-2.1/com.h2database/h2/1.4.200")
-            val h2old = h2oldRoot.walkTopDown().first { it.name == "h2-1.4.200.jar" }
+            // Platform test runtime can be a JBR without jdk.compiler; compile with an explicitly
+            // verified local JDK17 toolchain instead of relying on ToolProvider in the IDE loader.
+            val jdk17 = locateJdk17()
+            val compileCommand = listOf(File(jdk17, "bin/javac.exe").path, "--release", "8", "-g", "-encoding", "UTF-8", "-cp",
+                listOf(h2, mybatis).joinToString(File.pathSeparator), "-d", classes.absolutePath, source.absolutePath)
+            File(evidence, "compile-command.txt").writeText(compileCommand.joinToString("\n"))
+            val compiler = ProcessBuilder(compileCommand).redirectErrorStream(true)
+                .redirectOutput(File(evidence, "javac.log")).start()
+            try {
+                check(compiler.waitFor(30, TimeUnit.SECONDS)) { "JDK17 javac timed out; see javac.log" }
+                check(compiler.exitValue() == 0) { "JDK17 javac failed; see javac.log" }
+            } finally { if (compiler.isAlive) compiler.destroyForcibly() }
+            val h2old = locateArtifact(null, "com.h2database", "h2", "1.4.200",
+                "3ad9ac4b6aae9cd9d3ac1c447465e1ed06019b851b893dd6a8d76ddb6d85bca6", "org/h2/Driver.class",
+                System.getProperty("sqlvis.h2jdk8"))
             listOf(
-                capture("jdk17", File(System.getProperty("java.home"), "bin/java.exe"), h2, mybatis, classes),
-                capture("jdk8", File("D:/HuanJing/Java/jdk1.8.0_181/bin/java.exe"), h2old, mybatis, classes),
+                capture("jdk17", File(jdk17, "bin/java.exe"), h2, mybatis, classes),
+                capture("jdk8", File(System.getProperty("sqlvis.jdk8home", "D:/HuanJing/Java/jdk1.8.0_181"), "bin/java.exe"), h2old, mybatis, classes),
             )
+        }
+
+        private fun locateJdk17(): File {
+            val explicit = listOfNotNull(System.getProperty("sqlvis.jdk17home"), System.getProperty("java.home"), System.getenv("JAVA_HOME"))
+                .filter { it.isNotBlank() }.map(::File)
+            val installed = File(System.getProperty("user.home"), ".jdks").listFiles()?.filter { it.isDirectory }.orEmpty()
+            return (explicit + installed.sortedBy { it.name }).firstOrNull { home ->
+                val release = File(home, "release")
+                File(home, "bin/java.exe").isFile && File(home, "bin/javac.exe").isFile && release.isFile &&
+                    release.readLines().any { it.startsWith("JAVA_VERSION=\"17.") }
+            }?.canonicalFile ?: error("Verified JDK17 java+javac unavailable; set sqlvis.jdk17home")
+        }
+
+        /** PathClassLoader may expose a null CodeSource; never convert it to an empty path.
+         * All candidates (including cache fallbacks) must match the exact binary/version/hash. */
+        private fun locateArtifact(
+            anchor: Class<*>?, group: String, artifact: String, version: String,
+            expectedSha: String, classEntry: String, explicitPath: String? = null,
+        ): File {
+            val candidates = linkedMapOf<File, String>()
+            fun candidate(url: java.net.URL?, origin: String) {
+                if (url?.protocol != "file") return
+                runCatching { File(url.toURI()).canonicalFile }.getOrNull()?.let { candidates.putIfAbsent(it, origin) }
+            }
+            candidate(runCatching { anchor?.protectionDomain?.codeSource?.location }.getOrNull(), "codeSource")
+            val resource = anchor?.getResource("/$classEntry")
+            val connection = runCatching { resource?.openConnection() as? java.net.JarURLConnection }.getOrNull()
+            connection?.let {
+                it.useCaches = false
+                candidate(it.jarFileURL, "classResource")
+            }
+            explicitPath?.takeIf { it.isNotBlank() }?.let { candidates.putIfAbsent(File(it).canonicalFile, "explicit") }
+            val homes = listOfNotNull(System.getProperty("gradle.user.home"), System.getenv("GRADLE_USER_HOME"),
+                File(System.getProperty("user.home"), ".gradle").path).filter { it.isNotBlank() }.distinct()
+            for (home in homes) {
+                val dir = File(home, "caches/modules-2/files-2.1/$group/$artifact/$version")
+                dir.listFiles()?.filter { it.isDirectory }?.sortedBy { it.name }?.forEach { hashDir ->
+                    val file = File(hashDir, "$artifact-$version.jar")
+                    if (file.isFile) candidates.putIfAbsent(file.canonicalFile, "gradleCache")
+                }
+            }
+            val rejected = mutableListOf<String>()
+            for ((file, origin) in candidates) {
+                val valid = runCatching {
+                    check(file.isFile && file.name == "$artifact-$version.jar")
+                    java.util.jar.JarFile(file).use { jar ->
+                        check(jar.manifest?.mainAttributes?.getValue("Implementation-Version") == version)
+                        val entry = requireNotNull(jar.getJarEntry(classEntry))
+                        DataInputStream(jar.getInputStream(entry)).use { input ->
+                            check(input.readInt() == 0xCAFEBABE.toInt())
+                            input.readUnsignedShort()
+                            val major = input.readUnsignedShort()
+                            check(major in 45..if (version == "1.4.200" || artifact == "mybatis") 52 else 55)
+                        }
+                    }
+                    check(sha(file) == expectedSha)
+                }.isSuccess
+                if (valid) {
+                    File(evidence, "artifact-resolution.log").appendText("$group:$artifact:$version origin=$origin path=${file.path} sha256=$expectedSha\n")
+                    return file
+                }
+                rejected += "$origin=${file.path}"
+            }
+            error("Verified artifact unavailable: $group:$artifact:$version; rejected=$rejected; anchorLoader=${anchor?.classLoader?.javaClass?.name}; resource=$resource")
         }
 
         private fun capture(label: String, java: File, h2: File, mybatis: File, classes: File): Capture {
