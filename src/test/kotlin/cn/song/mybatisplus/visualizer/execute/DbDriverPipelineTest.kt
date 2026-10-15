@@ -53,7 +53,24 @@ class DbDriverPipelineTest : BasePlatformTestCase() {
 
         // ② loader 能把该版本解析成真实存在的 jar 文件
         val loader = DatabaseArtifactLoader.getInstance()
-        val jars = loader.getClasspathElements(resolved!!).map { it.absolutePath }
+        // 243: (ArtifactVersion)->List<File>; 253+: (ArtifactVersion,Context)->Collection<Path>。
+        // 签名来自发行物 javap，使用真实默认 Context，不能用假实现掩盖管线变化。
+        val owner = DatabaseArtifactLoader::class.java
+        val legacy = owner.methods.singleOrNull { it.name == "getClasspathElements" && it.parameterCount == 1 }
+        val raw = if (legacy != null) legacy.invoke(loader, resolved!!) else {
+            val contextType = Class.forName("com.intellij.database.dataSource.artifacts.DatabaseArtifactContext",
+                false, owner.classLoader)
+            val companion = contextType.getField("Companion").get(null)
+            val context = companion.javaClass.getMethod("getDefaultContext").invoke(companion)
+            owner.getMethod("getClasspathElements", resolved!!.javaClass, contextType).invoke(loader, resolved, context)
+        }
+        val jars = (raw as Collection<*>).map {
+            when (it) {
+                is File -> it.absolutePath
+                is java.nio.file.Path -> it.toAbsolutePath().toString()
+                else -> error("unexpected artifact path type: ${it?.javaClass?.name}")
+            }
+        }
         assertTrue("loader 应解析出非空 classpath，实际: $jars", jars.isNotEmpty())
         assertTrue("解析出的每个 classpath 条目都应存在: $jars", jars.all { File(it).isFile })
         assertTrue("classpath 应含 $expectedJar，实际: $jars", jars.any { it.endsWith(expectedJar) })
@@ -64,7 +81,7 @@ class DbDriverPipelineTest : BasePlatformTestCase() {
         assertTrue("驱动 $DRIVER_ID 应存在（Database 插件已加载）", driver != null)
         val refs = driver!!.artifacts.map { "${it.id}@${it.artifactVersion}" }
         assertTrue("driver artifact ref 应钉上版本，实际: $refs", refs.contains("$ARTIFACT_ID@$ARTIFACT_VERSION"))
-        val driverUrls = JdbcConsoleRunContext.expandPackUrls(driver.classpathElements).toList()
+        val driverUrls = resolvedDriverUrls(driver)
         assertTrue(
             "driver.classpathElements 应非空（版本为 null 时会回退恒空的 legacy 元素），实际: $driverUrls",
             driverUrls.isNotEmpty(),
@@ -80,12 +97,40 @@ class DbDriverPipelineTest : BasePlatformTestCase() {
         ds.javaClass.getDeclaredMethod("setDriverRef", String::class.java).apply { isAccessible = true }
             .invoke(ds, DRIVER_ID)
         ds.resolveDriver()
-        val dsUrls = JdbcConsoleRunContext.expandPackUrls(ds.classpathElements).toList()
+        val dsUrls = resolvedDriverUrls(driver, ds)
         assertTrue(
             "数据源 classpathElements 应非空（子进程 -Djdbc.classpath 的唯一来源），实际: $dsUrls",
             dsUrls.isNotEmpty(),
         )
         assertTrue("数据源 classpathElements 应含 $expectedJar，实际: $dsUrls", dsUrls.any { it.endsWith(expectedJar) })
+    }
+
+    private fun resolvedDriverUrls(driver: com.intellij.database.dataSource.DatabaseDriver,
+                                   source: LocalDataSource? = null): List<String> {
+        val legacy = JdbcConsoleRunContext::class.java.methods.singleOrNull {
+            it.name == "expandPackUrls" && it.parameterCount == 1
+        }
+        val values: Any = if (legacy != null) {
+            val owner = source ?: driver
+            val elements = owner.javaClass.getMethod("getClasspathElements").invoke(owner)
+            legacy.invoke(null, elements)
+        } else {
+            val loader = JdbcConsoleRunContext::class.java.classLoader
+            val type = Class.forName("com.intellij.database.dataSource.artifacts.DatabaseArtifactContext", false, loader)
+            val companion = type.getField("Companion").get(null)
+            val context = if (source == null) companion.javaClass.getMethod("getDefaultContext").invoke(companion)
+                else companion.javaClass.getMethod("getInstance", com.intellij.openapi.project.Project::class.java,
+                    LocalDataSource::class.java).invoke(companion, project, source)
+            val managerType = Class.forName("com.intellij.database.dataSource.DatabaseDriverClasspathManager", false, loader)
+            val factory = managerType.getField("Companion").get(null)
+            val manager = factory.javaClass.getMethod("getInstance", com.intellij.openapi.project.Project::class.java)
+                .invoke(factory, project)
+            val elements = managerType.getMethod("getClasspathElements",
+                com.intellij.database.dataSource.DatabaseDriver::class.java, type).invoke(manager, driver, context)
+            JdbcConsoleRunContext::class.java.getMethod("expandPackUrls", List::class.java, type)
+                .invoke(null, elements, context)
+        }
+        return (values as Iterable<*>).map { it as String }
     }
 
     /** T-M19/V178：真实 DatabaseTools 服务，不建连、不读取 demo 配置、不替换生产 hook。 */
