@@ -193,7 +193,7 @@ internal object IdeaSqlContextBridge {
         val valid = (dbDataSource.getMethod("isValid").invoke(value) as? Boolean) == true
         val config = dbDataSource.getMethod("getConnectionConfig").invoke(value)
         val url = config?.let {
-            val rawConfig = Class.forName("com.intellij.database.dataSource.RawConnectionConfig", false, loader)
+            val rawConfig = Class.forName("com.intellij.database.model.RawConnectionConfig", false, loader)
             rawConfig.getMethod("getUrl").invoke(it) as? String
         }
         return RawCandidate(id, name, url, languageId(language), valid)

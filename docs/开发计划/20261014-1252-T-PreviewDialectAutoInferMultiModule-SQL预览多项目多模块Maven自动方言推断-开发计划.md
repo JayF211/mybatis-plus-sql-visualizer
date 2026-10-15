@@ -373,6 +373,8 @@ mapOwnedFile(project, ownedVirtualFile, languageId)
 
 ## 十三、实施记录
 
+- 2026-10-16 T-M19/V178 非 UI 补验（独立 `t-m19-v178-nonui`，基线 `4c7ea2c3`）：不启动 runIde，不读 demo 私有数据源配置，使用既有 testDbDriverPipeline 的真实 DatabaseTools 无连接 fixture。实际发现并修复 `dbms=DM` 无平台枚举、sql.dialect InstanceBean 缺 `public static INSTANCE` 两项产品初始化错误；保留 DM 语言 ID，UNKNOWN 仅 Generic/SQL92 兼容，不能称原生达梦支持。真实非空候选另击中桥的 RawConnectionConfig 错包名（三版实际 owner 均 `com.intellij.database.model`），一行最小修复；撤修单项 **1/1/0/0**，diagnostic=ClassNotFoundException，已恢复。第六轮 fresh XML 为平台 **5/0/0/0**、模块 **5/0/0/0**；同命令 testFast 受既有隐式任务依赖校验未入场，不报整个命令绿。目录映射/覆盖/撤销后 SQL PSI 重解析、真实 UUID 重命名/改 URL/删除、断开态 session/console API、模块销毁已有 243 平台证据。243 的 getDataSourcesForResolve 实测不按 SqlResolveMappings.EMPTY 清候选，不能将 configuredScopePresent 当作 scope 已缩窄；该产品语义另列待核，不擅改决策顺序。三版精确候选 API 检查 243/253/262 均进程0，非三版服务运行通过。最终恢复复测及证据限制见 `docs/验收文档/20261016-T-M19-V178-真实DatabaseTools非UI补验-验收文档.md`。本条只回填本工作树，无全量/verify/UI/真库 Runner 结论。
+
 - 2026-10-14 12:52：初版立项，确认当前第一项目/第一数据源推断不适用于多项目多模块。
 - 2026-10-14 13:44：按用户“真智能、无需主动配置插件方言”的目标完成第二轮调研并重写方案。证据来源为 JetBrains IDEA 2026.2 官方文档、本机 IDEA 2026.2.3、缓存中的 2026.2.1/2025.3.5/2024.3.7.1 DatabaseTools 二进制反编译及当前仓库调用链。定案为“手动显式值/当前条目的精确事实 → 实际 SQL PSI 的 configured Resolution Scope + IDEA 有效 Dialect → 模块被动学习 → 项目候选共识”的渲染证据融合模式，并把执行目标单列为提交前一致性校验；默认 `ALL_DATA_SOURCES` 明确降为候选目录，不冒充用户绑定；模块绑定降为冲突修复工具；本轮未修改生产代码、未运行构建测试、未提交。
 - 2026-10-15 实施前提勘误：现有 `AgentEventAdapter` 将 URL 归约为脱敏库标，`LogSqlEntry`/自动保存/历史读回未保留完整 URL，旧历史不可能给 `EXACT`；同一路径命中多个模块时 `SourcePathResolver` 取首个也不能作为模块证据。新 URL 的凭据过滤与持久化格式属于另行授权事项，本轮先按缺失证据降级，不伪造精确来源。执行目标需在实际 Runner/活控制台确定后校验，`SqlExecutor.execute` 的 dataSource 参数当前未参与选择。

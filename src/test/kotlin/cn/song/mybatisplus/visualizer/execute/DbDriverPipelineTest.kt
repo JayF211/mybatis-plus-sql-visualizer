@@ -107,6 +107,7 @@ class DbDriverPipelineTest : BasePlatformTestCase() {
             com.intellij.openapi.application.WriteAction.run<RuntimeException> {
                 mappings.setMapping(directory, pg)
             }
+            com.intellij.testFramework.IndexingTestUtil.waitUntilIndexesAreReady(project)
             val inherited = cn.song.mybatisplus.visualizer.sql.IdeaSqlContextBridge.resolveDialect(project, file.virtualFile)
             assertEquals(cn.song.mybatisplus.visualizer.sql.IdeaSqlContextBridge.Availability.AVAILABLE, inherited.availability)
             assertEquals("PostgreSQL", inherited.effectiveDialectId)
@@ -114,6 +115,7 @@ class DbDriverPipelineTest : BasePlatformTestCase() {
             com.intellij.openapi.application.WriteAction.run<RuntimeException> {
                 mappings.setMapping(file.virtualFile, mysql)
             }
+            com.intellij.testFramework.IndexingTestUtil.waitUntilIndexesAreReady(project)
             val overridden = cn.song.mybatisplus.visualizer.sql.IdeaSqlContextBridge.resolveDialect(project, file.virtualFile)
             assertEquals("MySQL", overridden.effectiveDialectId)
             assertEquals("MySQL", overridden.immediateDialectId)
@@ -123,6 +125,7 @@ class DbDriverPipelineTest : BasePlatformTestCase() {
             com.intellij.openapi.application.WriteAction.run<RuntimeException> {
                 mappings.setMapping(file.virtualFile, null)
             }
+            com.intellij.testFramework.IndexingTestUtil.waitUntilIndexesAreReady(project)
             assertEquals("PostgreSQL", cn.song.mybatisplus.visualizer.sql.IdeaSqlContextBridge
                 .resolveDialect(project, file.virtualFile).effectiveDialectId)
             assertEquals("PostgreSQL", com.intellij.psi.PsiManager.getInstance(project)
@@ -167,10 +170,17 @@ class DbDriverPipelineTest : BasePlatformTestCase() {
             com.intellij.openapi.application.WriteAction.run<RuntimeException> {
                 scopes.setMapping(psi.virtualFile, com.intellij.database.util.TreePattern.EMPTY)
             }
-            val emptyScope = cn.song.mybatisplus.visualizer.sql.IdeaSqlContextBridge.resolve(project, psi, psi.virtualFile)
+            com.intellij.testFramework.PlatformTestUtil.dispatchAllInvocationEventsInIdeEventQueue()
+            com.intellij.testFramework.IndexingTestUtil.waitUntilIndexesAreReady(project)
+            val scopedPsi = com.intellij.psi.PsiManager.getInstance(project).findFile(scopeFile)!!
+            val emptyScope = cn.song.mybatisplus.visualizer.sql.IdeaSqlContextBridge.resolve(project, scopedPsi, scopeFile)
             assertEquals(cn.song.mybatisplus.visualizer.sql.IdeaSqlContextBridge.ScopeOrigin.CONFIGURED_RESOLUTION,
                 emptyScope.scopeOrigin)
-            assertTrue(emptyScope.finalCandidates.isEmpty())
+            // 243 getDataSourcesForResolve 只按有效方言筛选，不读取 SqlResolveMappings。
+            // 不把 EMPTY scope 误当候选清空；桥必须忠实保留平台实际返回值。
+            assertEquals(com.intellij.sql.dialects.SqlDataSourceMappings.getInstance(project)
+                .getDataSources(scopedPsi).map { it.uniqueId }, emptyScope.finalCandidates.map { it.stableId })
+            assertEquals(listOf(ds.uniqueId), emptyScope.finalCandidates.map { it.stableId })
             com.intellij.openapi.application.WriteAction.run<RuntimeException> {
                 scopes.setMapping(psi.virtualFile, null)
             }
