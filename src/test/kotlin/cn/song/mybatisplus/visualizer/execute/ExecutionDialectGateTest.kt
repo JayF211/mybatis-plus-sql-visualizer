@@ -62,6 +62,13 @@ class ExecutionDialectGateTest {
     }
 
     @Test
+    fun `exact JDBC vendor wins over broader platform language family`() {
+        assertEquals("OceanBase", ExecutionDialectGate.targetDialectName(
+            "jdbc:oceanbase://localhost/app", "MySQL"))
+        assertEquals("PostgreSQL", ExecutionDialectGate.targetDialectName(null, "PostgreSQL"))
+    }
+
+    @Test
     fun `session seam resolves exact selected datasource without runner display name`() {
         class Ds(private val url: String) { @Suppress("unused") fun getUrl(): String = url }
         val session = Any()

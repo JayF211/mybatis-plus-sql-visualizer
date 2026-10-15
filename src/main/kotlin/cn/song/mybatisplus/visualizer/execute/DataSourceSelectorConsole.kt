@@ -527,6 +527,13 @@ internal fun DataSourceSelector.executeOnConsole(
         )
         return
     }
+    // 只有真正通过提交前闸的模块/目标才学习；预览 prepare、冲突或取消均不写绑定。
+    val moduleKey = dialectGateRequest?.moduleKey
+    val dataSourceId = actualTarget?.stableId
+    if (!moduleKey.isNullOrBlank() && !dataSourceId.isNullOrBlank()) {
+        cn.song.mybatisplus.visualizer.sql.ModuleDataSourceBindingStore.getInstance(project)
+            .remember(moduleKey, dataSourceId)
+    }
     // O-64/T-RollbackIdentityParse：identity 包装产物整批直跑——覆写本次执行的 ExecOption
     // （只造**副本**传下去，prepared/shared 缓存与用户全局设置一概不动），弹层不再出现、
     // 整批（SET…ON + INSERT + SET…OFF）全部执行，即「Statements 默认全选」的平台实现杠杆。

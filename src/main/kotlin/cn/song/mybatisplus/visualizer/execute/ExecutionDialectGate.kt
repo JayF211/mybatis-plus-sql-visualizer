@@ -23,6 +23,7 @@ object ExecutionDialectGate {
         val intent: Intent,
         val canLosslesslyRerender: Boolean = false,
         val userTextUntouched: Boolean = false,
+        val moduleKey: String? = null,
     )
 
     data class Verdict(
@@ -100,8 +101,8 @@ object ExecutionDialectGate {
     fun fromDataSource(dataSource: Any): Target {
         val url = ExecDialectRouting.dataSourceUrl(dataSource)
         val platformId = ExecDialectRouting.platformDialectId(dataSource)
-        val dialectName = IdeaSqlContextBridge.pluginDialectName(platformId)
-            ?: UrlSubprotocolDialects.dialectName(url)
+        // JDBC 子协议是当前目标的精确厂商事实；平台 Language 可能只是 MySQL/PG 家族兜底。
+        val dialectName = targetDialectName(url, platformId)
         return Target(
             dataSource = dataSource,
             stableId = DataSourceSettings.getUniqueId(dataSource),
@@ -110,6 +111,10 @@ object ExecutionDialectGate {
             platformLanguageId = platformId,
         )
     }
+
+    internal fun targetDialectName(jdbcUrl: String?, platformLanguageId: String?): String? =
+        UrlSubprotocolDialects.dialectName(jdbcUrl)
+            ?: IdeaSqlContextBridge.pluginDialectName(platformLanguageId)
 
     private fun known(name: String?): String? = name?.let { candidate ->
         DialectRegistry.dialects.firstOrNull { it.name.equals(candidate, ignoreCase = true) }?.name
