@@ -62,9 +62,12 @@ object SqlLogFileReader {
         private var bytes = 0
         private var count = 0
         fun offer(line: String) {
-            if (!line.startsWith(REVISION_PREFIX) || line.length > MAX_REVISION_PAYLOAD + 150 ||
-                count >= MAX_REVISIONS || bytes + line.length > MAX_REVISION_TOTAL) return
-            count++; bytes += line.length
+            if (!line.startsWith(REVISION_PREFIX)) return
+            // 文件流把超长修订折叠成裸前缀；直接传入完整字符串也按同一前缀成本计费。
+            val chargedLength = if (line.length > MAX_REVISION_PAYLOAD + 150) REVISION_PREFIX.length else line.length
+            if (count >= MAX_REVISIONS || bytes + chargedLength > MAX_REVISION_TOTAL) return
+            count++; bytes += chargedLength
+            if (line.length > MAX_REVISION_PAYLOAD + 150) return
             runCatching {
                 val parts = line.removePrefix(REVISION_PREFIX).removeSuffix(PD_SUFFIX).split(' ', limit = 3)
                 if (parts.size != 3 || !ID_REGEX.matches(parts[0]) || !parts[1].matches(Regex("[0-9a-f]{64}")) ||

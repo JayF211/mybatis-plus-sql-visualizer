@@ -130,9 +130,8 @@ class SqlLogAutoSaver(
                 check(fileKey(block.file) == block.key)
                 if (currentFile == block.file) writer?.flush()
                 // Windows 创建时间可能被文件系统隧道复用；必须再找到本实例写出的随机标识。
-                check(block.file.bufferedReader().useLines { lines -> lines.any { it == "-- pd: o147-id: ${block.id} --" } })
-                val payload = java.util.Base64.getEncoder().encodeToString(renderEntry(merged).toByteArray(Charsets.UTF_8))
-                check(payload.length <= SqlLogFileReader.MAX_REVISION_PAYLOAD)
+                check(block.file.bufferedReader().use { containsExactLine(it, "-- pd: o147-id: ${block.id} --") })
+                val payload = revisionPayload(merged)
                 val line = "\n-- pd: o147-revision: ${block.id} ${block.identity} $payload --\n"
                 java.nio.channels.FileChannel.open(block.file.toPath(), StandardOpenOption.WRITE,
                     StandardOpenOption.APPEND, java.nio.file.LinkOption.NOFOLLOW_LINKS).use { channel ->
@@ -149,6 +148,55 @@ class SqlLogAutoSaver(
                 LOG.warn("自动保存历史 SQL：融合修订未追加，保留原历史")
             }
         }
+    }
+
+    /** 固定内存逐字符比较；不论外部行多长均不累积，CRLF/LF/EOF 都支持。 */
+    internal fun containsExactLine(reader: java.io.Reader, expected: String): Boolean {
+        var index = 0
+        var matches = true
+        var cr = false
+        while (true) {
+            val c = reader.read()
+            if (c == -1 || c == '\n'.code) {
+                if (matches && index == expected.length) return true
+                if (c == -1) return false
+                index = 0; matches = true; cr = false
+            } else if (matches) {
+                if (index < expected.length && c == expected[index].code && !cr) index++
+                else if (index == expected.length && c == '\r'.code && !cr) cr = true
+                else matches = false
+            }
+        }
+    }
+
+    internal class RevisionLimitExceeded : java.io.IOException("history revision exceeds byte budget")
+
+    /** Base64最终输出硬封顶；超额在流写时抛出，绝不先生成完整payload。 */
+    internal class RevisionOutput(private val limit: Int) : java.io.OutputStream() {
+        private val data = java.io.ByteArrayOutputStream(minOf(limit, 1024))
+        val size: Int get() = data.size()
+        override fun write(b: Int) {
+            if (size >= limit) throw RevisionLimitExceeded()
+            data.write(b)
+        }
+        override fun write(b: ByteArray, off: Int, len: Int) {
+            if (len > limit - size) throw RevisionLimitExceeded()
+            data.write(b, off, len)
+        }
+        fun text(): String = data.toString("US-ASCII")
+    }
+
+    internal fun revisionPayload(entry: LogSqlEntry): String {
+        val output = RevisionOutput(SqlLogFileReader.MAX_REVISION_PAYLOAD)
+        writeRevision(entry, output)
+        return output.text()
+    }
+
+    internal fun writeRevision(entry: LogSqlEntry, output: java.io.OutputStream) {
+        val encoded = java.util.Base64.getEncoder().wrap(output)
+        val w = SqlLogParamCodec.ChunkedWriter(java.io.OutputStreamWriter(encoded, Charsets.UTF_8))
+        writeEntryText(w, entry, null)
+        w.close()
     }
 
     /** 本轮已调度标志（幂等调度——风暴期 N 条投递 = 1 个写任务）。 */
@@ -428,20 +476,18 @@ class SqlLogAutoSaver(
     private fun writeEntry(w: BufferedWriter, entry: LogSqlEntry) {
         runCatching {
             val id = if (entry.captureProvenance != CaptureProvenance.UNKNOWN) java.util.UUID.randomUUID().toString() else null
-            w.write(renderEntry(entry, id))
+            writeEntryText(w, entry, id)
             if (id != null) currentFile?.let { file ->
                 fileKey(file)?.let { key -> remember(entry, WrittenBlock(file, id, key, SqlLogParamCodec.historyIdentity(entry))) }
             }
         }.onFailure { LOG.warn("自动保存历史 SQL：写入失败", it) }
     }
 
-    private fun renderEntry(entry: LogSqlEntry, historyId: String? = null): String {
-        val text = java.io.StringWriter()
-        val w = BufferedWriter(text)
+    private fun writeEntryText(w: java.io.Writer, entry: LogSqlEntry, historyId: String?) {
             // 头部：源码位置 | 耗时 | 时间戳 | 日志原始时间（可选）
-            val source = entry.sourceFile?.let { file ->
-                if (entry.sourceLine > 0) "$file:${entry.sourceLine}" else file
-            } ?: "unknown"
+            w.write("-- source: ")
+            w.write(entry.sourceFile ?: "unknown")
+            if (entry.sourceFile != null && entry.sourceLine > 0) w.write(":${entry.sourceLine}")
             val duration = entry.executionTimeMs?.let { "${it}ms" } ?: "—"
             // T-Perf-12：SimpleDateFormat（每条新建/线程缓存）→ DateTimeFormatter 常量（不可变线程安全）
             val timestamp = TIMESTAMP_FORMATTER.format(
@@ -450,8 +496,9 @@ class SqlLogAutoSaver(
             // 日志原始时间（解析到才写，向后兼容旧文件）
             val logTimePart = entry.logTimestamp?.let { " | logTime: $it" } ?: ""
             // T-AgentDialectLoop：目标库显示名（agent 通道才有，解析到才写）
-            val dbPart = entry.databaseName?.let { " | db: $it" } ?: ""
-            w.write("-- source: $source | time: $duration | $timestamp$logTimePart$dbPart --\n")
+            w.write(" | time: $duration | $timestamp$logTimePart")
+            entry.databaseName?.let { w.write(" | db: "); w.write(it) }
+            w.write(" --\n")
             // T-HistParam F1：参数持久化——params 非空或 rawSql 含 `?`（绑定行缺失未识别条目）时，
             // 在头部下写独立 Base64 注释行（正文保持可执行 restoredSql；读端 SqlLogFileReader 探测解码）。
             // M56 T-M56-00：扩展字段（mapperStatement/errorText/requestTag/updateCount）任一在场也写
@@ -468,13 +515,14 @@ class SqlLogAutoSaver(
                 entry.actualSql != null || entry.captureProvenance != CaptureProvenance.UNKNOWN ||
                 entry.source == SqlSource.MCP || entry.source == SqlSource.SHARDINGSPHERE
             ) {
-                w.write("-- pd: ${SqlLogParamCodec.encodeEntry(entry)} --\n")
+                w.write("-- pd: ")
+                SqlLogParamCodec.writeEncodedEntry(entry, w)
+                w.write(" --\n")
             }
             historyId?.let { w.write("-- pd: o147-id: $it --\n") }
-            w.write(withTerminator(entry.restoredSql))
+            w.write(entry.restoredSql)
+            if (entry.restoredSql.isNotEmpty() && !entry.restoredSql.endsWith(";")) w.write(";")
             w.write("\n\n")
-        w.flush()
-        return text.toString()
     }
 
     /**

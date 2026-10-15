@@ -250,6 +250,89 @@ class O147HistoryUpgradeTest {
             SqlLogFileReader.readFromFile(File(dir, "test.sql")).single().captureProvenance)
     }
 
+    @Test fun oversizedRevisionBudgetAgreesAcrossAllReaders() {
+        val dir = dir(); val saver = SqlLogAutoSaver(); saver.configure(dir.path, "test.sql", null)
+        val old = entry(); saver.write(old); saver.submitMerge(old, merged(old)); saver.close()
+        val file = File(dir, "test.sql")
+        val lines = file.readLines()
+        val revision = lines.single { it.startsWith("-- pd: o147-revision:") }
+        val original = lines.filterNot { it.startsWith("-- pd: o147-revision:") }.joinToString("\n", postfix = "\n")
+        val oversized = "-- pd: o147-revision: " + "A".repeat(SqlLogFileReader.MAX_REVISION_PAYLOAD + 500) + "\n"
+        file.bufferedWriter().use { out ->
+            out.write(original)
+            repeat(SqlLogFileReader.MAX_REVISIONS) { out.write(oversized) }
+            out.write(revision)
+        }
+        val loaded = SqlLogFileReader.readFromFile(file)
+        val streamed = mutableListOf<LogSqlEntry>()
+        SqlLogFileReader.forEachEntry(file) { streamed += it; true }
+        assertEquals(1, SqlLogFileReader.countInFile(file))
+        assertEquals(CaptureProvenance.CONSOLE_BRIDGE, loaded.single().captureProvenance)
+        assertEquals(loaded, streamed)
+        // Sequence form exercises the same counterexample without materializing a 129 MiB String.
+        val sequenceResult = SqlLogFileReader.parseContent(
+            original.lineSequence() + (0 until SqlLogFileReader.MAX_REVISIONS).asSequence().map { oversized.trimEnd() } + sequenceOf(revision),
+        )
+        assertEquals(loaded, sequenceResult)
+        // JDK compact UTF-8 read avoids Kotlin readText's full UTF-16 intermediate on this 129 MiB fixture.
+        assertEquals(loaded, SqlLogFileReader.parseContent(Files.readString(file.toPath())))
+    }
+
+    @Test fun uuidSearchUsesFixedMemoryEvenForHugeExternalLine() {
+        val saver = SqlLogAutoSaver()
+        val expected = "-- pd: o147-id: 00000000-0000-0000-0000-000000000147 --"
+        val input = object : java.io.Reader() {
+            var remaining = 4_000_000
+            val suffix = ("\n" + expected + "\r\n").reader()
+            override fun read(): Int = if (remaining-- > 0) 'x'.code else suffix.read()
+            override fun read(cbuf: CharArray, off: Int, len: Int): Int {
+                check(len <= 1024) { "unbounded line allocation" }
+                val c = read(); if (c < 0) return -1; cbuf[off] = c.toChar(); return 1
+            }
+            override fun close() = Unit
+        }
+        assertTrue(saver.containsExactLine(input, expected))
+        assertFalse(saver.containsExactLine((expected + "x\n").reader(), expected))
+        assertTrue(saver.containsExactLine(expected.reader(), expected))
+    }
+
+    @Test fun hugeMetadataAbortsEncodingBeforeTraversingRemainingPayload() {
+        val saver = SqlLogAutoSaver()
+        var visited = 0
+        val candidates = object : AbstractList<Pair<String, Int>>() {
+            override val size = 1_000_000
+            override fun get(index: Int): Pair<String, Int> {
+                visited++
+                check(visited < 5000) { "serialized far beyond revision budget" }
+                return "Synthetic".repeat(32) to index
+            }
+        }
+        val output = SqlLogAutoSaver.RevisionOutput(SqlLogFileReader.MAX_REVISION_PAYLOAD)
+        try {
+            saver.writeRevision(merged(entry()).copy(sourceCandidates = candidates), output)
+            fail("huge metadata must exceed bounded output")
+        } catch (_: SqlLogAutoSaver.RevisionLimitExceeded) { }
+        assertTrue(visited in 1..4999)
+        assertTrue(output.size <= SqlLogFileReader.MAX_REVISION_PAYLOAD)
+        val dir = dir(); saver.configure(dir.path, "test.sql", null)
+        val old = entry(); saver.write(old)
+        val file = File(dir, "test.sql"); val original = file.readBytes()
+        saver.submitMerge(old, merged(old).copy(stackDigest = "huge".repeat(1_000_000)))
+        saver.close()
+        assertArrayEquals(original, file.readBytes())
+        assertEquals(CaptureProvenance.CONSOLE_BRIDGE, SqlLogFileReader.readFromFile(file).single().captureProvenance)
+    }
+
+    @Test fun normalSaveDoesNotTruncateLargeSqlOrMetadata() {
+        val dir = dir(); val saver = SqlLogAutoSaver(); saver.configure(dir.path, "test.sql", null)
+        val sql = "SELECT '" + "synthetic".repeat(20000) + "'"
+        val original = entry(sql).copy(stackDigest = "stack".repeat(20000))
+        saver.write(original); saver.close()
+        val read = SqlLogFileReader.readFromFile(File(dir, "test.sql")).single()
+        assertEquals(sql, read.rawSql); assertEquals(sql, read.restoredSql)
+        assertEquals(original.stackDigest, read.stackDigest)
+    }
+
     @Test fun bareProvenanceWithoutParametersIsPersisted() {
         val dir = dir(); val saver = SqlLogAutoSaver(); saver.configure(dir.path, "test.sql", null)
         saver.write(entry()); saver.close()
