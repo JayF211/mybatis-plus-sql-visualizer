@@ -1008,6 +1008,16 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "手动模式语义不变对照/saveOrUpdate 批量预览 upsert+反引号不受残值污染）；" +
                     "私有 leakStaleManualDialect 为污染动作夹具非判定函数",
             ),
+            // ---- T-PrewarmWilDeadlock：同步 VFS refresh × WIRA 死锁守卫（2026-10-15） ----
+            GuardEntry(
+                "convention/SyncRefreshWriteIntentGuardTest.kt",
+                listOf(
+                    DecisionFn("syncRefreshInsideWiraOffenders", FnKind.VIOLATIONS),
+                ),
+                "同步 VFS refresh × WriteIntentReadAction 死锁守卫：BGT 持 WIL 等刷新会话（会话推进需 " +
+                    "WIL/EDT）自锁，2026.2 真机 threadDump 全 IDE 冻结实证；白名单仅 EDT 冷路径 " +
+                    "createTempPsiFile。判定内核配同文件合成样本自证（BGT 站点必抓/白名单不报/裸调不报）。",
+            ),
             // ---- 本元守卫自身 ----
             GuardEntry(
                 "convention/GuardSelfTestCoverageMetaGuardTest.kt",

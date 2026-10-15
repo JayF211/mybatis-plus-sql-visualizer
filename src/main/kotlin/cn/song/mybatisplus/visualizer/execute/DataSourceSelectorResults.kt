@@ -1314,7 +1314,11 @@ internal fun DataSourceSelector.projectExecFile(project: Project, sql: String, n
 
 internal fun DataSourceSelector.prewarmExecTempFileInner(project: Project, sql: String, LOG: com.intellij.openapi.diagnostic.Logger) {
     lastTempFileFailure = null
-    // T-ExecCopyFix F2b：refresh 段 WriteIntentReadAction（BGT 上 WIRA 合法；与 EDT 冷路径同款包装）
+    // T-PrewarmWilDeadlock：下方 refresh 段**必须裸调**（BGT 严禁 WIRA×同步 refresh）——T-ExecSlowOps
+    // 曾自 EDT 冷路径同款复制 WIRA 包装，2026.2 真机（threadDump-20261015-181620）实证自锁：本线程
+    // 持写意向锁阻塞在 RefreshSessionImpl.waitFor，而会话推进需 WIL/EDT，互等成环（EDT 再被预览
+    // 编辑器 mousePressed 排队等 WIL 即扩大为全 IDE「not responding」）。BGT 裸调即平台合法形态
+    // （下方 pre-refresh 的 findFileByIoFile 同款；EDT 冷路径 createTempPsiFile 的 WIRA 语境不同，须保留）。
     val ioFile = runCatching { projectExecFile(project, sql) }.getOrElse { e ->
         // T-FatalPassthrough T-FP-02b（独立复核阻断 2）：fatal 上浮（预热跑在 BGT，透传由平台
         // 记录现场）；非 fatal 仍返回（writeFile 失败 → 跳过预热，语义逐字不变）。
@@ -1336,10 +1340,9 @@ internal fun DataSourceSelector.prewarmExecTempFileInner(project: Project, sql: 
         LOG.warn("[M36] exec prewarm pre-refresh converge FAILED: ${e.javaClass.simpleName}: ${e.message}")
     }
     val vf = try {
-        com.intellij.openapi.application.WriteIntentReadAction
-            .compute<com.intellij.openapi.vfs.VirtualFile?> {
-                LocalFileSystem.getInstance().refreshAndFindFileByIoFile(ioFile)
-            }
+        // T-PrewarmWilDeadlock：裸调（见本方法首部注释）——262 平台 BGT 持 WIL 时同步 refresh
+        // 会话永不可能完成（自锁），裸调的异步会话在 EDT 健康时正常推进
+        LocalFileSystem.getInstance().refreshAndFindFileByIoFile(ioFile)
     } catch (e: Throwable) {
         if (FatalErrors.isFatal(e)) throw e // T-FP-02：fatal 透传（prewarm 跑在 BGT，透传由平台记录现场）
         LOG.warn("[M36] exec prewarm refreshVfs failed: ${e.javaClass.simpleName}: ${e.message}")

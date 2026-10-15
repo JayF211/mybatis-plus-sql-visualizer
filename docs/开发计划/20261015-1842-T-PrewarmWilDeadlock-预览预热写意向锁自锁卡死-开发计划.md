@@ -50,7 +50,9 @@ WIL 时刷新会话在调用线程同步处理）。随后 T-ExecSlowOps（1198f
 - 前提 C：用户点击不是死锁必要条件——756 持 WIL 等「需要 WIL/EDT 的会话」本身即环；点击只是让 EDT
   排队等锁、亮出 not responding。修复后即使无点击，预热链也应正常走完。留真机复验确认。
 
-## 4. 实施方案（单点最小修复）
+## 4. 实施方案
+
+**W1（根因，单点最小修复）**
 
 1. `execute/DataSourceSelectorResults.kt` `prewarmExecTempFileInner`：
    - refresh 段摘除 `WriteIntentReadAction.compute` 包装，改裸调 `LocalFileSystem.getInstance()
@@ -61,6 +63,23 @@ WIL 时刷新会话在调用线程同步处理）。随后 T-ExecSlowOps（1198f
 2. 全仓 WIRA 站点复核后**明确不动**：`createTempPsiFile`（EDT 冷路径）、`DataSourceSelectorConsole`
    attachConsole（EDT、无 sync refresh）、`DatabaseConsoleLauncher.createTempFile`（EDT 裸调）、
    `SqlPreviewPanelEditorLifecycle.prewarmPreviewTempFile`（BGT 裸调，本事件中的陪葬者非根因）。
+
+**W2（有界预热兜底，用户 2026-10-15 当日追加：超时自动终止）**
+
+W1 摘环后本路径不可能再自锁，但「同步 refresh/readAction/EDT 派发等平台等待因其他原因挂死」这类
+同族风险仍存在。预热是投机性增强（previewAsync 侧 fire-and-forget，弹窗冷路径本就能按需重建），
+故给 exec 预热整链加 30 秒预算：
+
+- `execute/DataSourceSelector.kt` `prewarmExecTempFile`：真实链 `prewarmExecTempFileInner` 改经
+  `AppExecutorUtil` 独立执行 + `future.get(30s)` 预算等待；超时 `cancel(true)`（中断，
+  `RefreshSessionImpl.waitFor` 内部的 runBlockingMaybeCancellable 通常响应中断）放弃本轮并 WARN，
+  **在途标记在 finally 照常释放**——否则一次挂死会让 `execPrewarmInFlight` 恒 true，后续预热全部
+  skip，预热能力静默报废；
+- ExecutionException 拆包：fatal 原样上浮（T-FatalPassthrough 语义与直跑一致），非 fatal 仅 warn；
+- 边界声明：cancel 若因平台内部不可中断而未真正唤醒滞留线程，业务也已脱困（不再等待、标记已释放），
+  滞留线程无 WIL 在身、无 EDT 阻塞面，仅占一条池线程；
+- 面板侧预热（`prewarmPreviewTempFile`）不加同款预算：其消费侧已有 `PrewarmAwait` 预算超时降级，
+  生产者滞留仅占池线程不可见面。
 
 ## 5. 守卫测试
 
@@ -82,8 +101,28 @@ WIL 时刷新会话在调用线程同步处理）。随后 T-ExecSlowOps（1198f
 
 - 不改预览面板路径的裸调 refresh（平台合法形态）；
 - 不做「findFileByIoFile 命中即跳过 sync refresh」之类的优化（本任务的锅是 WIL 自锁，不是 refresh 慢）；
+- 不给面板侧预热生产者加预算（消费侧 PrewarmAwait 已有界）；
 - K2J 端口分支按既有 T-SyncK2JMaster 机制在下一轮同步，不在本任务内移植。
 
 ## 实施记录
 
-（回填本工作树副本）
+2026-10-15 当轮完成，W1+W2+守卫全部落地（工作树 mybatis-plus-sql-visualizer-prewarm-wil）：
+
+- W1：`DataSourceSelectorResults.kt` `prewarmExecTempFileInner` refresh 段摘除 WIRA 包装改裸调，
+  首部注释改写为死锁说明（引用 threadDump-20261015-181620）。
+- W2：`DataSourceSelector.kt` `prewarmExecTempFile` 改独立执行 + 30s 预算（`EXEC_PREWARM_BUDGET_MS`），
+  超时 cancel+放弃+照常释放在途标记；ExecutionException 拆包 fatal 透传/非 fatal warn；
+  新增常量紧邻 `execPrewarmInFlight`。中途一次编译红：`AppExecutorUtil` 包名误写
+  `com.intellij.util.`（正解 `com.intellij.util.concurrency.`，与 IdeErrorReportSubmitter 既有用法对齐后过）。
+- 守卫：新增 `convention/SyncRefreshWriteIntentGuardTest`（7 用例：规则一/二/三 + 4 条合成样本自证），
+  判定内核 `syncRefreshInsideWiraOffenders` 已登记元守卫 GUARD_CLASSES。
+- 验证读数（`test --tests` 定向，`--no-configuration-cache`）：
+  - 修复态：SyncRefreshWriteIntentGuardTest **7/0/0**、GuardSelfTestCoverageMetaGuardTest **8/0/0**、
+    ExecDocSyncTest **14/0/0**；
+  - 反向验证（WIRA 装回预热链）：同 7 用例 **2 failures**——恰规则一 + 规则三（规则三精确报
+    DataSourceSelectorResults.kt:1218），其余 5 用例（含规则二与全部自证）保持绿，判别力精确；
+  - 还原后复跑：7/0/0 + 8/0/0 绿（读数落在将要提交的确切树上）。
+- 临时沙盒（MPSV-PrewarmWil，build.gradle.kts 临时行）已按协议还原，未入库。
+- 待真机复验（用户侧，262）：冷启动 IDE 首开预览弹窗应正常出 SQL、不再 not responding；
+  极端挂死场景 30s 后 WARN 放弃（日志关键字 `[M36] exec prewarm exceeded`）。
+- 未做（本计划 §7 非目标）：面板预热生产者预算、K2J 移植（下一轮 T-SyncK2JMaster 同步）。
