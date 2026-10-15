@@ -104,10 +104,14 @@ object XmlPreviewService {
             return emptyResult(e.message ?: "SQL 脚本解析失败。")
         }
         val result = toResult(model, staticWarnings, entityContext).let { preview ->
-            if (project == null) preview else preview.copy(
-                renderedDialect = sourceContext?.takeIf { it.project == project }
-                    ?.let(DialectRegistry::effective) ?: DialectRegistry.effective(project),
-            )
+            if (project == null) preview else {
+                val decision = sourceContext?.takeIf { it.project == project }
+                    ?.let { DialectRegistry.decision(it) } ?: DialectRegistry.decision(project)
+                preview.copy(
+                    renderedDialect = DialectRegistry.byName(decision.dialectName),
+                    dialectDecision = decision,
+                )
+            }
         }
         val ref = parsedRef ?: return result
 

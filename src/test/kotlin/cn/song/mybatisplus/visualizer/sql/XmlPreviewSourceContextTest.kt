@@ -108,7 +108,11 @@ class XmlPreviewSourceContextTest : BasePlatformTestCase() {
             val context = XmlPreviewService.resolveSourceContext(file, statement(file, id))
             assertNotNull("$id 应命中当前语句的实际注入", context.sqlPsiFile)
             assertEquals(DialectDecisionEngine.Source.IDEA_PROVIDER, DialectRegistry.decision(context).source)
-            assertEquals(dialect, XmlPreviewService.preview(file.text, id, project, sourceContext = context).renderedDialect?.name)
+            val result = XmlPreviewService.preview(file.text, id, project, sourceContext = context)
+            assertEquals(dialect, result.renderedDialect?.name)
+            assertEquals(DialectDecisionEngine.Source.IDEA_PROVIDER, result.dialectDecision?.source)
+            assertEquals(listOf(dialect), result.dialectDecision?.dataSourceIds)
+            assertFalse("XML 证据快照不得持久化 JDBC URL", result.dialectDecision.toString().contains("jdbc:"))
         }
     }
 
