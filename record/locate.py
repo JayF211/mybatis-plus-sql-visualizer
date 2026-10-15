@@ -17,9 +17,10 @@
   - `anchor.py`  —— **图像锚点**：把目标控件截成小模板，`find()`/`click_anchor()` 用
     `cv2.matchTemplate`（灰度 + 多尺度）在屏上找回来。零 IDE 侧改动，**立即可用**；
     注意：需要 `opencv-python`（本机原先没装，`pyautogui.locateCenterOnScreen(confidence=)` 也因此一直不可用）。
-  - `robot.py`   —— **组件树定位**：直连 IDE 内 robot-server 的 HTTP/JSON（`POST /xpath/component`），
-    按 XPath/类名/文本找到 Swing 组件，**服务端直接给出该组件的屏幕矩形**，再交给 pyautogui 点。
-    精确但需先给沙盒装上 `robot-server` 插件（装法与端口见该模块 docstring）。
+  - `robot.py`   —— **组件树定位**：直连 IDE 内 robot-server 的 HTTP/JSON（`POST /xpath/components`），
+    按 XPath/类名/文本找 Swing 组件；返回的 x/y 是**父组件内相对坐标**，沿祖先链求和成
+    屏幕物理坐标后才交给 pyautogui。已用 2026.2.1 真机切换「SQL 历史」页签验证；
+    装法与端口见该模块 docstring。
 
 选型与实测对比见 `docs/调研报告/20261013-2130-演示录制点击定位提效工具调研-调研报告.md`。
 """

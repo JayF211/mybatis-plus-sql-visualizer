@@ -43,6 +43,17 @@ class SqlLogPanelTypePopupToggleTest : BasePlatformTestCase() {
 
     private fun label(key: String) = MpSqlVisualizerBundle.message(key)
 
+    /**
+     * 弹窗内**类型**勾选框（按组件树收集后剔除「只看慢查询」——那是另一条过滤轴，
+     * 2026-10-14 用户要求补入本弹窗，不计入「每类型一个勾选框」的契约）。
+     */
+    private fun typeCheckBoxes(panel: SqlLogPanel): List<javax.swing.JCheckBox> {
+        val content = panel.buildTypeFilterContentForTest()
+        // 构建后读取「只看慢查询」实例：该字段每次构建都会换成新实例，必须先建后取再按身份剔除。
+        val slowOnly = panel.slowOnlyCheckBoxForTest
+        return collectCheckBoxes(content).filter { it !== slowOnly }
+    }
+
     private fun allTypes() = FILTERABLE_TYPES.toSet()
 
     fun test初始全勾_切换按钮应为全不选文案() {
@@ -83,7 +94,11 @@ class SqlLogPanelTypePopupToggleTest : BasePlatformTestCase() {
         try {
             val content = panel.buildTypeFilterContentForTest()
             val toggle = panel.typePopupToggleButtonForTest!!
-            val checkBoxes = collectCheckBoxes(content)
+            val all = collectCheckBoxes(content)
+            val slowOnly = panel.slowOnlyCheckBoxForTest
+            assertNotNull("弹窗内应含「只看慢查询」勾选框（另一条过滤轴）", slowOnly)
+            assertTrue("「只看慢查询」勾选框应在弹窗组件树内", all.any { it === slowOnly })
+            val checkBoxes = all.filter { it !== slowOnly }
             assertEquals("弹窗内应构建全部可筛选类型勾选框", FILTERABLE_TYPES.size, checkBoxes.size)
 
             // 取消一个类型 → 非全勾 → 文案翻「全选」
@@ -112,9 +127,9 @@ class SqlLogPanelTypePopupToggleTest : BasePlatformTestCase() {
             waitForEdt()
             assertEquals(label("log.filter.all"), panel.typeFilterButtonForTest.text)
             assertEquals(label("log.filter.selectNone"), toggle.text)
-            // 弹窗内勾选框同步填满（activeFilter 回写的镜像）
-            val checkBoxes = collectCheckBoxes(panel.buildTypeFilterContentForTest())
-            assertTrue("填满后弹窗勾选框应全部选中", checkBoxes.all { it.isSelected })
+            // 弹窗内类型勾选框同步填满（activeFilter 回写的镜像；「只看慢查询」不参与本契约）
+            val checkBoxes = typeCheckBoxes(panel)
+            assertTrue("填满后弹窗类型勾选框应全部选中", checkBoxes.all { it.isSelected })
         } finally {
             panel.dispose()
         }

@@ -6,6 +6,7 @@ import com.intellij.psi.tree.IElementType
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -405,6 +406,28 @@ class SqlSyntaxHighlighterTest {
                     assertTrue("${field.name} should have highlight", key.isNotEmpty())
                 }
             }
+    }
+
+    @Test
+    fun testEightTokensShareCanonicalKeysAndPlatformFallbacks() {
+        val keys = listOf(
+            SqlTokenTypes.KEYWORD to SqlHighlightColors.KEYWORD,
+            SqlTokenTypes.TABLE to SqlHighlightColors.TABLE,
+            SqlTokenTypes.IDENTIFIER to SqlHighlightColors.IDENTIFIER,
+            SqlTokenTypes.STRING to SqlHighlightColors.STRING,
+            SqlTokenTypes.NUMBER to SqlHighlightColors.NUMBER,
+            SqlTokenTypes.COMMENT to SqlHighlightColors.COMMENT,
+            SqlTokenTypes.OPERATOR to SqlHighlightColors.OPERATOR,
+            SqlTokenTypes.PAREN to SqlHighlightColors.PAREN,
+        )
+        for ((type, canonical) in keys) {
+            assertSame(canonical, highlighter.getTokenHighlights(type).single())
+            assertSame(canonical, SqlListSyntaxHighlighter().getTokenHighlights(type).single())
+            assertTrue(canonical.externalName.startsWith("MP_SQL."))
+            val legacy = requireNotNull(canonical.fallbackAttributeKey)
+            assertEquals(canonical.externalName.replace('.', '_'), legacy.externalName)
+            assertNotNull("legacy key must fall back to platform colors", legacy.fallbackAttributeKey)
+        }
     }
 
     @Test

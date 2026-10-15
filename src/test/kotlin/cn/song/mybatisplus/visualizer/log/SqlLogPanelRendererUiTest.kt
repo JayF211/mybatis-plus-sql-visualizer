@@ -159,6 +159,19 @@ class SqlLogPanelRendererUiTest : BasePlatformTestCase() {
         assertTrue("标签样文本原样保留（片段通道无注入面）", joinedText(r.sqlLine).contains("</span><script>"))
     }
 
+    fun test窄侧栏按像素裁切SQL而复制源文本不变() {
+        val original = "SELECT " + (1..40).joinToString(", ") { "column_$it" } + " FROM wide_table"
+        list.setSize(170, 80)
+        try {
+            val entry = entry(original)
+            val sql = joinedText(render(entry).sqlLine)
+            assertTrue("可见 SQL 应有宽度省略号", sql.endsWith("…"))
+            assertTrue("省略只发生在展示层", entry.restoredSql.endsWith("FROM wide_table"))
+        } finally {
+            list.setSize(0, 0)
+        }
+    }
+
     fun test超长SQL_渲染不异常且含截断摘要() {
         val longSql = "SELECT " + (1..200).joinToString(", ") { "col_$it" } + " FROM wide_table WHERE id = 1"
         assertTrue("构造的 SQL 超过 160 字符", longSql.length > 160)
@@ -281,6 +294,13 @@ class SqlLogPanelRendererUiTest : BasePlatformTestCase() {
             "AND 应独立成行且顶层缩进 4 空格（片段文本不折叠空格）",
             r.sqlLines.any { joinedText(it).startsWith("    AND") },
         )
+    }
+
+    fun test格式化模式不再只格式化首行摘要() {
+        val full = "SELECT " + (1..40).joinToString(", ") { "c$it" } + " FROM record WHERE id = 42"
+        val r = renderInMode("FORMATTED", entry(full))
+        val visible = r.sqlLines.joinToString("\n") { joinedText(it) }
+        assertTrue("全文最后的 WHERE 子句应在格式化模式可见", visible.contains("WHERE id = 42"))
     }
 
     fun test模式切换_缓存按模式键自动失效() {

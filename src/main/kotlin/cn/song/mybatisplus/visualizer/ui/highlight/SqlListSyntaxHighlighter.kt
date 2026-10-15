@@ -6,14 +6,10 @@ import com.intellij.openapi.fileTypes.SyntaxHighlighter
 import com.intellij.psi.tree.IElementType
 
 /**
- * 编辑器版 SQL 高亮器（T-ClickPreview-04）：[SqlLexer] 分词 + [SqlHighlightColors] 配色。
+ * 编辑器版 SQL 高亮器：[SqlLexer] 分词 + [SqlHighlightColors] canonical 配色键。
  *
- * 单击预览编辑器与日志列表条目共用同一条「token 类型 → 配色键」链路——映射唯一权威
- * [ATTR_BY_TYPE]，[cn.song.mybatisplus.visualizer.log.SqlListFragmentRenderer]（列表片段
- * 渲染）与本类（编辑器高亮）共用，保证编辑器内高亮与列表条目着色一致。此前预览编辑器
- * 高亮交给平台 SQL FileType 的数据库方言高亮，与列表的 One Dark 风格配色并存两套，
- * 同一条 SQL 两处颜色不同（四轮用户反馈）；换成自建高亮器后不再依赖 Database 插件，
- * 缺席环境（如测试沙盒）同样有高亮。
+ * [ATTR_BY_TYPE] 是编辑器及列表片段投影共用的 token → key 映射；key 在当前 scheme
+ * 显式配置优先，随后回退旧 MP_SQL_* 用户配置和平台语言配色，不写死主题颜色。
  */
 class SqlListSyntaxHighlighter : SyntaxHighlighter {
 

@@ -410,6 +410,20 @@ class PluginSettingsPanelBindingTest : BasePlatformTestCase() {
         }
     }
 
+    fun testListDisplayModeDefaultsToKeywordWrapAndPreservesSavedMode() {
+        val settings = PluginSettings.getInstance()
+        val saved = settings.state.logListSqlDisplayMode
+        try {
+            assertEquals("KEYWORD_WRAP", PluginSettings.State().logListSqlDisplayMode)
+            settings.state.logListSqlDisplayMode = "FORMATTED"
+            assertEquals(cn.song.mybatisplus.visualizer.log.SqlListDisplayMode.FORMATTED, settings.sqlListDisplayMode())
+            settings.state.logListSqlDisplayMode = "not-a-display-mode"
+            assertEquals(cn.song.mybatisplus.visualizer.log.SqlListDisplayMode.KEYWORD_WRAP, settings.sqlListDisplayMode())
+        } finally {
+            settings.state.logListSqlDisplayMode = saved
+        }
+    }
+
     /** T-DisplayModeToSettings：仅改显示模式同样必须置 isModified，且 apply 写回设置值（两列表共享一键）。 */
     fun testListDisplayModeChangeEnablesApplyAndPersists() {
         val settings = PluginSettings.getInstance()

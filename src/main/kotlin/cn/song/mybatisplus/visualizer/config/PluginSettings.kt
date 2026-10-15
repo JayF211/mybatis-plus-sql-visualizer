@@ -392,7 +392,7 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
         /**
          * SQL 列表显示模式（T-ListMode）：SQL 日志与 SQL 历史列表条目中 SQL 行的展示形态
          * （枚举 [cn.song.mybatisplus.visualizer.log.SqlListDisplayMode] 的 name，读取走
-         * [sqlListDisplayMode] 容错）。默认关键字换行。
+         * [sqlListDisplayMode] 容错）。默认关键字换行；已保存的显示模式保持不变。
          */
         var logListSqlDisplayMode: String = DEFAULT_LOG_LIST_DISPLAY_MODE,
 
@@ -647,7 +647,7 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
             .refreshXmlSynHiEnabledSnapshot(state.xmlSynHiEnabled)
     }
 
-    /** 当前 SQL 列表显示模式（T-ListMode；旧配置残留非法值时回退默认关键字换行）。 */
+    /** 当前 SQL 列表显示模式；已保存的有效模式保持原样，非法值回退关键字换行。 */
     fun sqlListDisplayMode(): cn.song.mybatisplus.visualizer.log.SqlListDisplayMode =
         runCatching { cn.song.mybatisplus.visualizer.log.SqlListDisplayMode.valueOf(state.logListSqlDisplayMode) }
             .getOrDefault(cn.song.mybatisplus.visualizer.log.SqlListDisplayMode.KEYWORD_WRAP)
@@ -655,7 +655,7 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
     companion object {
         const val DEFAULT_DIALECT = "MySQL"
 
-        /** SQL 列表显示模式默认值（T-ListMode，关键字换行）。 */
+        /** SQL 列表默认显示模式（关键字换行——概览 SQL 大致形态）。 */
         const val DEFAULT_LOG_LIST_DISPLAY_MODE = "KEYWORD_WRAP"
 
         /** 设置变更通知 Topic（订阅方据此即时刷新 UI）。 */

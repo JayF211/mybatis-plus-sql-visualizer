@@ -2,11 +2,14 @@ package cn.song.mybatisplus.visualizer.log
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import com.intellij.openapi.actionSystem.DefaultActionGroup
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Test
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import java.awt.BorderLayout
 import java.awt.Dimension
@@ -41,6 +44,31 @@ class SqlLogPanelLayoutTest : BasePlatformTestCase() {
 
     private fun waitForEdt() = com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
 
+    fun test全部动作直达工具栏_无自建更多弹层() {
+        val panel = SqlLogPanel(project, manager)
+        try {
+            val main = panel.toolbarGroup.getChildren(null).toList()
+            // 用户 2026-10-14：「不要这个更多，之前是侧边栏不够宽时自动折叠、悬停能看全部」。
+            // 故组内不得出现自建 popup 分组；窄宽折叠交给平台 ActionToolbar 自带的溢出。
+            assertFalse("工具栏不应再有自建「更多」弹层", main.any { it is DefaultActionGroup })
+            assertTrue("捕捉应直达", main.contains(panel.captureToggleAction))
+            assertTrue("滚动到底部应直达", main.contains(panel.scrollToEndAction))
+            assertTrue("排序应直达（并入左侧动作组）", main.contains(panel.sortActionForTest))
+            assertTrue("清空应直达", main.any { it is SqlLogPanel.ClearAction })
+            assertTrue("搜索应直达", main.any { it is SqlLogPanel.ShowSearchAction })
+            assertTrue("设置应直达", main.any { it is SqlLogPanel.SettingsAction })
+            assertTrue("屏蔽管理应直达", main.any { it is SqlLogPanel.ManageSuppressAction })
+            assertTrue("帮助应直达", main.any { it is SqlLogPanel.HelpAction })
+            assertEquals("八个动作应全部在组内（捕捉/清空/设置/屏蔽/搜索/滚底/排序/帮助）",
+                8, main.size)
+            // 用户 2026-10-14 选定「方案 A」：操作在前、工具在后、帮助收尾（溢出从右端折叠，帮助最先让位）。
+            assertEquals("帮助应为组内末项（方案 A）", main.last(), main.first { it is SqlLogPanel.HelpAction })
+            assertTrue("排序应在帮助之前", main.indexOfFirst { it === panel.sortActionForTest } < main.size - 1)
+        } finally {
+            panel.dispose()
+        }
+    }
+
     fun test工具栏关键组件存在_默认可见性正确() {
         val panel = SqlLogPanel(project, manager)
         try {
@@ -60,8 +88,11 @@ class SqlLogPanelLayoutTest : BasePlatformTestCase() {
                 panel.toolbarGroup.childActionsOrStubs.contains(panel.captureToggleAction),
             )
 
-            // 默认可见性：排序方式选择器恒可见（默认时间升序）；搜索条默认隐藏；慢查询徽章隐藏
-            assertEquals("排序方式选择器应恒可见", true, panel.sortButtonForTest.isVisible)
+            // 默认可见性：排序动作恒在工具栏组内（并入左侧动作组，随组折叠）；搜索条默认隐藏；慢查询徽章隐藏
+            assertTrue(
+                "排序动作应恒在工具栏动作组内（并入左侧按钮集，窄宽随组折叠）",
+                panel.toolbarGroup.getChildren(null).contains(panel.sortActionForTest),
+            )
             assertEquals("搜索条默认隐藏", false, panel.searchFieldVisibleForTest)
             assertEquals("默认无慢查询，计数徽章应隐藏/为空", false, panel.slowQueryLabelForTest?.isVisible ?: false)
         } finally {
@@ -83,7 +114,11 @@ class SqlLogPanelLayoutTest : BasePlatformTestCase() {
                 ),
             )
             waitForEdt()
-            assertEquals("有耗时信息时排序方式选择器仍可见", true, panel.sortButtonForTest.isVisible)
+            assertEquals(
+                "有耗时信息时排序动作仍在工具栏组内",
+                true,
+                panel.toolbarGroup.getChildren(null).contains(panel.sortActionForTest),
+            )
             assertEquals("默认排序方式为时间升序", SortMode.TIME_ASC, panel.currentSortMode)
         } finally {
             panel.dispose()
@@ -218,21 +253,58 @@ class SqlLogPanelLayoutTest : BasePlatformTestCase() {
             val row = panel.toolbarRowForTest!!
             val toolbarComponent = panel.toolbarComponentForTest
             assertNotNull("动作图标组组件应存在", toolbarComponent)
+            // T-SqlListSortRight 二轮（用户校正）：排序**并入左侧动作组**，图标组回到行宿主 CENTER；
+            // 故断言「行 → 图标组」直连（曾因还原反向验证探针误删挂载而全绿，此处保留该守卫）。
             assertTrue(
-                "动作图标组必须挂在行宿主上（曾漏挂且全绿）",
+                "动作图标组必须直接挂在行宿主上（曾漏挂且全绿）",
                 row.components.any { it === toolbarComponent },
             )
             val controls = panel.toolbarControlsForTest!!
             val children = controls.components.filter { it.isVisible }.toList()
             assertTrue("控制组应含 SQL类型按钮", children.contains(panel.typeFilterButtonForTest))
-            assertTrue("控制组应含 排序按钮", children.contains(panel.sortButtonForTest))
+            // 排序归位到动作组内：既不在整行最左（原 WEST 槽），也不进右侧控制组（原位置）。
+            val mainActions = panel.toolbarGroup.getChildren(null).toList()
+            val sortIndex = mainActions.indexOfFirst { it === panel.sortActionForTest }
+            assertTrue("排序动作应在工具栏动作组内", sortIndex >= 0)
+            assertTrue(
+                "排序应排在滚动到底部之后、帮助之前（方案 A 中排序为操作组末位，idx=$sortIndex / size=${mainActions.size}）",
+                sortIndex > 0 && sortIndex < mainActions.size - 1,
+            )
+            assertTrue(
+                "滚动到底部动作应排在排序之前",
+                mainActions.indexOfFirst { it === panel.scrollToEndAction } < sortIndex,
+            )
             assertTrue("控制组应含 去重勾选（仍在最右）", children.contains(panel.dedupeCheckBoxForTest))
             assertEquals(
                 "去重勾选应在控制组最右",
                 panel.dedupeCheckBoxForTest,
                 children.last(),
             )
-            assertFalse("动作图标组不应混进控制组（单行定构下它在 CENTER）", children.any { it === toolbarComponent })
+            assertFalse("动作图标组不应混进控制组", children.any { it === toolbarComponent })
+
+            // 两侧不再各取理想宽、结构上不可能互相压盖：图标组挂 CENTER、控制组挂 EAST，
+            // 行宿主 WEST 必须为空（它曾是压盖来源：左簇与控制组同时取理想宽）。
+            val layout = row.layout as BorderLayout
+            assertSame("动作图标组必须挂 CENTER（窄宽由 ActionToolbar 自身溢出折叠）",
+                toolbarComponent, layout.getLayoutComponent(BorderLayout.CENTER))
+            assertNull("行宿主 WEST 不应挂任何组件（排序已并入动作组，WEST 是压盖来源）",
+                layout.getLayoutComponent(BorderLayout.WEST))
+            assertNotNull("控制组应挂在行宿主 EAST", layout.getLayoutComponent(BorderLayout.EAST))
+        } finally {
+            panel.dispose()
+        }
+    }
+
+    fun test排序并入动作组后控制组仍保留图标组预算() {
+        val panel = SqlLogPanel(project, manager)
+        try {
+            panel.applyTypeFilterForTest(setOf(StatementType.SELECT, StatementType.UPDATE, StatementType.DELETE))
+            waitForEdt()
+            // T-SqlListSortRight 二轮：排序已是组内动作，左侧宽度由 ActionToolbar 自行折叠，
+            // 控制组最坏宽 + 图标组保守下限仍须落在用户侧栏宽内（判据不放宽）。
+            val right = panel.toolbarControlsForTest!!.preferredSize.width
+            assertTrue("控制组 $right + 图标组 $ICON_GROUP_WIDTH_MIN 不能超出 $USER_SIDEBAR_WIDTH",
+                right + ICON_GROUP_WIDTH_MIN <= USER_SIDEBAR_WIDTH)
         } finally {
             panel.dispose()
         }
@@ -344,11 +416,11 @@ class SqlLogPanelLayoutTest : BasePlatformTestCase() {
                 panel.typeFilterButtonForTest.toolTipText,
             )
             assertEquals(
-                "排序按钮 tooltip 应为「排序：」+ 当前方式",
+                "排序动作 tooltip 应为「排序：」+ 当前方式",
                 MpSqlVisualizerBundle.message("log.sort.label") + MpSqlVisualizerBundle.message("log.sort.time.asc"),
-                panel.sortButtonForTest.toolTipText,
+                panel.sortActionTooltipForTest(),
             )
-            // 排序按钮文案在预算内，不应被省略（省略只对超预算的组合生效）
+            // 当前方式显示名（工具窗工具栏只渲染图标，显示名进 tooltip 与菜单选中态）
             assertEquals("时间升序", panel.sortButtonTextForTest)
         } finally {
             panel.dispose()
@@ -382,10 +454,10 @@ class SqlLogPanelLayoutTest : BasePlatformTestCase() {
         try {
             waitForEdt()
             val tabs = panel.tabsForTest
-            assertEquals("四个 tab：SQL 日志 / 日志转 SQL / SQL→Java / SQL 历史", 4, tabs.tabCount)
+            assertEquals("四个 tab：SQL 日志 / 日志转 SQL / SQL→Java / SQL 历史", 4, tabs.getTabCount())
             assertTrue(
                 "历史 tab 应恒定存在（未开自动保存、无历史文件）",
-                tabs.indexOfTab(MpSqlVisualizerBundle.message("log.tab.history")) >= 0,
+                tabs.getTabs().any { it.text == MpSqlVisualizerBundle.message("log.tab.history") },
             )
         } finally {
             panel.dispose()
@@ -400,11 +472,11 @@ class SqlLogPanelLayoutTest : BasePlatformTestCase() {
         try {
             waitForEdt()
             val tabs = panel.tabsForTest
-            val index = tabs.indexOfTab(MpSqlVisualizerBundle.message("log.tab.history"))
-            assertTrue("历史 tab 应在场", index >= 0)
-            tabs.selectedIndex = index
+            val historyInfo = tabs.getTabs().firstOrNull { it.text == MpSqlVisualizerBundle.message("log.tab.history") }
+            assertTrue("历史 tab 应在场", historyInfo != null)
+            tabs.select(historyInfo!!, true)
             waitForEdt()
-            assertTrue("切到历史 tab 后选中的应是历史面板", tabs.selectedComponent is HistorySqlLogPanel)
+            assertTrue("切到历史 tab 后选中的应是历史面板", tabs.selectedInfo?.component is HistorySqlLogPanel)
         } finally {
             panel.dispose()
         }
@@ -425,18 +497,17 @@ class SqlLogPanelLayoutTest : BasePlatformTestCase() {
         try {
             waitForEdt()
             val tabs = panel.tabsForTest
-            val index = tabs.indexOfTab(MpSqlVisualizerBundle.message("log.tab.history"))
-            assertTrue("前提：自动保存开启时历史 tab 在场", index >= 0)
+            val historyInfo = tabs.getTabs().firstOrNull { it.text == MpSqlVisualizerBundle.message("log.tab.history") }
+            assertTrue("前提：自动保存开启时历史 tab 在场", historyInfo != null)
             settings.state.logAutoSaveEnabled = false
             // 等价设置页 apply 后的广播（监听器经 invokeLater 处理）
             project.messageBus.syncPublisher(PluginSettings.SETTINGS_CHANGE_TOPIC).settingsChanged()
             waitForEdt()
-            assertEquals(
+            assertTrue(
                 "关闭自动保存后历史 tab 不得被移除（旧实现此处会摘掉它）",
-                index,
-                tabs.indexOfTab(MpSqlVisualizerBundle.message("log.tab.history")),
+                tabs.getTabs().any { it === historyInfo },
             )
-            assertEquals("tab 总数不应变化", 4, tabs.tabCount)
+            assertEquals("tab 总数不应变化", 4, tabs.getTabCount())
         } finally {
             panel.dispose()
             settings.state.logAutoSaveEnabled = prevAutoSave
@@ -451,11 +522,9 @@ class SqlLogPanelLayoutTest : BasePlatformTestCase() {
         val manager = SqlLogManager(project)
         val panel = SqlLogPanel(project, manager)
         try {
-            val tabs = panel.getComponent(0) as? javax.swing.JTabbedPane
-            org.junit.Assert.assertNotNull(tabs)
-            var found = false
-            for (i in 0 until tabs!!.tabCount) {
-                if (tabs.getTitleAt(i).contains("历史") || tabs.getTitleAt(i).contains("History")) found = true
+            val tabs = panel.tabsForTest
+            val found = tabs.getTabs().any {
+                it.text.contains("历史") || it.text.contains("History")
             }
             assertTrue("未开启自动保存时历史 tab 也应常驻（R19）", found)
         } finally {

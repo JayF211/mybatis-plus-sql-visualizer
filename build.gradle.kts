@@ -165,6 +165,16 @@ dependencies {
         if (gifRecord) {
             plugin("com.intellij.ml.llm", "262.9437.276")
         }
+        // 录制态可选：把 robot-server 作为本地插件依赖交给 prepareSandbox 一起安装，
+        // 不覆盖 idea.plugins.path（覆盖会让主插件与 AI Assistant 消失）。
+        // 首次使用先运行 record/bootstrap-robot-server.py 下载到被忽略的本地目录。
+        if (gifRecord && providers.gradleProperty("gifRobotServer").orNull == "true") {
+            val robotServer = file("record/robot-plugins/robot-server-plugin")
+            require(robotServer.resolve("lib").isDirectory) {
+                "缺少 robot-server：先运行 python record/bootstrap-robot-server.py"
+            }
+            localPlugin(robotServer)
+        }
     }
 }
 
