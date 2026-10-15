@@ -98,6 +98,7 @@ public class PlatformSignatureChecker {
         missing += checkExecutionDialectGateApis(loader, dbnLib.isDirectory());
         missing += checkModuleCountApi(loader);
         missing += checkPreviewSourceContextApis(loader, dbnLib.isDirectory());
+        missing += checkSqlLogTabsApis(loader);
 
         if (missing > 0) {
             System.out.println("RESULT MISSING " + missing);
@@ -367,6 +368,67 @@ public class PlatformSignatureChecker {
             return missing;
         } catch (Throwable t) {
             System.out.println("MISS DatabaseTools execution dialect gate API: " + t);
+            return 1;
+        }
+    }
+
+    /** O-149/V182：逐一核 SqlLogPanel 当前静态调用的参数及返回类型，不以同名/参数个数冒充兼容。 */
+    private static int checkSqlLogTabsApis(ClassLoader loader) {
+        try {
+            Class<?> factory = Class.forName("com.intellij.ui.tabs.JBTabsFactory", false, loader);
+            Class<?> project = Class.forName("com.intellij.openapi.project.Project", false, loader);
+            Class<?> disposable = Class.forName("com.intellij.openapi.Disposable", false, loader);
+            Class<?> tabs = Class.forName("com.intellij.ui.tabs.JBTabs", false, loader);
+            Class<?> presentation = Class.forName("com.intellij.ui.tabs.JBTabsPresentation", false, loader);
+            Class<?> info = Class.forName("com.intellij.ui.tabs.TabInfo", false, loader);
+            Class<?> impl = Class.forName("com.intellij.ui.tabs.impl.JBTabsImpl", false, loader);
+            int missing = 0;
+            missing += checkExact(factory, "createTabs", tabs, true, project, disposable);
+            missing += checkExact(tabs, "getPresentation", presentation, false);
+            missing += checkExact(presentation, "setSingleRow", presentation, false, boolean.class);
+            missing += checkExact(presentation, "setSupportsCompression", presentation, false, boolean.class);
+            missing += checkExact(presentation, "setTabDraggingEnabled", presentation, false, boolean.class);
+            try {
+                info.getConstructor(javax.swing.JComponent.class);
+                System.out.println("OK   TabInfo(JComponent)");
+            } catch (NoSuchMethodException e) {
+                System.out.println("MISS TabInfo(JComponent): " + e);
+                missing++;
+            }
+            missing += checkExact(info, "setText", info, false, String.class);
+            missing += checkExact(info, "getText", String.class, false);
+            missing += checkExact(info, "getComponent", javax.swing.JComponent.class, false);
+            missing += checkExact(tabs, "addTab", info, false, info);
+            Class<?> listener = Class.forName("com.intellij.ui.tabs.TabsListener", false, loader);
+            missing += checkExact(tabs, "addListener", tabs, false, listener, disposable);
+            missing += checkExact(tabs, "getComponent", javax.swing.JComponent.class, false);
+            missing += checkExact(tabs, "getTabs", List.class, false);
+            missing += checkExact(tabs, "getTabCount", int.class, false);
+            missing += checkExact(tabs, "getSelectedInfo", info, false);
+            Class<?> callback = Class.forName("com.intellij.openapi.util.ActionCallback", false, loader);
+            missing += checkExact(tabs, "select", callback, false, info, boolean.class);
+            // 结构测试读取生产实例的真实旗位，不以测试自造 presentation 代替。
+            missing += checkExact(impl, "isSingleRow", boolean.class, false);
+            missing += checkExact(impl, "supportCompression", boolean.class, false);
+            missing += checkExact(impl, "getTabLabel", Class.forName("com.intellij.ui.tabs.impl.TabLabel", false, loader), false, info);
+            return missing;
+        } catch (Throwable t) {
+            System.out.println("MISS SqlLogPanel JBTabs API types: " + t);
+            return 1;
+        }
+    }
+
+    private static int checkExact(Class<?> owner, String name, Class<?> returns, boolean isStatic, Class<?>... args) {
+        String label = owner.getSimpleName() + "." + name + java.util.Arrays.toString(args);
+        try {
+            Method method = owner.getMethod(name, args);
+            if (method.getReturnType() != returns || java.lang.reflect.Modifier.isStatic(method.getModifiers()) != isStatic) {
+                System.out.println("MISS " + label + " return/static mismatch: " + method);
+                return 1;
+            }
+            return check(method, label);
+        } catch (Throwable t) {
+            System.out.println("MISS " + label + ": " + t);
             return 1;
         }
     }

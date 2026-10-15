@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.log
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.openapi.actionSystem.DefaultActionGroup
+import com.intellij.ui.tabs.impl.JBTabsImpl
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -500,6 +501,45 @@ class SqlLogPanelLayoutTest : BasePlatformTestCase() {
         } finally {
             panel.dispose()
             settings.state.logAutoSaveEnabled = prevAutoSave
+        }
+    }
+
+    /** V182：只检查真实页签容器的结构与旗位；headless 不把溢出菜单当作视觉验收。 */
+    fun testV182_窄侧栏页签结构与可用时的单行几何() {
+        val panel = SqlLogPanel(project, manager)
+        try {
+            waitForEdt()
+            val tabs = panel.tabsForTest
+            val infos = tabs.tabs
+            assertEquals("主容器恰有四个页签", 4, tabs.tabCount)
+            assertEquals(
+                "页签顺序不得漂移",
+                listOf("log.tab.logs", "log.tab.logToSql", "log.tab.sqlToJava", "log.tab.history")
+                    .map { MpSqlVisualizerBundle.message(it) },
+                infos.map { it.text },
+            )
+            assertSame("初始选中 SQL 日志", infos.first(), tabs.selectedInfo)
+            val implementation = tabs as JBTabsImpl
+            assertTrue("生产容器须开启单行模式", implementation.isSingleRow)
+            assertTrue("生产容器须开启压缩", implementation.supportCompression())
+
+            // 不挂显示窗口也可以布局；只有真实 TabLabel 的四个 raster bounds 均为正才断言行高。
+            // 仅有宿主 preferredSize 或零尺寸占位时，不构成一行/MorePopup 的视觉证据。
+            val holder = JPanel(BorderLayout()).apply { size = Dimension(240, 360) }
+            holder.add(tabs.component, BorderLayout.CENTER)
+            layoutRecursively(holder)
+            waitForEdt()
+            val bounds = infos.map { implementation.getTabLabel(it)?.bounds ?: java.awt.Rectangle() }
+            if (bounds.all { it.width > 0 && it.height > 0 }) {
+                assertEquals("窄栏中四个实际标签的纵向起点应相同：$bounds", 1, bounds.map { it.y }.distinct().size)
+            } else {
+                println("V182 GEOMETRY ENVIRONMENT-LIMITED: headless TabLabel raster bounds=$bounds; only structure/flags/selection verified")
+            }
+            tabs.select(infos[2], true)
+            waitForEdt()
+            assertSame("选择 SQL→Java 后应保留 TabInfo 身份", infos[2], tabs.selectedInfo)
+        } finally {
+            panel.dispose()
         }
     }
 
