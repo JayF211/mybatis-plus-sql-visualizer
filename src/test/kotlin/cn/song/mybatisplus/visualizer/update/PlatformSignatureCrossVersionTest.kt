@@ -31,6 +31,10 @@ import java.util.concurrent.Executors
  * javap 实证同形态）；顺带 INFO 打印三代 SQL 注入器在场实况（SqlLanguageInjector 243+ 已移除、
  * SqlTypeBasedInjector 代际改名——探测经 EP 枚举对改名免疫，INFO 不计缺失）。
  *
+ * O-145 W0/W1 追加实际 SQL PSI 与模块身份入口：InjectedLanguageManager 精确命中/owner 候选 API、
+ * 反射类型 `com.intellij.sql.psi.SqlFile`、ModuleUtilCore.moduleContainsFile，以及
+ * ExternalSystemModulePropertyManager 的 linked project id/path。生产不直接链接 SqlFile。
+ *
  * 发行版缺失时按 Assume 跳过对应家族（CI 机器可能只装部分版本）；一个家族都没有则整类跳过。
  */
 class PlatformSignatureCrossVersionTest {

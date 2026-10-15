@@ -96,6 +96,7 @@ public class PlatformSignatureChecker {
         missing += checkEditorColorsTopic(loader);
         missing += checkSqlContextApis(loader, dbnLib.isDirectory());
         missing += checkModuleCountApi(loader);
+        missing += checkPreviewSourceContextApis(loader, dbnLib.isDirectory());
 
         if (missing > 0) {
             System.out.println("RESULT MISSING " + missing);
@@ -241,6 +242,60 @@ public class PlatformSignatureChecker {
             System.out.println("MISS ModuleManager module count API: " + t);
             return 1;
         }
+    }
+
+    /** O-145 W0/W1：真实注入 SQL PSI、模块全候选归属与外部系统稳定身份所依赖的平台面。 */
+    private static int checkPreviewSourceContextApis(ClassLoader loader, boolean databaseToolsPresent) {
+        int missing = 0;
+        try {
+            Class<?> project = Class.forName("com.intellij.openapi.project.Project", false, loader);
+            Class<?> psiFile = Class.forName("com.intellij.psi.PsiFile", false, loader);
+            Class<?> psiElement = Class.forName("com.intellij.psi.PsiElement", false, loader);
+            Class<?> injected = Class.forName("com.intellij.lang.injection.InjectedLanguageManager", false, loader);
+            missing += check(injected.getMethod("getInstance", project),
+                    "InjectedLanguageManager.getInstance(Project)");
+            missing += check(injected.getMethod("findInjectedElementAt", psiFile, int.class),
+                    "InjectedLanguageManager.findInjectedElementAt(PsiFile,int)");
+            Method injectedFiles = injected.getMethod("getInjectedPsiFiles", psiElement);
+            missing += check(injectedFiles, "InjectedLanguageManager.getInjectedPsiFiles(PsiElement)");
+            if (!List.class.isAssignableFrom(injectedFiles.getReturnType())) {
+                System.out.println("MISS getInjectedPsiFiles does not return List: " + injectedFiles.getReturnType());
+                missing++;
+            }
+
+            Class<?> module = Class.forName("com.intellij.openapi.module.Module", false, loader);
+            Class<?> virtualFile = Class.forName("com.intellij.openapi.vfs.VirtualFile", false, loader);
+            Class<?> moduleUtil = Class.forName("com.intellij.openapi.module.ModuleUtilCore", false, loader);
+            missing += check(moduleUtil.getMethod("moduleContainsFile", module, virtualFile, boolean.class),
+                    "ModuleUtilCore.moduleContainsFile(Module,VirtualFile,boolean)");
+
+            Class<?> external = Class.forName(
+                    "com.intellij.openapi.externalSystem.ExternalSystemModulePropertyManager", false, loader);
+            missing += check(external.getMethod("getInstance", module),
+                    "ExternalSystemModulePropertyManager.getInstance(Module)");
+            missing += check(external.getMethod("getExternalSystemId"),
+                    "ExternalSystemModulePropertyManager.getExternalSystemId()");
+            missing += check(external.getMethod("getLinkedProjectId"),
+                    "ExternalSystemModulePropertyManager.getLinkedProjectId()");
+            missing += check(external.getMethod("getLinkedProjectPath"),
+                    "ExternalSystemModulePropertyManager.getLinkedProjectPath()");
+
+            if (databaseToolsPresent) {
+                Class<?> sqlFile = Class.forName("com.intellij.sql.psi.SqlFile", false, loader);
+                if (!sqlFile.isInterface() || !psiFile.isAssignableFrom(sqlFile)) {
+                    System.out.println("MISS SqlFile is not a PsiFile interface: " + sqlFile);
+                    missing++;
+                } else {
+                    System.out.println("OK   com.intellij.sql.psi.SqlFile is a PsiFile interface");
+                }
+            } else {
+                System.out.println("SKIP SqlFile reflection type (Database Tools not bundled)");
+            }
+        } catch (Throwable t) {
+            System.out.println("MISS preview source context API: " + t);
+            return missing + 1;
+        }
+        return missing;
     }
 
     private static int checkSqlContextApis(ClassLoader loader, boolean databaseToolsPresent) {
