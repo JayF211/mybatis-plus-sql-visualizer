@@ -88,6 +88,131 @@ class DbDriverPipelineTest : BasePlatformTestCase() {
         assertTrue("数据源 classpathElements 应含 $expectedJar，实际: $dsUrls", dsUrls.any { it.endsWith(expectedJar) })
     }
 
+    /** T-M19/V178：真实 DatabaseTools 服务，不建连、不读取 demo 配置、不替换生产 hook。 */
+    @Test
+    fun testRealSqlMappingInheritanceAndReparse() {
+        assertTrue(java.awt.GraphicsEnvironment.isHeadless())
+        val mappings = com.intellij.sql.dialects.SqlDialectMappings.getInstance(project)
+        val pg = com.intellij.lang.Language.findLanguageByID("PostgreSQL")
+            as com.intellij.sql.dialects.SqlLanguageDialect
+        val mysql = com.intellij.lang.Language.findLanguageByID("MySQL")
+            as com.intellij.sql.dialects.SqlLanguageDialect
+        val file = myFixture.addFileToProject("v178/query.sql", "SELECT 1")
+        assertTrue("must be real SQL PSI", file is com.intellij.sql.psi.SqlFile)
+        val directory = file.virtualFile.parent
+        try {
+            com.intellij.openapi.application.WriteAction.run<RuntimeException> {
+                mappings.setMapping(directory, pg)
+            }
+            val inherited = cn.song.mybatisplus.visualizer.sql.IdeaSqlContextBridge.resolveDialect(project, file.virtualFile)
+            assertEquals(cn.song.mybatisplus.visualizer.sql.IdeaSqlContextBridge.Availability.AVAILABLE, inherited.availability)
+            assertEquals("PostgreSQL", inherited.effectiveDialectId)
+            assertNull(inherited.immediateDialectId)
+            com.intellij.openapi.application.WriteAction.run<RuntimeException> {
+                mappings.setMapping(file.virtualFile, mysql)
+            }
+            val overridden = cn.song.mybatisplus.visualizer.sql.IdeaSqlContextBridge.resolveDialect(project, file.virtualFile)
+            assertEquals("MySQL", overridden.effectiveDialectId)
+            assertEquals("MySQL", overridden.immediateDialectId)
+            val psi = com.intellij.psi.PsiManager.getInstance(project).findFile(file.virtualFile)!!
+            assertTrue(psi is com.intellij.sql.psi.SqlFile)
+            assertEquals("MySQL", psi.language.id)
+            com.intellij.openapi.application.WriteAction.run<RuntimeException> {
+                mappings.setMapping(file.virtualFile, null)
+            }
+            assertEquals("PostgreSQL", cn.song.mybatisplus.visualizer.sql.IdeaSqlContextBridge
+                .resolveDialect(project, file.virtualFile).effectiveDialectId)
+            assertEquals("PostgreSQL", com.intellij.psi.PsiManager.getInstance(project)
+                .findFile(file.virtualFile)!!.language.id)
+        } finally {
+            com.intellij.openapi.application.WriteAction.run<RuntimeException> {
+                mappings.setMapping(file.virtualFile, null)
+                mappings.setMapping(directory, null)
+            }
+        }
+    }
+
+    @Test
+    fun testRealDataSourceScopeUuidRenameUrlChangeAndRemoval() {
+        val manager = LocalDataSourceManager.getInstance(project)
+        assertTrue("isolated sandbox must start empty", manager.dataSources.isEmpty())
+        val ds = manager.createEmpty()
+        ds.name = "v178-synthetic"
+        ds.url = "jdbc:postgresql://127.0.0.1:1/v178_never_connect"
+        ds.isAutoSynchronize = false
+        manager.addDataSource(ds)
+        val scopes = com.intellij.sql.dialects.SqlResolveMappings.getInstance(project)
+        val psi = myFixture.addFileToProject("v178/scope.sql", "SELECT 1")
+        val store = cn.song.mybatisplus.visualizer.sql.ModuleDataSourceBindingStore.getInstance(project)
+        try {
+            assertTrue(psi is com.intellij.sql.psi.SqlFile)
+            val realCandidates = com.intellij.sql.dialects.SqlDataSourceMappings.getInstance(project).getDataSources(psi)
+            assertEquals(listOf(ds.uniqueId), realCandidates.map { it.uniqueId })
+            val snapshot = cn.song.mybatisplus.visualizer.sql.IdeaSqlContextBridge.resolve(project, psi, psi.virtualFile)
+            assertEquals("bridge diagnostic=${snapshot.diagnostic}",
+                cn.song.mybatisplus.visualizer.sql.IdeaSqlContextBridge.Availability.AVAILABLE, snapshot.availability)
+            assertEquals(listOf(ds.uniqueId), snapshot.finalCandidates.map { it.stableId })
+            assertEquals("PostgreSQL", snapshot.finalCandidates.single().dialectName)
+            assertEquals(cn.song.mybatisplus.visualizer.sql.IdeaSqlContextBridge.ScopeOrigin.DEFAULT_ALL_DATA_SOURCES,
+                snapshot.scopeOrigin)
+            com.intellij.openapi.application.WriteAction.run<RuntimeException> {
+                scopes.setMapping(psi.virtualFile, com.intellij.database.util.TreePattern.EMPTY)
+            }
+            val emptyScope = cn.song.mybatisplus.visualizer.sql.IdeaSqlContextBridge.resolve(project, psi, psi.virtualFile)
+            assertEquals(cn.song.mybatisplus.visualizer.sql.IdeaSqlContextBridge.ScopeOrigin.CONFIGURED_RESOLUTION,
+                emptyScope.scopeOrigin)
+            assertTrue(emptyScope.finalCandidates.isEmpty())
+            com.intellij.openapi.application.WriteAction.run<RuntimeException> {
+                scopes.setMapping(psi.virtualFile, null)
+            }
+            store.remember("v178-module", ds.uniqueId)
+            val uuid = ds.uniqueId
+            manager.renameDataSource(ds, "v178-renamed")
+            assertEquals(uuid, ds.uniqueId)
+            assertEquals("PostgreSQL", store.learnedCandidate(project, "v178-module")!!.dialectName)
+            ds.url = "jdbc:mysql://127.0.0.1:1/v178_never_connect"
+            manager.fireDataSourceUpdated(ds)
+            assertEquals("MySQL", store.learnedCandidate(project, "v178-module")!!.dialectName)
+            assertEquals(setOf(uuid), store.state.bindings.values.toSet())
+            manager.removeDataSource(ds)
+            assertNull(store.learnedCandidate(project, "v178-module"))
+            assertNull(store.dataSourceId("v178-module"))
+        } finally {
+            store.clear()
+            com.intellij.openapi.application.WriteAction.run<RuntimeException> { scopes.setMapping(psi.virtualFile, null) }
+            if (manager.dataSources.contains(ds)) manager.removeDataSource(ds)
+        }
+    }
+
+    @Test
+    fun testRealDisconnectedSessionAndConsoleTargetApis() {
+        val manager = LocalDataSourceManager.getInstance(project)
+        val ds = manager.createEmpty()
+        ds.name = "v178-disconnected"
+        ds.url = "jdbc:postgresql://127.0.0.1:1/v178_never_connect"
+        ds.isAutoSynchronize = false
+        manager.addDataSource(ds)
+        val psi = myFixture.addFileToProject("v178/console.sql", "SELECT 1")
+        var console: com.intellij.database.console.JdbcConsole? = null
+        try {
+            console = com.intellij.database.console.JdbcConsole.newConsole(project)
+                .forFile(psi.virtualFile).fromDataSource(ds).build()
+            val session = console.session
+            assertFalse("fixture must not establish any connection", session.isConnected)
+            val sessionTarget = ExecutionDialectGate.fromSession(session)
+            val consoleTarget = ExecutionDialectGate.fromConsole(console)
+            assertNotNull("real session API must resolve", sessionTarget)
+            assertNotNull("real console API must resolve", consoleTarget)
+            assertEquals(ds.uniqueId, sessionTarget!!.stableId)
+            assertEquals(ds.uniqueId, consoleTarget!!.stableId)
+            assertEquals("PostgreSQL", sessionTarget.dialectName)
+            assertEquals("PostgreSQL", consoleTarget.dialectName)
+        } finally {
+            console?.let { com.intellij.openapi.util.Disposer.dispose(it) }
+            manager.removeDataSource(ds)
+        }
+    }
+
     /** 种子文件落点断言：DBN 只认 `<configPath>/options/<name>`（见助手 KDoc ②）。 */
     @Test
     fun testSeedFilesLandWhereDbLooksForThem() {

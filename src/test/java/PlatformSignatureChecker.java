@@ -329,6 +329,17 @@ public class PlatformSignatureChecker {
             missing += check(scopes.getMethod("getInstance", project), "SqlResolveMappings.getInstance(Project)");
             missing += check(scopes.getMethod("getMapping", virtualFile), "SqlResolveMappings.getMapping(VirtualFile)");
             missing += check(scopes.getMethod("getConfiguredMapping", virtualFile), "SqlResolveMappings.getConfiguredMapping(VirtualFile)");
+            // T-M19/V178: exercise every candidate-reader owner, not just the mappings entry.
+            Class<?> candidate = Class.forName("com.intellij.database.psi.DbDataSource", false, loader);
+            Class<?> config = Class.forName("com.intellij.database.model.RawConnectionConfig", false, loader);
+            Class<?> language = Class.forName("com.intellij.lang.Language", false, loader);
+            missing += checkExact(candidate, "getUniqueId", String.class, false);
+            missing += checkExact(candidate, "getName", String.class, false);
+            missing += checkExact(candidate, "getQueryLanguage", language, false);
+            missing += checkExact(candidate, "isValid", boolean.class, false);
+            missing += checkExact(candidate, "getConnectionConfig", config, false);
+            missing += checkExact(config, "getUrl", String.class, false);
+            System.out.println("INFO O145 connection config owner=" + config.getName());
             return missing;
         } catch (ClassNotFoundException e) {
             System.out.println("MISS DatabaseTools SQL context API class: " + e.getMessage());

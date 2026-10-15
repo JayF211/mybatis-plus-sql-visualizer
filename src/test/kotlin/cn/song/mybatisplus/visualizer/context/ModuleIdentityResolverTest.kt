@@ -122,6 +122,26 @@ class ModuleIdentityResolverTest : HeavyPlatformTestCase() {
         assertTrue(identity.canonicalKey.endsWith("standalone.iml"))
     }
 
+    fun testDisposedModuleIsNotReturnedAsSourceOwner() {
+        val source = writeRealSource("disposable/src/main/java/cn/song/shared/S.java")
+        val root = LocalFileSystem.getInstance().refreshAndFindFileByPath(
+            File(project.basePath!!, "disposable/src/main/java").absolutePath,
+        )!!
+        val disposableModule = createAdditionalModule("disposable")
+        runWriteAction { PsiTestUtil.addSourceRoot(disposableModule, root) }
+        val file = LocalFileSystem.getInstance().refreshAndFindFileByIoFile(source)!!
+        val before = ModuleIdentityResolver.resolve(project, file)
+        assertTrue(before is ModuleIdentityResolution.Unique)
+        assertEquals(disposableModule, (before as ModuleIdentityResolution.Unique).identity.module)
+        runWriteAction { ModuleManager.getInstance(project).disposeModule(disposableModule) }
+        assertTrue(disposableModule.isDisposed)
+        val after = ModuleIdentityResolver.resolve(project, file)
+        if (after is ModuleIdentityResolution.Unique) {
+            assertTrue("disposed owner must not survive", after.identity.module !== disposableModule)
+            assertTrue(!after.identity.module.isDisposed)
+        }
+    }
+
     private fun writeRealSource(relativePath: String): File {
         val file = File(project.basePath!!, relativePath)
         file.parentFile.mkdirs()
