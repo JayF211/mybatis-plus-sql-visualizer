@@ -83,6 +83,17 @@ class IdeaSqlDialectDecisionTest {
     }
 
     @Test
+    fun `deleted or invalid provider cannot claim strong dialect from stale URL`() {
+        val stale = IdeaSqlContextBridge.DataSourceCandidate(
+            "deleted-uuid", "deleted", "MySQL", "MySQL", false)
+        val decision = IdeaSqlDialectDecision.decide(snapshot = snapshot(
+            IdeaSqlContextBridge.ScopeOrigin.PROVIDED, listOf(stale)))
+        assertEquals(DialectDecisionEngine.Status.UNAVAILABLE, decision.status)
+        assertNull(decision.dialectName)
+        assertEquals(listOf("deleted-uuid"), decision.dataSourceIds)
+    }
+
+    @Test
     fun `Generic effective dialect supplies no MySQL evidence`() {
         val decision = IdeaSqlDialectDecision.decide(snapshot = snapshot(
             IdeaSqlContextBridge.ScopeOrigin.NONE, emptyList(), "GenericSQL"))

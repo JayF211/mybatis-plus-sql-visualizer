@@ -49,6 +49,22 @@ class IdeaSqlContextBridgeTest {
     }
 
     @Test
+    fun `provider without UUID remains provider and cannot make other candidate unique`() {
+        val snapshot = IdeaSqlContextBridge.fromRaw(IdeaSqlContextBridge.RawFacts(
+            provided = listOf(IdeaSqlContextBridge.RawCandidate(null, "external", null, null, true)),
+            finalCandidates = listOf(
+                raw("pg-uuid", "PostgreSQL"),
+                IdeaSqlContextBridge.RawCandidate(null, "external", null, null, true),
+            ),
+        ))
+        assertEquals(IdeaSqlContextBridge.ScopeOrigin.PROVIDED, snapshot.scopeOrigin)
+        val decision = IdeaSqlDialectDecision.decide(snapshot = snapshot)
+        assertEquals(DialectDecisionEngine.Status.AMBIGUOUS, decision.status)
+        assertNull(decision.dialectName)
+        assertTrue("unidentified source cannot become persistent UUID", decision.dataSourceIds.any { it.startsWith("unidentified:") })
+    }
+
+    @Test
     fun `generic SQL is not promoted to MySQL evidence`() {
         assertNull(IdeaSqlContextBridge.pluginDialectName("GenericSQL"))
         assertNull(IdeaSqlContextBridge.pluginDialectName("SQL92"))

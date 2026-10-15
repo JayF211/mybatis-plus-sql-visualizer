@@ -36,6 +36,8 @@ internal object IdeaSqlContextBridge {
         val configuredDialectId: String?,
         val immediateDialectId: String?,
         val diagnostic: String? = null,
+        /** 平台返回但缺稳定 UUID 的候选数；不得把其余候选误判为唯一。 */
+        val unidentifiedCandidateCount: Int = 0,
     )
 
     internal data class RawCandidate(
@@ -139,9 +141,9 @@ internal object IdeaSqlContextBridge {
         val provided = raw.provided.mapNotNull(::candidate).distinctBy { it.stableId }
         val final = raw.finalCandidates.mapNotNull(::candidate).distinctBy { it.stableId }
         val origin = when {
-            provided.isNotEmpty() -> ScopeOrigin.PROVIDED
+            raw.provided.isNotEmpty() -> ScopeOrigin.PROVIDED
             raw.configuredScopePresent -> ScopeOrigin.CONFIGURED_RESOLUTION
-            final.isNotEmpty() -> ScopeOrigin.DEFAULT_ALL_DATA_SOURCES
+            raw.finalCandidates.isNotEmpty() -> ScopeOrigin.DEFAULT_ALL_DATA_SOURCES
             else -> ScopeOrigin.NONE
         }
         return Snapshot(
@@ -154,6 +156,7 @@ internal object IdeaSqlContextBridge {
             effectiveDialectId = raw.effectiveDialectId,
             configuredDialectId = raw.configuredDialectId,
             immediateDialectId = raw.immediateDialectId,
+            unidentifiedCandidateCount = raw.finalCandidates.count { it.stableId.isNullOrBlank() },
         )
     }
 

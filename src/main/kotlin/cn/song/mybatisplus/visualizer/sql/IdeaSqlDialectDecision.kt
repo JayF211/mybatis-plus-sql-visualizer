@@ -12,8 +12,12 @@ internal object IdeaSqlDialectDecision {
         singleModuleProven: Boolean = false,
     ): DialectDecisionEngine.Decision {
         val effectiveIdeaDialect = snapshot?.effectiveDialectId?.let(IdeaSqlContextBridge::pluginDialectName)
-        val platformCandidates = snapshot?.finalCandidates.orEmpty().map {
-            DialectDecisionEngine.Candidate(it.stableId, it.dialectName)
+        val platformCandidates = snapshot?.finalCandidates.orEmpty().map { candidate ->
+            DialectDecisionEngine.Candidate(candidate.stableId,
+                candidate.dialectName.takeIf { candidate.valid })
+        } + (1..(snapshot?.unidentifiedCandidateCount ?: 0)).map {
+            // 无 UUID 候选只以本次决策的临时键占位，既防虚假唯一，也绝不进入模块持久绑定。
+            DialectDecisionEngine.Candidate("unidentified:$it", null)
         }
         val explicit = snapshot?.scopeOrigin == IdeaSqlContextBridge.ScopeOrigin.PROVIDED ||
             snapshot?.scopeOrigin == IdeaSqlContextBridge.ScopeOrigin.CONFIGURED_RESOLUTION

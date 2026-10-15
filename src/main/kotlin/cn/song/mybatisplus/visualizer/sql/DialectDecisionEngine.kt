@@ -1,6 +1,6 @@
 package cn.song.mybatisplus.visualizer.sql
 
-/** 方言证据只携带已归一的方言名与稳定候选身份，不保存 JDBC URL 或凭据。 */
+/** 方言证据不保存 JDBC URL/凭据；无 UUID 的候选只能带本次决策临时键，禁止持久学习。 */
 object DialectDecisionEngine {
     enum class Status { MANUAL, RESOLVED, AMBIGUOUS, CONFLICT, UNAVAILABLE }
     enum class Confidence { EXACT, STRONG, CONSENSUS, FALLBACK }
