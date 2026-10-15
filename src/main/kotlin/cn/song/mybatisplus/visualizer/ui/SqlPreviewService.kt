@@ -270,13 +270,13 @@ class SqlPreviewService(internal val project: Project) {
         val file = anchor.containingFile ?: return null
         val context = sourceContext?.takeIf { it.project == project && it.hostPsiFile == file }
             ?: resolveWrapperSourceContext(anchor)
-        // Java/Kotlin 源码仅提供 owner/module，只有真正的 SqlFile 才可供平台 SQL 映射查询。
+        // 宿主文件提供 IDEA 有效方言映射；SQL PSI 参数只在确有真实 SqlFile 时提供注入作用域。
         val decision = if (context.sqlPsiResolution is SqlPsiResolution.Ambiguous ||
             context.moduleResolution is ModuleIdentityResolution.Ambiguous) {
             cn.song.mybatisplus.visualizer.sql.DialectDecisionEngine.Decision(
                 cn.song.mybatisplus.visualizer.sql.DialectDecisionEngine.Status.AMBIGUOUS, null,
                 cn.song.mybatisplus.visualizer.sql.DialectDecisionEngine.Confidence.FALLBACK, null)
-        } else DialectRegistry.decision(project, context.sqlPsiFile?.virtualFile,
+        } else DialectRegistry.decision(project, context.hostVirtualFile,
             context.sqlPsiFile, context.canonicalModuleKey)
         val dialect = DialectRegistry.byName(decision.dialectName)
         // 缓存键含锚点偏移：同文件多个 Wrapper（查询/删除/修改）各自独立缓存，避免串结果

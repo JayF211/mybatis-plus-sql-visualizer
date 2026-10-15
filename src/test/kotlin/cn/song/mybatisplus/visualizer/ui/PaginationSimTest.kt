@@ -421,6 +421,46 @@ class PaginationSimTest : BasePlatformTestCase() {
         )
     }
 
+    fun testWrapperHostIdeaDialectWinsProjectMySqlWithoutSqlInjection() {
+        val state = PluginSettings.getInstance().state
+        state.dialectAuto = true
+        cn.song.mybatisplus.visualizer.sql.DataSourceUrlProbe.probeCandidatesForTest = {
+            listOf(cn.song.mybatisplus.visualizer.sql.DialectDecisionEngine.Candidate("mysql-uuid", "MySQL"))
+        }
+        cn.song.mybatisplus.visualizer.sql.IdeaSourceDialectProbe.languageIdForTest = { _, source ->
+            if (source == myFixture.file.virtualFile) "PostgreSQL" else null
+        }
+        cn.song.mybatisplus.visualizer.sql.DataSourceUrlProbe.invalidate(project)
+        try {
+            myFixture.configureByText("Demo.java", """
+                import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+                public class Demo {
+                    void query() {
+                        LambdaQueryWrapper<DeviceInfoEntity> w = new LambdaQueryWrapper<DeviceInfoEntity>()
+                            .eq(DeviceInfoEntity::getId, 1001L);
+                        service.page(new Page<>(2, 10), w);
+                    }
+                    static class DeviceInfoEntity { private Long id; }
+                }
+            """.trimIndent())
+            val service = newService()
+            val context = service.resolveWrapperSourceContext(anchor())
+            assertEquals(myFixture.file.virtualFile, context.hostVirtualFile)
+            assertNull("没有真实 SQL injection 不能冒认 Java 源码为 SqlFile", context.sqlPsiFile)
+            val result = service.preview(anchor(), context)!!
+            assertEquals("PostgreSQL", result.dialectDecision?.dialectName)
+            assertEquals(cn.song.mybatisplus.visualizer.sql.DialectDecisionEngine.Source.IDEA_EFFECTIVE_DIALECT,
+                result.dialectDecision?.source)
+            assertTrue(result.compactSql.endsWith("LIMIT 10 OFFSET 10"))
+            assertEquals("PostgreSQL", result.effectiveDialect?.name)
+            assertNotNull(result.countSql)
+        } finally {
+            cn.song.mybatisplus.visualizer.sql.IdeaSourceDialectProbe.languageIdForTest = null
+            cn.song.mybatisplus.visualizer.sql.DataSourceUrlProbe.probeCandidatesForTest = null
+            cn.song.mybatisplus.visualizer.sql.DataSourceUrlProbe.invalidate(project)
+        }
+    }
+
     fun testWrapperSourceDecisionUsesOwnerAndOneDialectForPageAndCount() {
         val settings = PluginSettings.getInstance().state
         settings.dialectAuto = false
