@@ -112,6 +112,36 @@ object SourcePathResolver {
                     .firstNotNullOfOrNull { root -> fs.findFileByPath("$root/$rel") }
         }.getOrNull()
     }
+
+    /**
+     * O-145 多模块来源恢复入口：返回全部候选，不把模块枚举顺序冒充来源证据。
+     *
+     * 顺序仍与 [resolveVirtualFile] 的三级策略一致（项目根、content roots、source roots），并按
+     * VirtualFile 路径去重。旧导航继续调用单值方法，首命中行为完全不变；只有来源上下文链使用本入口。
+     */
+    fun resolveVirtualFiles(project: Project, relativePath: String): List<VirtualFile> {
+        ApplicationManager.getApplication().assertReadAccessAllowed()
+        val rel = EntrySourceMatcher.normalize(relativePath)
+        if (rel.isEmpty()) return emptyList()
+        val fs = LocalFileSystem.getInstance()
+        val candidates = linkedMapOf<String, VirtualFile>()
+
+        fun collect(path: String) {
+            fs.findFileByPath(path)?.let { candidates.putIfAbsent(it.path, it) }
+        }
+
+        project.basePath?.let { base -> collect("${EntrySourceMatcher.normalize(base)}/$rel") }
+        runCatching {
+            val modules = ModuleManager.getInstance(project).modules
+            modules.asSequence()
+                .flatMap { ModuleRootManager.getInstance(it).contentRoots.asSequence() }
+                .forEach { root -> collect("${root.path}/$rel") }
+            modules.asSequence()
+                .flatMap { ModuleRootManager.getInstance(it).sourceRoots.asSequence() }
+                .forEach { root -> collect("${root.path}/$rel") }
+        }
+        return candidates.values.toList()
+    }
 }
 
 /**

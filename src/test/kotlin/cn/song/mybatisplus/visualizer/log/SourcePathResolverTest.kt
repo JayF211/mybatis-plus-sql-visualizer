@@ -53,9 +53,11 @@ class SourcePathResolverTest : BasePlatformTestCase() {
 
     fun `test全不存在返回null`() {
         assertNull(SourcePathResolver.resolveVirtualFile(project, "cn/song/no/such/File.java"))
+        assertTrue(SourcePathResolver.resolveVirtualFiles(project, "cn/song/no/such/File.java").isEmpty())
     }
 
     fun `test空白路径返回null`() {
         assertNull(SourcePathResolver.resolveVirtualFile(project, "   "))
+        assertTrue(SourcePathResolver.resolveVirtualFiles(project, "   ").isEmpty())
     }
 }
