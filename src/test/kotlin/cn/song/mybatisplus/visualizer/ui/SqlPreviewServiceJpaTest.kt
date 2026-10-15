@@ -231,8 +231,7 @@ class SqlPreviewServiceJpaTest : BasePlatformTestCase() {
         val settings = PluginSettings.getInstance()
         val snapshot = settings.getState().copy()
         try {
-            settings.state.dialectAuto = false
-            settings.state.dialect = "Oracle"
+            settings.state.dialectAuto = true
             myFixture.configureByText(
                 "CriteriaDemo.java",
                 """
@@ -258,12 +257,20 @@ class SqlPreviewServiceJpaTest : BasePlatformTestCase() {
             val call = PsiTreeUtil.collectElementsOfType(myFixture.file,
                 com.intellij.psi.PsiMethodCallExpression::class.java)
                 .first { it.methodExpression.referenceName == "createQuery" }
+            val source = myFixture.file.virtualFile
+            cn.song.mybatisplus.visualizer.sql.IdeaSourceDialectProbe.languageIdForTest = { _, file ->
+                assertEquals(source, file)
+                "Oracle"
+            }
             val result = newService().previewCriteriaQuery(call)
             assertNotNull(result)
-            assertTrue("Criteria 的 Oracle 分页必须按服务已选方言生成：${result!!.sql}",
+            assertEquals("Oracle", result!!.renderedDialect?.name)
+            assertEquals("Oracle", result.dialectDecision?.dialectName)
+            assertTrue("Criteria 的 Oracle 分页必须按宿主文件方言生成：${result.sql}",
                 result.sql.contains("OFFSET ? ROWS FETCH NEXT ? ROWS ONLY"))
             assertTrue("Oracle 不能残留 MySQL LIMIT：${result.sql}", !result.sql.contains("LIMIT ?"))
         } finally {
+            cn.song.mybatisplus.visualizer.sql.IdeaSourceDialectProbe.languageIdForTest = null
             settings.loadState(snapshot)
         }
     }

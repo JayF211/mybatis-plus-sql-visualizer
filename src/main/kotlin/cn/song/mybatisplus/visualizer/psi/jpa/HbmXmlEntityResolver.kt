@@ -119,6 +119,28 @@ object HbmXmlEntityResolver {
         return null
     }
 
+    /** 仅为预览决策查找定义标签；不缓存 PSI/URI，避免把调用点误认成 XML owner。 */
+    fun findNamedQueryDefinition(query: HbmXmlMapping.NamedQuery, project: Project): XmlTag? {
+        var owner: XmlTag? = null
+        for (file in findHbmXmlFiles(project)) {
+            val root = file.rootTag ?: continue
+            if (root.name != "hibernate-mapping") continue
+            for (tag in root.subTags) {
+                val kind = when (tag.name) {
+                    "query" -> HbmXmlMapping.QueryKind.HQL
+                    "sql-query" -> HbmXmlMapping.QueryKind.NATIVE
+                    else -> continue
+                }
+                if (kind == query.kind && tag.getAttributeValue("name") == query.name &&
+                    directTextOf(tag) == query.queryText) {
+                    if (owner != null) return null // 同名同文跨文件重复定义：owner 不唯一
+                    owner = tag
+                }
+            }
+        }
+        return owner
+    }
+
     /**
      * T-H1：提取命名查询文本——直属 XmlText 拼接（CDATA 剥包裹、trim，口径见
      * `xml/XmlDirectText.kt`）；排除 `<return-scalar>`/`<return>`/`<query-param>` 等子标签的子内容。

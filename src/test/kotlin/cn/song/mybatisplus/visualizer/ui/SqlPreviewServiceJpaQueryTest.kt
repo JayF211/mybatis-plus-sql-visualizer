@@ -43,6 +43,7 @@ class SqlPreviewServiceJpaQueryTest : BasePlatformTestCase() {
     override fun tearDown() {
         PluginSettings.getInstance().state.injectTenantLine = false
         PluginSettings.getInstance().state.dialect = PluginSettings.DEFAULT_DIALECT
+        IdeaSourceDialectProbe.languageIdForTest = null
         super.tearDown()
     }
 
@@ -108,6 +109,26 @@ class SqlPreviewServiceJpaQueryTest : BasePlatformTestCase() {
         assertEquals(SqlPsiResolution.None, service.jpaSourceContext(call("createQuery")).sqlPsiResolution)
         assertNotNull(result.dialectDecision)
         assertEquals(result.renderedDialect?.name, result.dialectDecision?.dialectName ?: "MySQL")
+    }
+
+    fun testO145NativeHqlUsesCallingJavaFileDialect() {
+        myFixture.configureByText("NativeDao.java", """
+            class NativeDao {
+                Object search(EntityManager em) {
+                    return em.createNativeQuery("SELECT * FROM t_user WHERE id = :id");
+                }
+            }
+            interface EntityManager { Object createNativeQuery(String sql); }
+        """.trimIndent())
+        val source = myFixture.file.virtualFile
+        IdeaSourceDialectProbe.languageIdForTest = { _, file ->
+            assertEquals(source, file)
+            "Oracle"
+        }
+        val result = newService().previewHql(call("createNativeQuery"))!!
+        assertTrue(result.sql.contains("id = ?"))
+        assertEquals("Oracle", result.renderedDialect?.name)
+        assertEquals("Oracle", result.dialectDecision?.dialectName)
     }
 
     // ------------------------------------------------------------------
@@ -610,8 +631,15 @@ class SqlPreviewServiceJpaQueryTest : BasePlatformTestCase() {
             }
             """.trimIndent(),
         )
-        val result = newService().preview(call("findAll"))
+        val source = myFixture.file.virtualFile
+        IdeaSourceDialectProbe.languageIdForTest = { _, file ->
+            assertEquals(source, file)
+            "PostgreSQL"
+        }
+        val result = newService().previewSpecification(call("findAll"))
         assertNotNull("Specification 查询应产出预览", result)
+        assertEquals("PostgreSQL", result!!.renderedDialect?.name)
+        assertEquals("PostgreSQL", result.dialectDecision?.dialectName)
         assertEquals("t_user", result!!.tableName)
         assertEquals(
             """

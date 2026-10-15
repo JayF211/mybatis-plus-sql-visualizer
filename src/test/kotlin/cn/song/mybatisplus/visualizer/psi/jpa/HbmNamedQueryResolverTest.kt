@@ -1,6 +1,9 @@
 package cn.song.mybatisplus.visualizer.psi.jpa
 
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService
+import cn.song.mybatisplus.visualizer.sql.IdeaSourceDialectProbe
+import com.intellij.psi.PsiMethodCallExpression
+import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.psi.xml.XmlTag
 import com.intellij.psi.xml.XmlFile
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
@@ -51,6 +54,7 @@ class HbmNamedQueryResolverTest : BasePlatformTestCase() {
 
     override fun tearDown() {
         HbmXmlEntityResolver.clearCache()
+        IdeaSourceDialectProbe.languageIdForTest = null
         super.tearDown()
     }
 
@@ -84,9 +88,15 @@ class HbmNamedQueryResolverTest : BasePlatformTestCase() {
         val file = myFixture.configureByText("LegacyItem.hbm.xml", hbmContent) as XmlFile
         val tag = file.rootTag!!.findSubTags("sql-query").first()
         val service = project.getService(SqlPreviewService::class.java)
+        IdeaSourceDialectProbe.languageIdForTest = { _, source ->
+            assertEquals(file.virtualFile, source)
+            "Oracle"
+        }
         val result = service.previewHbmNamedQueryTag(project, tag)
         assertNotNull(result)
-        assertTrue("命名参数 :deprecated 应替换为 ?", result!!.sql.contains("deprecated = ?"))
+        assertEquals("Oracle", result!!.renderedDialect?.name)
+        assertEquals("Oracle", result.dialectDecision?.dialectName)
+        assertTrue("命名参数 :deprecated 应替换为 ?", result.sql.contains("deprecated = ?"))
         assertEquals(listOf("deprecated"), result.unresolvedParams)
     }
 
@@ -101,6 +111,28 @@ class HbmNamedQueryResolverTest : BasePlatformTestCase() {
         assertFalse("预览 SQL 不得含 CDATA 包裹: ${result!!.sql}", result.sql.contains("<![CDATA["))
         assertFalse("预览 SQL 不得含 CDATA 收尾标记", result.sql.contains("]]>"))
         assertTrue("HQL 实体应可解析渲染", result.sql.isNotBlank())
+    }
+
+    fun testO145NamedHbmUsesDefinitionXmlNotCallingJavaFile() {
+        val xml = myFixture.findFileInTempDir("resources/hbm/LegacyItem.hbm.xml")!!
+        val java = myFixture.configureByText("QueryCaller.java", """
+            class QueryCaller {
+                Object find(Session session) {
+                    return session.createNamedQuery("LegacyItem.findLowStockHql");
+                }
+            }
+            interface Session { Object createNamedQuery(String name); }
+        """.trimIndent())
+        IdeaSourceDialectProbe.languageIdForTest = { _, source ->
+            assertEquals("命名查询须以 XML 定义文件而非 Java 调用文件为 owner", xml, source)
+            "Oracle"
+        }
+        val call = PsiTreeUtil.collectElementsOfType(java, PsiMethodCallExpression::class.java)
+            .first { it.methodExpression.referenceName == "createNamedQuery" }
+        val result = SqlPreviewService(project).previewHql(call)!!
+        assertEquals("Oracle", result.renderedDialect?.name)
+        assertEquals("Oracle", result.dialectDecision?.dialectName)
+        assertTrue(result.sql.contains("legacy_item"))
     }
 
     fun testClassMapping_stillResolved_alongsideNamedQueries() {
