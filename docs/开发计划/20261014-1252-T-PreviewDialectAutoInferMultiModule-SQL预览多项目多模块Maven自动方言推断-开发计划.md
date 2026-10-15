@@ -3,7 +3,7 @@
 - 占号：**O-145 / R95 / D155 / V178**（2026-10-14 13:44 再次全仓复核；O-144 已由 T-XmlGap 占用，本组仅本计划在用）
 - 日期：2026-10-14
 - 基线：`master@760f4670`（`release: v2026.10.13 发行面纳入当前 HEAD 增量`）
-- 状态：W0 跨版本签名门已实施；W3 项目候选共识已接 `DialectRegistry`，不再按数据源列表首项决定方言。W1/W2 的实际 SQL PSI/IDE scope、W3 模块来源、W4 剩余入口、W5~W8 未完成；本轮不启动沙盒真机，V178 实际 Runner 项待验。
+- 状态：W0 跨版本签名门已实施；W3 项目候选共识已接 `DialectRegistry`；W1/W2 的 mapper XML Action/gutter 纵切已在隔离分支落地（仅 headless 注入/平台桥测试缝验证，真实 DatabaseTools 与 GUI 待验）。其他入口、模块学习、W4 剩余链及执行目标闸的生产贯通未以此项宣称完成。
 - 用户目标：插件应做到“真智能”，默认不要求用户主动配置 SQL Visualizer 方言；优先复用 IDEA 已有 SQL 方言、SQL 解析作用域与运行时上下文，只有证据缺失或冲突时才让用户介入
 - 关联：`T-DialectAutoInfer` 已实现基础 URL 推断；`T-PreviewExecDsDialect`（O-136）解决预览执行 Runner 的方言过滤。二者都没有解决“按原始源文件/注入 SQL/模块上下文求有效方言”的问题
 
@@ -394,3 +394,4 @@ mapOwnedFile(project, ownedVirtualFile, languageId)
 - 2026-10-15 W4 方言载体补齐（`46b01332`）：普通 CRUD 结果显式保存 `spec.dialect`，批量结果的 `effectiveDialect` 纳入 `BatchModel.dialect`，避免最终 Runner 闸和 W5 临时 PSI 再把 Oracle/PG CRUD 当成未知/MySQL。`CrudSqlGeneratorTest` 改前 **29 例中 1 红**（SELECT_ALL 方言为 null），改后 **29/0/0**；JPA 回归另 **18/0/0**。
 - 2026-10-15 W2 只读平台桥（`d088c919`）：新增反射隔离 `IdeaSqlContextBridge`，区分 provider、configured resolution、默认 ALL 与不可用；最终候选按稳定 UUID 去重，只在瞬态 raw facts 中读取 JDBC URL，快照不保留 URL；同时分离 effective/configured/immediate dialect，`IdeaSourceDialectProbe` 改消费有效方言。桥与 JPA 源文件路径 **24/0/0**；暂把 configured scope 错置于 provider 之前时桥测试 **6 例恰 1 红**，恢复后桥/路由/CRUD **56/0/0**。实际 SQL PSI 获取与入口上下文接线仍由 W1 基础件继续完成。
 - 2026-10-15 W7 目标闸纯模型（`3220cad3`）：新增 `ExecutionDialectGate` 和 session/`JdbcConsole` 精确目标解析，不按 Runner 显示名猜目标；策略钉住同方言放行、手动冲突阻断、自动模式仅在无损且未编辑时请求重渲染、未知 QUERY 需确认、未知 DML/EXPLAIN/TEMPLATE 阻断。定向 **7/0/0**；临时把手动冲突改为 MATCH 后 **7 例中 2 红**，恢复复绿。该提交是中央判定与目标解析基础件，尚不等于所有执行入口已接闸。
+- 2026-10-15 W1/W2 XML mapper 纵切（隔离分支 `o145-w1w2-xml-context-tm19`，dev 基线 `c72c4cf4`，提交 `4f4926ff`）：由 Action/gutter 的原始 XmlFile、选定 XmlTag 和有效光标构造 `PreviewSourceContext`；只认真实 SQL PSI，模块身份不走首模块便利 API，owner 内多注入/越界光标不给首个候选，自研 MpSqlMapper 明确拒绝；`DialectRegistry.effective(context)` 给 XML 结果方言与分页共同消费，UI 只保留原有模块键，不驻留来源 PSI。新夹具先因缺 API 编译红；接线后五类定向 **30/0/0**；临时撤来源方言分支 **5 例中 1 红**；恢复并增分页断言后 **31/0/0**。headless 243 用实际 XML PSI 和测试注入、provider 缝分别区分 PG/Oracle；不等于真实 DatabaseTools SqlFile/映射或 runIde GUI 验证。未跑全量、未合并推送。
