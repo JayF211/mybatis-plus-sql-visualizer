@@ -221,7 +221,8 @@ internal fun SqlPreviewPanel.renderSql() {        // T-WSC-01：写安全自愈�
         batch != null -> {
             val active = enabledIds.toSet()
             val sql = batch.renderSql(active)
-            showSql(backfillParamsBySource(sql, batch.orderedSources(active), batch.orderedHints(active)))
+            val overlay = fieldFillOverlay()
+            showSql(backfillParamsBySource(sql, batch.orderedSources(active), batch.orderedHints(active), overlay.literals))
         }
         model != null -> {
             // 模型级重生成：按动态条件启用集合重新生成 SQL（含回填提示），再按 source 回填参数
@@ -520,6 +521,11 @@ internal fun SqlPreviewPanel.showDiffToast(message: String) {
  */
 
 internal fun SqlPreviewPanel.clear() {
+    resetFieldFillSimulation()
+    fieldFillPreview = null
+    fieldFillFields.clear()
+    fieldFillCheckBox = null
+    fieldFillStatus = null
     current = null
     sourceModuleKey = null
     // 下次预热在结果到达前使用兼容 MySQL；结果到达后再按实际生成方言重映射。

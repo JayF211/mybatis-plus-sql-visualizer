@@ -312,6 +312,15 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
      */
     internal var lastRenderedSql: String? = null
 
+    // R92: preview-only overlay; never mixed into paramValues or real handler state.
+    internal var fieldFillEnabled = false
+    internal var fieldFillSyncing = false
+    internal var fieldFillPreview: PreviewResult? = null
+    internal val fieldFillValues = linkedMapOf<String, String>()
+    internal val fieldFillFields = linkedMapOf<String, JBTextField>()
+    internal var fieldFillCheckBox: JCheckBox? = null
+    internal var fieldFillStatus: JBLabel? = null
+
     /**
      * T-PrewarmLateRecover F1：预热相关回调的 EDT 派发通道（写安全模态）。
      *

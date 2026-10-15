@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.ui
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.model.BatchColumn
+import cn.song.mybatisplus.visualizer.model.FieldFillSimulation
 import cn.song.mybatisplus.visualizer.model.ConditionView
 import cn.song.mybatisplus.visualizer.model.LikePosition
 import cn.song.mybatisplus.visualizer.model.PreviewResult
@@ -70,6 +71,11 @@ import cn.song.mybatisplus.visualizer.model.wrapperFlagOutcomeTooltip
 // 以同包扩展函数形式搬出——方法体逐字符搬运，被触及的私有成员已按需放宽为 internal。
 
 internal fun SqlPreviewPanel.rebuildLeftPanel(result: PreviewResult) {
+    resetFieldFillSimulation()
+    fieldFillPreview = result
+    fieldFillFields.clear()
+    fieldFillCheckBox = null
+    fieldFillStatus = null
     paramPanel.removeAll()
     paramFields.clear()
     paramWarnLabels.clear()
@@ -111,10 +117,35 @@ internal fun SqlPreviewPanel.rebuildLeftPanel(result: PreviewResult) {
     // T-M23.2（用户要求）：参数可选场景必须有【全选/全不选】按钮（标题行右侧，T-M26.3 回归）
     if (batchModel != null) {
         paramPanel.add(batchSectionHeader())
+        if (batchModel.toggleColumns.any { it.fill != null && it.fill != "DEFAULT" }) {
+            fieldFillCheckBox = JCheckBox("FieldFill 安全模拟（默认关闭）", false).apply {
+                name = "fieldFillEnabled"
+                toolTipText = "仅使用手填字面量；不执行 MetaObjectHandler，不等价真实 handler"
+                addActionListener {
+                    fieldFillEnabled = isSelected
+                    renderSql()
+                }
+            }
+            paramPanel.add(fieldFillCheckBox)
+            fieldFillStatus = JBLabel("仅手填字面量；不执行或等价真实 handler；UPSERT 不填").apply {
+                name = "fieldFillStatus"
+                toolTipText = text
+            }
+            paramPanel.add(fieldFillStatus)
+        }
         // T-M26.3：fixed 列标签参与列宽统一（toggle 列复选框文本独立截断上限）
         val labelWidth = labelColumnWidth(batchModel.fixedColumns.map { "#${it.source}" })
         batchModel.toggleColumns.forEach { paramPanel.add(buildBatchColumnRow(it, isToggle = true)) }
         batchModel.fixedColumns.forEach { paramPanel.add(buildBatchColumnRow(it, isToggle = false, labelWidth)) }
+        // showResult recalls ordinary parameters before building controls. Restore overlay only now,
+        // from the preset cache (never SQL history), after the fresh-preview reset and field creation.
+        if (paramHistoryCache.isCurrentGeneration()) {
+            historyCacheKey()?.let { paramHistoryCache.recall(it) }?.forEach { (key, value) ->
+                if (key.startsWith(FieldFillSimulation.SNAPSHOT_PREFIX)) {
+                    fieldFillFields[key.removePrefix(FieldFillSimulation.SNAPSHOT_PREFIX)]?.text = value
+                }
+            }
+        }
         paramPanel.revalidate()
         paramPanel.repaint()
         return
@@ -360,6 +391,7 @@ internal fun SqlPreviewPanel.switchToScheme(name: String) {
  *  先清 map 会被复写），状态集清场放最后，保证 paramValues 干净、召回「已输入值优先」不误判。 */
 
 internal fun SqlPreviewPanel.clearParamStateForSchemeSwitch() {
+    resetFieldFillSimulation()
     paramFields.forEach { it.text = "" }
     xmlForEachValueFields.forEach { it.second.text = "" }
     // 编程式 isSelected 不触发 ActionListener，enabledIds 不受影响（末尾直接清）
@@ -443,8 +475,66 @@ internal fun SqlPreviewPanel.buildBatchColumnRow(col: BatchColumn, isToggle: Boo
     }
     paramFields += field
     row.add(field)
+    if (col.fill != null && col.fill != "DEFAULT") {
+        row.add(JBLabel("[fill=${col.fill}]").apply {
+            toolTipText = "注解元数据，不代表已执行 handler"
+        })
+        if (isToggle) {
+            val simulation = JBTextField(8).apply {
+                name = "fieldFill:${col.source}"
+                toolTipText = "模拟字面量；显式参数优先；数值列仅接受数字；不接受分号或脚本"
+                document.addDocumentListener(object : DocumentListener {
+                    private fun changed() {
+                        if (fieldFillSyncing) return
+                        fieldFillValues[col.source] = text
+                        renderSql()
+                        saveToHistory()
+                    }
+                    override fun insertUpdate(e: DocumentEvent?) = changed()
+                    override fun removeUpdate(e: DocumentEvent?) = changed()
+                    override fun changedUpdate(e: DocumentEvent?) = changed()
+                })
+            }
+            fieldFillFields[col.source] = simulation
+            row.add(JBLabel("模拟值"))
+            row.add(simulation)
+        }
+    }
     row.border = JBUI.Borders.empty(0, 8, 2, 8)
     return row
+}
+
+/** R92: clear visual fields before the map, as document listeners write back. */
+internal fun SqlPreviewPanel.resetFieldFillSimulation() {
+    fieldFillEnabled = false
+    fieldFillCheckBox?.isSelected = false
+    fieldFillSyncing = true
+    try {
+        fieldFillFields.values.forEach { if (it.text.isNotEmpty()) it.text = "" }
+    } finally {
+        fieldFillSyncing = false
+    }
+    fieldFillValues.clear()
+}
+
+internal fun SqlPreviewPanel.fieldFillOverlay(): FieldFillSimulation.Overlay {
+    if (fieldFillPreview !== current || !paramHistoryCache.isCurrentGeneration()) {
+        // No component edits here: this can run inside a DocumentListener notification.
+        fieldFillEnabled = false
+        fieldFillCheckBox?.isSelected = false
+        fieldFillValues.clear()
+    }
+    val model = current?.batchModel ?: return FieldFillSimulation.Overlay(emptyMap(), emptySet())
+    val overlay = FieldFillSimulation.overlay(model, enabledIds, paramValues, fieldFillValues, fieldFillEnabled)
+    fieldFillStatus?.apply {
+        text = if (overlay.invalidSources.isEmpty()) {
+            "仅手填字面量；不执行或等价真实 handler；UPSERT 不填"
+        } else {
+            "模拟值无效，保留占位符：${overlay.invalidSources.joinToString()}"
+        }
+        toolTipText = text
+    }
+    return overlay
 }
 
 /**
@@ -657,6 +747,7 @@ internal fun SqlPreviewPanel.clearConditionValues() {
 /** 清除按钮：清空批量参数列分区所有参数值（不影响勾选态）。 */
 
 internal fun SqlPreviewPanel.clearBatchValues() {
+    resetFieldFillSimulation()
     val model = current?.batchModel ?: return
     (model.toggleColumns + model.fixedColumns).forEach { col ->
         paramValues[col.source] = ""
@@ -1260,12 +1351,23 @@ internal fun SqlPreviewPanel.historyCacheKey(): String? {
 
 internal fun SqlPreviewPanel.recallFromHistory() {
     val key = historyCacheKey() ?: return
-        val history = paramHistoryCache.recall(key) ?: historySnapshotFallback(key) ?: return
+    val cached = paramHistoryCache.recall(key)
+    val history = cached ?: historySnapshotFallback(key) ?: return
     if (history.isEmpty()) return
     var applied = 0
     var stateRestored = false
     history.forEach { (source, value) ->
         when {
+            source.startsWith(FieldFillSimulation.SNAPSHOT_PREFIX) -> {
+                // Historical SQL snapshots are not an authority for simulation values.
+                val fieldSource = source.removePrefix(FieldFillSimulation.SNAPSHOT_PREFIX)
+                if (cached != null && fieldFillPreview === current && paramHistoryCache.isCurrentGeneration() &&
+                    fieldSource in fieldFillFields && fieldFillValues[fieldSource].isNullOrEmpty()) {
+                    fieldFillValues[fieldSource] = value
+                    fieldFillFields[fieldSource]?.text = value
+                    stateRestored = true
+                }
+            }
             source.startsWith(SNAPSHOT_CHK) -> {
                 val id = source.removePrefix(SNAPSHOT_CHK)
                 if (value == "1") enabledIds.add(id) else enabledIds.remove(id)
@@ -1321,6 +1423,11 @@ internal fun SqlPreviewPanel.syncToggleChecksFromState() {
 
 internal fun SqlPreviewPanel.buildHistorySnapshot(): Map<String, String> {
     val snapshot = paramValues.toMutableMap()
+    if (paramHistoryCache.isCurrentGeneration()) {
+        fieldFillValues.forEach { (source, value) ->
+            if (value.isNotEmpty()) snapshot[FieldFillSimulation.SNAPSHOT_PREFIX + source] = value
+        }
+    }
     val seenToggles = mutableSetOf<String>()
     (conditionCheckBoxes + batchCheckBoxes).forEach { cb ->
         val id = cb.getClientProperty(PROP_TOGGLE_ID) as? String ?: return@forEach
@@ -1428,7 +1535,12 @@ internal fun SqlPreviewPanel.detectInClauseParams(sql: String): Set<Int> {
  * 执行前由 [warnOnPlaceholderMismatch] 如实标注——不阻断。
  */
 
-internal fun SqlPreviewPanel.backfillParamsBySource(sql: String, sources: List<String>, hints: List<ParamHint> = emptyList()): String {
+internal fun SqlPreviewPanel.backfillParamsBySource(
+    sql: String,
+    sources: List<String>,
+    hints: List<ParamHint> = emptyList(),
+    simulatedLiterals: Map<Int, String> = emptyMap(),
+): String {
     if (sources.isEmpty()) return sql
     val positions = placeholderPositions(sql)
     placeholderReconciliation = PlaceholderCardinality.mismatchMarker(positions.size, sources.size)
@@ -1440,7 +1552,7 @@ internal fun SqlPreviewPanel.backfillParamsBySource(sql: String, sources: List<S
         sb.append(sql, prev, pos)
         val source = sources.getOrNull(paramIndex)
         val v = source?.let { paramValues[it] }
-        sb.append(renderParamValue(v, hints.getOrNull(paramIndex), source))
+        sb.append(simulatedLiterals[paramIndex] ?: renderParamValue(v, hints.getOrNull(paramIndex), source))
         paramIndex++
         prev = pos + 1
     }

@@ -196,6 +196,9 @@ class ParamHistoryCache(private val maxSize: Int = MAX_HISTORY_SIZE) {
     /** 当前实例的存储代际令牌；异步写回须在 EDT 取快照时一并捕获。 */
     internal fun generationToken(): Long = observedStorageGeneration
 
+    /** R92: old open panels must not export cleared simulation values into fresh snapshots. */
+    internal fun isCurrentGeneration(): Boolean = observedStorageGeneration == storageGeneration.get()
+
     /**
      * 新预览开始时接纳最新代际。showResult 已先清空并重建面板参数状态，因此此时不再携带清理前
      * 的 UI 快照；接纳后允许保存新输入。清理发生后仍停留在原预览的面板保持旧代际，任何写回均拒绝。
