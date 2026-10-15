@@ -63,7 +63,10 @@ class XmlSqlGutterLineMarkerProvider : LineMarkerProvider {
             val project: Project = elt.project
             val tag = elt.parent as? XmlTag ?: return
             val file = tag.containingFile as? XmlFile ?: return
+            val contextRef = java.util.concurrent.atomic.AtomicReference<cn.song.mybatisplus.visualizer.context.PreviewSourceContext?>()
             SqlPreviewService.previewAsync(project, {
+                val context = XmlPreviewService.resolveSourceContext(file, tag)
+                contextRef.set(context)
                 // T-M25.2：传 project 解析 @class@field 静态常量（用户项目常量类字段值）
                 // T-M27.3/4：注入实体上下文（namespace → Mapper 接口 → 主实体 + @TableName 联表候选）——
                 // 预览弹窗补全表/列来源；候选表名全位置提示（主表去重）
@@ -71,9 +74,9 @@ class XmlSqlGutterLineMarkerProvider : LineMarkerProvider {
                 val entity = src.main?.let { m ->
                     SqlCompletionContext(m.tableName, m.columns, m.tableAlias, m.columnComments, m.tableComment, src.candidates)
                 }
-                XmlPreviewService.preview(file.text, tag.getAttributeValue("id"), project, entity)
+                XmlPreviewService.preview(file.text, tag.getAttributeValue("id"), project, entity, sourceContext = context)
             }) { result ->
-                SqlPreviewService.showResult(project, result)
+                SqlPreviewService.showResult(project, result, sourceContext = contextRef.get())
             }
         }
     }

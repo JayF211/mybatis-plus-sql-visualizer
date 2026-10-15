@@ -497,7 +497,7 @@ class ConvertToSqlAction : AnAction() {
             statement = statement.parentTag
         }
         if (statement != null) {
-            previewXmlTag(project, file, statement, sourceLocation)
+            previewXmlTag(project, file, statement, sourceLocation, editor.caretModel.offset)
             return
         }
         // 光标不在语句内 → 全部语句候选（T-M25-01）
@@ -544,7 +544,7 @@ class ConvertToSqlAction : AnAction() {
 
     /** 预览单个 XML 语句（后台转换，EDT 渲染；T-M25.2 传 project 解析静态常量引用）。 */
     /** O-72：统一 XML 语句分发——通用内嵌 SQL 载体走 inline 预览，其余走 mapper 语句预览。 */
-    private fun previewXmlTag(project: Project, file: XmlFile, tag: XmlTag, sourceLocation: String?) {
+    private fun previewXmlTag(project: Project, file: XmlFile, tag: XmlTag, sourceLocation: String?, caretOffset: Int? = null) {
         if (XmlInlineSqlDetector.isSqlCarrierTag(tag)) {
             SqlPreviewService.previewAsync(project, {
                 XmlInlineSqlPreviewService.preview(project, tag)
@@ -553,20 +553,23 @@ class ConvertToSqlAction : AnAction() {
             }
             return
         }
-        previewXml(project, file, tag, sourceLocation)
+        previewXml(project, file, tag, sourceLocation, caretOffset)
     }
 
-    private fun previewXml(project: Project, file: XmlFile, tag: XmlTag, sourceLocation: String?) {
+    private fun previewXml(project: Project, file: XmlFile, tag: XmlTag, sourceLocation: String?, caretOffset: Int?) {
+        val contextRef = java.util.concurrent.atomic.AtomicReference<cn.song.mybatisplus.visualizer.context.PreviewSourceContext?>()
         SqlPreviewService.previewAsync(project, {
+            val context = XmlPreviewService.resolveSourceContext(file, tag, caretOffset)
+            contextRef.set(context)
             // T-M27.3/4：注入实体上下文（namespace → Mapper 接口 → 主实体 + @TableName 联表候选）——
             // 预览弹窗补全表/列来源；候选表名全位置提示（主表去重）
             val src = XmlSqlCompletionContextResolver.resolveXml(project, tag)
             val entity = src.main?.let { m ->
                 SqlCompletionContext(m.tableName, m.columns, m.tableAlias, m.columnComments, m.tableComment, src.candidates)
             }
-            XmlPreviewService.preview(file.text, tag.getAttributeValue("id"), project, entity)
+            XmlPreviewService.preview(file.text, tag.getAttributeValue("id"), project, entity, sourceContext = context)
         }) { result ->
-            SqlPreviewService.showResult(project, result, sourceLocation)
+            SqlPreviewService.showResult(project, result, sourceLocation, contextRef.get())
         }
     }
 
