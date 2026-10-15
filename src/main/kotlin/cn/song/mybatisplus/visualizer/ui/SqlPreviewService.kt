@@ -314,7 +314,12 @@ class SqlPreviewService(internal val project: Project) {
                         paramTable = null,
                         wrapperType = located.chain.wrapperType,
                         tableName = null,
-                        warning = "无法推断 Wrapper 实体表（服务链或 Kotlin 源码）；SQL 无法生成",
+                        warning = if (located.entityResolutionFailed) {
+                            "⚠ 字符串服务链无法推断实体表：Wrapper 链未携带实体类型" +
+                                "（无 <实体> 类型实参，服务接口/调用返回类型也无实体泛型），SQL 无法生成"
+                        } else {
+                            "Kotlin 源码无法推断实体表；SQL 无法生成"
+                        },
                         renderedDialect = dialect,
                         dialectDecision = decision,
                     )
