@@ -340,6 +340,17 @@ public class PlatformSignatureChecker {
             missing += checkExact(candidate, "getConnectionConfig", config, false);
             missing += checkExact(config, "getUrl", String.class, false);
             System.out.println("INFO O145 connection config owner=" + config.getName());
+            Class<?> dbms = Class.forName("com.intellij.database.Dbms", false, loader);
+            if (dbms.getField("UNKNOWN").getType() != dbms) {
+                System.out.println("MISS Dbms.UNKNOWN field type");
+                missing++;
+            }
+            Class<?> instanceBean = Class.forName("com.intellij.database.DbmsExtension$InstanceBean", false, loader);
+            Method factory = instanceBean.getDeclaredMethod("doGetInstance", Class.class, dbms);
+            missing += check(factory, "DbmsExtension.InstanceBean.doGetInstance(Class,Dbms)");
+            missing += checkClassBytes(loader, instanceBean.getName(), "sql.dialect INSTANCE field reader",
+                    "INSTANCE", "getField");
+            System.out.println("INFO DM compatibility parent=UNKNOWN (not native DM support)");
             return missing;
         } catch (ClassNotFoundException e) {
             System.out.println("MISS DatabaseTools SQL context API class: " + e.getMessage());

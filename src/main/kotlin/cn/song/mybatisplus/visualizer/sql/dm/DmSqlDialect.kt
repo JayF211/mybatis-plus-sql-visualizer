@@ -24,7 +24,7 @@ import com.intellij.sql.dialects.sql92.Sql92Dialect
  * 已知边界（D2「完整实现」候选，本轮不做）：无 DM 专属 parser/错误检查，`DM` 文件的高亮
  * 视觉与 Generic 相近；关键字集未按达梦扩展。
  */
-class DmSqlDialect : SqlLanguageDialectBase(ID) {
+class DmSqlDialect private constructor() : SqlLanguageDialectBase(ID) {
 
     override fun createTokensHelper(): TokensHelper = Sql92Dialect.INSTANCE.tokensHelper
 
@@ -39,6 +39,9 @@ class DmSqlDialect : SqlLanguageDialectBase(ID) {
     override fun supportsErrorHighlighting(): Boolean = false
 
     companion object {
+        // sql.dialect 使用 DbmsExtension.InstanceBean，读取 public static INSTANCE，不调用构造器。
+        @JvmField val INSTANCE: DmSqlDialect = DmSqlDialect()
+
         /**
          * 语言/方言 id：亦即 [cn.song.mybatisplus.visualizer.sql.UrlSubprotocolDialects] 达梦候选链
          * （PLUGIN_DIALECT_TO_SQL_LANGUAGE_IDS["DM（达梦）"] = [DM, Dameng]）的命中值。

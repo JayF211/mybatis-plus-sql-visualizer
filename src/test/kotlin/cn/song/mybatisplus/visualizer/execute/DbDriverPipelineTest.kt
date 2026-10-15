@@ -91,7 +91,10 @@ class DbDriverPipelineTest : BasePlatformTestCase() {
     /** T-M19/V178：真实 DatabaseTools 服务，不建连、不读取 demo 配置、不替换生产 hook。 */
     @Test
     fun testRealSqlMappingInheritanceAndReparse() {
-        assertTrue(java.awt.GraphicsEnvironment.isHeadless())
+        assertTrue(com.intellij.openapi.application.ApplicationManager.getApplication().isHeadlessEnvironment)
+        val available = com.intellij.sql.dialects.SqlDialectMappings.getInstance(project).availableValues
+        assertTrue("DM compatibility language must remain registered", available.any { it.id == "DM" })
+        assertEquals("GenericSQL", com.intellij.sql.dialects.SqlDialectMappings.getDefaultSqlDialect().id)
         val mappings = com.intellij.sql.dialects.SqlDialectMappings.getInstance(project)
         val pg = com.intellij.lang.Language.findLanguageByID("PostgreSQL")
             as com.intellij.sql.dialects.SqlLanguageDialect
@@ -140,9 +143,15 @@ class DbDriverPipelineTest : BasePlatformTestCase() {
         ds.name = "v178-synthetic"
         ds.url = "jdbc:postgresql://127.0.0.1:1/v178_never_connect"
         ds.isAutoSynchronize = false
+        ds.databaseDriver = DatabaseDriverManager.getInstance().getDriver("postgresql")!!
         manager.addDataSource(ds)
         val scopes = com.intellij.sql.dialects.SqlResolveMappings.getInstance(project)
-        val psi = myFixture.addFileToProject("v178/scope.sql", "SELECT 1")
+        val scopeFile = myFixture.addFileToProject("v178/scope.sql", "SELECT 1").virtualFile
+        com.intellij.openapi.application.WriteAction.run<RuntimeException> {
+            com.intellij.sql.dialects.SqlDialectMappings.getInstance(project).setMapping(scopeFile,
+                com.intellij.lang.Language.findLanguageByID("PostgreSQL") as com.intellij.sql.dialects.SqlLanguageDialect)
+        }
+        val psi = com.intellij.psi.PsiManager.getInstance(project).findFile(scopeFile)!!
         val store = cn.song.mybatisplus.visualizer.sql.ModuleDataSourceBindingStore.getInstance(project)
         try {
             assertTrue(psi is com.intellij.sql.psi.SqlFile)
@@ -191,6 +200,7 @@ class DbDriverPipelineTest : BasePlatformTestCase() {
         ds.name = "v178-disconnected"
         ds.url = "jdbc:postgresql://127.0.0.1:1/v178_never_connect"
         ds.isAutoSynchronize = false
+        ds.databaseDriver = DatabaseDriverManager.getInstance().getDriver("postgresql")!!
         manager.addDataSource(ds)
         val psi = myFixture.addFileToProject("v178/console.sql", "SELECT 1")
         var console: com.intellij.database.console.JdbcConsole? = null

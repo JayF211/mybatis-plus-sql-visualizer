@@ -63,7 +63,8 @@ class DmDialectRegistrationWiringTest {
         val xml = File(repoRoot(), "src/main/resources/META-INF/database-optional.xml").readText()
         assertTrue(
             "database-optional.xml 应含达梦 sql.dialect 注册（摘掉即红，反向锚点）",
-            xml.contains("<sql.dialect dbms=\"DM\""),
+            xml.contains("<sql.dialect dbms=\"UNKNOWN\" order=\"last\"") &&
+                !xml.contains("<sql.dialect dbms=\"DM\""),
         )
         assertTrue(
             "注册的 implementationClass 应指向 DmSqlDialect",

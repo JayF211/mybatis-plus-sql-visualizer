@@ -22,7 +22,9 @@
          随之命中，O-136 的「按数据源方言出 Runner」对达梦闭合。最小实现=Generic 样板
          （javap：TokensHelper 委托 Sql92、Dbms.UNKNOWN、不开错误高亮）。 -->
     <extensions defaultExtensionNs="com.intellij">
-        <sql.dialect dbms="DM"
+        <!-- dbms 是平台 Dbms 枚举名，不是语言 ID。243/253/262 均无 DM 枚举；
+             与 Sql92/Generic 一样注册 UNKNOWN，保留语言 ID=DM，只提供 Generic 兼容能力。 -->
+        <sql.dialect dbms="UNKNOWN" order="last"
                      implementationClass="cn.song.mybatisplus.visualizer.sql.dm.DmSqlDialect"/>
     </extensions>
 
