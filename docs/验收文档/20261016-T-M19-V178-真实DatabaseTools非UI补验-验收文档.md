@@ -2,7 +2,7 @@
 
 ## 范围与运行前提
 
-基线 `dev@4c7ea2c3`，独立分支 `t-m19-v178-nonui`。没有启动 runIde、GUI 验收、全量、verify、clean 或 --stop；不合并、不推送。真实平台运行测试为 IU-243.28141.41；253/262 仅独立发行物 API 检查，不将签名通过写成服务运行通过。
+基线 `dev@4c7ea2c3`，独立分支 `t-m19-v178-nonui`。没有启动 runIde、GUI 验收、全量、verify、clean 或 --stop；不合并、不推送。首阶段真实平台为IU-243.28141.41；后续已追加253真实八例、262显式重排classpath对照八例及243 H2/自然注入实跑，详见后文续验节。签名证据始终与服务运行证据分开。
 
 普通 test/testFast 的 classpath 主动排除 DatabaseTools，因此不具备证明真实 SQL PSI 的条件。`testDatabase` 是五个 `testDb*` 任务的聚合，而非一个 Test 任务。四类 Console/Selector/Diagram/ExecDoc 默认读取 demo 私有 `.idea/dataSources.xml` 或 `.local.xml`，部分依赖 `car_device_info/station_info`；本次没有运行这些读取路径。只运行既有 `testDbDriverPipeline`，并在同类追加真实平台 fixture。驱动种子读取的仅是驱动清单与 jar，不读取数据源密码文件。
 
@@ -69,6 +69,57 @@ DM 两次初始化失败是产品错误，已经修复，不作为环境限制�
 
 修复首次平台 **8/0/0/0**；撤回关键分支再次 **3/3/0/0**，仍错误 STRONG（`build/v178-scope-reverse-red.xml`，UTC 18:49:12）；恢复后最终真实平台 **8/0/0/0**（UTC 18:51:42.947），四类定向回归 Registry 2、Bridge 7、Decision 7、StatusText 2，合计 **18/0/0/0**，命令退出0（`call_iRtweb70Sd78Ve7fZFAbxJuv-stdout.log`）。真实测试同时验证三配置清除后恢复默认路径、手动 Oracle 和 captured MySQL 不受损、可见状态包含专用诊断。XML 观测实际 sql provider 扩展列表为 `[]`；因此非空真实 provider 在本 fixture 未覆盖，未人为注册伪 provider 换绿。纯测试仅回归既有手动/provider优先级，安全修复主证据是以上真实服务、真实模式与真实 PSI，不是手造快照。
 
-## 证据边界
+## 续验：253/262 真实运行而非签名替代
 
-真实合成配置、真实 SqlFile、真实映射及断开态 session/console 可以不启动 runIde 验证；不等于真实连接后提交 SQL、Runner 选择 UI、active console 切库、二击重渲染、结果页、取消查询或视觉矩阵。Java/Kotlin/XML 的真实宿主注入、253/262 平台运行语义仍需独立 fixture 或获准后 UI 验证。DBX 的 MySQL8.0.12 与 PostgreSQL16.14/dbx_test 引擎语义由主控独立记录，本任务未读取其凭据，不能拼接为 IDE Runner 端到端成功。
+使用同一独立树 `d38c1adc` 的 scope 安全代码，不改主控生产冻结。保留根编译基线243，只临时在既有 testIde 的 testDbDriverPipeline 设置 `localPath` 与精确 `testFramework(Platform, version)`，API依据本地 IPGP 2.18.1 sources.jar；不使用 gifRecord，不启动 runIde。临时构建修改不提交。
+
+253 目标为缓存 IU-253.33514.17、自带 JBR21.0.10。首次仅设置 localPath 时框架仍取根243，初始化报 Java11Shim 缺失；这是测试框架混装，不能算产品失败。显式锁253.33514.17后八例实际入场，七例通过，一例旧驱动夹具方法失配。253把 loader 的一参 List<File> 改为两参 Context/Collection<Path>，driver/source classpath读取迁至 DatabaseDriverClasspathManager；测试按真实jar javap适配，并仍要求真实jar路径存在与版本匹配，未用stub。
+
+253最终 **8/0/0/0**，UTC `2026-10-15T19:55:38.633Z`，用时8.942s，Gradle退出0。证据 `build/v178-253-eight-green.xml`、`build/v178-253-idea.log`、日志 `call_CwIEoc1YbED03Li5vpWCcmSP-stdout.log`；243旧八例另存 `build/v178-243-eight-green.xml`。测试适配提交 `39ea87e4`。
+
+262目标缓存 IU-262.10968.63、自带JBR25.0.4、精确framework 262.10968.63。第一次实际八例为 **8/8/0/0**，均在 project startup 初始化失败，还未执行 DatabaseTools 断言。原XML `build/v178-262-first-red.xml`，日志 `call_pgMhUQQUihb6zEUv8wcMrOxQ-stdout.log`。
+
+根因不是缺DatabaseTools：平台 `ultimate-plugin.jar` 注册 `postStartupActivity implementation=Z.Z.Z.Z.Z`，而核心 `product-backend.jar` 也含同名混淆class。IPGP测试把平台与插件放到同一个PathClassLoader；核心在前，加载的类无构造器，抛“Cannot find suitable constructor”，正确ultimate版本有 `<init>()V` 与 `execute(Project,Continuation)`。原加载顺序为核心classpath在前、bundled插件在后（IPGP TestIdeTask源码）；只做一次单变量对照，前置同一发行物真实ultimate jar，不删除EP/不stub。即便通过，也仅是显式重排测试classpath的fixture，不是标准IDE装配验证。
+
+| 262发行物 | jar SHA256 | Z/Z/Z/Z/Z.class SHA256 |
+|---|---|---|
+| lib/product-backend.jar | 77a4606272b12bf98d71a9aa8e1734d22d6a3ab151fd689a35849b74feb958ef | 9dd2ed07ce84cdba2f4366c26d689beb717a04a32dde452ee4b2e0740d81afb4 |
+| plugins/ultimate-plugin/lib/ultimate-plugin.jar | 9906a69af6aa17c800780b5c6ab1945cb0b7b99862635e78850e4ae674cc2194 | fb020cc7a80881ebc627553a09e10fb69e80277c69e7f81aa727a0c0ff04aa25 |
+
+方法表直接解析真实classfile获得（本机javap24不能读major69，发行JBR无jdk.jdeps模块，未拿这些工具限制当产品问题）。核心版本仅有混淆方法 `Z(...)V`；插件版本有无参构造、execute、静态初始化等。对照最终 **8/0/0/0**，UTC `2026-10-15T20:08:09.797Z`、12.212s，Gradle退出0。证据 `build/v178-262-reordered-eight-green.xml`、`build/v178-262-reordered-idea.log`、日志 `call_4sKiLPHeBO9NJFeOKvW9CSI6-stdout.log`。XML打印实际 build=IU-262.10968.63、java=25.0.4、fixture来源精确262.10968.63/test-framework jar，失败扩展class实际来自ultimate-plugin.jar。八条断言均入场且零skip。结论只限“显式重排测试classpath下的262 fixture通过”，原默认组装startup失败保留，不能写成标准IDE装配真机通过。
+
+### 跨版重放命令与证据锁定
+
+临时 task 配置仅对 testDbDriverPipeline 生效：`localPath.set(file(v178PlatformPath))`、`testFramework(Platform,v178FrameworkVersion)`；262对照另在Test.classpath前置 `files(v178UltimateFirst)`。测试仍编译于243，无gifRecord平台切换。命令均经parallel check/register和gradle-gate max2/in-process后台执行，未与主控另开第二路。
+
+```text
+testDbDriverPipeline --tests cn.song.mybatisplus.visualizer.execute.DbDriverPipelineTest
+-Pv178PlatformPath=<缓存idea-2025.3.5-win绝对路径> -Pv178FrameworkVersion=253.33514.17
+-PgifRecord=false -Pkotlin.compiler.execution.strategy=in-process --console=plain
+```
+
+262同命令换对应缓存路径/framework版本，并仅对照轮加 `-Pv178UltimateFirst=<同发行包>/plugins/ultimate-plugin/lib/ultimate-plugin.jar`。所有缓存路径和输出位置均在本节上文与日志可核，非安装日常IDE修改。
+
+| 锁定XML | SHA256 |
+|---|---|
+| v178-243-eight-green.xml | e91bc8387f3809f2daef1187c11b21a4761f72c3692dc9fdb10b7e1fdc9dc1c4 |
+| v178-253-eight-green.xml | ad4a0aea0f7e8f4f00781b4fe420a7c289d535b26baa62fcad162d4242cfd782 |
+| v178-262-first-red.xml | 4f5cbd70396776592966d2bf6d4fce89e8912cc6fa723bf88db55ceb52addc59 |
+| v178-262-reordered-eight-green.xml | 3ea1df9a17422ce7e3bc72c04a399594f9d0de5ba6ce58b82addd318211c291a |
+
+## 续验：243 平台连接与自然宿主注入
+
+独立真实probe **4/0/0/0**，UTC `2026-10-15T20:14:18.425Z`，35.573s，Gradle退出0。原结果 `build/test-results/testDbDriverPipeline/TEST-cn.song.mybatisplus.visualizer.execute.DbHeadlessConnectionProbe.xml`，锁定副本 `build/v178-243-h2-natural-green.xml`，日志 `call_oQE90GUyGZ987kIjRru0v5Nw-stdout.log`。后续testDbDriverPipeline会覆盖原结果目录，复核优先用锁定副本。
+
+- 本地H2正对照：真实H2 2.3.232 jar挂载到平台h2.unified复制驱动，去掉在线artifact；仅 `jdbc:h2:mem:<随机名>;DB_CLOSE_DELAY=0`、sa空密码，无业务配置。真实 `DatabaseConnectionManager.Builder.createBlockingNonCancellable` 返回连接，真实RemoteStatement执行 `SELECT 42 AS answer` 得42，`EXPLAIN SELECT 42 AS answer`返回 `SELECT 42 AS "ANSWER"`。读连接的实际数据源UUID，并与真实fromSession/fromConsole目标UUID及H2方言对齐。查询有10秒驱动超时，连接/查询分别60/20秒平台有界等待，finally释放console、连接、数据源。
+- 关键边界：日志 `sessionConnected=false`。此次证明平台真实连接管线执行SQL与同源目标API，不证明console自有session已连接，不证明用户Runner点击/提交双闸。没有把不同连接拼成同次Runner成功。
+- 自然注入正对照：IntelliLang=true，SQL语言是真实 `com.intellij.sql.psi.SqlLanguage`；Java `// language=SQL`、Kotlin同注释、XML `<!-- language=SQL -->` 均由平台自然生成 `com.intellij.sql.psi.impl.SqlFileImpl`，language=GenericSQL。宿主分别是Java PSI、KtFile、XmlFileImpl，没有注册测试injector、PlainText替身或ForTest缝。Java注入结果进一步进入生产桥，actualSqlPsi=true、AVAILABLE。
+- 关键边界：Java实际providers=[]；不证明非空provider分支、MyBatis Mapper特定注入规则、253/262自然注入、注入后的目录映射继承全部成立。三种简单language注释宿主已证，不扩写为完整V178注入矩阵。
+
+可重放探针保存于既有 `dev-support/DbHeadlessConnectionProbe.kt`，不进入默认测试发现，避免普通test剥离DatabaseTools时误加载。重放步骤：在独立树临时复制到 `src/test/kotlin/cn/song/mybatisplus/visualizer/execute/`；将既有testDbDriverPipeline的FQCN filter临时替换为 `cn.song.mybatisplus.visualizer.execute.DbHeadlessConnectionProbe`；经登记和gate运行该任务加同名`--tests`。使用243默认平台，无其他四类业务配置测试。跑完删除临时test源副本、还原构建配置。probe源码直接保存本次实跑内容，不将失败改成skip。
+
+## 证据边界与收尾
+
+最终相同测试适配回归243 **8/0/0/0**，UTC `2026-10-15T20:16:33.950Z`、7.242s，命令退出0；锁定 `build/v178-243-final-eight-green.xml`，日志 `call_YYYEhzQD16dRRcKODZtT2PHb-stdout.log`。XML实际build243.28141.41、JBR21.0.7、framework243.28141.41。临时build.gradle.kts/buildSrc配置全部还原，未提交平台切换或jar重排默认值，生产文件未改。
+
+真实合成配置、真实SqlFile、真实映射和断开态session/console已在243、253及限定重排的262实跑；243额外证明了平台H2连接查询与三种简单自然宿主注入。它们不等于Runner选择UI、active console自有session查询/切库、二击重渲染、结果页、取消查询或视觉矩阵。非空provider、253/262自然宿主注入及标准262装配未由本次证据证明。DBX的MySQL8.0.12与PostgreSQL16.14/dbx_test引擎语义由主控独立记录，本任务未读取其凭据，不能拼接为IDE Runner端到端成功。

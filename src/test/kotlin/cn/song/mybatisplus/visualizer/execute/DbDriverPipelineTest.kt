@@ -136,6 +136,11 @@ class DbDriverPipelineTest : BasePlatformTestCase() {
     /** T-M19/V178：真实 DatabaseTools 服务，不建连、不读取 demo 配置、不替换生产 hook。 */
     @Test
     fun testRealSqlMappingInheritanceAndReparse() {
+        println("V178 runtime build=${com.intellij.openapi.application.ApplicationInfo.getInstance().build} " +
+            "java=${System.getProperty("java.version")} " +
+            "fixture=${BasePlatformTestCase::class.java.getResource("BasePlatformTestCase.class")}")
+        val ultimate = runCatching { Class.forName("Z.Z.Z.Z.Z", false, javaClass.classLoader) }.getOrNull()
+        println("V178 ultimate class=${ultimate?.getResource("Z.class")}")
         assertTrue(com.intellij.openapi.application.ApplicationManager.getApplication().isHeadlessEnvironment)
         val available = com.intellij.sql.dialects.SqlDialectMappings.getInstance(project).availableValues
         assertTrue("DM compatibility language must remain registered", available.any { it.id == "DM" })
