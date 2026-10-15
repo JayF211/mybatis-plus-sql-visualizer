@@ -159,12 +159,15 @@ class ConvertToSqlAction : AnAction() {
         }
 
         // PSI 转换在后台线程执行（EDT 上慢操作会被 2025.3+ 禁止），回调在 EDT 渲染
+        val wrapperContext = java.util.concurrent.atomic.AtomicReference<cn.song.mybatisplus.visualizer.context.PreviewSourceContext?>()
         SqlPreviewService.previewAsync(project, {
-            service.preview(element)
+            val context = service.resolveWrapperSourceContext(element)
+            wrapperContext.set(context)
+            service.preview(element, context)
         }) { result ->
             if (result != null) {
                 // 统一展示入口（M10-03）：按显示方式（F-16）弹窗 / 工具窗口 / 两者
-                SqlPreviewService.showResult(project, result, sourceLocation)
+                SqlPreviewService.showResult(project, result, sourceLocation, wrapperContext.get())
             } else if (!tryHqlFallback(service, project, element, sourceLocation)
                 && !tryNamedQueryFallback(service, project, element, sourceLocation)
                 && !tryJdbcTemplateFallback(project, element, sourceLocation)
@@ -675,8 +678,13 @@ class ConvertToSqlAction : AnAction() {
 
     /** 预览单个链首调用（后台转换，EDT 渲染）。 */
     private fun preview(service: SqlPreviewService, anchor: PsiElement, project: Project, sourceLocation: String?) {
-        SqlPreviewService.previewAsync(project, { service.preview(anchor) }) { result ->
-            SqlPreviewService.showResult(project, result, sourceLocation)
+        val contextRef = java.util.concurrent.atomic.AtomicReference<cn.song.mybatisplus.visualizer.context.PreviewSourceContext?>()
+        SqlPreviewService.previewAsync(project, {
+            val context = service.resolveWrapperSourceContext(anchor)
+            contextRef.set(context)
+            service.preview(anchor, context)
+        }) { result ->
+            SqlPreviewService.showResult(project, result, sourceLocation, contextRef.get())
         }
     }
 

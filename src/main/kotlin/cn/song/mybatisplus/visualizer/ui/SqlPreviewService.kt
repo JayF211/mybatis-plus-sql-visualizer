@@ -1,10 +1,12 @@
 package cn.song.mybatisplus.visualizer.ui
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
+import cn.song.mybatisplus.visualizer.context.ActualSqlPsiResolver
 import cn.song.mybatisplus.visualizer.context.ModuleIdentityResolver
 import cn.song.mybatisplus.visualizer.context.ModuleIdentityResolution
 import cn.song.mybatisplus.visualizer.context.PreviewSourceContext
 import cn.song.mybatisplus.visualizer.context.PreviewSourceOrigin
+import cn.song.mybatisplus.visualizer.context.SqlPsiResolution
 import cn.song.mybatisplus.visualizer.sql.DialectDecisionEngine
 import cn.song.mybatisplus.visualizer.config.ProjectPluginSettings
 import cn.song.mybatisplus.visualizer.converter.ConverterRegistry
@@ -244,7 +246,19 @@ class SqlPreviewService(internal val project: Project) {
         return result
     }
 
-    fun preview(anchor: PsiElement): PreviewResult? {
+    /** Wrapper 的 owner 是调用所在源码文件，不是实体类文件，也不是把 Java/Kotlin 当成 SQL PSI。 */
+    fun resolveWrapperSourceContext(anchor: PsiElement): PreviewSourceContext {
+        val file = anchor.containingFile
+        val owner = PsiTreeUtil.getParentOfType(anchor, PsiMethod::class.java, false) ?: anchor
+        val sqlResolution = if (file == null) SqlPsiResolution.None else
+            ActualSqlPsiResolver.resolve(file, owner, anchor.textOffset)
+        val moduleResolution = file?.virtualFile?.let { ModuleIdentityResolver.resolve(project, it) }
+            ?: ModuleIdentityResolution.None
+        return PreviewSourceContext(project, PreviewSourceOrigin.PSI, file,
+            sqlPsiResolution = sqlResolution, moduleResolution = moduleResolution)
+    }
+
+    fun preview(anchor: PsiElement, sourceContext: PreviewSourceContext? = null): PreviewResult? {
         // JDBC 模板 SQL 字符串预览（正向）：queryForList/update 等方法的字符串 SQL 实参 → 预览
         // 放在最前：JDBC 分支不写 Wrapper 缓存、不依赖实体解析，与既有路径完全隔离
         if (settings?.state?.jdbcSqlPreviewEnabled != false) {
@@ -254,12 +268,24 @@ class SqlPreviewService(internal val project: Project) {
         }
 
         val file = anchor.containingFile ?: return null
+        val context = sourceContext?.takeIf { it.project == project && it.hostPsiFile == file }
+            ?: resolveWrapperSourceContext(anchor)
+        // Java/Kotlin 源码仅提供 owner/module，只有真正的 SqlFile 才可供平台 SQL 映射查询。
+        val decision = if (context.sqlPsiResolution is SqlPsiResolution.Ambiguous ||
+            context.moduleResolution is ModuleIdentityResolution.Ambiguous) {
+            cn.song.mybatisplus.visualizer.sql.DialectDecisionEngine.Decision(
+                cn.song.mybatisplus.visualizer.sql.DialectDecisionEngine.Status.AMBIGUOUS, null,
+                cn.song.mybatisplus.visualizer.sql.DialectDecisionEngine.Confidence.FALLBACK, null)
+        } else DialectRegistry.decision(project, context.sqlPsiFile?.virtualFile,
+            context.sqlPsiFile, context.canonicalModuleKey)
+        val dialect = DialectRegistry.byName(decision.dialectName)
         // 缓存键含锚点偏移：同文件多个 Wrapper（查询/删除/修改）各自独立缓存，避免串结果
         // M14.6：缓存键含「替换 ? 占位符」开关，开关切换后不命中旧结果
         // T-M19.4（用户实测：表名配置修改后预览不生效）：缓存键含**表配置签名**——设置变更
         // （文件戳不变的场景）不再命中旧解析结果
         val resolveVariables = effectiveReplaceParams()
-        val located = cache.getOrCompute(file, anchor.textRange.startOffset, resolveVariables, tableConfigSignature()) {
+        val located = cache.getOrCompute(file, anchor.textRange.startOffset, resolveVariables,
+            "${tableConfigSignature()}|${decision.status}|${decision.dialectName}|${decision.source}|${decision.dataSourceIds}") {
             WrapperLocator.locateWithTable(anchor, resolveVariables)
         }
         // T-M19.4（用户实测：实体文件新增/修改 @TableName 后预览不生效——缓存按**锚点文件**戳失效，
@@ -278,7 +304,7 @@ class SqlPreviewService(internal val project: Project) {
                 // 返回带显式警示的空结果（面板红字），不再静默 return null——
                 // 「返回 null = 非 wrapper 锚点」契约收窄保留：仅 located 带 entityResolutionFailed
                 // 标记（服务链形态）时降级，工厂/Kotlin/构造形态与其余锚点行为不变
-                if (located.entityResolutionFailed) {
+                if (located.entityResolutionFailed || file.language.id.equals("kotlin", ignoreCase = true)) {
                     LOG.info("preview: DEGRADE table=null, wrapperType=${located.chain.wrapperType}, " +
                              "anchor=${anchor.textRange}")
                     return PreviewResult(
@@ -288,8 +314,9 @@ class SqlPreviewService(internal val project: Project) {
                         paramTable = null,
                         wrapperType = located.chain.wrapperType,
                         tableName = null,
-                        warning = "⚠ 字符串服务链无法推断实体表：Wrapper 链未携带实体类型" +
-                            "（无 <实体> 类型实参，服务接口/调用返回类型也无实体泛型），SQL 无法生成",
+                        warning = "无法推断 Wrapper 实体表（服务链或 Kotlin 源码）；SQL 无法生成",
+                        renderedDialect = dialect,
+                        dialectDecision = decision,
                     )
                 }
                 LOG.info("preview: RETURN_NULL table=null, wrapperType=${located.chain.wrapperType}, " +
@@ -347,7 +374,7 @@ class SqlPreviewService(internal val project: Project) {
             // 缺陷②修复：参数历史键指纹取「注入前」语句文本——下面这一串注入（逻辑删除 / 乐观锁 /
             // 多租户 / 数据权限 / 分页 LIMIT）都会改写 SQL 文本，而历史键原先是 SHA-256(SQL 全文)，
             // 用户一开这些开关键就变 → 已回填参数召回 miss 退回占位符（且防抖后新键以空值覆盖落库）。
-            val historyFingerprintSeed = SqlGenerator.generate(statement, compact = true, dialect = currentDialect())
+            val historyFingerprintSeed = SqlGenerator.generate(statement, compact = true, dialect = dialect)
             // T-M15-07：逻辑删除注入（@TableLogic 实体 + 配置开启）——查询/计数/exists/删除自动追加 `AND deleted = 0`
             // （对齐 MyBatis-Plus 全局 logic-delete-field 配置；UPDATE 不注入——更新可能修改 deleted 本身）
             // T-M20-05（P1-01 语义修正）：MPJ 六方法按源码顺序求值——主表/副表逻辑删除独立开关，
@@ -391,10 +418,12 @@ class SqlPreviewService(internal val project: Project) {
             }
             // R12 T-PaginationSim：分页 COUNT 包裹预览（D1=A 预览附第二条语句；D2=A 基础包裹形态；
             // D3=A searchCount=false 跳过；count/exists 消费不产 COUNT——复用 T-M29-02/03 分页消费口径）
-            val countSql = paginationCountSql(located.chain, pagedStatement)
+            val countSql = paginationCountSql(located.chain, pagedStatement, dialect)
             val result = buildPreviewResult(
                 located.chain.wrapperType, table, pagedStatement, countSql,
                 historyFingerprintSeed = historyFingerprintSeed,
+                dialect = dialect,
+                dialectDecision = decision,
             )
             recordHistory(result, anchor)
             // exists 消费：外层包裹 SELECT EXISTS（对齐 MP 3.5.15 BaseMapper.exists 语义）
@@ -1324,6 +1353,7 @@ class SqlPreviewService(internal val project: Project) {
     private fun paginationCountSql(
         chain: cn.song.mybatisplus.visualizer.model.WrapperChain,
         statement: SqlStatement,
+        dialect: Dialect,
     ): String? {
         if (settings?.state?.paginationSimEnabled == false) return null
         if (settings?.state?.paginationCountEnabled == false) return null
@@ -1331,7 +1361,7 @@ class SqlPreviewService(internal val project: Project) {
         if (!chain.pageSearchCount) return null
         val select = statement as? SelectStatement ?: return null
         if (select.limit == null) return null
-        val base = SqlGenerator.generate(select.copy(limit = null), compact = true, dialect = currentDialect())
+        val base = SqlGenerator.generate(select.copy(limit = null), compact = true, dialect = dialect)
         return PaginationSimulator.wrapCountSql(base)
     }
 
@@ -1343,9 +1373,9 @@ class SqlPreviewService(internal val project: Project) {
      * 标识符」这一档只有在**确知连接声明了** `ANSI_QUOTES` 时才不报，否则降级 WARN（见
      * [boundAnsiQuotesOrNull]）。
      */
-    internal fun analyzePerf(sql: String, statement: SqlStatement): List<PerfWarning>? {
+    internal fun analyzePerf(sql: String, statement: SqlStatement, dialect: Dialect = currentDialect()): List<PerfWarning>? {
         if (statement !is SelectStatement) return null
-        val warnings = SqlPerfAnalyzer.analyze(sql, currentDialect(), boundAnsiQuotesOrNull())
+        val warnings = SqlPerfAnalyzer.analyze(sql, dialect, boundAnsiQuotesOrNull())
         return warnings.ifEmpty { null }
     }
 

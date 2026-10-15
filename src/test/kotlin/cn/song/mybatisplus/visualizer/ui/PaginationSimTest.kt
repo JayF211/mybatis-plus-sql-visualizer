@@ -421,6 +421,60 @@ class PaginationSimTest : BasePlatformTestCase() {
         )
     }
 
+    fun testWrapperSourceDecisionUsesOwnerAndOneDialectForPageAndCount() {
+        val settings = PluginSettings.getInstance().state
+        settings.dialectAuto = false
+        settings.dialect = "Oracle"
+        myFixture.configureByText("Demo.java", """
+            import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+            public class Demo {
+                void query() {
+                    LambdaQueryWrapper<DeviceInfoEntity> w = new LambdaQueryWrapper<DeviceInfoEntity>()
+                        .eq(DeviceInfoEntity::getId, 1001L);
+                    service.page(new Page<>(2, 10), w);
+                }
+                static class DeviceInfoEntity { private Long id; }
+            }
+        """.trimIndent())
+        val service = newService()
+        val owner = service.resolveWrapperSourceContext(anchor())
+        assertEquals(myFixture.file, owner.hostPsiFile)
+        assertNull("Java 不是 SqlFile", owner.sqlPsiFile)
+        val oracle = service.preview(anchor(), owner)!!
+        assertEquals("Oracle", oracle.dialectDecision?.dialectName)
+        assertEquals("Oracle", oracle.effectiveDialect?.name)
+        assertTrue(oracle.compactSql.contains("OFFSET 10 ROWS FETCH NEXT 10 ROWS ONLY"))
+        assertTrue(oracle.countSql!!.contains("FROM (SELECT"))
+        assertEquals("Oracle", oracle.previewModel?.dialect?.name ?: oracle.renderedDialect?.name)
+
+        settings.dialect = "PostgreSQL"
+        val postgres = service.preview(anchor(), owner)!!
+        assertEquals("PostgreSQL", postgres.dialectDecision?.dialectName)
+        assertTrue(postgres.compactSql.endsWith("LIMIT 10 OFFSET 10"))
+        assertEquals("PostgreSQL", postgres.effectiveDialect?.name)
+    }
+
+    fun testWrapperAmbiguousSourceFailsClosedWithoutChoosingFirstSqlPsi() {
+        myFixture.configureByText("Demo.java", """
+            import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+            public class Demo {
+                void query() {
+                    LambdaQueryWrapper<DeviceInfoEntity> w = new LambdaQueryWrapper<DeviceInfoEntity>()
+                        .eq(DeviceInfoEntity::getId, 1L);
+                }
+                static class DeviceInfoEntity { private Long id; }
+            }
+        """.trimIndent())
+        val service = newService()
+        val context = service.resolveWrapperSourceContext(anchor()).copy(
+            sqlPsiResolution = cn.song.mybatisplus.visualizer.context.SqlPsiResolution.Ambiguous(
+                listOf(myFixture.file, myFixture.file)))
+        val result = service.preview(anchor(), context)!!
+        assertEquals(cn.song.mybatisplus.visualizer.sql.DialectDecisionEngine.Status.AMBIGUOUS,
+            result.dialectDecision?.status)
+        assertNull(result.dialectDecision?.dialectName)
+    }
+
     fun testPageConsumedProducesWrappedCountSql() {
         // service.page(Page, wrapper) → 主语句 LIMIT + 第二条目 COUNT 包裹（包裹不含 LIMIT 的原语句）
         myFixture.configureByText(
