@@ -67,8 +67,11 @@ class SqlHistoryManager : PersistentStateComponent<SqlHistoryManager.State> {
         if (entry.projectIdentity != capture.key.projectIdentity) return ExplainPlanSaveResult.CLEARED_OR_REMOVED
         if (!capture.key.persistable) return ExplainPlanSaveResult.SESSION_ONLY
         val snapshot = ExplainPlanSnapshot.create(capture.key, raw)
+        val newestTime = entries.asSequence().flatMap { it.explainPlans.asSequence() }.maxOfOrNull { it.capturedAt } ?: 0L
+        // 同一毫秒完成的多个回调仍按保存顺序淘汰，不因稳定排序把最新一份丢掉。
+        if (newestTime >= snapshot.capturedAt && newestTime < Long.MAX_VALUE) snapshot.capturedAt = newestTime + 1
         if (snapshot.serializedBytes() > MAX_PLAN_BYTES) return ExplainPlanSaveResult.TOO_LARGE
-        entry.explainPlans.add(snapshot)
+        entry.explainPlans.add(0, snapshot)
         enforcePlanBounds()
         return ExplainPlanSaveResult.SAVED
     }
@@ -271,6 +274,7 @@ class SqlHistoryManager : PersistentStateComponent<SqlHistoryManager.State> {
     // ---------- 删除 / 清空 ----------
 
     /** 按 id 删除条目。 */
+    @Synchronized
     fun remove(id: String) {
         state.entries.removeAll { it.id == id }
         state.favoriteEntries.removeAll { it.id == id }

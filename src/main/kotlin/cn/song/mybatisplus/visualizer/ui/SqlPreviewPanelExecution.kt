@@ -930,6 +930,26 @@ internal fun SqlPreviewPanel.submitExplainDirect(
  * 换入结构化视图，代际计数防过期回调覆盖新预览。
  */
 
+internal fun SqlPreviewPanel.captureExplainPlanHistory(
+    history: cn.song.mybatisplus.visualizer.history.SqlHistoryManager,
+    planKey: cn.song.mybatisplus.visualizer.history.ExplainPlanKey,
+    target: Any,
+): cn.song.mybatisplus.visualizer.history.ExplainPlanHistorySession.Request {
+    val originalPreview = current
+    // XML/日志纯文本预览没有经过 recordHistory；首次 EXPLAIN 复用同一历史域建条目。
+    // 已有 ID 即使被用户删除也绝不补建，防删除后在途结果复活。
+    if (originalPreview != null && originalPreview.historyEntryId.isEmpty() && planKey.persistable) {
+        originalPreview.historyEntryId = history.add(cn.song.mybatisplus.visualizer.history.SqlHistoryEntry(
+            sql = originalPreview.sql, compactSql = originalPreview.compactSql,
+            timestamp = System.currentTimeMillis(), tableName = originalPreview.tableName.orEmpty(),
+            projectIdentity = planKey.projectIdentity,
+        )).id
+    }
+    return explainPlanHistorySession.begin(
+        history, originalPreview?.sql.orEmpty(), planKey, target, originalPreview?.historyEntryId.orEmpty(),
+    )
+}
+
 internal fun SqlPreviewPanel.submitExplainOrStructured(
     proj: Project,
     dialect: cn.song.mybatisplus.visualizer.sql.Dialect,
@@ -987,9 +1007,7 @@ internal fun SqlPreviewPanel.submitExplainOrStructured(
                 cn.song.mybatisplus.visualizer.execute.DataSourceSettings.getUniqueId(ds),
                 dialect.name, outFormat, explainSql,
             )
-            val historyRequest = explainPlanHistorySession.begin(
-                history, current?.sql.orEmpty(), planKey, ds, current?.historyEntryId.orEmpty(),
-            )
+            val historyRequest = captureExplainPlanHistory(history, planKey, ds)
             cn.song.mybatisplus.visualizer.execute.ExplainPanelChannel.executeStructured(
                 proj, ds, explainSql,
                 timeoutSeconds = settings.executionTimeoutSeconds,

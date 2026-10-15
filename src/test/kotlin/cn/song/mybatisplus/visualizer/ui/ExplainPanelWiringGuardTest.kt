@@ -101,11 +101,12 @@ class ExplainPanelWiringGuardTest {
     @Test
     fun `R90_真实提交捕获上下文且成功回调接持久化与选择器`() {
         val source = sqlPreviewPanelSource()
-        val begin = source.indexOf("val historyRequest = explainPlanHistorySession.begin(")
+        val begin = source.indexOf("val historyRequest = captureExplainPlanHistory(")
         val submit = source.indexOf("ExplainPanelChannel.executeStructured(", begin)
         val complete = source.indexOf("explainPlanHistorySession.complete(history, historyRequest, outcome.raw)", submit)
         assertTrue("上下文必须在提交前固定并由成功回调消费", begin >= 0 && submit > begin && complete > submit)
-        assertTrue(source.contains("current?.historyEntryId.orEmpty()"))
+        assertTrue(source.contains("originalPreview?.historyEntryId.orEmpty()"))
+        assertTrue(source.contains("return explainPlanHistorySession.begin("))
         assertTrue(source.contains("DataSourceSettings.getUniqueId(ds)"))
         assertTrue(source.contains("baselines = historyCompletion.baselines"))
         assertTrue(source.contains("historyStatus = historyCompletion.saved"))
