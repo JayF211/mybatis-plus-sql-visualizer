@@ -39,6 +39,7 @@ import com.intellij.notification.NotificationAction
 import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.util.IconLoader
 import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.intellij.openapi.fileEditor.OpenFileDescriptor
@@ -534,6 +535,7 @@ class SqlLogPanel(
         previewToggleAction,
         scrollToEndAction,
         sortModeAction,
+        CommunityAction(),
         HelpAction(),
     )
 
@@ -1132,6 +1134,16 @@ class SqlLogPanel(
 
         override fun actionPerformed(e: AnActionEvent) {
             SqlSuppressManagerDialog(project).show()
+        }
+    }
+
+    internal inner class CommunityAction : AnAction(
+        MpSqlVisualizerBundle.message("log.community.action"),
+        MpSqlVisualizerBundle.message("log.community.action.tip"),
+        IconLoader.getIcon("/icons/communityChat.svg", SqlLogPanel::class.java),
+    ) {
+        override fun actionPerformed(e: AnActionEvent) {
+            CommunityDialog(project).apply { startLoading() }.show()
         }
     }
 

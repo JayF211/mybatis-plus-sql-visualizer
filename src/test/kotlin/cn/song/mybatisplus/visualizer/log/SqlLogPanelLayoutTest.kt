@@ -64,11 +64,16 @@ class SqlLogPanelLayoutTest : BasePlatformTestCase() {
             assertTrue("设置应直达", main.any { it is SqlLogPanel.SettingsAction })
             assertTrue("屏蔽管理应直达", main.any { it is SqlLogPanel.ManageSuppressAction })
             assertTrue("帮助应直达", main.any { it is SqlLogPanel.HelpAction })
-            assertEquals("九个图标动作应全部在组内（预览随组折叠）",
-                9, main.size)
-            // 用户 2026-10-14 选定「方案 A」：操作在前、工具在后、帮助收尾（溢出从右端折叠，帮助最先让位）。
+            val community = main.filterIsInstance<SqlLogPanel.CommunityAction>()
+            assertEquals("交流群入口只能出现一次", 1, community.size)
+            assertEquals(MpSqlVisualizerBundle.message("log.community.action"), community.single().templatePresentation.text)
+            assertNotNull("交流群动作必须显示自有图标", community.single().templatePresentation.icon)
+            assertEquals("十个图标动作应全部在组内（预览随组折叠）",
+                10, main.size)
             assertEquals("帮助应为组内末项（方案 A）", main.last(), main.first { it is SqlLogPanel.HelpAction })
-            assertTrue("排序应在帮助之前", main.indexOfFirst { it === panel.sortActionForTest } < main.size - 1)
+            val sortIndex = main.indexOfFirst { it === panel.sortActionForTest }
+            assertEquals("交流群按钮应紧挨排序右侧、帮助左侧", sortIndex + 1, main.indexOf(community.single()))
+            assertEquals("帮助应紧随交流群按钮", main.lastIndex, main.indexOf(community.single()) + 1)
         } finally {
             panel.dispose()
         }
