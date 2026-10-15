@@ -88,8 +88,10 @@ internal object IdeaSqlContextBridge {
         if (sqlPsiFile == null || dialectFile == null) return unavailable(actualSqlPsi = false)
         val actual = isActualSqlFile(sqlPsiFile)
         if (!actual) return unavailable(actualSqlPsi = false)
+        // injected SQL 的 VirtualFileWindow 直接交给平台 mappings；平台负责 delegate/original 归一化。
+        val sqlDialectFile = sqlPsiFile.virtualFile ?: dialectFile
         rawFactsForTest?.let { provider ->
-            return fromRaw(provider(project, sqlPsiFile, dialectFile), Availability.AVAILABLE, true)
+            return fromRaw(provider(project, sqlPsiFile, sqlDialectFile), Availability.AVAILABLE, true)
         }
         val loader = IdeaSqlContextBridge::class.java.classLoader
         val dataSourceMappingsClass = runCatching {
@@ -104,16 +106,16 @@ internal object IdeaSqlContextBridge {
             val resolveMappingsClass = Class.forName("com.intellij.sql.dialects.SqlResolveMappings", false, loader)
             val resolveMappings = resolveMappingsClass.getMethod("getInstance", Project::class.java).invoke(null, project)
             val configuredScope = resolveMappings.javaClass
-                .getMethod("getConfiguredMapping", VirtualFile::class.java).invoke(resolveMappings, dialectFile)
+                .getMethod("getConfiguredMapping", VirtualFile::class.java).invoke(resolveMappings, sqlDialectFile)
 
             val dialectMappingsClass = Class.forName("com.intellij.sql.dialects.SqlDialectMappings", false, loader)
             val dialectMappings = dialectMappingsClass.getMethod("getInstance", Project::class.java).invoke(null, project)
             val effective = dialectMappingsClass.getMethod("getMapping", Project::class.java, VirtualFile::class.java)
-                .invoke(null, project, dialectFile)
+                .invoke(null, project, sqlDialectFile)
             val configured = dialectMappings.javaClass
-                .getMethod("getConfiguredMapping", VirtualFile::class.java).invoke(dialectMappings, dialectFile)
+                .getMethod("getConfiguredMapping", VirtualFile::class.java).invoke(dialectMappings, sqlDialectFile)
             val immediate = dialectMappings.javaClass
-                .getMethod("getImmediateMapping", VirtualFile::class.java).invoke(dialectMappings, dialectFile)
+                .getMethod("getImmediateMapping", VirtualFile::class.java).invoke(dialectMappings, sqlDialectFile)
 
             fromRaw(
                 RawFacts(

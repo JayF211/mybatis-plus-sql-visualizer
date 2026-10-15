@@ -4,7 +4,12 @@ package cn.song.mybatisplus.visualizer.sql
 object DialectDecisionEngine {
     enum class Status { MANUAL, RESOLVED, AMBIGUOUS, CONFLICT, UNAVAILABLE }
     enum class Confidence { EXACT, STRONG, CONSENSUS, FALLBACK }
-    enum class Source { MANUAL, CAPTURED_URL, IDEA_SCOPE, IDEA_DIALECT, LEARNED_MODULE, PROJECT_CONSENSUS, PROJECT_AGENT }
+    enum class Source {
+        MANUAL, CAPTURED_URL,
+        IDEA_SCOPE, IDEA_DIALECT,
+        IDEA_PROVIDER, IDEA_CONFIGURED_SCOPE, IDEA_DEFAULT_SCOPE, IDEA_EFFECTIVE_DIALECT,
+        LEARNED_MODULE, PROJECT_CONSENSUS, PROJECT_AGENT,
+    }
     enum class TargetStatus { MATCH, AUTO_RERENDER_REQUIRED, MANUAL_CONFLICT, TARGET_UNKNOWN }
 
     data class Candidate(val id: String, val dialectName: String?)
@@ -14,7 +19,9 @@ object DialectDecisionEngine {
         val capturedDialect: String? = null,
         val explicitScope: Boolean = false,
         val scopeCandidates: List<Candidate> = emptyList(),
+        val scopeSource: Source = Source.IDEA_SCOPE,
         val ideaDialect: String? = null,
+        val ideaDialectSource: Source = Source.IDEA_DIALECT,
         val learnedModule: Candidate? = null,
         val projectCandidates: List<Candidate> = emptyList(),
         val lastAgentDialect: String? = null,
@@ -43,9 +50,9 @@ object DialectDecisionEngine {
         }
         val idea = knownName(input.ideaDialect)
         if (input.explicitScope) {
-            fromCandidates(input.scopeCandidates, Source.IDEA_SCOPE, idea)?.let { return it }
+            fromCandidates(input.scopeCandidates, input.scopeSource, idea, input.ideaDialectSource)?.let { return it }
         }
-        idea?.let { return resolved(it, Confidence.STRONG, Source.IDEA_DIALECT) }
+        idea?.let { return resolved(it, Confidence.STRONG, input.ideaDialectSource) }
         input.learnedModule?.let { candidate ->
             knownName(candidate.dialectName)?.let {
                 return resolved(it, Confidence.STRONG, Source.LEARNED_MODULE, listOf(candidate.id))
@@ -79,20 +86,22 @@ object DialectDecisionEngine {
         return TargetCheck(status, rendered, target)
     }
 
-    private fun fromCandidates(raw: List<Candidate>, source: Source, idea: String?): Decision? {
+    private fun fromCandidates(raw: List<Candidate>, source: Source, idea: String?,
+                               ideaSource: Source = Source.IDEA_DIALECT): Decision? {
         val candidates = raw.filter { it.id.isNotBlank() }
             .distinct().sortedWith(compareBy(Candidate::id, { it.dialectName.orEmpty() }))
         if (candidates.isEmpty()) return null
         val ids = candidates.map(Candidate::id).distinct()
         val names = candidates.map { knownName(it.dialectName) }
         val distinct = names.toSet()
-        val evidence = if (idea != null && source == Source.IDEA_SCOPE) listOf(source, Source.IDEA_DIALECT)
-            else listOf(source)
+        val evidence = if (idea != null) listOf(source, ideaSource) else listOf(source)
         if (distinct.size > 1) {
             return Decision(Status.AMBIGUOUS, null, Confidence.FALLBACK, source, ids, evidence)
         }
-        val name = names.first() ?: return unavailable(source, ids, evidence)
-        if (idea != null && idea != name && source == Source.IDEA_SCOPE) {
+        val name = names.first() ?: return if (idea != null) {
+            resolved(idea, Confidence.STRONG, ideaSource, ids, evidence)
+        } else unavailable(source, ids, evidence)
+        if (idea != null && idea != name) {
             return Decision(Status.CONFLICT, null, Confidence.FALLBACK, source, ids, evidence)
         }
         return resolved(name, if (ids.size == 1) Confidence.STRONG else Confidence.CONSENSUS,

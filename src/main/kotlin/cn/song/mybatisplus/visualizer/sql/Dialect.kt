@@ -942,6 +942,7 @@ object DialectRegistry {
     fun decision(
         project: com.intellij.openapi.project.Project? = null,
         sourceFile: com.intellij.openapi.vfs.VirtualFile? = null,
+        sqlPsiFile: com.intellij.psi.PsiFile? = null,
     ): DialectDecisionEngine.Decision {
         val settings = runCatching {
             cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state
@@ -957,8 +958,21 @@ object DialectRegistry {
         val agentDialect = UrlSubprotocolDialects.dialectName(
             cn.song.mybatisplus.visualizer.log.agent.AgentUrlRegistry.lastConnectionUrl(project),
         )
+        val dialectFile = sqlPsiFile?.virtualFile ?: sourceFile
+        if (sqlPsiFile != null && dialectFile != null) {
+            val snapshot = IdeaSqlContextBridge.resolve(project, sqlPsiFile, dialectFile)
+            if (snapshot.availability != IdeaSqlContextBridge.Availability.DATABASE_TOOLS_UNAVAILABLE) {
+                return IdeaSqlDialectDecision.decide(
+                    snapshot = snapshot,
+                    fallbackProjectCandidates = candidates,
+                    lastAgentDialect = agentDialect,
+                    singleModuleProven = singleModule,
+                )
+            }
+        }
         return DialectDecisionEngine.decide(DialectDecisionEngine.Input(
             ideaDialect = sourceFile?.let { IdeaSourceDialectProbe.dialectName(project, it) },
+            ideaDialectSource = DialectDecisionEngine.Source.IDEA_EFFECTIVE_DIALECT,
             projectCandidates = candidates, lastAgentDialect = agentDialect, singleModuleProven = singleModule,
         ))
     }
@@ -966,7 +980,8 @@ object DialectRegistry {
     fun effective(
         project: com.intellij.openapi.project.Project? = null,
         sourceFile: com.intellij.openapi.vfs.VirtualFile? = null,
-    ): Dialect = decision(project, sourceFile).dialectName?.let { byName(it) } ?: MySqlDialect
+        sqlPsiFile: com.intellij.psi.PsiFile? = null,
+    ): Dialect = decision(project, sourceFile, sqlPsiFile).dialectName?.let { byName(it) } ?: MySqlDialect
 
     /**
      * T-TS-FixC：项目级有效方言模式（null=无项目上下文/项目级服务不可用，调用方按全局判定）。
