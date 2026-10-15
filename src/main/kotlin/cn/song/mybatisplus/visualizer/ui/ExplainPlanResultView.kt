@@ -126,7 +126,13 @@ class ExplainPlanResultView(
         }
         if (baselines.isNotEmpty()) showComparison(ExplainPlanDiff.diff(baselines.first().raw, raw, format))
         historyStatusLabel.text = historyStatus?.let {
-            MpSqlVisualizerBundle.message("panel.explain.history." + it.name)
+            when (it) {
+                cn.song.mybatisplus.visualizer.history.ExplainPlanSaveResult.SAVED -> MpSqlVisualizerBundle.message("panel.explain.history.SAVED")
+                cn.song.mybatisplus.visualizer.history.ExplainPlanSaveResult.SESSION_ONLY -> MpSqlVisualizerBundle.message("panel.explain.history.SESSION_ONLY")
+                cn.song.mybatisplus.visualizer.history.ExplainPlanSaveResult.TOO_LARGE -> MpSqlVisualizerBundle.message("panel.explain.history.TOO_LARGE")
+                cn.song.mybatisplus.visualizer.history.ExplainPlanSaveResult.CLEARED_OR_REMOVED -> MpSqlVisualizerBundle.message("panel.explain.history.CLEARED_OR_REMOVED")
+                cn.song.mybatisplus.visualizer.history.ExplainPlanSaveResult.RETENTION_DISABLED -> MpSqlVisualizerBundle.message("panel.explain.history.RETENTION_DISABLED")
+            }
         }.orEmpty()
         historyStatusLabel.isVisible = historyStatus != null
         historyStatusLabel.border = JBUI.Borders.empty(1, 4)
