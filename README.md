@@ -228,7 +228,7 @@ ORDER BY t1.create_time DESC
 
 | 配置项 | 默认值 | 作用 |
 |--------|--------|------|
-| 数据库方言 | 智能推断（跟随数据源） | 分页 / upsert 子句按方言渲染（MySQL / PostgreSQL / Oracle / SQL Server / H2 / SQLite / MariaDB / DM / KingBase / OceanBase / openGauss）。当前「智能推断」仍是项目级最佳努力：已配置数据源按方言候选集合判断，唯一且有效的已知源或全部同方言候选可确定渲染方言；异方言、无 UUID/失效候选或证据不足时不取第一个数据源；仍可依其他明确的 IDEA 方言渲染，全部证据缺失才兼容回退 MySQL。仅能证明单模块且没有数据源候选时才参考最近增强捕获 URL。注解和 mapper XML 入口在有真实 SQL PSI 时尝试按 IDEA provider/Resolution Scope/有效方言求解（已做 headless 与三代签名验证，真实 IDE 注入行为待验）；其他入口证据缺失则继续项目候选共识或明示 MySQL 兼容回退；当前预览执行会在实际 Runner session 与 active JdbcConsole 两处核对目标方言，已知冲突阻断，自动可无损重渲染的模型要求复核后二次执行，原始查询未知方言须确认、写操作/EXPLAIN 未知方言阻断；手动选定后按手动值生效、可随时切回（升级时从未动过该设置的老用户自动进入推断模式，手动值原样保留） |
+| 数据库方言 | 智能推断（跟随数据源） | 分页 / upsert 子句按方言渲染（MySQL / PostgreSQL / Oracle / SQL Server / H2 / SQLite / MariaDB / DM / KingBase / OceanBase / openGauss）。当前「智能推断」仍是项目级最佳努力：已配置数据源按方言候选集合判断，唯一且有效的已知源或全部同方言候选可确定渲染方言；异方言、无 UUID/失效候选或证据不足时不取第一个数据源；仍可依其他明确的 IDEA 方言渲染，全部证据缺失才兼容回退 MySQL。仅能证明单模块且没有数据源候选时才参考最近增强捕获 URL。注解和 mapper XML 入口在有真实 SQL PSI 时尝试按 IDEA provider/Resolution Scope/有效方言求解；Wrapper 无注入时参考宿主文件有效方言，Java JPQL/HQL 命名查询按定义文件求来源（均仅完成 headless，真实 IDE 注入与跨文件索引待验）。旧日志与历史只保留脱敏库标，不会反推精确连接 URL；其余入口证据缺失则继续项目候选共识或明示 MySQL 兼容回退；当前预览执行会在实际 Runner session 与 active JdbcConsole 两处核对目标方言，已知冲突阻断，自动可无损重渲染的模型要求复核后二次执行，原始查询未知方言须确认、写操作/EXPLAIN 未知方言阻断；手动选定后按手动值生效、可随时切回（升级时从未动过该设置的老用户自动进入推断模式，手动值原样保留） |
 | 替换 ? 占位符 | 开 | 关闭后变量也渲染为 `?`，在左栏输入框手动填值；代码字面量恒内联 |
 | 空参数填充策略 | 占位符 `?` | 带签名信息的参数输入行留空时的填充方式，占位符 `?`（默认）/ NULL 字面量 / 空字符串三选一；默认保留 `?` 待填提示，避免 NULL 静默过滤行（如 `amount >= NULL` 恒不匹配），需要可直接执行的 SQL 时切 NULL / 空字符串档，已持久化过 NULL / 空字符串的老用户保持原档 |
 | 格式化输出 | 开 | 多行缩进（关 = 单行） |
