@@ -329,6 +329,20 @@ public class PlatformSignatureChecker {
             missing += check(scopes.getMethod("getInstance", project), "SqlResolveMappings.getInstance(Project)");
             missing += check(scopes.getMethod("getMapping", virtualFile), "SqlResolveMappings.getMapping(VirtualFile)");
             missing += check(scopes.getMethod("getConfiguredMapping", virtualFile), "SqlResolveMappings.getConfiguredMapping(VirtualFile)");
+            Class<?> pattern = Class.forName("com.intellij.database.util.TreePattern", false, loader);
+            Class<?> provider = Class.forName("com.intellij.sql.psi.impl.DataSourceProvider", false, loader);
+            // Inherited generic getter erases to Object; concrete default mapping and ALL pin TreePattern.
+            missing += checkExact(scopes, "getConfiguredMapping", Object.class, false, virtualFile);
+            missing += checkExact(scopes, "getDefaultMapping", pattern, false, virtualFile);
+            missing += checkExact(provider, "getDataSources", List.class, false, psiFile);
+            missing += checkExact(dataSources, "getProvidedDataSources", List.class, false, psiFile);
+            if (scopes.getField("ALL_DATA_SOURCES").getType() != pattern ||
+                    pattern.getField("EMPTY").getType() != pattern) {
+                System.out.println("MISS scope constants must be TreePattern");
+                missing++;
+            }
+            System.out.println("INFO configured scope getter owner=" + scopes.getMethod("getConfiguredMapping", virtualFile).getDeclaringClass().getName()
+                    + " mapping=" + pattern.getName() + " provider=" + provider.getName());
             // T-M19/V178: exercise every candidate-reader owner, not just the mappings entry.
             Class<?> candidate = Class.forName("com.intellij.database.psi.DbDataSource", false, loader);
             Class<?> config = Class.forName("com.intellij.database.model.RawConnectionConfig", false, loader);

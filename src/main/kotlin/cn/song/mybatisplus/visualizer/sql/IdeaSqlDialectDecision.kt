@@ -11,6 +11,16 @@ internal object IdeaSqlDialectDecision {
         lastAgentDialect: String? = null,
         singleModuleProven: Boolean = false,
     ): DialectDecisionEngine.Decision {
+        // 无法证明配置 scope 的候选边界时不得借有效方言/已学绑定/项目候选绕过。
+        // 手动与事件精确事实仍走原优先级；真实 provider 在桥中优先，不进入此分支。
+        if (snapshot?.configuredScopePresent == true &&
+            snapshot.scopeOrigin == IdeaSqlContextBridge.ScopeOrigin.UNAVAILABLE) {
+            val decision = DialectDecisionEngine.decide(DialectDecisionEngine.Input(
+                manualDialect = manualDialect, capturedDialect = capturedDialect,
+            ))
+            return if (decision.status == DialectDecisionEngine.Status.UNAVAILABLE)
+                decision.copy(source = DialectDecisionEngine.Source.IDEA_CONFIGURED_SCOPE) else decision
+        }
         val effectiveIdeaDialect = snapshot?.effectiveDialectId?.let(IdeaSqlContextBridge::pluginDialectName)
         val platformCandidates = snapshot?.finalCandidates.orEmpty().map { candidate ->
             DialectDecisionEngine.Candidate(candidate.stableId,

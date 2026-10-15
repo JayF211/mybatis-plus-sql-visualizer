@@ -28,7 +28,7 @@ class IdeaSqlContextBridgeTest {
         val configured = IdeaSqlContextBridge.fromRaw(IdeaSqlContextBridge.RawFacts(
             finalCandidates = listOf(raw("oracle", "Oracle")), configuredScopePresent = true,
         ))
-        assertEquals(IdeaSqlContextBridge.ScopeOrigin.CONFIGURED_RESOLUTION, configured.scopeOrigin)
+        assertEquals(IdeaSqlContextBridge.ScopeOrigin.UNAVAILABLE, configured.scopeOrigin)
         val defaultAll = IdeaSqlContextBridge.fromRaw(IdeaSqlContextBridge.RawFacts(
             finalCandidates = listOf(raw("my", "MySQL"), raw("pg", "PostgreSQL")),
         ))

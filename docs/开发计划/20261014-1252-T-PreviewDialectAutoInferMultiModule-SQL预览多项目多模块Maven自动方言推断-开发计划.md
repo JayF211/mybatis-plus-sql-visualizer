@@ -373,6 +373,8 @@ mapOwnedFile(project, ownedVirtualFile, languageId)
 
 ## 十三、实施记录
 
+- 2026-10-16 T-M19/V178 scope 安全续验：上条 scope 语义待核项已按非 UI 实测关闭误判，不能转嫁为 UI 待验。真实 PG+MySQL、真实 PG SqlFile 配置 EMPTY/限定 MySQL UUID/显式 ALL 三项均复现错误 RESOLVED/STRONG/IDEA_CONFIGURED_SCOPE，**3/3/0/0**。现有 API 未证明候选按配置 scope 缩窄，故无真实 provider 的明确配置降为 UNAVAILABLE，阻止 effective/learned/project 回升冒充强证据，专用双语状态明确建议手动方言或明确执行目标；默认未配置 ALL、手动/captured 和原 provider 优先不变。撤修三项再次 **3/3/0/0**，恢复真实平台 **8/0/0/0**，四类定向回归合计 **18/0/0/0**；无跳过。新增三版 scope mapping 类型及 provider 精确签名均 RESULT OK。实际243 fixture的 sql provider EP清单为空，未伪造非空provider；该非空运行分支只保留既有优先级回归，不冒称实测。此修复是诚实关闭不可靠证据层，仍不宣称显式 scope 候选解析已支持；证据路径见既有正式验收文档续验节。
+
 - 2026-10-16 T-M19/V178 非 UI 补验（独立 `t-m19-v178-nonui`，基线 `4c7ea2c3`）：不启动 runIde，不读 demo 私有数据源配置，使用既有 testDbDriverPipeline 的真实 DatabaseTools 无连接 fixture。实际发现并修复 `dbms=DM` 无平台枚举、sql.dialect InstanceBean 缺 `public static INSTANCE` 两项产品初始化错误；保留 DM 语言 ID，UNKNOWN 仅 Generic/SQL92 兼容，不能称原生达梦支持。真实非空候选另击中桥的 RawConnectionConfig 错包名（三版实际 owner 均 `com.intellij.database.model`），一行最小修复；撤修单项 **1/1/0/0**，diagnostic=ClassNotFoundException，已恢复。第六轮 fresh XML 为平台 **5/0/0/0**、模块 **5/0/0/0**；同命令 testFast 受既有隐式任务依赖校验未入场，不报整个命令绿。目录映射/覆盖/撤销后 SQL PSI 重解析、真实 UUID 重命名/改 URL/删除、断开态 session/console API、模块销毁已有 243 平台证据。243 的 getDataSourcesForResolve 实测不按 SqlResolveMappings.EMPTY 清候选，不能将 configuredScopePresent 当作 scope 已缩窄；该产品语义另列待核，不擅改决策顺序。三版精确候选 API 检查 243/253/262 均进程0，非三版服务运行通过。最终恢复复测及证据限制见 `docs/验收文档/20261016-T-M19-V178-真实DatabaseTools非UI补验-验收文档.md`。本条只回填本工作树，无全量/verify/UI/真库 Runner 结论。
 
 - 2026-10-14 12:52：初版立项，确认当前第一项目/第一数据源推断不适用于多项目多模块。

@@ -57,6 +57,18 @@ DM 仍是 Generic/SQL92 兼容语言，不是原生达梦 parser；插件 DM 渲
 
 DM 两次初始化失败是产品错误，已经修复，不作为环境限制销账；三版发行物的 InstanceBean 均读取 INSTANCE（262 位于 intellij.database.jar，243/253 位于 database-plugin.jar）。桥候选完整链在修前红、修后绿、撤修再红、恢复再绿，未使用 stub。映射重解析在真实 SqlFile 上断言，不只检查设置值。断开态 session/console 是真实工厂对象，但没有执行查询，不能等同 active connected Runner 双闸验收。
 
+## 续验：关闭 configured scope 误报强证据
+
+此节取代上文“产品语义待核”的处理状态。真实 fixture 同时注册 PostgreSQL/MySQL 两个无连接数据源，对 PG SqlFile 分别写入 EMPTY、限定 MySQL UUID、显式 ALL。UUID pattern 通过真实 `SqlImportUtil.getDataSourceName(mysql)` 与 `createDataSources` 构造（字节码确认使用 quoted uniqueId，不按显示名猜）。三项均先确认实际 provider 返回空、实际 getDataSources 只返 PG，然后调用生产桥和生产决策：修前 **3/3/0/0**，均错误输出 RESOLVED/STRONG/IDEA_CONFIGURED_SCOPE PostgreSQL。首红 `build/v178-scope-first-red.xml`。
+
+单一安全处理：存在明确 configured mapping、但无真实 provider 时，桥将该层标为 UNAVAILABLE，决策不得通过有效方言、已学绑定或项目候选把它重新升级为已验证。手动方言与精确捕获事实仍按原优先级；真实 provider 的分支仍先于配置存在性判断。未设置 mapping 的默认 ALL 不进入降级，清除配置后恢复原默认行为。保留平台原候选供诊断，但不声称它们是 scope 已限定的集合。没有猜解 TreePattern、没有选择第一个候选。
+
+预览状态行与详情明确说明“无法可靠解析 IDEA 已配置的解析作用域；请手动指定方言或选择明确的执行目标”，仍显示兼容预览未验证。不是宣称已经支持显式 scope 解析。
+
+三版精确签名新增：继承的 getConfiguredMapping(VirtualFile) 擦除返回 Object、声明 owner 均 PerFileMappingsBase；getDefaultMapping 与 EMPTY/ALL 常量实际类型均 TreePattern；DataSourceProvider.getDataSources(PsiFile) 与 getProvidedDataSources 返回 List。243/253/262 新门均 RESULT OK，日志 `call_nu2myo8fCEwn3b4UJBccpI78-stdout.log`。真实 JdbcConsoleDataSourceProvider 属 virtualFileDataSourceProvider，不能混作 sql.dataSourceProvider 或伪造其非空返回；本次三配置场景真实 sql provider 返回空。
+
+修复首次平台 **8/0/0/0**；撤回关键分支再次 **3/3/0/0**，仍错误 STRONG（`build/v178-scope-reverse-red.xml`，UTC 18:49:12）；恢复后最终真实平台 **8/0/0/0**（UTC 18:51:42.947），四类定向回归 Registry 2、Bridge 7、Decision 7、StatusText 2，合计 **18/0/0/0**，命令退出0（`call_iRtweb70Sd78Ve7fZFAbxJuv-stdout.log`）。真实测试同时验证三配置清除后恢复默认路径、手动 Oracle 和 captured MySQL 不受损、可见状态包含专用诊断。XML 观测实际 sql provider 扩展列表为 `[]`；因此非空真实 provider 在本 fixture 未覆盖，未人为注册伪 provider 换绿。纯测试仅回归既有手动/provider优先级，安全修复主证据是以上真实服务、真实模式与真实 PSI，不是手造快照。
+
 ## 证据边界
 
 真实合成配置、真实 SqlFile、真实映射及断开态 session/console 可以不启动 runIde 验证；不等于真实连接后提交 SQL、Runner 选择 UI、active console 切库、二击重渲染、结果页、取消查询或视觉矩阵。Java/Kotlin/XML 的真实宿主注入、253/262 平台运行语义仍需独立 fixture 或获准后 UI 验证。DBX 的 MySQL8.0.12 与 PostgreSQL16.14/dbx_test 引擎语义由主控独立记录，本任务未读取其凭据，不能拼接为 IDE Runner 端到端成功。

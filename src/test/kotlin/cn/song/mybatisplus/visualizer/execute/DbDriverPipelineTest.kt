@@ -174,7 +174,7 @@ class DbDriverPipelineTest : BasePlatformTestCase() {
             com.intellij.testFramework.IndexingTestUtil.waitUntilIndexesAreReady(project)
             val scopedPsi = com.intellij.psi.PsiManager.getInstance(project).findFile(scopeFile)!!
             val emptyScope = cn.song.mybatisplus.visualizer.sql.IdeaSqlContextBridge.resolve(project, scopedPsi, scopeFile)
-            assertEquals(cn.song.mybatisplus.visualizer.sql.IdeaSqlContextBridge.ScopeOrigin.CONFIGURED_RESOLUTION,
+            assertEquals(cn.song.mybatisplus.visualizer.sql.IdeaSqlContextBridge.ScopeOrigin.UNAVAILABLE,
                 emptyScope.scopeOrigin)
             // 243 getDataSourcesForResolve 只按有效方言筛选，不读取 SqlResolveMappings。
             // 不把 EMPTY scope 误当候选清空；桥必须忠实保留平台实际返回值。
@@ -230,6 +230,75 @@ class DbDriverPipelineTest : BasePlatformTestCase() {
         } finally {
             console?.let { com.intellij.openapi.util.Disposer.dispose(it) }
             manager.removeDataSource(ds)
+        }
+    }
+
+    fun testConfiguredEmptyCannotPromoteDialectFilteredCandidates() = checkUnverifiedScope("empty")
+    fun testConfiguredUuidCannotPromoteOtherDialectCandidates() = checkUnverifiedScope("uuid")
+    fun testConfiguredAllCannotPromoteDialectFilteredCandidates() = checkUnverifiedScope("all")
+
+    private fun checkUnverifiedScope(mode: String) {
+        val manager = LocalDataSourceManager.getInstance(project)
+        fun source(name: String, driver: String, protocol: String): LocalDataSource = manager.createEmpty().apply {
+            this.name = name
+            url = "jdbc:$protocol://127.0.0.1:1/v178_never_connect"
+            isAutoSynchronize = false
+            databaseDriver = DatabaseDriverManager.getInstance().getDriver(driver)!!
+            manager.addDataSource(this)
+        }
+        val pg = source("scope-pg", "postgresql", "postgresql")
+        val mysql = source("scope-my", "mysql.8", "mysql")
+        val file = myFixture.addFileToProject("v178/$mode.sql", "SELECT 1").virtualFile
+        val dialects = com.intellij.sql.dialects.SqlDialectMappings.getInstance(project)
+        val scopes = com.intellij.sql.dialects.SqlResolveMappings.getInstance(project)
+        try {
+            val pattern = when (mode) {
+                "empty" -> com.intellij.database.util.TreePattern.EMPTY
+                "uuid" -> com.intellij.database.util.TreePattern(com.intellij.sql.dialects.SqlImportUtil.createDataSources(
+                    arrayOf(com.intellij.sql.dialects.SqlImportUtil.getDataSourceName(mysql))))
+                else -> com.intellij.sql.dialects.SqlResolveMappings.ALL_DATA_SOURCES
+            }
+            com.intellij.openapi.application.WriteAction.run<RuntimeException> {
+                dialects.setMapping(file, com.intellij.lang.Language.findLanguageByID("PostgreSQL")
+                    as com.intellij.sql.dialects.SqlLanguageDialect)
+                scopes.setMapping(file, pattern)
+            }
+            com.intellij.testFramework.IndexingTestUtil.waitUntilIndexesAreReady(project)
+            val psi = com.intellij.psi.PsiManager.getInstance(project).findFile(file)!!
+            assertTrue(psi is com.intellij.sql.psi.SqlFile)
+            assertEquals(pattern, scopes.getConfiguredMapping(file))
+            val mappings = com.intellij.sql.dialects.SqlDataSourceMappings.getInstance(project)
+            assertTrue(mappings.getProvidedDataSources(psi).isEmpty())
+            println("V178 real providers=" + com.intellij.sql.psi.impl.DataSourceProvider.EP_NAME.extensionList
+                .map { it.javaClass.name } + "; mode=$mode")
+            assertEquals(listOf(pg.uniqueId), mappings.getDataSources(psi).map { it.uniqueId })
+            val snapshot = cn.song.mybatisplus.visualizer.sql.IdeaSqlContextBridge.resolve(project, psi, file)
+            val decision = cn.song.mybatisplus.visualizer.sql.IdeaSqlDialectDecision.decide(snapshot = snapshot)
+            assertEquals("unverified $mode scope must not become precise evidence: $decision",
+                cn.song.mybatisplus.visualizer.sql.DialectDecisionEngine.Status.UNAVAILABLE, decision.status)
+            assertNull(decision.dialectName)
+            assertTrue(cn.song.mybatisplus.visualizer.ui.DialectPreviewStatusText.describe(decision).visible.contains(
+                cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message("panel.meta.dialectStatus.scopeUnavailable")))
+            assertEquals(cn.song.mybatisplus.visualizer.sql.IdeaSqlContextBridge.ScopeOrigin.UNAVAILABLE, snapshot.scopeOrigin)
+            assertEquals("Oracle", cn.song.mybatisplus.visualizer.sql.IdeaSqlDialectDecision.decide(
+                manualDialect = "Oracle", snapshot = snapshot).dialectName)
+            assertEquals("MySQL", cn.song.mybatisplus.visualizer.sql.IdeaSqlDialectDecision.decide(
+                capturedDialect = "MySQL", snapshot = snapshot).dialectName)
+            com.intellij.openapi.application.WriteAction.run<RuntimeException> { scopes.setMapping(file, null) }
+            com.intellij.testFramework.PlatformTestUtil.dispatchAllInvocationEventsInIdeEventQueue()
+            val cleared = cn.song.mybatisplus.visualizer.sql.IdeaSqlContextBridge.resolve(project,
+                com.intellij.psi.PsiManager.getInstance(project).findFile(file), file)
+            assertFalse(cleared.configuredScopePresent)
+            assertEquals(cn.song.mybatisplus.visualizer.sql.IdeaSqlContextBridge.ScopeOrigin.DEFAULT_ALL_DATA_SOURCES,
+                cleared.scopeOrigin)
+            assertEquals("PostgreSQL", cn.song.mybatisplus.visualizer.sql.IdeaSqlDialectDecision.decide(snapshot = cleared).dialectName)
+        } finally {
+            com.intellij.openapi.application.WriteAction.run<RuntimeException> {
+                scopes.setMapping(file, null)
+                dialects.setMapping(file, null)
+            }
+            manager.removeDataSource(pg)
+            manager.removeDataSource(mysql)
         }
     }
 

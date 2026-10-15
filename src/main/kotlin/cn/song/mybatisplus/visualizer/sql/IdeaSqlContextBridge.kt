@@ -142,7 +142,9 @@ internal object IdeaSqlContextBridge {
         val final = raw.finalCandidates.mapNotNull(::candidate).distinctBy { it.stableId }
         val origin = when {
             raw.provided.isNotEmpty() -> ScopeOrigin.PROVIDED
-            raw.configuredScopePresent -> ScopeOrigin.CONFIGURED_RESOLUTION
+            // getDataSources 返回方言筛选候选，不承诺已按 SqlResolveMappings 缩窄。
+            // 在没有真实 provider 的情况下，仅“存在配置”不能升级为精确绑定证据。
+            raw.configuredScopePresent -> ScopeOrigin.UNAVAILABLE
             raw.finalCandidates.isNotEmpty() -> ScopeOrigin.DEFAULT_ALL_DATA_SOURCES
             else -> ScopeOrigin.NONE
         }

@@ -13,7 +13,9 @@ internal object DialectPreviewStatusText {
             DialectDecisionEngine.Status.RESOLVED -> source(decision.source)
             DialectDecisionEngine.Status.AMBIGUOUS -> MpSqlVisualizerBundle.message("panel.meta.dialectStatus.ambiguous")
             DialectDecisionEngine.Status.CONFLICT -> MpSqlVisualizerBundle.message("panel.meta.dialectStatus.conflict")
-            DialectDecisionEngine.Status.UNAVAILABLE -> MpSqlVisualizerBundle.message("panel.meta.dialectStatus.unavailable")
+            DialectDecisionEngine.Status.UNAVAILABLE -> MpSqlVisualizerBundle.message(
+                if (decision.source == DialectDecisionEngine.Source.IDEA_CONFIGURED_SCOPE)
+                    "panel.meta.dialectStatus.scopeUnavailable" else "panel.meta.dialectStatus.unavailable")
         }
         val rendered = decision.dialectName ?: decision.compatibilityFallbackName ?: "MySQL"
         val visible = if (decision.dialectName == null) {
