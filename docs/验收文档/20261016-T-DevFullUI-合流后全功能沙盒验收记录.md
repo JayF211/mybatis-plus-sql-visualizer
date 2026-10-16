@@ -146,6 +146,45 @@
 - U12/U27 XML真实入口：UserMapper.xml selectUserListByXml有动态条件真/假标记，输入admin/1/18后LIKE concat和年龄实值正常，取消status后SQL移除该条件（frame-fb97e027）；全不选后清除输入，WHERE清除且参数空（frame-4848d756）。
 - U42嵌入/模块作用域：源码模块拼接、StringBuffer、helper返回三形态均生成wms_inventory_embed_demo及move_tool_pallet_no/qty_base_qty（frame-0a0b1d19/f2076a37/77df39c4）；切jpa-jar-model-demo宿主生成wms_inventory_jar_demo、sku_inventory_status、item_key_lot_info_received_date，未串兄弟模型（frame-b613912f）。当前聚合工程仍有模型模块，不能冒称实体来自反编译JAR，该子项另验。
 
+## 第三批准备
+
+第二批源码保持44ee9d11至GUI退出；新修复已合dev：UI-004 e6f3de57；UI-005 f9fd950d/ad91a474/c39a5c4d；UI-006 02201dbc。UI-005独立真实MP3.5.7编译生成代码及getSqlSelect/getSqlSegment，两类68/0，基线生成器68项5红；不冒充Gradle门禁。UI-004/UI-006此前未跑定向，本轮合流五类后台验证，测试未终态前不标修复通过。
+
+第二次退出再次等待process detach，已取IDE线程栈，定位为原生WaitForProcessTask等待而非插件锁。应用53644结束后IDE仍有残留运行确认，选择Disconnect才退出。另数据库驱动进程50828存在agent会话，疑似挂载范围过宽，留待独立归因；不据此断言是退出阻塞原因。
+
+第三批五类首跑98项8失败：历史两类19项全绿；反向两类68项6失败均为编译夹具CodeSource.location在IDE PathClassLoader下null，独立CLI读数不能覆盖；FieldFill11项2失败为安全说明实际高度不足。已回交原代理续修，未放宽断言或以失败归环境而跳过。
+
+UI-007辅助进程误挂载已证：第二批IDE日志5887–5889识别非主配置后仍排队attach50828，5919–5927实际RemoteJdbcServer输出agent retransform及CONFIG ACK。监听和补扫在授权后无身份排除，用户确认不能授权平台helper注入；独立t-devui-attach-target已派修复。前述命令行末尾MySQL Driver只是参数，真实main为com.intellij.database.remote.RemoteJdbcServer，归因已校正。未证明它导致退出卡住。
+
+第三批续修与正反闭环：CodeSource后备须同时支持IDE自定义jar URLConnection，不只JDK JarURLConnection；主控解析实测jar:file资源并核class字节一致，提交8aeb0b50。FieldFill动态错误状态显式失效父布局缓存后11例通过。五类最终98/0/0/0；临时恢复错误回调顺序及移除高度失效，三例全红（进入刷新计数2≠3、状态高度32不足64），立即恢复并五类98/0/0/0。主控src/main与HEAD无差异，反向探针已清。第三批沙盒按8aeb0b50启动，UI007尚未纳入。
+
+### 第三批UI已取证
+
+第三批PID37120、主窗口全屏。UI004首次切历史自动显示既有7条文件（frame-84cbadf3），设置空扫后新文件的原始路径还需用新空目录专项复验。UI005 Query模式聚合改为单次select(status, COUNT(*) AS cnt)（frame-bfccf9eb），双引号表名生成UiProbe不带引号而列SQL引号保留（frame-8d4bd702）；AUTO实体正例仍须补。UI006默认参数区安全开关与说明左对齐完整可读（frame-66c4d714），两组fill普通/模拟输入纵排无需横滚（frame-6c636b19）；开启后日期字符串进入SQL，普通explicit优先（frame-8270532c）；非法含分号模拟恢复问号并完整显示具体字段错误（frame-10a7f8d2）。
+
+已从GUI新窗口打开独立夹具树mybatis-plus-demo/pom.xml，保留原项目，准备四型fill、真实模型JAR和项目隔离；未从根聚合导入，避免库源码替代JAR。UI007独立六类69绿、撤拒绝14项9红、恢复69绿，尚未合入当前运行包。
+
+- U20独立FillProbe真实mapper入口：INSERT启用后created_by=`O''Reilly`单引号加倍、operator_id=42不加引号，UPDATE专属updated_by保留?（frame-68052cbd）；数值`1 OR 1=1`被拒并显示字段提示（frame-de160f2a）。UPDATE只模拟updated_by和operator_id，INSERT专属created_by仍?，WHERE id/revision保持?（frame-29dd1662）；取消列不补回、关闭模拟恢复普通占位（frame-e91d4665）。saveOrUpdateBatch的UPSERT开启且输入模拟值仍全部?，说明明确不填（frame-c71e69a1）。本轮均未执行写SQL或用户Handler。
+
+- U43真实JAR正例：独立宿主类搜索LegacyBooking显示Maven cn.song:mp-jar-model-lib:1.0.0及本地.m2 JAR路径（frame-73329f5f），打开触发JetBrains Decompiler条款，选择Decide later未替用户接受。由LegacyBookingCases真实调用预览生成ui_reservation_ledger、booking_code/state_code且常量BOOK,100正确（frame-8f84e19b）。已证二进制实体正向解析，后台/显式表名反查仍待验。
+
+- U31真实分片工程已GUI导入；首跑IDE沿用JDK8导致“源17需要目标17”，不是插件缺陷。通过Project Structure选择已安装Microsoft JDK17.0.19，仅修改独立夹具工程SDK，再次IDE Run在途。该前提修正未触业务库。
+
+- U31真框架已运行：IDE Run的ShardingH2Demo在JDK17下打印真实三条Logic/四条Actual及三组PASS（frame-9ccdd327）。增强捕获获得四条物理SQL（存量PS参数缺失告警保留）；暂停增强后both命令从真实控制台收到逻辑SQL，预览仍问号且错误提示Hibernate TRACE（frame-ccef5032）。GUI确认ShardingSphere开关已开（frame-7dd4ba1d），日志也证来源SHARDINGSPHERE，非配置问题。
+- UI-008：5.5.2实际Actual后缀`::: [100, BOOK,100]`无Parameters前缀，旧解析器只认Parameters，导致参数未恢复；来源提示只区分JDBC/其他而误写Hibernate。路由actualSql已保存但预览未见附注。独立t-devui-sharding-format已派实现、需真样本反向与GUI复验，不改原始日志适应解析器。
+
+### 第三批浅色交叉与下一批修复
+
+- 在Appearance确认Light与125%并点OK后，原主演示窗口日志第三位清除图标可见（frame-f67bddcb）；历史首次切入列出7条/6条两个文件（frame-3c954eeb）。七条文件列表保留蓝色关键字、紫色标识符、绿色耗时与同结构徽章（frame-9c854d16）；完整预览参数1、全部操作与执行/复制/取消可见（frame-0e4c83c0）。只覆盖这几处真实画面，不能外推四主题缩放全矩阵。
+- UI-009真实复现：七条历史文件打开正则开关，输入`(`，结果显示0条并称“该文件暂无SQL条目”，没有非法正则反馈（frame-178d73d2）。改为合法`id=6|id=7`立即恢复2条（frame-d5d54289），排除文件内容为空。已派独立t-devui-history-regex修复错误反馈和无匹配空态，当前运行包不变。
+- UI-008已交6234a850/978ecbb3，但只读复核拦截：物理分页可能把逻辑LIMIT参数10/20改为0/30，数量一致不等于参数映射不变；无类型字符串001/true也不能猜为数值/布尔后进入restoredSql及导出。已回交采用保守问号、只读路由说明，不合入当前版本。UI-007需补BaseProcessHandler.getCommandLine跨版本签名登记，已回交。当前并发UI＋Runtime-Perf两槽占满，未追加构建。
+- UI-001在Light125%、原生自动放大到1247×925设置窗口中，SQL Preview顶部与末尾全部可读，R90三行完整、Wrapper下拉不截（frame-b4f55523/5fe91628）。本轮没有人为拉大窗口；SQL Log页仍出现横向滚动条，未据此判所有内容截断。
+- U39的243能力负例：MCP Tools页顶部称“11个AI工具已注册、可直接调用”（frame-e4ef69b8），点平台设置按钮却提示“需要IDEA2025.2+并启用MCP Server”（frame-b2ec93df）。导航降级正常，顶部就绪文案与实际能力矛盾，登记待修UI-011；实际11工具调用不能用243代验。
+- UI-005原AUTO实体复验补齐：原聚合SQL在Lambda/AUTO两形态均回落QueryWrapper<User>，单select同时含status/COUNT(*) AS cnt，groupBy与having完整（frame-38654924/9e3c5fb6）。另外发现UI-010：先切AUTO启动旧ui_probe查询、随后替换输入user，旧异步弹层仍显示ui_probe（frame-84fa67aa），取消后旧输出残留；代码只读确认回调无请求代次/文本/形态核对，旧候选及输出可能回灌。当前新SQL再次转换正确不构成对竞态的修复。
+
+- U10主动降级：KotlinWrapperScenarios.kt:47的ktQuery链内按Alt+Shift+Q，通知明确“暂不能可靠预览”、不生成猜测SQL，画面该链无插件gutter（frame-11171827）。构造与选择区/普通行负例仍待补。
+- UI-009已提交dca7b369，UI-007平台签名登记6f756735，均待合流定向；前者未跑测试。代理报告的renderer空池疑虑已实读排除：主树初始化实际为`mutableListOf(SimpleColoredComponent())`，不是空列表，不纳入缺陷。
+
 ## 依据与历史证据保全
 
 - 十九轮UI11组、Runner12组及R90/R91/R92/R94/O147/V178专册。
