@@ -24,6 +24,12 @@ class RequestTraceStore(private val maxRequests: Int = 500, private val maxTrans
     private val seenControl = HashSet<Long>()
     private var controlTruncated = false
 
+    init {
+        require(maxRequests in 1..2000 && maxTransactions in 1..10_000)
+    }
+
+    private fun validText(vararg values: String?): Boolean = values.all { it == null || it.length <= 256 }
+
     @Synchronized
     fun clear() {
         requests.clear()
@@ -36,9 +42,12 @@ class RequestTraceStore(private val maxRequests: Int = 500, private val maxTrans
     fun accept(event: RequestEvent) {
         val id = event.requestId?.takeIf { it.length in 1..160 } ?: return
         if (event.kind !in setOf("START", "END")) return
+        if (!validText(event.envelope.runId, event.envelope.captureStateToken, event.parentRequestId,
+                event.status, event.coverage)) { controlTruncated = true; return }
         if (!admit(event.envelope.sequence)) return
+        val sanitized = event.copy(errorClass = null)
         val pair = requests.getOrPut(id) { PairOfEvents() }
-        if (event.kind == "START") pair.start = event else pair.end = event
+        if (event.kind == "START") pair.start = sanitized else pair.end = sanitized
         while (requests.size > maxRequests) {
             requests.remove(requests.keys.first())
             controlTruncated = true
@@ -47,6 +56,9 @@ class RequestTraceStore(private val maxRequests: Int = 500, private val maxTrans
 
     @Synchronized
     fun accept(event: TransactionEvent) {
+        if (!validText(event.envelope.runId, event.envelope.captureStateToken, event.kind, event.connectionId,
+                event.leaseId, event.transactionId, event.savepointId, event.requestId, event.status, event.outcome,
+                event.coverage)) { controlTruncated = true; return }
         if (!admit(event.envelope.sequence)) return
         transactions.addLast(event.copy(errorClass = null, sqlState = event.sqlState?.take(8)))
         while (transactions.size > maxTransactions) {
