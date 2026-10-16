@@ -78,6 +78,8 @@ internal fun SqlPreviewPanel.toolbar(): JBPanel<JBPanel<*>> = JBPanel<JBPanel<*>
 internal fun SqlPreviewPanel.moreActions(): List<Pair<String, () -> Unit>> = listOf(
     MpSqlVisualizerBundle.message("panel.rollbackSql") to { showRollbackSql() },
     MpSqlVisualizerBundle.message("insight.action") to { showSqlInsight() },
+    MpSqlVisualizerBundle.message("insight.scenario.action") to { showParameterScenarios() },
+    MpSqlVisualizerBundle.message("insight.scenario.traceAction") to { showParameterScenarios() },
     MpSqlVisualizerBundle.message("panel.param.import") to { importParamsFromClipboard() },
     MpSqlVisualizerBundle.message("panel.compare") to { showSqlDiff() },
     MpSqlVisualizerBundle.message("panel.share") to { showShareDialog() },
