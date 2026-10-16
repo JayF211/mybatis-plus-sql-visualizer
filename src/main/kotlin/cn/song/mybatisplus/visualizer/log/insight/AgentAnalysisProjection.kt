@@ -15,7 +15,7 @@ object AgentAnalysisProjection {
         if (event.timestampSource != "ENTRY_WALL_MILLIS") return null
         return SqlExecutionObservation(
             runId, executionId, sequence, epoch, event.timestamp, nanos, event.durationNanos, event.threadId,
-            digest(entry.structureKey), entry.databaseName?.let(::digest),
+            digest(entry.structureKey), databaseIdentity(event),
             listOfNotNull(event.sourceFile, event.methodKey).joinToString(":").takeIf { it.isNotBlank() }?.let(::digest),
             event.requestTag?.let(::digest),
             when (event.resultStatus) {
@@ -29,6 +29,58 @@ object AgentAnalysisProjection {
             transactionId = event.transactionId,
         )
     }
+
+    /** Endpoint identity is not a UI badge. Unknown targets use explicitly labelled, run-local buckets. */
+    private fun databaseIdentity(event: AgentEvent): String {
+        val endpoint = event.url?.let(::canonicalJdbcTarget)
+        if (endpoint != null) return "jdbc-target:" + digest(endpoint)
+        val run = event.runId.orEmpty()
+        val connection = event.connectionId?.takeIf { it.isNotBlank() && it.length <= 1024 }
+        return if (connection != null) "unknown-connection:" + digest(identityTuple(run, connection))
+        else "unknown-event:" + digest(identityTuple(run, event.executionId.orEmpty()))
+    }
+
+    /** Verified single-host network subset only. No DNS, credential retention or process-global parser flags. */
+    private fun canonicalJdbcTarget(url: String): String? = try {
+        if (url.length > 8192 || url.any { it.isISOControl() } || !url.startsWith("jdbc:", true)) null
+        else {
+            val uri = java.net.URI(url.substring(5))
+            val scheme = uri.scheme?.lowercase(java.util.Locale.ROOT)
+            val defaultPort = when (scheme) { "mysql", "mariadb" -> 3306; "postgresql" -> 5432; else -> null }
+            val host = uri.host?.lowercase(java.util.Locale.ROOT)
+            val path = uri.rawPath
+            val port = if (uri.port == -1) defaultPort else uri.port
+            if (defaultPort == null || host.isNullOrBlank() || uri.rawFragment != null || port == null || port !in 1..65535 ||
+                path == null || !path.startsWith('/') || path.length < 2 || path.substring(1).contains('/')) null
+            else {
+                // Preserve path case and quoting; conservatively reject encoded delimiters or ambiguous syntax.
+                val database = java.net.URLDecoder.decode(path.substring(1).replace("+", "%2B"), "UTF-8")
+                if (!database.matches(Regex("[A-Za-z0-9_.$-]{1,256}"))) null
+                else {
+                    var schema: String? = null
+                    var supported = true
+                    val schemaSeen = mutableSetOf<String>()
+                    val safeOptions = setOf("user", "password", "ssl", "sslmode", "sslcert", "sslkey", "sslrootcert", "applicationname",
+                        "connecttimeout", "sockettimeout", "tcpkeepalive", "useunicode", "characterencoding", "servertimezone",
+                        "usessl", "requiressl", "verifyservercertificate", "allowpublickeyretrieval", "rewritebatchedstatements")
+                    uri.rawQuery?.split('&')?.forEach { parameter ->
+                        val name = java.net.URLDecoder.decode(parameter.substringBefore('='), "UTF-8").lowercase(java.util.Locale.ROOT)
+                        when {
+                            name == "currentschema" && scheme == "postgresql" -> {
+                                val value = java.net.URLDecoder.decode(parameter.substringAfter('=', ""), "UTF-8")
+                                if (!schemaSeen.add(name) || !value.matches(Regex("[A-Za-z_][A-Za-z0-9_$]{0,127}"))) supported = false
+                                else schema = value
+                            }
+                            name !in safeOptions -> supported = false // options/sessionVariables may silently change namespace or routing
+                        }
+                    }
+                    if (!supported) null else identityTuple(scheme!!, host, port.toString(), database, schema ?: "<schema-unknown>")
+                }
+            }
+        }
+    } catch (_: Exception) { null }
+
+    private fun identityTuple(vararg parts: String): String = parts.joinToString("") { "${it.length}:$it" }
 
     fun boundary(state: AgentCaptureState): AnalysisCaptureBoundary? {
         if (state.protocolVersion != 2L || state.kind == "STOP") return null
