@@ -24,6 +24,7 @@ public final class SqlEvent {
     public String timestampSource;
     public String errorClass;
     public String sqlState;
+    public String requestId, parentRequestId, connectionId, leaseId, transactionId;
 
     /** SQL 文本（PreparedStatement 为 prepare 时的 SQL，Statement 为 execute 参数，批为拼接）。 */
     public String sql;

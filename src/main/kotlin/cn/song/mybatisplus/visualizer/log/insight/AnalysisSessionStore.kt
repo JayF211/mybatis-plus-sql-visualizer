@@ -18,6 +18,10 @@ data class SqlExecutionObservation(
     val requestTag: String?,
     val status: ExecutionObservationStatus,
     val truncated: Boolean = false,
+    val requestId: String? = null,
+    val parentRequestId: String? = null,
+    val connectionId: String? = null,
+    val transactionId: String? = null,
 )
 
 enum class ExecutionObservationStatus { SUCCESS, ERROR, UNKNOWN }
@@ -163,11 +167,14 @@ class AnalysisSessionStore(
     private fun valid(event: SqlExecutionObservation): Boolean =
         event.executionId.length in 1..160 && event.runId.length in 1..160 && event.sequence > 0 &&
             event.captureEpoch >= 0 && event.startedAtMillis >= 0 && event.durationNanos >= 0 &&
-            event.fingerprint.length in 1..128 && listOf(event.databaseIdentity, event.callSite, event.requestTag).all { it == null || it.length <= 1024 }
+            event.fingerprint.length in 1..128 && listOf(event.databaseIdentity, event.callSite, event.requestTag,
+                event.requestId, event.parentRequestId, event.connectionId, event.transactionId).all { it == null || it.length <= 1024 }
 
     private fun estimateBytes(event: SqlExecutionObservation): Long = 192L + 2L *
         (event.executionId.length + event.runId.length + event.fingerprint.length +
-            (event.databaseIdentity?.length ?: 0) + (event.callSite?.length ?: 0) + (event.requestTag?.length ?: 0))
+            (event.databaseIdentity?.length ?: 0) + (event.callSite?.length ?: 0) + (event.requestTag?.length ?: 0) +
+            (event.requestId?.length ?: 0) + (event.parentRequestId?.length ?: 0) +
+            (event.connectionId?.length ?: 0) + (event.transactionId?.length ?: 0))
 
     companion object {
         private val KNOWN_ISSUES = setOf("queue_dropped", "encoding_failed", "transport_uncertain", "capture_failed",

@@ -7,7 +7,7 @@ import org.junit.Test
 class RequestSqlBudgetTest {
     private val budget = SqlRequestBudget(2, 100, 0)
     private fun event(id: Long) = SqlExecutionObservation("run", "execution-$id", id, 1, 100, 100,
-        20, 1, "fp", "db", "call", "request", ExecutionObservationStatus.SUCCESS)
+        20, 1, "fp", "db", "call", null, ExecutionObservationStatus.SUCCESS, requestId = "request")
     private fun evidence(vararg observations: SqlExecutionObservation) = SqlRequestEvidence(
         "request", "run", true, true, 10, observations.size, 0, 0, true, true, observations.toList(),
     )
@@ -49,7 +49,7 @@ class RequestSqlBudgetTest {
 
     @Test
     fun `wrong request or process cannot create budget failure for another scope`() {
-        val wrong = evidence(event(1).copy(requestTag = "other", durationNanos = 1000))
+        val wrong = evidence(event(1).copy(requestId = "other", durationNanos = 1000))
         assertEquals(SqlBudgetStatus.INCONCLUSIVE, RequestSqlBudget.evaluate(wrong, budget).status)
         assertEquals(0, RequestSqlBudget.evaluate(wrong, budget).observedExecutions)
     }

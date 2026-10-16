@@ -73,6 +73,9 @@ dependencies {
     "asmFat"("org.ow2.asm:asm-commons:$asmVersion")
 
     testImplementation("junit:junit:4.13.2")
+    // Real API bytecode fixtures only; the production agent never links Servlet symbols.
+    testImplementation("javax.servlet:javax.servlet-api:4.0.1")
+    testImplementation("jakarta.servlet:jakarta.servlet-api:5.0.0")
     // attach 门禁测试的「用户应用」驱动：H2（与根项目方言验证同版本）
     testImplementation("com.h2database:h2:2.3.232")
     // T-AttachPoolWarm：真机复现（MySQL 8 + 存量池连接复用）——测试 classpath 提供真 driver jar，

@@ -94,6 +94,7 @@ final class WovenEvents {
         if (scope != null) scope.apply(event);
         else event.timestampSource = "EXIT_ESTIMATE_MILLIS";
         EventBuilder.applyResult(event, op, result, failure);
-        EventBus.offer(event);
+        boolean accepted = EventBus.offerTracked(event);
+        if (scope != null) scope.reported = accepted;
     }
 }

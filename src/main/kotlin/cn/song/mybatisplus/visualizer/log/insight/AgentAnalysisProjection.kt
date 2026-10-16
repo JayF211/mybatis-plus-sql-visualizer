@@ -23,6 +23,10 @@ object AgentAnalysisProjection {
                 "ERROR" -> ExecutionObservationStatus.ERROR
                 else -> ExecutionObservationStatus.UNKNOWN
             },
+            requestId = event.requestId,
+            parentRequestId = event.parentRequestId,
+            connectionId = event.connectionId,
+            transactionId = event.transactionId,
         )
     }
 
@@ -40,6 +44,11 @@ object AgentAnalysisProjection {
         )
         for ((value, reason) in counters) if (value == null || value > 0) add(reason)
         if (state.protocolVersion != 2L || state.coverage != "INSTRUMENTED_JDBC_ONLY") add("unsupported_capture")
+        if (state.requestTracing == true || state.transactionTracing == true) {
+            val controlLoss = listOf(state.controlDropped, state.controlCleared, state.controlEncodingFailed,
+                state.controlTransportUncertain, state.controlHookFailed)
+            if (controlLoss.any { it == null || it > 0 }) add("scope_incomplete")
+        }
         // Run-level terminal counts do not establish request lifecycle or complete driver coverage.
         add("scope_incomplete")
     }

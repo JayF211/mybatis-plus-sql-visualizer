@@ -108,6 +108,7 @@ final class StatementHandler implements InvocationHandler {
         try {
             result = doInvoke(method, args);
         } catch (Throwable e) {
+            scope.failed = true;
             failure = e;
             throw failure;
         } finally {
@@ -163,7 +164,7 @@ final class StatementHandler implements InvocationHandler {
         event.threadName = Thread.currentThread().getName();
         scope.apply(event);
         EventBuilder.applyResult(event, op, result, failure);
-        EventBus.offer(event);
+        scope.reported = EventBus.offerTracked(event);
     }
 
 }

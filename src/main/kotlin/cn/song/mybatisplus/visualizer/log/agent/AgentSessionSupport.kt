@@ -550,6 +550,14 @@ internal class AgentSession(
                 livenessFrameSeen = true
                 AgentCaptureState.parse(body)?.let(analysisChannel::onState)
             }
+            RequestEvent.COMMAND -> {
+                livenessFrameSeen = true
+                RequestEvent.parse(body)?.let(analysisChannel::onRequest)
+            }
+            TransactionEvent.COMMAND -> {
+                livenessFrameSeen = true
+                TransactionEvent.parse(body)?.let(analysisChannel::onTransaction)
+            }
             // T-AgentConfigChannel T-02：CONFIG 回执——应用侧「已生效」的唯一直接证据。
             // 与 HEARTBEAT/EVENT 同属存活帧（应用侧真在跑才会发）。
             AgentProtocol.CMD_CONFIG_ACK -> {
@@ -612,6 +620,8 @@ internal class AgentSession(
                 AgentProtocol.configBody(disabled, desensitize, prefixes, bizPrefixes, stackMaxFrames),
             ).asJsonObject
             config.addProperty(AgentCaptureState.CONFIG_KEY, analysisChannel.isRequested())
+            config.addProperty(RequestEvent.CONFIG_KEY, analysisChannel.isRequested())
+            config.addProperty(TransactionEvent.CONFIG_KEY, analysisChannel.isRequested())
             analysisChannel.requestedToken()?.let { config.addProperty("captureStateToken", it) }
             val body = config.toString().toByteArray(Charsets.UTF_8)
             synchronized(output) {

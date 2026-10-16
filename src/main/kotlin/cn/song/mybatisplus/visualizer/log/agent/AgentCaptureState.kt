@@ -31,6 +31,15 @@ data class AgentCaptureState(
     val limitations: Set<String>,
     /** Echo of the last valid CONFIG nonce; absent on legacy peers. Not a run/epoch identity. */
     val captureStateToken: String? = null,
+    val controlGenerated: Long? = null,
+    val controlDropped: Long? = null,
+    val controlCleared: Long? = null,
+    val controlEncodingFailed: Long? = null,
+    val controlTransportUncertain: Long? = null,
+    val controlWritten: Long? = null,
+    val controlHookFailed: Long? = null,
+    val requestTracing: Boolean? = null,
+    val transactionTracing: Boolean? = null,
 ) {
     companion object {
         const val COMMAND = 6
@@ -52,6 +61,11 @@ data class AgentCaptureState(
                 sampled = o.number("sampled"), coverage = o.text("coverage"),
                 capabilities = o.strings("capabilities"), limitations = o.strings("limitations"),
                 captureStateToken = o.text("captureStateToken")?.takeIf { it.matches(Regex("[0-9a-fA-F]{1,64}")) },
+                controlGenerated = o.number("controlGenerated"), controlDropped = o.number("controlDropped"),
+                controlCleared = o.number("controlCleared"), controlEncodingFailed = o.number("controlEncodingFailed"),
+                controlTransportUncertain = o.number("controlTransportUncertain"), controlWritten = o.number("controlWritten"),
+                controlHookFailed = o.number("controlHookFailed"), requestTracing = o.flag("requestTracing"),
+                transactionTracing = o.flag("transactionTracing"),
             )
         }.getOrNull()
 

@@ -49,15 +49,18 @@ public final class EventBus {
     }
 
     /** 采集线程入口：非阻塞入队，满则丢事件（计数）不阻塞业务线程。 */
-    public static void offer(SqlEvent event) {
+    public static void offer(SqlEvent event) { offerTracked(event); }
+
+    public static boolean offerTracked(SqlEvent event) {
         synchronized (CaptureLedger.class) {
             if (event != null && event.captureEpoch != null
                     && (cn.song.mybatisplus.sqlvis.agent.AgentState.isDisabled()
                     || event.captureEpoch.longValue() != CaptureLedger.captureEpoch())) {
                 CLEARED.incrementAndGet();
-                return;
+                return false;
             }
-            if (event == null || !QUEUE.offer(event)) DROPPED.incrementAndGet();
+            if (event == null || !QUEUE.offer(event)) { DROPPED.incrementAndGet(); return false; }
+            return true;
         }
     }
 
