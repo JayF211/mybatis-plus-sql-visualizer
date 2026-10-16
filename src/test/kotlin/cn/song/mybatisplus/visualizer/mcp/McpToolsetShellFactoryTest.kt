@@ -2,7 +2,14 @@ package cn.song.mybatisplus.visualizer.mcp
 
 import cn.song.mybatisplus.visualizer.acp.SignatureDistroDiscovery
 import java.io.File
+import java.net.JarURLConnection
+import java.net.URL
+import java.net.URLConnection
+import java.net.URLStreamHandler
 import java.net.URLClassLoader
+import java.nio.file.Files
+import java.util.jar.JarEntry
+import java.util.jar.JarOutputStream
 import java.util.jar.JarFile
 import org.junit.Assume.assumeTrue
 import org.junit.Assert.assertNull
@@ -37,6 +44,11 @@ class McpToolsetShellFactoryTest {
     fun `能力探测_真实本地发行物正反对照且不按版本号判断`() {
         val distros = SignatureDistroDiscovery.ideaDistros
         assumeTrue("没有本地发行物，不能冒充跨平台验证", distros.isNotEmpty())
+        val checkerHome = locateArtifact(PlatformSignatureChecker::class.java)
+        val productionHome = locateArtifact(
+            Class.forName("cn.song.mybatisplus.visualizer.mcp.McpToolsetDynamicRegistrarKt", false, McpToolGate::class.java.classLoader),
+        )
+        val kotlinHome = locateArtifact(kotlin.Unit::class.java)
         var presentCount = 0
         var absentCount = 0
         for ((_, root) in distros) {
@@ -51,9 +63,6 @@ class McpToolsetShellFactoryTest {
             val java = sequenceOf(root.resolve("jbr/bin/java.exe"), root.resolve("jbr/bin/java"))
                 .firstOrNull { it.isFile }
             assertTrue("发行物必须提供匹配的 JBR：$root", java != null)
-            val checkerHome = File(PlatformSignatureChecker::class.java.protectionDomain.codeSource.location.toURI())
-            val productionHome = File(McpToolGate::class.java.protectionDomain.codeSource.location.toURI())
-            val kotlinHome = File(kotlin.Unit::class.java.protectionDomain.codeSource.location.toURI())
             val process = ProcessBuilder(
                 java!!.absolutePath, "-cp", checkerHome.absolutePath, "PlatformSignatureChecker",
                 root.resolve("lib").absolutePath, "--mcp-capability-probe",
@@ -71,6 +80,83 @@ class McpToolsetShellFactoryTest {
         }
         println("UI011 real distro capability: present=$presentCount absent=$absentCount")
         assumeTrue("本机未同时提供能力正反发行物，双向验证未完成", presentCount > 0 && absentCount > 0)
+    }
+
+    /** 沿 GeneratedProjectionCompiler 的资源候选＋字节对账策略，另支持编译输出目录。
+     * PathClassLoader 的 CodeSource.location 可为空；IDE jar 连接也未必继承 JDK JarURLConnection。
+     * 不猜 build/cache 路径，不凭同名文件接受候选，不将解析失败降级成测试跳过。
+     */
+    private fun locateArtifact(anchor: Class<*>): File {
+        val entry = anchor.name.replace('.', '/') + ".class"
+        val resource = requireNotNull(anchor.getResource("/$entry")) { "Missing class resource: $entry" }
+        return locateArtifact(entry, resource, runCatching { anchor.protectionDomain?.codeSource?.location }.getOrNull())
+    }
+
+    private fun locateArtifact(entry: String, resource: URL, codeSource: URL?): File {
+        val candidates = linkedSetOf<File>()
+        fun candidate(url: URL?) {
+            if (url?.protocol == "file") {
+                runCatching { File(url.toURI()).canonicalFile }.getOrNull()?.let(candidates::add)
+            }
+        }
+        candidate(codeSource)
+        val connection = resource.openConnection().apply { useCaches = false }
+        (connection as? JarURLConnection)?.let { candidate(it.jarFileURL) }
+        if (resource.protocol == "jar") {
+            // 不反射 IDE 私有连接类：标准 jar URL 文本也能定位真实 archive，包含空格的 URI 保留转义。
+            candidate(URL(resource.toExternalForm().substringAfter("jar:").substringBefore("!/")))
+        } else if (resource.protocol == "file") {
+            var root = File(resource.toURI())
+            repeat(entry.split('/').size) { root = root.parentFile ?: error("Invalid class resource: $resource") }
+            candidates.add(root.canonicalFile)
+        }
+        val expected = connection.getInputStream().use { it.readBytes() }
+        return candidates.firstOrNull { file ->
+            runCatching {
+                if (file.isDirectory) {
+                    val classFile = file.resolve(entry)
+                    classFile.isFile && classFile.readBytes().contentEquals(expected)
+                } else if (file.isFile) {
+                    JarFile(file).use { jar ->
+                        val classEntry = jar.getJarEntry(entry) ?: return@use false
+                        jar.getInputStream(classEntry).use { it.readBytes().contentEquals(expected) }
+                    }
+                } else false
+            }.getOrDefault(false)
+        } ?: error("Verified artifact unavailable: $entry; resource=$resource; candidates=$candidates")
+    }
+
+    @Test
+    fun `资源定位_空CodeSource支持目录与非JDK的jar连接且拒绝字节不符`() {
+        val root = Files.createTempDirectory("mpsv capability resource ").toFile()
+        try {
+            val entry = "sample/nested/Probe.class"
+            val bytes = byteArrayOf(1, 2, 3, 4)
+            val classFile = root.resolve(entry).apply { parentFile.mkdirs(); writeBytes(bytes) }
+            assertEquals(root.canonicalFile, locateArtifact(entry, classFile.toURI().toURL(), null))
+
+            val jar = root.resolve("actual artifact.jar")
+            JarOutputStream(jar.outputStream()).use { output ->
+                output.putNextEntry(JarEntry(entry))
+                output.write(bytes)
+                output.closeEntry()
+            }
+            fun customResource(content: ByteArray): URL = URL(
+                null, "jar:${jar.toURI().toURL()}!/$entry", object : URLStreamHandler() {
+                    override fun openConnection(url: URL): URLConnection = object : URLConnection(url) {
+                        override fun connect() = Unit
+                        override fun getInputStream() = content.inputStream()
+                    }
+                },
+            )
+            val resource = customResource(bytes)
+            assertTrue("覆盖 IDE 非 JDK JarURLConnection 形态", resource.openConnection() !is JarURLConnection)
+            assertEquals(jar.canonicalFile, locateArtifact(entry, resource, null))
+            val mismatch = runCatching { locateArtifact(entry, customResource(byteArrayOf(9)), root.toURI().toURL()) }
+            assertTrue("同名目录及 JAR 字节不符时均必须拒绝", mismatch.exceptionOrNull() is IllegalStateException)
+        } finally {
+            root.deleteRecursively()
+        }
     }
 
     /** 模拟平台 McpToolset 接口（空标记接口即可，壳 implements 的类型解析只要求可达）。 */
