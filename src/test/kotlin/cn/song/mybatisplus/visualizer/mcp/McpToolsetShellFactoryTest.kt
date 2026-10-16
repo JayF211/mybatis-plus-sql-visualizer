@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.mcp
 
 import cn.song.mybatisplus.visualizer.acp.SignatureDistroDiscovery
+import java.io.File
 import java.net.URLClassLoader
 import java.util.jar.JarFile
 import org.junit.Assume.assumeTrue
@@ -45,16 +46,28 @@ class McpToolsetShellFactoryTest {
             val containsInterface = jars.any { jar ->
                 JarFile(jar).use { it.getJarEntry("com/intellij/mcpserver/McpToolset.class") != null }
             }
-            URLClassLoader(jars.map { it.toURI().toURL() }.toTypedArray(), null).use { loader ->
-                val result = findMcpToolsetClass(loader)
-                assertEquals("探测必须对应发行物内容：$root", containsInterface, result != null)
-                if (containsInterface) {
-                    assertTrue(result!!.isInterface)
-                    presentCount++
-                } else {
-                    absentCount++
-                }
-            }
+            // 只把生产探测函数和 stdlib 交给目标 JBR，不加载整个插件，也不调用注册入口。
+            // 不使用当前测试 JVM：262 的 McpToolset 为 major 69，243 的 JBR 21 无法加载。
+            val java = sequenceOf(root.resolve("jbr/bin/java.exe"), root.resolve("jbr/bin/java"))
+                .firstOrNull { it.isFile }
+            assertTrue("发行物必须提供匹配的 JBR：$root", java != null)
+            val checkerHome = File(PlatformSignatureChecker::class.java.protectionDomain.codeSource.location.toURI())
+            val productionHome = File(McpToolGate::class.java.protectionDomain.codeSource.location.toURI())
+            val kotlinHome = File(kotlin.Unit::class.java.protectionDomain.codeSource.location.toURI())
+            val process = ProcessBuilder(
+                java!!.absolutePath, "-cp", checkerHome.absolutePath, "PlatformSignatureChecker",
+                root.resolve("lib").absolutePath, "--mcp-capability-probe",
+                productionHome.absolutePath, kotlinHome.absolutePath,
+            ).redirectErrorStream(true).start()
+            val output = process.inputStream.bufferedReader().use { it.readText() }
+            assertEquals("目标 JBR 能力探测失败：$root\n$output", 0, process.waitFor())
+            val expected = if (containsInterface) "PRESENT" else "ABSENT"
+            assertEquals(
+                "生产探测必须对应发行物内容：$root\n$output",
+                listOf("MCP_CAPABILITY=$expected"),
+                output.lineSequence().filter { it.startsWith("MCP_CAPABILITY=") }.toList(),
+            )
+            if (containsInterface) presentCount++ else absentCount++
         }
         println("UI011 real distro capability: present=$presentCount absent=$absentCount")
         assumeTrue("本机未同时提供能力正反发行物，双向验证未完成", presentCount > 0 && absentCount > 0)
