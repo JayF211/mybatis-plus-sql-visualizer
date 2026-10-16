@@ -17,7 +17,8 @@ data class SqlRequestEvidence(
     val qualityIssues: Set<String> = emptySet(),
 )
 
-data class SqlRequestBudget(val maxExecutions: Int, val maxCumulativeNanos: Long, val maxErrors: Int = 0)
+data class SqlRequestBudget(val maxExecutions: Int, val maxCumulativeNanos: Long, val maxErrors: Int = 0,
+    val expectedShapeSet: Set<String>? = null)
 
 data class SqlBudgetVerdict(
     val status: SqlBudgetStatus,
@@ -25,11 +26,14 @@ data class SqlBudgetVerdict(
     val observedExecutions: Int,
     val observedCumulativeNanos: Long,
     val observedErrors: Int,
+    val addedShapes: Set<String> = emptySet(),
+    val missingShapes: Set<String> = emptySet(),
 )
 
 object RequestSqlBudget {
     fun evaluate(evidence: SqlRequestEvidence, budget: SqlRequestBudget): SqlBudgetVerdict {
         require(budget.maxExecutions >= 0 && budget.maxCumulativeNanos >= 0 && budget.maxErrors >= 0)
+        require(budget.expectedShapeSet == null || (budget.expectedShapeSet.size <= 1000 && budget.expectedShapeSet.all { it.length in 1..128 }))
         val reasons = linkedSetOf<String>()
         val seen = HashSet<String>()
         val events = evidence.observations.filter {
@@ -64,13 +68,19 @@ object RequestSqlBudget {
         if (events.any { it.status == ExecutionObservationStatus.UNKNOWN }) reasons += "unknown_result"
         if (events.any { it.truncated }) reasons += "truncated_event"
         if (evidence.qualityIssues.isNotEmpty()) reasons += "capture_quality_incomplete"
+        val observedShapes = events.map { it.fingerprint }.toSet()
+        val addedShapes = budget.expectedShapeSet?.let { observedShapes - it }.orEmpty()
+        val missingShapes = budget.expectedShapeSet?.let { it - observedShapes }.orEmpty()
+        val completeBeforeShapeCheck = reasons.isEmpty()
+        if (addedShapes.isNotEmpty()) reasons += "unexpected_shape_observed"
+        if (missingShapes.isNotEmpty() && completeBeforeShapeCheck) reasons += "expected_shape_missing"
         // A lower bound can prove a violation, but cannot prove compliance when coverage is missing.
         val status = when {
             "invalid_scope_event" in reasons || "scope_identity_missing" in reasons -> SqlBudgetStatus.INCONCLUSIVE
-            exceeded -> SqlBudgetStatus.FAIL
+            exceeded || addedShapes.isNotEmpty() || "expected_shape_missing" in reasons -> SqlBudgetStatus.FAIL
             reasons.isNotEmpty() -> SqlBudgetStatus.INCONCLUSIVE
             else -> SqlBudgetStatus.PASS
         }
-        return SqlBudgetVerdict(status, reasons, events.size, duration, errors)
+        return SqlBudgetVerdict(status, reasons, events.size, duration, errors, addedShapes, missingShapes)
     }
 }
