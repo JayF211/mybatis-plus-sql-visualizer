@@ -70,6 +70,9 @@ object SqlSchemaDiffer {
         return SqlSchemaDiffReport(before.databaseContext, before.version, after.version, changes, diagnostics.distinct(), true, impactComplete)
     }
 
-    // SQL type spelling normalization only; identifier identity is never normalized this way.
-    private fun canonicalType(type: String) = type.trim().replace(Regex("\\s+"), " ").uppercase(Locale.ROOT)
+    // Normalize only a proven built-in grammar. Quoted names, ENUM literals and unknown/custom types stay byte-for-byte.
+    private fun canonicalType(type: String): String {
+        val builtin = Regex("(?i)^\\s*(?:smallint|integer|int|bigint|real|double\\s+precision|boolean|bool|text|bytea|date|json|jsonb|uuid|(?:numeric|decimal|varchar|character\\s+varying|char|character)(?:\\s*\\(\\s*[0-9]+(?:\\s*,\\s*[0-9]+)?\\s*\\))?|(?:timestamp|time)(?:\\s*\\(\\s*[0-9]+\\s*\\))?(?:\\s+(?:with|without)\\s+time\\s+zone)?)\\s*$")
+        return if (builtin.matches(type)) type.trim().replace(Regex("\\s+"), " ").uppercase(Locale.ROOT) else type
+    }
 }
