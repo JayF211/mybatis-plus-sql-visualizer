@@ -248,6 +248,9 @@ class AgentManager(private val project: Project) : Disposable {
 
     fun sqlTransactionEvents(): List<TransactionEvent> = sessions.flatMap { it.analysisChannel.transactions() }
 
+    fun sqlAnalysisEvidence(): List<cn.song.mybatisplus.visualizer.log.insight.AnalysisEvidenceSnapshot> =
+        sessions.map { it.analysisChannel.evidenceSnapshot() }
+
 
     /**
      * T-PremainReattach：premain 会话提交段与关开关清表段的互斥锁。覆盖两段临界区——

@@ -131,6 +131,9 @@ class AnalysisSessionStore(
         return true
     }
 
+    @Synchronized
+    internal fun stateIdentity(): Pair<Long, Boolean> = generation to enabled
+
     fun snapshot(): AnalysisSessionSnapshot {
         val captured = synchronized(this) {
             AnalysisSessionSnapshot(generation, enabled, events.toList(), emptyList(), issues.toSet(), bytes)
