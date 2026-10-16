@@ -73,6 +73,33 @@ class HqlEntityNameExtractorTest {
         assertEquals("UserEntity", HqlEntityNameExtractor.extract("INSERT INTO UserEntity (id, name) SELECT o.id, o.name FROM OrderEntity o"))
     }
 
+    @Test
+    fun `scalar subquery does not steal top level root`() {
+        assertEquals("Inventory", HqlEntityNameExtractor.extract("select (select max(d.id) from Detail d) from Inventory i"))
+    }
+
+    @Test
+    fun `quoted keywords and parentheses do not affect root`() {
+        assertEquals("model.Inventory", HqlEntityNameExtractor.extract("select 'it''s ( from Wrong x )' from model.Inventory i"))
+    }
+
+    @Test
+    fun `qualified names survive all statement heads`() {
+        for (query in listOf("from model.Inventory i", "update model.Inventory i set i.id=1", "delete from model.Inventory", "delete model.Inventory")) {
+            assertEquals(query, "model.Inventory", HqlEntityNameExtractor.extract(query))
+        }
+    }
+
+    @Test
+    fun `insert select uses qualified target not source`() {
+        assertEquals("archive.Inventory", HqlEntityNameExtractor.extract("insert into archive.Inventory (id) select s.id from source.Inventory s"))
+    }
+
+    @Test
+    fun `cte inner root does not replace outer query`() {
+        assertEquals("model.Inventory", HqlEntityNameExtractor.extract("with recent as (select d.id from Detail d) select i from model.Inventory i"))
+    }
+
     /** 提取不到实体名返回 null（畸形语句）。 */
     @Test
     fun `malformed_returnsNull`() {

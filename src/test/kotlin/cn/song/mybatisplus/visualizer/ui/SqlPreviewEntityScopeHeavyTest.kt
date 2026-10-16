@@ -190,6 +190,127 @@ class SqlPreviewEntityScopeHeavyTest : HeavyPlatformTestCase() {
         assertNull(service().resolveHqlTable(null, "Stock", "from Stock", host))
     }
 
+    fun testExplicitInvisibleClassCannotBypassHostScope() {
+        val other = createModule("other")
+        val wrong = entity(other, "wrong.Inventory", "wrong_inventory")
+        val host = source(myModule, "host.Query")
+        ready()
+        assertNull(service().resolveHqlTable(wrong, "Inventory", "from Inventory", host))
+    }
+
+    fun testExplicitSameNameClassCannotBypassVisibleAmbiguity() {
+        val first = entity(myModule, "first.Inventory", "first_inventory")
+        entity(myModule, "second.Inventory", "second_inventory")
+        val host = source(myModule, "host.Query")
+        ready()
+        assertNull(service().resolveHqlTable(first, "Inventory", "from Inventory", host))
+    }
+
+    fun testExplicitClassCannotReplaceUniqueVisibleCandidate() {
+        val other = createModule("other")
+        val wrong = entity(other, "wrong.Inventory", "wrong_inventory")
+        entity(myModule, "visible.Inventory", "visible_inventory")
+        val host = source(myModule, "host.Query")
+        ready()
+        assertEquals("visible_inventory", service().resolveHqlTable(wrong, "Inventory", "from Inventory", host)?.tableName)
+    }
+
+    fun testProductionPreviewIgnoresScalarSubqueryWhenResolvingRoot() {
+        entity(myModule, "model.Inventory", "inventory")
+        entity(myModule, "model.Detail", "detail")
+        val host = source(myModule, "host.Query", "Object commonDao; void run() { commonDao.findByQuery(\"select (select max(d.id) from Detail d) from Inventory i\"); }")
+        ready()
+        assertEquals("inventory", service().previewCustomDaoHql(call(host, "findByQuery"))?.tableName)
+    }
+
+    fun testProductionPreviewUsesQualifiedRootNotPackageNamedEntity() {
+        entity(myModule, "model.Inventory", "inventory")
+        entity(myModule, "decoy.model", "wrong_package")
+        val host = source(myModule, "host.Query", "Object commonDao; void run() { commonDao.findByQuery(\"from model.Inventory i\"); }")
+        ready()
+        assertEquals("inventory", service().previewCustomDaoHql(call(host, "findByQuery"))?.tableName)
+    }
+
+    fun testFindAvailableJarInventoryMapsAllThreeEmbeddedPathsThroughProductionPreview() {
+        val settings = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state
+        val oldNaming = settings.embeddedColumnNaming
+        settings.embeddedColumnNaming = cn.song.mybatisplus.visualizer.config.PluginSettings.EMBEDDED_NAMING_AUTO
+        try {
+            val other = createModule("embedded-demo")
+            source(other, "decoy.WmsInventoryEntity", "long id; @javax.persistence.Column(name=\"move_tool_pallet_no\") String moveTool;",
+                "@javax.persistence.Entity @javax.persistence.Table(name=\"embed_demo\")")
+            file(myModule, "application.properties", "spring.jpa.properties.hibernate.implicit_naming_strategy=component-path")
+            val host = source(myModule, "host.JarQueryService", """
+                Object wmsJarCommonDao;
+                Object findAvailableJarInventory(String warehouseId, String inventoryStatus) {
+                    String hql = "from WmsInventoryEntity inv "
+                        + "where inv.warehouseId = :warehouseId "
+                        + "and inv.sku.inventoryStatus = :inventoryStatus "
+                        + "and inv.qty.baseQty > 0 "
+                        + "and inv.itemKey.lotInfo.receivedDate is not null "
+                        + "order by inv.id";
+                    return wmsJarCommonDao.findByQueryMaxNum(hql,
+                        new String[]{"warehouseId", "inventoryStatus"},
+                        new Object[]{warehouseId, inventoryStatus}, 0, 10);
+                }
+            """.trimIndent())
+            val dir = Files.createTempDirectory("preview-embedded-classlib-").toFile().also(dirs::add)
+            val classes = File(dir, "classes").apply { mkdirs() }
+            val sources = linkedMapOf<String, String>()
+            for (annotation in listOf("Entity", "Embeddable", "Embedded", "Id")) {
+                sources["javax/persistence/$annotation.java"] = "package javax.persistence; @java.lang.annotation.Retention(java.lang.annotation.RetentionPolicy.RUNTIME) public @interface $annotation {}"
+            }
+            for (annotation in listOf("Table", "Column")) {
+                sources["javax/persistence/$annotation.java"] = "package javax.persistence; @java.lang.annotation.Retention(java.lang.annotation.RetentionPolicy.RUNTIME) public @interface $annotation { String name(); }"
+            }
+            sources["lib/WmsInventoryEntity.java"] = """
+                package lib;
+                @javax.persistence.Entity @javax.persistence.Table(name="jar_demo")
+                public class WmsInventoryEntity {
+                    @javax.persistence.Id public long id;
+                    @javax.persistence.Column(name="warehouse_id") public String warehouseId;
+                    @javax.persistence.Embedded public WmsInventoryQty qty;
+                    @javax.persistence.Embedded public WmsSku sku;
+                    @javax.persistence.Embedded public WmsItemKey itemKey;
+                }
+            """.trimIndent()
+            sources["lib/WmsInventoryQty.java"] = "package lib; @javax.persistence.Embeddable public class WmsInventoryQty { public Long baseQty; }"
+            sources["lib/WmsSku.java"] = "package lib; @javax.persistence.Embeddable public class WmsSku { public String inventoryStatus; }"
+            sources["lib/WmsItemKey.java"] = """
+                package lib;
+                @javax.persistence.Embeddable public class WmsItemKey {
+                    @javax.persistence.Embedded public LotInfo lotInfo;
+                    @javax.persistence.Embeddable public static class LotInfo { public java.time.LocalDateTime receivedDate; }
+                }
+            """.trimIndent()
+            val paths = sources.map { (path, text) -> File(dir, path).apply { parentFile.mkdirs(); writeText(text) }.absolutePath }
+            val executable = if (System.getProperty("os.name").startsWith("Windows")) "javac.exe" else "javac"
+            val javac = listOfNotNull(System.getenv("JAVA_HOME"), System.getProperty("java.home"), "D:/HuanJing/Java/jdk1.8.0_181")
+                .map { File(it, "bin/$executable") }.firstOrNull(File::isFile)
+            assertNotNull("Real external javac required", javac)
+            val log = File(dir, "javac.log")
+            val process = ProcessBuilder(listOf(javac!!.absolutePath, "-source", "8", "-target", "8", "-d", classes.absolutePath) + paths)
+                .redirectErrorStream(true).redirectOutput(log).start()
+            assertTrue(process.waitFor(30, java.util.concurrent.TimeUnit.SECONDS))
+            assertEquals(log.readText(), 0, process.exitValue())
+            val root = LocalFileSystem.getInstance().refreshAndFindFileByIoFile(classes)!!
+            root.refresh(false, true)
+            ModuleRootModificationUtil.addModuleLibrary(myModule, root.url)
+            ready()
+            val binary = EntityClassResolver.resolveClassByName(project, "WmsInventoryEntity", host)
+            assertEquals("class", binary?.containingFile?.virtualFile?.extension)
+            assertEquals("lib.WmsInventoryEntity", binary?.qualifiedName)
+            val preview = service().previewCustomDaoHql(call(host, "findByQueryMaxNum"))
+            assertNotNull(preview)
+            val sql = preview!!.sql
+            assertEquals("jar_demo", preview.tableName)
+            for (column in listOf("qty_base_qty", "sku_inventory_status", "item_key_lot_info_received_date")) assertTrue(sql, sql.contains(column))
+            for (forbidden in listOf("embed_demo", "move_tool_pallet_no", "inv.qty.baseQty", "inv.sku.inventoryStatus", "inv.itemKey.lotInfo.receivedDate")) assertFalse(sql, sql.contains(forbidden))
+        } finally {
+            settings.embeddedColumnNaming = oldNaming
+        }
+    }
+
     private fun hbm(module: Module, filename: String, table: String): XmlFile = file(module, filename,
         "<hibernate-mapping><class name=\"legacy.Inventory\" table=\"$table\"><id name=\"id\" column=\"item_id\"/></class><query name=\"Unrelated.all\"><![CDATA[from Inventory]]></query></hibernate-mapping>") as XmlFile
 
