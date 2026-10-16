@@ -434,7 +434,8 @@ M0+M1a原粗估约9～14人日，M0至M3约45～74人日；这两个数均不是
 | 2026-10-17 | 性能与最终冻结 | sender独立reader/单writer/wake后61定向绿，默认三组9JVM每轮1万SQL零丢失、请求全配对；freeze67533aca | 新增追踪5%稳定成本受外部IDE与JIT波动未证明；warm10000两次因并行登记竞争未启动，如实留未验，不记PASS。Docker preflight超时，最终testShards显式禁容器测试，非UI其余全量/打包/三代兼容在途 |
 | 2026-10-17 | 全量失败回交 | R1六红：四站点/守卫契约与两selfPID重挂夹具；R2两红：CONFIG扩展字段及MP核心不存在selectAs的旧预期 | R1修复后后端32、Meta/Wiring15、守卫组合39绿；R2修复后Join39+Generator45+ListenSync3=87绿，生产安全闸未放宽；失败读数独立归档，不拼局部绿 |
 | 2026-10-17 | H09真实目标JVM | release8同份javax/H2功能载体在JDK8/17/21独立运行 | 三组FUNCTIONAL_PASS，5请求配对、4唯一功能SQL、commit/rollback及异常后复用、独立最终行数1、全部loss0；Jakarta跨JDK未外推 |
-| 进行中 | 第三轮完整门禁 | 冻结a9a3488b，已吸dev3393dc66 | 完整五片/agent/external强制fresh，成功后打包+三代offline兼容；未预填通过 |
+| 2026-10-17 | 第三轮失败与同族收口 | a9a3488b在片1出现AliasDualTrack三条旧MP核心selectAs期待；两测试修复638a5740，不改生产 | 全reverse包11类298/0/0/0，主控核XML；真实编译/完整投影/WHERE/ORDER及MPJ正反对照保持。R3片2～5未跑，非全量通过 |
+| 进行中 | 第四轮完整门禁 | 冻结ab8b54b1，已吸dev bfbe5b4c属性门控诊断 | 完整五片/agent/external强制fresh，成功后打包+三代offline兼容；只读独立需求审计并行，未预填通过 |
 | 待最终收口 | 合回dev | — | G-final通过前不得回合；UI验收按用户要求暂未执行，性能成本限制必须披露 |
 
 后续每阶段交付须附：实际改动范围、被推翻前提、支持/降级矩阵、定向及反向读数、集成分支检查点、性能对照、隐私检查、阻塞及UI待验项。最终另附覆盖全部任务的非UI验收记录、最终门禁SHA和一次性合流结果。不得把“计划更新”“开发完成”或“非UI验证通过”写成“全部验收通过”。

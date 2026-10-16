@@ -65,9 +65,9 @@
 
 ## 三、已证伪前提与后续动作
 
-- H08有程序化结果读取基础：McpDbExecutor的反射通道已在项目中存在，无需硬读原生网格；但collect将SQL NULL转为空字符串，不能直接作为回归比较输入。新增纯JDBC采集器保留NULL，平台适配和安全执行入口仍待实施验证。
-- 预览页签存在固定索引/整体拆容器问题，子车道先修真实生命周期，不能只加新tab。
-- 当前主控结果比较实现只有基础，没有运行生产入口，必须保持W45未完成。
+- H08有程序化结果读取基础：McpDbExecutor的反射通道已在项目中存在，无需硬读原生网格；但原collect将SQL NULL转为空字符串，不能直接作为回归比较输入。现已新增保留NULL的采集器、Remote适配、独立目标会话和单次授权入口，定向证据见W45；仍不得把这些证据扩大为GUI或用户业务数据库验收。
+- 预览页签原有固定索引/整体拆容器问题已由稳定页签身份、取消票据和独立释放修复；实际DocumentListener失效链已做反向验证，最终全量仍需覆盖。
+- W45曾只有基础模型而无生产入口，现已补齐真实消费者及其测试。该历史缺口已闭合，但最终全量、构建与兼容尚未通过，不能写成全部验收完成。
 
 ## 四、性能实测与当前阻断
 
@@ -127,6 +127,12 @@ agent首轮3组各3个独立JVM，实际心跳为实验注入200ms，warm200请�
 ### 第三轮冻结
 
 冻结 `a9a3488b64a86264c9ac3979ba8d2e8ca0fde77a`，已吸收dev `3393dc66` 日志配对与徽章修复；R2两红为测试契约更正，原功能保护保持。gate detached完整从片1复跑，所有Test强制fresh，Docker显式禁用，默认5片。05:44 preflight Commit约51.179/73.750GB、余约22.57GB；并行仅另一dev四类短定向，不是另一全量，使用独立沙盒。本轮片1实际失败：159类1505/3/0/0，agent38类213绿、external6类27/0/0/1；片2～5未运行，63新增类48未入场。三红均为AliasDualTrackDefenseTest同族旧MP核心Lambda/selectAs预期，与已落dev UI005整链字符串Wrapper回落不符；由runtime车道扩为整族reverse定向盘点，保留真实编译/别名/WHERE/ORDER及MPJ正对照，不放宽生产逻辑。日志SHA256 `1d1510ddfbd92242642fac373166a2a1075c2d6552297779ff3a6c4716b535fe`，audit `491bf9f7770c3f77f7d1dcceeb8c4150905fcfad7d82400984f382b95621f5ed`；归档`.local/sql-insight-gate-round3-failed.tar.gz` SHA256 `29c85b20aa6790427cda9cd78e6144c4c7f982eb881215704b12c1ffd7fda2a0`。未打包、未verify，仍无全量通过读数。
+
+### 第三轮同族修复与第四轮冻结
+
+R3三红修复已收编为638a5740（原babc87c5），仅修改AliasDualTrackDefenseTest与GeneratedProjectionCompiler两份测试文件，未改变生产行为。核心LAMBDA/WRAPPERS_LAMBDA生成结果实际编译并核完整投影、实名WHERE和ORDER；MPJ selectAs正对照、未知列限定名、错误别名不得反向纠偏的负例保留。主控读取全部实际XML复核：快桶10类275例、平台SqlToJavaConverterTest 23例，共11类298/0/0/0。该结果覆盖reverse整个测试包，不等于项目全量。XML独立归档`.local/sql-insight-reverse-r3-verified.tar.gz`，SHA256 `ca4a4b2cd43de09e0d07f9cd50bd0aeaa5a28154ba4dd80c8a14c891dd85dfe9`。
+
+第四轮冻结 `ab8b54b15e5723003c0d3af1ab3799a057380b2d`，已单向吸收dev `bfbe5b4c` 的属性门控日志几何诊断及其测试。专用gate树从片1完整复跑默认五片、agent与external；强制Test新执行，沿用独立沙盒、Docker显式禁用及非UI边界。通过后才依次打包与三代离线兼容验证。前三轮失败独立保留，不拼接部分结果，不预填本轮通过。门禁期间主控只更新文档，同时独立只读复核31工作包和17项需求的实际消费者与证据边界。
 
 ### Agent JVM 验证层级
 
