@@ -14,16 +14,15 @@ import org.junit.Test
  * 起就是分离设计——展示轨（SELECT 列别名）与实名轨（列归属/条件/排序）互不读写。
  * 本文件按四路径把现状钉死，后续重构碰坏即红：
  *
- *  - 路径 1 lambda 生成：`SqlReverseParser.kt` SelectColumn（:1319，expr 原文与 alias 两字段
- *    分离）/consumeSelectAlias（:491）；`JavaCodeGenerator.kt` renderSelectCall（:871-888）
- *    产出 `selectAs(实名ref, "别名")`。
+ *  - 路径 1 MP 核心 lambda 请求：别名投影必须整链回落 QueryWrapper，单次 select 保留全部列；
+ *    MP 核心没有 selectAs。MPJ_LAMBDA 才保留 selectAs(实名ref, "别名") 正对照。
  *  - 路径 2 rawMode 回落：`JavaCodeGenerator.kt` :872-875，MPJQueryWrapper 无
  *    selectAs(String, SFunction) 重载，`"expr AS alias"` 整串保留——**有意行为，非缺陷**。
  *  - 路径 3 表达式/未映射列回落：运算表达式列（`a+b AS total`）在解析层即被拒绝（列清单扫描
  *    在运算符 token 处中断，FROM 判定落空抛 SqlReverseException）——计划预设的「整串回落」
  *    实为「解析拒绝」，表达式列从不携带别名进入生成器（审计如实偏离记录）；「字符串回落」
- *    真正的触达面是**未映射列**：renderSelectRef（:853-862）拆别名前缀失败 → renderColumnRef
- *    （:843-850）整串回落字符串，别名仍单列第二参，双轨形态不变。
+ *    真正的触达面是未映射列：MP 核心整链回落字符串投影，保留表限定名和 AS 别名；
+ *    不生成 MP 核心不存在的 selectAs(String, String)。
  *  - 路径 4 WHERE/ORDER BY 列：SqlReverseParser.parseColumnRef（:1199-1204）只消费限定名、
  *    从不读 AS 别名；renderCondition（:929-941）/renderOrderBy（:1027）走实名 ColumnRef——
  *    条件轨与展示轨天然隔离（含反向：条件里误写 SELECT 别名也不会被「纠偏」成实名）。
@@ -47,16 +46,18 @@ class AliasDualTrackDefenseTest {
     // ---------- 路径 1：lambda 生成（实名 ref + 别名第二参，双轨同现不互染） ----------
 
     @Test
-    fun `路径1_lambda生成_别名走selectAs第二参_列归属用实名`() {
+    fun `路径1_MP核心别名整链回落保留全部投影_MPJ仍有selectAs`() {
         val result = SqlReverseParser.parse("SELECT psn_no AS psn, psn_name FROM personnel")
-        // 解析层即双字段分离（expr 实名原文 / alias 展示名）
         assertEquals(listOf(SelectColumn("psn_no", "psn"), SelectColumn("psn_name")), result.selectColumns)
-        val code = JavaCodeGenerator.generate(result, personnel, GeneratedWrapper.LAMBDA)
-        assertTrue(code, code.contains(".selectAs(Personnel::getPsnNo, \"psn\")"))
-        assertTrue(code, code.contains(".select(Personnel::getPsnName)"))
-        // 别名不得冒充实名进入列归属（不存在 Personnel::getPsn 字段的引用形态）
-        assertFalse("别名不得进入 lambda 实名轨", code.contains("Personnel::getPsn)"))
-        assertFalse("lambda 模式不得回落整串形态", code.contains("psn_no AS psn"))
+        for (kind in listOf(GeneratedWrapper.LAMBDA, GeneratedWrapper.WRAPPERS_LAMBDA)) {
+            val code = JavaCodeGenerator.generate(result, personnel, kind)
+            assertFalse("MP核心不存在selectAs", code.contains(".selectAs("))
+            GeneratedProjectionCompiler.assertProjection(code, "psn_no AS psn,psn_name")
+        }
+        val mpj = JavaCodeGenerator.generate(result, personnel, GeneratedWrapper.MPJ_LAMBDA)
+        assertTrue(mpj, mpj.contains(".selectAs(Personnel::getPsnNo, \"psn\")"))
+        assertTrue(mpj, mpj.contains(".select(Personnel::getPsnName)"))
+        assertFalse("展示别名不得替代实名字段", mpj.contains("Personnel::getPsn)"))
     }
 
     // ---------- 路径 2：rawMode 整串保留（有意行为，测试按现状锁） ----------
@@ -88,25 +89,35 @@ class AliasDualTrackDefenseTest {
         val code = JavaCodeGenerator.generate(result, personnel, GeneratedWrapper.LAMBDA)
         assertTrue("聚合列回落字符串 select 且保留 AS 别名", code.contains("select(\"MAX(age) AS maxAge\")"))
         assertFalse("聚合列不可 lambda 引用，不得产出 selectAs", code.contains("selectAs"))
+        GeneratedProjectionCompiler.assertProjection(code, "MAX(age) AS maxAge")
     }
 
     @Test
-    fun `路径3c_未映射列回落字符串_表别名前缀保留_别名单列第二参`() {
-        // 实体映射失败 → 整串回落字符串（含表别名前缀），别名仍独立第二参——回落不合并双轨
+    fun `路径3c_未映射列MP核心整链回落_保留表限定名与展示别名`() {
         val result = SqlReverseParser.parse("SELECT t.unknown_col AS total FROM personnel t")
-        val code = JavaCodeGenerator.generate(result, personnel, GeneratedWrapper.LAMBDA)
-        assertTrue(code, code.contains(".selectAs(\"t.unknown_col\", \"total\")"))
+        assertEquals(listOf(SelectColumn("t.unknown_col", "total")), result.selectColumns)
+        for (kind in listOf(GeneratedWrapper.LAMBDA, GeneratedWrapper.WRAPPERS_LAMBDA)) {
+            val code = JavaCodeGenerator.generate(result, personnel, kind)
+            assertFalse(code, code.contains(".selectAs("))
+            GeneratedProjectionCompiler.assertProjection(code, "t.unknown_col AS total")
+        }
     }
 
     // ---------- 路径 4：WHERE / ORDER BY 取实名，别名不污染条件轨 ----------
 
     @Test
-    fun `路径4_WHERE与ORDER BY取实名_lambda化不受别名干扰`() {
+    fun `路径4_MP核心整链回落_WHERE与ORDER仍取实名`() {
         val result = SqlReverseParser.parse("SELECT psn_no AS psn FROM personnel WHERE psn_no = '1' ORDER BY psn_no")
-        val code = JavaCodeGenerator.generate(result, personnel, GeneratedWrapper.LAMBDA)
-        assertTrue(code, code.contains(".selectAs(Personnel::getPsnNo, \"psn\")"))
-        assertTrue("WHERE 条件列实名 lambda", code.contains(".eq(Personnel::getPsnNo, \"1\")"))
-        assertTrue("ORDER BY 列实名 lambda", code.contains("orderByAsc(Personnel::getPsnNo)"))
+        for (kind in listOf(GeneratedWrapper.LAMBDA, GeneratedWrapper.WRAPPERS_LAMBDA)) {
+            val code = JavaCodeGenerator.generate(result, personnel, kind)
+            assertFalse(code, code.contains(".selectAs("))
+            GeneratedProjectionCompiler.assertProjection(code, "psn_no AS psn", "psn_no =", "ORDER BY psn_no ASC")
+            assertFalse("展示别名不得进入条件或排序", code.contains(".eq(\"psn\"") || code.contains("orderByAsc(\"psn\")"))
+        }
+        val mpj = JavaCodeGenerator.generate(result, personnel, GeneratedWrapper.MPJ_LAMBDA)
+        assertTrue(mpj, mpj.contains(".selectAs(Personnel::getPsnNo, \"psn\")"))
+        assertTrue(mpj, mpj.contains(".eq(Personnel::getPsnNo, \"1\")"))
+        assertTrue(mpj, mpj.contains("orderByAsc(Personnel::getPsnNo)"))
     }
 
     @Test
@@ -117,5 +128,6 @@ class AliasDualTrackDefenseTest {
         val code = JavaCodeGenerator.generate(result, personnel, GeneratedWrapper.LAMBDA)
         assertTrue(code, code.contains(".eq(\"psn\", \"1\")"))
         assertFalse("别名条件不得被反向改写为实名 lambda", code.contains("Personnel::getPsnNo, \"1\""))
+        GeneratedProjectionCompiler.assertProjection(code, "psn_no AS psn", "psn =")
     }
 }

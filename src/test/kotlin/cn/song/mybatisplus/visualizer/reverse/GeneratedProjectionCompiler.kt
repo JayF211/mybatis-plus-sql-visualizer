@@ -118,6 +118,11 @@ internal object GeneratedProjectionCompiler {
                         public String getName() { return "x"; }
                     }
                     public static class UiProbe extends User {}
+                    public static class Personnel {
+                        public String getPsnNo() { return "1"; }
+                        public String getPsnName() { return "fixture"; }
+                        public Integer getAge() { return 1; }
+                    }
                     public static String[] inspect() {
                         Wrapper<?> wrapper =
                         $code
