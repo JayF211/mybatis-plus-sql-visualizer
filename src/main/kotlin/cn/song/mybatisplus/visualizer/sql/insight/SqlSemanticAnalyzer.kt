@@ -4,6 +4,7 @@ import cn.song.mybatisplus.visualizer.execute.SqlAstParser
 import net.sf.jsqlparser.expression.*
 import net.sf.jsqlparser.expression.operators.relational.Between
 import net.sf.jsqlparser.expression.operators.relational.ExpressionList
+import net.sf.jsqlparser.expression.operators.relational.ExistsExpression
 import net.sf.jsqlparser.expression.operators.relational.InExpression
 import net.sf.jsqlparser.expression.operators.relational.IsNullExpression
 import net.sf.jsqlparser.schema.Column
@@ -42,8 +43,13 @@ object SqlSemanticAnalyzer {
             val outputs: List<SemanticProjection>?,
         )
         private data class Cte(val scopeId: String?, val outputs: List<SemanticProjection>)
-        private data class Frame(val id: String, val parent: String?, val label: String, val bindings: MutableList<Binding> = mutableListOf())
-        private data class Resolved(val sources: Set<SemanticColumn>, val quality: AnalysisQuality = AnalysisQuality.CERTAIN, val derived: Boolean = false)
+        private data class Frame(val id: String, val parent: String?, val label: String, val bindings: MutableList<Binding> = mutableListOf(),
+            val correlation: Frame? = null, var ctes: Map<String, Cte> = emptyMap(), var reserved: Set<String> = emptySet())
+        private data class Resolved(val sources: Set<SemanticColumn>, val quality: AnalysisQuality = AnalysisQuality.CERTAIN,
+            val derived: Boolean = false, val conditions: Set<SemanticColumn> = emptySet())
+        private val aggregates = setOf("SUM", "AVG", "MIN", "MAX", "COUNT")
+        private val scalarFunctions = setOf("ABS", "LOWER", "UPPER", "TRIM", "LTRIM", "RTRIM", "LENGTH", "CHAR_LENGTH", "COALESCE", "NULLIF", "CONCAT", "ROUND", "FLOOR", "CEIL", "CEILING", "REPLACE")
+        private fun known(q: AnalysisQuality) = q == AnalysisQuality.CERTAIN || q == AnalysisQuality.CONDITIONAL
 
         fun run(): SqlSemanticModel = try {
             checkpoint()
@@ -130,12 +136,13 @@ object SqlSemanticAnalyzer {
             AnalysisQuality.AMBIGUOUS in values -> AnalysisQuality.AMBIGUOUS
             AnalysisQuality.UNKNOWN in values -> AnalysisQuality.UNKNOWN
             AnalysisQuality.PARTIAL in values -> AnalysisQuality.PARTIAL
+            AnalysisQuality.CONDITIONAL in values -> AnalysisQuality.CONDITIONAL
             else -> AnalysisQuality.CERTAIN
         }
 
-        private fun frame(parent: String?, label: String): Frame {
+        private fun frame(parent: String?, label: String, correlation: Frame? = null): Frame {
             checkpoint()
-            return Frame("scope-${nextScope++}", parent, label)
+            return Frame("scope-${nextScope++}", parent, label, correlation = correlation)
         }
 
         private fun finish(f: Frame, operation: SqlOperation, outputs: List<SemanticProjection> = emptyList()): SemanticScope =
@@ -209,8 +216,8 @@ object SqlSemanticAnalyzer {
             }
         }
 
-        private fun select(node: Select, parent: String?, label: String, inherited: Map<String, Cte>, outerReserved: Set<String>): SemanticScope {
-            val f = frame(parent, label)
+        private fun select(node: Select, parent: String?, label: String, inherited: Map<String, Cte>, outerReserved: Set<String>, correlation: Frame? = null): SemanticScope {
+            val f = frame(parent, label, correlation)
             val withItems = node.withItemsList.orEmpty()
             if (withItems.any { it.isRecursive }) {
                 diagnostic(DiagnosticCode.RECURSIVE_CTE, "Recursive WITH is not supported; no recursive lineage is asserted.", f.id)
@@ -246,8 +253,10 @@ object SqlSemanticAnalyzer {
                 }
                 ctes[name] = Cte(child.id, outputs)
             }
+            f.ctes = ctes
+            f.reserved = reserved
             if (node is ParenthesedSelect) {
-                val child = select(node.select, f.id, label, ctes, reserved)
+                val child = select(node.select, f.id, label, ctes, reserved, correlation)
                 return finish(f, SqlOperation.SELECT, child.projections)
             }
             if (node !is PlainSelect) {
@@ -268,11 +277,7 @@ object SqlSemanticAnalyzer {
             val outputs = node.selectItems.mapIndexed { index, item ->
                 val resolved = expression(item.expression, f)
                 val name = item.alias?.name ?: (item.expression as? Column)?.columnName
-                val projection = SemanticProjection(index, name, item.expression.toString(), resolved.sources, resolved.quality, resolved.derived)
-                if (resolved.quality == AnalysisQuality.CERTAIN && resolved.sources.isNotEmpty())
-                    dependencies += SemanticDependency(if (resolved.derived) DependencyKind.DERIVED_VALUE else DependencyKind.DIRECT_VALUE,
-                        f.id, projection.expression, resolved.sources, outputIndex = index)
-                projection
+                projection(index, name, item.expression.toString(), resolved, f)
             }
             node.where?.let { dependency(it, DependencyKind.FILTER, f) }
             node.having?.let { dependency(it, DependencyKind.FILTER, f) }
@@ -287,11 +292,24 @@ object SqlSemanticAnalyzer {
             return finish(f, SqlOperation.SELECT, outputs)
         }
 
+        private fun projection(index: Int, name: String?, text: String, value: Resolved, f: Frame): SemanticProjection {
+            if (known(value.quality) && value.sources.isNotEmpty())
+                dependencies += SemanticDependency(if (value.derived) DependencyKind.DERIVED_VALUE else DependencyKind.DIRECT_VALUE,
+                    f.id, text, value.sources, outputIndex = index, quality = value.quality)
+            if (value.conditions.isNotEmpty()) dependencies += SemanticDependency(DependencyKind.CONDITION, f.id, text,
+                value.conditions, outputIndex = index, quality = value.quality)
+            return SemanticProjection(index, name, text, value.sources, value.quality, value.derived, conditionSources = value.conditions)
+        }
+
         private fun column(column: Column, f: Frame): Resolved {
             if (!verifiedIdentifier(column.columnName) || column.table?.nameParts?.any { !verifiedIdentifier(it) } == true)
                 return diagnostic(DiagnosticCode.UNSUPPORTED_DIALECT, "Unverified column quoting: $column.", f.id)
             val qualifier = column.table?.takeIf { !it.name.isNullOrBlank() }?.let { qualifiedKey(it) }
-            val candidates = if (qualifier == null) f.bindings else f.bindings.filter { qualifier in it.qualifiers }
+            if (qualifier == null && f.correlation != null && f.bindings.any { it.outputs == null })
+                return diagnostic(DiagnosticCode.AMBIGUOUS_COLUMN, "Unqualified correlated column needs verified local metadata: $column.", f.id, AnalysisQuality.AMBIGUOUS)
+            val candidates = if (qualifier == null) f.bindings.filter { b -> b.outputs == null || b.outputs.any { it.name?.let(::key) == key(column.columnName) } }
+                else f.bindings.filter { qualifier in it.qualifiers }
+            if (candidates.isEmpty() && qualifier != null && f.correlation != null) return column(column, f.correlation)
             if (candidates.isEmpty()) return diagnostic(DiagnosticCode.UNKNOWN_RELATION, "No visible relation for $column.", f.id, AnalysisQuality.UNKNOWN)
             if (candidates.size != 1) return diagnostic(DiagnosticCode.AMBIGUOUS_COLUMN, "Column $column has multiple possible input occurrences.", f.id, AnalysisQuality.AMBIGUOUS)
             val binding = candidates.single()
@@ -300,7 +318,7 @@ object SqlSemanticAnalyzer {
             if (matching.isEmpty()) return diagnostic(DiagnosticCode.UNKNOWN_COLUMN, "Column $column is not a proven output of its input scope.", f.id, AnalysisQuality.UNKNOWN)
             if (matching.size != 1) return diagnostic(DiagnosticCode.AMBIGUOUS_COLUMN, "Column $column matches duplicate output names.", f.id, AnalysisQuality.AMBIGUOUS)
             val output = matching.single()
-            return Resolved(output.sources, output.quality, output.derived)
+            return Resolved(output.sources, output.quality, output.derived, output.conditionSources)
         }
 
         private fun expression(expr: Expression, f: Frame): Resolved {
@@ -311,6 +329,16 @@ object SqlSemanticAnalyzer {
 
         private fun expressionBody(expr: Expression, f: Frame): Resolved = when (expr) {
             is Column -> column(expr, f)
+            is Function -> function(expr, f)
+            is AnalyticExpression -> filteredAggregate(expr, f)
+            is CaseExpression -> caseExpression(expr, f)
+            is CastExpression -> expression(expr.leftExpression, f).copy(derived = true)
+            is Select -> subquery(expr, f, scalar = true)
+            is ExistsExpression -> {
+                val nested = expr.rightExpression
+                if (nested is Select) subquery(nested, f, scalar = false)
+                else diagnostic(DiagnosticCode.UNSUPPORTED_EXPRESSION, "EXISTS operand is not a SELECT.", f.id)
+            }
             is AllColumns -> diagnostic(DiagnosticCode.STAR_REQUIRES_METADATA, "Star expansion has no verified metadata; no columns are invented.", f.id, AnalysisQuality.UNKNOWN)
             is BinaryExpression -> combine(listOf(expression(expr.leftExpression, f), expression(expr.rightExpression, f)), derived = true)
             is SignedExpression -> expression(expr.expression, f).copy(derived = true)
@@ -325,10 +353,78 @@ object SqlSemanticAnalyzer {
                 "Expression ${expr.javaClass.simpleName} is outside the verified subset; no value origins are asserted.", f.id)
         }
 
+        private fun function(expr: Function, f: Frame): Resolved {
+            val name = expr.name.uppercase(Locale.ROOT)
+            if (name !in aggregates && name !in scalarFunctions || expr.multipartName.size != 1 || expr.keep != null ||
+                expr.havingClause != null || expr.namedParameters != null || expr.attribute != null || expr.limit != null)
+                return diagnostic(DiagnosticCode.UNSUPPORTED_EXPRESSION, "Function shape is not verified: ${expr.name}.", f.id)
+            val arguments = expr.parameters.orEmpty()
+            val values = if (name == "COUNT" && (expr.isAllColumns || arguments.any { it is AllColumns })) Resolved(emptySet(), derived = true)
+                else combine(arguments.map { expression(it, f) }, true)
+            val ordering = combine(expr.orderByElements.orEmpty().map { expression(it.expression, f) }, true)
+            val conditions = values.conditions + ordering.sources + ordering.conditions
+            return when (name) {
+                "COUNT" -> values.copy(sources = emptySet(), conditions = conditions + values.sources)
+                "NULLIF" -> {
+                    if (arguments.size != 2) return diagnostic(DiagnosticCode.UNSUPPORTED_EXPRESSION, "NULLIF needs two operands.", f.id)
+                    val first = expression(arguments[0], f)
+                    values.copy(sources = if (known(values.quality)) first.sources else emptySet(), conditions = conditions + values.sources)
+                }
+                else -> values.copy(conditions = conditions, quality = quality(listOf(values.quality, ordering.quality)))
+            }
+        }
+
+        private fun filteredAggregate(expr: AnalyticExpression, f: Frame): Resolved {
+            val name = expr.name.uppercase(Locale.ROOT)
+            if (expr.type != AnalyticType.FILTER_ONLY || name !in aggregates || expr.keep != null || expr.havingClause != null)
+                return diagnostic(DiagnosticCode.UNSUPPORTED_EXPRESSION, "Window/ordered-set aggregate is outside this subset.", f.id)
+            val value = if (expr.isAllColumns || expr.expression is AllColumns || expr.expression == null) Resolved(emptySet(), derived = true)
+                else expression(expr.expression, f).copy(derived = true)
+            val filter = expr.filterExpression?.let { expression(it, f) } ?: Resolved(emptySet())
+            val q = quality(listOf(value.quality, filter.quality))
+            return Resolved(if (name == "COUNT" || !known(q)) emptySet() else value.sources, q, true,
+                value.conditions + filter.sources + filter.conditions + if (name == "COUNT") value.sources else emptySet())
+        }
+
+        private fun caseExpression(expr: CaseExpression, f: Frame): Resolved {
+            val values = expr.whenClauses.orEmpty().map { expression(it.thenExpression, f) } +
+                listOfNotNull(expr.elseExpression?.let { expression(it, f) })
+            val predicates = expr.whenClauses.orEmpty().map { expression(it.whenExpression, f) } +
+                listOfNotNull(expr.switchExpression?.let { expression(it, f) })
+            val value = combine(values, true)
+            val predicate = combine(predicates, true)
+            val q = quality(listOf(value.quality, predicate.quality))
+            return Resolved(if (known(q)) value.sources else emptySet(), q, true,
+                value.conditions + predicate.sources + predicate.conditions)
+        }
+
+        private fun subquery(node: Select, outer: Frame, scalar: Boolean): Resolved {
+            var body = node
+            while (body is ParenthesedSelect) body = body.select
+            val start = dependencies.size
+            val child = select(node, outer.id, if (scalar) "scalar" else "exists", outer.ctes, outer.reserved, outer)
+            val influences = dependencies.drop(start).filter { it.kind in setOf(DependencyKind.FILTER, DependencyKind.JOIN, DependencyKind.GROUP, DependencyKind.CONDITION, DependencyKind.ORDER) }
+                .flatMap { it.sources }.toSet()
+            if (!scalar) return Resolved(emptySet(), quality(dependencies.drop(start).map { it.quality }), true, influences)
+            if (child.projections.size != 1) return diagnostic(DiagnosticCode.COLUMN_COUNT_MISMATCH, "Scalar SELECT must project exactly one column.", outer.id)
+            val plain = body as? PlainSelect
+            val noRowsSource = plain != null && plain.fromItem == null && plain.joins.isNullOrEmpty()
+            val aggregate = plain != null && plain.groupBy == null && plain.selectItems.all { item ->
+                val e = item.expression
+                (e is Function && e.name.uppercase(Locale.ROOT) in aggregates) ||
+                    (e is AnalyticExpression && e.type == AnalyticType.FILTER_ONLY && e.name.uppercase(Locale.ROOT) in aggregates)
+            }
+            val limitOne = plain?.limit?.rowCount?.let { it is LongValue && it.value in 0L..1L } == true
+            if (!noRowsSource && !aggregate && !limitOne)
+                return diagnostic(DiagnosticCode.SCALAR_CARDINALITY_UNKNOWN, "At-most-one scalar row is not proven (use aggregate or explicit LIMIT 1).", outer.id, AnalysisQuality.UNKNOWN)
+            val p = child.projections.single()
+            return Resolved(p.sources, p.quality, true, p.conditionSources + influences)
+        }
+
         private fun combine(parts: List<Resolved>, derived: Boolean): Resolved {
             val q = quality(parts.map { it.quality })
-            return Resolved(if (q == AnalysisQuality.CERTAIN) parts.flatMap { it.sources }.toSet() else emptySet(), q,
-                derived || parts.any { it.derived })
+            return Resolved(if (known(q)) parts.flatMap { it.sources }.toSet() else emptySet(), q,
+                derived || parts.any { it.derived }, parts.flatMap { it.conditions }.toSet())
         }
 
         private fun dependency(expr: Expression, kind: DependencyKind, f: Frame, outputs: List<SemanticProjection> = emptyList(), ordinal: Boolean = false) {
@@ -346,7 +442,7 @@ object SqlSemanticAnalyzer {
                 aliasMatches.size == 1 -> aliasMatches.single().let { Resolved(it.sources, it.quality, it.derived) }
                 else -> expression(expr, f)
             }
-            dependencies += SemanticDependency(kind, f.id, expr.toString(), resolved.sources, quality = resolved.quality)
+            dependencies += SemanticDependency(kind, f.id, expr.toString(), resolved.sources + resolved.conditions, quality = resolved.quality)
         }
 
         private fun insert(node: Insert): String {

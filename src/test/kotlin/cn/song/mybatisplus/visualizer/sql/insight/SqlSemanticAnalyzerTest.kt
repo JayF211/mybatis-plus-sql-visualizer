@@ -141,7 +141,7 @@ class SqlSemanticAnalyzerTest {
         assertTrue(analyze("SELEC FROM").diagnostics.any { it.code == DiagnosticCode.PARSE_ERROR })
         val m = analyze("SELECT (SELECT x.id FROM x) AS nested FROM t")
         assertTrue(m.outputFields.single().sources.isEmpty())
-        assertTrue(m.diagnostics.any { it.code == DiagnosticCode.UNSUPPORTED_EXPRESSION })
+        assertTrue(m.diagnostics.any { it.code == DiagnosticCode.SCALAR_CARDINALITY_UNKNOWN })
     }
 
     @Test fun `ranges are explicitly unknown for comments repeated unicode and edited sql`() {
@@ -196,7 +196,7 @@ class SqlSemanticAnalyzerTest {
     }
 
     @Test fun `unsupported expression cannot leak partially resolved value columns`() {
-        val m = analyze("SELECT t.id + abs(t.other) AS x FROM t")
+        val m = analyze("SELECT t.id + custom_unknown(t.other) AS x FROM t")
         assertTrue(m.outputFields.single().sources.isEmpty())
         assertTrue(m.dependencies.none { it.kind == DependencyKind.DERIVED_VALUE })
         assertTrue(m.diagnostics.any { it.code == DiagnosticCode.UNSUPPORTED_EXPRESSION })

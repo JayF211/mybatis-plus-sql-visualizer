@@ -8,19 +8,26 @@ data class AnalysisSnapshot(
     val metadataVersion: String? = null,
     val scenarioId: String? = null,
     val sourceVersion: String? = null,
+    val metadata: SqlColumnMetadata? = null,
 )
 
+/** Caller-supplied, ordered schema snapshot; never loaded from the IDE or database by the analyzer. */
+data class SqlColumnMetadata(val databaseContext: String, val version: String, val tables: List<SqlTableColumns>)
+/** Identifier parts are ordered catalog/schema/table, retaining SQL quoting. */
+data class SqlTableColumns(val nameParts: List<String>, val columns: List<String>)
+
 enum class SqlInsightDialect { MYSQL, POSTGRESQL, UNKNOWN }
-enum class AnalysisQuality { CERTAIN, PARTIAL, AMBIGUOUS, UNKNOWN }
-enum class SqlOperation { SELECT, INSERT, UPDATE, DELETE, UNSUPPORTED }
-enum class RelationKind { TABLE, CTE, DERIVED }
+enum class AnalysisQuality { CERTAIN, PARTIAL, AMBIGUOUS, UNKNOWN, CONDITIONAL }
+enum class SqlOperation { SELECT, INSERT, UPDATE, DELETE, UNSUPPORTED, MERGE, CREATE_TEMP, DROP_TEMP }
+enum class RelationKind { TABLE, CTE, DERIVED, TEMPORARY }
 enum class TableRole { READ, WRITE, DELETE }
-enum class DependencyKind { DIRECT_VALUE, DERIVED_VALUE, ASSIGNMENT, JOIN, FILTER, GROUP, ORDER }
+enum class DependencyKind { DIRECT_VALUE, DERIVED_VALUE, ASSIGNMENT, JOIN, FILTER, GROUP, ORDER, CONDITION, MERGE_MATCH, DEDUPLICATION }
 enum class DiagnosticCode {
     PARSE_ERROR, UNSUPPORTED_STATEMENT, UNSUPPORTED_DIALECT, UNSUPPORTED_EXPRESSION,
     UNSUPPORTED_CLAUSE, AMBIGUOUS_COLUMN, UNKNOWN_COLUMN, UNKNOWN_RELATION,
     STAR_REQUIRES_METADATA, RECURSIVE_CTE, INVALID_CTE, TARGET_COLUMNS_REQUIRED,
     COLUMN_COUNT_MISMATCH, SOURCE_RANGE_UNKNOWN, INPUT_BUDGET_EXCEEDED, CANCELLED,
+    METADATA_MISMATCH, SCALAR_CARDINALITY_UNKNOWN, TEMPORARY_STATE_UNKNOWN, CONDITIONAL_WRITE,
 }
 
 /** No guessed token offsets. Whole input navigation remains possible via snapshot.sql. */
@@ -56,6 +63,7 @@ data class SemanticProjection(
     val quality: AnalysisQuality,
     val derived: Boolean = false,
     val sourceRange: SqlSourceRange? = null,
+    val conditionSources: Set<SemanticColumn> = emptySet(),
 )
 
 /** JOIN/FILTER/GROUP/ORDER affect rows; they are deliberately not projection value origins. */
@@ -68,6 +76,7 @@ data class SemanticDependency(
     val outputIndex: Int? = null,
     val quality: AnalysisQuality = AnalysisQuality.CERTAIN,
     val sourceRange: SqlSourceRange? = null,
+    val branchId: String? = null,
 )
 
 data class SemanticScope(
@@ -87,6 +96,8 @@ data class SqlSemanticModel(
     val diagnostics: List<SemanticDiagnostic>,
     val rootScopeId: String?,
     val quality: AnalysisQuality,
+    /** Textual statement order, not evidence of execution or transaction commit. */
+    val statementScopeIds: List<String> = emptyList(),
 ) {
     val outputFields: List<SemanticProjection>
         get() = scopes.firstOrNull { it.id == rootScopeId }?.projections.orEmpty()
