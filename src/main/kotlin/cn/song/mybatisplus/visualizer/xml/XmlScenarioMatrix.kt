@@ -45,6 +45,8 @@ object XmlScenarioMatrix {
                     renderOne(model, input, dialect, databaseContext, sourceVersion, isCancelled)
                 } catch (cancelled: CancellationException) {
                     throw cancelled
+                } catch (_: XmlTraceBudgetExceeded) {
+                    XmlScenarioResult(input.name, null, 0, emptyMap(), null, null, emptyList(), "render_budget")
                 } catch (_: IllegalArgumentException) {
                     XmlScenarioResult(input.name, null, 0, emptyMap(), null, null, emptyList(), "invalid_scenario")
                 }
@@ -82,7 +84,7 @@ object XmlScenarioMatrix {
             defaults.forEachCounts + collections.mapValues { it.value.size }, nulls,
             model.bindViews.mapNotNull { view -> values[view.name]?.let { view.name to it } }.toMap())
         val rendered = model.renderSql(state, traceEnabled = true, isCancelled = isCancelled,
-            collectionValues = collections)
+            collectionValues = collections, parameterValues = values)
         val warnings = rendered.errors.toMutableList()
         warnings += "Conditions follow stored preview toggles; parameter values do not prove runtime branch coverage."
         for (mapping in rendered.mappings) {

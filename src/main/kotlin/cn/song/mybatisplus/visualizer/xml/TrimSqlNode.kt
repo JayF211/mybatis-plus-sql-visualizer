@@ -46,8 +46,12 @@ open class TrimSqlNode(
             set(value) { delegate.renderTrace = value }
 
         override fun getSql(): String = sqlBuffer.toString()
+        internal override fun traceLength(): Int = sqlBuffer.length
+        internal override fun traceSlice(from: Int, maximum: Int): String? =
+            if (from in 0..sqlBuffer.length && sqlBuffer.length - from <= maximum) sqlBuffer.substring(from).trim() else null
 
         override fun appendSql(sql: String) {
+            renderTrace?.accountAppend(sql.length)
             sqlBuffer.append(sql)
         }
 

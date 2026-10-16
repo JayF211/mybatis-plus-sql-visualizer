@@ -25,6 +25,14 @@ internal class XmlRenderTraceRecorder(root: SqlNode, private val cancelled: () -
     private val events = mutableListOf<XmlRenderTraceEvent>()
     private var truncated = false
     private var characters = 0
+    private var applications = 0
+    private var appendedCharacters = 0L
+
+    fun accountAppend(length: Int) {
+        if (cancelled()) throw java.util.concurrent.CancellationException()
+        appendedCharacters += length
+        if (appendedCharacters > MAX_RENDER_CHARACTERS) throw XmlTraceBudgetExceeded()
+    }
 
     init { index(root, "statement", 0) }
 
@@ -44,13 +52,15 @@ internal class XmlRenderTraceRecorder(root: SqlNode, private val cancelled: () -
 
     fun apply(node: SqlNode, context: DynamicContext): Boolean {
         if (cancelled()) throw java.util.concurrent.CancellationException()
-        val before = context.getSql()
+        if (++applications > MAX_APPLICATIONS) throw XmlTraceBudgetExceeded()
+        val before = context.traceLength()
         val invocation = (invocations[node] ?: 0) + 1
         invocations[node] = invocation
         val result = node.apply(context)
         if (events.size >= MAX_EVENTS) { truncated = true; return result }
-        val after = context.getSql()
-        val fragment = if (after.startsWith(before)) after.substring(before.length).trim().takeIf { it.isNotEmpty() } else null
+        val after = context.traceLength()
+        val fragment = context.traceSlice(before, MAX_FRAGMENT)?.takeIf { it.isNotEmpty() }
+        if (after - before > MAX_FRAGMENT) truncated = true
         val safeFragment = if (fragment != null && fragment.length <= MAX_FRAGMENT && characters + fragment.length <= MAX_CHARACTERS) {
             characters += fragment.length
             fragment
@@ -78,5 +88,9 @@ internal class XmlRenderTraceRecorder(root: SqlNode, private val cancelled: () -
         const val MAX_EVENTS = 2000
         const val MAX_FRAGMENT = 4096
         const val MAX_CHARACTERS = 256 * 1024
+        const val MAX_APPLICATIONS = 10_000
+        const val MAX_RENDER_CHARACTERS = 1024 * 1024
     }
 }
+
+internal class XmlTraceBudgetExceeded : IllegalArgumentException("xml_render_budget")

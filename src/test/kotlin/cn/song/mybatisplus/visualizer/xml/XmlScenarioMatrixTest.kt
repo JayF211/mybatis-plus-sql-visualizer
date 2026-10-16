@@ -51,6 +51,29 @@ class XmlScenarioMatrixTest {
     }
 
     @Test
+    fun `dollar substitution and derived bind use actual scenario scalar values`() {
+        val model = model("<bind name=\"p\" value=\"'%' + name + '%'\"/>SELECT id FROM t WHERE name LIKE #{p} ORDER BY " + '$' + "{orderBy}")
+        val results = XmlScenarioMatrix.render(model, listOf(
+            XmlScenarioInput("one", mapOf("name" to "alice", "orderBy" to "id")),
+            XmlScenarioInput("two", mapOf("name" to "bob", "orderBy" to "created_at")),
+        ), SqlInsightDialect.POSTGRESQL)
+        assertTrue(results[0].sql.orEmpty(), results[0].sql.orEmpty().contains("%alice%"))
+        assertTrue(results[0].sql.orEmpty().contains("ORDER BY id"))
+        assertTrue(results[1].sql.orEmpty().contains("%bob%"))
+        assertTrue(results[1].sql.orEmpty().contains("ORDER BY created_at"))
+    }
+
+    @Test
+    fun `nested collection product stops at render work budget`() {
+        val model = model("SELECT <foreach collection=\"a\" item=\"x\" separator=\",\"><foreach collection=\"b\" item=\"y\" separator=\",\">#{x}</foreach></foreach>")
+        val values = (1..200).joinToString(",")
+        val result = XmlScenarioMatrix.render(model, listOf(XmlScenarioInput("bounded", mapOf("__fev__:a" to values, "__fev__:b" to values))),
+            SqlInsightDialect.POSTGRESQL).single()
+        assertEquals("render_budget", result.failure)
+        assertEquals(null, result.sql)
+    }
+
+    @Test
     fun `invalid scenario fails independently`() {
         val results = XmlScenarioMatrix.render(model("SELECT 1 <if test=\"x != null\">WHERE x=#{x}</if>"), listOf(
             XmlScenarioInput("bad", mapOf("__chk__:x != null" to "maybe")),
