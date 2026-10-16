@@ -207,6 +207,9 @@ def trial(args, mode, index, classes):
         result["memoryDrained"] = windows_memory(proc.pid)
         result["drainedCpuPercentOneCore"] = result["drainedCpuNanos"] * 100 / result["drainedWallNanos"]
         send("EXIT"); result["exitCode"] = proc.wait(timeout=15)
+    except Exception as failure:
+        result["experimentError"] = repr(failure)
+        if receiver: result["failureReceiverState"] = receiver.snapshot()
     finally:
         if proc.poll() is None:
             proc.kill(); proc.wait()  # Only this newly launched child, never another session process.
@@ -239,7 +242,12 @@ def main():
         modes = modes[repeat % 3:] + modes[:repeat % 3]
         for mode in modes:
             print("RUN", repeat, mode, flush=True)
-            results.append(trial(args, mode, repeat, classes))
+            row = trial(args, mode, repeat, classes)
+            results.append(row)
+            if "experimentError" in row:
+                Path(args.output, "summary.json").write_text(json.dumps(dict(metadata=metadata, trials=results,
+                    stoppedReason="fixture_or_environment_failure; no performance verdict"), indent=2), encoding="utf-8")
+                raise RuntimeError(row["experimentError"])
     import statistics
     comparisons = {}
     for baseline in ("none", "sql"):
