@@ -59,6 +59,20 @@ class AgentListenSyncTest : BasePlatformTestCase() {
         manager.pushCaptureActive(false)
     }
 
+    private fun expectedConfig(disabled: Boolean, desensitize: Boolean, token: String? = null): String {
+        val base = AgentProtocol.configBody(disabled, desensitize, emptyList(), emptyList(), 24).removeSuffix("}")
+        val enabled = token != null
+        return base + ",\"captureState\":$enabled,\"requestTracing\":$enabled,\"transactionTracing\":$enabled" +
+            (token?.let { ",\"captureStateToken\":\"$it\"" } ?: "") + "}"
+    }
+
+    private fun readConfig(input: DataInputStream): String {
+        val length = input.readInt()
+        assertTrue(length in 1..(1 shl 20))
+        assertEquals(AgentProtocol.CMD_CONFIG, input.readUnsignedByte())
+        return String(ByteArray(length).also { input.readFully(it) }, Charsets.UTF_8)
+    }
+
     fun testsendConfig_disabled帧体正确编码() {
         val server = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
         val client = Socket("127.0.0.1", server.localPort)
@@ -74,14 +88,25 @@ class AgentListenSyncTest : BasePlatformTestCase() {
             val body1 = String(ByteArray(len1).also { input.readFully(it) }, Charsets.UTF_8)
             assertEquals(AgentProtocol.CMD_CONFIG, cmd1)
             assertTrue("disabled=true 应入帧体: $body1", body1.contains("\"disabled\":true"))
-            // T-StackHoverUi：sendConfig 实际走五参 configBody（列尾恒带 stackFrames，帧数取设置值缺省 24）
-            assertEquals(AgentProtocol.configBody(disabled = true, desensitize = false, emptyList(), emptyList(), 24), body1)
+            // Preserve exact compact legacy fields AND explicitly disabled optional analysis flags.
+            assertEquals(expectedConfig(disabled = true, desensitize = false), body1)
 
             session.sendConfig(disabled = false, desensitize = true)
             val len2 = input.readInt()
-            input.readUnsignedByte()
+            assertEquals(AgentProtocol.CMD_CONFIG, input.readUnsignedByte())
             val body2 = String(ByteArray(len2).also { input.readFully(it) }, Charsets.UTF_8)
             assertTrue("disabled=false 应入帧体: $body2", body2.contains("\"disabled\":false"))
+            assertEquals(expectedConfig(disabled = false, desensitize = true), body2)
+
+            session.analysisChannel.enable()
+            val token = session.analysisChannel.requestedToken()!!
+            assertTrue(token.matches(Regex("[0-9a-f]{32}")))
+            session.sendConfig(disabled = false, desensitize = true)
+            assertEquals(expectedConfig(false, true, token), readConfig(input))
+            session.analysisChannel.disable()
+            session.sendConfig(disabled = true, desensitize = false)
+            assertEquals("停采不得携旧nonce或继续启用追踪", expectedConfig(true, false), readConfig(input))
+            session.close()
         } finally {
             client.close()
             accepted.close()
