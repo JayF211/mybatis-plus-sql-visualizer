@@ -120,13 +120,21 @@ agent首轮3组各3个独立JVM，实际心跳为实验注入200ms，warm200请�
 | external | 6 | 27/0/0/1 |
 | agent | 38 | 213/0/0/0 |
 
-两项为陈旧测试契约：AgentListenSyncTest期望旧JSON未含三个默认false追踪字段，原停采/脱敏值未变；JavaCodeGeneratorJoinTest期望MP核心Lambda.selectAs，本地MP3.5.17 javap证实无该API，dev UI005已改为QueryWrapper完整字符串投影，MPJ路径仍须selectAs。分别补精确字段启停闭环与真实编译/MPJ正对照，未放宽生产安全规则，定向回归后再冻第三轮。
+两项为陈旧测试契约：AgentListenSyncTest期望旧JSON未含三个默认false追踪字段，原停采/脱敏值未变；JavaCodeGeneratorJoinTest期望MP核心Lambda.selectAs，本地MP3.5.17 javap证实无该API，dev UI005已改为QueryWrapper完整字符串投影，MPJ路径仍须selectAs。分别补精确字段启停闭环与真实编译/MPJ正对照，未放宽生产安全规则。修复提交3e5f31fd/142cc926，定向JavaCodeGeneratorJoinTest39、JavaCodeGeneratorTest45、AgentListenSyncTest3合计87/0/0/0已核XML。第三轮候选a9a3488b已单向吸收dev3393dc66的Sharding日志配对/徽章修复，完整复跑待短JDK功能验证结束。
 
 本轮10skip：Docker明确禁用5、外部jdbcUrl未给1、Database测试classpath缺席2、符号链接权限1、ACP结构性1。round2日志SHA256 `eedb0ce810b22dc89c9855799c9f462c00981a58abe53b16e2f655288754178a`，audit `f0e9425cc6a7795162efc6bb300eed58a6958e76df94ef5c9a51b1e8a972681c`；封存 `.local/sql-insight-gate-round2-failed.tar.gz`，SHA256 `f4493623a5d9e107aa161f11037998e224aa29cff79e7b3736e0f32e6114c3a4`。
 
+### 第三轮冻结
+
+冻结 `a9a3488b64a86264c9ac3979ba8d2e8ca0fde77a`，已吸收dev `3393dc66` 日志配对与徽章修复；R2两红为测试契约更正，原功能保护保持。gate detached完整从片1复跑，所有Test强制fresh，Docker显式禁用，默认5片。05:44 preflight Commit约51.179/73.750GB、余约22.57GB；并行仅另一dev四类短定向，不是另一全量，使用独立沙盒。最终结果待本轮完成回填，不提前拼绿。
+
 ### Agent JVM 验证层级
 
-第二轮fresh XML已经证明既有 `AttachGateTest.attach门禁_JDK8目标` 与 `AttachPoolWarmGateTest.模式B2_JDK8目标_Hikari池存量连接复用` 均实际执行、未skip；测试源码明确启动本机JDK8子进程。新增ServletRequestWeaveTest的6例在JDK17测试宿主内隔离ClassLoader运行，并非JDK8子进程。产物新增ServletWeaver/RequestHooks/TraceBus/TransactionTracker为major52，只证明Java8字节码兼容，不能替代新Servlet hook在JDK8/JDK21的运行实测。最终对外口径按此分层，不将IDE三代兼容报告冒充agent JVM矩阵。
+第二轮fresh XML已经证明既有 `AttachGateTest.attach门禁_JDK8目标` 与 `AttachPoolWarmGateTest.模式B2_JDK8目标_Hikari池存量连接复用` 均实际执行、未skip；测试源码明确启动本机JDK8子进程。新增ServletRequestWeaveTest最初6例只在JDK17宿主隔离ClassLoader运行，major52仅是字节码证据，故随后补H09真实目标JVM验证。
+
+H09同份fixture经`javac --release 8`后，实际java.version分别为1.8.0_181、17.0.19、21.0.11，三个独立进程均FUNCTIONAL_PASS/exit0。每个5请求START/END配对、4唯一功能SQL（3条请求内+独立查询）、真实commit/rollback与SQL transactionId/requestId关联，业务计数3、最终库行数1；异常后同线程无SQL请求不串身份，SQL/control全部loss0、controlGenerated=written=17。
+
+限定javax Servlet4.0.1；JDK8配H2 1.4.200，17/21配H2 2.3.232；Jakarta仅既有JDK17真实API测试，不外推全JDK。冻结agent SHA256 `8f2d1e020aa7c246f43250a193cdd753d8d6baf36dc7b77315d3f2f5cb299ad1`。summary SHA256 `d77b6a34f784b058b603d353ed93948b8da8114b68bb1bf5ffe32086507e69aa`，独立归档`.local/sql-insight-h09-jdk8-17-21.tar.gz` SHA256 `e581c95160d6215d239bec318e8d07f0e4cf863721b50a3710455fe632c7a494`。这是功能兼容而非性能预算证据，也不由IDE三代verifier替代。
 
 ## 六、最终门禁清单
 
