@@ -682,10 +682,10 @@ final class SenderLoop implements Runnable {
      */
     static boolean sendEvent(DataOutputStream out, cn.song.mybatisplus.sqlvis.agent.model.SqlEvent event)
             throws IOException {
-        final String payload;
+        final byte[] payload;
         try {
-            payload = EventBus.encodeEvent(event);
-            if (payload.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > MAX_FRAME_LEN) {
+            payload = EventBus.encodeEvent(event).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            if (payload.length > MAX_FRAME_LEN) {
                 CaptureLedger.encodingFailed();
                 return false;
             }
@@ -704,7 +704,11 @@ final class SenderLoop implements Runnable {
     }
 
     static void writeFrame(DataOutputStream out, int cmd, String payload) throws IOException {
-        final byte[] body = payload.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        writeFrame(out, cmd, payload.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
+
+    /** SQL sends reuse the exact byte array already checked against MAX_FRAME_LEN. */
+    private static void writeFrame(DataOutputStream out, int cmd, byte[] body) throws IOException {
         out.writeInt(body.length);
         out.writeByte(cmd);
         out.write(body);
