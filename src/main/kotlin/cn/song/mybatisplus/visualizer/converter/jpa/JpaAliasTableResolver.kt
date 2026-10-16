@@ -41,21 +41,17 @@ internal class JpaQueryEntityLookup(private val project: Project?, private val c
     }
 
     companion object {
-        private val ROOT = Regex("(?i)\\b(?:FROM|UPDATE|INTO|DELETE(?:\\s+FROM)?)\\s+([a-zA-Z_][a-zA-Z0-9_.$]*)")
-
-        /** 忽略字面量和括号内 FROM，避免 SELECT 标量子查询抢占根表。 */
-        fun rootEntity(sql: String): String? {
-            val masked = JpaSqlLiteralMasking.mask(sql).first
-            var depth = 0
-            var offset = 0
-            for (match in ROOT.findAll(masked)) {
-                while (offset < match.range.first) {
-                    when (masked[offset++]) { '(' -> depth++; ')' -> depth-- }
-                }
-                if (depth == 0) return match.groupValues[1]
-            }
-            return null
-        }
+        /**
+         * 根实体名——**委托共享提取器** [cn.song.mybatisplus.visualizer.psi.jpa.HqlEntityNameExtractor.extract]
+         * （T-EntityNameScope 收口）。
+         *
+         * 此前预览（[HqlEntityNameExtractor]）与转换链各有一套算法，对同一句 HQL 可能给出**不同**的根实体；
+         * 而预览先产出的非空 TableInfo 会被转换链优先采用，于是弱提取压过强提取
+         * （实测反例 `select (select max(d.id) from Detail d) from Inventory i`：预览认 `Detail`、
+         * 转换链认 `Inventory`，最终按 `Detail` 渲染）。现生产只有一处实现。
+         */
+        fun rootEntity(sql: String): String? =
+            cn.song.mybatisplus.visualizer.psi.jpa.HqlEntityNameExtractor.extract(sql)
     }
 }
 

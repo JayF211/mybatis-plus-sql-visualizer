@@ -496,27 +496,38 @@ internal fun SqlPreviewService.resolveHqlTable(
     // 查询中的根实体才是权威；TypedQuery 的结果类型、NamedQuery 宿主、查询名前缀都可能不是根实体。
     val className = extractEntityNameFromHql(hql) ?: entityClassName ?: return null
     val resolver = JpaEntityResolver()
-    val explicit = entityClass?.takeIf {
-        val entityName = cn.song.mybatisplus.visualizer.psi.jpa.JpaMetadataReader.entityNameOf(it)
-            ?.takeIf(String::isNotBlank) ?: it.name
-        className == it.qualifiedName || className == entityName
+    val resolution = cn.song.mybatisplus.visualizer.psi.jpa.EntityAliasSweep.resolve(project, className, context)
+    // 歧义是终态：不借显式类、XML 映射或别名 fallback 再偷偷挑一个。
+    if (resolution.ambiguous) return null
+    // 显式传入的类（TypedQuery 结果类型 / @NamedQuery 宿主）**不是旁路**——scope 内解析出根实体时以它为准；
+    // 解析不出时，只有显式类本身在查询宿主可见范围内才可用。否则它属于别的模块/持久化单元，拿它当根实体会
+    // 渲染出另一张表（T-EntityNameScope：同名实体跨模块误选即此形态）。
+    val explicit = entityClass?.takeIf { classMatchesQueryEntity(it, className) }
+    val target = resolution.psiClass
+        ?: explicit?.takeIf { isVisibleInQueryScope(it, context) }
+    // 类解析不到不是终态：HBM 纯 XML 映射工程里根本没有 Java 类（既有路径必须保持可达）。
+    if (target == null) {
+        val hbmOnly = HbmXmlEntityResolver.resolve(className, project, context)
+        return hbmOnly?.let { convertHbmMappingToTableInfo(it) }
     }
-    var resolved: TableInfo? = null
-    if (explicit != null) {
-        resolved = resolver.resolve(explicit)
-        if (resolved.columns.isNotEmpty()) return resolved
-    } else {
-        val resolution = cn.song.mybatisplus.visualizer.psi.jpa.EntityAliasSweep.resolve(project, className, context)
-        // 歧义是终态，不能借 XML/别名 fallback 再偷偷挑一个。
-        if (resolution.ambiguous) return null
-        resolution.psiClass?.let {
-            resolved = resolver.resolve(it)
-            if (resolved!!.columns.isNotEmpty()) return resolved
-        }
-    }
+    val resolved = resolver.resolve(target)
+    if (resolved.columns.isNotEmpty()) return resolved
     val hbmMapping = HbmXmlEntityResolver.resolve(className, project, context)
     return hbmMapping?.let { convertHbmMappingToTableInfo(it) } ?: resolved
 }
+
+/** 显式类是否就是查询里那个实体（根实体名匹配；FQN 与 `@Entity(name)` 两种写法都认）。 */
+private fun classMatchesQueryEntity(clazz: PsiClass, rootName: String): Boolean {
+    val entityName = cn.song.mybatisplus.visualizer.psi.jpa.JpaMetadataReader.entityNameOf(clazz)
+        ?.takeIf(String::isNotBlank) ?: clazz.name
+    return rootName == clazz.qualifiedName || rootName == entityName
+}
+
+/** 显式类是否落在查询宿主的可见范围内（模块 + 依赖 + 库）。 */
+private fun isVisibleInQueryScope(clazz: PsiClass, context: PsiElement?): Boolean = runCatching {
+    val scope = cn.song.mybatisplus.visualizer.psi.EntityClassResolver.searchScope(clazz.project, context)
+    clazz.containingFile?.virtualFile?.let(scope::contains) == true
+}.getOrDefault(false)
 
 /**
  * T-HqlInhCols：按 @Entity(name=...) 实体别名查找实体类。
