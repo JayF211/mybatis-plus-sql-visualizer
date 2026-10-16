@@ -105,18 +105,25 @@ object NamedQueryLocator {
         project: Project,
         queryName: String?,
         context: com.intellij.psi.PsiElement? = null,
-    ): NamedQueryInfo? {
-        if (queryName.isNullOrBlank() || com.intellij.openapi.project.DumbService.isDumb(project)) return null
+    ): NamedQueryInfo? = findCandidatesByQueryName(project, queryName, context).singleOrNull()
+
+    /** 保留歧义信息供预览阻断 HBM fallback，避免 null 被误当作「Java 定义不存在」。 */
+    internal fun findCandidatesByQueryName(
+        project: Project,
+        queryName: String?,
+        context: com.intellij.psi.PsiElement? = null,
+    ): List<NamedQueryInfo> {
+        if (queryName.isNullOrBlank() || com.intellij.openapi.project.DumbService.isDumb(project)) return emptyList()
         val ownerName = queryName.substringBeforeLast('.', "").trim()
-        if (ownerName.isBlank()) return null
+        if (ownerName.isBlank()) return emptyList()
         return try {
             val scope = cn.song.mybatisplus.visualizer.psi.EntityClassResolver.searchScope(project, context)
             // 命名查询宿主不一定是查询根实体，也不一定标了 @Entity；只按宿主名取类，不借实体规则误删。
             val classes = if ('.' in ownerName) JavaPsiFacade.getInstance(project).findClasses(ownerName, scope).toList()
             else com.intellij.psi.search.PsiShortNamesCache.getInstance(project).getClassesByName(ownerName, scope).toList()
-            classes.distinct().flatMap { locate(it) }.filter { it.name == queryName }.singleOrNull()
+            classes.distinct().flatMap { locate(it) }.filter { it.name == queryName }
         } catch (_: com.intellij.openapi.project.IndexNotReadyException) {
-            null
+            emptyList()
         }
     }
 

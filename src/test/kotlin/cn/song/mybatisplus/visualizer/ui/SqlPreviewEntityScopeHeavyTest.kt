@@ -84,6 +84,38 @@ class SqlPreviewEntityScopeHeavyTest : HeavyPlatformTestCase() {
         assertFalse(preview.sql, preview.sql.contains("inventory_b"))
     }
 
+    fun testCustomDaoProductionPreviewKeepsHostContextForRealLibraryEntity() {
+        val other = createModule("other")
+        entity(other, "unrelated.Inventory", "wrong_source")
+        val host = source(myModule, "host.Query", "Object commonDao; void run() { commonDao.findByQuery(\"from Inventory i\"); }")
+        val dir = Files.createTempDirectory("preview-entity-library-").toFile().also(dirs::add)
+        val classes = File(dir, "classes").apply { mkdirs() }
+        val annotation = File(dir, "javax/persistence/Table.java").apply {
+            parentFile.mkdirs()
+            writeText("package javax.persistence; @java.lang.annotation.Retention(java.lang.annotation.RetentionPolicy.RUNTIME) public @interface Table { String name(); }")
+        }
+        val javaSource = File(dir, "lib/Inventory.java").apply {
+            parentFile.mkdirs()
+            writeText("package lib; @javax.persistence.Table(name=\"jar_inventory\") public class Inventory { public long id; public String itemCode; }")
+        }
+        val executable = if (System.getProperty("os.name").startsWith("Windows")) "javac.exe" else "javac"
+        val javac = listOfNotNull(System.getenv("JAVA_HOME"), System.getProperty("java.home"), "D:/HuanJing/Java/jdk1.8.0_181")
+            .map { File(it, "bin/$executable") }.firstOrNull(File::isFile)
+        assertNotNull("A real JDK is required", javac)
+        val log = File(dir, "javac.log")
+        val process = ProcessBuilder(javac!!.absolutePath, "-source", "8", "-target", "8", "-d", classes.absolutePath,
+            annotation.absolutePath, javaSource.absolutePath).redirectErrorStream(true).redirectOutput(log).start()
+        assertTrue(process.waitFor(30, java.util.concurrent.TimeUnit.SECONDS))
+        assertEquals(log.readText(), 0, process.exitValue())
+        val root = LocalFileSystem.getInstance().refreshAndFindFileByIoFile(classes)!!
+        root.refresh(false, true)
+        ModuleRootModificationUtil.addModuleLibrary(myModule, root.url)
+        ready()
+        val resolved = EntityClassResolver.resolveClassByName(project, "Inventory", host)
+        assertEquals("class", resolved?.containingFile?.virtualFile?.extension)
+        assertEquals("jar_inventory", service().previewCustomDaoHql(call(host, "findByQuery"))?.tableName)
+    }
+
     fun testHqlProductionPreviewUsesQueryModule() {
         val other = createModule("other")
         entity(myModule, "a.Inventory", "inventory_a")

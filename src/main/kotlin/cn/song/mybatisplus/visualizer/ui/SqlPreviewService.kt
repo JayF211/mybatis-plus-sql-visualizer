@@ -816,7 +816,9 @@ class SqlPreviewService(internal val project: Project) {
         // T-PreviewShortcut：createNamedQuery("name") 按名回查实体 @NamedQuery，解析真实 JPQL；
         // 跨文件 / 命名不规范解析不到时优雅降级为把名字当 HQL 处理（不抛、不挂起）。
         if (info.createQueryMethodName == "createNamedQuery") {
-            val named = NamedQueryLocator.findByQueryName(project, info.hql, info.method ?: anchor)
+            val namedCandidates = NamedQueryLocator.findCandidatesByQueryName(project, info.hql, info.method ?: anchor)
+            if (namedCandidates.size > 1) return null
+            val named = namedCandidates.singleOrNull()
             if (named != null && named.query.isNotBlank()) {
                 val entityClass = named.annotation?.let { PsiTreeUtil.getParentOfType(it, PsiClass::class.java, false) }
                 val table = resolveHqlTable(entityClass, null, named.query, info.method ?: anchor)
@@ -973,7 +975,9 @@ class SqlPreviewService(internal val project: Project) {
             )
         }
         if (info.kind == DaoQueryKind.NAMED_QUERY) {
-            val named = NamedQueryLocator.findByQueryName(project, info.hql, info.method ?: anchor)
+            val namedCandidates = NamedQueryLocator.findCandidatesByQueryName(project, info.hql, info.method ?: anchor)
+            if (namedCandidates.size > 1) return null
+            val named = namedCandidates.singleOrNull()
             if (named != null && named.query.isNotBlank()) {
                 val entityClass = named.annotation?.let { PsiTreeUtil.getParentOfType(it, PsiClass::class.java, false) }
                 val table = resolveHqlTable(entityClass, null, named.query, info.method ?: anchor)
