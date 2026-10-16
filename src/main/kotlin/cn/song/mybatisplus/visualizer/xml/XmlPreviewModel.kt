@@ -161,14 +161,25 @@ class XmlPreviewModel private constructor(
 
     fun renderSql(): RenderedXmlSql = renderSql(defaultState())
 
-    fun renderSql(state: XmlPreviewState): RenderedXmlSql = XmlSqlRenderer().render(
+    fun renderSql(state: XmlPreviewState): RenderedXmlSql = renderSql(state, false)
+
+    fun renderSql(
+        state: XmlPreviewState,
+        traceEnabled: Boolean,
+        isCancelled: () -> Boolean = { false },
+        collectionValues: Map<String, List<String?>> = emptyMap(),
+    ): RenderedXmlSql = XmlSqlRenderer().render(
         node = rootNode,
-        bindings = mockBindings(state),
+        bindings = mockBindings(state) + collectionValues.filterKeys { key ->
+            key !in state.forEachNulls && forEachViews.any { it.collectionExpr == key }
+        },
         // 全部条件都有明确真值（开关缺席 = false）——开关是分支唯一真值源，表达式仅无开关时兜底求值
         conditionOverrides = conditionViews.associate { it.id to (it.id in state.enabledIds) },
         protectedNames = state.bindOverrides.keys.toSet(),
         staticFieldValues = staticFieldValues,
         bindNames = bindViews.map { it.name }.toSet(),
+        traceEnabled = traceEnabled,
+        isCancelled = isCancelled,
     )
 
     /**

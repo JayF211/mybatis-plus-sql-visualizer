@@ -15,7 +15,7 @@ class IfSqlNode(val contents: SqlNode, val test: String) : SqlNode {
         val truth = context.conditionResult(test) ?: evaluate(context)
         // R30 探镜：登记本轮判定结果（只读观测，不改渲染语义——真值来源不受影响）
         context.recordConditionOutcome(test, truth)
-        if (truth) contents.apply(context)
+        if (truth) context.applyNode(contents)
         return truth
     }
 
@@ -44,9 +44,9 @@ class ChooseSqlNode(val whenNodes: List<SqlNode>, val defaultNode: SqlNode?) : S
 
     override fun apply(context: DynamicContext): Boolean {
         for (node in whenNodes) {
-            if (node.apply(context)) return true
+            if (context.applyNode(node)) return true
         }
-        defaultNode?.apply(context)
+        defaultNode?.let { context.applyNode(it) }
         return false
     }
 }
