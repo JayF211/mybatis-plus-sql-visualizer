@@ -91,7 +91,21 @@ agent首轮3组各3个独立JVM，实际心跳为实验注入200ms，warm200请�
 
 **状态**：突发发送丢失瓶颈已有无损负载证据闭合，新增追踪5%初始成本目标尚未在稳定空机环境证明。三轮均标host-contention=observed-other-IDE-session，不宣称空机标准性能通过。失败目录agent-trials与agent-trials-default-warm2000保留；成功覆盖目录agent-trials-wakeup-default-warm2000/summary.json，产物agent SHA256 `8f2d1e020aa7c246f43250a193cdd753d8d6baf36dc7b77315d3f2f5cb299ad1`。后续复测必须新目录，不覆盖失败证据、不以丢弃事件换低耗时。
 
-## 五、最终门禁清单
+## 五、最终冻结与自动化门禁
+
+冻结提交 `67533aca415bf227e891d697ad45cdf33563b4ff`，基于已同步dev `5d884a5e`。专用detached工作树 `mpsv-sql-insight-gate` 生产写集为空，配置/输出仅在其build下；主控期间仅提交文档，不让在途代码改变绿灯含义。
+
+- 测试命令：`:testShards --no-configuration-cache -PmpvDockerTests=false -Pkotlin.compiler.execution.strategy=in-process`，默认5片，包含external与agent子项目。
+- 打包与兼容：测试通过后分别执行`:buildPlugin --no-configuration-cache`、`:verifyGate --no-configuration-cache -PverifyOnly=true`，默认243/253/262离线检查，不跑GUI。
+- Docker preflight实际exit124，容器类显式禁用，跳过发生在调用Docker前；不重启用户daemon，不拿容器未运行当真实数据库覆盖。
+- preflight提交量53,412,392,960/73,750,339,584字节，余约18.94GiB；仅本次全量与既有IDE运行，没有其他testShards并行。此值是开跑时快照，不是整个任务内存峰值。
+- 新增测试清单按实际类名核对：相对dev新增54个根项目测试、8个agent测试；必须核XML每类/每方法入场，不能只信文件清单或BUILD SUCCESSFUL。
+- 首轮状态：全量11分33秒后失败，未执行打包/兼容。shard1=157类1777/0/0/1；shard2=152类1520/6/0/2；agent=38类213/0/0/0；external=6类27/0/0/1。shard3～5未启动，62新增类中32未入场，不构成完整覆盖。
+- 首轮6红：后台PSI捕获守卫命中UsageNavigation块内重取站点；fatal守卫命中RemoteSqlComparisonBridge/PreviewTabManager；bundle守卫把动态拼接前缀当字面量；premain重挂两例的selfPID被新辅助JVM安全闸拒绝；织入源守卫仍要求旧无参WeaveGate形态。由主控/对应车道逐项核实修复，禁止删安全闸或造无消费者bundle父键。
+- 首轮日志SHA256 `0112fedbe1a17961004f5159828e9fb4f5e46011cf4ba645f43c3c50ef7ccd5a`；审计报告SHA256 `af7090e79bdc6e641cdaf299af45be721243b15b211aec750fd2688f41f7df9d`，均在gate树build/final-gate。4项实际skip为Windows符号链接权限1、Database测试classpath不可用2、ACP impl制品缺席1；容器用例所在后续片尚未执行，不能提前算入skip。
+- 修复将使67533aca的全量读数过期，须另冻新SHA完整复跑，不把第一片绿与第二轮部分绿拼成全量。
+
+## 六、最终门禁清单
 
 - [x] 31项范围内开发都有可达生产入口或明确内部生产消费者（冻结67533aca，逐包表及只读覆盖复核；W44最终断点已以eb0ec7ac闭合）。
 - [x] 17项SI需求逐条对应用户行为和定向正反测试；最终统一门禁仍需验证所有类同时入场。
