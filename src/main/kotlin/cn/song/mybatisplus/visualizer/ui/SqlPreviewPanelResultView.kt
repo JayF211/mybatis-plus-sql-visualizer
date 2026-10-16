@@ -25,7 +25,6 @@ import java.awt.FontMetrics
 import javax.swing.BoxLayout
 import javax.swing.JButton
 import javax.swing.JComponent
-import javax.swing.JTabbedPane
 import javax.swing.KeyStroke
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel.Companion.COLUMN_INFO_TAB_TITLE
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel.Companion.MIN_META_BUDGET_PX
@@ -152,6 +151,7 @@ internal fun SqlPreviewPanel.moreActionsStep(actions: List<Pair<String, () -> Un
  */
 
 internal fun SqlPreviewPanel.showResult(result: PreviewResult) {
+    if (previewDisposed || project?.isDisposed == true) return
     current = result
     // O-145 W7：在结果/渲染时冻结 AUTO/MANUAL，执行点击时只读取此快照；设置随后变化不改写历史事实。
     executionDialectRenderMode = project?.let {
@@ -230,6 +230,7 @@ internal fun SqlPreviewPanel.showResult(result: PreviewResult) {
  */
 
 internal fun SqlPreviewPanel.updateDiagramTab(result: PreviewResult) {
+    if (previewDisposed || project?.isDisposed == true) return
     // F-1 修复：previewModel 仅在「有动态条件」时才构造（无条件联表链为 null），故图判据先看它、
     // 缺失时回落到独立的 diagramStatement 载体——否则无条件的 JOIN 链拿不到「JOIN 图」标签页。
     val statement = result.previewModel?.statement ?: result.diagramStatement
@@ -237,6 +238,9 @@ internal fun SqlPreviewPanel.updateDiagramTab(result: PreviewResult) {
     if (hasJoins) {
         // 确保内容区已切换为标签页模式
         ensureTabbedContent()
+        var pending: java.util.concurrent.Future<*>? = null
+        val refresh = previewTabs.beginRefresh(PREVIEW_JOIN_TAB) { pending?.cancel(true) } ?: return
+        diagramEnrichRetryTarget = null
         // T-Perf-09：schema 富化（数据源全量遍历）移后台预取——数千表冷缓存时 EDT 直跑冻结秒级；
         // 富化完成回 EDT 再展示。当前 PreviewResult 被替换（新预览）时作废迟到的应用。
         // T-Embed-02：数据源可用时把列类型/注释升级为 DB 真实值（int(11)/DB COMMENT），缺席静默回落
@@ -252,22 +256,18 @@ internal fun SqlPreviewPanel.updateDiagramTab(result: PreviewResult) {
             // T-TS-05：buildDiagramModel 移入 try——抛在 showJoinDiagram 调用**之前**时，
             // showJoinDiagram 的 finally 根本没机会执行，转圈会留在宿主层。
             try {
-                showJoinDiagram(JoinDiagramGenerator.buildDiagramModel(stmt))
+                val model = JoinDiagramGenerator.buildDiagramModel(stmt)
+                applyDiagramRefresh(result, refresh) { showJoinDiagram(model) }
             } catch (t: Throwable) {
-                // T-TS-FixA：本 catch 是这条分支的**唯一**收尾方——buildDiagramModel 是
-                // showJoinDiagram 的**实参**，实参求值期抛出时方法根本没进入，其 finally
-                // （唯一收口点）不会执行；此处不摘圈，上面 showLoading() 打开的转圈就永留宿主层，
-                // 直到下一次预览或整图卸载（对照后台富化分支：那边同样在异常时显式摘圈，
-                // 两条分支对同一异常的处理必须对称）。
-                // 线程：updateDiagramTab 由 showResult 在 EDT 上同步调用，本 catch 亦在 EDT，
-                // 直接摘即可——invokeLater 归位只服务于跨线程的后台富化分支。
-                diagramPanel.hideLoading()
+                // 建模型抛出时尚未进入 showJoinDiagram，其 finally 无法收尾。
+                // 同步失败也核对当前票据，不能停掉后来一次刷新拥有的加载态。
+                applyDiagramRefresh(result, refresh) { diagramPanel.hideLoading() }
                 com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
                     .warn("[T-F8] join diagram build failed (no project), loading cleared here", t)
             }
             return
         }
-        com.intellij.openapi.application.ApplicationManager.getApplication().executeOnPooledThread {
+        pending = com.intellij.openapi.application.ApplicationManager.getApplication().executeOnPooledThread {
             // T-TS-05：建模型同样在 try 内——本拍一旦抛，pooled 线程终止、下面的 invokeLater
             // 永不投递，转圈就永远留在宿主层（收尾方只剩 showJoinDiagram，而它不会被调用）。
             val base = try {
@@ -277,7 +277,7 @@ internal fun SqlPreviewPanel.updateDiagramTab(result: PreviewResult) {
                     .warn("[T-F8] join diagram model build failed (background)", t)
                 // 回 EDT 摘转圈：作废判定同下面那拍——转圈属于「当前加载」，不能摘后一次预览的
                 com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater {
-                    if (current === result && project?.isDisposed != true) diagramPanel.hideLoading()
+                    applyDiagramRefresh(result, refresh) { diagramPanel.hideLoading() }
                 }
                 return@executeOnPooledThread
             }
@@ -296,23 +296,32 @@ internal fun SqlPreviewPanel.updateDiagramTab(result: PreviewResult) {
                 // 刚打开的转圈一起摘掉（转圈是「当前加载」的状态，不是本次回调的状态）。
                 // 此时加载态的归属方是后一次预览：它要么自己收尾（showJoinDiagram 末尾），
                 // 要么走无 JOIN 分支（unloadJoinDiagram → diagramPanel.clear() 复位）。
-                if (current !== result || project?.isDisposed == true) return@invokeLater
-                if (!contributed) diagramEnrichRetryTarget = result
-                // T-TS-05：建图异常不逃逸到平台事件泵——逃逸只会让平台记一条无上下文的错，
-                // 而转圈已由 showJoinDiagram 的 finally 摘下；这里补一条带上下文的 warn 便于定位。
-                try {
-                    showJoinDiagram(enriched)
-                } catch (t: Throwable) {
-                    com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
-                        .warn("[T-F8] join diagram build failed (post-enrich), loading cleared by finally", t)
+                applyDiagramRefresh(result, refresh) {
+                    if (!contributed) diagramEnrichRetryTarget = result
+                    // 建图异常不逃逸到平台事件泵，加载态由 showJoinDiagram 的 finally 收口。
+                    try {
+                        showJoinDiagram(enriched)
+                    } catch (t: Throwable) {
+                        com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+                            .warn("[T-F8] join diagram build failed (post-enrich), loading cleared by finally", t)
+                    }
                 }
             }
         }
     } else {
         // 无 JOIN：整图卸载（移除 diagram 标签页 + 释放原生图 + 回收虚拟外键登记）
         removeDiagramTab()
-        unloadJoinDiagram()
     }
+}
+
+/** 成功与失败回调共用同一道门；同一结果的重刷、移除后重挂也会令旧票据失效。 */
+internal fun SqlPreviewPanel.applyDiagramRefresh(
+    result: PreviewResult,
+    refresh: PreviewTabManager.RefreshTicket,
+    action: () -> Unit,
+): Boolean {
+    if (previewDisposed || current !== result || project?.isDisposed == true) return false
+    return previewTabs.applyIfCurrent(refresh) { action() }
 }
 
 /**
@@ -335,6 +344,7 @@ internal fun SqlPreviewPanel.updateDiagramTab(result: PreviewResult) {
  */
 
 internal fun SqlPreviewPanel.showJoinDiagram(model: DiagramModel) {
+    if (previewDisposed || project?.isDisposed == true || previewTabs.component(PREVIEW_JOIN_TAB) !== diagramLoadingHost) return
     try {
         // T-TS-05 测试缝：注入一个会抛的 render 复现建图异常路径（正常为 null）。
         // 为什么需要缝：结构合法的模型在测试沙盒里几乎不抛（同 DiagramPanel.renderGuarded 的
@@ -397,54 +407,39 @@ internal fun SqlPreviewPanel.clearNativeDiagram() {
 /** T-EmbedFkOrder F2：整图卸载（无 JOIN/面板清空）——释放原生图并回收虚拟外键登记。 */
 
 internal fun SqlPreviewPanel.unloadJoinDiagram() {
-    clearNativeDiagram()
-    diagramPanel.clear()
-    cn.song.mybatisplus.visualizer.ui.diagram.nativefw.db.NativeDatabaseDiagramSupport.clearRegisteredFk()
+    diagramEnrichRetryTarget = null
+    try {
+        clearNativeDiagram()
+    } finally {
+        // Disposer 可能已先释放子组件；关闭后不再写加载面/画布，原生资源仍须独立释放。
+        if (!previewDisposed) diagramPanel.clear()
+        cn.song.mybatisplus.visualizer.ui.diagram.nativefw.db.NativeDatabaseDiagramSupport.clearRegisteredFk()
+    }
 }
 
 /** 确保内容区为标签页模式（含 SQL + 可选的 JOIN 图）。 */
 
-internal fun SqlPreviewPanel.ensureTabbedContent(addDiagramTab: Boolean = true) {
-    val tabPane = contentTabPane
-    if (tabPane != null) return // 已切换
-    // 从当前布局中取出 split（SQL 视图）
-    val center = (layout as BorderLayout).getLayoutComponent(BorderLayout.CENTER)
-    if (center != null) remove(center)
-    // 构建标签页
-    val pane = JTabbedPane().apply {
-        addTab(MpSqlVisualizerBundle.message("panel.tab.sql"), center)
-        if (addDiagramTab) {
-            // T-F8：标签页内容是加载面板（内含 diagramTabHost）——转圈盖住整页，
-            // 原生/自绘两条路径共用同一个加载面
-            addTab(MpSqlVisualizerBundle.message("diagram.tab.title"), diagramLoadingHost)
-        }
-    }
-    // F-42 修复：渲染完成时组件可能处于 hidden（标签页未被选中），swapContent/revalidate
-    // 对 hidden 组件无效——切到"JOIN 图"标签页时强制刷新，使图像真正显示
-    if (addDiagramTab) {
-        pane.addChangeListener {
-            if (pane.selectedIndex == 1 && currentNativeDiagram == null) {
-                diagramPanel.refreshAfterVisible()
-            }
-        }
-    }
-    add(pane, BorderLayout.CENTER)
-    contentTabPane = pane
-    revalidate()
-    repaint()
+internal fun SqlPreviewPanel.ensureTabbedContent() {
+    if (previewDisposed || project?.isDisposed == true) return
+    previewTabs.put(
+        PREVIEW_JOIN_TAB,
+        MpSqlVisualizerBundle.message("diagram.tab.title"),
+        diagramLoadingHost,
+        onRemove = { unloadJoinDiagram() },
+        onSelected = {
+            if (!previewDisposed && currentNativeDiagram == null) diagramPanel.refreshAfterVisible()
+        },
+    )
 }
 
-/** 移除 JOIN 图标签页（恢复纯 SQL 视图）。 */
-
+/** 只移除 JOIN 页；其余页与选择保持，最后一页移除才恢复原 SQL 组件。 */
 internal fun SqlPreviewPanel.removeDiagramTab() {
-    val tabPane = contentTabPane ?: return
-    val sqlContent = tabPane.getComponentAt(0)
-    remove(tabPane)
-    add(sqlContent, BorderLayout.CENTER)
-    contentTabPane = null
-    revalidate()
-    repaint()
+    diagramEnrichRetryTarget = null
+    previewTabs.remove(PREVIEW_JOIN_TAB)
 }
+
+private const val PREVIEW_JOIN_TAB = "join"
+private const val PREVIEW_COLUMNS_TAB = "columns"
 
 // ------------------------------------------------------------------
 // F-45：maintainPage 列信息标签页
@@ -456,14 +451,11 @@ internal fun SqlPreviewPanel.removeDiagramTab() {
  */
 
 internal fun SqlPreviewPanel.updateColumnInfoTab(result: PreviewResult) {
-    if (result.pagesColumns != null) {
-        ensureTabbedContent(addDiagramTab = false)
-        val tabPane = contentTabPane ?: return
-        // 已添加则不重复添加
-        if (!hasTabTitle(tabPane, COLUMN_INFO_TAB_TITLE)) {
-            val panel = buildColumnInfoPanel(result.pagesColumns)
-            tabPane.addTab(COLUMN_INFO_TAB_TITLE, panel)
-        }
+    if (previewDisposed || project?.isDisposed == true) return
+    val columns = result.pagesColumns
+    if (columns != null) {
+        // 每份结果刷新列内容，管理器保留该页身份与选中态；标题不再充当身份。
+        previewTabs.put(PREVIEW_COLUMNS_TAB, COLUMN_INFO_TAB_TITLE, buildColumnInfoPanel(columns))
     } else {
         removeColumnInfoTab()
     }
@@ -504,32 +496,7 @@ internal fun SqlPreviewPanel.buildColumnInfoPanel(columns: List<PagesColumn>): J
 /** 移除列信息标签页。 */
 
 internal fun SqlPreviewPanel.removeColumnInfoTab() {
-    val tabPane = contentTabPane ?: return
-    // 从末尾开始找列信息标签页（可能在 JOIN 图之后）
-    for (i in tabPane.tabCount - 1 downTo 0) {
-        if (tabPane.getTitleAt(i) == COLUMN_INFO_TAB_TITLE) {
-            tabPane.removeTabAt(i)
-            break
-        }
-    }
-    // 只剩 SQL 标签页时恢复纯 SQL 视图
-    if (tabPane.tabCount == 1) {
-        val sqlContent = tabPane.getComponentAt(0)
-        remove(tabPane)
-        add(sqlContent, BorderLayout.CENTER)
-        contentTabPane = null
-        revalidate()
-        repaint()
-    }
-}
-
-/** 检查标签页是否已存在指定标题。 */
-
-internal fun SqlPreviewPanel.hasTabTitle(tabPane: JTabbedPane, title: String): Boolean {
-    for (i in 0 until tabPane.tabCount) {
-        if (tabPane.getTitleAt(i) == title) return true
-    }
-    return false
+    previewTabs.remove(PREVIEW_COLUMNS_TAB)
 }
 
 /** 刷新补全上下文（表名/列名，可能随新预览变化）——M16.2 双载体：Editor userData 优先 + PSI 兜底。
