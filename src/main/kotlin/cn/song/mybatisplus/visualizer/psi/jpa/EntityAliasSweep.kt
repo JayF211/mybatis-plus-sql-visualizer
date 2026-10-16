@@ -1,7 +1,20 @@
 package cn.song.mybatisplus.visualizer.psi.jpa
 
+import cn.song.mybatisplus.visualizer.psi.EntityClassResolver
 import com.intellij.openapi.progress.ProgressManager
+import com.intellij.openapi.project.DumbService
+import com.intellij.openapi.project.IndexNotReadyException
+import com.intellij.openapi.project.Project
+import com.intellij.openapi.roots.ProjectRootModificationTracker
+import com.intellij.openapi.util.Key
 import com.intellij.psi.PsiClass
+import com.intellij.psi.PsiElement
+import com.intellij.psi.SmartPointerManager
+import com.intellij.psi.SmartPsiElementPointer
+import com.intellij.psi.search.GlobalSearchScope
+import com.intellij.psi.search.PsiShortNamesCache
+import com.intellij.psi.util.PsiModificationTracker
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * 实体别名反查的**有界扫描**（T-GutterDupFreeze S3，20261008 用户真机冻结事故）。
@@ -20,6 +33,74 @@ import com.intellij.psi.PsiClass
  * 一次性截断后永久记成未命中。
  */
 internal object EntityAliasSweep {
+
+    /**
+     * 预览与转换器共用的实体名入口。普通类名已有候选（包括歧义）就不扫描别名；
+     * 仅旧慢路径执行有界完整扫描，不能在首个别名命中处停止并伪装成唯一命中。
+     * 索引未就绪、扫描截断均不写负缓存；取消异常自然向上传播。
+     */
+    fun resolve(project: Project, name: String, context: PsiElement? = null): EntityClassResolver.Resolution {
+        if (name.isBlank() || DumbService.isDumb(project)) return unresolved()
+        return try {
+            val direct = EntityClassResolver.resolveByName(project, name, context)
+            if (direct.psiClass != null || direct.candidates.isNotEmpty()) return direct
+            val scope = EntityClassResolver.searchScope(project, context)
+            val stamp = PsiModificationTracker.getInstance(project).modificationCount
+            val roots = ProjectRootModificationTracker.getInstance(project).modificationCount
+            val existing = project.getUserData(CACHE_KEY)
+            val cache = if (existing != null && existing.psiStamp == stamp && existing.rootStamp == roots) existing
+            else LookupCache(stamp, roots).also { project.putUserData(CACHE_KEY, it) }
+            val key = LookupKey(name, scope)
+            val cached = cache.entries[key]
+            if (cached != null) {
+                val classes = cached.mapNotNull { it.element }
+                if (classes.size == cached.size) {
+                    return EntityClassResolver.resolveWithAliasCandidates(project, name, context, classes)
+                }
+                cache.entries.remove(key)
+            }
+            val namesCache = PsiShortNamesCache.getInstance(project)
+            val scan = findAliasCandidates(name, namesCache.allClassNames.asSequence()) {
+                namesCache.getClassesByName(it, scope)
+            }
+            if (!scan.complete) return unresolved()
+            if (cache.entries.size >= CACHE_LIMIT) cache.entries.clear()
+            cache.entries[key] = scan.candidates.map { SmartPointerManager.getInstance(project).createSmartPsiElementPointer(it) }
+            EntityClassResolver.resolveWithAliasCandidates(project, name, context, scan.candidates)
+        } catch (_: IndexNotReadyException) {
+            unresolved()
+        }
+    }
+
+    internal data class AliasCandidates(val candidates: List<PsiClass>, val complete: Boolean)
+
+    internal fun findAliasCandidates(
+        aliasName: String,
+        names: Sequence<String>,
+        limit: Int = SCAN_LIMIT,
+        lookup: (String) -> Array<PsiClass>,
+    ): AliasCandidates {
+        val candidates = LinkedHashSet<PsiClass>()
+        var scanned = 0
+        for (shortName in names) {
+            if (scanned >= limit) return AliasCandidates(emptyList(), false)
+            if (scanned % CANCEL_CHECK_INTERVAL == 0) ProgressManager.checkCanceled()
+            scanned++
+            for (clazz in lookup(shortName)) {
+                if (clazz.isInterface || clazz.isEnum || clazz.isAnnotationType) continue
+                if (JpaMetadataReader.entityNameOf(clazz) == aliasName) candidates.add(clazz)
+            }
+        }
+        return AliasCandidates(candidates.toList(), true)
+    }
+
+    private fun unresolved() = EntityClassResolver.Resolution(null, emptyList())
+    private data class LookupKey(val name: String, val scope: GlobalSearchScope)
+    private class LookupCache(val psiStamp: Long, val rootStamp: Long) {
+        val entries = ConcurrentHashMap<LookupKey, List<SmartPsiElementPointer<PsiClass>>>()
+    }
+    private const val CACHE_LIMIT = 4096
+    private val CACHE_KEY = Key.create<LookupCache>("mp-visualizer.scopedEntityAliases")
 
     /**
      * 单次反查允许遍历的类短名数上限。

@@ -77,6 +77,43 @@ class EntityAliasSweepTest : BasePlatformTestCase() {
         assertNotNull("别名比较应忽略大小写", result)
     }
 
+    fun testCompleteCandidateScanDoesNotStopAtFirstAlias() {
+        val first = myFixture.addClass("@jakarta.persistence.Entity(name=\"Shared\") class First {}")
+        val second = myFixture.addClass("@jakarta.persistence.Entity(name=\"Shared\") class Second {}")
+        val scan = EntityAliasSweep.findAliasCandidates("Shared", sequenceOf("First", "Second")) {
+            if (it == "First") arrayOf(first) else arrayOf(second)
+        }
+        assertTrue(scan.complete)
+        assertEquals(listOf(first, second), scan.candidates)
+    }
+
+    fun testTruncatedCandidateScanDiscardsEvenAnEarlyMatch() {
+        val first = myFixture.addClass("@jakarta.persistence.Entity(name=\"Shared\") class First {}")
+        val scan = EntityAliasSweep.findAliasCandidates("Shared", sequenceOf("First", "Unknown"), limit = 1) {
+            arrayOf(first)
+        }
+        assertFalse(scan.complete)
+        assertTrue(scan.candidates.isEmpty())
+    }
+
+    fun testCandidateScanUsesCaseSensitiveJpaEntityNames() {
+        val first = myFixture.addClass("@jakarta.persistence.Entity(name=\"Shared\") class First {}")
+        val scan = EntityAliasSweep.findAliasCandidates("shared", sequenceOf("First")) { arrayOf(first) }
+        assertTrue(scan.complete)
+        assertTrue(scan.candidates.isEmpty())
+    }
+
+    fun testCandidateScanPropagatesCancellation() {
+        try {
+            EntityAliasSweep.findAliasCandidates("Shared", sequenceOf("First")) {
+                throw com.intellij.openapi.progress.ProcessCanceledException()
+            }
+            fail("Cancellation must not be converted into an unresolved entity")
+        } catch (_: com.intellij.openapi.progress.ProcessCanceledException) {
+            // Expected: the surrounding read action owns cancellation.
+        }
+    }
+
     /**
      * 在测试夹具里造一个类；[alias] 非空时标注 `@Entity(name = alias)`。
      * 注解写全限定名：`JpaMetadataReader.findFlex` 有短名文本兜底，无需把 JPA 库挂上 classpath
