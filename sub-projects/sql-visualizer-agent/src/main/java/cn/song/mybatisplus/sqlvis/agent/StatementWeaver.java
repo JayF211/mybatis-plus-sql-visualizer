@@ -292,6 +292,10 @@ public final class StatementWeaver implements Opcodes {
         final int sqlSlot = (kind == Kind.EXEC_PARAM) ? thisSlot + 1 : -1; // 引用（String，首参）
         final int retSlot = (sqlSlot >= 0 ? sqlSlot : thisSlot) + 1;       // 出口暂存 2 槽
         int inserted = 0;
+        // Only escaping exceptions are execution failures. Original ATHROW instructions may be
+        // caught inside the driver; implicit throws have no ATHROW in this method at all.
+        final org.objectweb.asm.tree.LabelNode bodyStart = new org.objectweb.asm.tree.LabelNode();
+        final InsnNode escapingThrow = new InsnNode(ATHROW);
 
         if (timed) {
             final InsnList head = new InsnList();
@@ -304,7 +308,22 @@ public final class StatementWeaver implements Opcodes {
                 head.add(new VarInsnNode(ALOAD, 1));
                 head.add(new VarInsnNode(ASTORE, sqlSlot));
             }
+            head.add(bodyStart);
             mn.instructions.insertBefore(mn.instructions.getFirst(), head);
+            final org.objectweb.asm.tree.LabelNode bodyEnd = new org.objectweb.asm.tree.LabelNode();
+            final org.objectweb.asm.tree.LabelNode handler = new org.objectweb.asm.tree.LabelNode();
+            mn.instructions.add(bodyEnd);
+            mn.instructions.add(handler);
+            // No COMPUTE_FRAMES / class loading: original locals can have any value here.
+            // Only our immutable entry slots survive; patchFrames appends their exact types.
+            Object[] originalLocals = new Object[tokenSlot];
+            java.util.Arrays.fill(originalLocals, TOP);
+            mn.instructions.add(new FrameNode(F_NEW, tokenSlot, originalLocals,
+                    1, new Object[]{"java/lang/Throwable"}));
+            mn.instructions.add(escapingThrow);
+            // Append last so existing driver handlers retain priority.
+            mn.tryCatchBlocks.add(new org.objectweb.asm.tree.TryCatchBlockNode(
+                    bodyStart, bodyEnd, handler, "java/lang/Throwable"));
         }
 
         AbstractInsnNode insn = mn.instructions.getFirst();
@@ -334,7 +353,7 @@ public final class StatementWeaver implements Opcodes {
                 l.add(new VarInsnNode(ALOAD, retSlot));
                 mn.instructions.insertBefore(insn, l);
                 inserted++;
-            } else if (timed && isTimedExit(op)) {
+            } else if (timed && isTimedExit(op) && (op != ATHROW || insn == escapingThrow)) {
                 final boolean throwing = op == ATHROW;
                 final InsnList l = new InsnList();
                 // 1) 返回值/异常先存槽
@@ -360,8 +379,10 @@ public final class StatementWeaver implements Opcodes {
                     l.add(new VarInsnNode(ALOAD, retSlot)); // failure
                 } else if (op == IRETURN) {
                     l.add(new VarInsnNode(ILOAD, retSlot)); // 先压 int 参
-                    l.add(new MethodInsnNode(INVOKESTATIC, "java/lang/Integer", "valueOf",
-                            "(I)Ljava/lang/Integer;", false)); // 装箱为结果
+                    final boolean booleanResult = mn.desc.endsWith(")Z");
+                    l.add(new MethodInsnNode(INVOKESTATIC,
+                            booleanResult ? "java/lang/Boolean" : "java/lang/Integer", "valueOf",
+                            booleanResult ? "(Z)Ljava/lang/Boolean;" : "(I)Ljava/lang/Integer;", false));
                     l.add(new InsnNode(ACONST_NULL)); // failure
                 } else if (op == LRETURN) {
                     l.add(new VarInsnNode(LLOAD, retSlot)); // 先压 long 参
