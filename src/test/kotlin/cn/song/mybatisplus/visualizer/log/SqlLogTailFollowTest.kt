@@ -1,14 +1,22 @@
 package cn.song.mybatisplus.visualizer.log
 
+import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.actionSystem.ActionPlaces
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.DataContext
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
+import com.intellij.ui.scale.JBUIScale
+import com.intellij.util.ui.UIUtil
+import java.awt.BorderLayout
+import java.awt.Component
+import java.awt.Container
 import java.awt.event.KeyEvent
 import java.awt.event.MouseEvent
 import java.awt.event.MouseWheelEvent
+import javax.swing.JPanel
+import javax.swing.SwingUtilities
 
 class SqlLogTailFollowTest : BasePlatformTestCase() {
     fun testClearActionTemplateHasPlatformClearIcon() {
@@ -245,6 +253,155 @@ class SqlLogTailFollowTest : BasePlatformTestCase() {
         } finally {
             panel.dispose()
             manager.dispose()
+        }
+    }
+
+    /**
+     * UI012 复现探针：完整面板（JBTabs → previewHost → scrollPane → list），不是裸 JList。
+     * 不开 JFrame、不驱动 GUI。测试比例不等同于原生 Zoom/LAF；通过仅能说明此夹具未复现。
+     * 不在稳定布局中调用 updateUI/revalidate 或重新设置行高，避免探针顺手治好被测问题。
+     */
+    fun testUi012FullContainerGeometryAt100Percent() = checkUi012Geometry(1.0f)
+
+    fun testUi012FullContainerGeometryAt125Percent() = checkUi012Geometry(1.25f)
+
+    private fun checkUi012Geometry(scale: Float) {
+        val settings = PluginSettings.getInstance().state
+        val savedMode = settings.logListSqlDisplayMode
+        val savedMask = settings.displayMaskEnabled
+        val savedScale = JBUIScale.scale(1.0f)
+        settings.logListSqlDisplayMode = SqlListDisplayMode.KEYWORD_WRAP.name
+        settings.displayMaskEnabled = false
+        JBUIScale.setUserScaleFactorForTest(scale)
+        var manager: SqlLogManager? = null
+        var panel: SqlLogPanel? = null
+        try {
+            val logManager = SqlLogManager(project).also { manager = it }
+            logManager.entries.maxEntries = 200
+            logManager.entries.dedupeEnabled = false
+            logManager.entries.setPaused(false)
+            val logPanel = SqlLogPanel(project, logManager).also { panel = it }
+            val root = JPanel(BorderLayout()).apply {
+                add(logPanel, BorderLayout.CENTER)
+                setSize(560, 520)
+            }
+            val scroll = requireNotNull(logPanel.listScrollPaneForTest)
+            val list = logPanel.list
+            assertTrue("必须保留完整面板的滚动容器层级", SwingUtilities.isDescendingFrom(scroll, root))
+            assertEquals("四行模式必须走可变行高而不是固定高假设", -1, list.fixedCellHeight)
+            assertEquals(scale, JBUIScale.scale(1.0f), 0.001f)
+
+            fun settle(stage: String): String {
+                // 有界排空+完整树布局，不 sleep、不重装 ListUI、不改 scroll model。
+                repeat(4) {
+                    UIUtil.dispatchAllInvocationEvents()
+                    layoutGeometryTree(root)
+                }
+                return ui012Geometry(stage, logPanel, logManager).also { println(it) }
+            }
+
+            fun addRows(ids: IntRange) {
+                ids.forEach { id ->
+                    val sql = "SELECT id, name FROM ui012_probe WHERE id = $id"
+                    assertTrue("测试条目必须真实入缓冲 id=$id", logManager.entries.addEntry(
+                        LogSqlEntry(sql, sql, emptyList(), timestamp = id.toLong()),
+                    ))
+                }
+            }
+
+            fun scrollToEnd(stage: String) {
+                val action = logPanel.scrollToEndAction
+                action.actionPerformed(AnActionEvent.createFromAnAction(
+                    action, null, ActionPlaces.TOOLBAR, DataContext.EMPTY_CONTEXT,
+                ))
+                val evidence = settle(stage)
+                val last = requireNotNull(list.getCellBounds(list.model.size - 1, list.model.size - 1))
+                val visible = list.visibleRect
+                assertTrue("夹具必须拥有非零视口\n$evidence", visible.width > 0 && visible.height > 0)
+                assertTrue("尾条必须真正完整可见，不能只验滚动条等式\n$evidence",
+                    last.y >= visible.y && last.y + last.height <= visible.y + visible.height)
+                assertTrue("最后一行不能落在列表实际尺寸之外\n$evidence",
+                    last.y + last.height <= list.height)
+            }
+
+            settle("created")
+            addRows(1..468)
+            val full = settle("capacity-200-after-468")
+            assertEquals(full, 200, list.model.size)
+            val clear = logPanel.toolbarGroup.getChildren(null).filterIsInstance<SqlLogPanel.ClearAction>().single()
+            clear.actionPerformed(AnActionEvent.createFromAnAction(
+                clear, null, ActionPlaces.TOOLBAR, DataContext.EMPTY_CONTEXT,
+            ))
+            val cleared = settle("cleared")
+            assertEquals(cleared, 0, list.model.size)
+            addRows(1..8)
+            settle("first-eight")
+            addRows(9..10)
+            val ten = settle("append-nine-ten")
+            assertEquals(ten, (1L..10L).toList(), (0 until list.model.size).map {
+                list.model.getElementAt(it).sequenceNumber
+            })
+            // 明确复刻 metadata + SELECT/FROM/WHERE；避免单行样例给出无关绿灯。
+            val renderer = LogEntryListCellRenderer()
+            renderer.getListCellRendererComponent(list, list.model.getElementAt(0), 0, false, false)
+            assertEquals("夹具 SQL 必须渲染成三行，加 metadata 共四行", 3, renderer.sqlLines.size)
+            scrollToEnd("ten-explicit-end")
+
+            logPanel.searchFieldForTest.text = "id = 9"
+            logPanel.applySearchTextForTest()
+            val search = settle("search-nine")
+            assertEquals(search, 1, list.model.size)
+            assertEquals(search, 9L, list.model.getElementAt(0).sequenceNumber)
+            logPanel.searchFieldForTest.text = ""
+            logPanel.applySearchTextForTest()
+            val restored = settle("clear-search")
+            assertEquals(restored, 10, list.model.size)
+            scrollToEnd("clear-search-explicit-end")
+
+            root.setSize(560, 720)
+            settle("taller-host")
+            scrollToEnd("taller-host-explicit-end")
+        } finally {
+            try {
+                panel?.dispose()
+            } finally {
+                try {
+                    manager?.dispose()
+                } finally {
+                    settings.logListSqlDisplayMode = savedMode
+                    settings.displayMaskEnabled = savedMask
+                    JBUIScale.setUserScaleFactorForTest(savedScale)
+                }
+            }
+        }
+    }
+
+    private fun layoutGeometryTree(component: Component) {
+        if (component is Container) {
+            component.doLayout()
+            component.components.forEach(::layoutGeometryTree)
+        }
+    }
+
+    private fun ui012Geometry(stage: String, panel: SqlLogPanel, manager: SqlLogManager): String {
+        val list = panel.list
+        val scroll = requireNotNull(panel.listScrollPaneForTest)
+        val viewport = scroll.viewport
+        val bar = scroll.verticalScrollBar
+        val size = list.model.size
+        return buildString {
+            appendLine("UI012 stage=$stage scale=${JBUIScale.scale(1.0f)} buffer=${manager.entries.size()} model=$size")
+            appendLine("ids=${(0 until size).map { list.model.getElementAt(it).sequenceNumber }}")
+            appendLine("ui=${list.ui.javaClass.name} fixed=${list.fixedCellHeight} visibleRows=${list.visibleRowCount}")
+            appendLine("first=${if (size == 0) null else list.getCellBounds(0, 0)} last=${if (size == 0) null else list.getCellBounds(size - 1, size - 1)}")
+            appendLine("list preferred=${list.preferredSize} size=${list.size} visible=${list.visibleRect}")
+            appendLine("viewport view=${viewport.viewSize} extent=${viewport.extentSize} position=${viewport.viewPosition}")
+            appendLine("bar value=${bar.value} maximum=${bar.maximum} extent=${bar.visibleAmount}")
+            var ancestor: Component? = list
+            while (ancestor != null) {
+                appendLine("ancestor=${ancestor.javaClass.name} bounds=${ancestor.bounds} visible=${ancestor.isVisible}")
+                ancestor = ancestor.parent
+            }
         }
     }
 
