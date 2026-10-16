@@ -126,7 +126,7 @@ agent首轮3组各3个独立JVM，实际心跳为实验注入200ms，warm200请�
 
 ### 第三轮冻结
 
-冻结 `a9a3488b64a86264c9ac3979ba8d2e8ca0fde77a`，已吸收dev `3393dc66` 日志配对与徽章修复；R2两红为测试契约更正，原功能保护保持。gate detached完整从片1复跑，所有Test强制fresh，Docker显式禁用，默认5片。05:44 preflight Commit约51.179/73.750GB、余约22.57GB；并行仅另一dev四类短定向，不是另一全量，使用独立沙盒。最终结果待本轮完成回填，不提前拼绿。
+冻结 `a9a3488b64a86264c9ac3979ba8d2e8ca0fde77a`，已吸收dev `3393dc66` 日志配对与徽章修复；R2两红为测试契约更正，原功能保护保持。gate detached完整从片1复跑，所有Test强制fresh，Docker显式禁用，默认5片。05:44 preflight Commit约51.179/73.750GB、余约22.57GB；并行仅另一dev四类短定向，不是另一全量，使用独立沙盒。本轮片1实际失败：159类1505/3/0/0，agent38类213绿、external6类27/0/0/1；片2～5未运行，63新增类48未入场。三红均为AliasDualTrackDefenseTest同族旧MP核心Lambda/selectAs预期，与已落dev UI005整链字符串Wrapper回落不符；由runtime车道扩为整族reverse定向盘点，保留真实编译/别名/WHERE/ORDER及MPJ正对照，不放宽生产逻辑。日志SHA256 `1d1510ddfbd92242642fac373166a2a1075c2d6552297779ff3a6c4716b535fe`，audit `491bf9f7770c3f77f7d1dcceeb8c4150905fcfad7d82400984f382b95621f5ed`；归档`.local/sql-insight-gate-round3-failed.tar.gz` SHA256 `29c85b20aa6790427cda9cd78e6144c4c7f982eb881215704b12c1ffd7fda2a0`。未打包、未verify，仍无全量通过读数。
 
 ### Agent JVM 验证层级
 
