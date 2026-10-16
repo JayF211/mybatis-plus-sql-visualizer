@@ -50,6 +50,26 @@ class SqlSchemaDifferTest {
         assertTrue(report.diagnostics.any { it.code == "IMPACT_COVERAGE_PARTIAL" })
     }
 
+    @Test fun `nullability changes expose both values without inventing unknown transitions`() {
+        for ((before, after) in listOf(false to true, true to false)) {
+            val diff = SqlSchemaDiffer.compare(snapshot("v1", listOf(SqlTypedColumn("id", "INT", before))),
+                snapshot("v2", listOf(SqlTypedColumn("id", "INT", after))))
+            val change = diff.changes.single()
+            assertEquals(SqlSchemaChangeKind.NULLABILITY_CHANGED, change.kind)
+            assertEquals(before, change.beforeNullable)
+            assertEquals(after, change.afterNullable)
+            assertEquals("INT", change.beforeType)
+            assertEquals("INT", change.afterType)
+        }
+        val unknown = SqlSchemaDiffer.compare(snapshot("v1", listOf(SqlTypedColumn("id", "INT", null))),
+            snapshot("v2", listOf(SqlTypedColumn("id", "INT", true))))
+        assertTrue(unknown.changes.none { it.kind == SqlSchemaChangeKind.NULLABILITY_CHANGED })
+        val typeOnly = SqlSchemaDiffer.compare(snapshot("v1", listOf(SqlTypedColumn("id", "INT", true))),
+            snapshot("v2", listOf(SqlTypedColumn("id", "BIGINT", true)))).changes.single()
+        assertNull(typeOnly.beforeNullable)
+        assertNull(typeOnly.afterNullable)
+    }
+
     @Test fun `duplicate snapshots and cancellation do not publish partial diffs`() {
         val a = snapshot("v1", listOf(SqlTypedColumn("id", "INT")))
         val b = snapshot("v2", listOf(SqlTypedColumn("id", "BIGINT")))

@@ -8,7 +8,8 @@ data class SqlSchemaSnapshot(val databaseContext: String, val version: String, v
     val dialect: SqlInsightDialect = SqlInsightDialect.POSTGRESQL)
 enum class SqlSchemaChangeKind { TABLE_ADDED, TABLE_REMOVED, COLUMN_ADDED, COLUMN_REMOVED, TYPE_CHANGED, NULLABILITY_CHANGED }
 data class SqlSchemaChange(val kind: SqlSchemaChangeKind, val tableNameParts: List<String>, val column: String?,
-    val beforeType: String? = null, val afterType: String? = null, val affected: List<SqlUsageReference> = emptyList())
+    val beforeType: String? = null, val afterType: String? = null, val affected: List<SqlUsageReference> = emptyList(),
+    val beforeNullable: Boolean? = null, val afterNullable: Boolean? = null)
 data class SqlSchemaDiffReport(val databaseContext: String?, val beforeVersion: String?, val afterVersion: String?,
     val changes: List<SqlSchemaChange>, val diagnostics: List<SqlUsageDiagnostic>, val comparable: Boolean, val impactComplete: Boolean)
 
@@ -35,10 +36,11 @@ object SqlSchemaDiffer {
             return rejected("SCHEMA_DUPLICATE_IDENTITY", "Duplicate table/column identities prevent a definite comparison.")
         val changes = mutableListOf<SqlSchemaChange>()
         var impactComplete = usageReport != null
-        fun record(kind: SqlSchemaChangeKind, table: SqlTypedTable, column: String? = null, from: String? = null, to: String? = null) {
+        fun record(kind: SqlSchemaChangeKind, table: SqlTypedTable, column: String? = null, from: String? = null, to: String? = null,
+            beforeNullable: Boolean? = null, afterNullable: Boolean? = null) {
             val matches = usageReport?.let { SqlObjectUsageAnalyzer.findUsages(it, SqlObjectQuery(before.databaseContext, table.nameParts, column, dialect)) }
             if (matches != null) { diagnostics += matches.diagnostics; impactComplete = impactComplete && matches.complete }
-            changes += SqlSchemaChange(kind, table.nameParts, column, from, to, matches?.references.orEmpty())
+            changes += SqlSchemaChange(kind, table.nameParts, column, from, to, matches?.references.orEmpty(), beforeNullable, afterNullable)
         }
         for (identity in old.keys + new.keys) {
             if (isCancelled()) return rejected("CANCELLED", "Schema comparison cancelled; no partial diff is published.")
@@ -58,7 +60,7 @@ object SqlSchemaDiffer {
                     diagnostics += SqlUsageDiagnostic("TYPE_UNKNOWN", "Type is unknown for ${b.nameParts.joinToString(".")}.${y.name}; no type change is asserted.")
                 else if (canonicalType(x.typeName) != canonicalType(y.typeName)) record(SqlSchemaChangeKind.TYPE_CHANGED, b, y.name, x.typeName, y.typeName)
                 if (x.nullable != null && y.nullable != null && x.nullable != y.nullable)
-                    record(SqlSchemaChangeKind.NULLABILITY_CHANGED, b, y.name, x.typeName, y.typeName)
+                    record(SqlSchemaChangeKind.NULLABILITY_CHANGED, b, y.name, x.typeName, y.typeName, x.nullable, y.nullable)
             }
         }
         if (usageReport == null) diagnostics += SqlUsageDiagnostic("USAGE_SNAPSHOT_MISSING", "Schema changes are known, but source mapping coverage was not supplied.")
