@@ -71,9 +71,14 @@ class SqlLogEntryBuffer(
      */
     private val dedupeIndex = HashMap<String, LogSqlEntry>()
 
+    // UI013：Logic 未绑定，文本相同不能证明同一次执行；Actual 仅属该次配对，禁止裁剪或融合。
+    // 反向验证锚点：临时改为 true，UI013 自动/手动保真用例必须变红。
+    private fun canDedupe(entry: LogSqlEntry): Boolean = entry.source != SqlSource.SHARDINGSPHERE
+
     private fun rebuildDedupeIndexLocked() {
         dedupeIndex.clear()
         for (e in entries) {
+            if (!canDedupe(e)) continue
             val latest = dedupeIndex[e.dedupeKey]
             if (latest == null || e.timestamp > latest.timestamp) dedupeIndex[e.dedupeKey] = e
         }
@@ -112,7 +117,7 @@ class SqlLogEntryBuffer(
             if (!dedupeEnabled) return
             val cutoff = nowMs - graceMs
             for (e in entries) {
-                if (e.timestamp < cutoff) continue
+                if (!canDedupe(e) || e.timestamp < cutoff) continue
                 val latest = dedupeIndex[e.dedupeKey]
                 if (latest == null || e.timestamp > latest.timestamp) dedupeIndex[e.dedupeKey] = e
             }
@@ -276,7 +281,7 @@ class SqlLogEntryBuffer(
                 val added = addNumbered(entry)
                 storedEntry = added
                 entries.addLast(added)
-                if (dedupeEnabled) {
+                if (dedupeEnabled && canDedupe(added)) {
                     // T-SqlLogPerf P6：索引 upsert（dedupeKey lazy 首触与旧版 isDuplicate 同价，
                     // 仅去重开启时支付）
                     dedupeIndex[added.dedupeKey] = added
@@ -288,7 +293,7 @@ class SqlLogEntryBuffer(
                         // 该键最新时才需要重算（队内同键余条 = 超窗重复入队形态，低频）
                         val k = evicted.dedupeKey
                         if (dedupeIndex[k] === evicted) {
-                            val stillThere = entries.lastOrNull { it.dedupeKey == k }
+                            val stillThere = entries.lastOrNull { canDedupe(it) && it.dedupeKey == k }
                             if (stillThere != null) dedupeIndex[k] = stillThere else dedupeIndex.remove(k)
                         }
                     }
@@ -354,7 +359,9 @@ class SqlLogEntryBuffer(
             for (entry in entries) {
                 // T-LogDedupeMpMark：与 isDuplicate 同键（空白规范化指纹），勾选时对既有跨格式副本同样生效；
                 // T-LogRowNumber 追加：手动全量裁剪不比较时间窗口（见 KDoc），纯按指纹判重。
-                val duplicate = keep.firstOrNull { it.dedupeKey == entry.dedupeKey }
+                val duplicate = if (canDedupe(entry)) {
+                    keep.firstOrNull { canDedupe(it) && it.dedupeKey == entry.dedupeKey }
+                } else null
                 if (duplicate != null) {
                     recordDedupeDrop(entry.dedupeKey)
                     removed++
@@ -397,6 +404,7 @@ class SqlLogEntryBuffer(
      * T-SqlLogPerf P6：O(n) 全表扫改 [dedupeIndex] O(1) 查表——「存在同键条目使 now-timestamp < 窗口」
      * ⟺ 该键最近时间戳落窗口内（最大时间戳是窗口判定的唯一有效候选，逐字等价）。 */
     private fun isDuplicate(entry: LogSqlEntry): Boolean {
+        if (!canDedupe(entry)) return false
         val latest = dedupeIndex[entry.dedupeKey] ?: return false
         return entry.timestamp - latest.timestamp < dedupeWindowMs
     }
@@ -473,7 +481,7 @@ class SqlLogEntryBuffer(
             // T-SqlLogPerf P6：单条删除仅重算该键（用户右键低频，O(n) 一次可接受）
             if (removed && dedupeEnabled) {
                 val k = entry.dedupeKey
-                val stillThere = entries.lastOrNull { it.dedupeKey == k }
+                val stillThere = entries.lastOrNull { canDedupe(it) && it.dedupeKey == k }
                 if (stillThere != null) dedupeIndex[k] = stillThere else dedupeIndex.remove(k)
             }
         }
