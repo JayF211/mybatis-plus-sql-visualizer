@@ -3,14 +3,14 @@ package cn.song.mybatisplus.visualizer.sql.insight
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.WriteAction
 import com.intellij.testFramework.PlatformTestUtil
-import com.intellij.testFramework.fixtures.LightJavaCodeInsightFixtureTestCase
+import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import java.util.concurrent.Callable
 import java.util.concurrent.Future
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
 /** Real platform PSI without opening an IDE window or invoking UI actions. */
-class ProjectSqlUsageServiceTest : LightJavaCodeInsightFixtureTestCase() {
+class ProjectSqlUsageServiceTest : BasePlatformTestCase() {
     private val template get() = AnalysisSnapshot("", databaseContext = "db")
     private fun <T> background(action: () -> T): T {
         val future = ApplicationManager.getApplication().executeOnPooledThread(Callable { action() })
