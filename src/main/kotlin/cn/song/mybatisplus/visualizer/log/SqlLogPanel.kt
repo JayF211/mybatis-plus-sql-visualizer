@@ -1119,8 +1119,9 @@ class SqlLogPanel(
         }
     }
 
-    internal inner class ClearAction : AnAction() {
+    internal inner class ClearAction : AnAction(AllIcons.Actions.GC) {
         override fun update(e: AnActionEvent) {
+            e.presentation.icon = AllIcons.Actions.GC
             e.presentation.text = MpSqlVisualizerBundle.message("log.panel.clear")
         }
 

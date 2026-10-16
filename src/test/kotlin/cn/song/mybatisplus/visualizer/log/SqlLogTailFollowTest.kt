@@ -1,5 +1,7 @@
 package cn.song.mybatisplus.visualizer.log
 
+import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import com.intellij.icons.AllIcons
 import com.intellij.openapi.actionSystem.ActionPlaces
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.DataContext
@@ -9,6 +11,86 @@ import java.awt.event.MouseEvent
 import java.awt.event.MouseWheelEvent
 
 class SqlLogTailFollowTest : BasePlatformTestCase() {
+    fun testClearActionTemplateHasPlatformClearIcon() {
+        val manager = SqlLogManager(project)
+        val panel = SqlLogPanel(project, manager)
+        try {
+            val action = panel.toolbarGroup.getChildren(null)[2]
+            assertTrue("清除动作仍须位于工具栏第三位", action is SqlLogPanel.ClearAction)
+            assertSame("首次 update 前模板已有平台清除图标", AllIcons.Actions.GC, action.templatePresentation.icon)
+            assertTrue(action.templatePresentation.isVisible)
+        } finally {
+            panel.dispose()
+            manager.dispose()
+        }
+    }
+
+    fun testClearActionUpdateRestoresPlatformClearIcon() {
+        val manager = SqlLogManager(project)
+        val panel = SqlLogPanel(project, manager)
+        try {
+            val action = panel.toolbarGroup.getChildren(null)[2]
+            assertTrue(action is SqlLogPanel.ClearAction)
+            val event = AnActionEvent.createFromAnAction(action, null, ActionPlaces.TOOLBAR, DataContext.EMPTY_CONTEXT)
+            // 不让模板继承掩盖 update 漏赋图标；模拟多轮 presentation 刷新。
+            repeat(3) { round ->
+                if (round == 1) {
+                    manager.entries.addEntry(LogSqlEntry("SELECT 1", "SELECT 1", emptyList(), timestamp = 1L))
+                } else if (round == 2) {
+                    action.actionPerformed(event)
+                }
+                event.presentation.icon = if (round == 1) AllIcons.Actions.Search else null
+                action.update(event)
+                assertSame("空列表、有数据、清除后均应恢复清除图标", AllIcons.Actions.GC, event.presentation.icon)
+                assertEquals(MpSqlVisualizerBundle.message("log.panel.clear"), event.presentation.text)
+                assertTrue("清除入口应始终可见", event.presentation.isVisible)
+                assertTrue("清除入口应可用", event.presentation.isEnabled)
+            }
+        } finally {
+            panel.dispose()
+            manager.dispose()
+        }
+    }
+
+    fun testClearActionClearsEntriesAndResumesTailFollow() {
+        val manager = SqlLogManager(project)
+        val panel = SqlLogPanel(project, manager)
+        try {
+            manager.entries.dedupeEnabled = false
+            manager.entries.addEntry(LogSqlEntry("SELECT 1", "SELECT 1", emptyList(), timestamp = 1L))
+            manager.entries.addEntry(LogSqlEntry("SELECT 2", "SELECT 2", emptyList(), timestamp = 2L))
+            com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+            assertEquals("夹具须先有两条实际显示的日志", 2, panel.list.model.size)
+            val scroll = requireNotNull(panel.listScrollPaneForTest)
+            scroll.mouseWheelListeners.forEach {
+                it.mouseWheelMoved(MouseWheelEvent(scroll, MouseEvent.MOUSE_WHEEL, 1L, 0, 5, 5, 0,
+                    false, MouseWheelEvent.WHEEL_UNIT_SCROLL, 1, -1))
+            }
+            assertEquals(TailFollowMode.PAUSED, panel.tailFollowModeForTest)
+
+            val action = panel.toolbarGroup.getChildren(null)[2]
+            assertTrue(action is SqlLogPanel.ClearAction)
+            val event = AnActionEvent.createFromAnAction(action, null, ActionPlaces.TOOLBAR, DataContext.EMPTY_CONTEXT)
+            action.actionPerformed(event)
+            com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+            assertTrue("清除动作须清空实际缓冲", manager.entries.snapshot().isEmpty())
+            assertEquals("可见列表同步清空", 0, panel.list.model.size)
+            assertEquals("清除后恢复尾随", TailFollowMode.FOLLOWING, panel.tailFollowModeForTest)
+
+            action.actionPerformed(event)
+            com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+            assertTrue("空列表重复清除仍为空", manager.entries.snapshot().isEmpty())
+            assertEquals(TailFollowMode.FOLLOWING, panel.tailFollowModeForTest)
+            manager.entries.addEntry(LogSqlEntry("SELECT 3", "SELECT 3", emptyList(), timestamp = 3L))
+            com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+            assertEquals("清除后仍能显示新日志", listOf("SELECT 3"), panel.visibleEntries)
+            assertEquals(TailFollowMode.FOLLOWING, panel.tailFollowModeForTest)
+        } finally {
+            panel.dispose()
+            manager.dispose()
+        }
+    }
+
     fun test只有滚底动作能从手动暂停恢复跟随() {
         val state = TailFollowState()
         assertEquals(TailFollowMode.FOLLOWING, state.mode)
