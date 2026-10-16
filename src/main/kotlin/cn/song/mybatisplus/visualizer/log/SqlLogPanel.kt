@@ -288,6 +288,9 @@ class SqlLogPanel(
 
     private val tailFollow = TailFollowState()
     private var listScrollPane: JBScrollPane? = null
+    private var ui012DiagnosticActions = 0
+    private var ui012DiagnosticPending = false
+    private var ui012DiagnosticDisposed = false
     internal val tailFollowModeForTest: TailFollowMode get() = tailFollow.mode
 
     private fun scrollToBottom(resume: Boolean) {
@@ -1145,8 +1148,78 @@ class SqlLogPanel(
         }
 
         override fun actionPerformed(e: AnActionEvent) {
+            // 仅显式按钮取证：最多十次动作，每次前/后一拍各一行；普通流式贴底不记录。
+            val diagnose = ui012DiagnosticsEnabled() && !ui012DiagnosticDisposed &&
+                !ui012DiagnosticPending && ui012DiagnosticActions < 10
+            val actionId = if (diagnose) ++ui012DiagnosticActions else 0
+            if (diagnose) {
+                ui012DiagnosticPending = true
+                emitUi012Geometry("before", actionId)
+            }
             scrollToBottom(resume = true)
+            if (diagnose) {
+                ApplicationManager.getApplication().invokeLater {
+                    ui012DiagnosticPending = false
+                    if (!ui012DiagnosticDisposed) emitUi012Geometry("after-edt", actionId)
+                }
+            }
         }
+    }
+
+    /**
+     * UI012 可撤取证。只读数值和类名，不读 SQL、参数、组件 name/toString 或文件/项目路径。
+     * 不主动 doLayout/revalidate/updateUI。先抓实际几何，最后查询 cell/preferred：平台 getter
+     * 可能惰性刷新 ListUI 缓存，故同时报告查询引起的 renderer/layout 计数增量，不能当零扰动证明。
+     * sink 只供同模块定向测试收集输出；正式入口使用本类既有 LOG。
+     */
+    internal fun emitUi012Geometry(phase: String, actionId: Int, sink: (String) -> Unit = { LOG.info(it) }) {
+        if (!ui012DiagnosticsEnabled()) return
+        val line = runCatching {
+            val scroll = listScrollPane
+            val viewport = scroll?.viewport
+            val bar = scroll?.verticalScrollBar
+            val paints = list.diagnosticPaints
+            val layouts = list.diagnosticLayouts
+            val reads = list.diagnosticPreferredReads
+            val renders = entryCellRenderer.diagnosticRendererCalls
+            val actualSize = list.size
+            val actualVisible = list.visibleRect
+            val viewSize = viewport?.viewSize
+            val extent = viewport?.extentSize
+            val position = viewport?.viewPosition
+            val barValue = bar?.value
+            val barMaximum = bar?.maximum
+            val barExtent = bar?.visibleAmount
+            val ancestors = buildString {
+                var component: Component? = list
+                var depth = 0
+                while (component != null && depth < 16) {
+                    val current = component
+                    if (depth > 0) append('|')
+                    append(current.javaClass.name).append(':').append(current.bounds)
+                    append(":visible=").append(current.isVisible).append(":valid=").append(current.isValid)
+                    component = current.parent
+                    depth++
+                }
+                if (component != null) append("|truncated")
+            }
+            val count = listModel.size()
+            val first = if (count == 0) null else list.getCellBounds(0, 0)
+            val last = if (count == 0) null else list.getCellBounds(count - 1, count - 1)
+            val preferred = list.preferredSize
+            "UI012 phase=${if (phase == "before") "before" else "after-edt"} action=$actionId" +
+                " edt=${javax.swing.SwingUtilities.isEventDispatchThread()} buffer=${manager.entries.size()} model=$count" +
+                " ui=${list.ui.javaClass.name} fixed=${list.fixedCellHeight} visibleRows=${list.visibleRowCount}" +
+                " scale=${com.intellij.ui.scale.JBUIScale.scale(1.0f)} mode=${PluginSettings.getInstance().sqlListDisplayMode()}" +
+                " valid=${list.isValid} showing=${list.isShowing} tail=${tailFollow.mode} generation=$refreshGeneration" +
+                " size=$actualSize visible=$actualVisible view=$viewSize extent=$extent position=$position" +
+                " bar=$barValue/$barMaximum/$barExtent first=$first last=$last preferred=$preferred" +
+                " paints=$paints layouts=$layouts preferredReads=$reads rendererCalls=$renders" +
+                " queryLayoutDelta=${list.diagnosticLayouts - layouts}" +
+                " queryRendererDelta=${entryCellRenderer.diagnosticRendererCalls - renders}" +
+                " ancestors=$ancestors"
+        }.getOrElse { "UI012 action=$actionId snapshotFailed=${it.javaClass.name}" }
+        sink(line)
     }
 
     internal inner class SettingsAction : AnAction() {
@@ -2113,6 +2186,7 @@ class SqlLogPanel(
 
     /** 面板销毁：释放单击预览弹窗与日志转 SQL / SQL→Java 面板编辑器（manager 生命周期由项目 @Service 管理）。 */
     override fun dispose() {
+        ui012DiagnosticDisposed = true
         // T-Perf-24：停止搜索防抖 Timer（防晚到 apply 触碰已销毁面板）
         searchDebounceTimer.stop()
         // F80：撤链后补跑挂起标志（防 dispose 后晚到 invokeLater 触碰已销毁面板）
