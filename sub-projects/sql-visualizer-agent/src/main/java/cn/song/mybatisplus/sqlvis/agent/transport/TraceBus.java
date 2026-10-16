@@ -29,6 +29,7 @@ public final class TraceBus {
         boolean nextRequest = request == null ? requests : request;
         boolean nextTransaction = transaction == null ? transactions : transaction;
         String nextToken = tokenPresent ? token : nonce;
+        if (nextToken != null && !nextToken.matches("[0-9a-fA-F]{1,64}")) nextToken = null;
         if (nextRequest != requests || nextTransaction != transactions
                 || !java.util.Objects.equals(nextToken, nonce)) {
             revision++;

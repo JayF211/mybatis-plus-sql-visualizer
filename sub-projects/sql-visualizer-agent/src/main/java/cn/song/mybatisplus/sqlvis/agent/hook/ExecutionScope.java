@@ -77,7 +77,7 @@ final class ExecutionScope {
         ArrayDeque<ExecutionScope> stack = ACTIVE.get();
         if (stack != null && stack.remove(this)) {
             if (stack.isEmpty()) ACTIVE.remove();
-            if (request != null) RequestHooks.sqlEnd(failed, !reported);
+            if (request != null) RequestHooks.sqlEnd(request, failed, !reported);
             CaptureLedger.complete();
         }
     }
