@@ -10,6 +10,27 @@ import javax.swing.*
 
 class RequestBaselineViewTest {
     private fun all(root: Component): List<Component> = listOf(root) + if (root is Container) root.components.flatMap(::all) else emptyList()
+    @Test fun `switching request rejects an earlier capture callback`() {
+        SwingUtilities.invokeAndWait {
+            val pending = mutableListOf<() -> Unit>()
+            val view = RequestBaselineView({ it }, { task, apply -> pending += { apply(task()) } }, {})
+            fun request(id: String): ObservedRequest {
+                val e = SqlRequestEvidence(id, "run", true, false, null, null, null, null, false, true, emptyList())
+                return ObservedRequest(id, null, null, null, e, 0L, emptyList())
+            }
+            view.present(listOf(request("A"), request("B")))
+            val components = all(view)
+            val fields = components.filterIsInstance<JTextField>()
+            fields[0].text = "local"; fields[1].text = "scenario"
+            val choices = components.filterIsInstance<JComboBox<*>>().single()
+            choices.selectedIndex = 0
+            components.filterIsInstance<JButton>().single { it.text == "baseline.capture" }.doClick()
+            choices.selectedIndex = 1
+            pending.single()()
+            assertEquals("", components.filterIsInstance<JTextArea>().single { it.isEditable }.text)
+        }
+    }
+
     @Test fun `baseline capture load and copy require explicit selection and clicks`() {
         SwingUtilities.invokeAndWait {
             var submitted = 0

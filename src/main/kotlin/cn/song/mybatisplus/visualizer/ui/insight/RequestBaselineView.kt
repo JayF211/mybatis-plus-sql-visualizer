@@ -18,6 +18,7 @@ internal class RequestBaselineView(
     private var snapshot = emptyList<ObservedRequest>()
     private var version = 0L
     init {
+        requests.addActionListener { version++; output.text = text("stale") }
         val actions = JPanel().apply {
             add(JLabel(text("baseline.environment"))); add(environment)
             add(JLabel(text("baseline.context"))); add(context); add(requests)
@@ -40,7 +41,7 @@ internal class RequestBaselineView(
             val evidence = snapshot.getOrNull(requests.selectedIndex)?.evidence ?: return@button
             val input = json.text; val key = context.text; val token = version
             submit({ when (val decoded = RequestBaselineCodec.decode(input)) {
-                is RequestBaselineCodec.DecodeResult.Ready -> text("baseline.notice") + "\n" + RequestBaselines.evaluate(decoded.baseline, evidence, key)
+                is RequestBaselineCodec.DecodeResult.Ready -> text("baseline.notice") + "\n" + decoded.trustNotice + "\n" + RequestBaselines.evaluate(decoded.baseline, evidence, key)
                 is RequestBaselineCodec.DecodeResult.Rejected -> "REJECTED: ${decoded.reason}"
             } }, { value -> if (token == version) output.text = value })
         }
