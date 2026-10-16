@@ -168,6 +168,8 @@ class SqlPreviewTopRowLayoutTest : BasePlatformTestCase() {
                 listOf(
                     MpSqlVisualizerBundle.message("panel.rollbackSql"),
                     MpSqlVisualizerBundle.message("insight.action"),
+                    MpSqlVisualizerBundle.message("insight.scenario.action"),
+                    MpSqlVisualizerBundle.message("insight.scenario.traceAction"),
                     MpSqlVisualizerBundle.message("panel.param.import"),
                     MpSqlVisualizerBundle.message("panel.compare"),
                     MpSqlVisualizerBundle.message("panel.share"),

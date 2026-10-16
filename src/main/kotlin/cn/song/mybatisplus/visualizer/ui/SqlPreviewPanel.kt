@@ -250,6 +250,7 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
             syncInsightDocument()
         }
     internal var insightController: cn.song.mybatisplus.visualizer.ui.insight.PreviewInsightController? = null
+    internal var scenarioInsightView: cn.song.mybatisplus.visualizer.ui.insight.ScenarioInsightView? = null
 
     /**
      * T-M27.2：自建 autopopup 的调度防重入标志（平台 autopopup 对非文件编辑器不生效）。
@@ -501,6 +502,7 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
         set(value) {
             field = value
             insightController?.invalidate()
+            scenarioInsightView?.clear(insightText("stale"))
             // clear() 也经此入口：清空所有附加页，不把它伪装成仅关闭 JOIN。
             if (::previewTabs.isInitialized) {
                 if (value == null) previewTabs.clear() else previewTabs.invalidateRefreshes()
