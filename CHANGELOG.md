@@ -6,6 +6,7 @@
 
 ### Fixed
 
+- **表名→实体反查在「实体类来自依赖 JAR」时找不到（T-JarEmbedded W2）**：SQL→Java 反向转换按表名找实体（`EntityClassFinder`）的两条路（候选名快路径 + `@TableName` 全类扫描）此前一律只在**项目源码**范围里查，共享模型 JAR 里的实体一个都反查不到。现快路径补**库兜底**：项目范围 0 命中后，再按候选类名在依赖库范围找一遍并按表名精确校验（源码命中时行为逐字不变；代价上界＝4 个候选名 × 一次索引查询，且实体解析本身有三维缓存）。**明确不做**「全库逐类扫描」的慢路径库兜底——那要遍历全库类名并逐类读注解/解析（O(库类数) 的 PSI 访问），会把「表名无对应实体」这条此前反馈过卡顿的路径成本推高。已知边界：库里的实体若类名与表名约定不符、仅靠显式 `@TableName` 反查，仍找不到（与改前一致，无回归）。验证：`EntityClassFinderIntegrationTest` 里挂上本机 JDK 当 SDK（`HeavyPlatformTestCase` 默认不挂 SDK），用真实库类反推表名验库兜底，并断言「快路径命中 / 库命中都不触发慢路径全量扫描」；摘掉库兜底那一档 → 该用例必红（其余 9 条保持绿）
 - **实体来自依赖 JAR 时，嵌入列命名约定探测不到（T-JarEmbedded W1）**：`@Embedded` 嵌入列前缀（`qty.baseQty` → `qty_base_qty`）的判定此前只在**实体所在模块**的 `application*.yml/.properties` 里找信号；而实体类常来自共享模型 JAR（无源码，模块根不可知），且命名策略往往**写在 Java 代码里**（`props.put("hibernate.implicit_naming_strategy", ImplicitNamingStrategyComponentPathImpl.class)`）或声明在 `META-INF/persistence.xml` —— 这些位置此前一个都不看，于是即便装上支持前缀的版本，这类工程仍会渲染出丢前缀的列名。现在模块不可知时退到**工程级信号**：配置文件扩到 `persistence.xml` / `orm.xml` / `hibernate.cfg.xml`（含 `META-INF/`），并用词索引在工程源码里找命名策略类名（代码式配置）；模块已知时行为不变（只看该模块，防兄弟模块配置外溢）。另外**自定义**的 `ImplicitNamingStrategy` 实现类也按语义特征识别（文件既参与隐式命名、又用到 `AttributePath` 的父段/全路径 `getParent`/`getFullPath`/`getDepth`——那正是「把父路径并进列名」的写法），只看末端属性名、或只改表名的自定义策略不会被误判为组件路径档
 
 ## [2026.10.16] - 2026-10-16

@@ -224,9 +224,59 @@ T-PrewarmWilDeadlock）＋ **1 条失效链接**（`20261015-1830-T-SqlPreviewPr
 `20261015-1842-T-PrewarmWilDeadlock` 且原文件已删，索引未跟上）。补齐后复核：**目录 553 份计划 /
 索引 553 条引用 / 漏登记 0 / 失效链接 0 / 重复 0**。
 
-### 7.2 待回填：demo 仓 JAR 复现载体（子智能体进行中）
+### 7.2 demo 仓 JAR 复现载体（已完成，子智能体交付 `74cc257`）
 
-计划造 `selfdev-shared-lib` 式载体：模型 JAR 模块（`@Entity` + 三个 `@Embedded` + 一个静态嵌套类
-`WmsItemKey.LotInfo`，嵌入字段零注解）+ 宿主 Boot 模块（端口 8088 / 库 `jpa_demo`），命名约定分
-「`application.yml` 里写」与「Java 代码里 `props.put(...)`」两份，分别验 W1 的两条信号路；
-验收读数为真库列名（应含 `qty_base_qty` / `sku_inventory_status` / `lot_info_received_date`）。
+模型 JAR 模块 `jpa-jar-model-lib`（`@Entity` + 三个 `@Embedded` + `WmsItemKey` 内的静态嵌套类
+`LotInfo`，嵌入字段零注解）+ 宿主 Boot 模块 `jpa-jar-model-demo`（端口 8088 / 库 `jpa_demo` /
+表 `wms_inventory_jar_demo`），命名约定备了「`application.yml` 里写」与「Java 代码里
+`props.put(...)`（`@Profile("code-naming")`）」两份，分别对应 W1 的两条信号路。
+
+**真跑读数**（子智能体实测）：
+```
+create table wms_inventory_jar_demo (
+    id, item_key_lot_info_received_date, qty_base_qty, sku_inventory_status, warehouse_id, ...)
+/jar-model/columns → ["id","item_key_lot_info_received_date","qty_base_qty","sku_inventory_status","warehouse_id"]
+/jar-model/query（plain / buffer）→ 各 rowCount=1；两种命名配置下 hibernate 属性均生效
+```
+
+**勘误（子智能体纠正本计划原文）**：三层嵌入路径的真库列名是 **`item_key_lot_info_received_date`**，
+不是本文早先写的 `lot_info_received_date`——组件路径把**整条链** `itemKey.lotInfo.receivedDate` 都并进列名
+（与 §8.1 从 hibernate-core 源码得出的「多级取整条链」一致，是本文原稿手误）。
+
+### 7.3 W2 已实施（同日）：表名→实体反查的库兜底
+
+**缺口**：`EntityClassFinder` 的两条查找路（候选名快路径 + `@TableName` 全类扫描慢路径）此前一律用
+`GlobalSearchScope.projectScope`，于是**依赖 JAR 里的实体一个都反查不到**（用户场景＝实体类都在 JAR 里）。
+影响面＝所有「按表名找实体」的链路（已知消费方 `reverse/SqlToJavaConverter.kt`，SQL→Java 反向转换）。
+
+**改法（性能优先，明确不做越线的事）**：
+
+- 快路径补**库兜底**：项目 scope 0 命中后，再按**候选类名**在库 scope 找一遍，命中后同样按表名精确
+  校验；源码命中时行为逐字不变（库兜底只在 0 命中时执行）。代价上界＝4 个候选名 × 一次索引查询，
+  且 `EntityResolver.resolve` 自身有「文件 + 类名 + 配置签名」三维缓存，重复解析零成本。
+- **不做**「全库逐类扫描」的慢路径库兜底：那要遍历全库类名并逐类读注解/解析（O(库类数) 的 PSI 访问），
+  会把「表名无对应实体」这条此前反馈过卡顿的路径成本推高——**性能红线**。本轮先写过「表名 token 预筛
+  短名 + 扫全库」的版本，复核后撤掉（弱 token 如 `sys`/`rel` 会匹配大量库类名，成本仍不可控）。
+- scope 选型用 `allScope` 而非 `notScope(projectScope)`：后者会把 `isSearchInModuleContent` 一并取反，
+  挂在模块上的库根可能被排除（实测库类查不到）；`allScope` 语义明确，重复查项目类的代价可忽略。
+
+**测试**（`EntityClassFinderIntegrationTest`，`HeavyPlatformTestCase`）：
+
+- **库兜底正向**：给测试模块挂上**本机 JDK 当 SDK**，再在环境里探测一个真实库类、按插件自己的口径
+  反推表名，断言 `find(表名)` 能把它找回来；并断言**库命中不触发慢路径全量扫描**（性能口径钉成断言）。
+- **快路径命中不触发慢扫描**（同口径，任何环境都成立）。
+- 既有 9 条（`@TableName` 命中、去首段推断、缓存命中零扫描、缓存清除重扫、多候选顺序、VO/DTO 排除等）不回归。
+
+**读数**：6 个类 **63 例 0 失败 0 错误**（`EntityClassFinderHeavyTest` 17、`SqlToJavaConverterTest` 22、
+`PluginCacheManagerCoverageTest` 5、`SettingsRealityGuardTest` 4、`HibernateNamingConfigProbeProjectTest` 5、
+`EntityClassFinderIntegrationTest` 10）。
+
+**反向验证**：摘掉库兜底那一档（`find` 里删掉 `findByCandidateNames(..., libraryScope())` 调用）→
+`testLibraryEntityFoundByCandidateNameFallback` **恰 1 例红**（`表名 object → []`），其余 9 条保持绿，
+`GRADLE_EXIT=1`；还原后复跑 63/0/0。
+
+**踩坑（记录备查）**：`IdeaTestUtil` 与 `com.intellij.JavaTestUtil` 都**不在插件测试 classpath** 上；
+`HeavyPlatformTestCase` 默认**不挂任何 SDK**；`ModuleRootManager.setSdk` 会校验注册表，须先
+`ProjectJdkTable.addJdk`（并在 tearDown 里 `removeJdk` 防污染）；`LibraryTablesRegistrar.createLibrary`
+必须在写动作内；测试 JVM **无 javac**（临时 jar 造不出来）；「库源码根」形态的类不进索引。
+

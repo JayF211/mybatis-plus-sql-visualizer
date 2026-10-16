@@ -1,13 +1,21 @@
 package cn.song.mybatisplus.visualizer.psi
 
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.command.WriteCommandAction
+import com.intellij.openapi.projectRoots.JavaSdk
+import com.intellij.openapi.projectRoots.ProjectJdkTable
+import com.intellij.openapi.projectRoots.Sdk
+import com.intellij.openapi.roots.ModuleRootManager
 import com.intellij.openapi.util.Computable
 import com.intellij.openapi.vfs.VfsUtil
 import com.intellij.psi.PsiClass
 import com.intellij.psi.PsiDocumentManager
+import com.intellij.psi.JavaPsiFacade
 import com.intellij.psi.PsiManager
+import com.intellij.psi.search.GlobalSearchScope
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.testFramework.HeavyPlatformTestCase
+import com.intellij.testFramework.IndexingTestUtil
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
@@ -302,5 +310,81 @@ class EntityClassFinderIntegrationTest : HeavyPlatformTestCase() {
         assertEquals("VO 排除后应只返回实体类", 1, found.size)
         assertEquals("UserEntity", found[0].name)
         assertEquals("com.example.UserEntity", found[0].qualifiedName)
+    }
+
+    // ------------------------------------------------------------------
+    // T-JarEmbedded W2：依赖库（JAR / SDK）里的实体反查
+    // ------------------------------------------------------------------
+
+    /**
+     * 给测试模块挂上**本机 JDK 作为 SDK**。
+     *
+     * `HeavyPlatformTestCase` 默认**不挂任何 SDK**（实测：`allScope` 里连 `java.lang.Object` 都解析不到），
+     * 而库兜底要验的正是「类在依赖库/SDK 里、项目内容根没有」——所以这里以本机 JDK 建一个 SDK
+     * （先注册进 [ProjectJdkTable] 才能 setSdk，实测 `setSdk` 会校验注册表）挂到模块上，
+     * 让 `allScope` 真有库类可查；[tearDown] 里摘掉，避免污染其他用例。
+     */
+    private fun attachJdkAsSdk() {
+        val home = System.getProperty("java.home") ?: return
+        val sdk = JavaSdk.getInstance().createJdk("mpv-test-jdk", home, false)
+        ApplicationManager.getApplication().runWriteAction { ProjectJdkTable.getInstance().addJdk(sdk) }
+        attachedJdk = sdk
+        val model = ModuleRootManager.getInstance(myModule).modifiableModel
+        model.sdk = sdk
+        ApplicationManager.getApplication().runWriteAction { model.commit() }
+        IndexingTestUtil.waitUntilIndexesAreReady(project)
+    }
+
+    override fun tearDown() {
+        try {
+            attachedJdk?.let { sdk ->
+                ApplicationManager.getApplication().runWriteAction { ProjectJdkTable.getInstance().removeJdk(sdk) }
+            }
+        } finally {
+            attachedJdk = null
+            super.tearDown()
+        }
+    }
+
+    /** 本用例挂上的 SDK（tearDown 摘除）。 */
+    private var attachedJdk: Sdk? = null
+
+    /**
+     * 库兜底正向：**项目内容根里没有**该表对应的实体，但依赖库（测试工程的 SDK / mock JDK）里有。
+     *
+     * 不猜具体类名：先在环境里探测**哪个库类真的可见**（`JavaPsiFacade.findClass` 走 allScope），
+     * 再用它按插件自己的口径反推表名，最后断言 `find(表名)` 能把它找回来——与「实体来自依赖 JAR」
+     * 在 `find` 眼里同形（库兜底只看「候选类名 → 表名精确匹配」，与类从哪个 jar 来无关）。
+     * 环境若连一个库类都没挂，按「环境受限未验证」显式跳过，不编读数。
+     *
+     * 为什么不造临时 jar：测试 JVM **无 javac**（`ToolProvider.getSystemJavaCompiler()` 为 null，实测）；
+     * 「库源码根」也不行（实测该类根本不进索引：`JavaPsiFacade.findClass` 与短名索引都查不到）。
+     */
+    fun testLibraryEntityFoundByCandidateNameFallback() {
+        attachJdkAsSdk()
+        val all = GlobalSearchScope.allScope(project)
+        val facade = JavaPsiFacade.getInstance(project)
+        val libClass = listOf("java.lang.Object", "java.util.List", "java.util.Map", "java.lang.StringBuilder")
+            .firstNotNullOfOrNull { facade.findClass(it, all) }
+        assertNotNull("挂了 mock JDK 后 allScope 应能找到 java.lang.Object", libClass)
+
+        val table = EntityResolver.inferDecoratedTableName(libClass!!.name!!, project)
+        val found = EntityClassFinder(project).find(table)
+
+        assertTrue(
+            "依赖库里的类应被库兜底找到（表名 $table）：${found.map { it.qualifiedName }}",
+            found.any { it.qualifiedName == libClass.qualifiedName },
+        )
+        assertEquals("库命中后不应触发慢路径全量扫描", 0, EntityClassFinder.scanCountForTest(project))
+    }
+
+    /** 快路径命中即返回：**不得**进入慢路径全项目逐类扫描（性能口径钉成断言）。 */
+    fun testFastPathHitSkipsSlowScan() {
+        addClassFile("Random.java", "package com.example; public class Random { private Long id; }")
+
+        val found = EntityClassFinder(project).find("random")
+        assertEquals("快路径应命中项目里的实体", 1, found.size)
+        assertEquals("com.example.Random", found[0].qualifiedName)
+        assertEquals("快路径命中不应触发慢路径全量扫描", 0, EntityClassFinder.scanCountForTest(project))
     }
 }

@@ -21,6 +21,17 @@ import com.intellij.psi.search.PsiShortNamesCache
  *    扫描结果（类名/全限定名）缓存于 Project userData，以 `PsiModificationTracker.modificationCount`
  *    失效（PSI 任何修改自动重扫一次；无实体匹配场景不再每次转换全量扫描——性能修复）。
  *
+ * T-JarEmbedded W2（20261016）：**实体类可能来自依赖 JAR**（共享模型模块，工程无源码）——快路径
+ * 此前用 `projectScope`，这类工程的实体一个都反查不到（用户报障场景）。现补**库兜底**：项目 scope
+ * 0 命中后，再按候选类名在 `notScope(projectScope)`（依赖库）找一遍，命中后同样按表名精确校验；
+ * 源码命中时行为逐字不变（库兜底只在 0 命中时执行）。
+ *
+ * **性能口径（勿越线）**：库兜底**只做候选名快路径**——至多 4 个候选名 × 一次索引查询，且
+ * [EntityResolver.resolve] 自身有「文件 + 类名 + 配置签名」三维缓存，重复解析零成本。
+ * **不做**「全库逐类扫描」的慢路径库兜底：那要遍历全库类名并逐类读注解/解析（O(库类数) 的 PSI 访问），
+ * 会把「表名无对应实体」这条本已反馈过卡顿的路径成本推高——性能红线，明确不做。
+ * 已知边界：库里的实体若类名与表名约定不符、仅靠显式 `@TableName` 反查 → 仍找不到（与改前一致，无回归）。
+ *
  * 多模块同名实体可能返回多个候选（调用方走候选选择交互）；无候选返回空列表（调用方回落
  * 字符串列名 QueryWrapper 形态）。
  */
@@ -35,10 +46,27 @@ class EntityClassFinder(private val project: Project) {
     fun find(tableName: String): List<PsiClass> {
         if (tableName.isBlank()) return emptyList()
         val resolver = EntityResolver()
+        // 源码优先：既有行为逐字不变（项目 scope 命中即返回）
+        findByCandidateNames(tableName, resolver, GlobalSearchScope.projectScope(project))
+            .takeIf { it.isNotEmpty() }
+            ?.let { return it }
+        // T-JarEmbedded W2：实体类可能来自**依赖 JAR**（无源码）——项目 scope 看不见，补库兜底。
+        // 只在源码 0 命中时才跑，故不会改变既有工程的解析结果。
+        findByCandidateNames(tableName, resolver, libraryScope())
+            .takeIf { it.isNotEmpty() }
+            ?.let { return it }
+        return findByTableNameAnnotationCached(tableName)
+    }
+
+    /** 按候选类名在给定 scope 内找表名精确匹配的实体（快路径）。 */
+    private fun findByCandidateNames(
+        tableName: String,
+        resolver: EntityResolver,
+        scope: GlobalSearchScope,
+    ): List<PsiClass> {
         val result = mutableListOf<PsiClass>()
         for (candidateName in candidateClassNames(tableName)) {
-            val classes = PsiShortNamesCache.getInstance(project)
-                .getClassesByName(candidateName, GlobalSearchScope.projectScope(project))
+            val classes = PsiShortNamesCache.getInstance(project).getClassesByName(candidateName, scope)
             for (clazz in classes) {
                 // T-M36.3：VO/DTO 类排除——候选类名以 VO/DTO 结尾的（如 UserVO）不参与转换
                 // （表名校验已覆盖绝大多数；此为命名惯例的显式防御）
@@ -52,9 +80,18 @@ class EntityClassFinder(private val project: Project) {
                 }
             }
         }
-        if (result.isNotEmpty()) return result
-        return findByTableNameAnnotationCached(tableName)
+        return result
     }
+
+    /**
+     * 库兜底 scope（T-JarEmbedded W2）：`allScope`（项目内容 + 依赖库 + SDK）。
+     *
+     * 为什么不用 `notScope(projectScope)`：那个 scope 会把 `isSearchInModuleContent` 一并取反，
+     * 挂在模块上的**库根**可能被一起排除（实测：库源码根里的实体查不到）。`allScope` 语义明确、
+     * 覆盖依赖库；代价只是项目类被再查一遍的几次索引查询——而项目类在上一步已经查过且 0 命中，
+     * 解析结果又有 [EntityResolver] 的三维缓存，重复代价可忽略。
+     */
+    private fun libraryScope(): GlobalSearchScope = GlobalSearchScope.allScope(project)
 
     /**
      * @TableName 反查（缓存化兜底）：实体命名与表名驼峰不一致时（如 `AccountRoleRelEntity`
