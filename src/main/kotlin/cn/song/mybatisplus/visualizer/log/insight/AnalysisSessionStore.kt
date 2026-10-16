@@ -131,15 +131,18 @@ class AnalysisSessionStore(
         return true
     }
 
-    @Synchronized
     fun snapshot(): AnalysisSessionSnapshot {
-        val retained = events.toList()
+        val captured = synchronized(this) {
+            AnalysisSessionSnapshot(generation, enabled, events.toList(), emptyList(), issues.toSet(), bytes)
+        }
+        val retained = captured.observations
+        val snapshotIssues = captured.qualityIssues.toMutableSet()
         val groups = retained.groupBy { Triple(it.fingerprint, it.databaseIdentity, it.callSite) }.map { (key, entries) ->
             val durations = entries.map { it.durationNanos }.sorted()
             var total = 0L
             for (duration in durations) {
                 if (Long.MAX_VALUE - total < duration) {
-                    issues += "duration_overflow"
+                    snapshotIssues += "duration_overflow"
                     total = Long.MAX_VALUE
                     break
                 }
@@ -150,7 +153,7 @@ class AnalysisSessionStore(
                 entries.count { it.status == ExecutionObservationStatus.ERROR },
                 entries.count { it.status == ExecutionObservationStatus.UNKNOWN })
         }.sortedByDescending { it.cumulativeDurationNanos }
-        return AnalysisSessionSnapshot(generation, enabled, retained, groups, issues.toSet(), bytes)
+        return captured.copy(groups = groups, qualityIssues = snapshotIssues.toSet())
     }
 
     private fun reset() {

@@ -109,13 +109,11 @@ class AnalysisSessionChannel(private val store: AnalysisSessionStore = AnalysisS
             envelope.runId == current.boundary.runId && envelope.captureEpoch == current.boundary.captureEpoch
     }
 
-    @Synchronized
     fun requests(): List<ObservedRequest> = traces.snapshot(store.snapshot())
 
     @Synchronized
     fun transactions(): List<TransactionEvent> = traces.transactionEvents()
 
-    @Synchronized
     fun snapshot(): AnalysisSessionSnapshot = store.snapshot()
 
     @Synchronized
