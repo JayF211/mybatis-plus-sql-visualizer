@@ -96,6 +96,29 @@ class EntityAliasSweepTest : BasePlatformTestCase() {
         assertTrue(scan.candidates.isEmpty())
     }
 
+    /**
+     * 触顶结果**落缓存**：同一名字在同一版本内不重复付整段预算的扫描代价。
+     *
+     * 背景（20261016 实测）：真实工程的短名空间（含 JDK）恒大于 [EntityAliasSweep.SCAN_LIMIT]，
+     * 触顶是常态而非例外；触顶后不缓存 ⇒ 同一个名字**每次预览都重扫一整段预算**（单次约 1s，
+     * 且该扫描跑在预览的阻塞读动作里＝持读锁 1s）。摘掉「触顶也写缓存」这一档 → 第二次调用会再扫
+     * 一次，本用例的 `scanCountForTest()==1` 必红。
+     */
+    fun testTruncatedScanIsCachedAndNotRepeated() {
+        myFixture.addFileToProject("Foo.java", "@jakarta.persistence.Entity(name=\"Shared\") class Foo {}")
+        val context = myFixture.configureByText("Host.java", "class Host {}")
+        EntityAliasSweep.resetScanCountForTest()
+        EntityAliasSweep.scanLimitForTest = 0
+        try {
+            assertNull("触顶应按未解析返回", EntityAliasSweep.resolve(project, "Shared", context).psiClass)
+            assertEquals("应恰好扫描一次", 1, EntityAliasSweep.scanCountForTest())
+            assertNull("第二次仍按未解析返回", EntityAliasSweep.resolve(project, "Shared", context).psiClass)
+            assertEquals("触顶结果已落缓存，第二次不得重扫", 1, EntityAliasSweep.scanCountForTest())
+        } finally {
+            EntityAliasSweep.scanLimitForTest = null
+        }
+    }
+
     fun testCandidateScanUsesCaseSensitiveJpaEntityNames() {
         val first = (myFixture.addFileToProject("First.java", "@jakarta.persistence.Entity(name=\"Shared\") class First {}") as PsiJavaFile).classes.single()
         val scan = EntityAliasSweep.findAliasCandidates("shared", sequenceOf("First")) { arrayOf(first) }

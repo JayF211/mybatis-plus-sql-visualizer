@@ -37,7 +37,7 @@ internal object EntityAliasSweep {
     /**
      * 预览与转换器共用的实体名入口。普通类名已有候选（包括歧义）就不扫描别名；
      * 仅旧慢路径执行有界完整扫描，不能在首个别名命中处停止并伪装成唯一命中。
-     * 索引未就绪、扫描截断均不写负缓存；取消异常自然向上传播。
+     * 索引未就绪不写负缓存；**扫描触顶也落缓存**（见下），取消异常自然向上传播。
      */
     fun resolve(project: Project, name: String, context: PsiElement? = null): EntityClassResolver.Resolution {
         if (name.isBlank() || DumbService.isDumb(project)) return unresolved()
@@ -60,12 +60,19 @@ internal object EntityAliasSweep {
                 cache.entries.remove(key)
             }
             val namesCache = PsiShortNamesCache.getInstance(project)
-            val scan = findAliasCandidates(name, namesCache.allClassNames.asSequence()) {
+            scanCount.incrementAndGet()
+            val scan = findAliasCandidates(name, namesCache.allClassNames.asSequence(), scanLimitForTest ?: SCAN_LIMIT) {
                 namesCache.getClassesByName(it, scope)
             }
-            if (!scan.complete) return unresolved()
+            // 触顶（未扫完）**同样落缓存**（空候选）：
+            // 20261016 实测——真实工程的短名空间（含 JDK）恒大于 [SCAN_LIMIT]，故触顶是常态而非例外；
+            // 触顶后按未解析返回且不缓存，等于**同一个名字每次预览都重扫整整一段预算**（单次约 1s，而该扫描
+            // 跑在预览的阻塞读动作里，即持读锁 1s）。缓存空候选**不改变结果**（触顶本来就恒为「未解析」），
+            // 只去掉重复代价；缓存随 PSI/根版本失效，工程变小后仍会重扫。直接命中在缓存查询之前就已返回，
+            // 故空缓存不会遮蔽真实实体（见本函数开头两条 return）。
             if (cache.entries.size >= CACHE_LIMIT) cache.entries.clear()
             cache.entries[key] = scan.candidates.map { SmartPointerManager.getInstance(project).createSmartPsiElementPointer(it) }
+            if (!scan.complete) return unresolved()
             EntityClassResolver.resolveWithAliasCandidates(project, name, context, scan.candidates)
         } catch (_: IndexNotReadyException) {
             unresolved()
@@ -109,6 +116,18 @@ internal object EntityAliasSweep {
      * 病态/超大工程下把「冷索引逐名随机读」的最坏代价钉住（配合取消检查，平台需要写锁时可中断）。
      */
     internal const val SCAN_LIMIT: Int = 5000
+
+    /** 已执行的扫描次数（测试访问器：验「触顶结果落缓存、不重复扫」）。 */
+    private val scanCount = java.util.concurrent.atomic.AtomicInteger(0)
+
+    /** 测试缝：扫描上限替身（null = [SCAN_LIMIT]）——置 0 可确定性地制造「触顶」。 */
+    internal var scanLimitForTest: Int? = null
+
+    internal fun scanCountForTest(): Int = scanCount.get()
+
+    internal fun resetScanCountForTest() {
+        scanCount.set(0)
+    }
 
     /** 取消检查间隔（每 N 个短名查一次）：`checkCanceled` 自身有开销，不必逐个查。 */
     private const val CANCEL_CHECK_INTERVAL: Int = 64
