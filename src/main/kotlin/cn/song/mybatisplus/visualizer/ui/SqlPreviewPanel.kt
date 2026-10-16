@@ -245,6 +245,11 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
 
     // 右：可编辑 SQL 编辑器（PSI 支撑，补全用）
     internal var editor: Editor? = null
+        set(value) {
+            field = value
+            syncInsightDocument()
+        }
+    internal var insightController: cn.song.mybatisplus.visualizer.ui.insight.PreviewInsightController? = null
 
     /**
      * T-M27.2：自建 autopopup 的调度防重入标志（平台 autopopup 对非文件编辑器不生效）。
@@ -479,6 +484,10 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
     // M36.4：原生编辑器文档引用（参数回填/格式化时使用）
     /** 原生编辑器的文档引用（内嵌后参数变更同步用）。 */
     internal var nativeEditorDoc: com.intellij.openapi.editor.Document? = null
+        set(value) {
+            field = value
+            syncInsightDocument()
+        }
 
     /**
      * T-AutoFold F5：原生控制台编辑器引用（onNativeEditorReady 时登记）——
@@ -491,6 +500,7 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
     internal var current: PreviewResult? = null
         set(value) {
             field = value
+            insightController?.invalidate()
             // clear() 也经此入口：清空所有附加页，不把它伪装成仅关闭 JOIN。
             if (::previewTabs.isInitialized) {
                 if (value == null) previewTabs.clear() else previewTabs.invalidateRefreshes()
@@ -809,6 +819,8 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
      */
     override fun dispose() {
         previewDisposed = true
+        insightController?.dispose()
+        insightController = null
         // 先关闭页签接收边界，再释放原生编辑器；迟到的富化结果不可重建已关闭的页。
         runCatching { previewTabs.close() }
         // O-88 复验修复：dispose 链捕获折叠态——懒惰回写（buildSchemeRow 开头）只在同实例触发参数区

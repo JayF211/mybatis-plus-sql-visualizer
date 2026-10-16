@@ -1544,6 +1544,7 @@ internal fun SqlPreviewPanel.detachConsole() {
     // T-PreviewLineCommentDash O-134：摘除先减计数（install 的对称端点之一）
     nativeConsoleEditor?.let(EditorCommentShortcuts::uninstall)
     nativeConsoleEditor = null
+    nativeEditorDoc = null // 分析监听随控制台摘除解绑，不继续读取共享控制台的旧文档。
     embeddedConsole = null
     rehostListener = null
 }
