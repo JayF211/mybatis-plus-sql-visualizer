@@ -42,7 +42,7 @@ internal class RemoteSqlComparisonBridge(
             validate()
             val result = invoke(statementClass, statement, "executeQuery", sql) ?: throw ComparisonRejected("result_unavailable")
             try {
-                return collect(result, contextKey, maxRows) { cancellation.check(); validate() }
+                return collect(result, contextKey, maxRows) { cancellation.check() }.also { validate() }
             } finally { cleanup { invoke(resultClass, result, "close") } }
         } finally {
             cancellation.attach(null)

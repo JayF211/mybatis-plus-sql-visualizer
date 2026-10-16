@@ -79,6 +79,7 @@ open class DynamicContext(
 
     /** 追加 SQL 段（段间单个空格；空段不产生分隔）。 */
     open fun appendSql(sql: String) {
+        renderTrace?.accountAppend(sql.length)
         if (sql.isEmpty()) return
         if (sqlBuilder.isNotEmpty()) sqlBuilder.append(' ')
         sqlBuilder.append(sql)
@@ -86,6 +87,11 @@ open class DynamicContext(
 
     /** 当前累积 SQL（首尾空白已去除）。 */
     open fun getSql(): String = sqlBuilder.toString().trim()
+
+    internal open fun traceLength(): Int = sqlBuilder.length
+
+    internal open fun traceSlice(from: Int, maximum: Int): String? =
+        if (from in 0..sqlBuilder.length && sqlBuilder.length - from <= maximum) sqlBuilder.substring(from).trim() else null
 
     /** 绑定变量（bind / foreach item·index）。 */
     open fun bind(name: String, value: Any?) {

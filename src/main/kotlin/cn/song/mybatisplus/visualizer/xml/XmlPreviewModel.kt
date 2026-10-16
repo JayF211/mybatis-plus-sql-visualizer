@@ -168,11 +168,10 @@ class XmlPreviewModel private constructor(
         traceEnabled: Boolean,
         isCancelled: () -> Boolean = { false },
         collectionValues: Map<String, List<String?>> = emptyMap(),
+        parameterValues: Map<String, String> = emptyMap(),
     ): RenderedXmlSql = XmlSqlRenderer().render(
         node = rootNode,
-        bindings = mockBindings(state) + collectionValues.filterKeys { key ->
-            key !in state.forEachNulls && forEachViews.any { it.collectionExpr == key }
-        },
+        bindings = scenarioBindings(state, collectionValues, parameterValues),
         // 全部条件都有明确真值（开关缺席 = false）——开关是分支唯一真值源，表达式仅无开关时兜底求值
         conditionOverrides = conditionViews.associate { it.id to (it.id in state.enabledIds) },
         protectedNames = state.bindOverrides.keys.toSet(),
@@ -194,6 +193,26 @@ class XmlPreviewModel private constructor(
             false -> ConditionOutcome.FALSE
             null -> ConditionOutcome.UNEVALUATED
         }
+    }
+
+    private fun scenarioBindings(
+        state: XmlPreviewState,
+        collections: Map<String, List<String?>>,
+        parameters: Map<String, String>,
+    ): Map<String, Any?> {
+        val bindings = mockBindings(state).toMutableMap()
+        if (parameters.isNotEmpty()) {
+            val scalar = parameters.filterKeys { !it.startsWith("__") && it != DynamicContext.PARAMETER_OBJECT_KEY && it != DynamicContext.DATABASE_ID_KEY }
+            bindings.putAll(scalar)
+            val properties = ((bindings[DynamicContext.PARAMETER_OBJECT_KEY] as? MockObject)?.properties ?: emptyMap()).toMutableMap()
+            properties.putAll(scalar.filterKeys { '.' !in it })
+            for ((key, value) in scalar) {
+                if (key.startsWith("_parameter.")) properties[key.removePrefix("_parameter.")] = value
+            }
+            bindings[DynamicContext.PARAMETER_OBJECT_KEY] = MockObject(properties)
+        }
+        bindings.putAll(collections.filterKeys { key -> key !in state.forEachNulls && forEachViews.any { it.collectionExpr == key } })
+        return bindings
     }
 
     private fun mockBindings(state: XmlPreviewState): Map<String, Any?> {

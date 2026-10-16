@@ -122,6 +122,8 @@ class ForeachSqlNode(
             set(value) { delegate.renderTrace = value }
 
         override fun getSql(): String = delegate.getSql()
+        internal override fun traceLength(): Int = delegate.traceLength()
+        internal override fun traceSlice(from: Int, maximum: Int): String? = delegate.traceSlice(from, maximum)
 
         override fun bind(name: String, value: Any?) = delegate.bind(name, value)
 
@@ -180,6 +182,8 @@ class ForeachSqlNode(
             set(value) { delegate.renderTrace = value }
 
         override fun getSql(): String = delegate.getSql()
+        internal override fun traceLength(): Int = delegate.traceLength()
+        internal override fun traceSlice(from: Int, maximum: Int): String? = delegate.traceSlice(from, maximum)
 
         override fun bind(name: String, value: Any?) = delegate.bind(name, value)
 
