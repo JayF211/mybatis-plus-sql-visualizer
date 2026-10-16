@@ -80,6 +80,13 @@ class XmlRenderTraceTest {
         assertTrue(result.renderTrace.events.all { it.appendedTemplate == null })
     }
 
+    @Test(expected = XmlTraceBudgetExceeded::class)
+    fun `deep tree is rejected before recursive rendering`() {
+        var nested: SqlNode = StaticTextSqlNode("SELECT 1")
+        repeat(200) { nested = MixedSqlNode(listOf(nested)) }
+        XmlSqlRenderer().render(nested, emptyMap(), traceEnabled = true)
+    }
+
     @Test
     fun `nested trim produces actual final wrapper fragment`() {
         val result = XmlSqlRenderer().render(node("SELECT * FROM t <where><if test=\"x != null\">AND x=#{x}</if></where>"),

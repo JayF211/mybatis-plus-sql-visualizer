@@ -33,6 +33,8 @@ object SqlSemanticAnalyzer {
         private class Halt(val code: DiagnosticCode) : RuntimeException()
         private var work = 0
         private var expressionDepth = 0
+        private val metadataIndex = mutableMapOf<List<String>, List<String>>()
+        private val invalidMetadataKeys = mutableSetOf<List<String>>()
         private fun checkpoint() {
             if (isCancelled()) throw Halt(DiagnosticCode.CANCELLED)
             if (++work > 10_000 || nextScope > 128) throw Halt(DiagnosticCode.INPUT_BUDGET_EXCEEDED)
@@ -55,7 +57,8 @@ object SqlSemanticAnalyzer {
         )
         private data class Cte(val scopeId: String?, val outputs: List<SemanticProjection>)
         private data class Frame(val id: String, val parent: String?, val label: String, val bindings: MutableList<Binding> = mutableListOf(),
-            val correlation: Frame? = null, var ctes: Map<String, Cte> = emptyMap(), var reserved: Set<String> = emptySet(), var coalescedJoin: Boolean = false)
+            val correlation: Frame? = null, var ctes: Map<String, Cte> = emptyMap(), var reserved: Set<String> = emptySet(), var coalescedJoin: Boolean = false,
+            val priorAssignments: MutableSet<String> = mutableSetOf())
         private data class Resolved(val sources: Set<SemanticColumn>, val quality: AnalysisQuality = AnalysisQuality.CERTAIN,
             val derived: Boolean = false, val conditions: Set<SemanticColumn> = emptySet())
         private val aggregates = setOf("SUM", "AVG", "MIN", "MAX", "COUNT")
@@ -65,6 +68,7 @@ object SqlSemanticAnalyzer {
         fun run(): SqlSemanticModel = try {
             checkpoint()
             if (snapshot.sql.length > 65_536) throw Halt(DiagnosticCode.INPUT_BUDGET_EXCEEDED)
+            prepareMetadata()
             analyzeInput()
         } catch (halt: Halt) {
             // Never publish half-built scopes/edges after cancellation or a budget failure.
@@ -211,21 +215,55 @@ object SqlSemanticAnalyzer {
             return Binding(relation, qualifiers, outputs).also { f.bindings += it }
         }
 
+        /** One bounded index per analysis, including unused supplied tables. Never rescan the public snapshot per relation. */
+        private fun prepareMetadata() {
+            val metadata = snapshot.metadata ?: return
+            if (metadata.tables.size > 1000) throw Halt(DiagnosticCode.INPUT_BUDGET_EXCEEDED)
+            var characters = metadata.databaseContext.length.toLong() + metadata.version.length
+            var columns = 0
+            fun text(value: String) {
+                checkpoint()
+                characters += value.length
+                if (characters > 1_048_576 || value.length > 4096) throw Halt(DiagnosticCode.INPUT_BUDGET_EXCEEDED)
+            }
+            if (characters > 1_048_576) throw Halt(DiagnosticCode.INPUT_BUDGET_EXCEEDED)
+            val matched = metadata.databaseContext.isNotBlank() && metadata.version.isNotBlank() &&
+                metadata.databaseContext == snapshot.databaseContext && metadata.version == snapshot.metadataVersion
+            if (!matched) diagnostic(DiagnosticCode.METADATA_MISMATCH, "Metadata database/version does not match this snapshot.")
+            for (i in metadata.tables.indices) {
+                checkpoint() // before reading an entry, so callers can cancel lazy public lists promptly
+                val table = metadata.tables[i]
+                if (table.nameParts.size !in 1..4 || table.columns.size > 5000 || columns.toLong() + table.columns.size > 5000)
+                    throw Halt(DiagnosticCode.INPUT_BUDGET_EXCEEDED)
+                columns += table.columns.size
+                val parts = table.nameParts.map { text(it); key(it) }
+                val names = ArrayList<String>(table.columns.size)
+                val seen = mutableSetOf<String>()
+                var valid = true
+                for (j in table.columns.indices) {
+                    checkpoint()
+                    val name = table.columns[j]
+                    text(name)
+                    if (!seen.add(key(name))) valid = false
+                    names += name
+                }
+                if (matched) {
+                    if (!valid || metadataIndex.containsKey(parts) || parts in invalidMetadataKeys) {
+                        invalidMetadataKeys += parts
+                        metadataIndex.remove(parts)
+                        diagnostic(DiagnosticCode.METADATA_MISMATCH, "Metadata table or columns are duplicated.")
+                    } else metadataIndex[parts] = names
+                }
+            }
+        }
+
         private fun metadataOutputs(table: Table, relation: SemanticRelation): List<SemanticProjection>? {
-            val metadata = snapshot.metadata ?: return null
+            if (snapshot.metadata == null) return null
             checkpoint()
-            if (metadata.databaseContext.isBlank() || metadata.version.isBlank() || metadata.databaseContext != snapshot.databaseContext || metadata.version != snapshot.metadataVersion) {
-                diagnostic(DiagnosticCode.METADATA_MISMATCH, "Metadata database/version does not match this snapshot.", relation.scopeId)
-                return null
-            }
             val parts = table.nameParts.asReversed().map(::key)
-            val matches = metadata.tables.filter { it.nameParts.map(::key) == parts }
-            if (matches.isEmpty()) return null
-            if (matches.size != 1 || matches.single().columns.map(::key).distinct().size != matches.single().columns.size) {
-                diagnostic(DiagnosticCode.METADATA_MISMATCH, "Metadata table or columns are duplicated.", relation.scopeId)
-                return emptyList()
-            }
-            return matches.single().columns.mapIndexed { i, name ->
+            if (parts in invalidMetadataKeys) return emptyList()
+            val columns = metadataIndex[parts] ?: return null
+            return columns.mapIndexed { i, name ->
                 checkpoint()
                 SemanticProjection(i, name, name, setOf(SemanticColumn(relation.id, name)), AnalysisQuality.CERTAIN)
             }
@@ -248,7 +286,7 @@ object SqlSemanticAnalyzer {
                     val relation = SemanticRelation("relation-${relations.size}", f.id, RelationKind.DERIVED, "derived", alias,
                         setOf(TableRole.READ), snapshot.databaseContext, child.id)
                     relations += relation
-                    f.bindings += Binding(relation, alias?.let { setOf(key(it)) }.orEmpty(), child.projections)
+                    f.bindings += Binding(relation, alias?.let { setOf(key(it)) }.orEmpty(), renamedDerivedOutputs(item.alias, child.projections, f))
                     if (alias == null) diagnostic(DiagnosticCode.UNKNOWN_RELATION, "Derived table has no binding alias.", f.id)
                 }
                 else -> {
@@ -260,6 +298,25 @@ object SqlSemanticAnalyzer {
                     diagnostic(DiagnosticCode.UNSUPPORTED_CLAUSE, "Unsupported FROM item: ${item.javaClass.simpleName}", f.id)
                 }
             }
+        }
+
+        private fun renamedDerivedOutputs(alias: Alias?, outputs: List<SemanticProjection>, f: Frame): List<SemanticProjection> {
+            val columns = alias?.aliasColumns.orEmpty()
+            if (columns.isEmpty()) return outputs
+            if (columns.size > outputs.size || outputs.any { it.name == null && !known(it.quality) }) {
+                diagnostic(DiagnosticCode.COLUMN_COUNT_MISMATCH, "Derived alias column count cannot be aligned with proven output width.", f.id)
+                return emptyList()
+            }
+            val renamed = outputs.mapIndexed { i, p ->
+                checkpoint()
+                if (i < columns.size) p.copy(name = columns[i].name) else p
+            }
+            if (columns.any { it.colDataType != null || !verifiedIdentifier(it.name) } ||
+                renamed.mapNotNull { it.name?.let(::key) }.let { it.size != it.distinct().size }) {
+                diagnostic(DiagnosticCode.AMBIGUOUS_COLUMN, "Derived alias columns are duplicate or use unsupported typed/quoted aliases.", f.id, AnalysisQuality.AMBIGUOUS)
+                return emptyList()
+            }
+            return renamed
         }
 
         private fun select(node: Select, parent: String?, label: String, inherited: Map<String, Cte>, outerReserved: Set<String>, correlation: Frame? = null): SemanticScope {
@@ -399,12 +456,14 @@ object SqlSemanticAnalyzer {
             val qualifier = column.table?.takeIf { !it.name.isNullOrBlank() }?.let { qualifiedKey(it) }
             if (qualifier == null && f.correlation != null && f.bindings.any { it.outputs == null })
                 return diagnostic(DiagnosticCode.AMBIGUOUS_COLUMN, "Unqualified correlated column needs verified local metadata: $column.", f.id, AnalysisQuality.AMBIGUOUS)
-            val candidates = if (qualifier == null) f.bindings.filter { b -> b.outputs == null || b.outputs.any { it.name?.let(::key) == key(column.columnName) } }
+            val candidates = if (qualifier == null) f.bindings.filter { b -> b.outputs.isNullOrEmpty() || b.outputs.any { it.name == null || key(it.name) == key(column.columnName) } }
                 else f.bindings.filter { qualifier in it.qualifiers }
             if (candidates.isEmpty() && qualifier != null && f.correlation != null) return column(column, f.correlation)
             if (candidates.isEmpty()) return diagnostic(DiagnosticCode.UNKNOWN_RELATION, "No visible relation for $column.", f.id, AnalysisQuality.UNKNOWN)
             if (candidates.size != 1) return diagnostic(DiagnosticCode.AMBIGUOUS_COLUMN, "Column $column has multiple possible input occurrences.", f.id, AnalysisQuality.AMBIGUOUS)
             val binding = candidates.single()
+            if (snapshot.dialect == SqlInsightDialect.MYSQL && key(column.columnName) in f.priorAssignments)
+                return diagnostic(DiagnosticCode.UNSUPPORTED_EXPRESSION, "MySQL sequential assignment references an earlier target column in this scope.", f.id, AnalysisQuality.UNKNOWN)
             if (binding.outputs == null) return Resolved(setOf(SemanticColumn(binding.relation.id, column.columnName)))
             val matching = binding.outputs.filter { it.name != null && key(it.name) == key(column.columnName) }
             if (matching.isEmpty()) return diagnostic(DiagnosticCode.UNKNOWN_COLUMN, "Column $column is not a proven output of its input scope.", f.id, AnalysisQuality.UNKNOWN)
@@ -706,20 +765,18 @@ object SqlSemanticAnalyzer {
                 return finish(f, SqlOperation.UPDATE).id
             }
             val target = bindTable(node.table, f, setOf(TableRole.READ, TableRole.WRITE), emptyMap(), emptySet())
-            val alreadyAssigned = mutableSetOf<String>()
             val updates = mutableMapOf<String, Resolved>()
             node.updateSets.forEach { set ->
                 if (set.columns.size != set.values.size) {
                     diagnostic(DiagnosticCode.COLUMN_COUNT_MISMATCH, "UPDATE tuple assignment is not aligned.", f.id)
                 } else set.columns.forEachIndexed { i, column ->
-                    var value = expression(set.getValue(i), f)
-                    if (snapshot.dialect == SqlInsightDialect.MYSQL && value.sources.any { key(it.name) in alreadyAssigned })
-                        value = diagnostic(DiagnosticCode.UNSUPPORTED_EXPRESSION, "MySQL sequential assignment reads an earlier modified column.", f.id)
+                    val value = expression(set.getValue(i), f)
                     val assigned = assignment(target, column, value, set.getValue(i).toString(), f)
                     updates[key(column.columnName)] = if (assigned) value else Resolved(emptySet(), AnalysisQuality.UNKNOWN)
-                    alreadyAssigned += key(column.columnName)
+                    f.priorAssignments += key(column.columnName)
                 }
             }
+            f.priorAssignments.clear() // WHERE/ORDER refer to row selection, not the sequential SET environment.
             node.where?.let { dependency(it, DependencyKind.FILTER, f) }
             node.orderByElements.orEmpty().forEach { dependency(it.expression, DependencyKind.ORDER, f) }
             if (node.limit != null || node.returningClause != null || node.outputClause != null)

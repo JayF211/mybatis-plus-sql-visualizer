@@ -27,12 +27,21 @@ object SqlScenarioRegressionPackage {
         data class Rejected(val reason: String) : Export
     }
 
-    fun export(results: List<XmlScenarioResult>): Export {
+    fun export(results: List<XmlScenarioResult>, isCancelled: () -> Boolean = { false }): Export {
         if (results.size > 20) return Export.Rejected("scenario_limit")
+        var inputChars = 0L
+        var projectedChars = 0L
         val cases = results.mapIndexed { index, result ->
+            if (isCancelled()) throw java.util.concurrent.CancellationException()
+            inputChars += result.sql?.length ?: 0
+            if (inputChars > 256 * 1024) return Export.Rejected("input_budget")
             val projection = result.sql?.let { ShareContentProjection.sql(it, includeIdentifiers = false) }
             val sql = projection?.sql
+            projectedChars += sql?.length ?: 0
+            if (projectedChars > MAX_BYTES / 4) return Export.Rejected("package_budget")
             val model = result.semantics
+            if (model != null && (model.relations.size > 2000 || model.diagnostics.size > 2000 || model.outputFields.size > 2000))
+                return Export.Rejected("semantic_budget")
             Case("scenario-${index + 1}", sql, sql?.let(::digest), result.parameterCount,
                 result.conditionResults.values.count { it }, result.conditionResults.values.count { !it },
                 model?.takeIf { it.quality == cn.song.mybatisplus.visualizer.sql.insight.AnalysisQuality.CERTAIN }?.outputFields?.size,
@@ -41,6 +50,7 @@ object SqlScenarioRegressionPackage {
                 result.failure != null || projection?.omitted != false || result.trace?.truncated == true ||
                     model?.quality != cn.song.mybatisplus.visualizer.sql.insight.AnalysisQuality.CERTAIN)
         }
+        if (isCancelled()) throw java.util.concurrent.CancellationException()
         val json = Gson().toJson(Package(SCHEMA, cases, listOf(
             "Diagnostic projection only; never execute this package as SQL.",
             "Condition coverage follows preview overrides, not runtime paths.",

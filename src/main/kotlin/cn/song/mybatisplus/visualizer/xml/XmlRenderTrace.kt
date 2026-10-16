@@ -26,6 +26,8 @@ internal class XmlRenderTraceRecorder(root: SqlNode, private val cancelled: () -
     private var truncated = false
     private var characters = 0
     private var applications = 0
+    private var activeDepth = 0
+    private var indexedNodes = 0
     private var appendedCharacters = 0L
 
     fun accountAppend(length: Int) {
@@ -37,7 +39,9 @@ internal class XmlRenderTraceRecorder(root: SqlNode, private val cancelled: () -
     init { index(root, "statement", 0) }
 
     private fun index(node: SqlNode, path: String, depth: Int) {
-        if (paths.size >= MAX_EVENTS || depth > 128) { truncated = true; return }
+        if (cancelled()) throw java.util.concurrent.CancellationException()
+        if (depth > 128 || ++indexedNodes > MAX_APPLICATIONS) throw XmlTraceBudgetExceeded()
+        if (paths.size >= MAX_EVENTS) { truncated = true; return }
         paths[node] = path
         val children = when (node) {
             is MixedSqlNode -> node.children
@@ -56,7 +60,8 @@ internal class XmlRenderTraceRecorder(root: SqlNode, private val cancelled: () -
         val before = context.traceLength()
         val invocation = (invocations[node] ?: 0) + 1
         invocations[node] = invocation
-        val result = node.apply(context)
+        if (++activeDepth > 128) { activeDepth--; throw XmlTraceBudgetExceeded() }
+        val result = try { node.apply(context) } finally { activeDepth-- }
         if (events.size >= MAX_EVENTS) { truncated = true; return result }
         val after = context.traceLength()
         val fragment = context.traceSlice(before, MAX_FRAGMENT)?.takeIf { it.isNotEmpty() }

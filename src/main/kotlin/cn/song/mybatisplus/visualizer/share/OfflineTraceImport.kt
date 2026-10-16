@@ -105,10 +105,15 @@ object OfflineTraceImport {
 
     fun traceLink(template: String, traceId: String): URI? {
         if (!validTraceId(traceId) || template.length > 2048 || template.split("{traceId}").size != 2) return null
-        val uri = try { URI(template.replace("{traceId}", traceId.lowercase())) } catch (_: Exception) { return null }
+        val uri: URI
+        val pattern: URI
+        try {
+            uri = URI(template.replace("{traceId}", traceId.lowercase(java.util.Locale.ROOT)))
+            pattern = URI(template.replace("{traceId}", "trace"))
+        } catch (_: Exception) { return null }
         return uri.takeIf {
             it.scheme == "https" && !it.host.isNullOrBlank() && it.rawUserInfo == null &&
-                it.port in listOf(-1, 443) && it.host == URI(template.replace("{traceId}", "trace")).host
+                it.port in listOf(-1, 443) && it.host == pattern.host
         }
     }
 
