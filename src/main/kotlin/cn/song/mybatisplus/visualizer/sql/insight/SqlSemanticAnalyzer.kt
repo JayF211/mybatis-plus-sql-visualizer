@@ -64,6 +64,11 @@ object SqlSemanticAnalyzer {
                 diagnostic(DiagnosticCode.UNSUPPORTED_DIALECT, "Only verified MySQL/PostgreSQL identifier rules are supported.")
                 return model(null)
             }
+            if (hasQuotedDottedIdentifier(snapshot.sql)) {
+                diagnostic(DiagnosticCode.UNSUPPORTED_DIALECT,
+                    "JSqlParser 5.3 may split a quoted dotted identifier into multipart names; lineage is withheld.")
+                return model(null)
+            }
             val statement: Statement = try {
                 SqlAstParser.parseSingle(snapshot.sql)
             } catch (_: Exception) {
@@ -84,6 +89,33 @@ object SqlSemanticAnalyzer {
             diagnostics += SemanticDiagnostic(DiagnosticCode.SOURCE_RANGE_UNKNOWN, AnalysisQuality.UNKNOWN,
                 "AST source ranges have not been proven against the original text; only whole-input navigation is available.")
             return model(root)
+        }
+
+        /** Lexical veto only, not a second SQL parser. Never alter the parser's process-global properties. */
+        private fun hasQuotedDottedIdentifier(sql: String): Boolean {
+            var i = 0
+            while (i < sql.length) {
+                if (sql.startsWith("--", i)) {
+                    i = sql.indexOf('\n', i + 2).takeIf { it >= 0 } ?: sql.length
+                } else if (sql.startsWith("/*", i)) {
+                    i = sql.indexOf("*/", i + 2).takeIf { it >= 0 }?.plus(2) ?: sql.length
+                } else if (sql[i] in charArrayOf('\'', '"', '`', '[')) {
+                    val opening = sql[i++]
+                    val closing = if (opening == '[') ']' else opening
+                    var dotted = false
+                    while (i < sql.length) {
+                        val c = sql[i++]
+                        if (c == closing) {
+                            if (i < sql.length && sql[i] == closing) { i++; continue }
+                            break
+                        }
+                        if (c == '\\' && snapshot.dialect == SqlInsightDialect.MYSQL && i < sql.length) i++
+                        if (c == '.') dotted = true
+                    }
+                    if (opening != '\'' && dotted) return true
+                } else i++
+            }
+            return false
         }
 
         private fun model(root: String?) = SqlSemanticModel(snapshot, scopes.toList(), relations.toList(), dependencies.toList(),

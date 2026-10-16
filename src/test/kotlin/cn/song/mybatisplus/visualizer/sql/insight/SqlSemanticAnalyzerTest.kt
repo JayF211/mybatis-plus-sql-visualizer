@@ -171,8 +171,11 @@ class SqlSemanticAnalyzerTest {
 
     @Test fun `quoted dotted identifier is not confused with multipart qualifier`() {
         val m = analyze("SELECT \"a.b\".id, a.b.id FROM tab \"a.b\" JOIN a.b ON \"a.b\".id=a.b.id")
-        assertEquals(setOf("tab:\"a.b\".id"), origins(m, 0))
-        assertEquals(setOf("a.b:null.id"), origins(m, 1))
+        assertTrue(m.outputFields.isEmpty())
+        assertTrue(m.dependencies.isEmpty())
+        assertTrue(m.diagnostics.any { it.code == DiagnosticCode.UNSUPPORTED_DIALECT })
+        val harmless = analyze("/* \"a.b\" */ SELECT t.id, 'a.b' AS text FROM t")
+        assertEquals(setOf("t:null.id"), origins(harmless))
     }
 
     @Test fun `mysql earlier assigned values and unsupported quote forms do not get false origins`() {
