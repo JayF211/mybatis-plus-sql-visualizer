@@ -121,7 +121,7 @@ class SqlSemanticAnalyzerTest {
     }
 
     @Test fun `unsupported multi table dml and set operations are explicit`() {
-        for (sql in listOf("UPDATE users SET name=t.name FROM teams t WHERE users.id=t.id", "DELETE FROM users USING teams WHERE users.id=teams.id", "SELECT t.id FROM t UNION SELECT u.id FROM u")) {
+        for (sql in listOf("UPDATE users SET name=t.name FROM teams t WHERE users.id=t.id", "DELETE FROM users USING teams WHERE users.id=teams.id", "SELECT t.id FROM t INTERSECT SELECT u.id FROM u")) {
             val m = analyze(sql)
             assertTrue(sql, m.diagnostics.any { it.code == DiagnosticCode.UNSUPPORTED_STATEMENT })
             assertTrue(m.dependencies.none { it.kind == DependencyKind.ASSIGNMENT })
@@ -141,7 +141,7 @@ class SqlSemanticAnalyzerTest {
         assertTrue(analyze("SELEC FROM").diagnostics.any { it.code == DiagnosticCode.PARSE_ERROR })
         val m = analyze("SELECT (SELECT x.id FROM x) AS nested FROM t")
         assertTrue(m.outputFields.single().sources.isEmpty())
-        assertTrue(m.diagnostics.any { it.code == DiagnosticCode.UNSUPPORTED_EXPRESSION })
+        assertTrue(m.diagnostics.any { it.code == DiagnosticCode.SCALAR_CARDINALITY_UNKNOWN })
     }
 
     @Test fun `ranges are explicitly unknown for comments repeated unicode and edited sql`() {
@@ -196,7 +196,7 @@ class SqlSemanticAnalyzerTest {
     }
 
     @Test fun `unsupported expression cannot leak partially resolved value columns`() {
-        val m = analyze("SELECT t.id + abs(t.other) AS x FROM t")
+        val m = analyze("SELECT t.id + custom_unknown(t.other) AS x FROM t")
         assertTrue(m.outputFields.single().sources.isEmpty())
         assertTrue(m.dependencies.none { it.kind == DependencyKind.DERIVED_VALUE })
         assertTrue(m.diagnostics.any { it.code == DiagnosticCode.UNSUPPORTED_EXPRESSION })

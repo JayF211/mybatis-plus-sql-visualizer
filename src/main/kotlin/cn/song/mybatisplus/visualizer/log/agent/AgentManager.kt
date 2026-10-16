@@ -198,6 +198,7 @@ class AgentManager(private val project: Project) : Disposable {
     fun setUserPaused(paused: Boolean) {
         if (userPaused == paused) return
         userPaused = paused
+        if (paused) setSqlAnalysisEnabled(false)
         LOG.info("增强捕获用户暂停切换：$paused（暂停只停 agent 通道，控制台通道照常；连接与 CONFIG 链不动）")
         updateOnline()
         publishStatusChanged()
@@ -211,6 +212,26 @@ class AgentManager(private val project: Project) : Disposable {
 
     /** 会话表。internal 为同模块守护测试缝（T-PS4-03 sweepOffline 清表断言）；生产链路勿直接读写。 */
     internal val sessions = CopyOnWriteArrayList<AgentSession>()
+
+    /** Explicit, transient opt-in; analysis never turns capture on or changes parameter privacy. */
+    fun setSqlAnalysisEnabled(enabled: Boolean) {
+        val allowed = enabled && isEnhancedActive() && isListenActive() && !userPaused
+        val selected = sessions.filter { it.alive }
+        selected.forEach { if (allowed) it.analysisChannel.enable() else it.analysisChannel.disable() }
+        executor.execute {
+            selected.forEach { if (it.alive) it.sendConfig(disabled = !isListenActive()) }
+        }
+    }
+
+    fun clearSqlAnalysis() {
+        val selected = sessions.filter { it.alive }
+        selected.forEach { it.analysisChannel.clear() }
+        executor.execute { selected.forEach { if (it.alive) it.sendConfig(disabled = !isListenActive()) } }
+    }
+
+    fun sqlAnalysisSnapshots(): List<cn.song.mybatisplus.visualizer.log.insight.AnalysisSessionSnapshot> =
+        sessions.map { it.analysisChannel.snapshot() }
+
 
     /**
      * T-PremainReattach：premain 会话提交段与关开关清表段的互斥锁。覆盖两段临界区——
@@ -1820,6 +1841,7 @@ class AgentManager(private val project: Project) : Disposable {
      * （收到即 INFO 记一行含 pid 与三值，窗口内未收到即 WARN「CONFIG 未获确认」）。
      */
     fun pushCaptureActive(active: Boolean) {
+        if (!active) sessions.forEach { it.analysisChannel.disable() }
         if (!isEnhancedActive()) return
         val desensitize = PluginSettings.getInstance().state.enhancedCaptureDesensitize
         // 追加 P-5：每次下发（本方法 + pushDesensitize）在 AgentSession.sendConfig 内已把该会话确认态

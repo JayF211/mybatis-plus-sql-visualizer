@@ -29,6 +29,8 @@ data class AgentCaptureState(
     val coverage: String?,
     val capabilities: Set<String>,
     val limitations: Set<String>,
+    /** Echo of the last valid CONFIG nonce; absent on legacy peers. Not a run/epoch identity. */
+    val captureStateToken: String? = null,
 ) {
     companion object {
         const val COMMAND = 6
@@ -49,6 +51,7 @@ data class AgentCaptureState(
                 transportUncertain = o.number("transportUncertain"), written = o.number("written"),
                 sampled = o.number("sampled"), coverage = o.text("coverage"),
                 capabilities = o.strings("capabilities"), limitations = o.strings("limitations"),
+                captureStateToken = o.text("captureStateToken")?.takeIf { it.matches(Regex("[0-9a-fA-F]{1,64}")) },
             )
         }.getOrNull()
 

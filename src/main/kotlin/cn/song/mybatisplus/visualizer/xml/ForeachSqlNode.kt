@@ -42,7 +42,7 @@ class ForeachSqlNode(
                 applyIndex(scoped, i, uniqueNumber)
                 applyItem(scoped, o, uniqueNumber)
             }
-            contents.apply(FilteredContext(scoped, index, item, uniqueNumber))
+            FilteredContext(scoped, index, item, uniqueNumber).applyNode(contents)
             if (first) first = !scoped.isPrefixApplied()
             i++
         }
@@ -117,6 +117,12 @@ class ForeachSqlNode(
 
         fun isPrefixApplied(): Boolean = prefixApplied
 
+        internal override var renderTrace: XmlRenderTraceRecorder?
+            get() = delegate.renderTrace
+            set(value) { delegate.renderTrace = value }
+
+        override fun getSql(): String = delegate.getSql()
+
         override fun bind(name: String, value: Any?) = delegate.bind(name, value)
 
         override fun countDollarSubstitution() = delegate.countDollarSubstitution()
@@ -168,6 +174,12 @@ class ForeachSqlNode(
             // 若原样输出会使 IN 每项换行一行；trim 后预览紧凑（SQL 语义不变，MyBatis 原样保留）
             delegate.appendSql(newSql.trim())
         }
+
+        internal override var renderTrace: XmlRenderTraceRecorder?
+            get() = delegate.renderTrace
+            set(value) { delegate.renderTrace = value }
+
+        override fun getSql(): String = delegate.getSql()
 
         override fun bind(name: String, value: Any?) = delegate.bind(name, value)
 

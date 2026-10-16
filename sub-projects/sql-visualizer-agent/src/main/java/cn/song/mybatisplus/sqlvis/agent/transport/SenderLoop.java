@@ -113,6 +113,7 @@ final class SenderLoop implements Runnable {
 
     /** Per-connection opt-in; an old IDE never receives new command numbers. */
     private boolean captureStateEnabled;
+    private String captureStateToken;
     private final int serverPort;
     private final long backoffInitialMs;
     private final long backoffMaxMs;
@@ -237,6 +238,7 @@ final class SenderLoop implements Runnable {
                 final DataOutputStream out = new DataOutputStream(socket.getOutputStream());
                 final DataInputStream in = new DataInputStream(socket.getInputStream());
                 captureStateEnabled = false;
+                captureStateToken = null;
                 writeFrame(out, EventBus.CMD_HELLO, "{\"pid\":" + pid()
                         + ",\"protocolVersion\":2,\"runId\":\"" + CaptureLedger.RUN_ID
                         + "\",\"captureStateCommand\":6}");
@@ -277,7 +279,7 @@ final class SenderLoop implements Runnable {
                     // Quality has its own monotonic cadence, even while SQL keeps the socket busy.
                     if (captureStateEnabled && System.nanoTime() - lastCaptureStateNanos
                             >= java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(heartbeatIntervalMs)) {
-                        writeFrame(out, EventBus.CMD_CAPTURE_STATE, CaptureLedger.snapshot());
+                        writeFrame(out, EventBus.CMD_CAPTURE_STATE, captureStateBody());
                         lastCaptureStateNanos = System.nanoTime();
                     }
                     // 3) 入站帧（非阻塞轮询：超时=无数据）——[len][cmd][body]，畸形帧抛异常走重连
@@ -291,7 +293,7 @@ final class SenderLoop implements Runnable {
                             // T-02：CONFIG 生效回执（IDE 侧据此判「应用侧确已收到并生效」）
                             writeFrame(out, EventBus.CMD_CONFIG_ACK, ack);
                             if (captureStateEnabled) {
-                                writeFrame(out, EventBus.CMD_CAPTURE_STATE, CaptureLedger.snapshot());
+                                writeFrame(out, EventBus.CMD_CAPTURE_STATE, captureStateBody());
                                 lastCaptureStateNanos = System.nanoTime();
                             }
                             lastOutboundMs = System.currentTimeMillis();
@@ -382,6 +384,11 @@ final class SenderLoop implements Runnable {
         if (payload == null) {
             return null;
         }
+        if (payload.contains("\"captureStateToken\"")) {
+            java.util.regex.Matcher token = java.util.regex.Pattern.compile(
+                    "\\\"captureStateToken\\\"\\s*:\\s*\\\"([0-9a-fA-F]{1,64})\\\"").matcher(payload);
+            captureStateToken = token.find() ? token.group(1) : null;
+        }
         // New peers explicitly request independent quality/control snapshots; reconnect resets it.
         if (payload.contains("\"captureState\"")) {
             captureStateEnabled = java.util.regex.Pattern.compile("\\\"captureState\\\"\\s*:\\s*true\\b")
@@ -433,6 +440,12 @@ final class SenderLoop implements Runnable {
         AgentState.markConfigApplied();
         // T-02：CONFIG 应用成功回执（取值取**应用后**的生效态，含本次生效的前缀条数）
         return configAckBody();
+    }
+
+    String captureStateBody() {
+        String body = CaptureLedger.snapshot();
+        return captureStateToken == null ? body : body.substring(0, body.length() - 1)
+                + ",\"captureStateToken\":\"" + captureStateToken + "\"}";
     }
 
     /** 未知入站命令累计数（T-01 排障观测；告警只出一条，计数逐条累加）。 */

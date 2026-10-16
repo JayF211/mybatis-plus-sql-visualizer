@@ -52,6 +52,8 @@ data class RenderedXmlSql(
      * 默认空表：直接构造的既有调用点与消费者无感。
      */
     val conditionResults: Map<String, Boolean> = emptyMap(),
+    val renderTrace: XmlRenderTrace? = null,
+    val mappedScalarValues: Map<String, String?> = emptyMap(),
 )
 
 /**
@@ -72,16 +74,31 @@ class XmlSqlRenderer {
         protectedNames: Set<String> = emptySet(),
         staticFieldValues: Map<String, Any?> = emptyMap(),
         bindNames: Set<String> = emptySet(),
+        traceEnabled: Boolean = false,
+        isCancelled: () -> Boolean = { false },
     ): RenderedXmlSql {
         val context = DynamicContext(bindings, conditionOverrides, protectedNames, staticFieldValues)
-        node.apply(context)
+        if (traceEnabled) context.renderTrace = XmlRenderTraceRecorder(node, isCancelled)
+        context.applyNode(node)
         // T-M25.5：渲染完成后提取 bind 求值结果（含覆盖值）——参数行自动回填显示
         val bindValues = bindNames.mapNotNull { name ->
             context.bindings[name]?.toString()?.let { name to it }
         }.toMap()
         val (sql, mappings) = parseParameterMappings(context.getSql(), context.errors)
         // R30 探镜：条件判定结果随渲染产物出栈（只登记被走到的条件，见 DynamicContext.conditionOutcomes）
-        return RenderedXmlSql(sql, mappings, context.errors, bindValues, context.dollarSubstitutions, context.conditionOutcomes.toMap())
+        val scalarValues = if (traceEnabled) mappings.mapNotNull { mapping ->
+            val property = mapping.property
+            if (!context.bindings.containsKey(property)) null else {
+                val value = context.bindings[property]
+                when (value) {
+                    null -> property to null
+                    is String, is Number, is Boolean, is Char -> property to value.toString()
+                    else -> null
+                }
+            }
+        }.toMap() else emptyMap()
+        return RenderedXmlSql(sql, mappings, context.errors, bindValues, context.dollarSubstitutions,
+            context.conditionOutcomes.toMap(), context.renderTrace?.snapshot(), scalarValues)
     }
 
     private fun parseParameterMappings(sql: String, errors: List<String>): Pair<String, List<ParameterMapping>> {

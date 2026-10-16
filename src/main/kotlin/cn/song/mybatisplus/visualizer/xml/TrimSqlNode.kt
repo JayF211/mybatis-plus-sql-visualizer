@@ -27,7 +27,7 @@ open class TrimSqlNode(
 
     override fun apply(context: DynamicContext): Boolean {
         val filtered = FilteredDynamicContext(context)
-        val result = contents.apply(filtered)
+        val result = filtered.applyNode(contents)
         filtered.applyAll()
         return result
     }
@@ -40,6 +40,12 @@ open class TrimSqlNode(
     private inner class FilteredDynamicContext(private val delegate: DynamicContext) : DynamicContext(emptyMap()) {
 
         private val sqlBuffer = StringBuilder()
+
+        internal override var renderTrace: XmlRenderTraceRecorder?
+            get() = delegate.renderTrace
+            set(value) { delegate.renderTrace = value }
+
+        override fun getSql(): String = sqlBuffer.toString()
 
         override fun appendSql(sql: String) {
             sqlBuffer.append(sql)

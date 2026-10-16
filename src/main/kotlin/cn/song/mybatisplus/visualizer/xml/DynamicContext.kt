@@ -51,6 +51,10 @@ open class DynamicContext(
      */
     open val conditionOutcomes: MutableMap<String, Boolean> = LinkedHashMap()
 
+    internal open var renderTrace: XmlRenderTraceRecorder? = null
+
+    internal fun applyNode(node: SqlNode): Boolean = renderTrace?.apply(node, this) ?: node.apply(this)
+
     /** 条件判定登记入口：同表达式多次求值按 OR 合并（[conditionOutcomes]）。 */
     open fun recordConditionOutcome(test: String, truth: Boolean) {
         conditionOutcomes.merge(test, truth) { previous, current -> previous || current }

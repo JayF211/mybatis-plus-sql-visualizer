@@ -43,7 +43,8 @@ public final class CaptureLedger {
                 + ",\"sampled\":0,\"coverage\":\"INSTRUMENTED_JDBC_ONLY\""
                 + ",\"capabilities\":[\"EXECUTION_ID\",\"MONOTONIC_NANOS\",\"JDBC_RESULT\",\"LOSS_COUNTERS\"]"
                 + ",\"limitations\":[\"NO_REQUEST_BOUNDARIES\",\"NO_TRANSACTION_OUTCOME\",\"NO_DELIVERY_ACK\","
-                + "\"PRE_ATTACH_PREPARED_SQL_MAY_BE_UNKNOWN\",\"WOVEN_PARAMETERS_UNAVAILABLE\",\"STACK_BOUNDED\"]}";
+                + "\"PRE_ATTACH_PREPARED_SQL_MAY_BE_UNKNOWN\",\"WOVEN_PARAMETERS_UNAVAILABLE\",\"STACK_BOUNDED\","
+                + "\"CROSS_OBJECT_WRAPPER_IDENTITY_UNPROVEN\",\"NO_PROCESS_EXIT_TERMINAL\"]}";
     }
     private CaptureLedger() { }
 }

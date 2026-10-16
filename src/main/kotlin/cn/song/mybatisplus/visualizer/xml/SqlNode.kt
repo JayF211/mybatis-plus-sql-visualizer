@@ -13,7 +13,7 @@ sealed interface SqlNode {
 /** 子节点顺序拼接（parseDynamicTags 的出口，恒 true）。 */
 class MixedSqlNode(val children: List<SqlNode>) : SqlNode {
     override fun apply(context: DynamicContext): Boolean {
-        children.forEach { it.apply(context) }
+        children.forEach { context.applyNode(it) }
         return true
     }
 }

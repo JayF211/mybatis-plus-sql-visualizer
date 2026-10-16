@@ -221,6 +221,11 @@ class SqlLogEntryBuffer(
      */
     fun addAuditEntry(entry: LogSqlEntry): Boolean = addEntryInternal(entry, respectPaused = false)
 
+    /** Analysis shares user exclusion policy, but not the presentation deduplication window. */
+    internal fun allowsAnalysis(entry: LogSqlEntry): Boolean =
+        !paused && !isFiltered(entry.restoredSql) && entry.suppressKey !in suppressKeys &&
+            (!hasStructureKeys || entry.structureKey !in suppressKeys)
+
     private fun addEntryInternal(entry: LogSqlEntry, respectPaused: Boolean): Boolean {
         if (respectPaused && paused) return false
         if (isFiltered(entry.restoredSql)) return false

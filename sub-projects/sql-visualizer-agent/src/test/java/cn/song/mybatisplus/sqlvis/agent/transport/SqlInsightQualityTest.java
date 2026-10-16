@@ -49,6 +49,30 @@ public class SqlInsightQualityTest {
         assertTrue(CaptureLedger.snapshot().contains("\"terminal\":false"));
     }
 
+    @Test public void concurrentStopMustWaitForInFlightExecutionEvidence() throws Exception {
+        java.util.concurrent.CountDownLatch entered = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch finish = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.atomic.AtomicReference<Throwable> failure = new java.util.concurrent.atomic.AtomicReference<Throwable>();
+        Thread worker = new Thread(() -> {
+            Object raw = new Object();
+            long token = SqlHookCallbacks.onStatementEnter(raw);
+            entered.countDown();
+            try { assertTrue(finish.await(5, java.util.concurrent.TimeUnit.SECONDS)); }
+            catch (Throwable t) { failure.set(t); }
+            finally { SqlHookCallbacks.onExecuteExit(raw, "select 1", "executeQuery", token, new Object(), null); }
+        });
+        worker.start();
+        try {
+            assertTrue(entered.await(5, java.util.concurrent.TimeUnit.SECONDS));
+            AgentState.setDisabled(true);
+            assertTrue(count("active") > 0);
+            assertTrue(CaptureLedger.snapshot().contains("\"terminal\":false"));
+        } finally { finish.countDown(); worker.join(5000); }
+        assertFalse(worker.isAlive());
+        assertNull(failure.get());
+        assertTrue(CaptureLedger.snapshot().contains("\"terminal\":true"));
+    }
+
     @Test public void staleEpochCannotRefillAfterStopAndReopen() {
         Object raw = new Object();
         long token = SqlHookCallbacks.onStatementEnter(raw);
