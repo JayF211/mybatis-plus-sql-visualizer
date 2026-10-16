@@ -114,6 +114,38 @@
 
 | UI-003 | B1/U05；用户现场指出 | 宽日志工具栏没有可辨认的清除日志图标，第三动作显示通用占位样式；frame-9baa1a8e。源码SqlLogPanel.kt:505–509已注册ClearAction，但:1122–1129构造无图标、update只设text，其他同排动作均显式设icon。判定为图标配置遗漏，不是动作未注册或窄栏溢出。未为验证而清除当前5条日志 | 按用户要求纳入下一批统一修复；本批运行包不变 | 待补真实ActionToolbar图标回归 | 待宽/窄栏、主题及点击清除回归 |
 
+| UI-004 | B2/U36 | 设置时空扫后首切历史不刷新，手动刷新才显示已落盘7条；JBTabs old/new参数反置且首扫兜底已消耗 | t-devui-history-refresh：9e32ad43 | 未跑，待槽位/批末 | 待合入后重现空目录→写入→首次切入 |
+| UI-005 | B2/U38 | `SELECT status, COUNT(*) AS cnt FROM user GROUP BY status HAVING COUNT(*) > 1`：AUTO选实体后生成Lambda字符串select/groupBy无法编译；Query模式连续select覆盖status。frame-44389909/ba3d3850，本地MP3.5.7 javap证实 | t-devui-reverse-projection实施中 | 待真实API编译与投影回归 | 待修复版同样本复验 |
+
+## 第二批修复合流与复验
+
+首批沙盒通过原生Exit后，运行中演示应用Terminate卡在Waiting for process detach；90秒有界等待结束仍在运行，已先保存JDK8线程现场，再按IDE原生Kill process结束本次应用。归属核实为PID24408、父54712、命令行含本次MPSV-MasterMerge-UI243 agent路径；没有操作其他进程。随后runIde任务退出0。线程现场见会话日志call_BS521Rpri31WTvUICa2mT7yM-stdout.log，归因未定，不预判插件关闭死锁。原始界面保持be3ff18b直到本批结束。
+
+- UI-001：原修复b0433976→dev `38a595cf`，独立定向27/0/0/0，撤首列过滤2/2红、恢复27绿。
+- UI-002：原修复8fd89abc→dev `3f55c74a`；此前并非中断，而是主动留待测试。用户要求检查后已恢复原代理补验：两类18/0/0/0，临时R61标签4/4红，恢复18绿；证据记录09c8c978留在独立分支。
+- UI-003：原修复12c01f4d→dev `44ee9d11`，定向9/0/0/0，摘图标三例2红1绿、恢复9绿，清空/尾随业务未改。
+- 三个源码修复均已合入，未合入代理的旧整份验收文档以免覆盖主控现场账。合流后定向回归在后台运行，通过后以同一独立配置启动第二批；尚不能写UI复验通过。
+- 子代理核验：四个修复/夹具工作树均干净，有提交和实际证据；没有发现掉线遗留的未提交成果。只有UI-002缺执行证据，已补齐。
+
+- UI-004已证根因：JBTabs真实243回调参数是oldSelection/newSelection，SqlLogPanel将第一参当current，导致进入不刷、离开反刷；设置时0文件扫描提前置首扫标记，showing兜底不再补。独立分支t-devui-history-refresh已提交9e32ad43，去除旧测试人工showing补刷的假绿并补真实tabs.select回归；因另一会话T-SqlInsight-Runtime占用，定向/反向未跑，批末补验，不先勾通过。
+
+### 第二批实际结果
+
+运行包dev@44ee9d11，十类合流定向116/0/0/0，重新启动PID36912并自动恢复1920×1080全屏。系统级置顶仍未证明。
+
+- UI-001中文默认窗口复验通过：998×742设置页控件正常靠左、无横向截断，R90三行隐私全文可见（frame-879d2246），代码生成下拉含五选项且末项换行不截断（frame-01c745b6）。英文/缩放矩阵待后续复验。
+- UI-002中文复验通过：重启后读取上一批19:21:05历史计划，显示本地时间/快照来源（frame-4e984f16）；再执行显示“上次执行（当前会话）”（frame-a8a53746），不再显示R61。R90跨IDE重启正例与普通参数ui_alpha/1/18召回同时通过；预设栏重启默认收起（frame-376e94b9）。
+- UI-003宽栏暗色复验通过：第三动作垃圾桶图标在空/有数据时可见，点击后5条日志清空（frame-93892d50），再请求ids6/7得到新2条（frame-a84ebfed），捕获未停止。
+- U36开启自动保存并设独立build/ui243-history后，已清空的5条及新2条都在同一历史文件中，共7条；不操作已有历史目录。首次进入历史未自动刷新、手动刷新出现文件，登记UI-004待根因核实。历史内原始SQL搜id=6得1条；带空格id = 6为0，属于原文匹配口径；正则id=6|id=7得2条（frame-c6d4e151）。双选原生Diff打开并显示1 difference（frame-265fd990）。
+
+- U03/U05窄栏：将日志工具窗缩至当前约300物理像素，四页仍单行，历史被收进平台MorePopup；菜单有SQL历史（frame-b48d78e2），键盘Enter切入后历史成为当前页（frame-840b1226）。清除垃圾桶仍在前三动作可见。精确230/250/460及主题缩放组合仍待补，不用此一格覆盖全矩阵。
+- U30日志转SQL：真实分两行输入Preparing/Parameters，生成id=6与username='ui_test'，状态“已转换1条SQL”（frame-dd8613e9）。首轮typeText中的换行未落地，错拼成一行时正确显示未回填告警；明确属输入工具问题，不归产品缺陷。
+- U38六形态首轮：聚合/分组/HAVING发现UI-005；INSERT NULL生成setName(null)（frame-0d0ab9ea）；DISTINCT与LIMIT5/FOR UPDATE单last同时保留（frame-16c16ee4）；UNION明确注释需手动处理（frame-604c22fa）。双引号另现fallback实体类名`QueryWrapper<"UiProbe">`不合法，已交同修复代理一并处理，列引号应保留、Java类型名不应携SQL引号（frame-a72d62c5）。这些仅静态GUI输出，不称生成Java已运行。
+
+- U20/CRUD：实体User生成候选六项正确，INSERT主键AUTO未勾、fill安全模拟默认关闭；发现UI-006参数区BoxLayout/FlowLayout导致开关右移、模拟输入在横向视口外（frame-307e73ef/219fc32e）。独立t-devui-fill-layout已交97a6b6b4修复与真实350px回归，未编译/测试，待批末验证和GUI复验；不因输入尚不可见就声称R92全部通过。
+- U12/U27 XML真实入口：UserMapper.xml selectUserListByXml有动态条件真/假标记，输入admin/1/18后LIKE concat和年龄实值正常，取消status后SQL移除该条件（frame-fb97e027）；全不选后清除输入，WHERE清除且参数空（frame-4848d756）。
+- U42嵌入/模块作用域：源码模块拼接、StringBuffer、helper返回三形态均生成wms_inventory_embed_demo及move_tool_pallet_no/qty_base_qty（frame-0a0b1d19/f2076a37/77df39c4）；切jpa-jar-model-demo宿主生成wms_inventory_jar_demo、sku_inventory_status、item_key_lot_info_received_date，未串兄弟模型（frame-b613912f）。当前聚合工程仍有模型模块，不能冒称实体来自反编译JAR，该子项另验。
+
 ## 依据与历史证据保全
 
 - 十九轮UI11组、Runner12组及R90/R91/R92/R94/O147/V178专册。

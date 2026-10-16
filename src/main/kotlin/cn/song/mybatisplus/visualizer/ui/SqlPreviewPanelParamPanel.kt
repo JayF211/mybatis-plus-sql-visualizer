@@ -70,6 +70,33 @@ import cn.song.mybatisplus.visualizer.model.wrapperFlagOutcomeTooltip
 // T-M53-II（2026-10-10）：以下为 SqlPreviewPanel 的「参数面板构建、方案/历史与参数值回填渲染」内聚成员，
 // 以同包扩展函数形式搬出——方法体逐字符搬运，被触及的私有成员已按需放宽为 internal。
 
+/** UI-006: keep the safety explanation visible, including unbroken identifiers in errors. */
+private fun fieldFillText(text: String, font: java.awt.Font): String {
+    val metrics = javax.swing.JLabel().getFontMetrics(font)
+    val limit = JBUI.scale(260)
+    val lines = mutableListOf<String>()
+    var line = StringBuilder()
+    for (character in text) {
+        if (character == '\n' || (line.isNotEmpty() && metrics.stringWidth(line.toString() + character) > limit)) {
+            lines += line.toString()
+            line = StringBuilder()
+        }
+        if (character != '\n') line.append(character)
+    }
+    lines += line.toString()
+    return "<html>" + lines.joinToString("<br>") {
+        it.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    } + "</html>"
+}
+
+/** Wrap the control in the same left-anchored row geometry as the other BoxLayout children. */
+private fun fieldFillRow(control: JComponent): JBPanel<JBPanel<*>> =
+    JBPanel<JBPanel<*>>(BorderLayout()).apply {
+        alignmentX = java.awt.Component.LEFT_ALIGNMENT
+        border = JBUI.Borders.empty(4, 16, 4, 8)
+        add(control, BorderLayout.WEST)
+    }
+
 internal fun SqlPreviewPanel.rebuildLeftPanel(result: PreviewResult) {
     resetFieldFillSimulation()
     fieldFillPreview = result
@@ -120,23 +147,30 @@ internal fun SqlPreviewPanel.rebuildLeftPanel(result: PreviewResult) {
         if (batchModel.toggleColumns.any { it.fill != null && it.fill != "DEFAULT" }) {
             fieldFillCheckBox = JCheckBox(MpSqlVisualizerBundle.message("fieldFill.simulation.enabled"), false).apply {
                 name = "fieldFillEnabled"
+                text = fieldFillText(text, font)
                 toolTipText = MpSqlVisualizerBundle.message("fieldFill.simulation.enabled.tooltip")
                 addActionListener {
                     fieldFillEnabled = isSelected
                     renderSql()
                 }
             }
-            paramPanel.add(fieldFillCheckBox)
+            paramPanel.add(fieldFillRow(fieldFillCheckBox!!))
             fieldFillStatus = JBLabel(MpSqlVisualizerBundle.message("fieldFill.simulation.status")).apply {
                 name = "fieldFillStatus"
                 toolTipText = text
+                text = fieldFillText(text, font)
             }
-            paramPanel.add(fieldFillStatus)
+            paramPanel.add(fieldFillRow(fieldFillStatus!!))
         }
         // T-M26.3：fixed 列标签参与列宽统一（toggle 列复选框文本独立截断上限）
         val labelWidth = labelColumnWidth(batchModel.fixedColumns.map { "#${it.source}" })
         batchModel.toggleColumns.forEach { paramPanel.add(buildBatchColumnRow(it, isToggle = true)) }
         batchModel.fixedColumns.forEach { paramPanel.add(buildBatchColumnRow(it, isToggle = false, labelWidth)) }
+        // BoxLayout aligns all direct children on a common X anchor; do not mix centered panels
+        // with standalone LEFT-aligned labels/check boxes (the cause of the shifted safety switch).
+        paramPanel.components.filterIsInstance<JComponent>().forEach {
+            it.alignmentX = java.awt.Component.LEFT_ALIGNMENT
+        }
         // showResult 在构建控件前召回普通参数；模拟值须等新预览复位、输入框建好后，
         // 才从参数预设缓存恢复，不从 SQL 历史回落恢复。
         if (paramHistoryCache.isCurrentGeneration()) {
@@ -448,7 +482,20 @@ internal fun SqlPreviewPanel.onSchemesChangedFromDialog() {
  */
 
 internal fun SqlPreviewPanel.buildBatchColumnRow(col: BatchColumn, isToggle: Boolean, labelWidth: Int = 0): JBPanel<JBPanel<*>> {
-    val row = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 8, 6))
+    val hasFill = col.fill != null && col.fill != "DEFAULT"
+    val row = JBPanel<JBPanel<*>>(if (hasFill) java.awt.GridBagLayout() else FlowLayout(FlowLayout.LEFT, 8, 6))
+    fun addCell(component: JComponent, x: Int, y: Int, span: Int = 1) {
+        if (!hasFill) {
+            row.add(component)
+            return
+        }
+        row.add(component, java.awt.GridBagConstraints().apply {
+            gridx = x; gridy = y; gridwidth = span
+            anchor = java.awt.GridBagConstraints.WEST
+            weightx = if (span == 2 || x == 1) 1.0 else 0.0
+            insets = JBUI.insets(3, 8, 3, 0)
+        })
+    }
     if (isToggle) {
         val checkBox = JCheckBox(checkBoxText(col.source), col.columnName in enabledIds).apply {
             toolTipText = if (checkBoxText(col.source) != col.source) col.source else col.columnName
@@ -458,10 +505,11 @@ internal fun SqlPreviewPanel.buildBatchColumnRow(col: BatchColumn, isToggle: Boo
                 renderSql()
             }
         }
+        if (hasFill) checkBox.text = fieldFillText(col.source, checkBox.font)
         batchCheckBoxes += checkBox
-        row.add(checkBox)
+        addCell(checkBox, 0, 0, 2)
     } else {
-        row.add(paramLabel(col.source, labelWidth))
+        addCell(paramLabel(col.source, labelWidth), 0, 0, 2)
     }
     val field = JBTextField(8).apply {
         toolTipText = "#${col.source}"
@@ -474,11 +522,13 @@ internal fun SqlPreviewPanel.buildBatchColumnRow(col: BatchColumn, isToggle: Boo
         })
     }
     paramFields += field
-    row.add(field)
-    if (col.fill != null && col.fill != "DEFAULT") {
-        row.add(JBLabel("[fill=${col.fill}]").apply {
+    addCell(field, 1, if (hasFill) 1 else 0)
+    if (hasFill) {
+        // The source occupies its own line; normal and simulated inputs stay in the same
+        // compact value column instead of extending one FlowLayout row beyond the viewport.
+        addCell(JBLabel("[fill=${col.fill}]").apply {
             toolTipText = MpSqlVisualizerBundle.message("fieldFill.simulation.annotation.tooltip")
-        })
+        }, 0, 1)
         if (isToggle) {
             val simulation = JBTextField(8).apply {
                 name = "fieldFill:${col.source}"
@@ -496,8 +546,8 @@ internal fun SqlPreviewPanel.buildBatchColumnRow(col: BatchColumn, isToggle: Boo
                 })
             }
             fieldFillFields[col.source] = simulation
-            row.add(JBLabel(MpSqlVisualizerBundle.message("fieldFill.simulation.value.label")))
-            row.add(simulation)
+            addCell(JBLabel(MpSqlVisualizerBundle.message("fieldFill.simulation.value.label")), 0, 2)
+            addCell(simulation, 1, 2)
         }
     }
     row.border = JBUI.Borders.empty(0, 8, 2, 8)
@@ -527,12 +577,24 @@ internal fun SqlPreviewPanel.fieldFillOverlay(): FieldFillSimulation.Overlay {
     val model = current?.batchModel ?: return FieldFillSimulation.Overlay(emptyMap(), emptySet())
     val overlay = FieldFillSimulation.overlay(model, enabledIds, paramValues, fieldFillValues, fieldFillEnabled)
     fieldFillStatus?.apply {
-        text = if (overlay.invalidSources.isEmpty()) {
+        val message = if (overlay.invalidSources.isEmpty()) {
             MpSqlVisualizerBundle.message("fieldFill.simulation.status")
         } else {
             MpSqlVisualizerBundle.message("fieldFill.simulation.invalid", overlay.invalidSources.joinToString())
         }
-        toolTipText = text
+        val wrapped = fieldFillText(message, font)
+        if (text != wrapped) {
+            text = wrapped
+            // UI-006: a longer error changes the row's height, not just the label's text.
+            // BoxLayout caches child SizeRequirements; JLabel.revalidate() alone does not
+            // invalidate that cache when an ancestor is already invalid (e.g. before realization).
+            parent?.invalidate()
+            paramPanel.invalidate()
+            paramPanel.parent?.invalidate()
+            paramScroll.revalidate()
+            paramScroll.repaint()
+        }
+        toolTipText = message
     }
     return overlay
 }

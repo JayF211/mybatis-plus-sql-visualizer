@@ -613,14 +613,14 @@ class SqlLogPanel(
         tabs.addListener(
             object : com.intellij.ui.tabs.TabsListener {
                 override fun selectionChanged(
-                    current: com.intellij.ui.tabs.TabInfo?,
                     previous: com.intellij.ui.tabs.TabInfo?,
+                    current: com.intellij.ui.tabs.TabInfo?,
                 ) {
                     if (current === sqlToJavaTab) {
                         sqlToJavaPanel.refreshFormatFromSettings()
                     }
-                    // F-44：切换到历史 tab 时刷新数据；F87（T-PerfSweep25）起这里同时是**首扫唯一入口**
-                    //（历史面板构造不再自带 refresh——开窗即扫回退为首次切换才扫）
+                    // UI-004：TabsListener 参数顺序为旧页签、新页签；必须在进入历史页时刷新。
+                    // 设置变更可能已在隐藏期间扫描空目录，不能依赖 showing 的一次性首扫兜底。
                     if (current === historyTab) {
                         historyPanel.refresh()
                     }

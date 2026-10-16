@@ -21,6 +21,68 @@ import org.junit.Test
 class JavaCodeGeneratorTest {
 
     @Test
+    fun `UI005_双引号表名只在Java类名推导剥壳`() {
+        val result = SqlReverseParser.parse("SELECT \"id\" FROM \"ui_probe\" WHERE \"name\" = 'alpha'")
+        val code = JavaCodeGenerator.generate(result)
+        assertEquals("UiProbe", JavaCodeGenerator.entityClassName(result.tableName))
+        GeneratedProjectionCompiler.assertProjection(code, "\"id\"", "\"name\" =")
+    }
+
+    @Test
+    fun `UI005_聚合投影在所有MP核心形态真实编译且不覆盖`() {
+        val sql = "SELECT status, COUNT(*) AS cnt FROM user GROUP BY status HAVING COUNT(*) > 1"
+        val result = SqlReverseParser.parse(sql)
+        val kinds = listOf(GeneratedWrapper.QUERY, GeneratedWrapper.LAMBDA,
+            GeneratedWrapper.WRAPPERS_QUERY, GeneratedWrapper.WRAPPERS_LAMBDA)
+        for (mapping in listOf(emptyMap(), mapOf("status" to "status"))) {
+            for (kind in kinds) {
+                val code = JavaCodeGenerator.generate(result, JavaCodeGenerator.EntityTarget("User", mapping), kind)
+                GeneratedProjectionCompiler.assertProjection(code, "status,COUNT(*) AS cnt", "GROUP BY status", "HAVING COUNT(*) > 1")
+            }
+        }
+    }
+
+    @Test
+    fun `UI005_别名及无别名聚合与DISTINCT保留查询语义`() {
+        val entity = JavaCodeGenerator.EntityTarget("User", mapOf("status" to "status", "id" to "id"))
+        val cases = listOf(
+            "SELECT status, COUNT(*) FROM user GROUP BY status" to "status,COUNT(*)",
+            "SELECT status AS state, id AS uid FROM user" to "status AS state,id AS uid",
+            "SELECT DISTINCT status, id FROM user" to "DISTINCT status, id",
+            "SELECT status, COUNT(*) AS cnt FROM user WHERE id > 1 GROUP BY status HAVING COUNT(*) > 1 ORDER BY status DESC LIMIT 5" to "status,COUNT(*) AS cnt",
+        )
+        for ((sql, projection) in cases) {
+            for (kind in listOf(GeneratedWrapper.LAMBDA, GeneratedWrapper.QUERY, GeneratedWrapper.WRAPPERS_LAMBDA)) {
+                val code = JavaCodeGenerator.generate(SqlReverseParser.parse(sql), entity, kind)
+                if (sql.contains("WHERE")) {
+                    GeneratedProjectionCompiler.assertProjection(code, projection, "id >", "GROUP BY status", "HAVING COUNT(*) > 1", "ORDER BY status DESC", "LIMIT 5")
+                } else {
+                    GeneratedProjectionCompiler.assertProjection(code, projection)
+                }
+            }
+        }
+    }
+
+    @Test
+    fun `UI005_未映射分组整链回落且保留实体类名`() {
+        val code = JavaCodeGenerator.generate(
+            SqlReverseParser.parse("SELECT id FROM user GROUP BY status"),
+            JavaCodeGenerator.EntityTarget("User", mapOf("id" to "id")),
+        )
+        GeneratedProjectionCompiler.assertProjection(code, "id", "GROUP BY status")
+    }
+
+    @Test
+    fun `UI005_真实API反对照拒绝Lambda字符串并证实select覆盖`() {
+        GeneratedProjectionCompiler.assertDoesNotCompile("new LambdaQueryWrapper<User>().select(\"status\");")
+        GeneratedProjectionCompiler.assertDoesNotCompile("new LambdaQueryWrapper<User>().groupBy(\"status\");")
+        GeneratedProjectionCompiler.assertProjection(
+            "new QueryWrapper<User>().select(\"status\").select(\"COUNT(*) AS cnt\").groupBy(\"status\").having(\"COUNT(*) > 1\");",
+            "COUNT(*) AS cnt", "GROUP BY status", "HAVING COUNT(*) > 1",
+        )
+    }
+
+    @Test
     fun `完整链路_条件全家与排序分页`() {
         val result = SqlReverseResult(
             tableName = "user",
