@@ -87,7 +87,7 @@ class FieldFillSimulationPanelTest : BasePlatformTestCase() {
                             if (control is javax.swing.JCheckBox) {
                                 assertTrue("Text plus checkbox icon must fit actual bounds", control.preferredSize.width <= b.width)
                             }
-                            assertTrue("Full text height must fit $b", html.getPreferredSpan(javax.swing.text.View.Y_AXIS) <= b.height)
+                            assertTrue("Full text height must fit ${control.name ?: control.javaClass.simpleName} $b; required=${html.getPreferredSpan(javax.swing.text.View.Y_AXIS)}", html.getPreferredSpan(javax.swing.text.View.Y_AXIS) <= b.height)
                         }
                     }
                     assertTrue("Safety switch stays at the left edge", bounds(p.fieldFillCheckBox!!).x <= 24)
@@ -111,15 +111,18 @@ class FieldFillSimulationPanelTest : BasePlatformTestCase() {
                 assertFalse("AUTO id is not selected", "id" in p.enabledIds)
                 assertFits()
                 assertEquals(MpSqlVisualizerBundle.message("fieldFill.simulation.status"), visibleText(p.fieldFillStatus!!.text))
+                val normalStatusHeight = p.fieldFillStatus!!.height
                 p.fieldFillFields.getValue(longSource).text = "1; DELETE FROM t"
                 p.fieldFillCheckBox!!.doClick()
                 assertFits()
                 assertEquals(MpSqlVisualizerBundle.message("fieldFill.simulation.invalid", longSource), visibleText(p.fieldFillStatus!!.text))
+                assertTrue("Long error must increase the allocated row height", p.fieldFillStatus!!.height > normalStatusHeight)
                 assertFalse(p.lastRenderedSqlForTest()!!.contains("DELETE"))
                 assertFalse("Layout must not select AUTO id", "id" in p.enabledIds)
                 p.fieldFillFields.getValue(longSource).text = "42"
                 assertFits()
                 assertEquals(MpSqlVisualizerBundle.message("fieldFill.simulation.status"), visibleText(p.fieldFillStatus!!.text))
+                assertEquals("Normal status must release the extra error height", normalStatusHeight, p.fieldFillStatus!!.height)
             } finally {
                 p.clear()
             }

@@ -582,7 +582,18 @@ internal fun SqlPreviewPanel.fieldFillOverlay(): FieldFillSimulation.Overlay {
         } else {
             MpSqlVisualizerBundle.message("fieldFill.simulation.invalid", overlay.invalidSources.joinToString())
         }
-        text = fieldFillText(message, font)
+        val wrapped = fieldFillText(message, font)
+        if (text != wrapped) {
+            text = wrapped
+            // UI-006: a longer error changes the row's height, not just the label's text.
+            // BoxLayout caches child SizeRequirements; JLabel.revalidate() alone does not
+            // invalidate that cache when an ancestor is already invalid (e.g. before realization).
+            parent?.invalidate()
+            paramPanel.invalidate()
+            paramPanel.parent?.invalidate()
+            paramScroll.revalidate()
+            paramScroll.repaint()
+        }
         toolTipText = message
     }
     return overlay
