@@ -392,22 +392,6 @@ class SqlLogPanel(
 
     /** 排序按钮（测试断言文案/可见性）。 */
     internal val sortActionForTest: AnAction get() = sortModeAction
-    internal fun sortActionTextForTest(): String {
-        val event = AnActionEvent.createFromAnAction(
-            sortModeAction, null, com.intellij.openapi.actionSystem.ActionPlaces.TOOLBAR,
-            com.intellij.openapi.actionSystem.DataContext.EMPTY_CONTEXT,
-        )
-        sortModeAction.update(event)
-        return event.presentation.text ?: ""
-    }
-    internal fun sortActionTooltipForTest(): String? {
-        val event = AnActionEvent.createFromAnAction(
-            sortModeAction, null, com.intellij.openapi.actionSystem.ActionPlaces.TOOLBAR,
-            com.intellij.openapi.actionSystem.DataContext.EMPTY_CONTEXT,
-        )
-        sortModeAction.update(event)
-        return event.presentation.description
-    }
 
     /** 排序菜单项文案列表（测试断言选项齐备；构建菜单但不 show）。 */
     internal fun sortMenuLabelsForTest(): List<String> = buildSortMenuItems().map { it.text }
@@ -455,9 +439,6 @@ class SqlLogPanel(
 
     /** T-UiCoord F2：工具栏动作图标组组件（结构断言：它必须挂在行宿主 CENTER；排序已并入该动作组）。 */
     internal val toolbarComponentForTest: JComponent? get() = toolbarComponent
-
-    /** 工具栏动作组内的直接动作个数（测试断言：全部动作直达、无自建「更多」弹层）。 */
-    internal val toolbarActionCountForTest: Int get() = toolbarGroup.getChildren(null).size
 
     /** T-UiCoord F2：下拉按钮显示文本的像素预算（测试按同一预算算期望的省略文本）。 */
     internal val dropdownTextBudgetForTest: Int get() = JBUI.scale(DROPDOWN_TEXT_BUDGET_PX)

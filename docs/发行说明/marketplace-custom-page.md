@@ -47,7 +47,7 @@
 | 执行计划 EXPLAIN ![Ultimate](https://sql-visualizer.jvtools.cn/badges/tag-ultimate.svg)![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) | 弹窗内「执行计划」按钮 | 按方言提交原生控制台，真实计划与静态性能标注同屏对照；覆盖 11 种方言（含 Oracle / SQL Server 模板），可选结构化渲染（表格 / 可折叠树 + 索引建议） |
 | 执行 SQL ![Ultimate](https://sql-visualizer.jvtools.cn/badges/tag-ultimate.svg) | 弹窗内「执行」按钮 | 原生 Database 控制台内嵌，数据源 / Tx / 会话工具栏全保留 |
 | JOIN 关系图 | 弹窗内「JOIN 图」tab | IDEA 原生 Diagrams 渲染（Community 降级自绘）；PNG / SVG 导出 |
-| 调用栈悬停 ![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) | 悬停预览面板调用栈区域 | 调试器风格弹层，结构化解析帧、跳过尾部基础设施帧、锚定最深业务帧；帧数可配置（默认 24，范围 12~64） |
+| 调用栈悬停 ![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) | 悬停预览面板调用栈区域 | 调试器风格弹层，优先呈现已采集的业务帧、折叠相邻内部帧；摘要可单击打开，支持逐帧跳转与原文复制；帧数可配置（默认 24，范围 12~64） |
 
 ### SQL 日志
 
@@ -55,9 +55,9 @@
 |------|---------|------|
 | 自动捕获 | 侧边栏「捕捉」按钮 | MyBatis / Hibernate / JdbcTemplate 三种日志格式；耗时展示与慢查询标记；可配置项目启动即自动监听 |
 | 增强捕获 ![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) | 设置页开关（默认开启） | 挂载轻量 agent 直接采集 JDBC 真实执行——不依赖日志格式，附目标库、毫秒级耗时与影响行数 |
-| 单击预览 ![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) | 单击日志列表条目 | 高亮可编辑轻量预览，改完即复制（双击仍开完整弹窗） |
+| 快速预览 ![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) | 工具栏「快速预览」打开底部预览区 | 单击日志或历史条目只选中，打开底部预览后可连续查看、编辑与复制；双击仍打开完整预览 |
 | 类型颜色标记 ![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) | 列表自动生效 / 设置页配置 | 按语句类型着色：左侧色条或整行淡背景，四色可自定义 |
-| 显示模式 ![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) | 工具栏下拉 | 单行 / 关键字换行 / 格式化，跨会话保留 |
+| 显示模式 ![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) | 设置页「列表显示」 | 单行 / 关键字换行 / 格式化，跨会话保留 |
 | 多选批量复制 ![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) | Ctrl / Shift 多选后右键 | 一次复制全部选中 SQL，分号收尾换行拼接 |
 | 历史与源码定位 ![New](https://sql-visualizer.jvtools.cn/badges/tag-new.svg) | 侧边栏「SQL 历史」tab / 双击条目 | 历史标签页常驻，未开启自动保存也可进入；历史自动保存、两级导航；保存目录可自定义且读写同源；条目可钉住、支持正则检索与大小写开关、导出 CSV / TSV / 纯文本 / 可执行 SQL 脚本、两条历史版本对比；精确跳到触发 SQL 的源码行 |
 | 去重 / 过滤 | 工具栏 | SQL 类型多选筛选；`Ctrl+F` 搜索；去重 `⨉N` 徽章即时显示 |
