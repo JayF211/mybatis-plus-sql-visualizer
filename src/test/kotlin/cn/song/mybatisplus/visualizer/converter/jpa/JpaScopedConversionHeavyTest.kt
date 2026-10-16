@@ -112,12 +112,16 @@ class JpaScopedConversionHeavyTest : HeavyPlatformTestCase() {
 
     fun testNamedEntityWithDifferentJavaNameAndLowerCaseSubqueryName() {
         val host = source(myModule, "host.Query")
-        source(myModule, "model.ActualInventory", "@javax.persistence.Id @javax.persistence.Column(name=\"stock_key\") long id;", "@javax.persistence.Entity(name=\"Stock\") @javax.persistence.Table(name=\"named_stock\")")
+        source(myModule, "model.ActualInventory", """
+            @javax.persistence.Id @javax.persistence.Column(name="stock_key") long id;
+            @javax.persistence.ManyToOne @javax.persistence.JoinColumn(name="stock_detail_fk", referencedColumnName="detail_key") ActualDetail detail;
+        """.trimIndent(), "@javax.persistence.Entity(name=\"Stock\") @javax.persistence.Table(name=\"named_stock\")")
         source(myModule, "model.ActualDetail", "@javax.persistence.Column(name=\"stock_owner\") long ownerId;", "@javax.persistence.Entity(name=\"stockDetail\") @javax.persistence.Table(name=\"named_detail\")")
         IndexingTestUtil.waitUntilIndexesAreReady(project)
-        for (sql in sqls("select s.id from Stock s where exists (select d.ownerId from stockDetail d where d.ownerId=s.id)", host)) {
+        for (sql in sqls("select s.id from Stock s join s.detail joined where exists (select d.ownerId from stockDetail d where d.ownerId=s.id)", host)) {
             assertTrue(sql, sql.contains("from named_stock s"))
             assertTrue(sql, sql.contains("s.stock_key"))
+            assertTrue(sql, sql.contains("JOIN named_detail joined ON joined.detail_key = s.stock_detail_fk"))
             assertTrue(sql, sql.contains("from named_detail d"))
             assertTrue(sql, sql.contains("d.stock_owner"))
         }
