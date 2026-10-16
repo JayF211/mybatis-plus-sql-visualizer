@@ -103,7 +103,9 @@ agent首轮3组各3个独立JVM，实际心跳为实验注入200ms，warm200请�
 - 首轮状态：全量11分33秒后失败，未执行打包/兼容。shard1=157类1777/0/0/1；shard2=152类1520/6/0/2；agent=38类213/0/0/0；external=6类27/0/0/1。shard3～5未启动，62新增类中32未入场，不构成完整覆盖。
 - 首轮6红：后台PSI捕获守卫命中UsageNavigation块内重取站点；fatal守卫命中RemoteSqlComparisonBridge/PreviewTabManager；bundle守卫把动态拼接前缀当字面量；premain重挂两例的selfPID被新辅助JVM安全闸拒绝；织入源守卫仍要求旧无参WeaveGate形态。由主控/对应车道逐项核实修复，禁止删安全闸或造无消费者bundle父键。
 - 首轮日志SHA256 `0112fedbe1a17961004f5159828e9fb4f5e46011cf4ba645f43c3c50ef7ccd5a`；审计报告SHA256 `af7090e79bdc6e641cdaf299af45be721243b15b211aec750fd2688f41f7df9d`，均在gate树build/final-gate。4项实际skip为Windows符号链接权限1、Database测试classpath不可用2、ACP impl制品缺席1；容器用例所在后续片尚未执行，不能提前算入skip。
-- 修复将使67533aca的全量读数过期，须另冻新SHA完整复跑，不把第一片绿与第二轮部分绿拼成全量。
+- 修复使67533aca的全量读数过期，须另冻新SHA完整复跑，不把第一片绿与第二轮部分绿拼成全量。首轮归档 `.local/sql-insight-gate-round1-failed.tar.gz`，SHA256 `826fb6aacb296817000865103cfff4e8996ee8a223ad8bbcd61a6019c7682759`。
+- 六红修复：Remote fatal资源关闭语义/重挂self PID夹具局部注入正对照/ExecutionScope真实嵌套守卫收编edc9a9c0，元守卫登记214adcb5；UI fatal优先透传与导航块内PSI重取精准说明988db4fe，真实去注释负例；W43动态键模板及9实际算子键双语断言43b1a351。生产attach安全闸未放宽、没有虚造bundle父键。后端定向平台32、Meta/Wiring15绿，UI守卫组合七类39/0/0/0，含Banned/Bundle/Meta全扫描及真实导航去注释1命中、fatal/普通异常行为测试。
+- 第二轮正式冻结 `b23e890de8b46cea71f9ed5b8fb5b7df16443a0c`，已单向吸收dev `c15a63cc` 的非GUI日志几何探针。授权gate干净detached切换新SHA完整复跑5片/agent/external，本地init仅强制Test任务fresh，不clean；日志/审计进round2目录，不覆盖round1。第二轮尚未获得最终通过读数。六红修复定向独立归档 `.local/sql-insight-gatefix-evidence.tar.gz`，SHA256 `0266f92584d119dbd33802b601b92e98a30b124d2f9f9c8e462434971a20a4c7`。
 
 ## 六、最终门禁清单
 
