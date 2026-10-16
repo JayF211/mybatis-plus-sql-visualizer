@@ -907,9 +907,8 @@ class GuardSelfTestCoverageMetaGuardTest {
             ),
             GuardEntry(
                 "log/agent/StatementWeaveWiringGuardTest.kt",
-                emptyList(),
-                "断言直接内联在 @Test（T-StatementWeave 接线源码守卫，跨仓直读 agent 子项目源码）；" +
-                    "agentSrc/stripComments 为夹具",
+                listOf(DecisionFn("sharedScopeWired", FnKind.VIOLATIONS)),
+                "共享执行作用域Boolean接线内核，以真实源码调用点摘除自证；其余断言内联，agentSrc/stripComments为夹具",
             ),
             GuardEntry(
                 "mcp/McpScopeSourceScanTest.kt",

@@ -53,7 +53,7 @@ class StatementWeaveWiringGuardTest {
     }
 
     @Test
-    fun test接线守卫_代理层双通道去重门() {
+    fun test接线守卫_代理层双通道去重门_真实站点摘除自证() {
         val proxy = stripComments(agentSrc("hook/StatementHandler.java"))
         val woven = stripComments(agentSrc("hook/SqlHookCallbacks.java"))
         val scope = stripComments(agentSrc("hook/ExecutionScope.java"))
