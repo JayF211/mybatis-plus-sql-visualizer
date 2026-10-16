@@ -20,6 +20,19 @@ class SqlScenarioRegressionPackageTest {
     }
 
     @Test
+    fun `unknown star output is not exported as complete or known width`() {
+        val sql = "SELECT * FROM t"
+        val semantic = cn.song.mybatisplus.visualizer.sql.insight.SqlSemanticAnalyzer.analyze(
+            cn.song.mybatisplus.visualizer.sql.insight.AnalysisSnapshot(sql),
+        )
+        val result = XmlScenarioResult("unknown", sql, 0, emptyMap(), null, semantic, emptyList())
+        val export = SqlScenarioRegressionPackage.export(listOf(result)) as SqlScenarioRegressionPackage.Export.Ready
+        val case = com.google.gson.JsonParser.parseString(export.json).asJsonObject.getAsJsonArray("cases")[0].asJsonObject
+        assertTrue(case.get("incomplete").asBoolean)
+        assertTrue(!case.has("outputFields") || case.get("outputFields").isJsonNull)
+    }
+
+    @Test
     fun `over scenario budget rejected`() {
         val empty = XmlScenarioResult("", "SELECT 1", 0, emptyMap(), null, null, emptyList())
         assertTrue(SqlScenarioRegressionPackage.export(List(21) { empty }) is SqlScenarioRegressionPackage.Export.Rejected)

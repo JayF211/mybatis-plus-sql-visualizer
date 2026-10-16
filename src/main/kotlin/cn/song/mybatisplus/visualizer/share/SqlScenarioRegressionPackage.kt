@@ -35,10 +35,11 @@ object SqlScenarioRegressionPackage {
             val model = result.semantics
             Case("scenario-${index + 1}", sql, sql?.let(::digest), result.parameterCount,
                 result.conditionResults.values.count { it }, result.conditionResults.values.count { !it },
-                model?.outputFields?.size,
+                model?.takeIf { it.quality == cn.song.mybatisplus.visualizer.sql.insight.AnalysisQuality.CERTAIN }?.outputFields?.size,
                 model?.relations.orEmpty().flatMap { it.roles }.groupingBy { it.name }.eachCount(),
                 model?.diagnostics.orEmpty().map { it.code.name }.distinct(),
-                result.failure != null || projection?.omitted != false || result.trace?.truncated == true || model == null)
+                result.failure != null || projection?.omitted != false || result.trace?.truncated == true ||
+                    model?.quality != cn.song.mybatisplus.visualizer.sql.insight.AnalysisQuality.CERTAIN)
         }
         val json = Gson().toJson(Package(SCHEMA, cases, listOf(
             "Diagnostic projection only; never execute this package as SQL.",
