@@ -15,17 +15,20 @@ internal class RuntimeEvidencePanel(private val text: (String) -> String) : JPan
     private val tags = InsightDetailPanel(listOf("runId", "requestTag", text("runtime.count")), text("runtime.tagNotice"))
     private val timeline = RuntimeTimeline()
     private val run = JComboBox<String>()
+    private val request = JComboBox<String>()
+    private val allRequests = text("runtime.allRequests")
     init {
         alerts.button(text("runtime.ignore")) {
             keys.getOrNull(alerts.selectedRow())?.let { ignored += it }
             snapshot?.let(::present)
         }
         alerts.button(text("runtime.restore")) { ignored.clear(); snapshot?.let(::present) }
-        run.addActionListener { updateTimeline() }
+        run.addActionListener { updateRequestChoices(); updateTimeline() }
+        request.addActionListener { updateTimeline() }
         add(JTabbedPane().apply {
             addTab(text("runtime.tags"), tags)
             addTab(text("runtime.repeated"), alerts)
-            addTab(text("runtime.timeline"), JPanel(BorderLayout()).apply { add(run, BorderLayout.NORTH); add(JScrollPane(timeline), BorderLayout.CENTER) })
+            addTab(text("runtime.timeline"), JPanel(BorderLayout()).apply { add(JPanel().apply { add(run); add(request) }, BorderLayout.NORTH); add(JScrollPane(timeline), BorderLayout.CENTER) })
         }, BorderLayout.CENTER)
     }
     fun present(value: RuntimeInsightSnapshot) {
@@ -43,8 +46,14 @@ internal class RuntimeEvidencePanel(private val text: (String) -> String) : JPan
         if (selected != null && events.any { it.runId == selected }) run.selectedItem = selected
         updateTimeline()
     }
+    private fun updateRequestChoices() {
+        val ids = snapshot?.sessions.orEmpty().flatMap { it.observations }.filter { it.runId == run.selectedItem }.mapNotNull { it.requestId }.distinct().take(500)
+        request.model = DefaultComboBoxModel((listOf(allRequests) + ids).toTypedArray())
+    }
     private fun updateTimeline() {
-        timeline.present(snapshot?.sessions.orEmpty().flatMap { it.observations }.filter { it.runId == run.selectedItem }, text("runtime.timelineNotice"))
+        timeline.present(snapshot?.sessions.orEmpty().flatMap { it.observations }.filter {
+            it.runId == run.selectedItem && (request.selectedItem == null || request.selectedItem == allRequests || it.requestId == request.selectedItem)
+        }, text("runtime.timelineNotice"))
     }
     internal fun ignoredForTest(): Set<RepeatedAlertKey> = ignored.toSet()
 }
@@ -53,12 +62,13 @@ internal class RuntimeTimeline : JComponent() {
     private var events = emptyList<SqlExecutionObservation>()
     private var notice = ""
     fun present(values: List<SqlExecutionObservation>, explanation: String) {
-        events = values.filter { it.startNanos >= 0 && it.durationNanos >= 0 && it.durationNanos <= Long.MAX_VALUE - it.startNanos }
+        events = values.filter { it.durationNanos >= 0 && it.startNanos <= Long.MAX_VALUE - it.durationNanos }
             .sortedBy { it.startNanos }.take(200)
         notice = explanation
         preferredSize = Dimension(900, maxOf(100, 60 + events.size * 26))
         revalidate(); repaint()
     }
+    internal fun intervalCountForTest(): Int = events.size
     override fun paintComponent(graphics: Graphics) {
         super.paintComponent(graphics)
         val g = graphics.create() as Graphics2D
