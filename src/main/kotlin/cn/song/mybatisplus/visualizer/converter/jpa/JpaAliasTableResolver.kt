@@ -108,9 +108,9 @@ internal data class JpaAliasScope(
  * 改写**之后**，否则改写新增的副表别名（`JOIN u.rel r` → `INNER JOIN t_target r ON ...`）看不到。
  *
  * **解析失败静默跳过**：不抛异常、不按命名策略盲猜列名（猜错列名比保留属性名更误导，沿用
- * [JpaFromEntityMapper] 的既有原则）。未解析出的别名回落调用方既有的根实体列清单行为，
- * 因此本改动对既有产物是「严格收窄 + 新增」，不产生「原本会被替换、现在不替换」的回归面
- * ——这条要求依赖 [JpaAliasPropertyMapper] 的正则**容忍限定符与点号之间的空白**
+ * [JpaFromEntityMapper] 的既有原则）。已声明但未解析出的别名保持属性原文，不借根表列填补；
+ * 未声明限定符及嵌入路径仍保留历史根表回退。明确绑定的根表别名正常映射。
+ * [JpaAliasPropertyMapper] 的正则仍须**容忍限定符与点号之间的空白**
  * （`u .code` 这类合法写法改前会被旧实现替换，正则若要求紧邻就会漏掉，见该对象 KDoc）。
  *
  * **已接受的边界**：关联路径 JOIN（`JOIN 根别名.关联属性 副表别名`）的副表别名解析不出来——
@@ -309,6 +309,8 @@ internal object JpaAliasPropertyMapper {
             val middle = match.groupValues[3]
             val field = match.groupValues[4]
             val owner = scope.byAlias[qualifier]
+            // 已声明却解析失败（含歧义）的副表不能借用根表列；未知限定符/嵌入路径仍沿用旧契约。
+            if (owner == null && qualifier in scope.knownQualifiers) return@replace match.value
             val column = (owner ?: rootTable).columnByField(field)
             if (column == null || column.fieldName == column.columnName) {
                 match.value

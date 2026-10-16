@@ -158,6 +158,55 @@ class JpaScopedConversionHeavyTest : HeavyPlatformTestCase() {
         }
     }
 
+    fun testAmbiguousSecondaryAliasesDoNotBorrowRootColumns() {
+        val left = createModule("left")
+        val right = createModule("right")
+        val host = source(myModule, "host.Query")
+        source(myModule, "model.Root", "@javax.persistence.Column(name=\"root_label\") String displayName;",
+            "@javax.persistence.Entity @javax.persistence.Table(name=\"root_table\")")
+        source(left, "left.Detail", "@javax.persistence.Column(name=\"left_label\") String displayName;",
+            "@javax.persistence.Entity @javax.persistence.Table(name=\"left_detail\")")
+        source(right, "right.Detail", "@javax.persistence.Column(name=\"right_label\") String displayName;",
+            "@javax.persistence.Entity @javax.persistence.Table(name=\"right_detail\")")
+        ModuleRootModificationUtil.addDependency(myModule, left)
+        ModuleRootModificationUtil.addDependency(myModule, right)
+        IndexingTestUtil.waitUntilIndexesAreReady(project)
+        val resolution = EntityClassResolver.resolveByName(project, "Detail", host)
+        assertTrue("Fixture must produce genuine visible ambiguity", resolution.ambiguous)
+        assertNull(resolution.psiClass)
+        for (sql in sqls("select r.displayName, d.displayName from Root r join Detail d on d.displayName=r.displayName " +
+            "where exists (select s.displayName from Detail s where s.displayName=r.displayName)", host)) {
+            assertTrue(sql, sql.contains("r.root_label"))
+            assertTrue(sql, sql.contains("d.displayName"))
+            assertTrue(sql, sql.contains("s.displayName"))
+            assertFalse(sql, sql.contains("d.root_label"))
+            assertFalse(sql, sql.contains("s.root_label"))
+            assertFalse(sql, sql.contains("left_label") || sql.contains("right_label"))
+        }
+        // FQN removes the ambiguity: each side must use its own real column, not the root's.
+        for (sql in sqls("select r.displayName, d.displayName, e.displayName from Root r " +
+            "join left.Detail d on d.displayName=r.displayName join right.Detail e on e.displayName=r.displayName", host)) {
+            assertTrue(sql, sql.contains("r.root_label"))
+            assertTrue(sql, sql.contains("d.left_label"))
+            assertTrue(sql, sql.contains("e.right_label"))
+        }
+    }
+
+    fun testMissingDeclaredSecondaryAndUnknownQualifierHaveDifferentContracts() {
+        val host = source(myModule, "host.Query")
+        source(myModule, "model.Root", "@javax.persistence.Column(name=\"root_label\") String displayName;",
+            "@javax.persistence.Entity @javax.persistence.Table(name=\"root_table\")")
+        IndexingTestUtil.waitUntilIndexesAreReady(project)
+        for (sql in sqls("select r.displayName, d . displayName, unknown.displayName from Root r " +
+            "join MissingDetail d on d.displayName=r.displayName", host)) {
+            assertTrue(sql, sql.contains("r.root_label"))
+            assertTrue(sql, sql.contains("d . displayName"))
+            assertTrue(sql, sql.contains("d.displayName"))
+            assertFalse(sql, sql.contains("d.root_label"))
+            assertTrue("Undeclared qualifier retains legacy fallback: $sql", sql.contains("unknown.root_label"))
+        }
+    }
+
     fun testAmbiguousRootDoesNotBorrowResolvedSecondaryColumns() {
         val host = source(myModule, "host.Query")
         entities(myModule, "a", "a")
