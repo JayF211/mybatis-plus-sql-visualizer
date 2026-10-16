@@ -107,6 +107,16 @@ tracing相对sql的中位P95为-5.16%、wall为-1.54%，逐轮P95增量却为+21
 
 诊断尚未锁定根因，不据此贸然改锁或队列。后续仅对实际代码可证明的重复scope读取、请求元数据处理或编码工作做单项反证，保持协议内容、完整性、质量和隐私不变；必要时另列更长固定负载的稳态校准，不覆盖原短窗失败结果。JFR原始文件与window-analysis.json位于runtime树`build/MPSV-SqlInsight-Runtime-JFR`，生产代码及既有基准脚本未因本次诊断修改。
 
+### 单次UTF8编码优化与新agent功能复验
+
+实际调用链证明：原SenderLoop.sendEvent为长度校验执行一次getBytes后丢弃数组，再调用writeFrame(String)重复编码。最小修改复用已检查的byte[]，不改JSON、帧格式、锁、队列、flush或质量字段。真实class调用图测试原先expected1/actual2为红；修后9类42例全部通过，覆盖Unicode补充平面、孤立代理字符、null、UTF8精确长度边界、超长拒绝及既有I/O质量/配置/心跳行为。已收编228e8571，原全量冻结ab8b54b1不能覆盖这次生产变更。两模式都会受益，未据此宣称新增追踪成本达标。
+
+基准夹具699f1595仅增加有界measureRequests（1～10000，默认500不变），5000请求长窗须独立记账，不能替代原500请求预算。原新A/B尚未执行：现场真实干扰是另一会话IDE启动的demo活动；GradleWorker经核实为闲置daemon，不应误称正在运行测试。
+
+优化产物agent SHA256 `8616b14342320a8ff1b1128f07d55d50b7aad06e05ecb886d7e7f86ac05ac876`已重新运行H09，不沿用旧agent结果。JDK 1.8.0_181、17.0.19、21.0.11均FUNCTIONAL_PASS：各5请求起止配对、4唯一功能SQL（3请求内）、7事务帧、真实commit/rollback关联及最终库行数1；SQL generated=written=5含setup，controlGenerated=written=17，全部loss0。javax/H2边界保持，summary SHA256 `e484ca4793e52a18008a20ac58f3ae398dea8a37a07005f63256a47e4ae75d3b`，原始目录为runtime树`build/MPSV-SqlInsight-Encoding-H09/functional-8-17-21`。
+
+已单向吸收dev日志时间归属修复至be132978；新冻结`be132978e183e9f72967658da09141be23c6a799`交独立gate做第五轮非计时全量/打包/兼容预检，资源允许才启动。第五轮和性能A/B不并行；资源预算依然未通过，不因功能复验绿而提前合流。
+
 ## 五、最终冻结与自动化门禁
 
 冻结提交 `67533aca415bf227e891d697ad45cdf33563b4ff`，基于已同步dev `5d884a5e`。专用detached工作树 `mpsv-sql-insight-gate` 生产写集为空，配置/输出仅在其build下；主控期间仅提交文档，不让在途代码改变绿灯含义。
