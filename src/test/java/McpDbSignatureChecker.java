@@ -64,6 +64,9 @@ public class McpDbSignatureChecker {
         missing += check(method(Class.forName("com.intellij.database.dataSource.DatabaseConnectionCore", true, loader), "getRemoteConnection"), "DatabaseConnectionCore.getRemoteConnection()");
         Class<?> remoteConnection = Class.forName("com.intellij.database.remote.jdbc.RemoteConnection", true, loader);
         missing += check(method(remoteConnection, "createStatement"), "RemoteConnection.createStatement()");
+        // W45 comparison bridge: fail closed unless the existing connection is read-only/autocommit.
+        missing += check(method(remoteConnection, "isReadOnly"), "RemoteConnection.isReadOnly()");
+        missing += check(method(remoteConnection, "getAutoCommit"), "RemoteConnection.getAutoCommit()");
         // T-NoticeChannel：notices 通道（getAllWarnings 取尽 + clearWarnings 清除；语句级/连接级都取）
         missing += check(method(remoteConnection, "getAllWarnings"), "RemoteConnection.getAllWarnings()");
         missing += check(method(remoteConnection, "clearWarnings"), "RemoteConnection.clearWarnings()");
@@ -81,15 +84,19 @@ public class McpDbSignatureChecker {
         // T-ExecTimeoutGuard：超时护栏（setQueryTimeout 驱动级建议值 + cancel 超时收尾）
         missing += check(method(remoteStatement, "setQueryTimeout", params("int")), "RemoteStatement.setQueryTimeout(int)");
         missing += check(method(remoteStatement, "cancel"), "RemoteStatement.cancel()");
+        missing += check(method(remoteStatement, "setMaxRows", params("int")), "RemoteStatement.setMaxRows(int)");
         Class<?> rs = Class.forName("com.intellij.database.remote.jdbc.RemoteResultSet", true, loader);
         missing += check(method(rs, "next"), "RemoteResultSet.next()");
         missing += check(method(rs, "getString", params("int")), "RemoteResultSet.getString(int)");
         missing += check(method(rs, "getMetaData"), "RemoteResultSet.getMetaData()");
         missing += check(method(rs, "wasNull"), "RemoteResultSet.wasNull()");
+        missing += check(method(rs, "getBigDecimal", params("int")), "RemoteResultSet.getBigDecimal(int)");
         missing += check(method(rs, "close"), "RemoteResultSet.close()");
         Class<?> meta = Class.forName("com.intellij.database.remote.jdbc.RemoteResultSetMetaData", true, loader);
         missing += check(method(meta, "getColumnCount"), "RemoteResultSetMetaData.getColumnCount()");
         missing += check(method(meta, "getColumnLabel", params("int")), "RemoteResultSetMetaData.getColumnLabel(int)");
+        missing += check(method(meta, "getColumnType", params("int")), "RemoteResultSetMetaData.getColumnType(int)");
+        missing += check(method(meta, "getPrecision", params("int")), "RemoteResultSetMetaData.getPrecision(int)");
 
         // T-McpDynamicToolset：McpExpectedBridge 反射链（McpToolsetSupport 审计边界转译 + 项目解析）。
         // mcpserver 新形态 API——243 内置 1.0.30/253 未装 Marketplace 包时类不可达，属预期
