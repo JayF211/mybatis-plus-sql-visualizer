@@ -42,6 +42,9 @@ data class RecognizedLogPreview(
  * 但其 `initialValues` 提供参数名 → 日志值映射（集合值为元素清单），供预览面板按名回填。
  */
 fun LogSqlEntry.toRecognizedPreview(): RecognizedLogPreview {
+    if (source == SqlSource.SHARDINGSPHERE) {
+        return RecognizedLogPreview(rawSql, rawSql, emptyList(), emptyMap(), emptyList(), false)
+    }
     val placeholderCount = countPlaceholders(rawSql)
     val recognized = placeholderCount > 0 && placeholderCount == params.size
     // T-ListParamCollect：命名参数条目（`sql = … :paramN` + 日志集合值）无 `?` 占位符，
@@ -119,7 +122,9 @@ internal fun countPlaceholders(sql: String): Int = placeholderPositions(sql).siz
 internal fun LogSqlEntry.toPreviewResult(
     formatSql: Boolean,
     literalRecovery: Boolean,
-): PreviewResult = toPreviewResultInternal(formatSql, literalRecovery).withExecutionError(errorText)
+): PreviewResult = toPreviewResultInternal(formatSql, literalRecovery)
+    .copy(actualSql = actualSql?.takeIf { source == SqlSource.SHARDINGSPHERE && it.isNotBlank() })
+    .withExecutionError(errorText)
 
 /**
  * T-M55-02：执行报错全文并入预览警示槽——列表行⛔片段之外，预览详情承载完整错误文本：
@@ -137,6 +142,19 @@ private fun LogSqlEntry.toPreviewResultInternal(
     formatSql: Boolean,
     literalRecovery: Boolean,
 ): PreviewResult {
+    // Actual 是物理 SQLUnit，不是 Logic 的绑定证据。旧缓存中曾猜出的参数也不预填。
+    if (source == SqlSource.SHARDINGSPHERE) {
+        return PreviewResult(
+            sql = formatIfNeeded(withTerminator(rawSql), formatSql),
+            compactSql = rawSql,
+            unresolvedParams = emptyList(),
+            paramTable = null,
+            wrapperType = null,
+            tableName = null,
+            stackDigest = stackDigest,
+            warning = MpSqlVisualizerBundle.message("log.preview.unresolvedNoBinding.sharding"),
+        )
+    }
     val recognized = toRecognizedPreview()
     if (recognized.recognized) {
         return PreviewResult(
@@ -201,10 +219,10 @@ private fun LogSqlEntry.toPreviewResultInternal(
         // T-JdbcThreadBucket F2：零参数时按来源分流——JdbcTemplate 引导开 org.springframework.jdbc.core，
         // Hibernate 引导开 type.descriptor.sql（避免把 JDBC 条目误导向 Hibernate 配置）
         warning = if (countPlaceholders(restoredSql) > 0) {
-            val noBindingKey = if (source == SqlSource.JDBC) {
-                "log.preview.unresolvedNoBinding.jdbc"
-            } else {
-                "log.preview.unresolvedNoBinding"
+            val noBindingKey = when (source) {
+                SqlSource.JDBC -> "log.preview.unresolvedNoBinding.jdbc"
+                SqlSource.SHARDINGSPHERE -> "log.preview.unresolvedNoBinding.sharding"
+                else -> "log.preview.unresolvedNoBinding"
             }
             MpSqlVisualizerBundle.message(
                 if (params.isEmpty()) noBindingKey

@@ -1,16 +1,14 @@
 package cn.song.mybatisplus.visualizer.log
 
 /**
- * ShardingSphere 双段日志解析器（R10 T-ShardingSphereCompat，**骨架首版**）。
+ * ShardingSphere 双段日志解析器。
  *
- * 支持的日志形态（ShardingSphere 5.x sql-show 公开文档形态，**真实语料未采样——V36**）：
- * - Logic SQL 行：`Logic SQL: select ...`（逻辑 SQL，占位符形态）
- * - Actual SQL 行：`Actual SQL: ds_0 ::: select ... ::: Parameters: [1, abc]`
- *   （路由后真实执行片段；`::: Parameters:` 段无参时缺省）
- *
- * D1=A 定案：**Logic SQL 为主条目**（可还原参数执行——参数取首个 Actual 的 `Parameters:`
- * 段，同语句各分片绑定值相同），**Actual SQL 段折叠为附注**（[LogSqlEntry.actualSql]，
- * 逐行原文，面板对照渲染等语料）。
+ * UI-008：以真实 5.5.2/H2 内存 fixture 的 sql-show 输出为兼容锚点：
+ * - `Logic SQL: select ...` 为主条目；
+ * - `Actual SQL: ds_0 ::: select ... ::: [100, BOOK,100]` 为路由原文；
+ * - 旧 `::: Parameters: [...]` 也仅作为路由原文保留，不表示有可靠类型。
+ * Actual 参数属于 SQLUnit 的物理 SQL，分页改写等会改变值，不能映射回 Logic。
+ * 即使占位数相等、各片参数一致也不回填；始终保留 Logic 问号和只读 Actual 原文。
  *
  * 三态状态机（循 [HibernateLogParser] 等待态配对先例 + [LogThreadRouter] 线程分桶）：
  * - IDLE：等待 Logic SQL 行；
@@ -19,14 +17,10 @@ package cn.song.mybatisplus.visualizer.log
  * - 噪声行在 PENDING 态**不闭合**（保守：与 MyBatis 行交错的场景 V11a 未采样，先保配对；
  *   代价是条目滞后一条语句产出，面板可见性由静默冲刷兜底）。
  *
- * TODO(等语料/V36)：真实双段日志语料到位后补全——①`Parameters: [..]` 值含 ", "（字符串内逗号）
- * 的拆分规则（骨架按文档样例「逗号+空格分隔」直拆）；②4.x 输出形态（D2=A 登记不支持）；③与
- * MyBatis `Preparing:` 行交错的配对语义与去重兜底（V11a）；④参数类型标注是否在位（当前按无类型
- * 还原，走 [LogSqlRestorer] 启发式，V11b 的复用结论=可复用）；⑤Actual 折叠附注的面板对照渲染（T-03）。
+ * 边界：List.toString 不携带类型或转义，001/true/逗号字符串均不能据此确定字面量。
+ * 不拆 Actual 参数，不伪造类型或逻辑绑定；4.x 不在本次范围。
  */
 class ShardingSphereLogParser(
-    private val restorer: LogSqlRestorer = LogSqlRestorer(),
-
     /** 行解析最大长度（超长截断，防控制台大输出卡顿；与其余解析器同口径）。 */
     var maxParseLength: Int = DEFAULT_MAX_PARSE_LENGTH,
 
@@ -54,9 +48,6 @@ class ShardingSphereLogParser(
          * 与 closeBucketPending 的 `joinToString("\n")` 结果恒等（追加时同步加分隔符）。
          */
         var actualJoinedLength = 0
-
-        /** 参数（取首个带 `Parameters:` 段的 Actual 行）。 */
-        val pendingParams = mutableListOf<LogSqlParam>()
     }
 
     private val router = LogThreadRouter(
@@ -97,9 +88,6 @@ class ShardingSphereLogParser(
                 if (bucket.actualLines.isNotEmpty()) bucket.actualJoinedLength++ // 行间分隔符
                 bucket.actualJoinedLength += segment.length
                 bucket.actualLines += segment
-                if (bucket.pendingParams.isEmpty()) {
-                    bucket.pendingParams += extractParams(actualSegment)
-                }
             }
             return
         }
@@ -156,15 +144,13 @@ class ShardingSphereLogParser(
         val logLine = bucket.pendingLogLine
         bucket.pendingLogLine = null
         val actual = bucket.actualLines.joinToString("\n")
-        val params = bucket.pendingParams.toList()
         bucket.actualLines.clear()
         bucket.actualJoinedLength = 0
-        bucket.pendingParams.clear()
         if (logic.isBlank()) return null
         val entry = LogSqlEntry(
             rawSql = logic,
-            restoredSql = restorer.restore(logic, params),
-            params = params,
+            restoredSql = logic,
+            params = emptyList(),
             source = SqlSource.SHARDINGSPHERE,
             logTimestamp = logLine?.let { LogTimestampParser.parse(it) },
             actualSql = actual.ifEmpty { null },
@@ -178,20 +164,6 @@ class ShardingSphereLogParser(
         val idx = line.indexOf(keyword)
         if (idx < 0) return null
         return line.substring(idx + keyword.length).trim()
-    }
-
-    /**
-     * 从 Actual 段提取 `Parameters: [...]` 绑定值（无类型标注；还原走 [LogSqlRestorer] 启发式）。
-     * TODO(等语料)：值文本含 ", " 的拆分、空参形态 `[]`、null 字面量形态——骨架按公开文档样例直拆。
-     */
-    private fun extractParams(actualSegment: String): List<LogSqlParam> {
-        val idx = actualSegment.lastIndexOf(PARAMETERS_KEYWORD)
-        if (idx < 0) return emptyList()
-        val bracket = actualSegment.substring(idx + PARAMETERS_KEYWORD.length).trim()
-        if (!bracket.startsWith("[") || !bracket.endsWith("]")) return emptyList()
-        val content = bracket.substring(1, bracket.length - 1)
-        if (content.isBlank()) return emptyList()
-        return content.split(", ").map { LogSqlParam(value = it, type = null) }
     }
 
     companion object {

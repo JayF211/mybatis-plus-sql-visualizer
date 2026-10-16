@@ -1,6 +1,9 @@
 package cn.song.mybatisplus.visualizer.share.ui
 
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel
+import cn.song.mybatisplus.visualizer.ui.showResult
+import cn.song.mybatisplus.visualizer.ui.clear
+import cn.song.mybatisplus.visualizer.log.toPreviewResult
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import com.intellij.ui.components.JBTextField
@@ -21,6 +24,39 @@ import javax.swing.JRadioButton
  * 构造用最小 SqlPreviewPanel（并 dispose 释放内部编辑器，防 teardown 报未释放）。
  */
 class ShareDialogTest : BasePlatformTestCase() {
+
+    fun testShardingActual原文只读附注不进入分享或诊断脱敏投影() {
+        val panel = SqlPreviewPanel(myFixture.project)
+        com.intellij.openapi.util.Disposer.register(testRootDisposable, panel)
+        val clipboard = cn.song.mybatisplus.visualizer.testutil.installFakeClipboard(testRootDisposable)
+        val parser = cn.song.mybatisplus.visualizer.log.ShardingSphereLogParser()
+        parser.feed("Logic SQL: SELECT * FROM ui_order WHERE reference_code = ?")
+        parser.feed("Actual SQL: PRIVATE_SHARD ::: SELECT * FROM private_order WHERE reference_code = ? ::: [ROUTE_SECRET_001,true,BOOK,100]")
+        parser.closePending()
+        val entry = parser.takeEntries().single()
+        panel.showResult(entry.toPreviewResult(false, false))
+        val text = panel.editorDocumentText()
+        assertNotNull(text)
+        assertTrue(text!!.contains("?"))
+        assertTrue(panel.paramValuesSnapshot().isEmpty())
+        val dialog = ShareDialog(myFixture.project, panel)
+        val draft = dialog.feedbackDraft(text)
+        val manager = cn.song.mybatisplus.visualizer.share.SqlShareManager(myFixture.project)
+        val copies = listOf<() -> Unit>(
+            { manager.copyAsMarkdown(panel) },
+            { manager.copyAsMarkdownTable(panel) },
+            { manager.copyExecutableSql(panel) },
+        )
+        val forbidden = listOf("PRIVATE_SHARD", "private_order", "ROUTE_SECRET", "BOOK,100", "001")
+        forbidden.forEach { assertFalse(draft.body.contains(it)) }
+        copies.forEach { copy ->
+            copy()
+            val shared = clipboard.text()!!
+            forbidden.forEach { assertFalse("分享不应读取 Actual 原文：$shared", shared.contains(it)) }
+            assertTrue(shared.contains("?"))
+        }
+        panel.clear()
+    }
 
     private fun allComponents(c: java.awt.Component): List<java.awt.Component> {
         val list = mutableListOf(c)

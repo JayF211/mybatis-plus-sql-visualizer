@@ -128,6 +128,8 @@ data class PreviewResult(
     val dialectDecision: DialectDecisionEngine.Decision? = null,
     /** R90：本次预览实际入库条目，recordHistory 在返回结果前设置；副本保留，未知为空。 */
     var historyEntryId: String = "",
+    /** ShardingSphere 路由日志原文，只读附注，不参与 SQL 编辑、复制或执行。 */
+    val actualSql: String? = null,
 ) {
     val effectiveDialect: Dialect? get() = previewModel?.dialect ?: batchModel?.dialect ?: renderedDialect
 }

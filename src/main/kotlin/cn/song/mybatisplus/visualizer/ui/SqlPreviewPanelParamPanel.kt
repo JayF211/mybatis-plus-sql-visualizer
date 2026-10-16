@@ -97,6 +97,25 @@ private fun fieldFillRow(control: JComponent): JBPanel<JBPanel<*>> =
         add(control, BorderLayout.WEST)
     }
 
+/** Actual 的无类型裸列表不是 SQL 字面量；展示脱敏时隐藏整段，不尝试逐值解析。 */
+private fun shardingRouteDisplayText(actual: String): String =
+    if (PluginSettings.getInstance().state.displayMaskEnabled) {
+        MpSqlVisualizerBundle.message("log.preview.shardingRoutesMasked")
+    } else actual
+
+/** 就地替换现有文本，清掉选区；不重建参数区、不改原始条目或预览模型。 */
+internal fun SqlPreviewPanel.refreshShardingRouteDisplay() {
+    val actual = current?.actualSql ?: return
+    val display = shardingRouteDisplayText(actual)
+    UIUtil.uiTraverser(paramPanel).filter(javax.swing.JTextArea::class.java).forEach { text ->
+        if (text.name == "shardingActualSqlText") {
+            text.text = display
+            text.caretPosition = 0
+            text.toolTipText = null
+        }
+    }
+}
+
 internal fun SqlPreviewPanel.rebuildLeftPanel(result: PreviewResult) {
     resetFieldFillSimulation()
     fieldFillPreview = result
@@ -125,6 +144,27 @@ internal fun SqlPreviewPanel.rebuildLeftPanel(result: PreviewResult) {
     val xmlModelForSchemeRow = result.xmlModel
     val xmlHasControls = xmlModelForSchemeRow != null &&
         (xmlModelForSchemeRow.conditionViews.isNotEmpty() || xmlModelForSchemeRow.forEachViews.isNotEmpty())
+
+    // UI-008：沿用参数预设的标准折叠件，放在早退之前，无参数或歧义条目也能看路由。
+    result.actualSql?.takeIf { it.isNotBlank() }?.let { actual ->
+        val display = shardingRouteDisplayText(actual)
+        val text = javax.swing.JTextArea(display, display.lineSequence().count().coerceIn(2, 6), 24).apply {
+            name = "shardingActualSqlText"
+            isEditable = false
+            lineWrap = true
+            wrapStyleWord = false
+            caretPosition = 0
+        }
+        paramPanel.add(HideableTitledPanel(
+            MpSqlVisualizerBundle.message("log.preview.shardingRoutes"),
+            false,
+            com.intellij.ui.components.JBScrollPane(text),
+            false,
+        ).apply {
+            name = "shardingActualSqlFold"
+            alignmentX = java.awt.Component.LEFT_ALIGNMENT
+        })
+    }
 
     if (views.isEmpty() && result.unresolvedParams.isEmpty() && batchModel == null && !xmlHasControls) {
         // T-DevAcceptFix ①：绑定指示行已迁顶部常驻行——无参数早退不再重复建行

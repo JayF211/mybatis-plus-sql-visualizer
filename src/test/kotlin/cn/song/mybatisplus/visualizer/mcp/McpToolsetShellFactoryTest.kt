@@ -1,5 +1,10 @@
 package cn.song.mybatisplus.visualizer.mcp
 
+import cn.song.mybatisplus.visualizer.acp.SignatureDistroDiscovery
+import java.net.URLClassLoader
+import java.util.jar.JarFile
+import org.junit.Assume.assumeTrue
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
 import org.junit.Assert.fail
@@ -12,6 +17,48 @@ import org.junit.Test
  * 装载——真机端到端（平台工具发现/注解扫描/suspend 契约）在 262 沙盒 runIde 批次验证。
  */
 class McpToolsetShellFactoryTest {
+
+    @Test
+    fun `能力探测_接口缺席或依赖损坏时降级为不可用`() {
+        URLClassLoader(emptyArray(), null).use { loader ->
+            assertNull(findMcpToolsetClass(loader))
+        }
+        val brokenLoader = object : ClassLoader(null) {
+            override fun loadClass(name: String, resolve: Boolean): Class<*> {
+                if (name == "com.intellij.mcpserver.McpToolset") throw NoClassDefFoundError("missing dependency")
+                return super.loadClass(name, resolve)
+            }
+        }
+        assertNull(findMcpToolsetClass(brokenLoader))
+    }
+
+    @Test
+    fun `能力探测_真实本地发行物正反对照且不按版本号判断`() {
+        val distros = SignatureDistroDiscovery.ideaDistros
+        assumeTrue("没有本地发行物，不能冒充跨平台验证", distros.isNotEmpty())
+        var presentCount = 0
+        var absentCount = 0
+        for ((_, root) in distros) {
+            val jars = root.resolve("plugins").listFiles().orEmpty()
+                .filter { it.isDirectory && it.name.contains("mcp", ignoreCase = true) }
+                .flatMap { it.walkTopDown().filter { file -> file.isFile && file.extension == "jar" }.toList() }
+            val containsInterface = jars.any { jar ->
+                JarFile(jar).use { it.getJarEntry("com/intellij/mcpserver/McpToolset.class") != null }
+            }
+            URLClassLoader(jars.map { it.toURI().toURL() }.toTypedArray(), null).use { loader ->
+                val result = findMcpToolsetClass(loader)
+                assertEquals("探测必须对应发行物内容：$root", containsInterface, result != null)
+                if (containsInterface) {
+                    assertTrue(result!!.isInterface)
+                    presentCount++
+                } else {
+                    absentCount++
+                }
+            }
+        }
+        println("UI011 real distro capability: present=$presentCount absent=$absentCount")
+        assumeTrue("本机未同时提供能力正反发行物，双向验证未完成", presentCount > 0 && absentCount > 0)
+    }
 
     /** 模拟平台 McpToolset 接口（空标记接口即可，壳 implements 的类型解析只要求可达）。 */
     interface FakeToolset

@@ -759,6 +759,15 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
         // T-DarkTheme：主题切换时重绘（工具窗口模式下实时响应；命名色自动更新，仅需触发重绘）
         ApplicationManager.getApplication().messageBus.connect(this)
             .subscribe(LafManagerListener.TOPIC, LafManagerListener { lookAndFeelChanged() })
+        ApplicationManager.getApplication().messageBus.connect(this).subscribe(
+            PluginSettings.SETTINGS_CHANGE_TOPIC,
+            cn.song.mybatisplus.visualizer.config.SettingsChangeListener {
+                val app = ApplicationManager.getApplication()
+                // 设置应用通常在 EDT；后台广播同步收口，避免开脱敏后仍能复制旧原文。
+                val update = Runnable { if (!previewDisposed) refreshShardingRouteDisplay() }
+                if (app.isDispatchThread) update.run() else app.invokeAndWait(update)
+            },
+        )
 
         // F-1：注册图集面板到 Disposer 树（级联释放后台渲染任务）
         Disposer.register(this, diagramPanel)

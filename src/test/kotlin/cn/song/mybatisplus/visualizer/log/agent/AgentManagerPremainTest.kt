@@ -126,7 +126,21 @@ class AgentManagerPremainTest : BasePlatformTestCase() {
         assertTrue("回连后 pid 应写入幂等表（attach 链据此跳过）", manager.attachedPids.containsKey(pid))
         assertEquals("已挂载 pid=$pid", manager.statusSummary())
         assertFalse("通道认领后不再压制 attach", manager.hasPendingPremainChannel())
-        socket.close()
+        // UI-007：真实 HELLO 已提交的业务会话，最终身份门不得破坏 premain 幂等。
+        val savedInspector = manager.attachTargetInspector
+        val savedFactory = manager.attachSessionFactory
+        var attachCalls = 0
+        try {
+            manager.attachTargetInspector = { _, _, _ -> AgentAttachTarget.Decision.APPLICATION }
+            manager.attachSessionFactory = { attachCalls++; null }
+            assertTrue(manager.attachToPid(pid))
+            assertEquals("premain 在线后不得再调用动态 attach", 0, attachCalls)
+            assertEquals(1, manager.sessions.size)
+        } finally {
+            manager.attachTargetInspector = savedInspector
+            manager.attachSessionFactory = savedFactory
+            socket.close()
+        }
     }
 
     fun test同pid二次回连被丢弃_会话不叠加() {

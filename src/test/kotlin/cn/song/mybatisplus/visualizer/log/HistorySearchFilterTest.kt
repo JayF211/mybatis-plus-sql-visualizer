@@ -179,6 +179,123 @@ class HistorySearchFilterTest : BasePlatformTestCase() {
         }
     }
 
+    // UI009：断言真实组件状态，不以过滤结果为零冒充「错误已经可见」。
+    private fun searchOf(panel: HistorySqlLogPanel): cn.song.mybatisplus.visualizer.ui.search.NativeSearchTextField =
+        HistorySqlLogPanel::class.java.getDeclaredField("nativeSearch").apply { isAccessible = true }
+            .get(panel) as cn.song.mybatisplus.visualizer.ui.search.NativeSearchTextField
+
+    private fun filesOf(panel: HistorySqlLogPanel): com.intellij.ui.components.JBList<*> =
+        HistorySqlLogPanel::class.java.getDeclaredField("fileList").apply { isAccessible = true }
+            .get(panel) as com.intellij.ui.components.JBList<*>
+
+    private fun message(key: String, vararg args: Any): String =
+        cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message(key, *args)
+
+    private fun sqlEmptyText(panel: HistorySqlLogPanel): String =
+        (panel.sqlListForTest as com.intellij.ui.components.JBList<*>).emptyText.text
+
+    private fun withHistoryPanel(sql: List<String>, test: (HistorySqlLogPanel) -> Unit) {
+        writeHistoryFile("sql-history-ui009.sql", sql)
+        val panel = HistorySqlLogPanel(project)
+        try {
+            panel.refreshForTest()
+            panel.openFileForTest(panel.fileListEntries.single())
+            test(panel)
+        } finally {
+            panel.dispose()
+        }
+    }
+
+    fun testUI009_七条SQL非法正则明确报错而非空文件() {
+        withHistoryPanel((1..7).map { "SELECT $it" }) { panel ->
+            assertEquals(7, panel.sqlListEntries.size)
+            panel.regexToggleForTest = true
+            panel.setSearchForTest("(")
+            val search = searchOf(panel)
+            val error = message("log.history.search.invalidRegex")
+            assertEquals(0, panel.sqlListEntries.size)
+            assertEquals(error, search.component.statusText)
+            assertEquals(error, search.textEditor.toolTipText)
+            assertEquals(error, sqlEmptyText(panel))
+            // 右侧实际可见的标签也要报错，不能只写平台未挂载的状态区。
+            val visibleStatus = com.intellij.util.ui.UIUtil.uiTraverser(search.row)
+                .filter(javax.swing.JLabel::class.java).filter { it.isVisible && it.text == error }.toList()
+            assertFalse("非法正则必须有可见反馈", visibleStatus.isEmpty())
+            assertEquals(search.component.statusColor, visibleStatus.first().foreground)
+        }
+    }
+
+    fun testUI009_非法前缀有反馈且保留子串回退() {
+        withHistoryPanel(listOf("SELECT 'regex:('")) { panel ->
+            panel.setSearchForTest("regex:(")
+            assertEquals(1, panel.sqlListEntries.size)
+            assertEquals(message("log.history.search.invalidRegex"), searchOf(panel).component.statusText)
+            panel.setSearchForTest("regex:SELECT")
+            assertEquals(message("log.history.search.results", 1), searchOf(panel).component.statusText)
+            assertNull(searchOf(panel).textEditor.toolTipText)
+        }
+    }
+
+    fun testUI009_原生正则开关立即更新错误并可恢复() {
+        withHistoryPanel(listOf("SELECT COUNT(*) FROM t")) { panel ->
+            panel.setSearchForTest("(")
+            val search = searchOf(panel)
+            assertEquals(1, panel.sqlListEntries.size)
+            assertNull(search.textEditor.toolTipText)
+            // 直接改原生按钮使用的 FindModel，不走会主动 apply 的测试 setter。
+            search.findModel.isRegularExpressions = true
+            assertEquals(message("log.history.search.invalidRegex"), search.component.statusText)
+            assertEquals(1, panel.sqlListEntries.size)
+            search.findModel.isRegularExpressions = false
+            assertEquals(message("log.history.search.results", 1), search.component.statusText)
+            assertNull(search.textEditor.toolTipText)
+            search.findModel.isRegularExpressions = true
+            panel.setSearchForTest("")
+            assertEquals("", search.component.statusText)
+            assertNull(search.textEditor.toolTipText)
+            assertEquals(1, panel.sqlListEntries.size)
+        }
+    }
+
+    fun testUI009_有SQL无匹配与真实空文件区分() {
+        withHistoryPanel(listOf("SELECT 1")) { panel ->
+            panel.regexToggleForTest = true
+            panel.setSearchForTest("^UPDATE")
+            assertEquals(0, panel.sqlListEntries.size)
+            assertEquals(message("log.history.search.noMatches"), sqlEmptyText(panel))
+            assertEquals(message("log.history.search.results", 0), searchOf(panel).component.statusText)
+            assertNull(searchOf(panel).textEditor.toolTipText)
+            panel.setSearchForTest("")
+            panel.applyTemplateFocus("nonexistent-structure")
+            assertEquals(0, panel.sqlListEntries.size)
+            assertEquals(message("log.history.search.noMatches"), sqlEmptyText(panel))
+        }
+        withHistoryPanel(emptyList()) { panel ->
+            assertEquals(0, panel.sqlListEntries.size)
+            assertEquals(message("log.history.entries.empty"), sqlEmptyText(panel))
+            panel.setSearchForTest("missing")
+            assertEquals(message("log.history.entries.empty"), sqlEmptyText(panel))
+        }
+    }
+
+    fun testUI009_返回文件级清除正则错误且无匹配不冒充无文件() {
+        withHistoryPanel(listOf("SELECT 1")) { panel ->
+            panel.regexToggleForTest = true
+            panel.setSearchForTest("(")
+            assertNotNull(searchOf(panel).textEditor.toolTipText)
+            panel.backToFilesForTest()
+            assertEquals(0, panel.fileListEntries.size)
+            assertNull(searchOf(panel).textEditor.toolTipText)
+            assertEquals(message("log.history.search.results", 0), searchOf(panel).component.statusText)
+            assertEquals(message("log.history.search.noMatches"), filesOf(panel).emptyText.text)
+            panel.setSearchForTest("sql-history")
+            assertEquals(1, panel.fileListEntries.size)
+            panel.openFileForTest(panel.fileListEntries.single())
+            assertEquals("", searchOf(panel).component.statusText)
+            assertNull(searchOf(panel).textEditor.toolTipText)
+        }
+    }
+
     fun test历史页空态链接显示条件() {
         // T-SettingsFocusFromLink：仅「未开启自动保存 且 无历史文件」时露出
         org.junit.Assert.assertTrue(shouldShowAutoSaveHistoryLink(autoSaveEnabled = false, fileCount = 0))

@@ -32,6 +32,14 @@ public class PlatformSignatureChecker {
         File miscLib = new File(distroRoot, "plugins/libraries-misc-plugin/lib");
         collectJars(miscLib, urls);
         collectJars(new File(miscLib, "modules"), urls);
+        File[] mcpPlugins = new File(distroRoot, "plugins").listFiles(
+                file -> file.isDirectory() && file.getName().toLowerCase(java.util.Locale.ROOT).contains("mcp"));
+        if (mcpPlugins != null) {
+            for (File plugin : mcpPlugins) {
+                collectJars(new File(plugin, "lib"), urls);
+                collectJars(new File(plugin, "lib/modules"), urls);
+            }
+        }
         URLClassLoader loader = new URLClassLoader(urls.toArray(new URL[0]), null);
 
         int missing = 0;
@@ -99,6 +107,8 @@ public class PlatformSignatureChecker {
         missing += checkModuleCountApi(loader);
         missing += checkPreviewSourceContextApis(loader, dbnLib.isDirectory());
         missing += checkSqlLogTabsApis(loader);
+        missing += checkAttachTargetApis(loader);
+        missing += checkMcpToolsetCapability(loader);
 
         if (missing > 0) {
             System.out.println("RESULT MISSING " + missing);
@@ -452,6 +462,46 @@ public class PlatformSignatureChecker {
             System.out.println("MISS SqlLogPanel JBTabs API types: " + t);
             return 1;
         }
+    }
+
+    /** UI-007：AgentAttachTarget 在 handler 上反射读取命令；公共实例零参 String，不能仅按名字匹配。 */
+    public static int checkAttachTargetApis(ClassLoader loader) {
+        try {
+            Class<?> handler = Class.forName("com.intellij.execution.process.BaseProcessHandler", false, loader);
+            return checkAttachTargetCommandLine(handler);
+        } catch (Throwable t) {
+            System.out.println("MISS AgentAttachTarget BaseProcessHandler API: " + t);
+            return 1;
+        }
+    }
+
+    /** UI011：设置页复用注册器的只读 McpToolset 探测；缺席合法，存在时必须仍是接口。
+     *  不绑定版本号；不初始化类、不读 Companion、不访问服务，更不注册工具或启动服务器。
+     *  253/262 本地 javap 均证实 interface；243 发行物缺席。
+     */
+    private static int checkMcpToolsetCapability(ClassLoader loader) {
+        String name = "com.intellij.mcpserver.McpToolset";
+        if (loader.getResource(name.replace('.', '/') + ".class") == null) {
+            System.out.println("INFO MCP toolset capability absent (settings must not report ready)");
+            return 0;
+        }
+        try {
+            Class<?> toolset = Class.forName(name, false, loader);
+            if (!toolset.isInterface()) {
+                System.out.println("MISS MCP toolset capability type is no longer an interface");
+                return 1;
+            }
+            System.out.println("OK   MCP toolset capability present (not registration or server status)");
+            return 0;
+        } catch (Throwable t) {
+            System.out.println("MISS MCP toolset capability linkage: " + t);
+            return 1;
+        }
+    }
+
+    /** 与真实发行版登记共用的精确签名核验，供形态漂移负例调用。 */
+    public static int checkAttachTargetCommandLine(Class<?> handler) {
+        return checkExact(handler, "getCommandLine", String.class, false);
     }
 
     private static int checkExact(Class<?> owner, String name, Class<?> returns, boolean isStatic, Class<?>... args) {
