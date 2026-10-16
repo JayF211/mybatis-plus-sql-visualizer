@@ -257,6 +257,7 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
     internal var auxiliaryInsightListener: com.intellij.openapi.Disposable? = null
     internal var auxiliaryInsightGeneration = 0L
     internal var comparisonSqlInvalidated: (() -> Unit)? = null
+    internal var lastInsightUsageReport: cn.song.mybatisplus.visualizer.sql.insight.SqlUsageReport? = null
 
     /**
      * T-M27.2：自建 autopopup 的调度防重入标志（平台 autopopup 对非文件编辑器不生效）。

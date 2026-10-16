@@ -23,6 +23,7 @@ internal fun SqlPreviewPanel.bindAuxiliaryInsightDocument(document: Document?) {
 
 internal fun SqlPreviewPanel.invalidateAuxiliaryInsights() {
     auxiliaryInsightGeneration++
+    lastInsightUsageReport = null
     comparisonSqlInvalidated?.invoke()
     scenarioInsightView?.clear(insightText("stale"))
     previewTabs.beginRefresh("scenarios")
