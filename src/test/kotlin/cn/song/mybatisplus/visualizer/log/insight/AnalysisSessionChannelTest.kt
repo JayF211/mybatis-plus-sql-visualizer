@@ -36,7 +36,7 @@ class AnalysisSessionChannelTest {
         channel.enable()
         channel.onState(state(channel.requestedToken()!!, 10))
         channel.onEvent(event(10), entry, true)
-        for (i in 11L..110) channel.onEvent(event(i), entry, true)
+        for (i in 11L..110) channel.onEvent(event(i).copy(url = "jdbc:postgresql://localhost:5432/fixture"), entry, true)
         assertEquals(100, channel.snapshot().observations.size)
         assertEquals(100, channel.snapshot().groups.single().executions)
         assertFalse(channel.snapshot().toString().contains("secret"))

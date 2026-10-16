@@ -70,7 +70,7 @@ class AgentAnalysisIntakeTest : BasePlatformTestCase() {
                 output.writeInt(bytes.size); output.write(command); output.write(bytes); output.flush()
             }
             frame(AgentCaptureState.COMMAND, """{"protocolVersion":2,"runId":"run","kind":"SNAPSHOT","captureEpoch":1,"lastSequence":0,"captureStateToken":"$token"}""")
-            for (id in 1..100) frame(AgentProtocol.CMD_EVENT, """{"sql":"SELECT 123","ts":1000,"dn":20,"runId":"run","executionId":"exec-$id","sequence":$id,"captureEpoch":1,"threadId":1,"startNanos":100,"resultStatus":"SUCCESS","timestampSource":"ENTRY_WALL_MILLIS"}""")
+            for (id in 1..100) frame(AgentProtocol.CMD_EVENT, """{"sql":"SELECT 123","ts":1000,"dn":20,"runId":"run","executionId":"exec-$id","sequence":$id,"captureEpoch":1,"threadId":1,"startNanos":100,"resultStatus":"SUCCESS","timestampSource":"ENTRY_WALL_MILLIS","url":"jdbc:postgresql://localhost:5432/fixture"}""")
             frame(AgentProtocol.CMD_CONFIG_ACK, AgentProtocol.configAckBody(false, true, 0, 0))
             assertTrue("socket intake drained", processed.await(10, TimeUnit.SECONDS))
             assertEquals(1, manager.entries.size())
