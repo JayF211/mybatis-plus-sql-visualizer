@@ -489,6 +489,13 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
     internal var nativeConsoleEditor: com.intellij.openapi.editor.Editor? = null
 
     internal var current: PreviewResult? = null
+        set(value) {
+            field = value
+            // clear() 也经此入口：清空所有附加页，不把它伪装成仅关闭 JOIN。
+            if (::previewTabs.isInitialized) {
+                if (value == null) previewTabs.clear() else previewTabs.invalidateRefreshes()
+            }
+        }
 
     /** O-145 W7：结果到达时冻结的渲染模式；提交时不得重读设置冒充当初的渲染事实。 */
     internal var executionDialectRenderMode =
@@ -540,11 +547,10 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
      * 刷完置空；新预览替换 current 时旧值自然失配，无需额外清理。
      */
     internal var diagramEnrichRetryTarget: PreviewResult? = null
-    // F-45：maintainPage 列信息（仅 <pages> 预览非 null 时显示标签页）
-    private var columnInfoPanel: JComponent? = null
-    /** 内容区卡片：null=无内容 / "sql"=SQL编辑 / "sql+diagram"=SQL编辑 + JOIN图标签页。 */
-    private var contentPane: JBPanel<JBPanel<*>>? = null
-    internal var contentTabPane: JTabbedPane? = null
+    /** 附加页按稳定 ID 管理；分析/来源/场景功能落位后再按需挂载，不预建空白页。 */
+    internal lateinit var previewTabs: PreviewTabManager
+        private set
+    internal val contentTabPane: JTabbedPane? get() = previewTabs.pane
 
     // M12：动态条件启用集合（勾选状态，元素为 ConditionToggle.id）+ 参数值（按 source 绑定，取代位置绑定）
     internal val enabledIds = mutableSetOf<String>()
@@ -716,6 +722,7 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
         // M36.5：删除 verticalSplit 下半区——控制台已内嵌右侧，底部仅保留状态行
         //（resultPanel SOUTH，无内容时隐藏不占高度，错误/执行状态正常显示）
         add(split, BorderLayout.CENTER)
+        previewTabs = PreviewTabManager(this, split, MpSqlVisualizerBundle.message("panel.tab.sql"))
         add(resultPanel, BorderLayout.SOUTH)
 
         // T-M26.6：注册格式化快捷键——组件级 custom shortcut 命中即消费按键，
@@ -801,6 +808,9 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
      * 工具窗口模式下面板可能长期存活，由 [SqlPreviewDialog] 或工具窗口工厂调用释放。
      */
     override fun dispose() {
+        previewDisposed = true
+        // 先关闭页签接收边界，再释放原生编辑器；迟到的富化结果不可重建已关闭的页。
+        runCatching { previewTabs.close() }
         // O-88 复验修复：dispose 链捕获折叠态——懒惰回写（buildSchemeRow 开头）只在同实例触发参数区
         // 重建时执行，真机「收起→取消→换语句」走 DialogWrapper.dispose→Disposer 级联释放面板，
         // 全程无 buildSchemeRow 调用，静态字段从未写 true。面板自身是 Disposable 且经
