@@ -20,7 +20,9 @@ internal class InsightPanel(
     close: () -> Unit,
     private val navigate: (SqlSourceRange?) -> Unit,
     clearMetadata: () -> Unit = {},
+    copySummary: (String) -> Unit = {},
 ) : JPanel(BorderLayout()) {
+    private var summaryToCopy: String? = null
     private val status = JTextArea().apply { isEditable = false; lineWrap = true; wrapStyleWord = true; rows = 2 }
     private val summary = JTextArea().apply { isEditable = false; lineWrap = true; wrapStyleWord = true; rows = 4 }
     internal val tree = JTree(DefaultMutableTreeNode(text("structure"))).apply {
@@ -44,6 +46,7 @@ internal class InsightPanel(
     init {
         val toolbar = JPanel(FlowLayout(FlowLayout.LEADING)).apply {
             add(JButton(text("refresh")).apply { addActionListener { refresh() } })
+            add(JButton(text("copySummary")).apply { addActionListener { summaryToCopy?.let(copySummary) } })
             add(JButton(text("cancel")).apply { addActionListener { cancel() } })
             add(JButton(text("metadata.clear")).apply { addActionListener { clearMetadata() } })
             add(JButton(text("close")).apply { addActionListener { close() } })
@@ -55,6 +58,7 @@ internal class InsightPanel(
     fun status(key: String) { status.text = text(key) }
     fun present(presentation: InsightPresentation) {
         summary.text = presentation.summary
+        summaryToCopy = boundedInsightSummary(presentation)
         fun node(item: InsightItem): DefaultMutableTreeNode = DefaultMutableTreeNode(item).apply { item.children.forEach { add(node(it)) } }
         tree.model = DefaultTreeModel(DefaultMutableTreeNode(text("structure")).apply { presentation.items.forEach { add(node(it)) } })
         for (i in 0 until minOf(5, tree.rowCount)) tree.expandRow(i)
@@ -62,6 +66,7 @@ internal class InsightPanel(
         status(if (presentation.graphLimited) "limited" else "ready")
     }
     fun markStale() {
+        summaryToCopy = null
         tree.model = DefaultTreeModel(DefaultMutableTreeNode(text("stale")))
         graph.present(emptyList(), emptyList())
         summary.text = ""

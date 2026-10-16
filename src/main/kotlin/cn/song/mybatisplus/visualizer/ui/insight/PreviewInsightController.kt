@@ -23,6 +23,7 @@ internal class PreviewInsightController(
     private val snapshotFactory: (String, SqlInsightDialect, String) -> AnalysisSnapshot = { sql, d, version -> AnalysisSnapshot(sql, d, sourceVersion = version) },
     private val metadataGeneration: () -> Long = { 0L },
     private val clearMetadata: () -> Unit = {},
+    private val copySummary: (String) -> Unit = {},
 ) : Disposable {
     private var document: Document? = null
     private var listenerLife: Disposable? = null
@@ -72,7 +73,7 @@ internal class PreviewInsightController(
         if (view == null) {
             val panel = InsightPanel(text, ::refresh, ::cancel, { tabs.remove(TAB_ID) }, ::locate, {
                 clearMetadata(); invalidate(); refresh()
-            })
+            }, copySummary)
             if (!tabs.put(TAB_ID, text("title"), panel, onRemove = {
                     cancelActive(); displayed = null; view = null
                 })) return

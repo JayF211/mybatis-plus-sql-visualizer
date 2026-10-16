@@ -33,6 +33,7 @@ internal fun SqlPreviewPanel.showSqlInsight() {
         snapshotFactory = analysisMetadataBinding::snapshot,
         metadataGeneration = analysisMetadataBinding::generation,
         clearMetadata = analysisMetadataBinding::clear,
+        copySummary = cn.song.mybatisplus.visualizer.util.UiTextClipboard::copy,
         navigate = { doc, range ->
             val target = nativeConsoleEditor?.takeIf { !it.isDisposed && it.document === doc }
                 ?: editor?.takeIf { !it.isDisposed && it.document === doc }

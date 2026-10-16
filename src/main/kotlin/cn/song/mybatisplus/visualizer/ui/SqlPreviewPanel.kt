@@ -260,6 +260,7 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
     internal var comparisonExecutionForTest: cn.song.mybatisplus.visualizer.ui.insight.ComparisonExecutionPort? = null
     internal var comparisonTargetForTest: cn.song.mybatisplus.visualizer.execute.ComparisonTargetSession? = null
     internal var comparisonBackgroundForTest: (((() -> Unit)) -> Unit)? = null
+    internal var observedBackgroundForTest: (((() -> Unit)) -> Unit)? = null
     internal var lastInsightUsageReport: cn.song.mybatisplus.visualizer.sql.insight.SqlUsageReport? = null
     internal val analysisMetadataBinding = cn.song.mybatisplus.visualizer.sql.insight.AnalysisMetadataBinding()
 
