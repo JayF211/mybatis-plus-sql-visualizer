@@ -33,6 +33,17 @@ public class TraceBusTest {
         assertEquals(before + 1, number("controlDropped"));
         assertTrue(TraceBus.qualityFields().contains("controlGenerated"));
     }
+    @Test public void nestingBudgetDropsObservationsExplicitlyAndCleansThread() {
+        TraceBus.configure(true, false, "aaaa", true);
+        long before = number("controlHookFailed");
+        long[] scopes = new long[128];
+        for (int i = 0; i < scopes.length; i++) { scopes[i] = RequestHooks.enter(null); assertTrue(scopes[i] > 0); }
+        assertEquals(0, RequestHooks.enter(null));
+        assertEquals(before + 1, number("controlHookFailed"));
+        for (int i = scopes.length - 1; i >= 0; i--) RequestHooks.exit(scopes[i], null);
+        assertNull(RequestHooks.currentId());
+    }
+
     @Test public void disabledAndReopenedCannotReassociateInflightRequest() {
         TraceBus.configure(true, false, "aaaa", true);
         long token = RequestHooks.enter(null); assertNotNull(TraceBus.poll());

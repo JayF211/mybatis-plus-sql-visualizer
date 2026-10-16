@@ -55,6 +55,34 @@ public class SqlInsightControlFrameTest {
             EventBus.clearQueued();
         }
     }
+    @Test public void negotiatedSocketCarriesRequestAndTransactionCommands() throws Exception {
+        boolean saved = AgentState.isDisabled();
+        AgentState.setDisabled(false); EventBus.clearQueued();
+        Thread sender = null; Socket peer = null;
+        try (ServerSocket server = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
+            server.setSoTimeout(5000);
+            sender = new Thread(new SenderLoop(server.getLocalPort(), 1, 1, 2000, 1));
+            sender.setDaemon(true); sender.start(); peer = server.accept(); peer.setSoTimeout(5000);
+            DataInputStream in = new DataInputStream(peer.getInputStream());
+            DataOutputStream out = new DataOutputStream(peer.getOutputStream());
+            assertEquals(4, read(in).cmd); assertEquals(2, read(in).cmd);
+            SenderLoop.writeFrame(out, EventBus.CMD_CONFIG,
+                    "{\"disabled\":false,\"requestTracing\":true,\"transactionTracing\":true,\"captureStateToken\":\"ab12\"}");
+            assertEquals(5, read(in).cmd); assertEquals(6, read(in).cmd);
+            long request = cn.song.mybatisplus.sqlvis.agent.hook.RequestHooks.enter(null);
+            cn.song.mybatisplus.sqlvis.agent.hook.RequestHooks.exit(request, null);
+            TraceBus.emit(8, TraceBus.revision(), CaptureLedger.captureEpoch(), TraceBus.facts("COMMIT"));
+            Frame start = read(in), end = read(in), transaction = read(in);
+            assertEquals(7, start.cmd); assertEquals(7, end.cmd); assertEquals(8, transaction.cmd);
+            assertTrue(start.body.contains("ab12")); assertTrue(end.body.contains("END"));
+            assertTrue(transaction.body.contains("ab12"));
+        } finally {
+            if (sender != null) sender.interrupt(); if (peer != null) peer.close();
+            if (sender != null) sender.join(3000);
+            TraceBus.disconnected(); AgentState.setDisabled(saved); EventBus.clearQueued();
+        }
+    }
+
     @Test public void nonceEchoIsBoundedAndReplacedOnlyByExplicitConfig() {
         boolean saved = AgentState.isDisabled();
         try {

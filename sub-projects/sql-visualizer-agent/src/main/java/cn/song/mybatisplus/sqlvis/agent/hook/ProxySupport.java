@@ -24,10 +24,14 @@ final class ProxySupport {
     }
 
     static Object wrapStatement(Object rawStatement, String sql, String url) {
+        return wrapStatement(rawStatement, sql, url, null);
+    }
+
+    static Object wrapStatement(Object rawStatement, String sql, String url, TransactionTracker transactions) {
         final Class<?> cls = rawStatement.getClass();
         final Set<Class<?>> ifaces = new HashSet<Class<?>>();
         collectInterfaces(cls, ifaces);
-        final StatementHandler handler = new StatementHandler(rawStatement, sql, url);
+        final StatementHandler handler = new StatementHandler(rawStatement, sql, url, transactions);
         return newProxy(cls, ifaces, handler);
     }
 

@@ -29,6 +29,7 @@ public final class TraceBus {
         boolean nextRequest = request == null ? requests : request;
         boolean nextTransaction = transaction == null ? transactions : transaction;
         String nextToken = tokenPresent ? token : nonce;
+        if (nextToken != null && !nextToken.matches("[0-9a-fA-F]{1,64}")) nextToken = null;
         if (nextRequest != requests || nextTransaction != transactions
                 || !java.util.Objects.equals(nextToken, nonce)) {
             revision++;
@@ -74,7 +75,9 @@ public final class TraceBus {
                 + ",\"controlCleared\":" + cleared + ",\"controlEncodingFailed\":" + encodingFailed
                 + ",\"controlTransportUncertain\":" + transportUncertain + ",\"controlWritten\":" + written
                 + ",\"controlHookFailed\":" + hookFailed
-                + ",\"requestTracing\":" + requests + ",\"transactionTracing\":" + transactions;
+                + ",\"requestTracing\":" + requests + ",\"transactionTracing\":" + transactions
+                + ",\"requestCoverage\":\"SERVLET_THREAD_ONLY\",\"transactionCoverage\":\"PROXIED_CONNECTION_ONLY\""
+                + ",\"leaseIdentity\":\"OBSERVED_WRAPPER_LIFETIME\"";
     }
     static final class Frame {
         final int command; final long revision, epoch; final String body;

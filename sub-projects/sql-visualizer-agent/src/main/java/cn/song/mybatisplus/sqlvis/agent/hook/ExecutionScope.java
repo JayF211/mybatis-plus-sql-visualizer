@@ -14,6 +14,7 @@ final class ExecutionScope {
     final String source;
     RequestHooks.Scope request;
     boolean reported, failed;
+    String connectionId, leaseId, transactionId;
 
     private ExecutionScope(Object statement, String source, long sequence) {
         this.statement = statement;
@@ -66,6 +67,7 @@ final class ExecutionScope {
         event.timestamp = startMillis;
         event.captureSource = source;
         event.timestampSource = "ENTRY_WALL_MILLIS";
+        event.connectionId = connectionId; event.leaseId = leaseId; event.transactionId = transactionId;
         if (request != null) {
             event.requestId = request.id;
             event.parentRequestId = request.parent;
@@ -75,7 +77,7 @@ final class ExecutionScope {
         ArrayDeque<ExecutionScope> stack = ACTIVE.get();
         if (stack != null && stack.remove(this)) {
             if (stack.isEmpty()) ACTIVE.remove();
-            if (request != null) RequestHooks.sqlEnd(failed, !reported);
+            if (request != null) RequestHooks.sqlEnd(request, failed, !reported);
             CaptureLedger.complete();
         }
     }

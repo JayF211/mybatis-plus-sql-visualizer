@@ -16,6 +16,7 @@ public final class RequestHooks {
             if (!TraceBus.enabled(TraceBus.REQUEST)) return 0;
             ArrayDeque<Scope> stack = STACK.get();
             if (stack == null) { stack = new ArrayDeque<Scope>(); STACK.set(stack); }
+            if (stack.size() >= 128) { TraceBus.hookFailed(); return 0; }
             Scope scope = new Scope(TOKENS.incrementAndGet(), currentId(), request);
             stack.push(scope);
             try { emit(scope, "START", null); }
@@ -48,13 +49,16 @@ public final class RequestHooks {
     public static String currentId() { Scope scope = current(); return scope == null ? null : scope.id; }
     static void sqlBegin(long sequence) {
         ArrayDeque<Scope> stack = STACK.get();
-        if (stack != null && current() != null) for (Scope scope : stack) {
+        Scope current = current();
+        if (stack != null && current != null) for (Scope scope : stack) {
+            if (scope.revision != current.revision || scope.epoch != current.epoch) continue;
             scope.generated++; scope.lastSequence = Math.max(scope.lastSequence, sequence);
         }
     }
-    static void sqlEnd(boolean error, boolean lost) {
+    static void sqlEnd(Scope owner, boolean error, boolean lost) {
         ArrayDeque<Scope> stack = STACK.get();
         if (stack != null) for (Scope scope : stack) {
+            if (scope.revision != owner.revision || scope.epoch != owner.epoch) continue;
             scope.completed++; if (error) scope.failures++; if (lost) scope.lost++;
         }
     }
