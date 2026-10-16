@@ -28,15 +28,16 @@ class ScenarioInsightViewTest {
     }
     @Test fun `export is only projected after explicit preview click and stale state disables it`() {
         SwingUtilities.invokeAndWait {
-            val exports = mutableListOf<String>()
-            val view = ScenarioInsightView({ it }, {}, {}, {}, exports::add)
+            val exports = mutableListOf<List<XmlScenarioResult>>()
+            val view = ScenarioInsightView({ it }, {}, {}, {}, { exports += it })
             view.present(listOf(XmlScenarioResult("secret-preset", "SELECT 'password' FROM private_table", 1, emptyMap(), null, null, emptyList())), listOf("secret-preset"), "notice")
             assertTrue(exports.isEmpty())
             val button = view.panel.actions.components.filterIsInstance<JButton>().last()
             button.doClick()
             assertEquals(1, exports.size)
-            assertFalse(exports.single().contains("password"))
-            assertFalse(exports.single().contains("secret-preset"))
+            val projected = cn.song.mybatisplus.visualizer.share.SqlScenarioRegressionPackage.export(exports.single()) as cn.song.mybatisplus.visualizer.share.SqlScenarioRegressionPackage.Export.Ready
+            assertFalse(projected.json.contains("password"))
+            assertFalse(projected.json.contains("secret-preset"))
             view.clear("stale")
             assertFalse(button.isEnabled)
         }

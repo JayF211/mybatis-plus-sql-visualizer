@@ -46,6 +46,7 @@ internal class RuntimeInsightView(
     private val refresh: () -> Unit,
     close: () -> Unit,
     candidates: () -> Unit,
+    private val baselineView: RequestBaselineView? = null,
 ) {
     val panel = JPanel(BorderLayout())
     val workload = InsightDetailPanel(listOf(text("runtime.session"), text("runtime.shape"), text("runtime.count"), text("runtime.duration"), text("runtime.errors")), text("runtime.notice"))
@@ -79,6 +80,7 @@ internal class RuntimeInsightView(
             addTab(text("runtime.requests"), requests)
             addTab(text("runtime.transactions"), transactions)
             addTab(text("runtime.evidence"), evidence)
+            baselineView?.let { addTab(text("baseline.title"), it) }
         }, BorderLayout.CENTER)
     }
     fun present(snapshot: RuntimeInsightSnapshot) {
@@ -90,6 +92,7 @@ internal class RuntimeInsightView(
         requests.showRows(RuntimeInsightPresentation.requests(snapshot, SqlRequestBudget((count.value as Number).toInt(), (millis.value as Number).toLong() * 1_000_000)))
         transactions.showRows(RuntimeInsightPresentation.transactions(snapshot))
         evidence.present(snapshot)
+        baselineView?.present(snapshot.requests)
     }
     fun dispose() {
         if (closed) return

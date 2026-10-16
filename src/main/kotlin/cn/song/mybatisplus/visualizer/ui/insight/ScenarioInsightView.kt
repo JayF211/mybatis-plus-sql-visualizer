@@ -39,7 +39,7 @@ internal class ScenarioInsightView(
     refresh: () -> Unit,
     cancel: () -> Unit,
     close: () -> Unit,
-    private val exportPreview: (String) -> Unit,
+    private val exportPreview: (List<XmlScenarioResult>) -> Unit,
 ) {
     val panel = InsightDetailPanel(listOf(text("scenario.name"), text("quality"), text("scenario.parameters"), text("scenario.relations")), text("scenario.notice"))
     private var results = emptyList<XmlScenarioResult>()
@@ -58,10 +58,7 @@ internal class ScenarioInsightView(
                 cn.song.mybatisplus.visualizer.xml.XmlScenarioRegression.compare(expected, results).joinToString("\n") { "${it.name}: ${it.status} ${it.differences}" }
         }
         exportButton = panel.button(text("scenario.export")) {
-            when (val exported = SqlScenarioRegressionPackage.export(results)) {
-                is SqlScenarioRegressionPackage.Export.Ready -> exportPreview(exported.json)
-                is SqlScenarioRegressionPackage.Export.Rejected -> panel.status.text = exported.reason
-            }
+            exportPreview(results.toList())
         }.apply { isEnabled = false }
     }
     fun clear(message: String) {

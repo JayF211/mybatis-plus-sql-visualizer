@@ -30,6 +30,9 @@ internal fun SqlPreviewPanel.showSqlInsight() {
         },
         execute = { task -> ApplicationManager.getApplication().executeOnPooledThread(Runnable { task() }) },
         dispatch = { task -> ApplicationManager.getApplication().invokeLater { if (!previewDisposed && project?.isDisposed != true) task() } },
+        snapshotFactory = analysisMetadataBinding::snapshot,
+        metadataGeneration = analysisMetadataBinding::generation,
+        clearMetadata = analysisMetadataBinding::clear,
         navigate = { doc, range ->
             val target = nativeConsoleEditor?.takeIf { !it.isDisposed && it.document === doc }
                 ?: editor?.takeIf { !it.isDisposed && it.document === doc }

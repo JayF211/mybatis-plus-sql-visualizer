@@ -46,6 +46,7 @@ internal fun SqlPreviewPanel.showResultComparison() {
         add(JSplitPane(JSplitPane.VERTICAL_SPLIT, JSplitPane(JSplitPane.HORIZONTAL_SPLIT, JScrollPane(before), JScrollPane(after)).apply { resizeWeight = 0.5 }, results).apply { resizeWeight = 0.35 }, BorderLayout.CENTER)
     }
     fun background(task: () -> Unit) {
+        comparisonBackgroundForTest?.let { it(task); return }
         ApplicationManager.getApplication().executeOnPooledThread {
             try { task() } catch (failure: Exception) {
                 if (failure is java.util.concurrent.CancellationException || failure is com.intellij.openapi.progress.ProcessCanceledException || failure is InterruptedException) throw failure
@@ -69,8 +70,9 @@ internal fun SqlPreviewPanel.showResultComparison() {
         val option = choices.selectedItem as? ComparisonTargetOption ?: return@button
         gate.invalidate()
         val version = gate.capture()
+        val targetGeneration = target.generationToken()
         background {
-            val selected = target.select(option.identity)
+            val selected = target.select(option.identity, targetGeneration)
             ApplicationManager.getApplication().invokeLater {
                 if (!previewDisposed && gate.isCurrent(version)) results.status.text = insightText("comparison.notice") + "\ntarget=$selected"
             }
@@ -82,11 +84,19 @@ internal fun SqlPreviewPanel.showResultComparison() {
         if (selected == null) { results.status.text = insightText("comparison.targetRequired"); return@button }
         val left = before.text; val right = after.text
         if (!ComparisonUiPolicy.bindingsResolved(left, right)) { results.status.text = insightText("comparison.unresolved"); return@button }
-        when (val preparation = SqlComparisonRequest.prepare(left, right, selected.identity, selected.generation, maxRows = 100, timeoutSeconds = 10)) {
-            is SqlComparisonRequest.Preparation.Rejected -> results.status.text = preparation.reason
-            is SqlComparisonRequest.Preparation.Ready -> {
-                prepared = preparation.request; consent = SqlComparisonConsent(preparation.request)
-                results.detail.text = "target=$selected\nmaxRows=100; timeout=10s\nBASELINE:\n$left\nCANDIDATE:\n$right\n" + insightText("comparison.notice")
+        val version = gate.capture()
+        background {
+            val preparation = SqlComparisonRequest.prepare(left, right, selected.identity, selected.generation, maxRows = 100, timeoutSeconds = 10)
+            ApplicationManager.getApplication().invokeLater {
+                if (!previewDisposed && gate.isCurrent(version) && target.snapshot() == selected) {
+                    when (preparation) {
+                        is SqlComparisonRequest.Preparation.Rejected -> results.status.text = preparation.reason
+                        is SqlComparisonRequest.Preparation.Ready -> {
+                            prepared = preparation.request; consent = SqlComparisonConsent(preparation.request)
+                            results.detail.text = "target=$selected\nmaxRows=100; timeout=10s\nBASELINE:\n$left\nCANDIDATE:\n$right\n" + insightText("comparison.notice")
+                        }
+                    }
+                }
             }
         }
     }
@@ -106,7 +116,7 @@ internal fun SqlPreviewPanel.showResultComparison() {
         val ticket = previewTabs.beginRefresh("result-comparison") { cancel.cancel() } ?: return@button
         cancellation = cancel
         results.status.text = insightText("loading")
-        executor.execute(authorized, safety, target, cancel) { response ->
+        try { executor.execute(authorized, safety, target, cancel) { response ->
             ApplicationManager.getApplication().invokeLater {
                 if (!previewDisposed && !proj.isDisposed && gate.isCurrent(version)) previewTabs.applyIfCurrent(ticket) {
                     results.showRows(listOf("baseline" to response.baseline, "candidate" to response.candidate).map { (side, snapshot) ->
@@ -116,6 +126,9 @@ internal fun SqlPreviewPanel.showResultComparison() {
                     results.status.text = "${response.comparison}\n${response.consistency}; rows=${response.effectiveMaxRows}\n" + insightText("comparison.notice")
                 }
             }
+        } } catch (failure: Exception) {
+            if (failure is java.util.concurrent.CancellationException || failure is com.intellij.openapi.progress.ProcessCanceledException) throw failure
+            results.status.text = insightText("failed")
         }
     }
     results.button(insightText("cancel")) { cancellation?.cancel(); results.status.text = insightText("cancelled") }

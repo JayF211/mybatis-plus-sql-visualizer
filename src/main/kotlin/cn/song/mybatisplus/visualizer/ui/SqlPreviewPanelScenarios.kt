@@ -29,7 +29,7 @@ internal fun SqlPreviewPanel.showParameterScenarios() {
         view = ScenarioInsightView(::insightText, { refreshParameterScenarios() }, {
             previewTabs.beginRefresh("scenarios")
             scenarioInsightView?.clear(insightText("cancelled"))
-        }, { previewTabs.remove("scenarios") }, { showScenarioExportPreview(it) })
+        }, { previewTabs.remove("scenarios") }, { exportScenariosInBackground(it) })
         scenarioInsightView = view
         previewTabs.put("scenarios", insightText("scenario.title"), view.panel, onRemove = { scenarioInsightView = null })
     }
