@@ -32,6 +32,18 @@ class SqlScenarioRegressionPackageTest {
         assertTrue(!case.has("outputFields") || case.get("outputFields").isJsonNull)
     }
 
+    @Test(expected = java.util.concurrent.CancellationException::class)
+    fun `cancelled export aborts before projection`() {
+        val empty = XmlScenarioResult("", "SELECT 1", 0, emptyMap(), null, null, emptyList())
+        SqlScenarioRegressionPackage.export(listOf(empty)) { true }
+    }
+
+    @Test
+    fun `total input budget rejects before serializing all cases`() {
+        val large = XmlScenarioResult("", "SELECT '" + "x".repeat(70_000) + "'", 0, emptyMap(), null, null, emptyList())
+        assertTrue(SqlScenarioRegressionPackage.export(List(4) { large }) is SqlScenarioRegressionPackage.Export.Rejected)
+    }
+
     @Test
     fun `over scenario budget rejected`() {
         val empty = XmlScenarioResult("", "SELECT 1", 0, emptyMap(), null, null, emptyList())
