@@ -369,6 +369,8 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
             override fun removeUpdate(e: javax.swing.event.DocumentEvent) = scheduleSearch()
             override fun changedUpdate(e: javax.swing.event.DocumentEvent) = scheduleSearch()
         })
+        // 原生按钮只修改 FindModel，不触发 DocumentListener；切旗必须同步重验并清除过期错误。
+        nativeSearch.findModel.addObserver { applySearch() }
         // T-HistorySearchToggles：搜索框外包宿主容器（CENTER 搜索框 + EAST 正则/大小写两枚开关）
         toolbar.add(searchBar)
         // O-90：同模板聚焦提示 chip（聚焦时显示；点击清除）
@@ -600,6 +602,10 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     private fun updateFilesEmptyText() {
         val status = fileList.emptyText
         status.clear()
+        if (allFiles.isNotEmpty()) {
+            status.text = MpSqlVisualizerBundle.message("log.history.search.noMatches")
+            return
+        }
         MpSqlVisualizerBundle.message("log.history.files.empty").split("\n").forEach { line ->
             status.appendLine(line)
         }
@@ -679,7 +685,10 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         } else {
             allFiles.filter { it.displayName.contains(query, ignoreCase = !matchCaseEnabled) }
         }
-        filtered.forEach { fileListModel.addElement(it) } 
+        filtered.forEach { fileListModel.addElement(it) }
+        // 一级仍为文件名子串搜索；从二级返回时清掉与此层无关的正则错误。
+        nativeSearch.setSearchError(null)
+        updateFilesEmptyText()
         // T-SearchToggleNativeLook：原生状态区读数（对齐 IDEA 搜索条「N results」位）
         nativeSearch.setStatusText(
             if (query.isEmpty()) "" else MpSqlVisualizerBundle.message("log.history.search.results", filtered.size),
@@ -710,9 +719,17 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
                 matchCase = matchCaseEnabled,
                 memo = regexMemo,
             )
-        // T-SearchToggleNativeLook：原生状态区读数（对齐 IDEA 搜索条「N results」位）
+        val query = searchField.text.trim()
+        val invalidRegex = query.isNotEmpty() &&
+            (regexEnabled || query.startsWith(HISTORY_REGEX_PREFIX)) && regexMemo.compiled == null
+        val error = if (invalidRegex) MpSqlVisualizerBundle.message("log.history.search.invalidRegex") else null
+        // 过滤仍保留既有非法正则子串回退，但不能让「0 条」掩盖输入错误。
+        nativeSearch.setSearchError(error)
         nativeSearch.setStatusText(
-            if (searchField.text.trim().isEmpty()) "" else MpSqlVisualizerBundle.message("log.history.search.results", filteredEntries.size),
+            error ?: if (query.isEmpty()) "" else MpSqlVisualizerBundle.message("log.history.search.results", filteredEntries.size),
+        )
+        sqlList.emptyText.text = error ?: MpSqlVisualizerBundle.message(
+            if (currentEntries.isEmpty()) "log.history.entries.empty" else "log.history.search.noMatches",
         )
         showSqlEntries(filteredEntries)
     }
