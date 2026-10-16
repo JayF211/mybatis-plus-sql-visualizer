@@ -85,6 +85,7 @@ internal fun SqlPreviewPanel.moreActions(): List<Pair<String, () -> Unit>> = lis
     MpSqlVisualizerBundle.message("insight.usage.action") to { showObjectUsage() },
     MpSqlVisualizerBundle.message("insight.schema.action") to { showSchemaComparison() },
     MpSqlVisualizerBundle.message("insight.optimization.action") to { showOptimizationCandidates() },
+    MpSqlVisualizerBundle.message("insight.comparison.action") to { showResultComparison() },
     MpSqlVisualizerBundle.message("panel.param.import") to { importParamsFromClipboard() },
     MpSqlVisualizerBundle.message("panel.compare") to { showSqlDiff() },
     MpSqlVisualizerBundle.message("panel.share") to { showShareDialog() },

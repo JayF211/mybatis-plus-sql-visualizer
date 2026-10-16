@@ -175,6 +175,7 @@ class SqlPreviewTopRowLayoutTest : BasePlatformTestCase() {
                     MpSqlVisualizerBundle.message("insight.usage.action"),
                     MpSqlVisualizerBundle.message("insight.schema.action"),
                     MpSqlVisualizerBundle.message("insight.optimization.action"),
+                    MpSqlVisualizerBundle.message("insight.comparison.action"),
                     MpSqlVisualizerBundle.message("panel.param.import"),
                     MpSqlVisualizerBundle.message("panel.compare"),
                     MpSqlVisualizerBundle.message("panel.share"),

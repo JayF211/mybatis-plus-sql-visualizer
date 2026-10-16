@@ -28,7 +28,8 @@ class RuntimeEvidencePanelTest {
     }
     @Test fun `timeline paints overlapping intervals without platform plugins`() {
         SwingUtilities.invokeAndWait {
-            val timeline = RuntimeTimeline(); timeline.present(listOf(event("1", 0), event("2", 20)), "one run")
+            val timeline = RuntimeTimeline(); timeline.present(listOf(event("1", -100), event("2", -60)), "one run")
+            assertEquals(2, timeline.intervalCountForTest())
             timeline.setSize(900, 200)
             val image = BufferedImage(900, 200, BufferedImage.TYPE_INT_ARGB)
             val g = image.createGraphics(); try { timeline.paint(g) } finally { g.dispose() }

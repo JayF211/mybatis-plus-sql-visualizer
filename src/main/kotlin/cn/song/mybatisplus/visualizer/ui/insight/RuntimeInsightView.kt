@@ -5,7 +5,7 @@ import cn.song.mybatisplus.visualizer.log.insight.*
 import java.awt.BorderLayout
 import javax.swing.*
 
-internal data class RuntimeInsightSnapshot(val sessions: List<AnalysisSessionSnapshot>, val requests: List<ObservedRequest>, val transactions: List<TransactionEvent>)
+internal data class RuntimeInsightSnapshot(val sessions: List<AnalysisSessionSnapshot>, val requests: List<ObservedRequest>, val transactions: List<TransactionEvent>, val consistency: List<String> = emptyList())
 internal interface RuntimeInsightSource {
     fun enable(enabled: Boolean)
     fun snapshot(): RuntimeInsightSnapshot
@@ -86,7 +86,7 @@ internal class RuntimeInsightView(
         last = snapshot
         enabled.isSelected = snapshot.sessions.any { it.enabled }
         workload.showRows(RuntimeInsightPresentation.workload(snapshot, text))
-        workload.status.text = text("runtime.notice") + "\n" + snapshot.sessions.mapIndexed { index, s -> "${index + 1}: enabled=${s.enabled}; quality=${s.qualityIssues}; bytes=${s.retainedBytes}" }.joinToString("\n")
+        workload.status.text = text("runtime.notice") + "\n" + text("runtime.consistency") + snapshot.consistency.joinToString() + "\n" + snapshot.sessions.mapIndexed { index, s -> "${index + 1}: enabled=${s.enabled}; quality=${s.qualityIssues}; bytes=${s.retainedBytes}" }.joinToString("\n")
         requests.showRows(RuntimeInsightPresentation.requests(snapshot, SqlRequestBudget((count.value as Number).toInt(), (millis.value as Number).toLong() * 1_000_000)))
         transactions.showRows(RuntimeInsightPresentation.transactions(snapshot))
         evidence.present(snapshot)

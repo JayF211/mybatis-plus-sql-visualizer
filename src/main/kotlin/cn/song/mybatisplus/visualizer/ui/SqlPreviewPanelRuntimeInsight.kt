@@ -16,7 +16,10 @@ internal fun SqlPreviewPanel.showRuntimeInsight() {
         val manager = AgentManager.getInstance(proj)
         val source = object : RuntimeInsightSource {
             override fun enable(enabled: Boolean) { manager.setSqlAnalysisEnabled(enabled) }
-            override fun snapshot() = RuntimeInsightSnapshot(manager.sqlAnalysisSnapshots(), manager.sqlRequestSnapshots(), manager.sqlTransactionEvents())
+            override fun snapshot(): RuntimeInsightSnapshot {
+                val bundles = manager.sqlAnalysisEvidence()
+                return RuntimeInsightSnapshot(bundles.map { it.sql }, bundles.flatMap { it.requests }, bundles.flatMap { it.transactions }, bundles.map { it.consistency })
+            }
         }
         view = RuntimeInsightView(::insightText, source, { refreshRuntimeInsight() }, { previewTabs.remove("runtime-analysis") }, { showExecutionCandidates() })
         runtimeInsightSource = source
@@ -37,7 +40,13 @@ internal fun SqlPreviewPanel.refreshRuntimeInsight() {
     var future: java.util.concurrent.Future<*>? = null
     val ticket = previewTabs.beginRefresh("runtime-analysis") { stopped.set(true); future?.cancel(true) } ?: return
     future = ApplicationManager.getApplication().executeOnPooledThread {
-        val snapshot = source.snapshot()
+        val snapshot = try { source.snapshot() } catch (failure: Exception) {
+            if (failure is java.util.concurrent.CancellationException || failure is com.intellij.openapi.progress.ProcessCanceledException || failure is InterruptedException) throw failure
+            ApplicationManager.getApplication().invokeLater {
+                if (!previewDisposed && !stopped.get()) previewTabs.applyIfCurrent(ticket) { view.workload.status.text = insightText("failed") }
+            }
+            return@executeOnPooledThread
+        }
         ApplicationManager.getApplication().invokeLater {
             if (!previewDisposed && project?.isDisposed != true && !stopped.get()) previewTabs.applyIfCurrent(ticket) { view.present(snapshot) }
         }

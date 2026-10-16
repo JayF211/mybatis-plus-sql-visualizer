@@ -44,6 +44,7 @@ internal class OfflineTraceView(
         }
         panel.add(JSplitPane(JSplitPane.VERTICAL_SPLIT, JScrollPane(input), results).apply { resizeWeight = 0.25 }, BorderLayout.CENTER)
     }
+    fun clear(message: String) { snapshot = null; results.showRows(emptyList()); results.status.text = message }
     fun present(result: OfflineTraceImport.Result) {
         when (result) {
             is OfflineTraceImport.Result.Accepted -> {

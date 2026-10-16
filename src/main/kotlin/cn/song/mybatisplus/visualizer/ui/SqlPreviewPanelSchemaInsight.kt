@@ -20,22 +20,46 @@ internal fun SqlPreviewPanel.showSchemaComparison() {
         add(JSplitPane(JSplitPane.VERTICAL_SPLIT,
             JSplitPane(JSplitPane.HORIZONTAL_SPLIT, JScrollPane(before), JScrollPane(after)).apply { resizeWeight = 0.5 }, results).apply { resizeWeight = 0.3 }, BorderLayout.CENTER)
     }
+    val useUsage = JCheckBox(insightText("schema.useUsage"))
+    val affectedChoice = JComboBox<String>()
+    var changes = emptyList<cn.song.mybatisplus.visualizer.sql.insight.SqlSchemaChange>()
+    var affected = emptyList<cn.song.mybatisplus.visualizer.sql.insight.SqlUsageReference>()
+    results.actions.add(useUsage)
+    results.actions.add(affectedChoice)
+    results.table.selectionModel.addListSelectionListener {
+        if (!it.valueIsAdjusting) {
+            affected = changes.getOrNull(results.selectedRow())?.affected.orEmpty()
+            affectedChoice.model = DefaultComboBoxModel(affected.map { ref -> "${ref.location.filePath}:${ref.location.startOffset}" }.toTypedArray())
+        }
+    }
+    results.button(insightText("usage.navigate")) {
+        affected.getOrNull(affectedChoice.selectedIndex)?.let { navigateUsage(it.location) { message -> results.status.text = message } }
+    }
+    val inputGate = cn.song.mybatisplus.visualizer.ui.insight.InsightInputVersion({
+        previewTabs.beginRefresh("schema-comparison")
+        changes = emptyList(); affected = emptyList(); affectedChoice.removeAllItems()
+        results.showRows(emptyList()); results.status.text = insightText("stale")
+    }, before.document, after.document)
     results.button(insightText("schema.compare")) {
         val left = before.text; val right = after.text
+        val usage = if (useUsage.isSelected) lastInsightUsageReport else null
+        changes = emptyList(); affected = emptyList(); results.showRows(emptyList())
+        val inputVersion = inputGate.capture()
         var future: java.util.concurrent.Future<*>? = null
         val ticket = previewTabs.beginRefresh("schema-comparison") { future?.cancel(true) }
         if (ticket != null) future = ApplicationManager.getApplication().executeOnPooledThread {
             val a = SqlSchemaSnapshotCodec.parse(left)
             val b = SqlSchemaSnapshotCodec.parse(right)
             val report = if (a is SqlSchemaSnapshotCodec.Result.Accepted && b is SqlSchemaSnapshotCodec.Result.Accepted)
-                SqlSchemaDiffer.compare(a.snapshot, b.snapshot, isCancelled = { Thread.currentThread().isInterrupted }) else null
+                SqlSchemaDiffer.compare(a.snapshot, b.snapshot, usage, isCancelled = { Thread.currentThread().isInterrupted }) else null
             ApplicationManager.getApplication().invokeLater {
-                if (!previewDisposed) previewTabs.applyIfCurrent(ticket) {
+                if (!previewDisposed && inputGate.isCurrent(inputVersion)) previewTabs.applyIfCurrent(ticket) {
                     if (report == null) {
                         results.showRows(emptyList())
                         results.status.text = listOfNotNull((a as? SqlSchemaSnapshotCodec.Result.Rejected)?.reason, (b as? SqlSchemaSnapshotCodec.Result.Rejected)?.reason).joinToString("\n")
                     } else {
-                        results.showRows(report.changes.take(2000).map { change -> InsightDetailRow(
+                        changes = report.changes.take(2000)
+                        results.showRows(changes.map { change -> InsightDetailRow(
                             listOf(change.kind.name, change.tableNameParts.joinToString("."), change.column ?: "—"),
                             "before=${change.beforeType ?: "UNKNOWN"}\nafter=${change.afterType ?: "UNKNOWN"}\naffected=${change.affected}") })
                         results.status.text = insightText("schema.notice") + "\ndatabase=${report.databaseContext}; ${report.beforeVersion} → ${report.afterVersion}; comparable=${report.comparable}; impactComplete=${report.impactComplete}\n" + report.diagnostics.joinToString("\n") { "${it.code}: ${it.message}" }
@@ -46,6 +70,6 @@ internal fun SqlPreviewPanel.showSchemaComparison() {
     }
     results.button(insightText("cancel")) { previewTabs.beginRefresh("schema-comparison"); results.status.text = insightText("cancelled") }
     results.button(insightText("close")) { previewTabs.remove("schema-comparison") }
-    previewTabs.put("schema-comparison", insightText("schema.title"), host)
+    previewTabs.put("schema-comparison", insightText("schema.title"), host, onRemove = { inputGate.close() })
     previewTabs.pane?.selectedComponent = host
 }
