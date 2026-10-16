@@ -82,7 +82,7 @@ internal fun SqlPreviewPanel.showSchemaComparison() {
                         changes = report.changes.take(2000)
                         results.showRows(changes.map { change -> InsightDetailRow(
                             listOf(change.kind.name, change.tableNameParts.joinToString("."), change.column ?: "—"),
-                            "before=${change.beforeType ?: "UNKNOWN"}\nafter=${change.afterType ?: "UNKNOWN"}\naffected=${change.affected}") })
+                            "before=${change.beforeType ?: "UNKNOWN"}\nafter=${change.afterType ?: "UNKNOWN"}\nnullable=${change.beforeNullable ?: "UNKNOWN"} → ${change.afterNullable ?: "UNKNOWN"}\naffected=${change.affected}") })
                         results.status.text = insightText("schema.notice") + "\ndatabase=${report.databaseContext}; ${report.beforeVersion} → ${report.afterVersion}; comparable=${report.comparable}; impactComplete=${report.impactComplete}\n" + report.diagnostics.joinToString("\n") { "${it.code}: ${it.message}" }
                     }
                 }

@@ -81,6 +81,22 @@ class PreviewInsightControllerTest : BasePlatformTestCase() {
         } finally { controller.dispose() }
     }
 
+    fun testMetadataGenerationChangeRejectsAlreadyComputedResult() {
+        val queue = Queue(); val tabs = tabs(); val binding = AnalysisMetadataBinding()
+        val controller = PreviewInsightController(tabs, { it }, { SqlInsightDialect.POSTGRESQL }, queue::execute,
+            { queue.callbacks += it }, { _, _ -> true }, snapshotFactory = binding::snapshot,
+            metadataGeneration = binding::generation, clearMetadata = binding::clear)
+        try {
+            controller.bind(EditorFactory.getInstance().createDocument("SELECT t.id FROM t"))
+            controller.open(); queue.work()
+            binding.clear()
+            queue.apply()
+            assertEquals("loading", controller.panelForTest()!!.statusText())
+            controller.refresh(); queue.work(); queue.apply()
+            assertEquals("ready", controller.panelForTest()!!.statusText())
+        } finally { controller.dispose() }
+    }
+
     fun testTimeBudgetStopsBeforeAnalyzerAndReleasesLoadingState() {
         val queue = Queue(); val tabs = tabs(); var now = 0L; var calls = 0
         val controller = PreviewInsightController(tabs, { it }, { SqlInsightDialect.POSTGRESQL }, queue::execute,
