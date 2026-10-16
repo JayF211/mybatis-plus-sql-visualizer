@@ -8,13 +8,12 @@ package cn.song.mybatisplus.visualizer.log
  * **键 = [logTimeKey]（占位符版 rawSql 指纹）**：两侧同源原材料，不经过参数还原。
  * 旧口径用 `dedupeKey`（还原后 SQL 指纹），要求控制台与 agent 两套还原器逐字符一致——
  * 布尔参数、注释内 `?`、参数个数不等三类分叉都会静默失配（T-AgentLogTime 实证）。
- * 参数值序列（[logTimeParamSignature]）只作**次级判别**：同键多次执行时挑参数一致的那条，
- * 不是命中条件——参数渲染口径再分叉也不会把时间整条丢掉。
+ * 参数值序列（[logTimeParamSignature]）必须匹配：同模板不等于同一次执行，签名不一致时
+ * 返回未命中并保留候选，调用方回落执行开始时间，不借用队首其他执行的时间。
  *
- * 结构：`LinkedHashMap<键, 队列>`，同键**排队**而非覆盖（旧实现同键 `remove`+`put`，
- * 同一条 SQL 连续执行时先来的时间会被后来的顶掉）。`take` 先扫同键队列找签名一致项，
- * 找不到退回队首（宁用近似时间也不错失）；超出时间窗（[WINDOW_MS]）的陈旧项直接丢弃，
- * 防长时间接管里与本次执行配错。
+ * 结构：`LinkedHashMap<键, 队列>`，同键**排队**而非覆盖。`take` 消费第一个签名一致项，
+ * 双方空签名或同签名重复执行仍按 FIFO；空与非空签名不混配。超出时间窗（[WINDOW_MS]）
+ * 的陈旧项直接丢弃，防长时间接管里与本次执行配错。
  *
  * 并线程模型：控制台过滤线程 put / agent 会话线程 take，两侧各为每条 SQL 一次 O(1)~O(队列长)
  * 操作，锁竞争可忽略。有界（[CAPACITY] 个键、单键 [PER_KEY_CAPACITY] 条）防驻留膨胀。
@@ -49,8 +48,8 @@ object LogTimeCorrelator {
      * 暂存一条控制台日志时间。
      *
      * @param key [logTimeKey]（占位符版 SQL 指纹）
-     * @param logTime 日志行原始时间（未解析到时间戳时由调用方回落条目捕获时间）
-     * @param signature [logTimeParamSignature]（次级判别用）
+     * @param logTime 日志行原始时间；没有真实时间戳时不得入册IDE解析时刻。
+     * @param signature [logTimeParamSignature]（精确匹配用）
      */
     @Synchronized
     fun put(key: String, logTime: Long, signature: String = "") {
@@ -83,7 +82,7 @@ object LogTimeCorrelator {
 
     /**
      * 取回并消费一条日志时间；未命中返回 null（调用方回落捕获时间）。
-     * 同键队列里优先取参数签名一致的那条，找不到退回队首。
+     * 同键队列里只取参数签名一致的那条，找不到保持队列不变并记未命中。
      */
     @Synchronized
     fun take(key: String, signature: String = ""): Long? {
@@ -93,8 +92,7 @@ object LogTimeCorrelator {
             map.remove(key)
             return miss()
         }
-        val matched = queue.firstOrNull { it.signature == signature }
-        val item = matched ?: queue.first()
+        val item = queue.firstOrNull { it.signature == signature } ?: return miss()
         queue.remove(item)
         items--
         if (queue.isEmpty()) map.remove(key)

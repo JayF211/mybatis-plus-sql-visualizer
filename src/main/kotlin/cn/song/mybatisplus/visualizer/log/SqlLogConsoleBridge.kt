@@ -966,7 +966,7 @@ internal fun processConsoleLine(
 /**
  * T-AgentDialectLoop / T-AgentLogTime：增强接管期间的日志时间嗅探——复用既有三解析器的配对/时间解析
  * （零新解析逻辑），产出的条目不进面板、仅把「[logTimeKey] → 日志时间」暂存 [LogTimeCorrelator]
- * （参数值序列作次级判别签名）。
+ * （参数值序列必须匹配；没有真实日志时间的行不入册）。
  * 成本口径：每行 3 次 contains 门控（解析器既有门），每条 SQL 一次条目构造 + 指纹，
  * 条目即弃零驻留；源码标记行跳过（条目已弃，无需归属）。
  */
@@ -980,7 +980,9 @@ private fun sniffLogTimestamp(line: String, ctx: BridgeLineContext) {
     val taken = ctx.myBatisParser.takeEntries() + ctx.hibernateParser.takeEntries() +
         ctx.jdbcParser.takeEntries() + ctx.shardingParser.takeEntries()
     for (e in taken) {
-        LogTimeCorrelator.put(logTimeKey(e), e.logTimestamp ?: e.timestamp, logTimeParamSignature(e.params))
+        // 无时间 StdOut 的 timestamp 是 IDE 解析时刻，不能冒充应用日志时间。
+        val logTime = e.logTimestamp ?: continue
+        LogTimeCorrelator.put(logTimeKey(e), logTime, logTimeParamSignature(e.params))
     }
 }
 

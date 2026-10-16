@@ -62,11 +62,40 @@ class LogTimeCorrelatorTest {
     }
 
     @Test
-    fun `签名对不上退队首不错失`() {
+    fun `签名不匹配必须未命中且不能消费别的执行`() {
         LogTimeCorrelator.clear()
         val t1 = now() - 10
+        val misses = LogTimeCorrelator.missCount()
         LogTimeCorrelator.put("fp", t1, "1")
-        assertEquals("渲染口径分叉时退化为队首配对（近似优于空）", t1, LogTimeCorrelator.take("fp", "不认识的签名")!!)
+        assertNull("签名已知不一致，不能借用其他执行的时间", LogTimeCorrelator.take("fp", "2"))
+        assertEquals(misses + 1, LogTimeCorrelator.missCount())
+        assertEquals("错配请求不能偷走候选", 1, LogTimeCorrelator.size())
+        assertEquals(t1, LogTimeCorrelator.take("fp", "1"))
+    }
+
+    @Test
+    fun `单键十条挤掉前两条后不发生错配连锁`() {
+        LogTimeCorrelator.clear()
+        val base = now()
+        (1..10).forEach { LogTimeCorrelator.put("burst", base + it, "sig$it") }
+        assertEquals(8, LogTimeCorrelator.size())
+        // 旧逻辑会给1借3、给2借4，最终让9/10未命中；容量本身不是本测试的修复目标。
+        val observed = (1..10).map { LogTimeCorrelator.take("burst", "sig$it") }
+        val expected: List<Long?> = listOf(null, null) + (3..10).map { base + it }
+        assertEquals("只允许本签名命中；被淘汰的1/2回退，3..10仍各取自己的时间", expected, observed)
+        assertEquals(0, LogTimeCorrelator.size())
+    }
+
+    @Test
+    fun `空签名不能借用有签名条目_反向也不允许`() {
+        LogTimeCorrelator.clear()
+        val base = now()
+        LogTimeCorrelator.put("known", base, "sig")
+        assertNull(LogTimeCorrelator.take("known", ""))
+        assertEquals(base, LogTimeCorrelator.take("known", "sig"))
+        LogTimeCorrelator.put("unknown", base, "")
+        assertNull(LogTimeCorrelator.take("unknown", "sig"))
+        assertEquals("双方空签名时既有FIFO语义仍成立", base, LogTimeCorrelator.take("unknown", ""))
     }
 
     @Test
