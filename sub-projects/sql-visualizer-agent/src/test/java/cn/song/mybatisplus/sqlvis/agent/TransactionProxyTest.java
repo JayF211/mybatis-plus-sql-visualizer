@@ -15,15 +15,26 @@ import static org.junit.Assert.*;
 public class TransactionProxyTest {
     private boolean disabled;
     private Connection raw, connection;
+    private java.net.URLClassLoader driverLoader;
     @Before public void setup() throws Exception {
         disabled = AgentState.isDisabled(); AgentState.setDisabled(false); TraceBus.disconnected();
         TraceBus.configure(false, true, "abcd", true); EventBus.clearQueued();
-        raw = DriverManager.getConnection("jdbc:h2:mem:tx" + System.nanoTime() + ";DB_CLOSE_DELAY=-1");
+        // Keep real-driver execution out of the test application's loader: the existing
+        // zero-load weaving guard intentionally asserts H2 is not preloaded there.
+        java.net.URL resource = getClass().getClassLoader().getResource("org/h2/Driver.class");
+        assertNotNull(resource);
+        java.net.URL jar = ((java.net.JarURLConnection) resource.openConnection()).getJarFileURL();
+        driverLoader = new java.net.URLClassLoader(new java.net.URL[]{jar}, ClassLoader.getPlatformClassLoader());
+        Driver driver = (Driver) driverLoader.loadClass("org.h2.Driver").getDeclaredConstructor().newInstance();
+        raw = driver.connect("jdbc:h2:mem:tx" + System.nanoTime(), new Properties());
         raw.createStatement().execute("create table t(id int primary key)");
         connection = (Connection) SqlHookCallbacks.onConnection(raw, "jdbc:h2:mem:tx");
     }
     @After public void cleanup() throws Exception {
-        TraceBus.disconnected(); raw.close(); EventBus.clearQueued(); AgentState.setDisabled(disabled);
+        TraceBus.disconnected();
+        if (raw != null) raw.close();
+        if (driverLoader != null) driverLoader.close();
+        EventBus.clearQueued(); AgentState.setDisabled(disabled);
     }
     @Test public void commitIsObservedAtBoundaryNotAtSqlSuccess() throws Exception {
         connection.setAutoCommit(false); connection.createStatement().executeUpdate("insert into t values(1)");
