@@ -265,12 +265,15 @@ internal object JpaAliasPropertyMapper {
     private val PROPERTY_OR_LITERAL = Regex("${STRING_LITERAL.pattern}|${PROPERTY_PATTERN}")
 
     /**
-     * O-71 T-01：裸标识符分支（无点号路径的独立词）——「字面量 | 裸词」交替，字面量分支
-     * 在前且不带捕获组，手法与 [PROPERTY_OR_LITERAL] 一致。词后紧跟 `(` 的负前瞻排除
+     * O-71 T-01：裸标识符分支（无点号路径的独立词）——「字面量 | 完整点号路径 | 裸词」交替。
+     * 前两项不带捕获组，防止本轮重新处理限定属性、绕过上轮作用域判定。词后紧跟 `(` 的负前瞻排除
      * 函数调用（`count(1)` / `count (1)` 均覆盖）。
      */
-    private val BARE_WORD_OR_LITERAL =
-        Regex("${STRING_LITERAL.pattern}|\\b([a-zA-Z_][a-zA-Z0-9_]*)\\b(?!\\s*\\()")
+    private val BARE_WORD_OR_LITERAL = Regex(
+        "${STRING_LITERAL.pattern}|" +
+            "\\b[a-zA-Z_][a-zA-Z0-9_]*(?:\\s*\\.\\s*[a-zA-Z_][a-zA-Z0-9_]*)+\\b|" +
+            "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\b(?!\\s*\\()",
+    )
 
     /**
      * T-01 裸词替换的补充排除表：布尔/常量字面量与 HQL 特有操作词（子句关键字见文件顶层的
