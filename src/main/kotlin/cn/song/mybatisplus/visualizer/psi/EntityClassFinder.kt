@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.psi
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
+import cn.song.mybatisplus.visualizer.util.FatalErrors
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.progress.ProgressManager
@@ -142,7 +143,7 @@ class EntityClassFinder(private val project: Project) {
                 } catch (t: Throwable) {
                     // 被写动作抢占而取消（PCE）/ 关工程 / 任何取数异常：同样作废并允许重投
                     clearLibrarySweepDispatched()
-                    if (t is Error) throw t
+                    if (FatalErrors.isFatal(t)) throw t // T-FatalPassthrough：JVM 级致命错误透传
                 } finally {
                     inFlightSweep.decrementAndGet()
                 }

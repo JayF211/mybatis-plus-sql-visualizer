@@ -671,6 +671,16 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "无独立「返回违规点集合」的具名判定函数（差集在用例内联计算），故 decisionFns 留空；" +
                     "灵敏度=把 KEYWORDS 改回旧 41 词平集必红，已实测于实施轮（4 例红，含逐词差集原文）。",
             ),
+            GuardEntry(
+                "psi/FullScanCancelGuardTest.kt",
+                emptyList(),
+                "全量短名扫描的「有界 + 可取消」守卫（T-JarEmbedded，补 20261008 T-GutterDupFreeze 冻结形态的缺口）：" +
+                    "判定内核内联于两个用例——扫 src/main/kotlin 全量 .kt（先剥注释），断言" +
+                    "「每个 getAllClassNames() 所在成员函数体含 checkCanceled( 或委派 EntityAliasSweep」" +
+                    "与「库扫描 runLibrarySweepNow 不得出现 inferDecoratedTableName」。" +
+                    "offenders 列表在用例内联累积，无独立「返回违规点集合」的具名判定函数，故 decisionFns 留空；" +
+                    "灵敏度=按用例内合成样本自证（含合法/违规两向样本），实施轮已实测。",
+            ),
             // ---- 判定内核类（有可注入合成样本的判定函数） ----
             GuardEntry(
                 "convention/BannedApiScanSupport.kt",
