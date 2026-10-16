@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.config
 
 import cn.song.mybatisplus.visualizer.mcp.McpToolGate
+import cn.song.mybatisplus.visualizer.mcp.findMcpToolsetClass
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.openapi.options.Configurable
 import com.intellij.openapi.project.ProjectManager
@@ -32,7 +33,11 @@ import javax.swing.JPanel
  * SqlVisualizerToolGateFilterProvider（mcpServer.mcpToolFilterProvider EP，经 McpGateFilterRegistrar
  * 程序化注册，平台 mcpServer 类可达性门控）同步驱动外部路径，两条路径均出自 McpToolGate 单一真相源。
  */
-class McpConfigurable : Configurable {
+class McpConfigurable internal constructor(
+    private val platformCapability: () -> Boolean,
+) : Configurable {
+
+    constructor() : this({ findMcpToolsetClass() != null })
 
     private var panel: JPanel? = null
 
@@ -48,10 +53,13 @@ class McpConfigurable : Configurable {
     /** 全部启用/全部禁用状态切换单按钮（全勾→「全部禁用」点击清空，否则「全部启用」补满）。 */
     private var toggleAllButton: JButton? = null
 
-    /** P1-3：就绪横幅标题行（静态渲染快照，测试断言用）。 */
+    /** 工具声明数量，不表示运行时注册数量。 */
     private var bannerHeadline: JBLabel? = null
 
-    /** P1-3：就绪横幅门控现状行（静态渲染快照，测试断言用）。 */
+    /** 只读平台能力提示，与插件开关独立展示。 */
+    private var bannerPlatformLine: JBLabel? = null
+
+    /** 页内开关选择状态，应用后生效。 */
     private var bannerGateLine: JBLabel? = null
 
     override fun getDisplayName(): String = MpSqlVisualizerBundle.message("settings.mcp.title")
@@ -88,24 +96,29 @@ class McpConfigurable : Configurable {
         // T-MTS2-00：门控区——总开关 + 工具级复选框（测试环境服务未注册 → state=null 默认全启用）
         val state = runCatching { PluginSettings.getInstance().state }.getOrNull()
 
-        // P1-3（批次9 波次2）：页内就绪横幅——差异化最强的功能面此前在页内零自我陈述（第十轮
-        // 摩擦 #2「MCP 工具可发现性黑洞」，锚点 :62-73 仅 jumpRow、:92-99 复选框循环、:146 才有
-        // warning）。形态照抄 R20 落地页零监听器定例：**静态构建时按门控现状渲染，不做动态刷新
-        // 监听**（工具数动态取 [McpToolGate.TOOL_NAMES] 的 size，不写死数字——R14 十工具升十一
-        // 工具时旧写死文案即过期）。横幅是页内静态提示不是弹窗，不触 BannedApiSourceScanTest
-        // 弹窗白名单（弹窗克制红线：文案只指向下方开关，不弹任何对话框）。
+        // UI011：声明数、平台能力、插件开关是三个独立事实；不从工具清单推断注册或可调用。
+        // 沿用现有 JBLabel 横幅样式，仅只读探测接口可达性，不注册工具、不启动 MCP Server。
         bannerHeadline = JBLabel(
             MpSqlVisualizerBundle.message(
-                "settings.mcp.banner.ready",
+                "settings.mcp.banner.declared",
                 McpToolGate.TOOL_NAMES.size.toString(),
             ),
         )
-        bannerGateLine = JBLabel(bannerGateHint(state)).apply {
+        bannerPlatformLine = JBLabel(
+            MpSqlVisualizerBundle.message(
+                if (platformCapability()) "settings.mcp.banner.platformPresent"
+                else "settings.mcp.banner.platformUnavailable",
+            ),
+        ).apply {
+            foreground = JBUI.CurrentTheme.ContextHelp.FOREGROUND
+        }
+        bannerGateLine = JBLabel().apply {
             foreground = JBUI.CurrentTheme.ContextHelp.FOREGROUND
         }
         val banner = JPanel(GridLayout(0, 1)).apply {
             border = JBUI.Borders.emptyBottom(10)
             add(bannerHeadline)
+            add(bannerPlatformLine)
             add(bannerGateLine)
         }
 
@@ -151,14 +164,15 @@ class McpConfigurable : Configurable {
         )
         syncToggleAllLabel()
 
-        // 20261008 dev-bak 验收（缺陷 #2）：横幅按 R20 落地页「零监听器」定例构建后不再更新——
-        // 勾掉工具 / 关总开关乃至 Apply，横幅在同会话内恒显构建时快照（重开整个设置对话框才刷新）。
-        // 验收文档 3.21 预期「横幅切到部分禁用/总开关关闭态」。门控复选框是页内唯一写入方，
-        // 对它们挂 ActionListener 即时重算门控行（读复选框现状而非持久化 state，三态口径与
-        // [bannerGateHint] 同源；headline 的就绪文案保持静态——工具注册数不随开关变化）。
-        val bannerRefresher = java.lang.Runnable { refreshBannerGateLine() }
-        masterCheckBox?.addActionListener { bannerRefresher.run() }
-        toolCheckBoxes.values.forEach { it.addActionListener { bannerRefresher.run() } }
+        // UI011：单项、总开关、全选和 reset 均按页内选择刷新；不将未 Apply 的选择说成已生效。
+        refreshBannerGateLine()
+        masterCheckBox.addItemListener { refreshBannerGateLine() }
+        toolCheckBoxes.values.forEach { checkBox ->
+            checkBox.addItemListener {
+                refreshBannerGateLine()
+                syncToggleAllLabel()
+            }
+        }
 
         return JPanel(BorderLayout()).apply {
             border = JBUI.Borders.empty(8, 10)
@@ -172,27 +186,7 @@ class McpConfigurable : Configurable {
         return toolName + " — " + MpSqlVisualizerBundle.message(descKey)
     }
 
-    /**
-     * P1-3：就绪横幅门控现状行（纯函数，三态与 [isToolListedInState] 同一真相源）——
-     * 总开关关 > 工具级有禁用 > 全启用。state=null（测试环境服务未注册）按全启用兜底，
-     * 与门控默认口径一致。
-     */
-    private fun bannerGateHint(state: PluginSettings.State?): String = when {
-        state?.mcpToolsEnabled == false -> MpSqlVisualizerBundle.message("settings.mcp.banner.masterOff")
-        else -> {
-            val disabledCount = McpToolGate.TOOL_NAMES.count { !isToolListedInState(state, it) }
-            if (disabledCount == 0) {
-                MpSqlVisualizerBundle.message("settings.mcp.banner.allEnabled")
-            } else {
-                MpSqlVisualizerBundle.message("settings.mcp.banner.someDisabled", disabledCount.toString())
-            }
-        }
-    }
-
-    /**
-     * 20261008 验收缺陷 #2 修复：横幅门控行按复选框**现状**即时重算（总开关关 > 工具级有禁用 >
-     * 全启用，与 [bannerGateHint] 三态同源——数据源从持久化 state 换成页内复选框）。
-     */
+    /** 页内门控选择三态：总开关关 > 工具级有禁用 > 全启用，不代表平台调用状态。 */
     private fun refreshBannerGateLine() {
         val gate = bannerGateLine ?: return
         val masterOn = masterCheckBox?.isSelected != false
@@ -283,6 +277,7 @@ class McpConfigurable : Configurable {
         maskLiteralsCheckBox = null
         toggleAllButton = null
         bannerHeadline = null
+        bannerPlatformLine = null
         bannerGateLine = null
         toolCheckBoxes.clear()
     }
@@ -297,9 +292,11 @@ class McpConfigurable : Configurable {
 
     internal fun toggleAllButtonForTest(): JButton? = toggleAllButton
 
-    /** P1-3：就绪横幅标题行文案（null = 横幅未构建/已释放）。 */
+    /** 声明数量文案（null = 横幅未构建/已释放）。 */
     internal fun bannerHeadlineForTest(): String? = bannerHeadline?.text
 
-    /** P1-3：就绪横幅门控现状行文案。 */
+    internal fun bannerPlatformLineForTest(): String? = bannerPlatformLine?.text
+
+    /** 页内门控选择文案。 */
     internal fun bannerGateLineForTest(): String? = bannerGateLine?.text
 }
