@@ -99,6 +99,14 @@ tracing相对sql的中位P95为-5.16%、wall为-1.54%，逐轮P95增量却为+21
 
 开跑前背景IDE约9%单核CPU，过程两次采样为0，Gradle daemon采样为0且无worker/verifier；这是明确记录背景负载的实验，不是认证空机。原始summary SHA256 `26688cf9181adacaff9515a2ecf7185f0136fb546c387593627a3724bc8bf6ff`，位于runtime树`build/MPSV-SqlInsight-Runtime-Perf/sql-insight-perf/agent-trials-wakeup-default-warm10000/summary.json`。结论：资源门不得记PASS，当前阻止最终合回dev；继续核计量分母、绝对CPU与线程热点，不放宽目标、不丢事件、不删除质量证据。任何后续生产优化都需新冻结重新验证，ab8b54b1的门禁只覆盖原冻结代码。
 
+### CPU计量复核与有界JFR诊断
+
+原summary绝对CPU中位：SQL模式1953.125ms、追踪模式2234.375ms，每500请求增加281.25ms（每请求0.5625ms，约+14.4%），并非仅CPU百分比的wall分母效应。但CPU计量步长15.625ms、业务窗约1.1秒，包含JIT/GC/sender/main，不足以把增量归因到特定生产热点。
+
+另以两个独立JVM做诊断：预热10000请求并排空后才启动JFR，按businessStart/End裁剪业务窗，记录开关与采样扰动，不作预算复测。SQL/追踪均10000SQL零丢失，追踪1000起止事件完整；窗内ExecutionSample仅51/66，多为H2业务栈，JavaMonitorEnter超过1ms事件为0，不支持全局锁竞争是主因。Compilation有92/86个事件，C2编译耗时之和521/599ms，追踪侧SenderLoop.run重编译135ms；这些是可重叠的编译耗时，不能当进程CPU直接扣减。GC各15次、暂停22.0/24.9ms；ThreadCPULoad按12核归一，不能与单核100%口径混减。NativeSample里的Net.poll为阻塞采样，不能冒充CPU热点。
+
+诊断尚未锁定根因，不据此贸然改锁或队列。后续仅对实际代码可证明的重复scope读取、请求元数据处理或编码工作做单项反证，保持协议内容、完整性、质量和隐私不变；必要时另列更长固定负载的稳态校准，不覆盖原短窗失败结果。JFR原始文件与window-analysis.json位于runtime树`build/MPSV-SqlInsight-Runtime-JFR`，生产代码及既有基准脚本未因本次诊断修改。
+
 ## 五、最终冻结与自动化门禁
 
 冻结提交 `67533aca415bf227e891d697ad45cdf33563b4ff`，基于已同步dev `5d884a5e`。专用detached工作树 `mpsv-sql-insight-gate` 生产写集为空，配置/输出仅在其build下；主控期间仅提交文档，不让在途代码改变绿灯含义。
