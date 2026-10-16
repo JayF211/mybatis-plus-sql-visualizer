@@ -170,7 +170,7 @@ object HqlConverter {
         // 8.5 子查询 FROM/JOIN 中其他实体名 → 表名（J13；需 Project，无则跳过）。
         // 别名作用域已解析出实体→表名，透传给扫描器复用，免二次 PSI 检索
         sql = JpaFromEntityMapper.mapSubqueryEntities(sql, table) { name ->
-            scope.entityTableNames[name] ?: resolveTable(name)?.tableName
+            scope.entityTableNames[name]
         }
 
         // 9. SELECT 子句展开（T-HQL-SELECT-01 / T-BareFromSelect）

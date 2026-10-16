@@ -210,7 +210,7 @@ object JpaJoinOnResolver {
     /**
      * 按简单类名查找实体 PsiClass。
      *
-     * T-EntityNameScope：收口到 [EntityClassResolver]——同名实体按**模块可见性**消歧
+     * T-EntityNameScope：收口到 [EntityAliasSweep]——同名实体按**模块可见性**消歧
      * （此前是 projectScope 再 allScope 的 `firstOrNull()`，多模块同名时挑到哪个看索引顺序）。
      */
     private fun findEntityClass(project: Project, className: String, context: PsiElement?): PsiClass? =

@@ -136,6 +136,24 @@ class JpaScopedConversionHeavyTest : HeavyPlatformTestCase() {
         }
     }
 
+    fun testCancelledAndFatalResolutionAreNotSwallowed() {
+        val table = cn.song.mybatisplus.visualizer.model.TableInfo("Inventory", "inventory", emptyList())
+        val cancelled = com.intellij.openapi.progress.ProcessCanceledException()
+        try {
+            HqlConverter.convertWithEntityResolver("from Inventory i join Detail d on i.id=d.id", table) { throw cancelled }
+            fail("Cancellation must escape conversion")
+        } catch (actual: com.intellij.openapi.progress.ProcessCanceledException) {
+            assertSame(cancelled, actual)
+        }
+        val fatal = LinkageError("fatal probe")
+        try {
+            HqlConverter.convertWithEntityResolver("from Inventory i join Detail d on i.id=d.id", table) { throw fatal }
+            fail("Fatal errors must escape conversion")
+        } catch (actual: LinkageError) {
+            assertSame(fatal, actual)
+        }
+    }
+
     fun testAmbiguousRootDoesNotBorrowResolvedSecondaryColumns() {
         val host = source(myModule, "host.Query")
         entities(myModule, "a", "a")

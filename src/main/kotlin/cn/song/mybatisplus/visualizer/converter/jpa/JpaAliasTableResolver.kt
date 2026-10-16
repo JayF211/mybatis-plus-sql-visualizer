@@ -171,7 +171,7 @@ internal object JpaAliasTableResolver {
         // 同一实体名只解析一次（PSI 检索 + 注解遍历都不便宜）
         val memo = HashMap<String, TableInfo?>()
 
-        if (table.entityClassName.isNotBlank()) {
+        if (table.entityClassName.isNotBlank() && JpaQueryEntityLookup.rootEntity(sql) == table.entityClassName) {
             memo[table.entityClassName] = table
             registerTableName(entityTableNames, table.entityClassName, table.tableName)
         }
