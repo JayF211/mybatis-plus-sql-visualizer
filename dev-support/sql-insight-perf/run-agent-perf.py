@@ -88,7 +88,7 @@ class Receiver:
                     raise TimeoutError("receiver deadline")
                 self.changed.wait(remain)
 
-    def drain(self, timeout=20):
+    def drain(self, timeout=60):
         # Conservation, not gap-free sequence: all generated observations must be written or
         # explicitly lost. A flushed socket still is not an acknowledgement of IDE consumption.
         self.wait(lambda: self.quality is not None and self.quality.get("active") == 0 and
@@ -213,7 +213,22 @@ def main():
         for mode in modes:
             print("RUN", repeat, mode, flush=True)
             results.append(trial(args, mode, repeat, classes))
-    Path(args.output, "summary.json").write_text(json.dumps(dict(metadata=metadata, trials=results), indent=2), encoding="utf-8")
+    import statistics
+    comparisons = {}
+    for baseline in ("none", "sql"):
+        base = [r for r in results if r["mode"] == baseline]
+        traced = [r for r in results if r["mode"] == "tracing"]
+        median = lambda rows, key: statistics.median(r[key] for r in rows)
+        comparisons["tracing_vs_" + baseline] = {
+            "sqlP95IncreasePercent": (median(traced, "sqlP95Nanos") / median(base, "sqlP95Nanos") - 1) * 100,
+            "wallIncreasePercent": (median(traced, "wallNanos") / median(base, "wallNanos") - 1) * 100,
+            "cpuPercentagePointIncrease": median(traced, "cpuPercentOneCore") - median(base, "cpuPercentOneCore"),
+            "heapUsedIncreaseBytes": median(traced, "heapUsedBytes") - median(base, "heapUsedBytes"),
+            "allTracingObservationsReceived": all(r.get("captureCoverageComplete", False) for r in traced),
+            "warmStableAllTrials": all(r["warmStabilityWithin15Percent"] for r in base + traced),
+            "budgetConclusion": "REQUIRES_REVIEW_OF_LOSS_AND_WARMUP_NOT_AUTOMATIC_PASS",
+        }
+    Path(args.output, "summary.json").write_text(json.dumps(dict(metadata=metadata, trials=results, comparisons=comparisons), indent=2), encoding="utf-8")
     print("RESULT", str(Path(args.output, "summary.json")), flush=True)
 
 if __name__ == "__main__": main()
