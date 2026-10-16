@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.sql.insight
 
+import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.module.Module
@@ -23,20 +24,25 @@ sealed class SqlUsageSearchScope {
 }
 
 /** Explicit-query production entry point. No service registration, persistent index or library traversal. */
-class ProjectSqlUsageService(private val project: Project) {
+class ProjectSqlUsageService(private val project: Project) : Disposable {
+    @Volatile private var disposed = false
     private val generation = AtomicLong()
     @Volatile private var active: Future<*>? = null
 
-    fun cancel() { generation.incrementAndGet(); active?.cancel(false) }
+    @Synchronized fun cancel() { generation.incrementAndGet(); active?.cancel(false) }
+    @Synchronized override fun dispose() { disposed = true; cancel() }
 
     /** Completion runs on the pooled thread. UI must marshal its own presentation to EDT. */
-    fun collectAsync(scope: SqlUsageSearchScope, template: AnalysisSnapshot, limits: SqlUsageLimits = SqlUsageLimits(),
+    @Synchronized fun collectAsync(scope: SqlUsageSearchScope, template: AnalysisSnapshot, limits: SqlUsageLimits = SqlUsageLimits(),
         onComplete: (SqlUsageReport) -> Unit): Future<*> {
+        check(!disposed && !project.isDisposed) { "SQL usage service is disposed" }
         cancel()
         val token = generation.get()
         val future = ApplicationManager.getApplication().executeOnPooledThread(Runnable {
-            val report = collect(scope, template, limits) { project.isDisposed || generation.get() != token || Thread.currentThread().isInterrupted }
-            if (!project.isDisposed && generation.get() == token) onComplete(report)
+            val report = collect(scope, template, limits) { disposed || project.isDisposed || generation.get() != token || Thread.currentThread().isInterrupted }
+            synchronized(this) {
+                if (!disposed && !project.isDisposed && generation.get() == token) onComplete(report)
+            }
         })
         active = future
         return future
@@ -54,7 +60,7 @@ class ProjectSqlUsageService(private val project: Project) {
         var directories = 0
         var skipped = 0
         var truncated = false
-        fun cancelled() = project.isDisposed || isCancelled() || (scope is SqlUsageSearchScope.ModuleFiles && scope.module.isDisposed)
+        fun cancelled() = disposed || project.isDisposed || isCancelled() || (scope is SqlUsageSearchScope.ModuleFiles && scope.module.isDisposed)
         val roots = ReadAction.compute<List<VirtualFile>, RuntimeException> {
             if (cancelled()) emptyList() else when (scope) {
                 is SqlUsageSearchScope.CurrentFile -> listOf(scope.file)
