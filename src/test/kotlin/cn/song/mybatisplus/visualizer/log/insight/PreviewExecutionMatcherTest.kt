@@ -32,7 +32,10 @@ class PreviewExecutionMatcherTest {
         assertEquals(1, delta.executionDelta)
         assertEquals(20L, delta.cumulativeDurationDeltaNanos)
         assertEquals(SqlBudgetStatus.INCONCLUSIVE, SqlWorkloadBaselineComparator.compare(before, after.copy(contextKey = "v2")).status)
-        assertEquals(SqlBudgetStatus.INCONCLUSIVE, SqlWorkloadBaselineComparator.compare(before, after.copy(qualityIssues = setOf("lost"))).status)
+        val partial = SqlWorkloadBaselineComparator.compare(before, after.copy(qualityIssues = setOf("lost")))
+        assertEquals(SqlBudgetStatus.INCONCLUSIVE, partial.status)
+        assertEquals(1, partial.executionDelta)
+        assertEquals("observed_subset_delta_not_a_regression_verdict", partial.reason)
         assertEquals(SqlBudgetStatus.INCONCLUSIVE, SqlWorkloadBaselineComparator.compare(before, after.copy(generatedCount = null)).status)
     }
 }

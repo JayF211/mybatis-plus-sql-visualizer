@@ -70,14 +70,16 @@ class RequestTraceStore(private val maxRequests: Int = 500, private val maxTrans
     @Synchronized
     fun transactionEvents(): List<TransactionEvent> = transactions.toList()
 
-    @Synchronized
-    fun snapshot(sql: AnalysisSessionSnapshot): List<ObservedRequest> = requests.map { (id, pair) ->
+    fun snapshot(sql: AnalysisSessionSnapshot): List<ObservedRequest> {
+        val captured = synchronized(this) { requests.map { (id, pair) -> id to pair.copy() } to controlTruncated }
+        val byRequest = sql.observations.groupBy { it.runId to it.requestId }
+        return captured.first.map { (id, pair) ->
         val start = pair.start
         val end = pair.end
         val runId = start?.envelope?.runId ?: end?.envelope?.runId.orEmpty()
-        val events = sql.observations.filter { it.runId == runId && it.requestId == id }
+        val events = byRequest[runId to id].orEmpty()
         val quality = sql.qualityIssues.toMutableSet()
-        if (controlTruncated) quality += "control_capacity"
+        if (captured.second) quality += "control_capacity"
         if (end?.asyncStarted != false) quality += "async_coverage_unknown"
         if (end?.generatedSql != end?.completedSql) quality += "sql_still_active"
         val expected = end?.completedSql?.takeIf { it in 0..Int.MAX_VALUE.toLong() }?.toInt()
@@ -91,6 +93,7 @@ class RequestTraceStore(private val maxRequests: Int = 500, private val maxTrans
             }
         ObservedRequest(id, start?.parentRequestId ?: end?.parentRequestId, start, end, evidence,
             intervalUnion(events), repeated)
+        }
     }
 
     private fun admit(sequence: Long?): Boolean {

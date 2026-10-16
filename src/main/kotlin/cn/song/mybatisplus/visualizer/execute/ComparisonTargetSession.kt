@@ -16,7 +16,7 @@ class ComparisonTargetSession internal constructor(private val discover: () -> L
             val id = target.stableId?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
             val url = ExecDialectRouting.dataSourceUrl(ds) ?: return@mapNotNull null
             Record(ComparisonTargetOption(id, target.displayName ?: id, target.dialectName), ds,
-                fingerprint(url + "\u0000" + target.dialectName))
+                fingerprint(url + "\u0000" + target.dialectName + "\u0000" + configurationRevision(ds)))
         }
     })
     internal data class Record(val option: ComparisonTargetOption, val handle: Any, val configurationFingerprint: String)
@@ -51,6 +51,10 @@ class ComparisonTargetSession internal constructor(private val discover: () -> L
         }
     }
     companion object {
+        internal fun configurationRevision(dataSource: Any): Long =
+            Class.forName("com.intellij.database.dataSource.AbstractDataSource", false, ComparisonTargetSession::class.java.classLoader)
+                .getMethod("getModificationCount").invoke(dataSource) as Long
+
         private fun fingerprint(value: String) = java.security.MessageDigest.getInstance("SHA-256")
             .digest(value.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
     }

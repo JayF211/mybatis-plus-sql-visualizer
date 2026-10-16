@@ -7,6 +7,13 @@ import cn.song.mybatisplus.visualizer.log.agent.RequestEvent
 import cn.song.mybatisplus.visualizer.log.agent.TransactionEvent
 import cn.song.mybatisplus.visualizer.log.agent.TraceEventEnvelope
 
+data class AnalysisEvidenceSnapshot(
+    val sql: AnalysisSessionSnapshot,
+    val requests: List<ObservedRequest>,
+    val transactions: List<TransactionEvent>,
+    val consistency: String = "SAME_GENERATION_PARTIAL_OBSERVATION",
+)
+
 /** Per socket session. Disabled until the user opts in; delayed control frames cannot authorize old events. */
 class AnalysisSessionChannel(private val store: AnalysisSessionStore = AnalysisSessionStore()) {
     private var requested = false
@@ -109,14 +116,25 @@ class AnalysisSessionChannel(private val store: AnalysisSessionStore = AnalysisS
             envelope.runId == current.boundary.runId && envelope.captureEpoch == current.boundary.captureEpoch
     }
 
-    @Synchronized
     fun requests(): List<ObservedRequest> = traces.snapshot(store.snapshot())
 
     @Synchronized
     fun transactions(): List<TransactionEvent> = traces.transactionEvents()
 
-    @Synchronized
     fun snapshot(): AnalysisSessionSnapshot = store.snapshot()
+
+    fun evidenceSnapshot(): AnalysisEvidenceSnapshot {
+        val sql = store.snapshot()
+        val requests = traces.snapshot(sql)
+        val transactions = traces.transactionEvents()
+        val finalState = store.stateIdentity()
+        return if (sql.generation == finalState.first && sql.enabled == finalState.second) {
+            AnalysisEvidenceSnapshot(sql, requests, transactions)
+        } else {
+            val current = store.snapshot()
+            AnalysisEvidenceSnapshot(current.copy(qualityIssues = current.qualityIssues + "snapshot_changed"), emptyList(), emptyList(), "GENERATION_CHANGED")
+        }
+    }
 
     @Synchronized
     fun dispose() {

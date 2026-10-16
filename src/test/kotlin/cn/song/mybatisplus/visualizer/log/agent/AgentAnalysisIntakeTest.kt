@@ -12,6 +12,38 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 class AgentAnalysisIntakeTest : BasePlatformTestCase() {
+    fun testOptionalTracingStopIsSentWithoutInvalidatingKnownCaptureConfirmation() {
+        val server = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
+        val client = Socket("127.0.0.1", server.localPort)
+        val accepted = server.accept()
+        val ackSeen = CountDownLatch(1)
+        val session = AgentSession(project, 98766, accepted, onStateChange = {},
+            onCaptureConfirmationChanged = { ackSeen.countDown() })
+        try {
+            val bytes = AgentProtocol.configAckBody(false, true, 0, 0).toByteArray(Charsets.UTF_8)
+            DataOutputStream(client.getOutputStream()).apply { writeInt(bytes.size); write(AgentProtocol.CMD_CONFIG_ACK); write(bytes); flush() }
+            assertTrue(ackSeen.await(5, TimeUnit.SECONDS))
+            assertEquals(false, session.configAckDisabled)
+            session.analysisChannel.enable()
+            session.analysisChannel.disable()
+            session.sendConfig(false, true, preserveCaptureConfirmation = true)
+            client.soTimeout = 5000
+            val input = DataInputStream(client.getInputStream())
+            val length = input.readInt()
+            assertEquals(AgentProtocol.CMD_CONFIG, input.readUnsignedByte())
+            val body = ByteArray(length)
+            input.readFully(body)
+            val config = com.google.gson.JsonParser.parseString(String(body, Charsets.UTF_8)).asJsonObject
+            assertFalse(config.get("requestTracing").asBoolean)
+            assertFalse(config.get("transactionTracing").asBoolean)
+            assertFalse(config.get("captureState").asBoolean)
+            assertFalse(config.get("disabled").asBoolean)
+            assertEquals(false, session.configAckDisabled)
+        } finally {
+            session.close(); client.close(); server.close()
+        }
+    }
+
     fun testRealSessionBranchesBeforePresentationDeduplicationAndKeepsPolicy() {
         val manager = cn.song.mybatisplus.visualizer.testutil.AlreadyDisposedDiagnostics.projectService(
             project, SqlLogManager::class.java, "insight.intake.fixture",

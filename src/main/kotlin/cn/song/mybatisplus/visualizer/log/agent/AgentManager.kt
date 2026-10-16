@@ -198,7 +198,18 @@ class AgentManager(private val project: Project) : Disposable {
     fun setUserPaused(paused: Boolean) {
         if (userPaused == paused) return
         userPaused = paused
-        if (paused) sessions.forEach { it.analysisChannel.disable() }
+        if (paused) {
+            val traced = sessions.filter { it.alive && it.analysisChannel.isRequested() }
+            traced.forEach { it.analysisChannel.disable() }
+            if (traced.isNotEmpty()) executor.execute {
+                traced.forEach { session ->
+                    // Only modify optional tracing when the unchanged capture state is known.
+                    val disabled = session.configAckDisabled
+                    if (session.alive) session.sendConfig(disabled ?: true,
+                        preserveCaptureConfirmation = disabled != null)
+                }
+            }
+        }
         LOG.info("增强捕获用户暂停切换：$paused（暂停只停 agent 通道，控制台通道照常；连接与 CONFIG 链不动）")
         updateOnline()
         publishStatusChanged()
@@ -236,6 +247,9 @@ class AgentManager(private val project: Project) : Disposable {
         sessions.flatMap { it.analysisChannel.requests() }
 
     fun sqlTransactionEvents(): List<TransactionEvent> = sessions.flatMap { it.analysisChannel.transactions() }
+
+    fun sqlAnalysisEvidence(): List<cn.song.mybatisplus.visualizer.log.insight.AnalysisEvidenceSnapshot> =
+        sessions.map { it.analysisChannel.evidenceSnapshot() }
 
 
     /**
