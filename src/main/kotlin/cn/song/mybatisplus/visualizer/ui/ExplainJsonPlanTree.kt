@@ -143,6 +143,8 @@ object ExplainJsonPlanTree {
         val cost: Double?,
         /** 其余标量键值（diff 细节比对面；对象/数组值跳过——标量才可比）。 */
         val extras: Map<String, String>,
+        val estimatedRows: Long? = null,
+        val actualRowsPerLoop: Double? = null,
     )
 
     /**
@@ -186,6 +188,8 @@ object ExplainJsonPlanTree {
                         rows = rowsVal,
                         cost = costVal,
                         extras = extras,
+                        estimatedRows = longOf(obj, "Plan Rows"),
+                        actualRowsPerLoop = doubleOf(obj, "Actual Rows"),
                     )
                     rootOrdinal++
                 }

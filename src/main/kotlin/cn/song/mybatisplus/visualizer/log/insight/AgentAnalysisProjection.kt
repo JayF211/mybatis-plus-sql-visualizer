@@ -53,6 +53,8 @@ object AgentAnalysisProjection {
         add("scope_incomplete")
     }
 
+    fun shapeFingerprint(sql: String): String = digest(cn.song.mybatisplus.visualizer.log.structureFingerprint(sql))
+
     private fun digest(text: String): String = MessageDigest.getInstance("SHA-256")
         .digest(text.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
 }
