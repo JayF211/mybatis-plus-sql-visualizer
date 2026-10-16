@@ -231,6 +231,33 @@ class ParamHistoryCache(private val maxSize: Int = MAX_HISTORY_SIZE) {
      */
     fun schemeNames(): List<String> = orderedSchemeNames()
 
+    data class SchemeSnapshot(val name: String, val values: Map<String, String>)
+    data class ScenarioSnapshots(val storageGeneration: Long, val schemes: List<SchemeSnapshot>)
+
+    /** Iterating entries avoids access-order get(), so batch analysis cannot mutate LRU or active preset. */
+    fun snapshotSchemesFor(key: String, limit: Int = 20): ScenarioSnapshots {
+        require(limit in 1..20)
+        return synchronized(storageMutationLock) {
+            val generation = storageGeneration.get()
+            if (observedStorageGeneration != generation) return@synchronized ScenarioSnapshots(generation, emptyList())
+            synchronized(bucketLock) {
+                val result = mutableListOf<SchemeSnapshot>()
+                fun add(name: String, entries: Map<String, Map<String, String>>) {
+                    if (result.size >= limit) return
+                    entries.entries.firstOrNull { it.key == key }?.value?.let {
+                        result += SchemeSnapshot(name, it.toMap())
+                    }
+                }
+                add(DEFAULT_SCHEME, cache)
+                for (name in orderedSchemeNames()) {
+                    schemes[name]?.let { add(name, it) }
+                    if (result.size >= limit) break
+                }
+                ScenarioSnapshots(generation, result.toList())
+            }
+        }
+    }
+
     /**
      * 创建序方案名清单（一次成型，无中间 List）：序表先入、CHM 直查键补尾，HashSet 去重。
      * 语义与旧 `(schemeOrder + schemes.keys).distinct()` 逐值等价。

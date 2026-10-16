@@ -274,6 +274,7 @@ internal class AgentSession(
         private set
 
     private val output = java.io.DataOutputStream(socket.getOutputStream())
+    internal val analysisChannel = cn.song.mybatisplus.visualizer.log.insight.AnalysisSessionChannel()
     private val eventDropped = AtomicLong()
 
     /**
@@ -460,6 +461,7 @@ internal class AgentSession(
             } catch (t: Throwable) {
                 if (FatalErrors.isFatal(t)) throw t // T-FP-02：fatal 透传（读线程：透传即线程终止，平台记录现场）
                 LOG.warn("会话读循环退出（pid=$pid, alive 前=$alive）——掉线原因如下", t)
+                analysisChannel.disconnected()
                 alive = false
                 // T-AgentConfigChannel T-02：挂起状态按会话——掉线即清（重连是新会话，旧挂起不得残留）
                 clearPendingConfigAck()
@@ -535,6 +537,7 @@ internal class AgentSession(
                     // 未命中回落捕获时间（= execute 开始时刻，与日志行只差毫秒级）并留痕 [logTimeMiss]。
                     // T-ST-02b2：读路径经 sqlLogManagerIfCreated（永不发起创建）；取不到即丢弃该事件，不斩断流
                     val logManager = sqlLogManagerIfCreated(project) ?: return
+                    analysisChannel.onEvent(event, entry, logManager.entries.allowsAnalysis(entry))
                     logManager.entries.addEntry(stampLogTime(entry) ?: logTimeMiss(entry))
                 } catch (t: Throwable) {
                     if (FatalErrors.isFatal(t)) throw t // T-FP-02：fatal 透传
@@ -543,6 +546,10 @@ internal class AgentSession(
             }
             // T-AgentHeartbeat T-05：HEARTBEAT 是存活帧（EVENT 分支已在上面置位）
             AgentProtocol.CMD_HEARTBEAT -> livenessFrameSeen = true
+            AgentCaptureState.COMMAND -> {
+                livenessFrameSeen = true
+                AgentCaptureState.parse(body)?.let(analysisChannel::onState)
+            }
             // T-AgentConfigChannel T-02：CONFIG 回执——应用侧「已生效」的唯一直接证据。
             // 与 HEARTBEAT/EVENT 同属存活帧（应用侧真在跑才会发）。
             AgentProtocol.CMD_CONFIG_ACK -> {
@@ -601,8 +608,12 @@ internal class AgentSession(
                 .lineSequence().filter { it.isNotBlank() }.toList()
             // T-StackHoverUi：随 CONFIG 热下发调用栈快照帧数预算（设置改动即生效，无需重附 agent）
             val stackMaxFrames = PluginSettings.getInstance().state.enhancedCaptureStackMaxFrames
-            val body = AgentProtocol.configBody(disabled, desensitize, prefixes, bizPrefixes, stackMaxFrames)
-                .toByteArray(Charsets.UTF_8)
+            val config = com.google.gson.JsonParser.parseString(
+                AgentProtocol.configBody(disabled, desensitize, prefixes, bizPrefixes, stackMaxFrames),
+            ).asJsonObject
+            config.addProperty(AgentCaptureState.CONFIG_KEY, analysisChannel.isRequested())
+            analysisChannel.requestedToken()?.let { config.addProperty("captureStateToken", it) }
+            val body = config.toString().toByteArray(Charsets.UTF_8)
             synchronized(output) {
                 output.writeInt(body.size)
                 output.write(AgentProtocol.CMD_CONFIG)
@@ -628,6 +639,7 @@ internal class AgentSession(
     }
 
     fun close() {
+        analysisChannel.disconnected()
         alive = false
         // T-AgentConfigChannel T-02：挂起/确认态按会话——关闭即清，不残留到重连后的新会话
         clearPendingConfigAck()
