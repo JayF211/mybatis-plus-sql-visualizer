@@ -19,6 +19,7 @@ internal class InsightPanel(
     cancel: () -> Unit,
     close: () -> Unit,
     private val navigate: (SqlSourceRange?) -> Unit,
+    clearMetadata: () -> Unit = {},
 ) : JPanel(BorderLayout()) {
     private val status = JTextArea().apply { isEditable = false; lineWrap = true; wrapStyleWord = true; rows = 2 }
     private val summary = JTextArea().apply { isEditable = false; lineWrap = true; wrapStyleWord = true; rows = 4 }
@@ -44,6 +45,7 @@ internal class InsightPanel(
         val toolbar = JPanel(FlowLayout(FlowLayout.LEADING)).apply {
             add(JButton(text("refresh")).apply { addActionListener { refresh() } })
             add(JButton(text("cancel")).apply { addActionListener { cancel() } })
+            add(JButton(text("metadata.clear")).apply { addActionListener { clearMetadata() } })
             add(JButton(text("close")).apply { addActionListener { close() } })
         }
         add(JPanel(BorderLayout()).apply { add(toolbar, BorderLayout.NORTH); add(summary, BorderLayout.CENTER) }, BorderLayout.NORTH)

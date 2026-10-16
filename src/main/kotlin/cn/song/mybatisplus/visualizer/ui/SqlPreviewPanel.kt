@@ -259,7 +259,9 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
     internal var comparisonSqlInvalidated: (() -> Unit)? = null
     internal var comparisonExecutionForTest: cn.song.mybatisplus.visualizer.ui.insight.ComparisonExecutionPort? = null
     internal var comparisonTargetForTest: cn.song.mybatisplus.visualizer.execute.ComparisonTargetSession? = null
+    internal var comparisonBackgroundForTest: (((() -> Unit)) -> Unit)? = null
     internal var lastInsightUsageReport: cn.song.mybatisplus.visualizer.sql.insight.SqlUsageReport? = null
+    internal val analysisMetadataBinding = cn.song.mybatisplus.visualizer.sql.insight.AnalysisMetadataBinding()
 
     /**
      * T-M27.2：自建 autopopup 的调度防重入标志（平台 autopopup 对非文件编辑器不生效）。

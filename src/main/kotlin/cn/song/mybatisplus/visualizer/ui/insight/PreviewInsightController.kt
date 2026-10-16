@@ -20,6 +20,9 @@ internal class PreviewInsightController(
     private val navigate: (Document, SqlSourceRange) -> Boolean,
     private val analyze: (AnalysisSnapshot, () -> Boolean) -> SqlSemanticModel = SqlSemanticAnalyzer::analyze,
     private val nanoTime: () -> Long = System::nanoTime,
+    private val snapshotFactory: (String, SqlInsightDialect, String) -> AnalysisSnapshot = { sql, d, version -> AnalysisSnapshot(sql, d, sourceVersion = version) },
+    private val metadataGeneration: () -> Long = { 0L },
+    private val clearMetadata: () -> Unit = {},
 ) : Disposable {
     private var document: Document? = null
     private var listenerLife: Disposable? = null
@@ -36,6 +39,7 @@ internal class PreviewInsightController(
         val ticket: PreviewTabManager.RefreshTicket,
         val snapshot: AnalysisSnapshot,
         val started: Long,
+        val metadataGeneration: Long,
         val cancelled: AtomicBoolean = AtomicBoolean(),
         var future: Future<*>? = null,
     )
@@ -66,7 +70,9 @@ internal class PreviewInsightController(
     fun open() {
         if (closed) return
         if (view == null) {
-            val panel = InsightPanel(text, ::refresh, ::cancel, { tabs.remove(TAB_ID) }, ::locate)
+            val panel = InsightPanel(text, ::refresh, ::cancel, { tabs.remove(TAB_ID) }, ::locate, {
+                clearMetadata(); invalidate(); refresh()
+            })
             if (!tabs.put(TAB_ID, text("title"), panel, onRemove = {
                     cancelActive(); displayed = null; view = null
                 })) return
@@ -90,7 +96,7 @@ internal class PreviewInsightController(
         if (sql.isBlank()) { panel.status("empty"); return }
         val ticket = tabs.beginRefresh(TAB_ID) { cancelActive() } ?: return
         val run = Run(doc, doc.modificationStamp, generation, ticket,
-            AnalysisSnapshot(sql, dialect(), sourceVersion = "$generation:${doc.modificationStamp}"), nanoTime())
+            snapshotFactory(sql, dialect(), "$generation:${doc.modificationStamp}"), nanoTime(), metadataGeneration())
         active = run
         panel.status("loading")
         try {
@@ -123,7 +129,7 @@ internal class PreviewInsightController(
     }
 
     private fun isCurrent(run: Run): Boolean = !closed && !run.cancelled.get() && active === run &&
-        generation == run.generation && document === run.document && document?.modificationStamp == run.stamp &&
+        generation == run.generation && metadataGeneration() == run.metadataGeneration && document === run.document && document?.modificationStamp == run.stamp &&
         tabs.component(TAB_ID) === view
 
     fun cancel() {

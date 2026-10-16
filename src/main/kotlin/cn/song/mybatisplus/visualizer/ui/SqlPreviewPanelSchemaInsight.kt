@@ -40,6 +40,27 @@ internal fun SqlPreviewPanel.showSchemaComparison() {
         changes = emptyList(); affected = emptyList(); affectedChoice.removeAllItems()
         results.showRows(emptyList()); results.status.text = insightText("stale")
     }, before.document, after.document)
+    fun bindMetadata(input: javax.swing.JTextArea) {
+        val json = input.text
+        val version = inputGate.capture()
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val parsed = SqlSchemaSnapshotCodec.parse(json)
+            ApplicationManager.getApplication().invokeLater {
+                if (!previewDisposed && inputGate.isCurrent(version)) {
+                    if (parsed is SqlSchemaSnapshotCodec.Result.Accepted) {
+                        try {
+                            analysisMetadataBinding.select(parsed.snapshot)
+                            insightController?.invalidate()
+                            results.status.text = insightText("metadata.selected") + " ${parsed.snapshot.databaseContext}/${parsed.snapshot.version}"
+                            showSqlInsight()
+                        } catch (_: IllegalArgumentException) { results.status.text = insightText("metadata.rejected") }
+                    } else results.status.text = (parsed as SqlSchemaSnapshotCodec.Result.Rejected).reason
+                }
+            }
+        }
+    }
+    results.button(insightText("metadata.useBefore")) { bindMetadata(before) }
+    results.button(insightText("metadata.useAfter")) { bindMetadata(after) }
     results.button(insightText("schema.compare")) {
         val left = before.text; val right = after.text
         val usage = if (useUsage.isSelected) lastInsightUsageReport else null

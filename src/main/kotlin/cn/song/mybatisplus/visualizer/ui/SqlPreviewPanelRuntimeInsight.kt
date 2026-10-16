@@ -21,7 +21,17 @@ internal fun SqlPreviewPanel.showRuntimeInsight() {
                 return RuntimeInsightSnapshot(bundles.map { it.sql }, bundles.flatMap { it.requests }, bundles.flatMap { it.transactions }, bundles.map { it.consistency })
             }
         }
-        view = RuntimeInsightView(::insightText, source, { refreshRuntimeInsight() }, { previewTabs.remove("runtime-analysis") }, { showExecutionCandidates() })
+        val baseline = RequestBaselineView(::insightText, { task, apply ->
+            var future: java.util.concurrent.Future<*>? = null
+            val ticket = previewTabs.beginRefresh("runtime-analysis") { future?.cancel(true) }
+            if (ticket != null) future = ApplicationManager.getApplication().executeOnPooledThread {
+                val value = task()
+                ApplicationManager.getApplication().invokeLater {
+                    if (!previewDisposed && project?.isDisposed != true) previewTabs.applyIfCurrent(ticket) { apply(value) }
+                }
+            }
+        }, cn.song.mybatisplus.visualizer.util.UiTextClipboard::copy)
+        view = RuntimeInsightView(::insightText, source, { refreshRuntimeInsight() }, { previewTabs.remove("runtime-analysis") }, { showExecutionCandidates() }, baseline)
         runtimeInsightSource = source
         runtimeInsightView = view
         val mounted = view
@@ -61,7 +71,8 @@ internal fun SqlPreviewPanel.showExecutionCandidates() {
     val stamp = doc.modificationStamp
     val preview = current
     val panel = InsightDetailPanel(listOf("runId", "executionId", insightText("runtime.shape"), insightText("runtime.status")), insightText("runtime.candidateNotice"))
-    panel.button(insightText("runtime.compareSample")) { showObservedSqlDiff() }
+    var candidates = emptyList<cn.song.mybatisplus.visualizer.log.insight.PreviewExecutionCandidate>()
+    panel.button(insightText("runtime.compareSample")) { showObservedSqlDiff(candidates.getOrNull(panel.selectedRow())?.execution) }
     panel.button(insightText("close")) { previewTabs.remove("execution-candidates") }
     previewTabs.put("execution-candidates", insightText("runtime.candidates"), panel)
     previewTabs.pane?.selectedComponent = panel
@@ -80,7 +91,7 @@ internal fun SqlPreviewPanel.showExecutionCandidates() {
         }
         ApplicationManager.getApplication().invokeLater {
             if (!previewDisposed && !stopped.get() && current === preview && insightDocument() === doc && doc.modificationStamp == stamp) {
-                previewTabs.applyIfCurrent(ticket) { panel.showRows(rows) }
+                previewTabs.applyIfCurrent(ticket) { candidates = matches; panel.showRows(rows) }
             }
         }
     }

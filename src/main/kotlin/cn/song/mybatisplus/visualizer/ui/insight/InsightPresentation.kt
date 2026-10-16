@@ -81,7 +81,7 @@ internal object InsightPresenter {
             InsightItem(text("diagnostics"), children = diagnostics),
         )
         return InsightPresentation("${text("quality")}: ${model.quality}\n${text("sourceQuality")}: $sourceQuality\n" +
-            "${text("dialect")}: ${model.snapshot.dialect}\n${text("offline")}", items, vertices, visibleArrows, limited, sourceQuality)
+            "${text("dialect")}: ${model.snapshot.dialect}\n${text("metadata.status")}: ${model.snapshot.databaseContext ?: "UNKNOWN"} / ${model.snapshot.metadataVersion ?: "UNKNOWN"}\n${text("offline")}", items, vertices, visibleArrows, limited, sourceQuality)
     }
 
     fun validRange(range: SqlSourceRange?, length: Int): Boolean = range != null &&
