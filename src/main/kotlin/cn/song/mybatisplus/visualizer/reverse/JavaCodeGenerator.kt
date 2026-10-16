@@ -148,7 +148,7 @@ object JavaCodeGenerator {
             isJoin -> GeneratedWrapper.MPJ_QUERY
             voQuery -> if (entity != null) GeneratedWrapper.MPJ_LAMBDA else GeneratedWrapper.MPJ_QUERY
             wrapperKind == GeneratedWrapper.WRAPPERS_LAMBDA && (entity == null || needsStringProjection) -> GeneratedWrapper.WRAPPERS_QUERY
-            wrapperKind == GeneratedWrapper.LAMBDA && needsStringProjection -> GeneratedWrapper.QUERY
+            wrapperKind == GeneratedWrapper.LAMBDA && entity != null && needsStringProjection -> GeneratedWrapper.QUERY
             else -> wrapperKind
         }
         appendHeader(sb, result, entity, effectiveKind, invocation)
