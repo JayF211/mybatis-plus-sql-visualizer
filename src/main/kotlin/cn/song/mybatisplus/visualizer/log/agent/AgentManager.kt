@@ -496,6 +496,26 @@ class AgentManager(private val project: Project) : Disposable {
         sessions.lastOrNull { it.alive && it.lastConnectionUrl != null }?.lastConnectionUrl
             ?: sessions.lastOrNull { it.lastConnectionUrl != null }?.lastConnectionUrl
 
+    // UI-007：测试缝止于实际 attach/建会话边界，不用假 PID 的 attach 失败冒充安全门生效。
+    internal var attachTargetInspector: (Long, Any?, Boolean) -> AgentAttachTarget.Decision = AgentAttachTarget::inspect
+    internal var attachSessionFactory: (Long) -> AgentSession? = ::createSession
+    internal var attachTaskDispatcher: (Runnable) -> Unit = { executor.execute(it) }
+
+    private fun permitsAttachTarget(pid: Long, handler: Any?, readFiles: Boolean): Boolean {
+        return when (attachTargetInspector(pid, handler, readFiles)) {
+            AgentAttachTarget.Decision.HELPER, AgentAttachTarget.Decision.NON_JAVA -> {
+                LOG.info("attach 目标排除：pid=$pid（IDE/构建辅助进程或非 Java 入口）")
+                false
+            }
+            else -> true // UNKNOWN 保留既有授权及项目候选边界，不扩成系统扫描。
+        }
+    }
+
+    internal fun isAttachCandidate(processHandler: Any?): Boolean {
+        val pid = resolvePid(processHandler) ?: return false
+        return permitsAttachTarget(pid, processHandler, readFiles = false)
+    }
+
     /**
      * 进程出现回调（RunConfigurationProcessListener.processStarted 转接；增强未开启时空操作）。
      * 后台线程：进程就绪等待 + 3s 去抖 + attach——全程不进 EDT。
@@ -506,8 +526,8 @@ class AgentManager(private val project: Project) : Disposable {
      *
      * T-PS4-01 触发面收窄：未确认态的确认弹窗仅对主配置启动（[isMainConfigLaunch]）触发；
      * HTTP Client/测试/profiler 等非主配置进程在未确认态**静默跳过**（不弹窗、不入 attach 队列），
-     * 杜绝「拒绝注入的用户每进程启动挨一次 EDT 模态弹窗」。已 confirmed 的 attach 链路维持对
-     * 所有进程触发不变（增强捕获主通道语义零变化）。
+     * 杜绝「拒绝注入的用户每进程启动挨一次 EDT 模态弹窗」。UI-007：confirmed 仅代表授权，
+     * 不代表任意进程可注入；已知 IDE/构建 helper 与非 Java 入口始终排除。
      *
      * @param isMainConfigLaunch 是否主业务配置启动（ModuleBasedConfiguration 子类，与
      *   RunConfigurationProcessListener.isModuleBasedLaunch 同源判定）。默认 true =
@@ -519,6 +539,8 @@ class AgentManager(private val project: Project) : Disposable {
                 "disposed=${project.isDisposed}）——跳过挂载")
             return
         }
+        val candidatePid = resolvePid(processHandler)
+        if (candidatePid != null && !permitsAttachTarget(candidatePid, processHandler, readFiles = false)) return
         if (!isEnhancedConfirmed()) {
             if (!isMainConfigLaunch) {
                 LOG.info("onProcessAppeared: 增强已开启但未确认且非主配置进程——静默跳过（不弹窗不入队，T-PS4-01）")
@@ -783,6 +805,21 @@ class AgentManager(private val project: Project) : Disposable {
             LOG.warn("onProcessAppeared: resolvePid 失败（handler=${processHandler?.javaClass?.name}）——跳过挂载")
             return
         }
+        val target = attachTargetInspector(pid, processHandler, false)
+        if (target == AgentAttachTarget.Decision.HELPER || target == AgentAttachTarget.Decision.NON_JAVA) return
+        if (target == AgentAttachTarget.Decision.NEEDS_FILES) {
+            // 启动文件读 I/O 不进 EDT；身份判定前不写 pendingPids、不启动 attach。
+            attachTaskDispatcher(Runnable {
+                if (isEnhancedActive() && permitsAttachTarget(pid, processHandler, readFiles = true)) {
+                    queueAttach(pid, processHandler)
+                }
+            })
+            return
+        }
+        queueAttach(pid, processHandler)
+    }
+
+    private fun queueAttach(pid: Long, processHandler: Any?) {
         // T-PremainReattach S2：pid 命中暂停通道 → resume 重建会话并跳过 loadAgent。settings-rescan
         // （重开增强上升沿补挂）与进程启动钩子两条路径都经本入口，单点收口防双路径漏；返回 false
         // （无命中，或暂停期间通道已被运行结束/dispose 关闭）则照旧回落下方 loadAgent 路径。
@@ -801,32 +838,36 @@ class AgentManager(private val project: Project) : Disposable {
             return
         }
         pendingPids[pid] = now
-        executor.execute {
+        attachTaskDispatcher(Runnable {
             try {
                 LOG.info("onProcessAppeared: 目标 pid=$pid，${ATTACH_SETTLE_DELAY_MS}ms 静默等待后挂载")
                 // 静默等待：等应用初始化热点过去（驱动已加载场景 retransform 直达；未加载场景 transformer 兜底）。
                 // 单线程池串行性质：executor 仅此一条工作线程，跨 pid 的静默等待天然串行排队——
                 // 多进程先后启动时后者在前者等待结束后才进入 attach，不会并发压目标 JVM，维持既有语义。
                 Thread.sleep(ATTACH_SETTLE_DELAY_MS)
-                attachToPid(pid)
+                attachToPid(pid, processHandler)
             } catch (t: Throwable) {
                 if (FatalErrors.isFatal(t)) throw t // T-FP-02：fatal 透传
                 LOG.warn("onProcessAppeared: 惰性 attach 失败（非致命，桥继续捕获）", t)
             } finally {
                 pendingPids.remove(pid)
             }
-        }
+        })
     }
 
     /** attach 全链（幂等表去重；测试可直调）。返回是否达到在线。 */
-    fun attachToPid(pid: Long): Boolean {
+    fun attachToPid(pid: Long): Boolean = attachToPid(pid, null)
+
+    private fun attachToPid(pid: Long, processHandler: Any?): Boolean {
         if (!isEnhancedActive()) return false
+        // 最终入口也复核；直接 PID 调用不能绕过，排队期间身份变化也不得沿用旧结论。
+        if (!permitsAttachTarget(pid, processHandler, readFiles = true)) return false
         if (attachedPids.putIfAbsent(pid, System.currentTimeMillis()) != null) {
             LOG.info("attachToPid: pid=$pid 已挂载（幂等表命中），跳过")
             return online
         }
         val session = try {
-            createSession(pid)
+            attachSessionFactory(pid)
         } catch (t: Throwable) {
             if (FatalErrors.isFatal(t)) throw t // T-FP-02：fatal 透传
             attachedPids.remove(pid)
