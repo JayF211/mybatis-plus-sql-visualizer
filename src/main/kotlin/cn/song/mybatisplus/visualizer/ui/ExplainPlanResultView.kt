@@ -188,7 +188,29 @@ class ExplainPlanResultView(
             }
             else -> JBLabel(MpSqlVisualizerBundle.message("panel.explain.structured.unsupportedFormat"))
         }
-        add(JBScrollPane(content).apply { border = JBUI.Borders.empty() }, BorderLayout.CENTER)
+        val planScroll = JBScrollPane(content).apply { border = JBUI.Borders.empty() }
+        val insights = ExplainPlanInsights.inspect(raw, format)
+        if (insights == null) add(planScroll, BorderLayout.CENTER) else {
+            val text = buildString {
+                append(MpSqlVisualizerBundle.message("insight.plan.boundary")).append('\n')
+                for (operator in insights.operators) {
+                    append('\n').append(operator.label).append('\n')
+                    append(MpSqlVisualizerBundle.message("insight.plan." + operator.explanationKey)).append('\n')
+                    operator.estimatedRows?.let { append(MpSqlVisualizerBundle.message("insight.plan.estimatedRows", it)).append('\n') }
+                    operator.estimatedCost?.let { append(MpSqlVisualizerBundle.message("insight.plan.estimatedCost", it)).append('\n') }
+                    operator.actualRowsPerLoop?.let { append(MpSqlVisualizerBundle.message("insight.plan.actualRows", it)).append('\n') }
+                    operator.actualLoops?.let { append(MpSqlVisualizerBundle.message("insight.plan.loops", it)).append('\n') }
+                    operator.actualTimePerLoopMs?.let { append(MpSqlVisualizerBundle.message("insight.plan.actualTime", it)).append('\n') }
+                }
+                if (insights.limited) append(MpSqlVisualizerBundle.message("insight.plan.limited"))
+            }
+            val explanation = javax.swing.JTextArea(text).apply { isEditable = false; lineWrap = true; wrapStyleWord = true }
+            val tabs = javax.swing.JTabbedPane().apply {
+                addTab(MpSqlVisualizerBundle.message("insight.plan.raw"), planScroll)
+                addTab(MpSqlVisualizerBundle.message("insight.plan.explanation"), JBScrollPane(explanation))
+            }
+            add(tabs, BorderLayout.CENTER)
+        }
 
         // 驱动 notices 尾部透出（T-NoticeChannel 同源数据；空清单零追加）
         if (raw.notices.isNotEmpty()) {
