@@ -609,7 +609,8 @@ internal class AgentSession(
     }
 
     fun sendConfig(disabled: Boolean, desensitize: Boolean =
-        PluginSettings.getInstance().state.enhancedCaptureDesensitize) {
+        PluginSettings.getInstance().state.enhancedCaptureDesensitize,
+        preserveCaptureConfirmation: Boolean = false) {
         try {
             // T-SourceJumpFunnel P1-3：随 CONFIG 附带用户登记的帧过滤前缀（热下发；旧 agent 忽略该键）
             val prefixes = PluginSettings.getInstance().state.sourceFrameSkipPrefixes
@@ -638,9 +639,11 @@ internal class AgentSession(
             // 这是有意的取侧：宁可在一个 ACK 往返（毫秒级、且列表去重窗口会折叠同指纹条目）里
             // 短暂双通道产出，也不接受「桥封着 + 应用侧静默 = 零捕获且无任何可见信号」。
             // 注意次序：先清确认态再排超时巡检（巡检到点时读的是清空后的挂起，语义一致）。
-            configAckDisabled = null
-            onCaptureConfirmationChanged()
-            markConfigSent(disabled)
+            if (!preserveCaptureConfirmation) {
+                configAckDisabled = null
+                onCaptureConfirmationChanged()
+                markConfigSent(disabled)
+            }
         } catch (t: Throwable) {
             if (FatalErrors.isFatal(t)) throw t // T-FP-02：fatal 透传（原状：静默置 alive=false，致命错误会丢现场）
             alive = false
