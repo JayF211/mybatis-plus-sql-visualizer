@@ -180,9 +180,8 @@ class AgentLogTimeParityTest {
     }
 
     @Test
-    fun `参数个数不匹配_仍命中日志行时间`() {
-        // 旧键死因：agent 侧「占位符数 ≠ 参数数就不还原」守卫 → 保留 ? → 与已还原的控制台 SQL 不等。
-        // 新键只看占位符版原文，故参数少捕不再影响时间配对（还原口径的错位防护因此得以保留）。
+    fun `参数个数不匹配_不借用其他签名的日志时间`() {
+        // rawSql相同不能抵消已知参数签名不一致；少捕参数时同时保持SQL与时间的保守回退。
         val entry = runChain(
             listOf(
                 "$logLineTime [main] ==>  Preparing: SELECT * FROM t WHERE a = ? AND b = ?",
@@ -191,8 +190,54 @@ class AgentLogTimeParityTest {
             "SELECT * FROM t WHERE a = ? AND b = ?",
             listOf(Triple(1, "1", "Long")),
         )
-        assertHit(entry, "参数个数不匹配")
+        assertMissKeepsCaptureTime(entry, "参数个数不匹配")
+        assertEquals("不匹配不能消费其他执行的时间", 1, LogTimeCorrelator.size())
         assertEquals("少捕参数时 agent 侧保持原样不还原（防错位）", "SELECT * FROM t WHERE a = ? AND b = ?", entry.restoredSql)
+    }
+
+    @Test
+    fun `无时间StdOut十参数_真实桥入口不制造日志时间`() {
+        SqlCaptureGate.paused.set(true)
+        LogTimeCorrelator.clear()
+        val ctx = newCtx()
+        val sql = "SELECT * FROM ui012_time WHERE id = ?"
+        (1..10).forEach { id ->
+            processConsoleLine("==>  Preparing: $sql", ctx, null, {})
+            processConsoleLine("==> Parameters: $id(Long)", ctx, null, {})
+        }
+        assertEquals("StdOut没有时间戳，不能把IDE解析时刻入相关器", 0, LogTimeCorrelator.size())
+        val entries = (1..10).map { id ->
+            val captured = entryOf(sql, id.toString()).copy(timestamp = agentCapturedAt + id)
+            stampLogTime(captured) ?: captured
+        }
+        entries.forEachIndexed { index, entry ->
+            assertNull("无真实时间就不回填，第${index + 1}条", entry.logTimestamp)
+            assertEquals(agentCapturedAt + index + 1, entry.timestamp)
+        }
+        assertEquals("默认显示时间回落执行开始，不能制造9/10跳到前面的时间污染",
+            entries, entries.sortedBy { it.logTimestamp ?: it.timestamp })
+    }
+
+    @Test
+    fun `真实桥十参数超过八容量_只消费匹配签名`() {
+        SqlCaptureGate.paused.set(true)
+        LogTimeCorrelator.clear()
+        val ctx = newCtx()
+        val sql = "SELECT * FROM ui012_time WHERE id = ?"
+        val base = System.currentTimeMillis() - 1000
+        (1..10).forEach { id ->
+            val time = sdf.format(java.util.Date(base + id))
+            processConsoleLine("$time [main] ==>  Preparing: $sql", ctx, null, {})
+            processConsoleLine("$time [main] ==> Parameters: $id(Long)", ctx, null, {})
+        }
+        assertEquals("保持既有容量，不靠扩容掩盖错配", 8, LogTimeCorrelator.size())
+        val entries = (1..10).map { id ->
+            val entry = entryOf(sql, id.toString())
+            stampLogTime(entry) ?: entry
+        }
+        assertEquals("被淘汰的1/2只能回退，其余必须各取本签名的真实时间",
+            listOf(null, null) + (3..10).map { base + it }, entries.map { it.logTimestamp })
+        assertEquals(0, LogTimeCorrelator.size())
     }
 
     // ---------- 同键多次执行：签名判别 + FIFO ----------
