@@ -65,6 +65,13 @@ class SqlSemanticExpressionsTest {
         assertEquals(setOf("user_id", "id"), names(m.outputFields.single().conditionSources))
     }
 
+    @Test fun `unresolved correlated predicate downgrades scalar output instead of claiming certainty`() {
+        val m = model("SELECT (SELECT max(o.amount) FROM orders o WHERE ghost.id=o.id) FROM users u")
+        assertTrue(m.outputFields.single().sources.isEmpty())
+        assertTrue(m.outputFields.single().quality != AnalysisQuality.CERTAIN)
+        assertTrue(m.diagnostics.any { it.code == DiagnosticCode.UNKNOWN_RELATION })
+    }
+
     @Test fun `unknown functions remain opaque and cancellation drops expanded graph`() {
         val m = model("SELECT custom_secret(t.a) + t.b FROM t")
         assertTrue(m.outputFields.single().sources.isEmpty())

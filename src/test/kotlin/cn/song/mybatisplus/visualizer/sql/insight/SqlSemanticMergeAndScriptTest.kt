@@ -67,6 +67,22 @@ class SqlSemanticMergeAndScriptTest {
         assertTrue(analyze("CREATE TEMP TABLE stage AS SELECT u.id FROM users u; DROP TABLE stage; SELECT id FROM stage").outputFields.single().sources.isEmpty())
     }
 
+    @Test fun `unknown statement and invalid update target poison temporary state`() {
+        val invalid = analyze("CREATE TEMP TABLE stage AS SELECT u.a FROM users u; UPDATE stage SET ghost.a=7; SELECT a FROM stage")
+        assertTrue(invalid.outputFields.single().sources.isEmpty())
+        assertEquals(AnalysisQuality.UNKNOWN, invalid.outputFields.single().quality)
+        val unknown = analyze("CREATE TEMP TABLE stage AS SELECT u.a FROM users u; ALTER TABLE stage ADD COLUMN b INT; SELECT a FROM stage")
+        assertTrue(unknown.outputFields.single().sources.isEmpty())
+        assertEquals(AnalysisQuality.UNKNOWN, unknown.outputFields.single().quality)
+    }
+
+    @Test fun `full delete clears temp origins while filtered delete retains possible remaining origins`() {
+        val full = analyze("CREATE TEMP TABLE stage AS SELECT u.a FROM users u; DELETE FROM stage; SELECT a FROM stage")
+        assertTrue(full.outputFields.single().sources.isEmpty())
+        val partial = analyze("CREATE TEMP TABLE stage AS SELECT u.a FROM users u; DELETE FROM stage WHERE a=1; SELECT a FROM stage")
+        assertEquals(setOf("a"), names(partial.outputFields.single()))
+    }
+
     @Test fun `script cancellation yields no partial statement scope ids`() {
         var n = 0
         val m = SqlSemanticAnalyzer.analyze(AnalysisSnapshot("CREATE TEMP TABLE stage AS SELECT u.id FROM users u; SELECT id FROM stage")) { ++n > 10 }

@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.sql.insight
 
 import cn.song.mybatisplus.visualizer.execute.SqlAstParser
 import net.sf.jsqlparser.expression.*
+import net.sf.jsqlparser.expression.Function
 import net.sf.jsqlparser.expression.operators.relational.Between
 import net.sf.jsqlparser.expression.operators.relational.ExpressionList
 import net.sf.jsqlparser.expression.operators.relational.ExistsExpression
@@ -393,6 +394,8 @@ object SqlSemanticAnalyzer {
         private fun column(column: Column, f: Frame): Resolved {
             if (!verifiedIdentifier(column.columnName) || column.table?.nameParts?.any { !verifiedIdentifier(it) } == true)
                 return diagnostic(DiagnosticCode.UNSUPPORTED_DIALECT, "Unverified column quoting: $column.", f.id)
+            if (column.arrayConstructor != null || column.tableDelimiter != ".")
+                return diagnostic(DiagnosticCode.UNSUPPORTED_EXPRESSION, "Array/struct column access is not a direct column reference.", f.id)
             val qualifier = column.table?.takeIf { !it.name.isNullOrBlank() }?.let { qualifiedKey(it) }
             if (qualifier == null && f.correlation != null && f.bindings.any { it.outputs == null })
                 return diagnostic(DiagnosticCode.AMBIGUOUS_COLUMN, "Unqualified correlated column needs verified local metadata: $column.", f.id, AnalysisQuality.AMBIGUOUS)
@@ -491,10 +494,12 @@ object SqlSemanticAnalyzer {
             var body = node
             while (body is ParenthesedSelect) body = body.select
             val start = dependencies.size
+            val diagnosticStart = diagnostics.size
             val child = select(node, outer.id, if (scalar) "scalar" else "exists", outer.ctes, outer.reserved, outer)
             val influences = dependencies.drop(start).filter { it.kind in setOf(DependencyKind.FILTER, DependencyKind.JOIN, DependencyKind.GROUP, DependencyKind.CONDITION, DependencyKind.ORDER) }
                 .flatMap { it.sources }.toSet()
-            if (!scalar) return Resolved(emptySet(), quality(dependencies.drop(start).map { it.quality }), true, influences)
+            val childQuality = quality(dependencies.drop(start).map { it.quality } + diagnostics.drop(diagnosticStart).map { it.quality })
+            if (!scalar) return Resolved(emptySet(), childQuality, true, influences)
             if (child.projections.size != 1) return diagnostic(DiagnosticCode.COLUMN_COUNT_MISMATCH, "Scalar SELECT must project exactly one column.", outer.id)
             val plain = body as? PlainSelect
             val noRowsSource = plain != null && plain.fromItem == null && plain.joins.isNullOrEmpty()
@@ -507,7 +512,8 @@ object SqlSemanticAnalyzer {
             if (!noRowsSource && !aggregate && !limitOne)
                 return diagnostic(DiagnosticCode.SCALAR_CARDINALITY_UNKNOWN, "At-most-one scalar row is not proven (use aggregate or explicit LIMIT 1).", outer.id, AnalysisQuality.UNKNOWN)
             val p = child.projections.single()
-            return Resolved(p.sources, p.quality, true, p.conditionSources + influences)
+            val q = quality(listOf(p.quality, childQuality))
+            return Resolved(if (known(q)) p.sources else emptySet(), q, true, p.conditionSources + influences)
         }
 
         private fun combine(parts: List<Resolved>, derived: Boolean): Resolved {
@@ -709,8 +715,8 @@ object SqlSemanticAnalyzer {
                     var value = expression(set.getValue(i), f)
                     if (snapshot.dialect == SqlInsightDialect.MYSQL && value.sources.any { key(it.name) in alreadyAssigned })
                         value = diagnostic(DiagnosticCode.UNSUPPORTED_EXPRESSION, "MySQL sequential assignment reads an earlier modified column.", f.id)
-                    assignment(target, column, value, set.getValue(i).toString(), f)
-                    updates[key(column.columnName)] = value
+                    val assigned = assignment(target, column, value, set.getValue(i).toString(), f)
+                    updates[key(column.columnName)] = if (assigned) value else Resolved(emptySet(), AnalysisQuality.UNKNOWN)
                     alreadyAssigned += key(column.columnName)
                 }
             }
@@ -741,6 +747,7 @@ object SqlSemanticAnalyzer {
             val f = frame(null, "DELETE")
             if (!node.tables.isNullOrEmpty() || !node.usingList.isNullOrEmpty() || !node.joins.isNullOrEmpty() || !node.withItemsList.isNullOrEmpty()) {
                 diagnostic(DiagnosticCode.UNSUPPORTED_STATEMENT, "Only single-table DELETE without USING/WITH/JOIN is supported.", f.id)
+                poisonTemporary(qualifiedKey(node.table))
                 return finish(f, SqlOperation.DELETE).id
             }
             bindTable(node.table, f, setOf(TableRole.READ, TableRole.DELETE), emptyMap(), emptySet())
