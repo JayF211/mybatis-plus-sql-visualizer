@@ -148,7 +148,7 @@ def windows_memory(pid):
 
 def trial(args, mode, index, classes):
     receiver = Receiver() if mode != "none" else None
-    command = [args.java, "-Xms128m", "-Xmx512m", "-Djava.awt.headless=true"]
+    command = [args.java, "-Xms128m", "-Xmx512m", "-Djava.awt.headless=true", "-Dsqlinsight.perf.warmRequests=" + str(args.warm_requests)]
     if receiver:
         command += ["-Dsqlvis.agent.heartbeatMs=200", "-javaagent:" + args.agent + "=port=" + str(receiver.port)]
     command += ["-cp", os.pathsep.join((str(classes), args.h2, args.servlet)), "perf.sqlinsight.SqlInsightWorkload"]
@@ -221,6 +221,7 @@ def main():
     for name in ("java", "javac", "agent", "h2", "servlet", "output"):
         p.add_argument("--" + name, required=True)
     p.add_argument("--repeats", type=int, default=3)
+    p.add_argument("--warm-requests", type=int, default=200)
     p.add_argument("--host-contention", default="UNKNOWN: other IDE/UI activity may contend; not an idle-host certification")
     args = p.parse_args()
     root = Path(__file__).resolve().parents[2]
@@ -231,7 +232,7 @@ def main():
     metadata = dict(hostContention=args.host_contention, gitSha=subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip(),
                     java=subprocess.check_output([args.java, "-version"], stderr=subprocess.STDOUT, text=True),
                     jars={name: hashlib.sha256(Path(getattr(args, name)).read_bytes()).hexdigest() for name in ("agent", "h2", "servlet")},
-                    limitations=["local synthetic H2 + Servlet dispatch, not HTTP/container latency", "driver read/execute workload; startup excluded", "heap pool peak sum is not simultaneous peak", "RSS is sampled before/after; peakRSS includes startup", "no delivery completeness inferred from latency", "200-request warmup stability must be inspected"])
+                    limitations=["local synthetic H2 + Servlet dispatch, not HTTP/container latency", "driver read/execute workload; startup excluded", "heap pool peak sum is not simultaneous peak", "RSS is sampled before/after; peakRSS includes startup", "no delivery completeness inferred from latency", "warmup block stability must be inspected; use --warm-requests to rerun a fixed longer warmup"])
     results = []
     for repeat in range(args.repeats):
         modes = ["none", "sql", "tracing"]

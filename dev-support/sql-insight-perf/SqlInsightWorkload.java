@@ -12,7 +12,7 @@ import javax.servlet.http.*;
 /** Separate-process, fixed real JDBC workload. No agent APIs on the application classpath. */
 public final class SqlInsightWorkload {
     private static final int SQL_PER_REQUEST = 20;
-    private static final int WARM_REQUESTS = 200;
+    private static final int WARM_REQUESTS = Integer.getInteger("sqlinsight.perf.warmRequests", 200);
     private static final int MEASURE_REQUESTS = 500;
     private static final long[] SQL_NANOS = new long[MEASURE_REQUESTS * SQL_PER_REQUEST];
     private static int samples;
@@ -38,6 +38,7 @@ public final class SqlInsightWorkload {
         }
     }
     public static void main(String[] args) throws Exception {
+        if (WARM_REQUESTS < 200 || WARM_REQUESTS > 10000 || WARM_REQUESTS % 4 != 0) throw new IllegalArgumentException("warmRequests");
         BufferedReader commands = new BufferedReader(new InputStreamReader(System.in, "UTF-8"));
         System.out.println("BOOT_READY"); System.out.flush();
         if (!"SETUP".equals(commands.readLine())) throw new IllegalStateException("SETUP required");

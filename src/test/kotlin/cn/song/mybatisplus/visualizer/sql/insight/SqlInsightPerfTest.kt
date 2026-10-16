@@ -14,6 +14,10 @@ import java.lang.management.ManagementFactory
 class SqlInsightPerfTest {
     @Test fun measureFixedModelWorkloads() {
         val metrics = linkedMapOf<String, Any>()
+        val os = ManagementFactory.getOperatingSystemMXBean() as com.sun.management.OperatingSystemMXBean
+        val startCpu = os.processCpuTime
+        val startWall = System.nanoTime()
+        val startHeap = ManagementFactory.getMemoryMXBean().heapMemoryUsage.used
         val sqls = listOf(
             "SELECT u.id,u.name FROM users u WHERE u.id=1",
             "SELECT u.id,o.amount FROM users u JOIN orders o ON o.user_id=u.id WHERE o.amount>10 ORDER BY o.amount",
@@ -77,6 +81,10 @@ class SqlInsightPerfTest {
             val view = InsightPresenter.build(graph, { it })
             assertTrue(view.vertices.size <= 200); assertTrue(view.arrows.size <= 400); assertTrue(view.graphLimited)
         } })
+        metrics["wholeMeasurement"] = mapOf("wallNanos" to System.nanoTime() - startWall,
+            "processCpuNanos" to os.processCpuTime - startCpu, "heapBeforeBytes" to startHeap,
+            "heapAfterBytes" to ManagementFactory.getMemoryMXBean().heapMemoryUsage.used,
+            "hostContention" to "UNKNOWN: other IDE/UI activity may contend; not idle-host certification")
         metrics["environment"] = mapOf("java" to System.getProperty("java.version"), "vm" to System.getProperty("java.vm.name"),
             "processors" to Runtime.getRuntime().availableProcessors(), "heapUsedBytes" to ManagementFactory.getMemoryMXBean().heapMemoryUsage.used,
             "heapMaxBytes" to Runtime.getRuntime().maxMemory(), "gitSha" to ProcessBuilder("git", "rev-parse", "HEAD").start().inputStream.bufferedReader().readText().trim())
