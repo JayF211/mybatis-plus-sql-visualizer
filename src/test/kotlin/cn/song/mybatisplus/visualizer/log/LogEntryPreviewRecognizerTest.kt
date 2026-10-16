@@ -13,6 +13,31 @@ import org.junit.Test
  */
 class LogEntryPreviewRecognizerTest {
 
+    @Test
+    fun `Sharding歧义提示来源正确且路由原文贯穿所有预览分支`() {
+        val actual = "ds_0 ::: SELECT * FROM t_0 WHERE a = ? ::: [BOOK,100]\n" +
+            "ds_1 ::: SELECT * FROM t_1 WHERE a = ? ::: [BOOK,100]"
+        val raw = "SELECT * FROM t WHERE a = ?"
+        val missing = LogSqlEntry(rawSql = raw, restoredSql = raw, params = emptyList(),
+            source = SqlSource.SHARDINGSPHERE, actualSql = actual)
+        val unresolved = missing.toPreviewResult(false, false)
+        assertEquals(actual, unresolved.actualSql)
+        assertTrue(unresolved.warning!!.contains("ShardingSphere"))
+        assertFalse(unresolved.warning!!.contains("Hibernate"))
+        assertFalse(unresolved.warning!!.contains("TRACE"))
+        val bound = missing.copy(params = listOf(LogSqlParam("BOOK,100", null)),
+            restoredSql = "SELECT * FROM t WHERE a = 'BOOK,100'").toPreviewResult(false, false)
+        assertEquals(actual, bound.actualSql)
+        assertEquals("BOOK,100", bound.initialParamValues["param1"])
+        assertNull(bound.paramHints.single().quote)
+        assertTrue(bound.warning!!.contains("ShardingSphere"))
+        assertFalse(bound.sql.contains("ds_0"))
+        val literal = missing.copy(rawSql = "SELECT * FROM t WHERE a = 1", restoredSql = "SELECT * FROM t WHERE a = 1")
+        assertEquals(actual, literal.toPreviewResult(false, true).actualSql)
+        assertEquals(actual, literal.toPreviewResult(false, false).actualSql)
+        assertNull(missing.copy(source = SqlSource.HIBERNATE).toPreviewResult(false, false).actualSql)
+    }
+
     private fun entry(
         rawSql: String,
         params: List<LogSqlParam>,

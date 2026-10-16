@@ -126,6 +126,26 @@ internal fun SqlPreviewPanel.rebuildLeftPanel(result: PreviewResult) {
     val xmlHasControls = xmlModelForSchemeRow != null &&
         (xmlModelForSchemeRow.conditionViews.isNotEmpty() || xmlModelForSchemeRow.forEachViews.isNotEmpty())
 
+    // UI-008：沿用参数预设的标准折叠件，放在早退之前，无参数或歧义条目也能看路由。
+    result.actualSql?.takeIf { it.isNotBlank() }?.let { actual ->
+        val text = javax.swing.JTextArea(actual, actual.lineSequence().count().coerceIn(2, 6), 24).apply {
+            name = "shardingActualSqlText"
+            isEditable = false
+            lineWrap = true
+            wrapStyleWord = false
+            caretPosition = 0
+        }
+        paramPanel.add(HideableTitledPanel(
+            MpSqlVisualizerBundle.message("log.preview.shardingRoutes"),
+            false,
+            com.intellij.ui.components.JBScrollPane(text),
+            false,
+        ).apply {
+            name = "shardingActualSqlFold"
+            alignmentX = java.awt.Component.LEFT_ALIGNMENT
+        })
+    }
+
     if (views.isEmpty() && result.unresolvedParams.isEmpty() && batchModel == null && !xmlHasControls) {
         // T-DevAcceptFix ①：绑定指示行已迁顶部常驻行——无参数早退不再重复建行
         paramPanel.add(JBLabel(MpSqlVisualizerBundle.message("panel.param.none")).apply {

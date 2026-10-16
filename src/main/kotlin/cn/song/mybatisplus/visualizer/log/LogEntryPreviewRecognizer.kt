@@ -119,7 +119,9 @@ internal fun countPlaceholders(sql: String): Int = placeholderPositions(sql).siz
 internal fun LogSqlEntry.toPreviewResult(
     formatSql: Boolean,
     literalRecovery: Boolean,
-): PreviewResult = toPreviewResultInternal(formatSql, literalRecovery).withExecutionError(errorText)
+): PreviewResult = toPreviewResultInternal(formatSql, literalRecovery)
+    .copy(actualSql = actualSql?.takeIf { source == SqlSource.SHARDINGSPHERE && it.isNotBlank() })
+    .withExecutionError(errorText)
 
 /**
  * T-M55-02：执行报错全文并入预览警示槽——列表行⛔片段之外，预览详情承载完整错误文本：
@@ -149,7 +151,9 @@ private fun LogSqlEntry.toPreviewResultInternal(
             paramTable = null,
             wrapperType = null,
             tableName = null,
-            warning = null,
+            warning = if (source == SqlSource.SHARDINGSPHERE) {
+                MpSqlVisualizerBundle.message("log.preview.shardingUntyped")
+            } else null,
             paramHints = recognized.paramHints,
             initialParamValues = recognized.initialValues,
         )
@@ -201,10 +205,10 @@ private fun LogSqlEntry.toPreviewResultInternal(
         // T-JdbcThreadBucket F2：零参数时按来源分流——JdbcTemplate 引导开 org.springframework.jdbc.core，
         // Hibernate 引导开 type.descriptor.sql（避免把 JDBC 条目误导向 Hibernate 配置）
         warning = if (countPlaceholders(restoredSql) > 0) {
-            val noBindingKey = if (source == SqlSource.JDBC) {
-                "log.preview.unresolvedNoBinding.jdbc"
-            } else {
-                "log.preview.unresolvedNoBinding"
+            val noBindingKey = when (source) {
+                SqlSource.JDBC -> "log.preview.unresolvedNoBinding.jdbc"
+                SqlSource.SHARDINGSPHERE -> "log.preview.unresolvedNoBinding.sharding"
+                else -> "log.preview.unresolvedNoBinding"
             }
             MpSqlVisualizerBundle.message(
                 if (params.isEmpty()) noBindingKey
