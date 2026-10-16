@@ -88,8 +88,9 @@ object HqlConverter {
         tableInfo: TableInfo? = null,
         project: Project? = null,
         entityAlias: String? = null,
+        context: com.intellij.psi.PsiElement? = null,
     ): Result {
-        return convertInternal(hql, tableInfo, project, entityAlias, null)
+        return convertInternal(hql, tableInfo, project, entityAlias, null, context)
     }
 
     /**
@@ -105,7 +106,7 @@ object HqlConverter {
         entityAlias: String? = null,
         resolveEntity: (String) -> TableInfo?,
     ): Result {
-        return convertInternal(hql, tableInfo, null, entityAlias, resolveEntity)
+        return convertInternal(hql, tableInfo, null, entityAlias, resolveEntity, null)
     }
 
     private fun convertInternal(
@@ -114,6 +115,7 @@ object HqlConverter {
         project: Project?,
         entityAlias: String?,
         resolveEntity: ((String) -> TableInfo?)?,
+        context: com.intellij.psi.PsiElement?,
     ): Result {
         val table = tableInfo ?: createFallbackTable()
 
@@ -136,7 +138,8 @@ object HqlConverter {
         sql = NewExpressionStripper.strip(sql)
 
         // 5. 处理 JOIN FETCH / 关联 JOIN → LEFT/INNER JOIN（J7：ON 条件真实化）
-        sql = JpaJoinRewriter.rewrite(sql, table, project)
+        // T-EntityNameScope：透传 context——本步会按根实体名再解析一次 PsiClass（同名实体消歧靠它）
+        sql = JpaJoinRewriter.rewrite(sql, table, project, context)
 
         // 6. 处理 MEMBER OF（降级为注释提示）
         sql = handleMemberOf(sql)

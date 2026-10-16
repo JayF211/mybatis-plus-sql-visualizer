@@ -9,8 +9,8 @@ import com.intellij.psi.PsiClass
 import com.intellij.psi.PsiClassType
 import com.intellij.psi.PsiField
 import com.intellij.psi.PsiLiteralExpression
-import com.intellij.psi.search.GlobalSearchScope
-import com.intellij.psi.search.PsiShortNamesCache
+import com.intellij.psi.PsiElement
+import cn.song.mybatisplus.visualizer.psi.EntityClassResolver
 
 /**
  * JOIN ON 条件真实化解析器（J7，覆盖矩阵 §3「JOIN [LEFT/INNER] ... ON」行）。
@@ -89,8 +89,9 @@ object JpaJoinOnResolver {
         relationField: String,
         joinAlias: String,
         table: TableInfo? = null,
+        context: PsiElement? = null,
     ): OnResolution {
-        val entityClass = runCatching { findEntityClass(project, entityClassName) }.getOrNull()
+        val entityClass = runCatching { findEntityClass(project, entityClassName, context) }.getOrNull()
             ?: return degrade(rootAlias, relationField, joinAlias, table, "实体类不可解析")
         return resolveWithPsi(entityClass, rootAlias, relationField, joinAlias, table)
     }
@@ -206,13 +207,14 @@ object JpaJoinOnResolver {
     // PSI 读取辅助（本文件自有封装，只读；不依赖 psi/jpa 内部实现）
     // ------------------------------------------------------------------
 
-    /** 按简单类名查找实体 PsiClass（优先项目范围，找不到再全范围兜底）。 */
-    private fun findEntityClass(project: Project, className: String): PsiClass? {
-        if (className.isBlank()) return null
-        val cache = PsiShortNamesCache.getInstance(project)
-        return cache.getClassesByName(className, GlobalSearchScope.projectScope(project)).firstOrNull()
-            ?: cache.getClassesByName(className, GlobalSearchScope.allScope(project)).firstOrNull()
-    }
+    /**
+     * 按简单类名查找实体 PsiClass。
+     *
+     * T-EntityNameScope：收口到 [EntityClassResolver]——同名实体按**模块可见性**消歧
+     * （此前是 projectScope 再 allScope 的 `firstOrNull()`，多模块同名时挑到哪个看索引顺序）。
+     */
+    private fun findEntityClass(project: Project, className: String, context: PsiElement?): PsiClass? =
+        EntityClassResolver.resolveClassByName(project, className, context)
 
     /**
      * 解析关联字段的目标实体类：
