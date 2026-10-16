@@ -148,6 +148,40 @@ class SqlToJavaPanelStaleRequestTest : BasePlatformTestCase() {
         assertNewResult()
     }
 
+    fun testAutomaticRenderWithoutDialogAlsoRejectsOldCompletion() {
+        PluginSettings.getInstance().state.reverseManualEntitySelection = false
+        start()
+        start(NEW_SQL)
+        finishBackground(1)
+        finishUi()
+        assertNewResult()
+        val result = panel.resultTextForTest()
+        finishBackground()
+        finishUi()
+        assertEquals(result, panel.resultTextForTest())
+        assertTrue(dialogTables.isEmpty())
+        assertEquals(NEW_SQL, cache("cacheText"))
+    }
+
+    fun testDeferredRenderDispatchCannotRunAfterNewSynchronousQuery() {
+        PluginSettings.getInstance().state.reverseManualEntitySelection = false
+        start()
+        finishBackground()
+        DocWriteContext.writeAllowedProbe = { false }
+        val before = DocWriteContext.deferredCount.get()
+        finishUi()
+        assertTrue(DocWriteContext.deferredCount.get() > before)
+        assertEquals("", panel.resultTextForTest())
+        DocWriteContext.writeAllowedProbe = { true }
+        panel.inputEditorForTest().setSql(NEW_SQL)
+        panel.selectFormatForTest(PluginSettings.REVERSE_QUERY)
+        assertNewResult()
+        val status = panel.statusForTest()
+        UIUtil.dispatchAllInvocationEvents()
+        assertNewResult()
+        assertEquals(status, panel.statusForTest())
+    }
+
     fun testNewUiCallbackCompletesBeforeOldUiCallback() {
         start()
         finishBackground()
