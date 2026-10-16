@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.update
 
 import cn.song.mybatisplus.visualizer.acp.SignatureDistroDiscovery
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Test
 import java.io.File
@@ -39,6 +40,28 @@ import java.util.concurrent.Executors
  */
 class PlatformSignatureCrossVersionTest {
 
+    /** 直接调用跨版本运行器使用的登记方法，覆盖形态漂移而不是重复实现解析器。 */
+    @Test
+    fun attachTargetCommandLineSignatureIsExact() {
+        fun check(type: Class<*>): Int = PlatformSignatureChecker.checkAttachTargetCommandLine(type)
+        assertEquals("公共实例零参String应通过", 0, check(CommandLinePublic::class.java))
+        assertEquals("继承的公共方法也应通过", 0, check(CommandLineInherited::class.java))
+        for (wrong in listOf(CommandLineWrongReturn::class.java, CommandLineWithArgument::class.java,
+            CommandLineStatic::class.java, CommandLinePrivate::class.java, CommandLineMissing::class.java)) {
+            assertEquals("签名漂移必须拒绝：${wrong.simpleName}", 1, check(wrong))
+        }
+        val emptyLoader = object : ClassLoader(null) {}
+        assertEquals("平台类缺失必须拒绝", 1, PlatformSignatureChecker.checkAttachTargetApis(emptyLoader))
+    }
+
+    open class CommandLinePublic { fun getCommandLine(): String = "unused" }
+    class CommandLineInherited : CommandLinePublic()
+    class CommandLineWrongReturn { fun getCommandLine(): Any = "unused" }
+    class CommandLineWithArgument { fun getCommandLine(unused: String): String = unused }
+    class CommandLineStatic { companion object { @JvmStatic fun getCommandLine(): String = "unused" } }
+    class CommandLinePrivate { private fun getCommandLine(): String = "unused" }
+    class CommandLineMissing
+
     @Test
     fun dynamicInstallApisResolveOnAllLocalTargetPlatforms() {
         val distros = SignatureDistroDiscovery.ideaDistros
@@ -66,6 +89,8 @@ class PlatformSignatureCrossVersionTest {
             if (result.exitCode != 0) {
                 failures.add("IU-$family (${root.path}):\n${result.output}")
             }
+            assertTrue("IU-$family 必须实际执行UI-007签名登记，不能仅凭RESULT OK空绿：\n${result.output}",
+                result.output.lineSequence().any { it.startsWith("OK   BaseProcessHandler.getCommandLine[] -> ") })
         }
         assumeTrue("未发现可运行的目标平台发行版", covered.isNotEmpty())
         println("跨版本签名核验覆盖平台: ${covered.joinToString("、")}")

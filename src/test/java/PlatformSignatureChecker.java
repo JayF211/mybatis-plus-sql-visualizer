@@ -99,6 +99,7 @@ public class PlatformSignatureChecker {
         missing += checkModuleCountApi(loader);
         missing += checkPreviewSourceContextApis(loader, dbnLib.isDirectory());
         missing += checkSqlLogTabsApis(loader);
+        missing += checkAttachTargetApis(loader);
 
         if (missing > 0) {
             System.out.println("RESULT MISSING " + missing);
@@ -452,6 +453,22 @@ public class PlatformSignatureChecker {
             System.out.println("MISS SqlLogPanel JBTabs API types: " + t);
             return 1;
         }
+    }
+
+    /** UI-007：AgentAttachTarget 在 handler 上反射读取命令；公共实例零参 String，不能仅按名字匹配。 */
+    public static int checkAttachTargetApis(ClassLoader loader) {
+        try {
+            Class<?> handler = Class.forName("com.intellij.execution.process.BaseProcessHandler", false, loader);
+            return checkAttachTargetCommandLine(handler);
+        } catch (Throwable t) {
+            System.out.println("MISS AgentAttachTarget BaseProcessHandler API: " + t);
+            return 1;
+        }
+    }
+
+    /** 与真实发行版登记共用的精确签名核验，供形态漂移负例调用。 */
+    public static int checkAttachTargetCommandLine(Class<?> handler) {
+        return checkExact(handler, "getCommandLine", String.class, false);
     }
 
     private static int checkExact(Class<?> owner, String name, Class<?> returns, boolean isStatic, Class<?>... args) {
