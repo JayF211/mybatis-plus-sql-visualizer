@@ -52,7 +52,8 @@ public final class ConnectionHandler implements InvocationHandler {
             try { result = method.invoke(raw, args); return result; }
             catch (java.lang.reflect.InvocationTargetException e) {
                 failure = e.getCause() == null ? e : e.getCause(); throw failure;
-            } finally {
+            } catch (Throwable e) { failure = e; throw e; }
+            finally {
                 try { transactions.after(name, args, result, failure, revision, epoch); }
                 catch (Throwable ignored) { cn.song.mybatisplus.sqlvis.agent.transport.TraceBus.hookFailed(); }
             }

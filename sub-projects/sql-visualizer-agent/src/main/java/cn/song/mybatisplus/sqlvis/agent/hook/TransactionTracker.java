@@ -12,7 +12,7 @@ import java.util.Map;
  * No driver calls are added. Unknown entry autoCommit and disabled intervals invalidate evidence.
  */
 final class TransactionTracker {
-    private final String connectionId = TraceBus.id("connection"), leaseId = TraceBus.id("lease");
+    private String connectionId, leaseId;
     private String transactionId;
     private Boolean autoCommit;
     private boolean closed;
@@ -87,7 +87,11 @@ final class TransactionTracker {
             transactionId = null; autoCommit = null; savepoints.clear();
             revision = currentRevision; epoch = currentEpoch;
         }
-        return !closed && TraceBus.enabled(TraceBus.TRANSACTION);
+        if (closed || !TraceBus.enabled(TraceBus.TRANSACTION)) return false;
+        if (connectionId == null) {
+            connectionId = TraceBus.id("connection"); leaseId = TraceBus.id("lease");
+        }
+        return true;
     }
     private static String kind(String method) {
         if ("commit".equals(method)) return "COMMIT";

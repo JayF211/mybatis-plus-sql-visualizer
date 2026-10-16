@@ -80,6 +80,17 @@ public class TransactionProxyTest {
         assertNull(sql().transactionId); connection.commit();
         assertTrue(only("COMMIT").contains("\"outcome\":\"UNKNOWN\""));
     }
+    @Test public void nonceAndStopReopenInvalidatePriorTransactionEvidence() throws Exception {
+        connection.setAutoCommit(false); connection.createStatement().executeUpdate("insert into t values(1)");
+        assertNotNull(sql().transactionId);
+        TraceBus.configure(false, true, "ffff", true);
+        connection.commit(); assertTrue(only("COMMIT").contains("\"outcome\":\"UNKNOWN\""));
+        connection.setAutoCommit(false); connection.createStatement().executeUpdate("insert into t values(2)");
+        sql(); ServletRequestWeaveTest.drain();
+        AgentState.setDisabled(true); AgentState.setDisabled(false);
+        connection.rollback(); assertTrue(only("ROLLBACK").contains("\"outcome\":\"UNKNOWN\""));
+    }
+
     @Test public void failedRollbackAndSetAutoCommitNeverClaimSuccess() throws Exception {
         for (String target : new String[]{"rollback", "setAutoCommit", "close"}) {
             SQLException original = new SQLException("injected " + target, "08006");

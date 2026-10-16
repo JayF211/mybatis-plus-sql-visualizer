@@ -16,6 +16,7 @@ public final class RequestHooks {
             if (!TraceBus.enabled(TraceBus.REQUEST)) return 0;
             ArrayDeque<Scope> stack = STACK.get();
             if (stack == null) { stack = new ArrayDeque<Scope>(); STACK.set(stack); }
+            if (stack.size() >= 128) { TraceBus.hookFailed(); return 0; }
             Scope scope = new Scope(TOKENS.incrementAndGet(), currentId(), request);
             stack.push(scope);
             try { emit(scope, "START", null); }

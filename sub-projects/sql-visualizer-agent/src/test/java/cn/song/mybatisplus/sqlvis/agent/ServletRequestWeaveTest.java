@@ -14,6 +14,7 @@ import static org.junit.Assert.*;
 public class ServletRequestWeaveTest implements Opcodes {
     private boolean disabled;
     public static int mode;
+    public static boolean async;
     public static Runnable nested;
     public static void business() throws Exception {
         if (mode == 1) throw new java.sql.SQLException("business failure", "42000");
@@ -23,7 +24,7 @@ public class ServletRequestWeaveTest implements Opcodes {
     }
     @Before public void setup() throws Exception {
         disabled = AgentState.isDisabled(); AgentState.setDisabled(false);
-        TraceBus.disconnected(); TraceBus.configure(true, false, "aa11", true); drain(); mode = 0; nested = null;
+        TraceBus.disconnected(); TraceBus.configure(true, false, "aa11", true); drain(); mode = 0; async = false; nested = null;
     }
     @After public void cleanup() { TraceBus.disconnected(); AgentState.setDisabled(disabled); }
 
@@ -39,6 +40,34 @@ public class ServletRequestWeaveTest implements Opcodes {
         assertTrue(events.get(1).contains("parentRequestId"));
         assertNull(RequestHooks.currentId());
     }
+    @Test public void asyncIsExplicitAndWorkerSqlIsNotGuessedIntoParent() throws Exception {
+        async = true; invocation("jakarta").run();
+        List<String> events = drain(); assertTrue(events.get(1).contains("\"asyncStarted\":true"));
+        assertTrue(events.get(1).contains("SERVLET_THREAD_ONLY"));
+        long parent = RequestHooks.enter(null);
+        java.util.concurrent.atomic.AtomicReference<String> workerRequest = new java.util.concurrent.atomic.AtomicReference<String>();
+        Thread worker = new Thread(() -> workerRequest.set(RequestHooks.currentId()));
+        worker.start(); worker.join(5000); assertFalse(worker.isAlive()); assertNull(workerRequest.get());
+        RequestHooks.exit(parent, null); assertNull(RequestHooks.currentId());
+    }
+
+    @Test public void concurrentRequestThreadsNeverShareIdentity() throws Exception {
+        Invocation first = invocation("javax"), second = invocation("jakarta");
+        java.util.concurrent.ExecutorService workers = java.util.concurrent.Executors.newFixedThreadPool(2);
+        try {
+            java.util.concurrent.Future<?> a = workers.submit(() -> { try { first.run(); } catch (Exception e) { throw new RuntimeException(e); } });
+            java.util.concurrent.Future<?> b = workers.submit(() -> { try { second.run(); } catch (Exception e) { throw new RuntimeException(e); } });
+            a.get(5, java.util.concurrent.TimeUnit.SECONDS); b.get(5, java.util.concurrent.TimeUnit.SECONDS);
+            List<String> events = drain(); assertEquals(4, events.size());
+            Set<String> ids = new HashSet<String>();
+            for (String event : events) {
+                java.util.regex.Matcher id = java.util.regex.Pattern.compile("\\\"requestId\\\":\\\"([^\\\"]+)\\\"").matcher(event);
+                assertTrue(id.find()); ids.add(id.group(1));
+            }
+            assertEquals(2, ids.size()); assertNull(RequestHooks.currentId());
+        } finally { workers.shutdownNow(); }
+    }
+
     @Test public void absentCallbackLoaderDoesNotWeave() throws Exception {
         byte[] raw = bytes("javax.servlet.http.HttpServlet");
         assertSame(raw, ServletWeaver.weave(new ClassLoader(null) {}, "javax.servlet.http.HttpServlet", raw));
@@ -84,6 +113,7 @@ public class ServletRequestWeaveTest implements Opcodes {
         Class<?> requestType = loader.loadClass(family + ".servlet.http.HttpServletRequest");
         Class<?> responseType = loader.loadClass(family + ".servlet.http.HttpServletResponse");
         InvocationHandler handler = (p, m, a) -> {
+            if ("isAsyncStarted".equals(m.getName())) return async;
             if ("getMethod".equals(m.getName())) return "GET";
             if ("getProtocol".equals(m.getName())) return "HTTP/1.1";
             if (m.getReturnType() == boolean.class) return false;
