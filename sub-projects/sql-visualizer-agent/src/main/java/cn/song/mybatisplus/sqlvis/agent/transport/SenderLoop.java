@@ -239,6 +239,7 @@ final class SenderLoop implements Runnable {
                 final DataInputStream in = new DataInputStream(socket.getInputStream());
                 captureStateEnabled = false;
                 captureStateToken = null;
+                TraceBus.disconnected();
                 writeFrame(out, EventBus.CMD_HELLO, "{\"pid\":" + pid()
                         + ",\"protocolVersion\":2,\"runId\":\"" + CaptureLedger.RUN_ID
                         + "\",\"captureStateCommand\":6}");
@@ -270,6 +271,18 @@ final class SenderLoop implements Runnable {
                             burst++; // failed encodings consume the fairness budget too
                             if (sendEvent(out, slot[0])) lastOutboundMs = System.currentTimeMillis();
                         }
+                    }
+                    // Trace control is bounded independently and negotiated per connection.
+                    for (int controls = 0; controls < 64; controls++) {
+                        TraceBus.Frame trace = TraceBus.poll();
+                        if (trace == null) break;
+                        try {
+                            if (trace.body.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > MAX_FRAME_LEN) {
+                                TraceBus.encodedFailure(); continue;
+                            }
+                            writeFrame(out, trace.command, trace.body);
+                            TraceBus.written();
+                        } catch (IOException uncertain) { TraceBus.uncertain(); throw uncertain; }
                     }
                     // 2) 心跳：按真实流逝时间判（每轮都执行，不被 burst 分支包住——事件突发期间也按节奏发）
                     if (System.currentTimeMillis() - lastOutboundMs >= heartbeatIntervalMs) {
@@ -324,6 +337,7 @@ final class SenderLoop implements Runnable {
                     }
                 }
             } catch (Throwable t) {
+                TraceBus.disconnected();
                 closeQuietly(socket);
                 // T-PerfSweep6 T-PS6-05：退避复位点后移 + 「连上即被关」连续计数。
                 // 判据只看「是否建连成功」与「存活时长」，与异常类型无关（断开形态多样：
@@ -437,13 +451,23 @@ final class SenderLoop implements Runnable {
                 }
             }
         }
+        TraceBus.configure(configFlag(payload, "requestTracing"), configFlag(payload, "transactionTracing"),
+                captureStateToken, payload.contains("\"captureStateToken\""));
+        if (Boolean.TRUE.equals(configFlag(payload, "requestTracing"))
+                || Boolean.TRUE.equals(configFlag(payload, "transactionTracing"))) captureStateEnabled = true;
         AgentState.markConfigApplied();
         // T-02：CONFIG 应用成功回执（取值取**应用后**的生效态，含本次生效的前缀条数）
         return configAckBody();
     }
 
+    private static Boolean configFlag(String payload, String key) {
+        if (!payload.contains("\"" + key + "\"")) return null;
+        return java.util.regex.Pattern.compile("\\\"" + key + "\\\"\\s*:\\s*true\\b").matcher(payload).find();
+    }
+
     String captureStateBody() {
-        String body = CaptureLedger.snapshot();
+        String base = CaptureLedger.snapshot();
+        String body = base.substring(0, base.length() - 1) + TraceBus.qualityFields() + "}";
         return captureStateToken == null ? body : body.substring(0, body.length() - 1)
                 + ",\"captureStateToken\":\"" + captureStateToken + "\"}";
     }

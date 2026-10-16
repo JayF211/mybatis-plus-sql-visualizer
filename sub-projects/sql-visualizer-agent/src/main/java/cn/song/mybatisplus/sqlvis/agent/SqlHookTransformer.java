@@ -69,6 +69,12 @@ public class SqlHookTransformer implements ClassFileTransformer {
         // instrument API 传内部名（斜杠）；登记表为点分名——归一化
         final String dotted = className.replace('/', '.');
         try {
+            if (ServletWeaver.matches(dotted)) {
+                COUNT_WEAVABLE.incrementAndGet();
+                final byte[] out = ServletWeaver.weave(loader, dotted, classfileBuffer);
+                noteOutcome(out, classfileBuffer);
+                return out;
+            }
             if (DriverRegistry.isWeavable(dotted)) {
                 COUNT_WEAVABLE.incrementAndGet();
                 final byte[] out = ConnectWeaver.weave(loader, classfileBuffer);

@@ -95,6 +95,7 @@ public final class SqlHookCallbacks {
         if (token == 0L || stmt == null) return;
         final ExecutionScope scope = ExecutionScope.find(token);
         if (scope == null) return;
+        scope.failed = failure != null;
         try {
             String sql = sqlParam;
             String url = null;

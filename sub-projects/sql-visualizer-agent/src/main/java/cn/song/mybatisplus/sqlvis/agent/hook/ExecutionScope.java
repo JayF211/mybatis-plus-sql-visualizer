@@ -12,6 +12,8 @@ final class ExecutionScope {
     final Object statement;
     final long sequence, startNanos, startMillis, threadId, captureEpoch;
     final String source;
+    RequestHooks.Scope request;
+    boolean reported, failed;
 
     private ExecutionScope(Object statement, String source, long sequence) {
         this.statement = statement;
@@ -40,6 +42,8 @@ final class ExecutionScope {
         try {
             if (stack == null) { stack = new ArrayDeque<ExecutionScope>(); ACTIVE.set(stack); }
             stack.push(scope);
+            scope.request = RequestHooks.current();
+            if (scope.request != null) RequestHooks.sqlBegin(scope.sequence);
             return scope;
         } catch (Throwable failure) {
             CaptureLedger.captureFailed();
@@ -62,11 +66,16 @@ final class ExecutionScope {
         event.timestamp = startMillis;
         event.captureSource = source;
         event.timestampSource = "ENTRY_WALL_MILLIS";
+        if (request != null) {
+            event.requestId = request.id;
+            event.parentRequestId = request.parent;
+        }
     }
     void close() {
         ArrayDeque<ExecutionScope> stack = ACTIVE.get();
         if (stack != null && stack.remove(this)) {
             if (stack.isEmpty()) ACTIVE.remove();
+            if (request != null) RequestHooks.sqlEnd(failed, !reported);
             CaptureLedger.complete();
         }
     }

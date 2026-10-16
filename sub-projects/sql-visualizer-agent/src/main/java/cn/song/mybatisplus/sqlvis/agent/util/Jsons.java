@@ -29,6 +29,11 @@ public final class Jsons {
         str(sb, first, "timestampSource", e.timestampSource);
         str(sb, first, "errorClass", e.errorClass);
         str(sb, first, "sqlState", e.sqlState);
+        str(sb, first, "requestId", e.requestId);
+        str(sb, first, "parentRequestId", e.parentRequestId);
+        str(sb, first, "connectionId", e.connectionId);
+        str(sb, first, "leaseId", e.leaseId);
+        str(sb, first, "transactionId", e.transactionId);
         if (e.updateCount != null) {
             num(sb, first, "u", e.updateCount);
         }
@@ -85,6 +90,21 @@ public final class Jsons {
         }
         sb.append('}');
         return sb.toString();
+    }
+
+    /** Flat metadata-only control object; values are primitive facts, never arbitrary toString. */
+    public static String writeObject(java.util.Map<String, Object> fields) {
+        StringBuilder sb = new StringBuilder("{");
+        boolean[] first = {true};
+        for (java.util.Map.Entry<String, Object> field : fields.entrySet()) {
+            Object value = field.getValue();
+            if (value == null) continue;
+            sep(sb, first); val(sb, field.getKey()); sb.append(':');
+            if (value instanceof Number || value instanceof Boolean) sb.append(value);
+            else if (value instanceof String) val(sb, (String) value);
+            else throw new IllegalArgumentException("unsupported control field");
+        }
+        return sb.append('}').toString();
     }
 
     /** 成员分隔：首成员无逗号，后续成员补逗号。 */

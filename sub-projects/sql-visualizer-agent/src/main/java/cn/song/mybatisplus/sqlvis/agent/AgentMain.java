@@ -93,7 +93,8 @@ public final class AgentMain {
             final String name = c.getName();
             final boolean weavable = DriverRegistry.isWeavable(name)
                     || DriverRegistry.isStatementWeavable(name)
-                    || DriverRegistry.isPrepareWeavable(name);
+                    || DriverRegistry.isPrepareWeavable(name)
+                    || ServletWeaver.matches(name);
             if (!weavable) {
                 continue;
             }
