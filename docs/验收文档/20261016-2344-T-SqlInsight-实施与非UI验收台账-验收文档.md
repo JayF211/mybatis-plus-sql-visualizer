@@ -83,7 +83,13 @@ agent首轮3组各3个独立JVM，实际心跳为实验注入200ms，warm200请�
 
 随后默认心跳10秒、warm2000、完整3×3独立JVM复测：tracing对SQL中位P95约+2.83%、wall+0.74%、CPU+1.18百分点，预热末两块9轮都在15%内；但tracing只收到4602/2802/2048条，仍丢5398/7198/7952条，全部采集完整性失败。无agent对照的P95与CPU增幅也不能隐藏。原因进一步指向空闲时1秒入站等待加200ms休眠，突发到来不能唤醒sender；busy优化不解决idle起始积压。
 
-**当前阻断**：发送器可唤醒等待/独立入站reader的第二刀正在真实idle→burst反例验证与修复。上述两轮均标host-contention=observed-other-IDE-session，不宣称空机标准性能通过。失败目录agent-trials与agent-trials-default-warm2000保留，后续必须新目录同口径复测，不覆盖失败证据、不放大队列掩盖。
+### 可唤醒发送第二刀与无损对照
+
+真实idle→burst原先首SQL要1208ms，新单reader/有界mailbox4/合并wake信号/单writer后低于1ms；256SQL约23ms、256control约15ms，STOP ACK约2ms，半帧断连及心跳/配置保持。runtime65962c3a，集成e4499a53，11类61定向绿；没有放大SQL2048队列。
+
+第三轮默认10秒心跳、warm2000、完整3×3独立JVM：6个agent进程每轮generated=10000且unique received=10000，SQL/control损失均0，tracing三轮500START+500END完整配对，captureCoverageComplete=true。中位none/sql/tracing分别：wall983.89/1402.53/1231.00ms；SQL P95 159.4/267.2/229.4µs；一核归一CPU100.04/236.28/178.97%；RSS135.05/180.22/153.77MiB。tracing相对SQL捕获P95为-14.15%，但第三tracing预热比0.600不稳，不能宣传负开销；相对无agentP95+43.91%、wall+25.12%、CPU+78.93百分点如实披露。无agent差异包含既有完整SQL捕获成本，不能全归因新增请求追踪。
+
+**状态**：突发发送丢失瓶颈已有无损负载证据闭合，新增追踪5%初始成本目标尚未在稳定空机环境证明。三轮均标host-contention=observed-other-IDE-session，不宣称空机标准性能通过。失败目录agent-trials与agent-trials-default-warm2000保留；成功覆盖目录agent-trials-wakeup-default-warm2000/summary.json，产物agent SHA256 `8f2d1e020aa7c246f43250a193cdd753d8d6baf36dc7b77315d3f2f5cb299ad1`。后续复测必须新目录，不覆盖失败证据、不以丢弃事件换低耗时。
 
 ## 五、最终门禁清单
 
