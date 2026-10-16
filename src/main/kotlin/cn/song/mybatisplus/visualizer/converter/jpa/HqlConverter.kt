@@ -120,8 +120,12 @@ object HqlConverter {
         val lookup = JpaQueryEntityLookup(project, context)
         val rootName = JpaQueryEntityLookup.rootEntity(hql)
         val table = tableInfo ?: rootName?.let { lookup.resolveTable(it) } ?: createFallbackTable()
+        val mappedRootName = rootName?.takeIf {
+            tableInfo == null || it.substringAfterLast('.') == table.entityClassName || it == entityAlias ||
+                lookup.resolveClass(it)?.name == table.entityClassName
+        }
         val resolveTable: (String) -> TableInfo? = { name ->
-            if (name == rootName && table.entityClassName.isNotBlank()) table
+            if (name == mappedRootName && table.entityClassName.isNotBlank()) table
             else resolveEntity?.invoke(name) ?: lookup.resolveTable(name)
         }
 
@@ -157,7 +161,7 @@ object HqlConverter {
 
         // 7. 实体名 → 表名映射
         if (!table.entityClassName.isBlank()) {
-            sql = mapEntityToTable(sql, table, entityAlias ?: rootName)
+            sql = mapEntityToTable(sql, table, entityAlias ?: mappedRootName)
             // 8. 关联字段路径映射：alias.field.id → 外键列名（须在属性映射之前）
             sql = mapAssociationPath(sql, table)
             // 9. 属性名 → 列名映射（按别名作用域分派，副表别名同样映射）

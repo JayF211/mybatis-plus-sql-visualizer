@@ -59,7 +59,9 @@ internal object JpaJoinRewriter {
         val rootName = JpaQueryEntityLookup.rootEntity(sql)
         val (masked, literals) = JpaSqlLiteralMasking.mask(sql)
         val owners = Regex("(?i)\\b(?:FROM|JOIN)\\s+([a-zA-Z_][a-zA-Z0-9_.$]*)\\s+(?:AS\\s+)?([a-zA-Z_][a-zA-Z0-9_]*)")
-            .findAll(masked).associate { it.groupValues[2] to it.groupValues[1] }
+            .findAll(masked)
+            .filter { !it.groupValues[1].equals("FETCH", ignoreCase = true) }
+            .associate { it.groupValues[2] to it.groupValues[1] }
         fun replace(match: MatchResult): String {
             val name = owners[match.groupValues[3]] ?: rootName
             val ownerTable = if (name == rootName) table else name?.let { lookup.resolveTable(it) }

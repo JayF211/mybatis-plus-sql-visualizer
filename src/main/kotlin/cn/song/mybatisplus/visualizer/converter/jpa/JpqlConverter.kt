@@ -90,8 +90,12 @@ object JpqlConverter {
         val lookup = JpaQueryEntityLookup(project, context)
         val rootName = JpaQueryEntityLookup.rootEntity(jpql)
         val table = tableInfo ?: rootName?.let { lookup.resolveTable(it) } ?: createFallbackTable()
+        val mappedRootName = rootName?.takeIf {
+            tableInfo == null || it.substringAfterLast('.') == table.entityClassName ||
+                lookup.resolveClass(it)?.name == table.entityClassName
+        }
         val resolveTable: (String) -> TableInfo? = { name ->
-            if (name == rootName && table.entityClassName.isNotBlank()) table else lookup.resolveTable(name)
+            if (name == mappedRootName && table.entityClassName.isNotBlank()) table else lookup.resolveTable(name)
         }
 
         // 0. 检测 IN 子句参数（在命名参数替换前检测 :paramName）
@@ -121,7 +125,7 @@ object JpqlConverter {
         val scope = JpaAliasTableResolver.resolveAliases(sql, table, resolveTable)
 
         // 6. 实体名 → 表名映射
-        sql = mapEntityToTable(sql, table, rootName)
+        sql = mapEntityToTable(sql, table, mappedRootName)
 
         // 6.5 子查询 FROM/JOIN 中其他实体名 → 表名（J13；需 Project，无则跳过）。
         // 别名作用域已解析出实体→表名，透传给扫描器复用，免二次 PSI 检索
