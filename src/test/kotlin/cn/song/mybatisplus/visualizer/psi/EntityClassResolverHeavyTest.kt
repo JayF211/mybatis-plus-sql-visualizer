@@ -186,6 +186,9 @@ class EntityClassResolverHeavyTest : HeavyPlatformTestCase() {
         val result = EntityClassResolver.resolveWithAliasCandidates(project, "Inventory", null, listOf(first, second))
         assertNull(result.psiClass)
         assertEquals(2, result.candidates.size)
+        val direct = EntityClassResolver.resolveByName(project, "Inventory", null)
+        assertNull(direct.psiClass)
+        assertEquals(2, direct.candidates.size)
     }
 
     fun testExplicitEntityNameIsCaseSensitiveAndReplacesDefaultName() {
