@@ -87,6 +87,31 @@ class ResultComparisonServiceTest {
             assertEquals("order_not_proven", service(session).execute(approve(ordered), safety(ordered), ordered = true).comparison.reason)
         }
     }
+    @Test fun `named binds and explicit cancellation do not bypass execution boundary`() {
+        val request = request("SELECT :name AS x")
+        var opens = 0
+        val blocked = ResultComparisonService({ _, _ -> opens++; error("must not open") }, { ComparisonTargetState("fixture", 1, "H2") })
+        assertEquals("select_or_binding_guard", blocked.execute(approve(request), safety(request)).comparison.reason)
+        assertEquals(0, opens)
+        val cancellation = ComparisonCancellation(); var cancels = 0
+        cancellation.attach { cancels++; throw java.sql.SQLException("cancel unsupported") }
+        cancellation.cancel(); cancellation.cancel(); cancellation.attach(null)
+        assertEquals(1, cancels)
+        try { cancellation.check(); fail() } catch (_: java.util.concurrent.CancellationException) { }
+    }
+    @Test fun `cancelling after baseline prevents candidate statement`() {
+        val request = request(); val cancellation = ComparisonCancellation(); var calls = 0
+        val session = object : ComparisonQuerySession {
+            override fun query(sql: String, contextKey: String, maxRows: Int, timeoutSeconds: Int,
+                cancellation: ComparisonCancellation, validate: () -> Unit): SqlResultSnapshot {
+                calls++; cancellation.cancel()
+                return SqlResultSnapshot(listOf(SqlResultColumn("x", java.sql.Types.INTEGER)), emptyList(), contextKey = contextKey)
+            }
+            override fun close() { }
+        }
+        val result = service(session).execute(approve(request), safety(request), cancellation = cancellation)
+        assertEquals("cancelled", result.comparison.reason); assertEquals(1, calls)
+    }
     @Test fun `fatal failures are never converted to inconclusive`() {
         val request = request(); val fatal = OutOfMemoryError("fixture")
         val service = ResultComparisonService({ _, _ -> throw java.lang.reflect.InvocationTargetException(fatal) }, { ComparisonTargetState("fixture", 1, "H2") })

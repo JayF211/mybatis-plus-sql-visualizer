@@ -28,12 +28,19 @@ data class ComparisonExecutionResult(
 
 class ComparisonCancellation {
     private val cancelled = AtomicBoolean()
-    @Volatile private var cancelStatement: (() -> Unit)? = null
-    fun cancel() { cancelled.set(true); cancelStatement?.invoke() }
+    private val cancelStatement = java.util.concurrent.atomic.AtomicReference<(() -> Unit)?>(null)
+    fun cancel() {
+        if (cancelled.compareAndSet(false, true)) safelyCancel(cancelStatement.getAndSet(null))
+    }
+    private fun safelyCancel(action: (() -> Unit)?) {
+        try { action?.invoke() } catch (failure: Throwable) {
+            if (FatalErrors.isFatal(failure)) throw failure
+        }
+    }
     fun check() { if (cancelled.get() || Thread.currentThread().isInterrupted) throw CancellationException("comparison_cancelled") }
     internal fun attach(action: (() -> Unit)?) {
-        cancelStatement = action
-        if (cancelled.get()) action?.invoke()
+        cancelStatement.set(action)
+        if (cancelled.get()) safelyCancel(cancelStatement.getAndSet(null))
     }
 }
 
@@ -59,17 +66,23 @@ class ResultComparisonService internal constructor(
             ComparisonExecutionResult(left, right, SqlResultComparison(SqlResultComparisonStatus.INCONCLUSIVE,
                 reason, left?.rows?.size ?: 0, right?.rows?.size ?: 0), rows)
         if (!authorized.claimExecution()) return inconclusive("consent_not_consumed_or_reused")
+        var validatedTarget: ComparisonTargetState? = null
         fun validate() {
             cancellation.check()
             val target = currentTarget() ?: throw ComparisonRejected("target_unavailable")
             if (target.identity != authorized.targetIdentity || target.generation != authorized.targetGeneration)
                 throw ComparisonRejected("target_changed")
+            // Immutable SQL/safety need one parse, not a parser invocation for every result cell.
+            if (validatedTarget == target) return
             if (safety.requestFingerprint != authorized.fingerprint) throw ComparisonRejected("approval_mismatch")
             if (!safety.selectFunctionSideEffectsApproved) throw ComparisonRejected("select_side_effect_consent_required")
             if (!safety.parameterBindingsResolved) throw ComparisonRejected("parameters_unresolved")
             if (safety.rawSegmentsPresent && !safety.rawSegmentsApproved) throw ComparisonRejected("raw_segments_unapproved")
             for ((sql, dialect) in listOf(authorized.baselineSql to safety.baselineDialect, authorized.candidateSql to safety.candidateDialect)) {
-                if (!McpSelectGuard.checkSingleSelect(sql).allowed || placeholderPositions(sql).isNotEmpty())
+                // Conservative refusal: template/named markers are never silently sent as literals.
+                // This can reject a marker inside a quoted string; it cannot execute an unresolved bind.
+                if (!McpSelectGuard.checkSingleSelect(sql).allowed || placeholderPositions(sql).isNotEmpty()
+                    || sql.contains("\u0024{") || sql.contains("#{") || Regex("(?<!:):[A-Za-z_][A-Za-z0-9_]*").containsMatchIn(sql))
                     throw ComparisonRejected("select_or_binding_guard")
                 if (dialect.intent != ExecutionDialectGate.Intent.QUERY) throw ComparisonRejected("query_intent_required")
                 when (ExecutionDialectGate.evaluate(dialect, target.dialectName).status) {
@@ -80,6 +93,7 @@ class ResultComparisonService internal constructor(
                     else -> throw ComparisonRejected("dialect_conflict")
                 }
             }
+            validatedTarget = target
         }
         var left: SqlResultSnapshot? = null
         var right: SqlResultSnapshot? = null

@@ -54,6 +54,14 @@ class RemoteSqlComparisonBridgeTest {
             assertTrue(result.truncated); assertEquals(2, result.rows.size); assertEquals(result.rows[0], result.rows[1])
         }
     }
+    @Test fun `pre-cancelled read refuses execution`() = fixture { connection ->
+        val cancellation = ComparisonCancellation()
+        val bridge = RemoteSqlComparisonBridge(wrap("RemoteConnection", connection, true), loader) {}
+        cancellation.cancel()
+        try { bridge.query("SELECT 1", "fixture", 2, 2, cancellation) { cancellation.check() }; fail() }
+        catch (_: java.util.concurrent.CancellationException) { }
+        bridge.close()
+    }
     @Test fun `unbounded remote text is rejected rather than allocated`() = fixture { connection ->
         RemoteSqlComparisonBridge(wrap("RemoteConnection", connection, true), loader) {}.use { bridge ->
             try { bridge.query("SELECT CAST('x' AS VARCHAR) AS x", "fixture", 2, 2, ComparisonCancellation()) {}; fail() }

@@ -5,10 +5,23 @@ import com.intellij.openapi.project.Project
 import java.util.concurrent.Future
 
 /** Headless production entry. UI supplies the already-consumed exact-pair consent and confirmation
- * facts; it must keep currentTarget backed by its live binding/generation, not a captured constant.
+ * facts; currentTarget must read a thread-safe immutable UI snapshot, never PSI on this worker.
+ * Its generation MUST advance on either SQL edit, parameter edit or target change (not just binding).
+ * It must remain backed by live state, not a captured constant.
  * No alias fallback, datasource chooser, console injection or editor write occurs here.
  */
 object ProjectResultComparison {
+    /** Preferred entry: explicit comparison-only binding and SQL/parameter edit generation. */
+    fun executeAsync(
+        project: Project,
+        authorized: SqlComparisonRequest,
+        safety: ComparisonSafetyContext,
+        targetSession: ComparisonTargetSession,
+        ordered: Boolean = false,
+        cancellation: ComparisonCancellation = ComparisonCancellation(),
+        onResult: (ComparisonExecutionResult) -> Unit,
+    ): Future<*> = executeAsync(project, authorized, safety, targetSession::refresh, ordered, cancellation, onResult)
+
     fun executeAsync(
         project: Project,
         authorized: SqlComparisonRequest,
