@@ -148,7 +148,8 @@ def windows_memory(pid):
 
 def trial(args, mode, index, classes):
     receiver = Receiver() if mode != "none" else None
-    command = [args.java, "-Xms128m", "-Xmx512m", "-Djava.awt.headless=true", "-Dsqlinsight.perf.warmRequests=" + str(args.warm_requests)]
+    command = [args.java, "-Xms128m", "-Xmx512m", "-Djava.awt.headless=true", "-Dsqlinsight.perf.warmRequests=" + str(args.warm_requests),
+               "-Dsqlinsight.perf.measureRequests=" + str(args.measure_requests)]
     if receiver:
         command += ["-javaagent:" + args.agent + "=port=" + str(receiver.port)]
     command += ["-cp", os.pathsep.join((str(classes), args.h2, args.servlet)), "perf.sqlinsight.SqlInsightWorkload"]
@@ -225,14 +226,23 @@ def main():
         p.add_argument("--" + name, required=True)
     p.add_argument("--repeats", type=int, default=3)
     p.add_argument("--warm-requests", type=int, default=200)
+    p.add_argument("--measure-requests", type=int, default=500)
     p.add_argument("--host-contention", default="UNKNOWN: other IDE/UI activity may contend; not an idle-host certification")
     args = p.parse_args()
+    if not 1 <= args.measure_requests <= 10000:
+        p.error("measure-requests must be in 1..10000")
+    if not 200 <= args.warm_requests <= 10000 or args.warm_requests % 4:
+        p.error("warm-requests must be a multiple of 4 in 200..10000")
+    if not 1 <= args.repeats <= 10:
+        p.error("repeats must be in 1..10")
     root = Path(__file__).resolve().parents[2]
     Path(args.output).mkdir(parents=True, exist_ok=True)
     classes = Path(args.output, "classes"); classes.mkdir(exist_ok=True)
     source = Path(__file__).with_name("SqlInsightWorkload.java")
     subprocess.run([args.javac, "-encoding", "UTF-8", "-d", str(classes), "-cp", args.servlet, str(source)], check=True)
-    metadata = dict(hostContention=args.host_contention, agentHeartbeat="production-default-10000ms", gitSha=subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip(),
+    metadata = dict(hostContention=args.host_contention, measureRequests=args.measure_requests,
+                    experiment="original-500-request-budget" if args.measure_requests == 500 else "additional-long-window-not-original-budget",
+                    agentHeartbeat="production-default-10000ms", gitSha=subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip(),
                     java=subprocess.check_output([args.java, "-version"], stderr=subprocess.STDOUT, text=True),
                     jars={name: hashlib.sha256(Path(getattr(args, name)).read_bytes()).hexdigest() for name in ("agent", "h2", "servlet")},
                     limitations=["local synthetic H2 + Servlet dispatch, not HTTP/container latency", "driver read/execute workload; startup excluded", "heap pool peak sum is not simultaneous peak", "RSS is sampled before/after; peakRSS includes startup", "no delivery completeness inferred from latency", "warmup block stability must be inspected; use --warm-requests to rerun a fixed longer warmup"])

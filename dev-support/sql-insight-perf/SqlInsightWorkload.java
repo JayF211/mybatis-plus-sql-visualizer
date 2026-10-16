@@ -13,7 +13,12 @@ import javax.servlet.http.*;
 public final class SqlInsightWorkload {
     private static final int SQL_PER_REQUEST = 20;
     private static final int WARM_REQUESTS = Integer.getInteger("sqlinsight.perf.warmRequests", 200);
-    private static final int MEASURE_REQUESTS = 500;
+    private static final int MEASURE_REQUESTS = boundedMeasureRequests();
+    private static int boundedMeasureRequests() {
+        int value = Integer.getInteger("sqlinsight.perf.measureRequests", 500);
+        if (value < 1 || value > 10000) throw new IllegalArgumentException("measureRequests");
+        return value;
+    }
     private static final long[] SQL_NANOS = new long[MEASURE_REQUESTS * SQL_PER_REQUEST];
     private static int samples;
     private static boolean measured;
@@ -87,7 +92,7 @@ public final class SqlInsightWorkload {
             long expected = 0;
             for (int i = 0; i < SQL_PER_REQUEST; i++) for (int row = (i * 37) % 1000; row < 1000; row++) expected += row * 3L;
             expected *= MEASURE_REQUESTS;
-            if (BUSINESS_SQL.get() != 10_000 || checksum != expected) throw new AssertionError("business result mismatch");
+            if (BUSINESS_SQL.get() != (long) MEASURE_REQUESTS * SQL_PER_REQUEST || checksum != expected) throw new AssertionError("business result mismatch");
             long peak = 0;
             for (MemoryPoolMXBean pool : ManagementFactory.getMemoryPoolMXBeans())
                 if (pool.getType() == java.lang.management.MemoryType.HEAP) peak += pool.getPeakUsage().getUsed();
