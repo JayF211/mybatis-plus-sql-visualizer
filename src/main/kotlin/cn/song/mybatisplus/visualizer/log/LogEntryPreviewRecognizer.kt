@@ -42,6 +42,9 @@ data class RecognizedLogPreview(
  * 但其 `initialValues` 提供参数名 → 日志值映射（集合值为元素清单），供预览面板按名回填。
  */
 fun LogSqlEntry.toRecognizedPreview(): RecognizedLogPreview {
+    if (source == SqlSource.SHARDINGSPHERE) {
+        return RecognizedLogPreview(rawSql, rawSql, emptyList(), emptyMap(), emptyList(), false)
+    }
     val placeholderCount = countPlaceholders(rawSql)
     val recognized = placeholderCount > 0 && placeholderCount == params.size
     // T-ListParamCollect：命名参数条目（`sql = … :paramN` + 日志集合值）无 `?` 占位符，
@@ -139,6 +142,19 @@ private fun LogSqlEntry.toPreviewResultInternal(
     formatSql: Boolean,
     literalRecovery: Boolean,
 ): PreviewResult {
+    // Actual 是物理 SQLUnit，不是 Logic 的绑定证据。旧缓存中曾猜出的参数也不预填。
+    if (source == SqlSource.SHARDINGSPHERE) {
+        return PreviewResult(
+            sql = formatIfNeeded(withTerminator(rawSql), formatSql),
+            compactSql = rawSql,
+            unresolvedParams = emptyList(),
+            paramTable = null,
+            wrapperType = null,
+            tableName = null,
+            stackDigest = stackDigest,
+            warning = MpSqlVisualizerBundle.message("log.preview.unresolvedNoBinding.sharding"),
+        )
+    }
     val recognized = toRecognizedPreview()
     if (recognized.recognized) {
         return PreviewResult(
@@ -151,9 +167,7 @@ private fun LogSqlEntry.toPreviewResultInternal(
             paramTable = null,
             wrapperType = null,
             tableName = null,
-            warning = if (source == SqlSource.SHARDINGSPHERE) {
-                MpSqlVisualizerBundle.message("log.preview.shardingUntyped")
-            } else null,
+            warning = null,
             paramHints = recognized.paramHints,
             initialParamValues = recognized.initialValues,
         )

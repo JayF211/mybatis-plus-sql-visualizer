@@ -1,7 +1,6 @@
 package cn.song.mybatisplus.visualizer.log
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -39,13 +38,9 @@ class ShardingSphereLogParserTest {
         parser.closePending()
         val entries = parser.takeEntries()
         assertEquals(3, entries.size)
-        assertEquals(listOf("100", "BOOK,100"), entries[0].params.map { it.value })
-        assertEquals(listOf("101", "BOOK,101"), entries[1].params.map { it.value })
-        assertEquals(listOf("1"), entries[2].params.map { it.value })
-        assertTrue(entries.flatMap { it.params }.all { it.type == null })
-        assertTrue(entries[0].restoredSql.endsWith("order_id = 100 AND reference_code = 'BOOK,100'"))
-        assertTrue(entries[1].restoredSql.endsWith("order_id = 101 AND reference_code = 'BOOK,101'"))
-        assertTrue(entries[2].restoredSql.endsWith("state_code = 1 ORDER BY order_id"))
+        entries.forEach { assertUnrestoredAcrossOutputs(it) }
+        assertTrue(entries[0].actualSql!!.endsWith("[100, BOOK,100]"))
+        assertTrue(entries[1].actualSql!!.endsWith("[101, BOOK,101]"))
         assertEquals(2, entries[2].actualSql!!.lines().size)
         assertTrue(entries[2].actualSql!!.contains("ds_0 :::"))
         assertTrue(entries[2].actualSql!!.contains("ds_1 :::"))
@@ -59,12 +54,11 @@ class ShardingSphereLogParserTest {
             real552[4].replace("[main]", "[worker-2]"),
             real552[1].replace("[main]", "[worker-1]")).forEach(parser::feed)
         parser.closePending()
-        val entries = parser.takeEntries().associateBy { it.params.first().value }
+        val entries = parser.takeEntries()
         assertEquals(2, entries.size)
-        assertEquals("BOOK,100", entries["100"]!!.params[1].value)
-        assertTrue(entries["100"]!!.actualSql!!.startsWith("ds_0 :::"))
-        assertEquals("BOOK,101", entries["101"]!!.params[1].value)
-        assertTrue(entries["101"]!!.actualSql!!.startsWith("ds_1 :::"))
+        entries.forEach { assertUnrestoredAcrossOutputs(it) }
+        assertEquals(1, entries.count { it.actualSql!!.startsWith("ds_0 :::") && it.actualSql!!.endsWith("[100, BOOK,100]") })
+        assertEquals(1, entries.count { it.actualSql!!.startsWith("ds_1 :::") && it.actualSql!!.endsWith("[101, BOOK,101]") })
     }
 
     private fun parseActual(suffix: String, sql: String = "SELECT * FROM t WHERE a = ? AND b = ?"): LogSqlEntry {
@@ -88,11 +82,59 @@ class ShardingSphereLogParserTest {
     }
 
     @Test
-    fun `逗号空格单参数可由占位数消歧_旧格式并存`() {
+    fun `001及true与逗号字符串只留原文_旧Parameters不代表有类型`() {
         val sql = "SELECT '?' FROM t WHERE name = ? /* ? */"
-        assertEquals(listOf("BOOK, 100"), parseActual(" ::: [BOOK, 100]", sql).params.map { it.value })
-        assertEquals(listOf("100", "BOOK,100"), parseActual(" ::: Parameters: [100, BOOK,100]").params.map { it.value })
-        assertTrue(parseActual(" ::: [100, BOOK,100]", sql).params.single().type == null)
+        for (value in listOf("001", "true", "BOOK,100", "BOOK, 100", "001(String)")) {
+            for (prefix in listOf("", "Parameters: ")) {
+                val entry = parseActual(" ::: $prefix[$value]", sql)
+                assertUnrestoredAcrossOutputs(entry)
+                assertTrue(entry.actualSql!!.endsWith("$prefix[$value]"))
+            }
+        }
+    }
+
+    @Test
+    fun `分页物理参数同数且各片一致仍不能映射回Logic`() {
+        // SQLLogger 输出 SQLUnit 参数：逻辑 LIMIT [10,20] 经分页改写成为物理 [0,30]。
+        // 此为基于 5.5.2 重写行为的判别夹具，不冒充本轮运行采样。
+        val logic = "SELECT order_id FROM ui_order ORDER BY order_id LIMIT ?, ?"
+        val parser = ShardingSphereLogParser()
+        parser.feed("18:32:08.963 INFO  [main] ShardingSphere-SQL - Logic SQL: $logic")
+        for (shard in 0..1) parser.feed("18:32:08.963 INFO  [main] ShardingSphere-SQL - Actual SQL: ds_$shard ::: SELECT order_id FROM ui_order_$shard ORDER BY order_id LIMIT ?, ? ::: [0, 30]")
+        parser.closePending()
+        val entry = parser.takeEntries().single()
+        assertEquals(2, countPlaceholders(logic))
+        assertEquals(2, entry.actualSql!!.lines().size)
+        assertTrue(entry.actualSql!!.lines().all { it.endsWith("[0, 30]") })
+        assertUnrestoredAcrossOutputs(entry)
+    }
+
+    private fun assertUnrestoredAcrossOutputs(entry: LogSqlEntry) {
+        assertEquals(entry.rawSql, entry.restoredSql)
+        assertTrue(entry.params.isEmpty())
+        for (recover in listOf(false, true)) {
+            val preview = entry.toPreviewResult(false, recover)
+            assertEquals(withTerminator(entry.rawSql), preview.sql)
+            assertEquals(entry.rawSql, preview.compactSql)
+            assertTrue(preview.initialParamValues.isEmpty())
+            assertTrue(preview.unresolvedParams.isEmpty())
+            assertEquals(entry.actualSql, preview.actualSql)
+            assertTrue(preview.warning!!.contains("ShardingSphere"))
+        }
+        val replay = ReplayScriptExport.render(ReplayScriptExport.plan(
+            entry.restoredSql, cn.song.mybatisplus.visualizer.sql.MySqlDialect, false,
+        )!!)
+        assertTrue(replay.contains(entry.rawSql))
+        assertTrue(!replay.contains(" ::: "))
+        val row = SqlExportRow("", entry.restoredSql, entry.source.name)
+        for (format in SqlExportFormat.values()) {
+            val exported = SqlExportService.format(listOf(row), format)
+            assertEquals(entry.rawSql.count { it == '?' }, exported.count { it == '?' })
+            assertTrue(!exported.contains(" ::: "))
+            assertTrue(!exported.contains("BOOK"))
+            assertTrue(!exported.contains("001"))
+            assertTrue(!exported.contains("[0, 30]"))
+        }
     }
 
     @Test
@@ -163,10 +205,7 @@ class ShardingSphereLogParserTest {
         val entry = entries[0]
         assertEquals(SqlSource.SHARDINGSPHERE, entry.source)
         assertEquals("SELECT * FROM t_user WHERE id = ?", entry.rawSql)
-        assertEquals("Logic SQL 为主条目且参数可还原（无类型标注数值原样）", "SELECT * FROM t_user WHERE id = 1", entry.restoredSql)
-        assertEquals(1, entry.params.size)
-        assertEquals("1", entry.params[0].value)
-        assertNull(entry.params[0].type)
+        assertUnrestoredAcrossOutputs(entry)
         assertEquals(
             "Actual 段折叠附注（关键字后原文，不含日志前缀）",
             "ds_0 ::: SELECT * FROM t_user_0 WHERE id = ? ::: Parameters: [1]",
@@ -175,7 +214,7 @@ class ShardingSphereLogParserTest {
     }
 
     @Test
-    fun `多分片Actual逐行折叠_参数取首个Actual`() {
+    fun `多分片Actual逐行折叠_不把物理参数当逻辑参数`() {
         val parser = ShardingSphereLogParser()
         parser.feed(logicLine)
         parser.feed(actualLine)
@@ -190,7 +229,7 @@ class ShardingSphereLogParserTest {
         assertEquals(2, actual.lineSequence().count())
         assertTrue(actual.contains("ds_0 ::: SELECT * FROM t_user_0"))
         assertTrue(actual.contains("ds_1 ::: SELECT * FROM t_user_1"))
-        assertEquals("SELECT * FROM t_user WHERE id = 1", entries[0].restoredSql)
+        assertUnrestoredAcrossOutputs(entries[0])
     }
 
     @Test
@@ -229,7 +268,7 @@ class ShardingSphereLogParserTest {
         entries = parser.takeEntries()
         assertEquals(1, entries.size)
         assertEquals("UPDATE t_user SET name = ? WHERE id = ?", entries[0].rawSql)
-        assertEquals("字符串值无类型标注按启发式加引号", "UPDATE t_user SET name = 'abc' WHERE id = 1", entries[0].restoredSql)
+        assertUnrestoredAcrossOutputs(entries[0])
     }
 
     // ---------- 骨架边界（噪声/未配对/静默冲刷） ----------
