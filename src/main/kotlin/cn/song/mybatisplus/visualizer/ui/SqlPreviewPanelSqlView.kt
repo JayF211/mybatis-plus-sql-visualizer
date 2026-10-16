@@ -178,6 +178,7 @@ internal fun SqlPreviewPanel.renderSql() {        // T-WSC-01：写安全自愈�
         return
     }
     val result = current ?: return
+    invalidateAuxiliaryInsights() // 参数/开关变化即失效，即使最终SQL文本碰巧相同。
     val model = result.previewModel
     val batch = result.batchModel
     val xml = result.xmlModel

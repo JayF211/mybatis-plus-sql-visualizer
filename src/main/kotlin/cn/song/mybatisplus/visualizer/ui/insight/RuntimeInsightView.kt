@@ -12,10 +12,10 @@ internal interface RuntimeInsightSource {
 }
 
 internal object RuntimeInsightPresentation {
-    fun workload(snapshot: RuntimeInsightSnapshot): List<InsightDetailRow> = snapshot.sessions.flatMapIndexed { index, session ->
+    fun workload(snapshot: RuntimeInsightSnapshot, text: (String) -> String = { it }): List<InsightDetailRow> = snapshot.sessions.flatMapIndexed { index, session ->
         session.groups.map { g -> InsightDetailRow(listOf("${index + 1}", g.fingerprint, g.executions.toString(), g.cumulativeDurationNanos.toString(), "${g.errors}/${g.unknownStatus}"),
             "generation=${session.generation}\nenabled=${session.enabled}\nquality=${session.qualityIssues}\n" +
-                "database=${g.databaseIdentity ?: "UNKNOWN"}\ncallSite=${g.callSite ?: "UNKNOWN"}\nmaxNanos=${g.maximumDurationNanos}\np95Nanos=${g.p95DurationNanos}\nsamples=${g.executions}") }
+                "database=${runtimeTargetText(g.databaseIdentity, text)}\ncallSite=${g.callSite ?: "UNKNOWN"}\nmaxNanos=${g.maximumDurationNanos}\np95Nanos=${g.p95DurationNanos}\nsamples=${g.executions}") }
     }.take(2000)
     fun requests(snapshot: RuntimeInsightSnapshot, budget: SqlRequestBudget): List<InsightDetailRow> = snapshot.requests.take(500).map { request ->
         val verdict = RequestSqlBudget.evaluate(request.evidence, budget)
@@ -51,6 +51,7 @@ internal class RuntimeInsightView(
     val workload = InsightDetailPanel(listOf(text("runtime.session"), text("runtime.shape"), text("runtime.count"), text("runtime.duration"), text("runtime.errors")), text("runtime.notice"))
     private val requests = InsightDetailPanel(listOf("runId", "requestId", text("runtime.verdict"), text("runtime.count"), text("runtime.union")), text("runtime.requestNotice"))
     private val transactions = InsightDetailPanel(listOf("runId", "transactionId", text("runtime.kind"), text("runtime.status"), text("runtime.outcome")), text("runtime.transactionNotice"))
+    private val evidence = RuntimeEvidencePanel(text)
     private val enabled = JCheckBox(text("runtime.enable"))
     private val count = JSpinner(SpinnerNumberModel(100, 0, 1_000_000, 1))
     private val millis = JSpinner(SpinnerNumberModel(1000, 0, 1_000_000, 100))
@@ -77,16 +78,18 @@ internal class RuntimeInsightView(
             addTab(text("runtime.workload"), workload)
             addTab(text("runtime.requests"), requests)
             addTab(text("runtime.transactions"), transactions)
+            addTab(text("runtime.evidence"), evidence)
         }, BorderLayout.CENTER)
     }
     fun present(snapshot: RuntimeInsightSnapshot) {
         if (closed) return
         last = snapshot
         enabled.isSelected = snapshot.sessions.any { it.enabled }
-        workload.showRows(RuntimeInsightPresentation.workload(snapshot))
+        workload.showRows(RuntimeInsightPresentation.workload(snapshot, text))
         workload.status.text = text("runtime.notice") + "\n" + snapshot.sessions.mapIndexed { index, s -> "${index + 1}: enabled=${s.enabled}; quality=${s.qualityIssues}; bytes=${s.retainedBytes}" }.joinToString("\n")
         requests.showRows(RuntimeInsightPresentation.requests(snapshot, SqlRequestBudget((count.value as Number).toInt(), (millis.value as Number).toLong() * 1_000_000)))
         transactions.showRows(RuntimeInsightPresentation.transactions(snapshot))
+        evidence.present(snapshot)
     }
     fun dispose() {
         if (closed) return

@@ -52,6 +52,7 @@ internal fun SqlPreviewPanel.showExecutionCandidates() {
     val stamp = doc.modificationStamp
     val preview = current
     val panel = InsightDetailPanel(listOf("runId", "executionId", insightText("runtime.shape"), insightText("runtime.status")), insightText("runtime.candidateNotice"))
+    panel.button(insightText("runtime.compareSample")) { showObservedSqlDiff() }
     panel.button(insightText("close")) { previewTabs.remove("execution-candidates") }
     previewTabs.put("execution-candidates", insightText("runtime.candidates"), panel)
     previewTabs.pane?.selectedComponent = panel
@@ -66,7 +67,7 @@ internal fun SqlPreviewPanel.showExecutionCandidates() {
         val rows = matches.map { candidate ->
             val e = candidate.execution
             InsightDetailRow(listOf(e.runId, e.executionId, e.fingerprint, e.status.name),
-                "${candidate.evidence}\nscore=${candidate.score}\nstartedAtMillis=${e.startedAtMillis}\ndurationNanos=${e.durationNanos}\ndatabase=${e.databaseIdentity ?: "UNKNOWN"}\ncallSite=${e.callSite ?: "UNKNOWN"}\nrequestId=${e.requestId ?: "UNKNOWN"}")
+                "${candidate.evidence}\nscore=${candidate.score}\nstartedAtMillis=${e.startedAtMillis}\ndurationNanos=${e.durationNanos}\ndatabase=${runtimeTargetText(e.databaseIdentity, ::insightText)}\ncallSite=${e.callSite ?: "UNKNOWN"}\nrequestId=${e.requestId ?: "UNKNOWN"}")
         }
         ApplicationManager.getApplication().invokeLater {
             if (!previewDisposed && !stopped.get() && current === preview && insightDocument() === doc && doc.modificationStamp == stamp) {

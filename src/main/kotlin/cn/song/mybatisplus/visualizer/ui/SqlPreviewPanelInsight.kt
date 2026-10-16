@@ -11,7 +11,9 @@ import com.intellij.openapi.editor.ScrollType
 internal fun SqlPreviewPanel.insightDocument(): Document? = nativeEditorDoc ?: editor?.document
 
 internal fun SqlPreviewPanel.syncInsightDocument() {
-    insightController?.bind(if (previewDisposed) null else insightDocument())
+    val doc = if (previewDisposed) null else insightDocument()
+    insightController?.bind(doc)
+    bindAuxiliaryInsightDocument(doc)
 }
 
 internal fun SqlPreviewPanel.showSqlInsight() {
