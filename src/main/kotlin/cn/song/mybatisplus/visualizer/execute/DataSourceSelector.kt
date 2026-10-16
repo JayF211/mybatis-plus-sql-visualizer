@@ -206,11 +206,18 @@ object DataSourceSelector {
         target: ExecutionDialectGate.Target?,
         onDialectGate: ((ExecutionDialectGate.Verdict) -> Unit)?,
         onError: ((String) -> Unit)?,
+        onSubmission: ((ExecutionSubmission) -> Unit)? = null,
     ): Boolean {
         if (request == null) return true
         val verdict = ExecutionDialectGate.evaluate(request, target?.dialectName)
         onDialectGate?.invoke(verdict)
-        return when (verdict.status) {
+        val needsConfirmation = verdict.status == ExecutionDialectGate.Status.TARGET_UNKNOWN_QUERY_CONFIRM ||
+            verdict.status == ExecutionDialectGate.Status.RENDER_UNKNOWN_QUERY_CONFIRM
+        if (verdict.status != ExecutionDialectGate.Status.MATCH && !needsConfirmation) {
+            // 先报告未提交，后交付原有详细红字，不能用通用阻断状态覆盖详细原因。
+            onSubmission?.invoke(ExecutionSubmission.BLOCKED)
+        }
+        val allowed = when (verdict.status) {
             ExecutionDialectGate.Status.MATCH -> true
             ExecutionDialectGate.Status.TARGET_UNKNOWN_QUERY_CONFIRM,
             ExecutionDialectGate.Status.RENDER_UNKNOWN_QUERY_CONFIRM -> {
@@ -240,6 +247,8 @@ object DataSourceSelector {
                 false
             }
         }
+        if (!allowed && needsConfirmation) onSubmission?.invoke(ExecutionSubmission.CANCELLED)
+        return allowed
     }
 
     internal fun dialectGateMessage(verdict: ExecutionDialectGate.Verdict): String = when (verdict.status) {
@@ -472,7 +481,8 @@ object DataSourceSelector {
      *                  调用方可将其内嵌到任意容器；null = 不需要内嵌
      * @param onEditor  控制台编辑器就绪回调（注入插件补全上下文等）；null = 不需要
      * @param onError   错误回调（执行链任何环节失败时调用，参数为错误信息；null = 不通知）
-     * @param callback  完成回调（true=已触发执行；false=不可用/无数据源/取消）
+     * @param callback  兼容回调（true=已选择/排队，不保证提交；false=不可用/无数据源/取消）
+     * @param onSubmission 提交回执；成功来自 afterSubmitted，不来自选择、排队或 runner 返回
      */
     fun selectAndExecute(
         project: Project,
@@ -485,10 +495,12 @@ object DataSourceSelector {
         wholeScriptExec: Boolean = false,
         dialectGateRequest: ExecutionDialectGate.Request? = null,
         onDialectGate: ((ExecutionDialectGate.Verdict) -> Unit)? = null,
+        onSubmission: ((ExecutionSubmission) -> Unit)? = null,
     ) {
         chooseAndPrepare(project, sql, executeAfterPrepare = true,
             onConsole = onConsole, onEditor = onEditor, onError = onError, callback = callback, onErrorRich = onErrorRich,
-            wholeScriptExec = wholeScriptExec, dialectGateRequest = dialectGateRequest, onDialectGate = onDialectGate)
+            wholeScriptExec = wholeScriptExec, dialectGateRequest = dialectGateRequest, onDialectGate = onDialectGate,
+            onSubmission = onSubmission)
     }
 
     /**
@@ -1211,6 +1223,14 @@ object DataSourceSelector {
     // T-PreviewExecDs-02 F4：显式传 project——失败路径曾用 openProjects.firstOrNull() 清 last-used
     // /弹错误框，多项目同开时清的是「第一个打开项目」的记忆（错项目 bug，见开发计划 §2.2）。
     internal fun showRunnerPopup(project: Project, runners: List<Any>, callback: (Any?) -> Unit) {
+        com.intellij.openapi.ui.popup.JBPopupFactory.getInstance()
+            .createListPopup(createRunnerPopupStep(project, runners, callback))
+            .showInFocusCenter()
+    }
+
+    internal fun createRunnerPopupStep(
+        project: Project, runners: List<Any>, callback: (Any?) -> Unit,
+    ): com.intellij.openapi.ui.popup.util.BaseListPopupStep<RunnerItem> {
         val items = runners.map { RunnerItem(it, getRunnerName(it), getRunnerIcon(it)) }
         // T-PreviewExecDs-02 F5：多项目同开时标题带当前项目名——runner 枚举严格按当前项目
         // facade（F1 修复后），标题注明归属避免「这是哪来的数据源」困惑；单项目不加噪音。
@@ -1229,17 +1249,19 @@ object DataSourceSelector {
             override fun onChosen(selectedValue: RunnerItem?, finalChoice: Boolean): com.intellij.openapi.ui.popup.PopupStep<*>? {
                 com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
                     .info("[M36] popup onChosen: ${selectedValue?.name}")
-                callback(selectedValue?.runner)
-                return com.intellij.openapi.ui.popup.PopupStep.FINAL_CHOICE
+                // 243 禁止在 onChosen 内开模态确认；runner/session 续链须在弹窗关闭后启动。
+                return doFinalStep { callback(selectedValue?.runner) }
+            }
+
+            override fun canceled() {
+                callback(null)
             }
         }
-        com.intellij.openapi.ui.popup.JBPopupFactory.getInstance()
-            .createListPopup(step)
-            .showInFocusCenter()
+        return step
     }
 
     /** 弹窗列表项（Runner 包装）。 */
-    private data class RunnerItem(val runner: Any, val name: String, val icon: Icon?)
+    internal data class RunnerItem(val runner: Any, val name: String, val icon: Icon?)
 
     /**
      * 创建临时 .sql 文件（含 SQL），返回 (VirtualFile, PsiFile)。

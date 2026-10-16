@@ -31,6 +31,7 @@ internal fun DataSourceSelector.prepareAfterEditorResolved(
     ownsPrepareGate: Boolean = false,
     dialectGateRequest: ExecutionDialectGate.Request? = null,
     onDialectGate: ((ExecutionDialectGate.Verdict) -> Unit)? = null,
+    onSubmission: ((ExecutionSubmission) -> Unit)? = null,
 ) {
     val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
     // T-FirstExecResultInvisible F1：排队执行意图在本链完成准备时消费（下方缓存落地后）。
@@ -459,6 +460,7 @@ internal fun DataSourceSelector.prepareAfterEditorResolved(
                 wholeScriptExec = queuedIntent?.wholeScriptExec ?: wholeScriptExec,
                 dialectGateRequest = queuedIntent?.dialectGateRequest ?: dialectGateRequest,
                 onDialectGate = queuedIntent?.onDialectGate ?: onDialectGate,
+                onSubmission = queuedIntent?.onSubmission ?: onSubmission,
             )
             if (queuedIntent != null) queuedExecuted = true
         }
@@ -514,13 +516,14 @@ internal fun DataSourceSelector.executeOnConsole(
     wholeScriptExec: Boolean = false,
     dialectGateRequest: ExecutionDialectGate.Request? = null,
     onDialectGate: ((ExecutionDialectGate.Verdict) -> Unit)? = null,
+    onSubmission: ((ExecutionSubmission) -> Unit)? = null,
 ) {
     val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
     // O-145 W7：真实提交总口再次从 JdbcConsole 取实际数据源；必须早于任何文档改写、失效、
     // submitTransactionLater/executeQueries。准备后用户切换原生控制台数据源时，session 时判定已过期，
     // 本闸负责第二次阻断，绝不按 runner 显示名或缓存名猜目标。
     val actualTarget = ExecutionDialectGate.fromConsole(console)
-    if (!allowDialectGate(project, dialectGateRequest, actualTarget, onDialectGate, onError)) {
+    if (!allowDialectGate(project, dialectGateRequest, actualTarget, onDialectGate, onError, onSubmission)) {
         LOG.warn(
             "[M36][O-145] submit blocked before console mutation: " +
                 "target=${actualTarget?.stableId}/${actualTarget?.dialectName}",
@@ -616,6 +619,7 @@ internal fun DataSourceSelector.executeOnConsole(
         com.intellij.openapi.project.DumbService.getInstance(project).runWhenSmart {
             if (generation != executionGeneration) {
                 LOG.warn("[M36] execution submit cancelled (generation $generation != ${executionGeneration})")
+                onSubmission?.invoke(ExecutionSubmission.CANCELLED)
                 return@runWhenSmart
             }
             // M36.5.20：vf 同步 + **强制 commitDocument**——同步只保证 document 内容一致，
@@ -761,6 +765,7 @@ internal fun DataSourceSelector.executeOnConsole(
                                 ApplicationManager.getApplication().invokeLater({
                                     if (generation != executionGeneration) {
                                         LOG.warn("[M36] execution submit cancelled at EDT (generation $generation != ${executionGeneration})")
+                                        onSubmission?.invoke(ExecutionSubmission.CANCELLED)
                                         return@invokeLater
                                     }
                                     val disposable = (console as? com.intellij.openapi.Disposable)
@@ -784,7 +789,7 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
                                                 doRunMethod.invoke(null, console, info)
                                                 // 真实提交完成——此刻才启动结果监听
                                                 LOG.info("[M36] native query SUBMITTED (starting result watch)")
-                                                afterSubmitted(project, ui, console, onResultsReady, onError, LOG, dsName, demotedOverride = false, sqlText = executedSql, onErrorRich = onErrorRich)
+                                                afterSubmitted(project, ui, console, onResultsReady, onError, LOG, dsName, demotedOverride = false, sqlText = executedSql, onErrorRich = onErrorRich, onSubmission = onSubmission)
                                                 } catch (t: Throwable) {
                                                     val cause = (t as? java.lang.reflect.InvocationTargetException)?.targetException ?: t
                                                     // T-FP-02：反射包装层（InvocationTargetException）是普通异常，
@@ -813,6 +818,7 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
                                     } catch (t: Throwable) {
                                         if (FatalErrors.isFatal(t)) throw t // T-FP-02：fatal 透传
                                         LOG.warn("[M36] submitTransactionLater FAILED: ${t.javaClass.simpleName}: ${t.message}", t)
+                                        onSubmission?.invoke(ExecutionSubmission.BLOCKED)
                                     }
                                 }, com.intellij.openapi.application.ModalityState.any())
                                 nativeRun = true
@@ -852,7 +858,7 @@ LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole")
                 // 兜底路径（executeQueries 同步提交）：监听在此启动；原生路径由事务内
                 // afterSubmitted 启动，此处不再重复（防双重监听互相顶掉结果）。
                 if (submitted) {
-                    afterSubmitted(project, ui, console, onResultsReady, onError, LOG, dsName, demotedOverride = false, sqlText = executedSql, onErrorRich = onErrorRich)
+                    afterSubmitted(project, ui, console, onResultsReady, onError, LOG, dsName, demotedOverride = false, sqlText = executedSql, onErrorRich = onErrorRich, onSubmission = onSubmission)
                 }
             }
         }
@@ -1095,6 +1101,7 @@ internal fun DataSourceSelector.prepareInConsole(
     ownsPrepareGate: Boolean = false,
     dialectGateRequest: ExecutionDialectGate.Request? = null,
     onDialectGate: ((ExecutionDialectGate.Verdict) -> Unit)? = null,
+    onSubmission: ((ExecutionSubmission) -> Unit)? = null,
 ) {
     val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
     runCatching {
@@ -1127,7 +1134,11 @@ internal fun DataSourceSelector.prepareInConsole(
         val console = com.intellij.openapi.application.WriteIntentReadAction
             .compute<Any?> { attach.invoke(null, project, session, vf) }
         LOG.info("[M36] attachConsole -> $console")
-        if (console == null) return
+        if (console == null) {
+            onSubmission?.invoke(ExecutionSubmission.BLOCKED)
+            abortPrepareGate(ownsPrepareGate, null, LOG)
+            return
+        }
 
         val consoleClass = Class.forName(CONSOLE_CLASS)
 
@@ -1178,7 +1189,7 @@ internal fun DataSourceSelector.prepareInConsole(
             onEditor?.invoke(ed)
             prepareAfterEditorResolved(
                 project, vf, executeAfterPrepare, dataSourceName, onConsole, onError, console, document, ed,
-                onErrorRich, wholeScriptExec, ownsPrepareGate, dialectGateRequest, onDialectGate,
+                onErrorRich, wholeScriptExec, ownsPrepareGate, dialectGateRequest, onDialectGate, onSubmission,
             )
         } else {
             ApplicationManager.getApplication().executeOnPooledThread {
@@ -1201,7 +1212,7 @@ internal fun DataSourceSelector.prepareInConsole(
                             prepareAfterEditorResolved(
                                 project, vf, executeAfterPrepare, dataSourceName, onConsole, onError, console,
                                 document, resolved, onErrorRich, wholeScriptExec, ownsPrepareGate,
-                                dialectGateRequest, onDialectGate,
+                                dialectGateRequest, onDialectGate, onSubmission,
                             )
                         }.onFailure { e ->
                             LOG.warn("[M36] prepareInConsole(editor async wait) FAILED: ${e.javaClass.simpleName}: ${e.message}", e)

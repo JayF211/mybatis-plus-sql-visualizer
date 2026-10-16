@@ -117,6 +117,7 @@ internal class QueuedExecuteIntent(
     val wholeScriptExec: Boolean,
     val dialectGateRequest: ExecutionDialectGate.Request? = null,
     val onDialectGate: ((ExecutionDialectGate.Verdict) -> Unit)? = null,
+    val onSubmission: ((ExecutionSubmission) -> Unit)? = null,
 )
 
 /**

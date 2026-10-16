@@ -179,6 +179,7 @@ internal fun DataSourceSelector.chooseAndPrepare(
     wholeScriptExec: Boolean = false,
     dialectGateRequest: ExecutionDialectGate.Request? = null,
     onDialectGate: ((ExecutionDialectGate.Verdict) -> Unit)? = null,
+    onSubmission: ((ExecutionSubmission) -> Unit)? = null,
 ) {
     val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
     if (!ExecuteSqlSupport.isAvailable()) {
@@ -196,7 +197,7 @@ internal fun DataSourceSelector.chooseAndPrepare(
     val queuedIntent = if (executeAfterPrepare) {
         QueuedExecuteIntent(
             onConsole, onEditor, onError, onErrorRich, wholeScriptExec,
-            dialectGateRequest, onDialectGate,
+            dialectGateRequest, onDialectGate, onSubmission,
         )
     } else null
     var ownsGate = false
@@ -222,7 +223,7 @@ internal fun DataSourceSelector.chooseAndPrepare(
     // 显式执行路径同样复用（结果落在已嵌入面板）；用户切换数据源走弹窗 → 新建并替换共享缓存。
     if (reuseSharedConsole(
             project, submitSql, executeAfterPrepare, onConsole, onEditor, onError, callback, onErrorRich,
-            wholeScriptExec, dialectGateRequest, onDialectGate,
+            wholeScriptExec, dialectGateRequest, onDialectGate, onSubmission,
         )) {
         // T-FirstExecResultInvisible F1：复用路径同步收敛（不建链、不经 prepareAfterEditorResolved）
         // ——门持有链就地终结复位；PASS_THROUGH 预览链不动门。
@@ -252,7 +253,7 @@ internal fun DataSourceSelector.chooseAndPrepare(
             "[M36][O-145] session created: ${session?.javaClass?.name}, " +
                 "target=${actualTarget?.stableId}/${actualTarget?.dialectName}, execute=$executeAfterPrepare",
         )
-        if (!allowDialectGate(project, dialectGateRequest, actualTarget, onDialectGate, onError)) {
+        if (!allowDialectGate(project, dialectGateRequest, actualTarget, onDialectGate, onError, onSubmission)) {
             abortPrepareGate(ownsGate, dialectGateRequest?.let {
                 dialectGateMessage(ExecutionDialectGate.evaluate(it, actualTarget?.dialectName))
             }, LOG)
@@ -263,6 +264,7 @@ internal fun DataSourceSelector.chooseAndPrepare(
             project, session, vf, executeAfterPrepare, chosenRunnerName, onConsole, onEditor, onError,
             onErrorRich, wholeScriptExec, ownsPrepareGate = ownsGate,
             dialectGateRequest = dialectGateRequest, onDialectGate = onDialectGate,
+            onSubmission = onSubmission,
         )
     }
 
@@ -347,7 +349,10 @@ internal fun DataSourceSelector.chooseAndPrepare(
                 if (runner != null) chosenRunnerName = getRunnerName(runner)
                 callback?.invoke(runner != null)
                 // T-FirstExecResultInvisible F1：用户取消弹窗 = 链就此终结，复位单飞位
-                if (runner == null && ownsGate) prepareGate.finishPrepare()
+                if (runner == null) {
+                    if (ownsGate) prepareGate.finishPrepare()
+                    onSubmission?.invoke(ExecutionSubmission.CANCELLED)
+                }
                 // 弹窗中用户刚做了主动选择，失败仍需模态引导（silent=false）
                 if (runner != null) runRunner(project, runner, onError = onError)
             }
@@ -372,6 +377,7 @@ internal fun DataSourceSelector.reuseSharedConsole(
     wholeScriptExec: Boolean = false,
     dialectGateRequest: ExecutionDialectGate.Request? = null,
     onDialectGate: ((ExecutionDialectGate.Verdict) -> Unit)? = null,
+    onSubmission: ((ExecutionSubmission) -> Unit)? = null,
 ): Boolean {
     val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
     val console = sharedConsole ?: return false
@@ -520,6 +526,7 @@ internal fun DataSourceSelector.reuseSharedConsole(
             wholeScriptExec = wholeScriptExec,
             dialectGateRequest = dialectGateRequest ?: sharedDialectGateRequest,
             onDialectGate = onDialectGate ?: sharedDialectGateCallback,
+            onSubmission = onSubmission,
         )
     }
     callback?.invoke(true)
@@ -842,7 +849,9 @@ internal fun DataSourceSelector.afterSubmitted(
     demotedOverride: Boolean = false,
     sqlText: String? = null,
     onErrorRich: ((ExecutionErrorInfo) -> Unit)? = null,
+    onSubmission: ((ExecutionSubmission) -> Unit)? = null,
 ) {
+    onSubmission?.invoke(ExecutionSubmission.SUBMITTED)
     // M36.5.44：真实提交时刻递增换入代际——作废上一个执行遗留的 refresh Timer（防滞后一轮）。
     swapGeneration++
     // write-safe: UI-only（纯 Swing/只读，无文档写）
