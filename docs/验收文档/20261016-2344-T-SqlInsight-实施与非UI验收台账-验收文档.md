@@ -151,6 +151,16 @@ R3三红修复已收编为638a5740（原babc87c5），仅修改AliasDualTrackDef
 
 10项跳过分别为禁用Docker5、未配置外部数据库1、Database测试classpath缺席2、Windows符号链接权限1、ACP结构性1，不是这些环境验证通过。日志SHA256 `b1ea4db163fcb49e4de3b7a24ab5ff404cb28238356ce5fa723a8d4d72320695`；审计JSON SHA256 `70328bad987792c10b755bc404e14e2f110165d1e02a7120c2447c06a3053cb8`。这是首轮完整自动化测试通过结果，不拼接前三轮局部绿；打包、ZIP内容核验和三代兼容仍在后续步骤，不预填成功。
 
+### 第四轮打包、制品与三代兼容
+
+`buildPlugin`与`inspect-plugin-zip.py`均通过；同一ZIP完成三代离线`verifyGate -PverifyOnly=true`，实际verdict全部为Compatible：IU-243.28141.41、IU-253.33514.17、IU-262.10968.63。三代各有scheduled/deprecated/experimental/internal API提示，分别为5/35/96/1、6/45/94/1、8/117/94/1；Compatible不等于零API警告。ignored有效规则0，本轮offline下载0B，不代表Marketplace在线验证。
+
+实际ZIP为10,203,980字节，SHA256 `e3aff87366e6aef4aa8632e5e2718198cca2517859aa097a5b3aa726a06ce632`；主JAR SHA256 `d30820c72662f5ea6f3b3de5996f8e95376527d326ad79c6bb1610773857e831`；内嵌agent SHA256 `6f007d0f79d0a4cc8a4e7fe8d9b673e73ef503be5c8e81fe38785f0815c97fe5`。包内容核验包含核心洞察实现、预览入口、两语言包各187个一致的insight键；agent关键类ServletWeaver/RequestHooks/TransactionTracker/SenderWakeup均major52，无javax/jakarta Servlet测试依赖类混入。
+
+针对agent与H09原制品哈希不同，另做实物逐条比对：原jar仍在且哈希符合H09记录；两jar均373,261字节、147个文件条目（146个class及manifest），无增删、重复或顺序变化，全部解压字节相同。588个原始差异字节仅落在ZIP的DOS时间字段，归零时间字段后的整jar哈希均为`99396124aea0bb196e1b53a381f744dd0dc3fbd0f6636217d8ed7c110a2bb06d`。因此H09与性能使用的agent类字节和最终包一致；不把它描述为外层插件包也参加过原实验。
+
+构建、自动化测试和离线兼容已通过，但计划G-final的资源预算仍须单列：稳定5%新增开销尚未证明，不能仅因这些门禁全绿便把资源门或最终合流预填通过。
+
 ### Agent JVM 验证层级
 
 第二轮fresh XML已经证明既有 `AttachGateTest.attach门禁_JDK8目标` 与 `AttachPoolWarmGateTest.模式B2_JDK8目标_Hikari池存量连接复用` 均实际执行、未skip；测试源码明确启动本机JDK8子进程。新增ServletRequestWeaveTest最初6例只在JDK17宿主隔离ClassLoader运行，major52仅是字节码证据，故随后补H09真实目标JVM验证。
@@ -179,7 +189,7 @@ H09同份fixture经`javac --release 8`后，实际java.version分别为1.8.0_181
 - [ ] 定向测试实际XML入场、必要反向红/恢复绿已留证。
 - [ ] 性能/资源预算有对照，不只空载。
 - [x] 冻结ab8b54b1完成权威全量与agent验证，8284/0/0/10；合流前如dev再有生产变化需另行核对，不能沿用到未测试代码。
-- [ ] 新平台面三代兼容验证及构建校验完成。
+- [x] 新平台面三代离线兼容验证及构建校验完成，同ZIP三代Compatible；不替代GUI或Marketplace在线验证。
 - [ ] 独立复核闭环、未验UI与其他受限项逐条披露。
 - [ ] 最后一次ff-only合回dev，落地树与已验树一致，未push/发布/回流master。
 
