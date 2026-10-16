@@ -81,6 +81,21 @@ class AnalysisSessionChannelTest {
     }
 
     @Test
+    fun `control watermark rejects lifecycle events predating new session boundary`() {
+        val channel = AnalysisSessionChannel()
+        channel.enable()
+        val token = channel.requestedToken()!!
+        channel.onState(state(token).copy(controlGenerated = 5))
+        fun request(sequence: Long) = cn.song.mybatisplus.visualizer.log.agent.RequestEvent.parse(
+            """{"runId":"run","captureStateToken":"$token","captureEpoch":1,"sequence":$sequence,"kind":"START","requestId":"r-$sequence"}""",
+        )!!
+        channel.onRequest(request(5))
+        assertTrue(channel.requests().isEmpty())
+        channel.onRequest(request(6))
+        assertEquals("r-6", channel.requests().single().requestId)
+    }
+
+    @Test
     fun `stop retains evidence while dispose drops memory`() {
         val channel = AnalysisSessionChannel()
         channel.enable()

@@ -20,6 +20,7 @@ class AnalysisSessionChannel(private val store: AnalysisSessionStore = AnalysisS
     private var awaitingBoundary = false
     private var ticket: AnalysisSessionTicket? = null
     private var controlToken: String? = null
+    private var controlWatermark: Long? = null
     private val traces = RequestTraceStore()
 
     @Synchronized
@@ -60,6 +61,8 @@ class AnalysisSessionChannel(private val store: AnalysisSessionStore = AnalysisS
         if (!requested || state.captureStateToken != controlToken) return
         if (awaitingBoundary) {
             val boundary = AgentAnalysisProjection.boundary(state) ?: return
+            traces.clear()
+            controlWatermark = state.controlGenerated
             ticket = store.start(boundary)
             awaitingBoundary = false
         }
@@ -112,8 +115,10 @@ class AnalysisSessionChannel(private val store: AnalysisSessionStore = AnalysisS
 
     private fun acceptsControl(envelope: TraceEventEnvelope): Boolean {
         val current = ticket ?: return false
+        val watermark = controlWatermark ?: return false
         return requested && envelope.captureStateToken == controlToken &&
-            envelope.runId == current.boundary.runId && envelope.captureEpoch == current.boundary.captureEpoch
+            envelope.runId == current.boundary.runId && envelope.captureEpoch == current.boundary.captureEpoch &&
+            envelope.sequence?.let { it > watermark } == true
     }
 
     fun requests(): List<ObservedRequest> = traces.snapshot(store.snapshot())
