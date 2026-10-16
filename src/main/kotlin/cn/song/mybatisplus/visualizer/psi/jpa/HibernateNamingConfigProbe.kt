@@ -76,6 +76,26 @@ object HibernateNamingConfigProbe {
     /** 命名策略的设置键（词索引识别词；点分写法里的单个标识符段）。 */
     private const val NAMING_STRATEGY_KEY = "implicit_naming_strategy"
 
+    /** 隐式命名策略的参与类型（工程里出现即说明命名策略被工程自己改写）。 */
+    private val NAMING_STRATEGY_TYPES = listOf(
+        "ImplicitNamingStrategy",
+        "ImplicitNamingStrategyJpaCompliantImpl",
+        "ImplicitNamingStrategyLegacyJpaImpl",
+        "ImplicitNamingStrategyLegacyHbmImpl",
+    )
+
+    /** 属性路径类型（Hibernate 的 `AttributePath`）。 */
+    private const val ATTRIBUTE_PATH_TYPE = "AttributePath"
+
+    /**
+     * 「把属性路径的父段并进列名」的语义特征。
+     *
+     * `AttributePath` 上只有 `getParent()` / `getFullPath()` / `getDepth()` 能拿到**父段/整条路径**；
+     * 内置的组件路径策略正是 `getProperty()` + `getParent()` 递归拼接。只看末端属性名
+     * （`getProperty()`）的策略不会碰这三个方法。
+     */
+    private val ATTRIBUTE_PATH_WALK_MARKERS = listOf("getParent", "getFullPath", "getDepth")
+
     /** 模块根标记文件（任一命中即视为模块根）。 */
     internal val MODULE_MARKER_FILES = listOf("pom.xml", "build.gradle", "build.gradle.kts")
 
@@ -104,7 +124,9 @@ object HibernateNamingConfigProbe {
         } else {
             cached(project, PROJECT_WIDE_KEY) {
                 ReadAction.compute<Boolean, RuntimeException> {
-                    scanProjectConfigs(project) || projectSourcesReferenceComponentPathStrategy(project)
+                    scanProjectConfigs(project) ||
+                        projectSourcesReferenceComponentPathStrategy(project) ||
+                        projectHasCustomComponentPathStrategy(project)
                 }
             }
         }
@@ -219,6 +241,49 @@ object HibernateNamingConfigProbe {
             found
         }
     }.getOrDefault(false)
+
+    /**
+     * 工程里是否存在**自定义**的组件路径命名策略实现（T-JarEmbedded W1b）。
+     *
+     * 为什么不能「见到自定义策略就算」：多数自定义 `ImplicitNamingStrategy` 只改**表名**（加前缀、
+     * 去后缀等），对嵌入列命名毫无影响——那种工程若被当成组件路径档，反而会把列名改错。故这里看
+     * **语义特征**：文件既参与隐式命名（`implements`/`extends` 命名策略类型），又用到 `AttributePath`
+     * 的父段/全路径（`getParent` / `getFullPath` / `getDepth`）——那正是「把父路径并进列名」的写法。
+     *
+     * 已知边界（如实登记，勿当已解决）：
+     *  - 自定义策略类若在**依赖 JAR** 里（工程无源码），本探测看不到 → 仍需设置项或数据源校正；
+     *  - 自定义策略若用**别的连接符/形态**（不是 `_` 连接 + snake 化），插件按内置 component-path
+     *    口径渲染仍可能与真库不同（本轮不猜连接符）；
+     *  - 纯文本特征匹配，不解析控制流——`AttributePath` 与 `getParent` 出现在同一文件即视为命中。
+     */
+    private fun projectHasCustomComponentPathStrategy(project: Project): Boolean = runCatching {
+        val helper = PsiSearchHelper.getInstance(project)
+        val scope = GlobalSearchScope.projectScope(project)
+        val context = (UsageSearchContext.IN_CODE.toInt() or UsageSearchContext.IN_STRINGS.toInt()).toShort()
+        NAMING_STRATEGY_TYPES.any { type ->
+            var found = false
+            helper.processElementsWithWord(
+                TextOccurenceProcessor { element: PsiElement, _: Int ->
+                    val file = element.containingFile
+                    if (file is PsiJavaFile && looksLikeComponentPathStrategy(file.text)) {
+                        found = true
+                        false
+                    } else {
+                        true
+                    }
+                },
+                scope,
+                type,
+                context,
+                true,
+            )
+            found
+        }
+    }.getOrDefault(false)
+
+    /** 文件文本是否呈现「把属性路径的父段/全路径并进列名」的形态。 */
+    private fun looksLikeComponentPathStrategy(text: String): Boolean =
+        text.contains(ATTRIBUTE_PATH_TYPE) && ATTRIBUTE_PATH_WALK_MARKERS.any { text.contains(it) }
 
     private fun isNamingConfigFile(name: String): Boolean =
         isApplicationConfig(name) || name in JPA_CONFIG_FILE_NAMES

@@ -196,6 +196,34 @@ class 文件注解读取、`@Embedded` 展平三条都成立；缺的只是「�
 W3（class 文件注解判定加固）——W2 仍是真缺口（表名→实体反查在 JAR 场景下找不到），但与本轮报障的
 预览列名无关，另立批次。
 
+### 7.1b W1b 已实施（同日）：**自定义** `ImplicitNamingStrategy` 的语义识别
+
+用户追问「自定义的 `ImplicitNamingStrategy` 实现类能不能自动识别」。答案是**能，但必须按语义特征识别，
+不能见到自定义策略就算**——多数自定义策略只改**表名**（加前缀/去后缀），对嵌入列毫无影响；那种工程若被
+当成组件路径档，反而会把列名改错。
+
+判定依据（从 hibernate-core 5.6.4 源码取的 API 事实）：`AttributePath` 上只有
+`getParent()` / `getFullPath()` / `getDepth()` 能拿到**父段/整条路径**，内置组件路径策略正是
+`getProperty()` + `getParent()` 递归拼接；只取末端属性名（`getProperty()`）的策略不会碰这三个方法。
+故新判据＝**文件既参与隐式命名（`implements`/`extends` 命名策略类型）又用到 `AttributePath` 的
+父段/全路径**。
+
+**测试**：`HibernateNamingConfigProbeProjectTest` +2——「自定义组件路径策略被语义识别」（递归取
+`getParent()` 拼 `_` → 判是）与「只改表名的自定义策略不误判」（只重写 `determinePrimaryTableName`、
+不碰 `AttributePath` → 判否）。**5 例全绿**。
+
+**已知边界（如实登记，勿当已解决）**：自定义策略类若在**依赖 JAR** 里（工程无源码）→ 探测不到，仍需
+设置项/数据源校正；自定义策略若用**别的连接符或形态**（不是 `_` 连接 + snake 化）→ 插件按内置
+component-path 口径渲染仍可能与真库不同（本轮不猜连接符）；判据是文本特征，不解析控制流。
+
+### 7.1c 索引维护（同日）
+
+顺手补齐 `docs/索引/开发计划.md`：原 **11 份漏登记**（含本计划、T-EmbeddedColPrefix、T-HqlBufConcat、
+T-SqlTemplateCaret/Ux、T-DialectQuoteWarn、T-PerfSweep25/1719、竞品对比第二十六轮/第五~十三轮、
+T-PrewarmWilDeadlock）＋ **1 条失效链接**（`20261015-1830-T-SqlPreviewPrepareFreeze` 已被改名成
+`20261015-1842-T-PrewarmWilDeadlock` 且原文件已删，索引未跟上）。补齐后复核：**目录 553 份计划 /
+索引 553 条引用 / 漏登记 0 / 失效链接 0 / 重复 0**。
+
 ### 7.2 待回填：demo 仓 JAR 复现载体（子智能体进行中）
 
 计划造 `selfdev-shared-lib` 式载体：模型 JAR 模块（`@Entity` + 三个 `@Embedded` + 一个静态嵌套类
