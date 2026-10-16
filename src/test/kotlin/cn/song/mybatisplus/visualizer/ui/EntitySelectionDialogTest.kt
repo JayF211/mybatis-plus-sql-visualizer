@@ -100,9 +100,8 @@ class EntitySelectionDialogTest : BasePlatformTestCase() {
             ),
         ) {}
 
-        ReadAction.compute<List<EntitySelectionDialog.TableRow>, RuntimeException> {
-            dialog.refreshCandidatesFromLibraries()
-        }
+        // 不包 ReadAction：refreshCandidatesFromLibraries 自带分片读动作（外层再包会把读锁变回整趟持有）
+        dialog.refreshCandidatesFromLibraries()
 
         assertTrue(
             "「在依赖库中查找」应真的跑过一次库扫描（登记位被写上）",

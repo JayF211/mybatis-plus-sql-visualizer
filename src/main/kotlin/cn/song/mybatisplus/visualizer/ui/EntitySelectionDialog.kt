@@ -125,9 +125,7 @@ class EntitySelectionDialog(
         if (currentRows.none { it.tableName != null }) return
         scanButton?.isEnabled = false
         ApplicationManager.getApplication().executeOnPooledThread {
-            val refreshed = runCatching {
-                ReadAction.compute<List<TableRow>, RuntimeException> { refreshCandidatesFromLibraries() }
-            }.getOrNull()
+            val refreshed = runCatching { refreshCandidatesFromLibraries() }.getOrNull()
             ApplicationManager.getApplication().invokeLater(
                 {
                     scanButton?.isEnabled = true
@@ -143,14 +141,15 @@ class EntitySelectionDialog(
     }
 
     /**
-     * 「扫描依赖库 + 按新候选重解析各表」的**同步内核**（按钮路径与测试共用；须在 ReadAction 内调用）。
+     * 「扫描依赖库 + 按新候选重解析各表」的**同步内核**（按钮路径与测试共用）。
      *
      * 抽出来是为了可测：按钮那条路是 BGT + EDT 异步，测试直接调本方法就能确定性断言「扫完之后
-     * 候选确实变了」。
+     * 候选确实变了」。**本方法不要在外面包 `ReadAction`**——`runLibrarySweepNow` 自带分片读动作
+     * （外层再包一层会把读锁变回整趟持有，把打字冻住，见其 KDoc）；只有重解析那步需要读动作。
      */
     internal fun refreshCandidatesFromLibraries(): List<TableRow> {
         EntityClassFinder(project).runLibrarySweepNow()
-        return resolveCandidatesFromFinder()
+        return ReadAction.compute<List<TableRow>, RuntimeException> { resolveCandidatesFromFinder() }
     }
 
     /** 按**当前**实体反查结果（含库扫描缓存）重解析各表候选（须在 ReadAction 内调用）。 */

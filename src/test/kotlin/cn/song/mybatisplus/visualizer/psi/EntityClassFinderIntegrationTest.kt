@@ -1,7 +1,6 @@
 package cn.song.mybatisplus.visualizer.psi
 
 import com.intellij.openapi.application.ApplicationManager
-import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.projectRoots.JavaSdk
 import com.intellij.openapi.projectRoots.ProjectJdkTable
@@ -14,6 +13,7 @@ import com.intellij.psi.PsiDocumentManager
 import com.intellij.psi.JavaPsiFacade
 import com.intellij.psi.PsiManager
 import com.intellij.psi.search.GlobalSearchScope
+import com.intellij.psi.util.PsiModificationTracker
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.testFramework.HeavyPlatformTestCase
 import com.intellij.testFramework.IndexingTestUtil
@@ -394,22 +394,199 @@ class EntityClassFinderIntegrationTest : HeavyPlatformTestCase() {
     // ------------------------------------------------------------------
 
     /**
-     * 真扫：`runLibrarySweepNow()` 在**真实库类**上应能扫出「表名 → 类」（这里把本机 JDK 当库）。
+     * 真扫：`runLibrarySweepNow()` 按 `@TableName` 建「表名 → 类」索引。
      *
-     * 断言的是「扫描机制在真实库类上可用」；「缓存 → find 命中」这条接线由下面的注入式用例覆盖——
-     * 两者合起来才是完整路径，且不依赖「库里恰好有个 @TableName 与类名不符的类」这种环境巧合。
+     * **口径变化（T-JarEmbedded 性能收口）**：扫描只认 `@TableName`，不再按类名推断表名——后者对
+     * 任何类名都能推出非空表名，等于把整条 classpath（含 JDK）的类全建成「表」（实测只挂 JDK 就有
+     * 27k 类 → 20k 条目、单趟 4.5s、打字被阻塞 5.5s）。所以这里用**带注解的夹具**断言，不再拿
+     * 「JDK 里能扫出条目」当读数（JDK 类没有 `@TableName`，本就该扫出 0 条）。
      */
-    fun testLibrarySweepScansRealLibraryClasses() {
-        attachJdkAsSdk()
-        val entries = ReadAction.compute<Int, RuntimeException> {
-            EntityClassFinder(project).runLibrarySweepNow()
-        }
-        assertTrue("全库扫描应扫到库类并按表名建索引（entries=$entries）", entries > 0)
-        assertEquals(
-            "缓存条目数应与扫描返回值一致",
-            entries,
-            EntityClassFinder.sweepTableCountForTest(project),
+    fun testLibrarySweepIndexesAnnotatedClass() {
+        addClassFile(
+            "ProbeEntity.java",
+            """
+            package com.example;
+            import com.baomidou.mybatisplus.annotation.TableName;
+
+            @TableName("probe_tbl")
+            public class ProbeEntity { private Long id; }
+            """,
         )
+        val entries = EntityClassFinder(project).runLibrarySweepNow()
+        assertTrue("带 @TableName 的类应被扫进索引", "probe_tbl" in EntityClassFinder.sweepTablesForTest(project))
+        assertEquals("缓存条目数应与扫描返回值一致", entries, EntityClassFinder.sweepTableCountForTest(project))
+        assertEquals(
+            "扫描结果应能被 find 命中",
+            "com.example.ProbeEntity",
+            EntityClassFinder(project).find("probe_tbl").single().qualifiedName,
+        )
+    }
+
+    /**
+     * **性能收口的判别用例**：没有 `@TableName` 的类**不进**扫描索引。
+     *
+     * 摘掉「只认 @TableName」这一刀（恢复 `?: inferDecoratedTableName(...)` 兜底）→ 夹具类
+     * `PlainModel` 会被按类名推断成 `plain_model` 进缓存，本用例必红。
+     * 断言必须看**缓存内容**而不是 `find` 的结果——`find` 的快路径本来就会按类名推断命中
+     * `PlainModel`，拿它当断言等于什么都没验（这类假绿本轮踩过）。
+     */
+    fun testLibrarySweepSkipsClassesWithoutTableName() {
+        addClassFile("PlainModel.java", "package com.example; public class PlainModel { private Long id; }")
+        EntityClassFinder(project).runLibrarySweepNow()
+        assertTrue(
+            "无 @TableName 的类不应进库扫描索引（实际索引：${EntityClassFinder.sweepTablesForTest(project)}）",
+            "plain_model" !in EntityClassFinder.sweepTablesForTest(project),
+        )
+    }
+
+    /** 触顶（未扫完）**不落缓存**：残缺结果不得被当成完整结果长期复用。 */
+    fun testLibrarySweepTruncationDoesNotCache() {
+        addClassFile(
+            "ProbeEntity.java",
+            """
+            package com.example;
+            import com.baomidou.mybatisplus.annotation.TableName;
+
+            @TableName("probe_tbl")
+            public class ProbeEntity { private Long id; }
+            """,
+        )
+        // 上限置 0 = 立刻触顶（与短名个数无关，确定性）；上限按**剩余预算**切分，故 0 必然扫不动
+        EntityClassFinder.sweepScanLimitForTest = 0
+        try {
+            val entries = EntityClassFinder(project).runLibrarySweepNow()
+            assertEquals("触顶应返回 -1（未扫完）", -1, entries)
+            assertTrue("触顶不得落缓存", EntityClassFinder.sweepTablesForTest(project).isEmpty())
+            assertTrue("触顶不得把该版本标成已扫完", !EntityClassFinder.sweepDispatchedForTest(project))
+        } finally {
+            EntityClassFinder.sweepScanLimitForTest = null
+        }
+    }
+
+    /**
+     * 失效基准＝**classpath 版本**：**改源码正文（打字）**不得作废库扫描缓存。
+     *
+     * 旧口径挂 `PsiModificationTracker`（对任何 PSI 变化都递增，实测改一个文件 4→16）⇒ 每次编辑后
+     * 下一次未命中都会重投一趟全 classpath 扫描。本用例把冷却窗口置 0，单独验失效基准这一条；
+     * 摘回旧基准 → 本用例必红。
+     *
+     * 注意模拟动作必须是**改已有文件的正文**，不是「新增文件」：新增文件属于项目结构变化，
+     * `ProjectRootModificationTracker` 本来就会递增（实测踩过——第一版用例就是因此假红），
+     * 而日常最频繁的动作是打字。
+     */
+    fun testLibrarySweepCacheSurvivesSourceEdit() {
+        val entity = addClassFile(
+            "ProbeEntity.java",
+            """
+            package com.example;
+            import com.baomidou.mybatisplus.annotation.TableName;
+
+            @TableName("probe_tbl")
+            public class ProbeEntity { private Long id; }
+            """,
+        )
+        EntityClassFinder(project).runLibrarySweepNow()
+        assertTrue("扫描后应已登记投递", EntityClassFinder.sweepDispatchedForTest(project))
+
+        // 模拟打字：改**已有文件**的正文（PSI 版本递增；项目结构不变 ⇒ classpath 版本不变）
+        val vf = entity.containingFile.virtualFile
+        val psiBefore = PsiModificationTracker.getInstance(project).modificationCount
+        WriteCommandAction.runWriteCommandAction(project, Computable {
+            VfsUtil.saveText(
+                vf,
+                """
+                package com.example;
+                import com.baomidou.mybatisplus.annotation.TableName;
+
+                @TableName("probe_tbl")
+                public class ProbeEntity { private Long id; private String name; }
+                """.trimIndent(),
+            )
+        })
+        PsiDocumentManager.getInstance(project).commitAllDocuments()
+        val psiAfter = PsiModificationTracker.getInstance(project).modificationCount
+        assertTrue("夹具有效性：编辑后 PSI 版本必须递增，否则本用例什么都没验（$psiBefore → $psiAfter）", psiAfter > psiBefore)
+
+        var dispatched = 0
+        EntityClassFinder.sweepDispatchForTest = { dispatched++ }
+        EntityClassFinder.sweepCooldownMs = 0
+        try {
+            EntityClassFinder(project).find("t_booking")
+            assertEquals("改源码正文后不得重投库扫描", 0, dispatched)
+        } finally {
+            EntityClassFinder.sweepCooldownMs = EntityClassFinder.LIBRARY_SWEEP_COOLDOWN_MS
+            EntityClassFinder.sweepDispatchForTest = null
+        }
+        assertTrue("缓存条目应仍在", "probe_tbl" in EntityClassFinder.sweepTablesForTest(project))
+    }
+
+    /**
+     * 冷却窗口下界＝**上趟实际耗时**：扫描是秒级（实测只挂 JDK 就 4.4s），固定 5s 冷却短于一趟
+     * ⇒ 结构频繁变化（重构中反复增删文件）时会一趟接一趟连跑。这里把配置窗口置 0，
+     * 仅靠「上趟耗时」这一项就应挡住重投；摘掉那个下界 → 本用例必红。
+     *
+     * 用时钟缝（[EntityClassFinder.sweepClockForTest]）而非真实时钟：下界只有毫秒量级，
+     * 靠真实时间会变成时序抖动（假绿/假红都可能有）。
+     */
+    fun testLibrarySweepCooldownBoundedByLastScanCost() {
+        addClassFile(
+            "ProbeEntity.java",
+            """
+            package com.example;
+            import com.baomidou.mybatisplus.annotation.TableName;
+
+            @TableName("probe_tbl")
+            public class ProbeEntity { private Long id; }
+            """,
+        )
+        var now = 1_000_000L
+        EntityClassFinder.sweepClockForTest = { now }
+        var dispatched = 0
+        EntityClassFinder.sweepDispatchForTest = { dispatched++ }
+        EntityClassFinder.sweepCooldownMs = 0
+        try {
+            // 直接执行一趟（＝弹窗「在依赖库中查找」那条路）：应记下完成时刻与耗时，从而自带冷却窗口
+            EntityClassFinder(project).runLibrarySweepNow()
+            EntityClassFinder.clearLibrarySweepDispatchedForTest(project)
+
+            EntityClassFinder(project).find("t_booking")
+            assertEquals("冷却窗口应以上趟耗时为下界，不得立即重投", 0, dispatched)
+
+            now += 5
+            EntityClassFinder(project).find("t_booking")
+            assertEquals("越过下界后应可重投", 1, dispatched)
+        } finally {
+            EntityClassFinder.sweepClockForTest = null
+            EntityClassFinder.sweepCooldownMs = EntityClassFinder.LIBRARY_SWEEP_COOLDOWN_MS
+            EntityClassFinder.sweepDispatchForTest = null
+        }
+    }
+
+    /**
+     * 冷却窗口：窗口内不得重复投递（依赖/模块频繁变化时防投递风暴）。
+     *
+     * 两半都断言，使本用例自带判别力：冷却窗口内 → 不投；冷却关掉 → 同条件应可投。
+     */
+    fun testLibrarySweepCooldownBlocksRedispatch() {
+        var dispatched = 0
+        EntityClassFinder.sweepDispatchForTest = { dispatched++ }
+        EntityClassFinder.sweepCooldownMs = 60_000
+        try {
+            EntityClassFinder(project).find("t_booking")
+            assertEquals("首次未命中应投递", 1, dispatched)
+
+            // 模拟「上次扫描被取消/触顶」：登记被清（可重投），但冷却窗口仍在
+            EntityClassFinder.clearLibrarySweepDispatchedForTest(project)
+            EntityClassFinder(project).find("t_booking")
+            assertEquals("冷却窗口内不得重复投递", 1, dispatched)
+
+            EntityClassFinder.sweepCooldownMs = 0
+            EntityClassFinder(project).find("t_booking")
+            assertEquals("冷却关闭后应可重投", 2, dispatched)
+        } finally {
+            EntityClassFinder.sweepCooldownMs = EntityClassFinder.LIBRARY_SWEEP_COOLDOWN_MS
+            EntityClassFinder.sweepDispatchForTest = null
+        }
     }
 
     /**

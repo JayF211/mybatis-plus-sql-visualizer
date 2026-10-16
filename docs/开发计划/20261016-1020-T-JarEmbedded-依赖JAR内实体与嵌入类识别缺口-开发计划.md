@@ -358,7 +358,116 @@ EntitySelectionDialogTest         tests= 6 fail=1
 - `runLibrarySweepNow` 原先在扫完之后才读 `modificationCount` 作为缓存版本号，扫描期间若 PSI 有改动，
   会把「扫的是旧状态」标成「当前版本有效」。已改为进循环前先取版本号。
 
-**未做**：真机走查（弹窗按钮观感、后台扫描在超大工程上的耗时）。
+**未做**：真机走查（弹窗按钮观感）。
+
+### 7.4b 性能实测（20261016 补）：**用户问「几千个类首次加载会不会卡顿」→ 实测会，且比预想严重**
+
+临时探针（`TmpSweepCostProbeTest`，跑完即删，不入库）在**只挂本机 JDK、没有任何工程代码与三方依赖**
+的 `HeavyPlatformTestCase` 里实测三条：
+
+```
+PROBE1 shortNames=23342 classesSeen=27113 entries=20226 enumerateMs=7160 fullSweepMs=4585 warmSweepMs=4333
+PROBE2 controlWriteMs=0 contendedWriteMs=5551
+PROBE3 dispatchedBeforeEdit=0 dispatchedAfterEdit=1 modBefore=4 modAfter=16
+```
+
+**① 成本量级比「库类数」大得多——实际是「整条 classpath 的全部类」**：只有 JDK 时 `allScope` 就可见
+**27,113** 个类，扫描落 **20,226** 条表名条目（≈75% 的类都被当成「表」）。原因是判定 `tableNameAnnotation(clazz)
+?: inferDecoratedTableName(className)` 对**任何**类名都能推出非空表名 ⇒ 除了「非接口/枚举/注解」与
+「VO/DTO 后缀」两道筛子外**没有任何实体可信度过滤**，等于把整个 classpath 建了张反查表。单趟
+**4.5 s**（≈0.17 ms/类；第二次 4.33 s，说明不是一次性的 stub 冷加载，是实打实的遍历）。真实工程叠加
+Spring/Hibernate/MyBatis 等依赖后类数通常 6 万~15 万 ⇒ 单趟约 **10~25 s**。
+
+**② 它确实会卡打字——不是「后台线程所以无感」**：`requestLibrarySweep` 用的是**阻塞式**
+`ReadAction.compute`，整趟扫描期间持有应用级**读锁**；写动作（打字→文档提交、VFS 刷新、索引写阶段）
+必须等读锁释放。实测对照：无扫描时一次写动作 **0 ms**，扫描进行中同一写动作等了 **5,551 ms**。
+⇒ 这就是用户问的那种卡顿，而且发生在**第一次** `find` 未命中时（＝打开工程后第一次 SQL→Java 转换），
+也就是「首次加载」那一刻。
+
+**③ 缓存会被普通编辑作废并重扫**：失效键是 `PsiModificationTracker.modificationCount`，它对**普通编辑**
+也递增（实测加一个文件：4 → 16）。实测「扫完 → 未命中不再投递 → 编辑一次 → 未命中重新投递」
+（`dispatchedBeforeEdit=0` → `dispatchedAfterEdit=1`）。⇒ 「每项目版本一次」实际是「每次 PSI 变化一次」，
+在持续编辑中会反复扫。
+
+**④ 另缺两条**：循环内**没有** `ProgressManager.checkCanceled()`（不可取消、关工程也停不下来）；
+而我声称照抄的 `ColumnNameCalibrator` 其实还有一道**时间冷却窗口**（`PREFETCH_COOLDOWN_MS = 5_000`），
+我**没有**把它搬过来（我只搬了「每版本一次 + 在途上限 + 测试缝 + 投递失败归还计数」）。
+
+**修法（待用户拍板，未实施）**：
+1. **扫描面加实体可信度过滤**（治本，同时治成本与误命中）：只保留「带注解」或「类名以可配置实体后缀
+   结尾（`Entity`/`DO`/`PO`）」的类；再叠一条**包前缀黑名单**（`java.`/`javax.`/`sun.`/`com.sun.`/
+   `kotlin.`/`org.springframework.`/`org.apache.`/`com.intellij.` 等）——后者不需要任何 PSI 注解访问，
+   先把 JDK 与框架类整体剪掉，是最便宜的一刀。
+2. **改非阻塞可取消读动作**：`ReadAction.nonBlocking { … }.inSmartMode(project)` + 循环内每 N 个类
+   `ProgressManager.checkCanceled()` ⇒ 让写动作（打字）能抢占、且能被打断，而不是干等。
+3. **换失效键**：库扫描的结果只取决于 **classpath**（依赖库类），不取决于用户改源码 ⇒ 改挂
+   `ProjectRootModificationTracker`（模块/依赖变化才失效），或叠一道时间冷却（照先例的 5 s）+
+   最短重扫间隔，别让「改一个字符」触发重扫。
+4. **保留现有开关与显式触发**作为兜底；考虑把默认值改成「关」（大工程默认不扫，让用户按需点按钮）。
+
+### 7.4c 性能收口已实施（同日）：上节四条修法落地，并推翻上节第 1、2 条的原始设想
+
+**用户令「实施」后动手。上节四条修法里有两条在实测中被改写**：
+
+- 上节第 1 条的「加包前缀黑名单」**没有做**——因为它治不了本：真正的问题是**按类名推断表名的兜底**，
+  见下「根因一」。
+- 上节第 2 条设想的 `ReadAction.nonBlocking` **没有用**，也没用「`checkCanceled` 就够」——实测**不够**
+  （见下「根因二」）。真正有效的是**分片读动作**。
+
+**先证伪了一条看似更优的路（词索引）**：本想用 `PsiSearchHelper.processElementsWithWord` 一次索引查询
+替掉 23k 次枚举。实测两条都否掉——① 243 平台的 `UsageSearchContext` **没有 `IN_ANNOTATIONS`**
+（jar 实证只有 `IN_CODE`/`IN_COMMENTS`/`IN_STRINGS`/`IN_PLAIN_TEXT`/`IN_FOREIGN_LANGUAGES`）；
+② 用 `IN_CODE` 搜 `Deprecated`/`NotNull` 在**已挂 JDK** 的环境里**命中 0**（工程内文件能命中，71ms）
+⇒ **词索引看不见库/class 文件里的注解**，用它等于把「库内实体」这条正路弄丢。故库侧只能枚举。
+
+**三条根因与对应修法（每条都配了前后实测）**
+
+**根因一：扫描面是「整条 classpath 的所有类」，不是「库内实体」。** 判定写成
+`tableNameAnnotation(clazz) ?: inferDecoratedTableName(className)`，而按类名推断**对任何类名都能推出
+非空表名** ⇒ 只挂 JDK 就把 27k 类里的 **20,226** 个建成「表」。
+**修法＝只认 `@TableName`**（类名与表名**相符**的库内实体已由 §7.3 的快路径库兜底覆盖，本扫描存在的
+意义只有「类名与表名不符、只能靠 `@TableName` 认出」那一类）⇒ 条目 **20,226 → 0**（JDK 类没有
+`@TableName`，本就不该进）。
+
+**根因二：冻结机制＝`ReadAction.compute` 整趟持锁**——这正是 20261008 真机冻结事故
+（T-GutterDupFreeze）的形态，当时已用 `EntityAliasSweep`（上限 + 取消检查 + 命中即止）收口，
+**但仓内没有任何守卫钉住这个形态**，所以我把它又写了一遍（本轮最大的教训）。
+**只加 `checkCanceled` 不够**：加完实测写动作仍被阻塞 **5,480 ms**——`ReadAction.compute` 没有可取消的
+进度上下文，平台不会替我们让锁。**真正有效的是分片读动作**：每 500 个短名一个**独立**的
+`ReadAction.compute`，片间**真正释放读锁** ⇒ 扫描期间连发 60 次写动作取最大值，
+**5,480 ms → 158 / 286 ms**（约 35 倍）。调用方因此**不得**把 `runLibrarySweepNow` 包进外层
+`ReadAction`（守卫钉住）。
+**注意扫描总耗时没变**（4.4 s，枚举主导）：那是后台 CPU 代价，不是卡顿；用户感知的「卡」是持锁。
+
+**根因三：失效键太细 ⇒ 编辑一次就重扫。** `PsiModificationTracker` 对任何 PSI 变化都递增
+（实测改一个文件 4 → 16）。**修法＝`ProjectRootModificationTracker`**，实测口径：
+**改文件正文不递增**（打字不作废缓存）、**文件增删 / 依赖与模块根变化递增**。
+（第一版用例拿「新增文件」模拟打字，因此假红——已改成编辑正文，并把「PSI 版本必须递增」也钉进断言，
+防用例退化成空转。）另加**自适应冷却窗口**：窗口取 `max(配置 5 s, 上趟实际耗时)`——扫描是秒级，
+固定 5 s 冷却短于一趟，重构中反复增删文件会一趟接一趟连跑；**直接执行的扫描（弹窗按钮）同样进冷却窗口**。
+
+**新守卫 `FullScanCancelGuardTest`（3 条，纯逻辑，进 testFast）**：
+① 每个 `getAllClassNames()` 所在成员函数体必须含 `checkCanceled` 或委派 `EntityAliasSweep`；
+② 库扫描函数体不得出现 `inferDecoratedTableName`；③ 库扫描不得被外层 `ReadAction` 包住。
+**它存在的理由就是补上「守卫看不见它要防的站点」**——修前仓内 0 处守卫覆盖这个形态。
+
+**读数（`--rerun-tasks`，11 类 107 例 0 失败）**；探针前后对照（临时探针，跑完即删）：
+
+```
+修前 PROBE1 shortNames=23342 classesSeen=27113 entries=20226 fullSweepMs=4585
+     PROBE2 controlWriteMs=0 contendedWriteMs=5551
+     PROBE3 dispatchedBeforeEdit=0 dispatchedAfterEdit=1
+修后 AFTER-P1 entries=0 fullSweepMs=4430
+     AFTER-P2 controlWriteMs=0 maxWriteWaitMs=286 samples=60 sweepFinished=true
+     AFTER-P3 dispatchedBeforeEdit=0 dispatchedAfterContentEdit=0
+```
+
+**反向验证**（两批）：第一批五刀（只认 `@TableName` / 取消检查 / 失效键 / 冷却 / 触顶不落缓存）
+→ **恰 8 红**（5 条对应五刀 + 2 条「失效键退回 PSI 版本」的必然连带 + 1 条守卫）；第二批两刀
+（自适应下界 / 分片被外层包住）→ **恰 2 红**。
+
+**未做**：真机走查；超大工程（10 万类级）的真实单趟耗时——本机只量到 JDK 的 27k 类 / 4.4 s，
+真工程按线性外推约 10~25 s，**仍属后台 CPU（不再阻塞打字）**，且开关可关、弹窗可显式触发。
 
 ### 7.5 W3 已取证（同日）：class 文件（依赖 JAR）上的注解判定——**证伪：无缺口，落回归护栏**
 

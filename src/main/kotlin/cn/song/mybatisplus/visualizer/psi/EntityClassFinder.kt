@@ -3,7 +3,9 @@ package cn.song.mybatisplus.visualizer.psi
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ReadAction
+import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.roots.ProjectRootModificationTracker
 import com.intellij.openapi.util.Key
 import com.intellij.psi.PsiClass
 import com.intellij.psi.PsiLiteralExpression
@@ -69,15 +71,22 @@ class EntityClassFinder(private val project: Project) {
      * 库内实体的一次性全库扫描（T-JarEmbedded 优化方案 1）。
      *
      * 为什么需要它：库里的实体若类名与表名约定不符（`LegacyBooking` ↔ `t_booking`），快路径的候选名
-     * 一个都不沾，只能靠 `@TableName` 反查；而「扫全库类名 + 逐类读注解」是 O(库类数) 的 PSI 访问，
-     * 直接放在反查热路径上会拖慢「表名根本没有对应实体」这条最常见也最敏感的路径。
+     * 一个都不沾，只能靠 `@TableName` 反查；而「扫全库类名 + 逐类读注解」是 O(classpath 类数) 的
+     * PSI 访问，直接放在反查热路径上会拖慢「表名根本没有对应实体」这条最常见也最敏感的路径。
      *
      * 做法（照 [cn.song.mybatisplus.visualizer.psi.ColumnNameCalibrator] 的既有护栏模式）：把全库扫描
-     * 挪到**后台一次性执行**，结果按「表名 → 类」落**项目级缓存**（`PsiModificationTracker` 失效，
-     * 即每个项目版本最多扫一次）；反查时只读缓存，未就绪就投递一次并**本次原样返回空**——
-     * 由调用方按既有回落（字符串列名形态）走，下一次反查（缓存已就绪）即可命中。
+     * 挪到**后台一次性执行**，结果按「表名 → 类」落**项目级缓存**（项目结构版本失效）；反查时只读
+     * 缓存，未就绪就投递一次并**本次原样返回空**——由调用方按既有回落（字符串列名形态）走，
+     * 下一次反查（缓存已就绪）即可命中。
      *
-     * 三道闸：设置开关（可关）/ 每项目版本只投递一次 / 全局在途上限。
+     * **本扫描是本文件里唯一会遍历整条 classpath 的路径，必须守住「有界 + 可取消」**——它的形态与
+     * 20261008 真机冻结事故（T-GutterDupFreeze）同源：全量短名扫描跑在阻塞式 `ReadAction.compute`
+     * 里、读锁全程不放 ⇒ EDT 等读许可被冻住（实测 70 秒、空白窗关不掉）。当时的收口是
+     * [cn.song.mybatisplus.visualizer.psi.jpa.EntityAliasSweep]（上限 + 取消检查 + 命中即止）。
+     * 本方法照同一口径：循环内定期 `ProgressManager.checkCanceled()`（平台需要写锁时可中断）+
+     * 病态上限 [LIBRARY_SWEEP_SCAN_LIMIT]；另**只认 `@TableName`**，不再按类名推断表名（见方法内注释）。
+     *
+     * 四道闸：设置开关（可关）/ 本结构版本只投递一次 / 投递冷却窗口 / 全局在途上限。
      */
     private fun findByLibrarySweepCached(tableName: String): List<PsiClass> {
         val cached = librarySweepCache()?.tables?.get(tableName.lowercase())
@@ -86,17 +95,28 @@ class EntityClassFinder(private val project: Project) {
         return emptyList()
     }
 
-    /** 当前项目版本的库扫描缓存（版本不符返回 null，视为未就绪）。 */
+    /** 当前项目结构版本的库扫描缓存（版本不符返回 null，视为未就绪）。 */
     private fun librarySweepCache(): LibrarySweepCache? {
-        val current = PsiModificationTracker.getInstance(project).modificationCount
+        val current = projectStructureVersion()
         return project.getUserData(LIBRARY_SWEEP_CACHE_KEY)?.takeIf { it.count == current }
     }
 
     /**
-     * 投递一次「全库 @TableName 扫描」（方案 1）。三道闸任一未过即本次不投递（不阻塞、不等待）：
+     * 库扫描的失效基准＝**项目结构版本**（[ProjectRootModificationTracker]）。
+     *
+     * 实测口径（`EntityClassFinderIntegrationTest.testLibrarySweepCacheSurvivesSourceEdit` 钉住）：
+     * **改已有文件正文不递增**（打字不作废缓存），**文件增删/依赖与模块根变化递增**。
+     * 不用 [PsiModificationTracker] 的理由见 [LibrarySweepCache]。
+     */
+    private fun projectStructureVersion(): Long =
+        ProjectRootModificationTracker.getInstance(project).modificationCount
+
+    /**
+     * 投递一次「全库 @TableName 扫描」（方案 1）。四道闸任一未过即本次不投递（不阻塞、不等待）：
      *  1. 设置开关关闭（[isLibrarySweepEnabled]）；
-     *  2. 本版本已投递过（[markSweepDispatched]，每项目版本一次）；
-     *  3. 全局在途上限（[MAX_IN_FLIGHT_SWEEP]，防多项目同开时并发扫库）。
+     *  2. 本结构版本已投递过（[markSweepDispatched]）；
+     *  3. 投递冷却窗口未过（[cooldownElapsed]）；
+     *  4. 全局在途上限（[MAX_IN_FLIGHT_SWEEP]，防多项目同开时并发扫库）。
      *
      * 线程口径照 [ColumnNameCalibrator]：BGT 执行、内部自带 ReadAction、异常在下游被吞。
      */
@@ -113,7 +133,16 @@ class EntityClassFinder(private val project: Project) {
         val future = runCatching {
             app.executeOnPooledThread {
                 try {
-                    ReadAction.compute<Unit, RuntimeException> { runLibrarySweepNow() }
+                    // 不在这里包 ReadAction：runLibrarySweepNow 自带分片读动作，
+                    // 外层再包一层会把读锁变回「整趟持有」，分片失效
+                    val entries = runLibrarySweepNow()
+                    // 触顶未扫完（-1）：本次作废，允许后续未命中重投——否则「本版本已投递过」
+                    // 会把这一版彻底锁死，库内实体再也扫不出来
+                    if (entries < 0) clearLibrarySweepDispatched()
+                } catch (t: Throwable) {
+                    // 被写动作抢占而取消（PCE）/ 关工程 / 任何取数异常：同样作废并允许重投
+                    clearLibrarySweepDispatched()
+                    if (t is Error) throw t
                 } finally {
                     inFlightSweep.decrementAndGet()
                 }
@@ -123,17 +152,46 @@ class EntityClassFinder(private val project: Project) {
         if (future == null) inFlightSweep.decrementAndGet()
     }
 
-    /** 本版本是否已投递过库扫描；未投递则登记并返回 true。 */
+    /**
+     * 本项目结构版本是否可投递库扫描；可投递则登记并返回 true。
+     *
+     * 两个条件：本版本尚未投递过（[LibrarySweepCache.dispatched]）+ 距上次投递已过冷却窗口
+     * （[sweepCooldownMs]，照 [ColumnNameCalibrator] 的表名冷却窗口）——只有「每版本一次」不够：
+     * 依赖/模块频繁变化时每个版本都会投一次，叠一道时间冷却把投递频率钉住。
+     */
     private fun markSweepDispatched(): Boolean {
-        val current = PsiModificationTracker.getInstance(project).modificationCount
+        if (!cooldownElapsed()) return false
+        val current = projectStructureVersion()
         val existing = project.getUserData(LIBRARY_SWEEP_CACHE_KEY)
         if (existing != null && existing.count == current) {
             if (existing.dispatched) return false
             existing.dispatched = true
-            return true
+        } else {
+            project.putUserData(LIBRARY_SWEEP_CACHE_KEY, LibrarySweepCache(current, mutableMapOf(), dispatched = true))
         }
-        project.putUserData(LIBRARY_SWEEP_CACHE_KEY, LibrarySweepCache(current, mutableMapOf(), dispatched = true))
+        project.putUserData(LIBRARY_SWEEP_DISPATCH_AT_KEY, sweepNow())
         return true
+    }
+
+    /**
+     * 投递冷却窗口是否已过（无上次扫描记录视为已过）。
+     *
+     * 窗口取 `max(配置窗口, 上趟实际耗时)`：扫描本身是秒级到十秒级（实测只挂 JDK 就 4.4s），
+     * 固定 5s 的冷却短于一趟扫描 ⇒ 结构频繁变化时（重构中反复增删文件）会一趟接一趟连跑。
+     * 用「上趟耗时」当窗口下界，等于强制「两趟之间至少歇一趟」。
+     */
+    private fun cooldownElapsed(): Boolean {
+        val last = project.getUserData(LIBRARY_SWEEP_DISPATCH_AT_KEY) ?: return true
+        val lastCost = project.getUserData(LIBRARY_SWEEP_LAST_COST_KEY) ?: 0L
+        return sweepNow() - last >= maxOf(sweepCooldownMs, lastCost)
+    }
+
+    /** 当前时间（测试缝优先，便于把冷却窗口的用例做成确定性断言而不是时序抖动）。 */
+    private fun sweepNow(): Long = sweepClockForTest?.invoke() ?: System.currentTimeMillis()
+
+    /** 清掉「本版本已投递」登记（扫描被取消/触顶时调用，允许后续未命中重投）。 */
+    private fun clearLibrarySweepDispatched() {
+        project.getUserData(LIBRARY_SWEEP_CACHE_KEY)?.dispatched = false
     }
 
     /** 扫描开关（项目设置不可用时的兜底默认开）；测试缝优先。 */
@@ -141,34 +199,81 @@ class EntityClassFinder(private val project: Project) {
         sweepEnabledForTest
             ?: runCatching { PluginSettings.getInstance().state.libraryEntitySweepEnabled }.getOrDefault(true)
 
+    /** 单趟扫描上限（测试缝优先）。 */
+    private fun sweepScanLimit(): Int = sweepScanLimitForTest ?: LIBRARY_SWEEP_SCAN_LIMIT
+
     /**
-     * 执行一次全库 `@TableName` 扫描并落缓存（**须在 ReadAction 内调用**）。
+     * 执行一次全库 `@TableName` 扫描并落缓存。
      *
-     * 与项目慢路径 [scanAllClassesByTableName] 同一套判定（`@TableName` 注解值 > 按类名推断），
-     * 区别只在 scope（库）与结果形态（一次扫全部表，而非只找一张表）——这样扫描成本摊到
-     * 「每个项目版本一次」，而不是「每张表一次」。方案 2 的显式触发也复用本方法。
+     * **自带分片读动作，调用方不要再在外面包一层 `ReadAction`**——那会把读锁重新变成「整趟持有」，
+     * 分片就白做了。原因：整趟枚举是 O(classpath 类数)（实测只挂 JDK 就有 23k 短名 / 27k 类、单趟
+     * 约 4.5s），若全程持读锁，等待中的写动作（打字→文档提交、VFS 刷新、索引写阶段）就得干等，
+     * 实测被阻塞 5.5s——这正是 20261008 冻结事故（T-GutterDupFreeze）的形态。分片后每次持锁只有
+     * 一片的量级（[LIBRARY_SWEEP_SLICE] 个短名 ≈ 百毫秒），片间释放读锁让等待中的写动作立刻进入。
      *
-     * @return 扫到的「表名 → 类」条目数（0 = 库里没有可识别的实体）
+     * 与项目慢路径 [scanAllClassesByTableName] 的区别：scope 是**整条 classpath**、结果形态是
+     * 「一次扫全部表」（而非只找一张表）——这样扫描成本摊到「每个结构版本一次」，而不是「每张表一次」。
+     * 方案 2 的显式触发也复用本方法。
+     *
+     * **只认 `@TableName`，不做「按类名推断表名」的兜底**：后者对任何类名都能推出非空表名，
+     * 等于把整条 classpath（含 JDK）的类全建成「表」——实测只挂 JDK 就有 27k 类 → 20k 条目。
+     * 而「类名与表名相符」的库内实体已由快路径的库兜底（W2）覆盖，本扫描存在的意义只有
+     * 「类名与表名不符、只能靠 `@TableName` 认出」那一类。
+     *
+     * @return 扫到的「表名 → 类」条目数；**-1 = 触顶未扫完**（不落缓存，调用方应允许重投）
      */
     internal fun runLibrarySweepNow(): Int {
-        // 版本号**先取**：扫描期间 PSI 若发生变化，落盘的 count 仍是扫描开始时的版本 ⇒ 缓存立即
-        // 被判为过期（下次反查重投），不会把「基于旧 PSI 的结果」当成当前版本的有效缓存
-        val startedAt = PsiModificationTracker.getInstance(project).modificationCount
-        val namesCache = PsiShortNamesCache.getInstance(project)
+        val startedMs = sweepNow()
+        // 版本号**先取**：扫描期间项目结构若变化，落盘的 count 仍是开始时的版本 ⇒ 缓存立即
+        // 被判为过期（下次反查重投），不会把「基于旧状态的结果」当成当前版本的有效缓存
+        val startedAt = projectStructureVersion()
         val scope = libraryScope()
+        val limit = sweepScanLimit()
         val tables = mutableMapOf<String, MutableList<MatchedClass>>()
-        for (shortName in namesCache.getAllClassNames()) {
-            if (shortName.endsWithIgnoreCase("VO") || shortName.endsWithIgnoreCase("DTO")) continue
-            for (clazz in namesCache.getClassesByName(shortName, scope)) {
-                if (clazz.isInterface || clazz.isEnum || clazz.isAnnotationType) continue
-                if (isVoDto(clazz)) continue
-                val className = clazz.name ?: continue
-                val table = tableNameAnnotation(clazz)
-                    ?: EntityResolver.inferDecoratedTableName(className, clazz.project)
-                if (table.isBlank()) continue
-                tables.getOrPut(table.lowercase()) { mutableListOf() } += MatchedClass(shortName, clazz.qualifiedName)
-            }
+
+        // 短名清单本身要读索引：单独一个短读动作，不把它的持锁摊进循环
+        val names = ReadAction.compute<Array<String>, RuntimeException> {
+            PsiShortNamesCache.getInstance(project).getAllClassNames()
         }
+
+        var scanned = 0
+        var truncated = false
+        var from = 0
+        while (from < names.size) {
+            // 片间取消检查：工程关闭 / 平台请求取消时尽早退出（T-GutterDupFreeze 口径）
+            ProgressManager.checkCanceled()
+            // 上限按**剩余预算**切分（不是按片判断）：否则上限小于一片时会被整片吞掉、形同不设限
+            val remaining = limit - scanned
+            if (remaining <= 0) {
+                truncated = true
+                break
+            }
+            val to = minOf(from + LIBRARY_SWEEP_SLICE, from + remaining, names.size)
+            ReadAction.compute<Unit, RuntimeException> {
+                val namesCache = PsiShortNamesCache.getInstance(project)
+                for (j in from until to) {
+                    val shortName = names[j]
+                    scanned++
+                    if (shortName.endsWithIgnoreCase("VO") || shortName.endsWithIgnoreCase("DTO")) continue
+                    for (clazz in namesCache.getClassesByName(shortName, scope)) {
+                        if (clazz.isInterface || clazz.isEnum || clazz.isAnnotationType) continue
+                        if (isVoDto(clazz)) continue
+                        val table = tableNameAnnotation(clazz) ?: continue
+                        if (table.isBlank()) continue
+                        tables.getOrPut(table.lowercase()) { mutableListOf() } +=
+                            MatchedClass(shortName, clazz.qualifiedName)
+                    }
+                }
+            }
+            from = to
+        }
+        // 记录本趟耗时与完成时刻：冷却窗口用它们当基准（见 [cooldownElapsed]）。触顶也要记——代价已经付了。
+        // **直接执行的扫描（如弹窗「在依赖库中查找」）同样要进冷却窗口**，否则紧接着的下一次未命中
+        // 会立刻再投一趟后台扫描，白跑。下界取 max(1ms, 实测)：小夹具上耗时可能取整成 0。
+        project.putUserData(LIBRARY_SWEEP_DISPATCH_AT_KEY, sweepNow())
+        project.putUserData(LIBRARY_SWEEP_LAST_COST_KEY, maxOf(1L, sweepNow() - startedMs))
+        // 触顶＝「没扫完」而非「确认没有」：不落缓存（残缺结果被当成完整结果长期复用更糟）
+        if (truncated) return -1
         project.putUserData(
             LIBRARY_SWEEP_CACHE_KEY,
             LibrarySweepCache(startedAt, tables, dispatched = true),
@@ -253,7 +358,12 @@ class EntityClassFinder(private val project: Project) {
         val cache = PsiShortNamesCache.getInstance(project)
         val scope = GlobalSearchScope.projectScope(project)
         val result = mutableListOf<PsiClass>()
+        var scanned = 0
         for (shortName in cache.getAllClassNames()) {
+            // 取消检查（T-GutterDupFreeze 口径，与库扫描同一收口）：全量短名遍历跑在阻塞式
+            // ReadAction 里，读锁全程不放——平台需要写锁时须能中断，否则冻住 EDT。
+            if (scanned % LIBRARY_SWEEP_CANCEL_INTERVAL == 0) ProgressManager.checkCanceled()
+            scanned++
             // 短名快筛：VO/DTO 结尾的直接跳过（避免逐类检查）
             if (shortName.endsWithIgnoreCase("VO") || shortName.endsWithIgnoreCase("DTO")) continue
             for (clazz in cache.getClassesByName(shortName, scope)) {
@@ -317,11 +427,16 @@ class EntityClassFinder(private val project: Project) {
     private data class MatchedClass(val shortName: String, val qualifiedName: String?)
 
     /**
-     * 库内实体的一次性全库扫描缓存（T-JarEmbedded 优化方案 1；Project userData，
-     * `PsiModificationTracker` 失效——即每个项目版本最多扫一次）。
+     * 库内实体的一次性全库扫描缓存（T-JarEmbedded 优化方案 1；Project userData）。
+     *
+     * 失效基准＝**项目结构版本**（[ProjectRootModificationTracker]）：模块/依赖/库根变化、以及
+     * **文件增删**才递增；**改文件正文（打字）不递增**（实测：改已有文件正文后 PSI 版本涨、
+     * 本计数不变；新增文件则本计数会涨——新增文件属结构变化，可接受）。
+     * 不用 [PsiModificationTracker]：它对任何 PSI 变化都递增（实测改一个文件 4→16），会把
+     * 「每版本一次」退化成「每次编辑一次」反复重扫整条 classpath。
      */
     private data class LibrarySweepCache(
-        /** 扫描时的 modificationCount——PSI 修改后失效重建。 */
+        /** 扫描时的项目结构版本——结构变化后失效重建。 */
         val count: Long,
         /** 表名（小写）→ 库内匹配类（短名 + 全限定名）。 */
         val tables: Map<String, List<MatchedClass>>,
@@ -348,6 +463,50 @@ class EntityClassFinder(private val project: Project) {
         /** 库扫描缓存键（T-JarEmbedded 方案 1）。 */
         private val LIBRARY_SWEEP_CACHE_KEY = Key.create<LibrarySweepCache>("mp-visualizer.librarySweepCache")
 
+        /** 上次投递库扫描的时间戳（冷却窗口用）。与缓存条目分开存——缓存条目会随项目结构版本重建。 */
+        private val LIBRARY_SWEEP_DISPATCH_AT_KEY = Key.create<Long>("mp-visualizer.librarySweepDispatchAt")
+
+        /** 上趟库扫描的实际耗时（冷却窗口下界，见 [cooldownElapsed]）。 */
+        private val LIBRARY_SWEEP_LAST_COST_KEY = Key.create<Long>("mp-visualizer.librarySweepLastCostMs")
+
+        /**
+         * 取消检查间隔（每 N 个短名查一次）——`checkCanceled` 自身有开销，不必逐个查；
+         * 口径与 [cn.song.mybatisplus.visualizer.psi.jpa.EntityAliasSweep] 一致（T-GutterDupFreeze 收口）。
+         * 目前由项目慢路径 [scanAllClassesByTableName] 使用（库扫描改走分片，见 [LIBRARY_SWEEP_SLICE]）。
+         */
+        internal const val LIBRARY_SWEEP_CANCEL_INTERVAL = 64
+
+        /**
+         * 库扫描的分片大小（每片一个**独立**的短读动作）。
+         *
+         * 为什么不是「一整趟一个读动作 + 取消检查」：实测那样做等待中的写动作仍被阻塞 5.5s——
+         * `ReadAction.compute` 是整趟持锁，取消检查没有可取消的进度上下文，平台不会替我们让锁。
+         * 分片后读锁在片间**真正释放**，等待中的写动作（打字→文档提交）能在片间立刻进入，
+         * 把「一次等 N 秒」压成「每次等约一片」。取 500：按实测约 0.17ms/短名估算，单片持锁 ≈ 百毫秒级。
+         */
+        internal const val LIBRARY_SWEEP_SLICE = 500
+
+        /**
+         * 单趟库扫描允许遍历的短名数上限——**病态兜底，不是常规截断线**。
+         *
+         * 取 20 万：classpath 级枚举（含 JDK）常态就是 2~3 万个短名，任何「常规量级」的上限都会把
+         * 真实工程一律截断、让功能静默失效；这里只钉住索引异常/病态工程的最坏代价，
+         * 真正的响应性保障是取消检查（平台需要写锁时可中断）。
+         */
+        internal const val LIBRARY_SWEEP_SCAN_LIMIT = 200_000
+
+        /** 投递冷却窗口（照 [ColumnNameCalibrator] 的 `PREFETCH_COOLDOWN_MS`）。 */
+        internal const val LIBRARY_SWEEP_COOLDOWN_MS = 5_000L
+
+        /** 测试缝：扫描上限替身（null = [LIBRARY_SWEEP_SCAN_LIMIT]）——确定性验证「触顶不落缓存」。 */
+        internal var sweepScanLimitForTest: Int? = null
+
+        /** 测试缝：投递冷却窗口（0 = 关闭冷却）。 */
+        internal var sweepCooldownMs: Long = LIBRARY_SWEEP_COOLDOWN_MS
+
+        /** 测试缝：时钟替身（null = `System.currentTimeMillis()`）——把冷却窗口的用例做成确定性断言。 */
+        internal var sweepClockForTest: (() -> Long)? = null
+
         /** 全局在途库扫描上限（方案 1；多项目同开时防并发扫库，照 ColumnNameCalibrator 的在途闸）。 */
         private const val MAX_IN_FLIGHT_SWEEP = 1
 
@@ -367,7 +526,7 @@ class EntityClassFinder(private val project: Project) {
          * 「库里恰好有个 @TableName 与类名不符的类」的前提下，确定性验证缓存命中路径。
          */
         internal fun seedLibrarySweepForTest(project: Project, table: String, clazz: PsiClass) {
-            val current = PsiModificationTracker.getInstance(project).modificationCount
+            val current = ProjectRootModificationTracker.getInstance(project).modificationCount
             val existing = project.getUserData(LIBRARY_SWEEP_CACHE_KEY)
             val tables = if (existing != null && existing.count == current) {
                 existing.tables.toMutableMap()
@@ -387,9 +546,20 @@ class EntityClassFinder(private val project: Project) {
         internal fun sweepTableCountForTest(project: Project): Int =
             project.getUserData(LIBRARY_SWEEP_CACHE_KEY)?.tables?.size ?: 0
 
-        /** 清除库扫描缓存（与 [clearReverseLookupCache] 同步清）。 */
+        /** 测试访问器：库扫描缓存里的表名集合（判「某表是否被索引」，不受夹具外的类干扰）。 */
+        internal fun sweepTablesForTest(project: Project): Set<String> =
+            project.getUserData(LIBRARY_SWEEP_CACHE_KEY)?.tables?.keys ?: emptySet()
+
+        /** 测试访问器：清掉「本版本已投递」登记（模拟扫描被取消/触顶后的可重投状态）。 */
+        internal fun clearLibrarySweepDispatchedForTest(project: Project) {
+            project.getUserData(LIBRARY_SWEEP_CACHE_KEY)?.dispatched = false
+        }
+
+        /** 清除库扫描缓存（与 [clearReverseLookupCache] 同步清）；连投递时间戳与耗时一起清，「清除缓存」即真正的重来。 */
         internal fun clearLibrarySweepCache(project: Project) {
             project.putUserData(LIBRARY_SWEEP_CACHE_KEY, null)
+            project.putUserData(LIBRARY_SWEEP_DISPATCH_AT_KEY, null)
+            project.putUserData(LIBRARY_SWEEP_LAST_COST_KEY, null)
         }
 
         /** 测试访问器：项目级全量反查扫描次数（缓存命中后不再增长）。 */
