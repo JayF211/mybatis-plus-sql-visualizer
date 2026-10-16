@@ -35,6 +35,10 @@ class Receiver:
         self.connected = threading.Event()
         self.changed = threading.Condition()
         self.counts = {}
+        self.execution_ids = set()
+        self.duplicate_sql = 0
+        self.request_starts = set()
+        self.request_ends = set()
         self.quality = None
         self.quality_ack_count = 0
         self.error = None
@@ -53,6 +57,14 @@ class Receiver:
                 body = json.loads(exact(self.sock, size))
                 with self.changed:
                     self.counts[cmd] = self.counts.get(cmd, 0) + 1
+                    if cmd == 1:
+                        identity = body.get("executionId")
+                        if not identity or identity in self.execution_ids:
+                            self.duplicate_sql += 1
+                        self.execution_ids.add(identity)
+                    if cmd == 7:
+                        target = self.request_starts if body.get("kind") == "START" else self.request_ends
+                        target.add(body.get("requestId"))
                     if cmd == 6:
                         self.quality = body
                         self.quality_ack_count = self.counts.get(5, 0)
@@ -99,7 +111,10 @@ class Receiver:
 
     def snapshot(self):
         with self.changed:
-            return dict(counts=dict(self.counts), quality=dict(self.quality or {}), error=self.error)
+            return dict(counts=dict(self.counts), quality=dict(self.quality or {}), error=self.error,
+                        uniqueSql=len(self.execution_ids), duplicateSql=self.duplicate_sql,
+                        requestStarts=len(self.request_starts), requestEnds=len(self.request_ends),
+                        unmatchedRequestEnds=len(self.request_ends - self.request_starts))
 
     def close(self):
         if self.sock:
@@ -178,8 +193,14 @@ def trial(args, mode, index, classes):
             result["receivedRequestFrames"] = after["counts"].get(7, 0) - before["counts"].get(7, 0)
             result["qualityDelta"] = {k: v - before["quality"].get(k, 0) for k, v in after["quality"].items()
                                       if type(v) is int and type(before["quality"].get(k, 0)) is int}
+            losses = ("queueDropped", "cleared", "encodingFailed", "transportUncertain", "omitted", "captureFailed",
+                      "controlDropped", "controlCleared", "controlEncodingFailed", "controlTransportUncertain", "controlHookFailed")
             result["captureCoverageComplete"] = result["receivedSql"] == result["sqlCount"] and (
-                mode != "tracing" or result["receivedRequestFrames"] == result["requests"] * 2) and not result.get("drainTimedOut", False)
+                after["uniqueSql"] - before["uniqueSql"] == result["sqlCount"]) and after["duplicateSql"] == before["duplicateSql"] and (
+                mode != "tracing" or (result["receivedRequestFrames"] == result["requests"] * 2
+                and after["requestStarts"] - before["requestStarts"] == result["requests"]
+                and after["requestEnds"] - before["requestEnds"] == result["requests"]
+                and after["unmatchedRequestEnds"] == 0)) and all(result["qualityDelta"].get(k, 0) == 0 for k in losses) and not result.get("drainTimedOut", False)
         result["cpuPercentOneCore"] = result["cpuNanos"] * 100 / result["wallNanos"]
         send("EXIT"); result["exitCode"] = proc.wait(timeout=15)
     finally:
@@ -196,13 +217,14 @@ def main():
     for name in ("java", "javac", "agent", "h2", "servlet", "output"):
         p.add_argument("--" + name, required=True)
     p.add_argument("--repeats", type=int, default=3)
+    p.add_argument("--host-contention", default="UNKNOWN: other IDE/UI activity may contend; not an idle-host certification")
     args = p.parse_args()
     root = Path(__file__).resolve().parents[2]
     Path(args.output).mkdir(parents=True, exist_ok=True)
     classes = Path(args.output, "classes"); classes.mkdir(exist_ok=True)
     source = Path(__file__).with_name("SqlInsightWorkload.java")
     subprocess.run([args.javac, "-encoding", "UTF-8", "-d", str(classes), "-cp", args.servlet, str(source)], check=True)
-    metadata = dict(gitSha=subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip(),
+    metadata = dict(hostContention=args.host_contention, gitSha=subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip(),
                     java=subprocess.check_output([args.java, "-version"], stderr=subprocess.STDOUT, text=True),
                     jars={name: hashlib.sha256(Path(getattr(args, name)).read_bytes()).hexdigest() for name in ("agent", "h2", "servlet")},
                     limitations=["local synthetic H2 + Servlet dispatch, not HTTP/container latency", "driver read/execute workload; startup excluded", "heap pool peak sum is not simultaneous peak", "RSS is sampled before/after; peakRSS includes startup", "no delivery completeness inferred from latency", "200-request warmup stability must be inspected"])
