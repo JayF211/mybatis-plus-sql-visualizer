@@ -14,6 +14,12 @@ import net.sf.jsqlparser.statement.delete.Delete
 import net.sf.jsqlparser.statement.insert.Insert
 import net.sf.jsqlparser.statement.select.*
 import net.sf.jsqlparser.statement.update.Update
+import net.sf.jsqlparser.statement.merge.Merge
+import net.sf.jsqlparser.statement.merge.MergeUpdate
+import net.sf.jsqlparser.statement.merge.MergeInsert
+import net.sf.jsqlparser.statement.merge.MergeDelete
+import net.sf.jsqlparser.statement.create.table.CreateTable
+import net.sf.jsqlparser.statement.drop.Drop
 import java.util.Locale
 
 /** Offline analysis only. Uses the existing strict parser unchanged; never executes SQL or loads IDE state. */
@@ -35,6 +41,10 @@ object SqlSemanticAnalyzer {
         private val dependencies = mutableListOf<SemanticDependency>()
         private val diagnostics = mutableListOf<SemanticDiagnostic>()
         private var nextScope = 0
+        private val statementScopeIds = mutableListOf<String>()
+        private data class TempState(val scopeId: String, val outputs: List<SemanticProjection>)
+        private val temporary = mutableMapOf<String, TempState>()
+        private val droppedTemporary = mutableSetOf<String>()
 
         private data class Binding(
             val relation: SemanticRelation,
@@ -61,6 +71,7 @@ object SqlSemanticAnalyzer {
             relations.clear()
             dependencies.clear()
             diagnostics.clear()
+            statementScopeIds.clear()
             diagnostic(halt.code, if (halt.code == DiagnosticCode.CANCELLED) "Analysis was cancelled." else "Analysis input/traversal budget exceeded.", q = AnalysisQuality.UNKNOWN)
             model(null)
         }
@@ -75,27 +86,36 @@ object SqlSemanticAnalyzer {
                     "JSqlParser 5.3 may split a quoted dotted identifier into multipart names; lineage is withheld.")
                 return model(null)
             }
-            val statement: Statement = try {
-                SqlAstParser.parseSingle(snapshot.sql)
+            val statements: List<Statement> = try {
+                SqlAstParser.parseStatements(snapshot.sql)
             } catch (_: Exception) {
-                diagnostic(DiagnosticCode.PARSE_ERROR, "The strict SQL parser could not parse one complete statement.")
+                diagnostic(DiagnosticCode.PARSE_ERROR, "The strict SQL parser could not parse the complete script.")
                 return model(null)
             }
-            checkpoint()
-            val root = when (statement) {
+            statements.forEach { statement ->
+                checkpoint()
+                statementScopeIds += statement(statement)
+            }
+            diagnostics += SemanticDiagnostic(DiagnosticCode.SOURCE_RANGE_UNKNOWN, AnalysisQuality.UNKNOWN,
+                "AST source ranges have not been proven against the original text; only whole-input navigation is available.")
+            return model(statementScopeIds.lastOrNull())
+        }
+
+        private fun statement(statement: Statement): String = when (statement) {
                 is Select -> select(statement, null, "SELECT", emptyMap(), emptySet()).id
                 is Insert -> insert(statement)
                 is Update -> update(statement)
                 is Delete -> delete(statement)
+                is Merge -> merge(statement)
+                is CreateTable -> createTemporary(statement)
+                is Drop -> dropTemporary(statement)
                 else -> {
-                    diagnostic(DiagnosticCode.UNSUPPORTED_STATEMENT, "Unsupported statement: ${statement.javaClass.simpleName}")
-                    null
+                    val f = frame(null, "unsupported")
+                    diagnostic(DiagnosticCode.UNSUPPORTED_STATEMENT, "Unsupported statement: ${statement.javaClass.simpleName}; temporary state invalidated.", f.id)
+                    temporary.keys.toList().forEach { poisonTemporary(it) }
+                    finish(f, SqlOperation.UNSUPPORTED).id
                 }
             }
-            diagnostics += SemanticDiagnostic(DiagnosticCode.SOURCE_RANGE_UNKNOWN, AnalysisQuality.UNKNOWN,
-                "AST source ranges have not been proven against the original text; only whole-input navigation is available.")
-            return model(root)
-        }
 
         /** Lexical veto only, not a second SQL parser. Never alter the parser's process-global properties. */
         private fun hasQuotedDottedIdentifier(sql: String): Boolean {
@@ -125,7 +145,7 @@ object SqlSemanticAnalyzer {
         }
 
         private fun model(root: String?) = SqlSemanticModel(snapshot, scopes.toList(), relations.toList(), dependencies.toList(),
-            diagnostics.toList(), root, quality(diagnostics.filter { it.code != DiagnosticCode.SOURCE_RANGE_UNKNOWN }.map { it.quality }))
+            diagnostics.toList(), root, quality(diagnostics.filter { it.code != DiagnosticCode.SOURCE_RANGE_UNKNOWN }.map { it.quality }), statementScopeIds.toList())
 
         private fun diagnostic(code: DiagnosticCode, message: String, scope: String? = null, q: AnalysisQuality = AnalysisQuality.PARTIAL): Resolved {
             diagnostics += SemanticDiagnostic(code, q, message, scope)
@@ -176,13 +196,17 @@ object SqlSemanticAnalyzer {
             val cte = if (unqualified) ctes[cteName] else null
             val invalidCte = unqualified && cte == null && cteName in reserved
             if (invalidCte) diagnostic(DiagnosticCode.INVALID_CTE, "CTE ${table.name} is recursive or referenced before its definition.", f.id)
+            val tempKey = qualifiedKey(table)
+            val temp = if (cte == null && !invalidCte) temporary[tempKey] else null
+            val dropped = tempKey in droppedTemporary && temp == null && cte == null
+            if (dropped) diagnostic(DiagnosticCode.TEMPORARY_STATE_UNKNOWN, "Temporary relation was dropped: ${table.fullyQualifiedName}.", f.id, AnalysisQuality.UNKNOWN)
             val alias = table.alias?.name
             val relation = SemanticRelation("relation-${relations.size}", f.id,
-                if (cte != null || invalidCte) RelationKind.CTE else RelationKind.TABLE,
-                table.fullyQualifiedName, alias, roles, snapshot.databaseContext, cte?.scopeId)
+                if (cte != null || invalidCte) RelationKind.CTE else if (temp != null || dropped) RelationKind.TEMPORARY else RelationKind.TABLE,
+                table.fullyQualifiedName, alias, roles, snapshot.databaseContext, cte?.scopeId ?: temp?.scopeId)
             relations += relation
             val qualifiers = if (alias != null) setOf(key(alias)) else setOf(key(table.name), qualifiedKey(table))
-            val outputs = if (invalidCte || !verified) emptyList() else cte?.outputs ?: metadataOutputs(table, relation)
+            val outputs = if (invalidCte || !verified || dropped) emptyList() else cte?.outputs ?: temp?.outputs ?: metadataOutputs(table, relation)
             return Binding(relation, qualifiers, outputs).also { f.bindings += it }
         }
 
@@ -510,31 +534,160 @@ object SqlSemanticAnalyzer {
             dependencies += SemanticDependency(kind, f.id, expr.toString(), resolved.sources + resolved.conditions, quality = resolved.quality)
         }
 
+        private fun assignment(target: Binding, column: Column, value: Resolved, text: String, f: Frame, branch: String? = null): Boolean {
+            val qualifier = column.table?.takeIf { !it.name.isNullOrBlank() }?.let(::qualifiedKey)
+            val targetValid = qualifier == null || qualifier in target.qualifiers
+            val columnValid = target.outputs == null || target.outputs.any { it.name?.let(::key) == key(column.columnName) }
+            if (!targetValid || !columnValid) {
+                diagnostic(DiagnosticCode.UNKNOWN_COLUMN, "Assignment target is not a proven target column: $column.", f.id)
+                return false
+            }
+            if (known(value.quality)) dependencies += SemanticDependency(DependencyKind.ASSIGNMENT, f.id, text, value.sources,
+                SemanticColumn(target.relation.id, column.columnName), quality = value.quality, branchId = branch)
+            if (value.conditions.isNotEmpty()) dependencies += SemanticDependency(DependencyKind.CONDITION, f.id, text, value.conditions,
+                SemanticColumn(target.relation.id, column.columnName), quality = value.quality, branchId = branch)
+            return known(value.quality)
+        }
+
+        private fun merge(node: Merge): String {
+            val f = frame(null, "MERGE")
+            val roles = mutableSetOf(TableRole.READ)
+            if (node.operations.any { it is MergeUpdate || it is MergeInsert }) roles += TableRole.WRITE
+            if (node.operations.any { it is MergeDelete || (it is MergeUpdate && it.deleteWhereCondition != null) }) roles += TableRole.DELETE
+            val target = bindTable(node.table, f, roles, emptyMap(), emptySet())
+            if (!node.withItemsList.isNullOrEmpty() || node.outputClause != null) {
+                diagnostic(DiagnosticCode.UNSUPPORTED_STATEMENT, "MERGE WITH/OUTPUT is outside the verified branch subset.", f.id)
+                poisonTemporary(qualifiedKey(node.table))
+                return finish(f, SqlOperation.MERGE).id
+            }
+            from(node.fromItem, f, emptyMap(), emptySet())
+            dependency(node.onCondition, DependencyKind.MERGE_MATCH, f)
+            node.operations.forEachIndexed { i, operation ->
+                checkpoint()
+                val branch = "${f.id}-branch-$i"
+                fun predicate(expr: Expression?) {
+                    if (expr != null) {
+                        val value = expression(expr, f)
+                        dependencies += SemanticDependency(DependencyKind.CONDITION, f.id, expr.toString(), value.sources + value.conditions,
+                            quality = value.quality, branchId = branch)
+                    }
+                }
+                when (operation) {
+                    is MergeUpdate -> {
+                        predicate(operation.andPredicate)
+                        predicate(operation.whereCondition)
+                        predicate(operation.deleteWhereCondition)
+                        operation.updateSets.forEach { set ->
+                            if (set.columns.size != set.values.size) diagnostic(DiagnosticCode.COLUMN_COUNT_MISMATCH, "MERGE UPDATE tuple counts differ.", f.id)
+                            else set.columns.forEachIndexed { j, col -> assignment(target, col, expression(set.getValue(j), f), set.getValue(j).toString(), f, branch) }
+                        }
+                    }
+                    is MergeInsert -> {
+                        predicate(operation.andPredicate)
+                        predicate(operation.whereCondition)
+                        if (operation.columns.isNullOrEmpty() || operation.columns.size != operation.values.size)
+                            diagnostic(DiagnosticCode.COLUMN_COUNT_MISMATCH, "MERGE INSERT needs matching explicit target columns.", f.id)
+                        else operation.columns.forEachIndexed { j, col -> assignment(target, col, expression(operation.values[j], f), operation.values[j].toString(), f, branch) }
+                    }
+                    is MergeDelete -> predicate(operation.andPredicate)
+                    else -> diagnostic(DiagnosticCode.UNSUPPORTED_CLAUSE, "Unsupported MERGE action: ${operation.javaClass.simpleName}.", f.id)
+                }
+            }
+            // Branch row sets may overlap; until a branch-state join is proven never expose a certain temp state.
+            poisonTemporary(qualifiedKey(node.table))
+            return finish(f, SqlOperation.MERGE).id
+        }
+
+        private fun poisonTemporary(name: String) {
+            val state = temporary[name] ?: return
+            temporary[name] = state.copy(outputs = state.outputs.map { it.copy(sources = emptySet(), quality = AnalysisQuality.UNKNOWN) })
+            diagnostic(DiagnosticCode.TEMPORARY_STATE_UNKNOWN, "An unresolved write invalidated temporary column state.", state.scopeId, AnalysisQuality.UNKNOWN)
+        }
+
+        private fun createTemporary(node: CreateTable): String {
+            val f = frame(null, "CREATE TEMP")
+            val name = qualifiedKey(node.table)
+            val isTemp = node.createOptionsStrings.orEmpty().any { it.equals("TEMP", true) || it.equals("TEMPORARY", true) }
+            if (!isTemp || node.likeTable != null || node.isIfNotExists || node.isOrReplace || name in temporary) {
+                diagnostic(DiagnosticCode.UNSUPPORTED_STATEMENT, "Only fresh explicit CREATE TEMP TABLE/AS SELECT is verified.", f.id)
+                poisonTemporary(name)
+                return finish(f, SqlOperation.UNSUPPORTED).id
+            }
+            var outputs = node.select?.let { select(it, f.id, "temporary source", emptyMap(), emptySet()).projections }.orEmpty()
+            val names = node.columnDefinitions.orEmpty().map { it.columnName }.ifEmpty { node.columns.orEmpty() }
+            if (node.select == null) outputs = names.mapIndexed { i, col -> SemanticProjection(i, col, "empty temporary column", emptySet(), AnalysisQuality.CERTAIN) }
+            else if (names.isNotEmpty()) {
+                if (names.size != outputs.size) {
+                    diagnostic(DiagnosticCode.COLUMN_COUNT_MISMATCH, "Temporary column declaration and SELECT width differ.", f.id)
+                    outputs = names.mapIndexed { i, col -> SemanticProjection(i, col, "unknown", emptySet(), AnalysisQuality.UNKNOWN) }
+                } else outputs = outputs.mapIndexed { i, p -> p.copy(name = names[i]) }
+            }
+            if (outputs.any { it.name == null } || outputs.map { it.name?.let(::key) }.distinct().size != outputs.size) {
+                diagnostic(DiagnosticCode.AMBIGUOUS_COLUMN, "Temporary output column names must be explicit and unique.", f.id, AnalysisQuality.AMBIGUOUS)
+                outputs = outputs.map { it.copy(sources = emptySet(), quality = AnalysisQuality.UNKNOWN) }
+            }
+            temporary[name] = TempState(f.id, outputs)
+            droppedTemporary.remove(name)
+            bindTable(node.table, f, setOf(TableRole.WRITE), emptyMap(), emptySet())
+            return finish(f, SqlOperation.CREATE_TEMP, outputs).id
+        }
+
+        private fun dropTemporary(node: Drop): String {
+            val f = frame(null, "DROP TEMP")
+            val name = qualifiedKey(node.name)
+            if (!node.type.equals("TABLE", true) || name !in temporary) {
+                diagnostic(DiagnosticCode.UNSUPPORTED_STATEMENT, "Only a known temporary table lifecycle can be dropped in this model.", f.id)
+                return finish(f, SqlOperation.UNSUPPORTED).id
+            }
+            bindTable(node.name, f, setOf(TableRole.DELETE), emptyMap(), emptySet())
+            temporary.remove(name)
+            droppedTemporary += name
+            return finish(f, SqlOperation.DROP_TEMP).id
+        }
+
         private fun insert(node: Insert): String {
             val f = frame(null, "INSERT")
             val target = bindTable(node.table, f, setOf(TableRole.WRITE), emptyMap(), emptySet())
             if (!node.duplicateUpdateSets.isNullOrEmpty() || !node.setUpdateSets.isNullOrEmpty() || node.conflictAction != null ||
                 !node.withItemsList.isNullOrEmpty() || node.isOverwrite || node.returningClause != null || node.outputClause != null) {
                 diagnostic(DiagnosticCode.UNSUPPORTED_STATEMENT, "INSERT modifiers/upsert/RETURNING are outside the verified subset.", f.id)
+                poisonTemporary(qualifiedKey(node.table))
                 return finish(f, SqlOperation.INSERT).id
             }
             val body = node.select
             if (body == null || body is Values) {
                 diagnostic(DiagnosticCode.UNSUPPORTED_STATEMENT, "Only INSERT SELECT is supported.", f.id)
+                poisonTemporary(qualifiedKey(node.table))
                 return finish(f, SqlOperation.INSERT).id
             }
             val source = select(body, f.id, "INSERT source", emptyMap(), emptySet())
             val columns = node.columns.orEmpty()
+            val valid = columns.isNotEmpty() && columns.size == source.projections.size && source.projections.all { known(it.quality) } &&
+                columns.map { key(it.columnName) }.distinct().size == columns.size
             when {
                 columns.isEmpty() -> diagnostic(DiagnosticCode.TARGET_COLUMNS_REQUIRED, "INSERT SELECT needs explicit target columns.", f.id)
                 columns.size != source.projections.size -> diagnostic(DiagnosticCode.COLUMN_COUNT_MISMATCH, "INSERT source/target column counts differ.", f.id)
-                source.projections.any { it.quality != AnalysisQuality.CERTAIN } ->
+                !valid ->
                     diagnostic(DiagnosticCode.UNKNOWN_COLUMN, "INSERT has an unresolved projection; positional assignment is not asserted.", f.id, AnalysisQuality.UNKNOWN)
                 else -> columns.forEachIndexed { i, column ->
                     val output = source.projections[i]
-                    dependencies += SemanticDependency(DependencyKind.ASSIGNMENT, f.id, output.expression, output.sources,
-                        SemanticColumn(target.relation.id, column.columnName))
+                    assignment(target, column, Resolved(output.sources, output.quality, output.derived, output.conditionSources), output.expression, f)
                 }
+            }
+            val tempName = qualifiedKey(node.table)
+            val state = temporary[tempName]
+            if (state != null) {
+                if (!valid || columns.any { c -> state.outputs.none { it.name?.let(::key) == key(c.columnName) } }) poisonTemporary(tempName)
+                else temporary[tempName] = state.copy(outputs = state.outputs.map { old ->
+                    val index = columns.indexOfFirst { key(it.columnName) == old.name?.let(::key) }
+                    if (index < 0) old.copy(sources = emptySet(), quality = AnalysisQuality.UNKNOWN)
+                    else {
+                        val incoming = source.projections[index]
+                        val q = quality(listOf(old.quality, incoming.quality))
+                        old.copy(sources = if (known(q)) old.sources + incoming.sources else emptySet(), quality = q,
+                            conditionSources = old.conditionSources + incoming.conditionSources)
+                    }
+                })
             }
             return finish(f, SqlOperation.INSERT).id
         }
@@ -543,21 +696,21 @@ object SqlSemanticAnalyzer {
             val f = frame(null, "UPDATE")
             if (node.fromItem != null || !node.joins.isNullOrEmpty() || !node.startJoins.isNullOrEmpty() || !node.withItemsList.isNullOrEmpty()) {
                 diagnostic(DiagnosticCode.UNSUPPORTED_STATEMENT, "Only single-table UPDATE without FROM/WITH/JOIN is supported.", f.id)
+                poisonTemporary(qualifiedKey(node.table))
                 return finish(f, SqlOperation.UPDATE).id
             }
             val target = bindTable(node.table, f, setOf(TableRole.READ, TableRole.WRITE), emptyMap(), emptySet())
             val alreadyAssigned = mutableSetOf<String>()
+            val updates = mutableMapOf<String, Resolved>()
             node.updateSets.forEach { set ->
                 if (set.columns.size != set.values.size) {
                     diagnostic(DiagnosticCode.COLUMN_COUNT_MISMATCH, "UPDATE tuple assignment is not aligned.", f.id)
                 } else set.columns.forEachIndexed { i, column ->
-                    val targetResolution = column(column, f)
                     var value = expression(set.getValue(i), f)
                     if (snapshot.dialect == SqlInsightDialect.MYSQL && value.sources.any { key(it.name) in alreadyAssigned })
                         value = diagnostic(DiagnosticCode.UNSUPPORTED_EXPRESSION, "MySQL sequential assignment reads an earlier modified column.", f.id)
-                    if (targetResolution.quality == AnalysisQuality.CERTAIN && value.quality == AnalysisQuality.CERTAIN)
-                        dependencies += SemanticDependency(DependencyKind.ASSIGNMENT, f.id, set.getValue(i).toString(), value.sources,
-                            SemanticColumn(target.relation.id, column.columnName))
+                    assignment(target, column, value, set.getValue(i).toString(), f)
+                    updates[key(column.columnName)] = value
                     alreadyAssigned += key(column.columnName)
                 }
             }
@@ -565,6 +718,22 @@ object SqlSemanticAnalyzer {
             node.orderByElements.orEmpty().forEach { dependency(it.expression, DependencyKind.ORDER, f) }
             if (node.limit != null || node.returningClause != null || node.outputClause != null)
                 diagnostic(DiagnosticCode.UNSUPPORTED_CLAUSE, "UPDATE LIMIT/RETURNING/OUTPUT is not explained.", f.id)
+            val name = qualifiedKey(node.table)
+            val state = temporary[name]
+            if (state != null) {
+                val conditional = node.where != null || node.limit != null
+                val influences = dependencies.filter { it.scopeId == f.id && it.kind == DependencyKind.FILTER }.flatMap { it.sources }.toSet()
+                temporary[name] = state.copy(outputs = state.outputs.map { old ->
+                    val value = updates[old.name?.let(::key)] ?: return@map old
+                    if (!known(value.quality)) old.copy(sources = emptySet(), quality = AnalysisQuality.UNKNOWN)
+                    else if (conditional) {
+                        val q = if (known(old.quality)) AnalysisQuality.CONDITIONAL else AnalysisQuality.UNKNOWN
+                        old.copy(sources = if (known(q)) old.sources + value.sources else emptySet(), quality = q,
+                            conditionSources = old.conditionSources + value.conditions + influences)
+                    } else old.copy(sources = value.sources, quality = value.quality, conditionSources = value.conditions)
+                })
+                if (conditional) diagnostic(DiagnosticCode.CONDITIONAL_WRITE, "Partial-row UPDATE retains prior and assigned possible column origins.", f.id, AnalysisQuality.CONDITIONAL)
+            }
             return finish(f, SqlOperation.UPDATE).id
         }
 
@@ -579,6 +748,10 @@ object SqlSemanticAnalyzer {
             node.orderByElements.orEmpty().forEach { dependency(it.expression, DependencyKind.ORDER, f) }
             if (node.limit != null || node.returningClause != null || node.outputClause != null)
                 diagnostic(DiagnosticCode.UNSUPPORTED_CLAUSE, "DELETE LIMIT/RETURNING/OUTPUT is not explained.", f.id)
+            val tempName = qualifiedKey(node.table)
+            val state = temporary[tempName]
+            if (state != null && node.where == null && node.limit == null)
+                temporary[tempName] = state.copy(outputs = state.outputs.map { it.copy(sources = emptySet(), conditionSources = emptySet(), quality = AnalysisQuality.CERTAIN) })
             return finish(f, SqlOperation.DELETE).id
         }
     }
