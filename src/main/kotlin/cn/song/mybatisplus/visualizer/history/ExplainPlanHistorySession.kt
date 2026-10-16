@@ -1,6 +1,8 @@
 package cn.song.mybatisplus.visualizer.history
 
 import cn.song.mybatisplus.visualizer.mcp.McpExplainFormatter
+import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import cn.song.mybatisplus.visualizer.util.PluginBuildInfo
 
 /** R90 的提交/成功回调共同使用的上下文；只有值快照进入 manager，target 仅在面板会话内。 */
 class ExplainPlanHistorySession {
@@ -40,14 +42,23 @@ class ExplainPlanHistorySession {
         }
         val stored = if (retain) manager.matchingExplainPlans(request.key) else emptyList()
         val baselines = stored.mapNotNull { snapshot -> snapshot.raw()?.let {
-            Baseline("${java.time.Instant.ofEpochMilli(snapshot.capturedAt)} · ${snapshot.id.take(8)}", it)
+            Baseline(MpSqlVisualizerBundle.message("panel.explain.history.snapshot",
+                PluginBuildInfo.formatBuildTime(snapshot.capturedAt.toString()), snapshot.id.take(8)), it)
         } }.toMutableList()
         previous?.takeIf {
             it.request.generation == request.generation && it.request.key == request.key &&
                 (request.key.persistable || it.request.target === request.target)
         }?.let { last ->
             // R61：上次结果即使超限未持久化，也仍可在同目标会话内比较。
-            if (baselines.none { it.raw == last.raw }) baselines.add(0, Baseline("R61", last.raw))
+            val previousLabel = MpSqlVisualizerBundle.message("panel.explain.history.previousSession")
+            val retainedIndex = baselines.indexOfFirst { it.raw == last.raw }
+            if (retainedIndex < 0) {
+                baselines.add(0, Baseline(previousLabel, last.raw))
+            } else {
+                // 保持原来的去重、顺序与比较数据，只补充这一项的会话来源。
+                val retained = baselines[retainedIndex]
+                baselines[retainedIndex] = retained.copy(label = "$previousLabel · ${retained.label}")
+            }
         }
         val saved = if (!retain) ExplainPlanSaveResult.RETENTION_DISABLED
             else request.capture?.let { manager.saveExplainPlan(it, raw) } ?: ExplainPlanSaveResult.SESSION_ONLY

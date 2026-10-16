@@ -1,5 +1,11 @@
 package cn.song.mybatisplus.visualizer.ui
 
+import cn.song.mybatisplus.visualizer.config.PluginSettings
+import cn.song.mybatisplus.visualizer.history.ExplainPlanHistorySession
+import cn.song.mybatisplus.visualizer.history.ExplainPlanKey
+import cn.song.mybatisplus.visualizer.history.ExplainPlanSnapshot
+import cn.song.mybatisplus.visualizer.history.SqlHistoryEntry
+import cn.song.mybatisplus.visualizer.history.SqlHistoryManager
 import cn.song.mybatisplus.visualizer.mcp.McpExplainFormatter
 import cn.song.mybatisplus.visualizer.sql.ExplainOutputFormat
 import cn.song.mybatisplus.visualizer.util.ExplainIndexAdvisor
@@ -9,6 +15,11 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import java.time.Instant
+import java.util.Locale
+import java.util.TimeZone
+import javax.swing.JLabel
+import javax.swing.JList
 
 /**
  * R33 EXPLAIN 结构化渲染视图组件行为测试（渲染判别测试）。
@@ -143,6 +154,104 @@ class ExplainPlanResultViewUiTest : BasePlatformTestCase() {
         assertTrue(view.compareTextForTest()!!.contains("200"))
         assertEquals(0, executed)
         assertEquals("99500", view.tableModelForTest()!!.getValueAt(0, 5))
+    }
+
+    fun testBaselineLabelsChineseShanghai() = assertBaselineLabels("zh", "Asia/Shanghai", "19:20:35")
+
+    fun testBaselineLabelsEnglishShanghai() = assertBaselineLabels("en", "Asia/Shanghai", "19:20:35")
+
+    fun testBaselineLabelsChineseLosAngeles() = assertBaselineLabels("zh", "America/Los_Angeles", "04:20:35")
+
+    fun testBaselineLabelsEnglishLosAngeles() = assertBaselineLabels("en", "America/Los_Angeles", "04:20:35")
+
+    /** 真实 session → 真实 JComboBox renderer，不能只验证 bundle 或合成标签。 */
+    private fun assertBaselineLabels(language: String, zone: String, localTime: String) {
+        val settings = PluginSettings.getInstance()
+        val oldLanguage = settings.state.language
+        val oldZone = TimeZone.getDefault()
+        val oldLocale = Locale.getDefault()
+        try {
+            settings.state.language = language
+            TimeZone.setDefault(TimeZone.getTimeZone(zone))
+            // 插件语言必须覆盖系统语言；固定环境且 finally 恢复，不依赖测试机配置。
+            Locale.setDefault(if (language == "zh") Locale.US else Locale.SIMPLIFIED_CHINESE)
+            val sql = "select * from tb_user"
+            val key = ExplainPlanKey.create("project-a", "eb03ba8b-a414-4453-b6e0-5bf55b34fed2",
+                "MySQL", ExplainOutputFormat.TABLE, sql)
+            fun raw(rows: String, notices: List<String> = emptyList()) = McpExplainFormatter.RawResult(
+                mysqlHeaders, listOf(mysqlRows.first().toMutableList().apply { set(5, rows) }), notices = notices,
+            )
+            val manager = SqlHistoryManager()
+            val entry = manager.add(SqlHistoryEntry(sql = sql, projectIdentity = key.projectIdentity))
+            val session = ExplainPlanHistorySession()
+            val target = Any()
+            // notices 不持久化：复现真机同时出现会话项和已保存项的路径。
+            val previous = raw("100", listOf("driver notice"))
+            session.complete(manager, session.begin(manager, sql, key, target, null, true), previous, true)
+            val capturedAtEpoch = Instant.parse("2026-10-16T11:20:35.827Z").toEpochMilli()
+            val retained = entry.explainPlans.single().apply {
+                id = "bc6000e5-1111-4111-8111-111111111111"
+                this.capturedAt = capturedAtEpoch
+            }
+            val older = ExplainPlanSnapshot.create(key, raw("50")).apply {
+                id = "aa7000f6-2222-4222-8222-222222222222"
+                this.capturedAt = capturedAtEpoch
+            }
+            entry.explainPlans.add(older)
+            val originalSnapshots = listOf(retained.copy(), older.copy())
+            val current = raw("200")
+            val completion = session.complete(manager,
+                session.begin(manager, sql, key, target, null, true), current, true)
+            val view = ExplainPlanResultView("MySQL", "mp_demo", 1, current, ExplainOutputFormat.TABLE,
+                baselines = completion.baselines)
+            val selector = view.baselineSelectorForTest()
+            val previousLabel = if (language == "zh") "上次执行（当前会话）" else "Previous execution (current session)"
+            fun snapshotLabel(id: String) = if (language == "zh")
+                "历史快照 2026-10-16 $localTime（本地时间） · #$id"
+            else "Saved plan 2026-10-16 $localTime (local time) · #$id"
+            val expected = listOf(previousLabel, snapshotLabel("bc6000e5"), snapshotLabel("aa7000f6"))
+            assertEquals(3, selector.itemCount)
+            val list = JList<String>()
+            fun rendered(value: String, index: Int): String = (selector.renderer
+                .getListCellRendererComponent(list, value, index, true, false) as JLabel).text
+            // index=-1 是收起时的默认显示；其余为下拉列表实际 renderer 输出。
+            assertEquals(previousLabel, rendered(selector.selectedItem as String, -1))
+            expected.forEachIndexed { index, label ->
+                val text = rendered(selector.getItemAt(index), index)
+                assertEquals(label, text)
+                assertFalse(text.contains("R61"))
+                assertFalse(text.contains("T11:20:35.827Z"))
+                assertFalse(text.contains(retained.id))
+                selector.selectedIndex = index
+                assertEquals(label, rendered(selector.selectedItem as String, -1))
+                val comparedRows = listOf("100", "100", "50")[index]
+                assertTrue(view.compareTextForTest()!!.contains(comparedRows))
+            }
+            assertEquals(previous, completion.baselines.first().raw)
+            assertEquals(originalSnapshots, entry.explainPlans.filter { it.id in originalSnapshots.map { plan -> plan.id } })
+            assertEquals(3, entry.explainPlans.size) // 切换下拉没有保存/执行第四次。
+            assertEquals("200", view.tableModelForTest()!!.getValueAt(0, 5))
+
+            // 无 notices 差异时仍按原规则去重，仅给已保存项补来源，不增删/重排基线。
+            val deduplicatedSession = ExplainPlanHistorySession()
+            val first = raw("300")
+            deduplicatedSession.complete(manager,
+                deduplicatedSession.begin(manager, sql, key, target, null, true), first, true)
+            val deduplicated = deduplicatedSession.complete(manager,
+                deduplicatedSession.begin(manager, sql, key, target, null, true), raw("400"), true)
+            assertEquals(1, deduplicated.baselines.count { it.raw == first })
+            val deduplicatedView = ExplainPlanResultView("MySQL", null, 1, raw("400"), ExplainOutputFormat.TABLE,
+                baselines = deduplicated.baselines)
+            val deduplicatedSelector = deduplicatedView.baselineSelectorForTest()
+            val selected = (deduplicatedSelector.renderer.getListCellRendererComponent(list,
+                deduplicatedSelector.selectedItem as String, -1, true, false) as JLabel).text
+            assertTrue(selected.startsWith("$previousLabel · "))
+            assertFalse(selected.contains("R61"))
+        } finally {
+            settings.state.language = oldLanguage
+            TimeZone.setDefault(oldZone)
+            Locale.setDefault(oldLocale)
+        }
     }
 
     fun testR90_超限拒绝明确显示且当前结果不截断() {
