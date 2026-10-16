@@ -13,24 +13,27 @@ package cn.song.mybatisplus.sqlvis.agent.hook;
  */
 public final class WeaveGate {
 
-    private static final ThreadLocal<Boolean> PROXY_ACTIVE = new ThreadLocal<Boolean>();
+    private static final ThreadLocal<Integer> PROXY_ACTIVE = new ThreadLocal<Integer>();
 
     private WeaveGate() {
     }
 
     /** 代理层进入原始方法调用前置位（必须 try/finally 配对 [exitProxy]）。 */
     public static void enterProxy() {
-        PROXY_ACTIVE.set(Boolean.TRUE);
+        Integer depth = PROXY_ACTIVE.get();
+        PROXY_ACTIVE.set(depth == null ? 1 : depth + 1);
     }
 
     /** 代理层离开原始方法调用后复位。 */
     public static void exitProxy() {
-        PROXY_ACTIVE.set(Boolean.FALSE);
+        Integer depth = PROXY_ACTIVE.get();
+        if (depth == null || depth <= 1) PROXY_ACTIVE.remove();
+        else PROXY_ACTIVE.set(depth - 1);
     }
 
     /** 织入钩子读：true = 本线程正处于代理层原始调用内，织入通道须短路让代理层独占采集。 */
     public static boolean isProxyActive() {
-        final Boolean v = PROXY_ACTIVE.get();
-        return v != null && v.booleanValue();
+        final Integer v = PROXY_ACTIVE.get();
+        return v != null && v > 0;
     }
 }

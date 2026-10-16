@@ -26,6 +26,8 @@ public final class EventBus {
      * 旧版 IDE 忽略未知 cmd 天然兼容。
      */
     public static final int CMD_CONFIG_ACK = 5;
+    /** Optional v2 quality/control snapshot, emitted directly by sender (never SQL queued). */
+    public static final int CMD_CAPTURE_STATE = 6;
 
     private static final int QUEUE_CAPACITY = 2048;
     private static final BlockingQueue<SqlEvent> QUEUE = new ArrayBlockingQueue<SqlEvent>(QUEUE_CAPACITY);
@@ -48,8 +50,14 @@ public final class EventBus {
 
     /** 采集线程入口：非阻塞入队，满则丢事件（计数）不阻塞业务线程。 */
     public static void offer(SqlEvent event) {
-        if (event == null || !QUEUE.offer(event)) {
-            DROPPED.incrementAndGet();
+        synchronized (CaptureLedger.class) {
+            if (event != null && event.captureEpoch != null
+                    && (cn.song.mybatisplus.sqlvis.agent.AgentState.isDisabled()
+                    || event.captureEpoch.longValue() != CaptureLedger.captureEpoch())) {
+                CLEARED.incrementAndGet();
+                return;
+            }
+            if (event == null || !QUEUE.offer(event)) DROPPED.incrementAndGet();
         }
     }
 

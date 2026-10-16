@@ -45,8 +45,11 @@ final class EventBuilder {
         }
         if ("execute".equals(op) && Boolean.FALSE.equals(result)) {
             try {
+                if (rawStatement instanceof java.sql.Statement) {
+                    return nonNegative(((java.sql.Statement) rawStatement).getUpdateCount());
+                }
                 Method m = UPDATE_COUNT_METHOD.get();
-                if (m == null) {
+                if (m == null || !m.getDeclaringClass().isInstance(rawStatement)) {
                     m = rawStatement.getClass().getMethod("getUpdateCount");
                     UPDATE_COUNT_METHOD.set(m);
                 }
@@ -71,6 +74,39 @@ final class EventBuilder {
             }
         }
         return sum;
+    }
+
+    static void applyResult(cn.song.mybatisplus.sqlvis.agent.model.SqlEvent event,
+                            String op, Object result, Throwable failure) {
+        event.resultStatus = failure == null ? "SUCCESS" : "ERROR";
+        event.errorClass = failure == null ? null : failure.getClass().getName();
+        event.sqlState = failure instanceof java.sql.SQLException
+                ? ((java.sql.SQLException) failure).getSQLState() : null;
+        event.updateCountStatus = event.updateCount == null ? "UNKNOWN" : "KNOWN";
+        if (failure != null) {
+            // A stale getUpdateCount on a failed call is not evidence for this execution.
+            event.updateCount = null;
+            event.updateCountStatus = "UNKNOWN";
+        }
+        Object batch = result;
+        if (failure instanceof java.sql.BatchUpdateException) {
+            batch = ((java.sql.BatchUpdateException) failure).getLargeUpdateCounts();
+        }
+        if (batch instanceof int[] || batch instanceof long[]) {
+            boolean partial = failure != null;
+            int known = 0;
+            long sum = 0;
+            int length = batch instanceof int[] ? ((int[]) batch).length : ((long[]) batch).length;
+            for (int i = 0; i < length; i++) {
+                long value = batch instanceof int[] ? ((int[]) batch)[i] : ((long[]) batch)[i];
+                if (value < 0) { partial = true; continue; }
+                if (Long.MAX_VALUE - sum < value) { partial = true; continue; }
+                known++;
+                sum += value;
+            }
+            event.updateCount = known == 0 && partial ? null : sum;
+            event.updateCountStatus = event.updateCount == null ? "UNKNOWN" : partial ? "PARTIAL" : "KNOWN";
+        }
     }
 
     private EventBuilder() {

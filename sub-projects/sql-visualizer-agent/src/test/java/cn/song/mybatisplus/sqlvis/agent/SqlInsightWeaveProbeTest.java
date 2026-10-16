@@ -16,8 +16,15 @@ import static org.junit.Assert.*;
 
 /** Real class bytes are woven and verified by the JVM; no mocked callback assertions. */
 public class SqlInsightWeaveProbeTest {
-    public static class StatementFixture {
-        public int executeUpdate(String sql) { return 7; }
+    public interface ExecuteApi { int executeUpdate(String sql); }
+    public static class StatementFixture implements ExecuteApi {
+        public StatementFixture nested;
+        public int executeUpdate(String sql) {
+            if ("delegate".equals(sql)) return executeLargeUpdate(sql) == 7L ? 7 : 0;
+            if ("nested".equals(sql)) return nested.executeUpdate("inner");
+            return 7;
+        }
+        public long executeLargeUpdate(String sql) { return 7L; }
         public boolean execute(String sql) { return false; }
         public int getUpdateCount() { return 9; }
         public Object executeQuery(String sql) {
@@ -98,6 +105,54 @@ public class SqlInsightWeaveProbeTest {
         SqlEvent event = queue().poll();
         assertNotNull(event);
         assertTrue(event.errorText.contains("IllegalStateException"));
+        assertNull(queue().poll());
+    }
+
+    @Test public void sameObjectDelegationIsOneExecution() throws Exception {
+        assertEquals(7, call("executeUpdate", "delegate"));
+        SqlEvent event = queue().poll();
+        assertNotNull(event.executionId);
+        assertEquals("SUCCESS", event.resultStatus);
+        assertEquals("KNOWN", event.updateCountStatus);
+        assertNotNull(event.startNanos);
+        assertEquals("ENTRY_WALL_MILLIS", event.timestampSource);
+        assertNull(queue().poll());
+    }
+
+    @Test public void nestedDifferentStatementRemainsDistinctAndCanArriveOutOfOrder() throws Exception {
+        Object inner = statement.getClass().getDeclaredConstructor().newInstance();
+        statement.getClass().getField("nested").set(statement, inner);
+        call("executeUpdate", "nested");
+        SqlEvent first = queue().poll(), second = queue().poll();
+        assertNotNull(first);
+        assertNotNull(second);
+        assertNotEquals(first.executionId, second.executionId);
+        assertTrue("entry order is not completion order", first.sequence > second.sequence);
+        assertNull(queue().poll());
+    }
+
+    @Test public void actualProxyOverWovenStatementDoesNotDoubleReport() throws Exception {
+        Class<?> support = Class.forName("cn.song.mybatisplus.sqlvis.agent.hook.ProxySupport");
+        java.lang.reflect.Method wrap = support.getDeclaredMethod("wrapStatement", Object.class, String.class, String.class);
+        wrap.setAccessible(true);
+        ExecuteApi proxy = (ExecuteApi) wrap.invoke(null, statement, null, null);
+        assertEquals(7, proxy.executeUpdate("update t set x=1"));
+        SqlEvent event = queue().poll();
+        assertNotNull(event);
+        assertEquals("PROXY", event.captureSource);
+        assertNotNull(event.executionId);
+        assertNull(queue().poll());
+    }
+
+    @Test public void sameSqlOneHundredTimesHasOneHundredIdentities() throws Exception {
+        java.util.Set<String> ids = new java.util.HashSet<String>();
+        for (int i = 0; i < 100; i++) {
+            call("executeUpdate", "update t set x=1");
+            SqlEvent event = queue().poll();
+            assertNotNull(event);
+            ids.add(event.executionId);
+        }
+        assertEquals(100, ids.size());
         assertNull(queue().poll());
     }
 

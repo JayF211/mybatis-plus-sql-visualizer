@@ -8,6 +8,23 @@ import java.util.List;
  */
 public final class SqlEvent {
 
+    /** Optional v2 execution facts. Absent on legacy/manual events; never inferred from SQL text. */
+    public String runId;
+    public String executionId;
+    public Long sequence;
+    /** Agent capture on/off boundary, not the IDE analysis generation. */
+    public Long captureEpoch;
+    public Long threadId;
+    public Long startNanos;
+    /** SUCCESS / ERROR / UNKNOWN describes the JDBC call, not a transaction commit. */
+    public String resultStatus;
+    /** KNOWN / PARTIAL / UNKNOWN; partial batch sums are lower bounds, not exact totals. */
+    public String updateCountStatus;
+    public String captureSource;
+    public String timestampSource;
+    public String errorClass;
+    public String sqlState;
+
     /** SQL 文本（PreparedStatement 为 prepare 时的 SQL，Statement 为 execute 参数，批为拼接）。 */
     public String sql;
     /** 采集时间戳（毫秒）：execute **开始**那一刻（T-AgentLogTime——面板回落值与日志行对齐）。 */

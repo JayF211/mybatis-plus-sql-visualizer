@@ -52,11 +52,14 @@ public final class AgentState {
     }
 
     public static void setDisabled(boolean value) {
-        final boolean prev = disabled;
-        disabled = value;
-        if (!prev && value) {
-            // 停采下降沿：清空已排队事件并计数（EventBus.clearedCount 可观测）
-            EventBus.clearQueued();
+        synchronized (cn.song.mybatisplus.sqlvis.agent.transport.CaptureLedger.class) {
+            final boolean prev = disabled;
+            disabled = value;
+            if (prev != value) cn.song.mybatisplus.sqlvis.agent.transport.CaptureLedger.captureBoundary();
+            if (!prev && value) {
+                // Serialize with identity allocation; in-flight calls retain their entry epoch.
+                EventBus.clearQueued();
+            }
         }
     }
 

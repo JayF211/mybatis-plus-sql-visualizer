@@ -37,6 +37,19 @@ data class AgentEvent(
     val threadName: String?,
     /** connect 时连接 URL（T-AgentDialectLoop；旧版 agent 无此键 → null 容错）。 */
     val url: String? = null,
+    /** v2 facts are optional. Legacy absence is UNKNOWN, never inferred success/identity. */
+    val runId: String? = null,
+    val executionId: String? = null,
+    val sequence: Long? = null,
+    val captureEpoch: Long? = null,
+    val threadId: Long? = null,
+    val startNanos: Long? = null,
+    val resultStatus: String = "UNKNOWN",
+    val updateCountStatus: String = "UNKNOWN",
+    val captureSource: String? = null,
+    val timestampSource: String? = null,
+    val errorClass: String? = null,
+    val sqlState: String? = null,
 ) {
     companion object {
         /** 解析 EVENT 帧 body；结构不符返回 null（丢弃并计数，不断流）。 */
@@ -75,6 +88,20 @@ data class AgentEvent(
                 params = params,
                 threadName = o.get("th")?.takeIf { it.isJsonPrimitive }?.asString,
                 url = o.get("url")?.takeIf { it.isJsonPrimitive }?.asString,
+                runId = o.optionalText("runId"),
+                executionId = o.optionalText("executionId"),
+                sequence = o.optionalLong("sequence")?.takeIf { it > 0 },
+                captureEpoch = o.optionalLong("captureEpoch")?.takeIf { it >= 0 },
+                threadId = o.optionalLong("threadId")?.takeIf { it > 0 },
+                startNanos = o.optionalLong("startNanos"),
+                resultStatus = o.optionalText("resultStatus")
+                    ?.takeIf { it in setOf("SUCCESS", "ERROR", "UNKNOWN") } ?: "UNKNOWN",
+                updateCountStatus = o.optionalText("updateCountStatus")
+                    ?.takeIf { it in setOf("KNOWN", "PARTIAL", "UNKNOWN") } ?: "UNKNOWN",
+                captureSource = o.optionalText("captureSource"),
+                timestampSource = o.optionalText("timestampSource"),
+                errorClass = o.optionalText("errorClass"),
+                sqlState = o.optionalText("sqlState"),
             )
         }.getOrNull()
 
@@ -99,6 +126,15 @@ data class AgentEvent(
 
         /** 候选行（T-SourceJumpFunnel）：file/line 必有，className 旧 agent 缺省（四列协议第四列已废弃）。 */
         internal data class CandidateRow(val file: String, val line: Int, val className: String?)
+
+        private fun com.google.gson.JsonObject.optionalText(key: String): String? = runCatching {
+            get(key)?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }?.asString
+        }.getOrNull()
+
+        private fun com.google.gson.JsonObject.optionalLong(key: String): Long? = runCatching {
+            get(key)?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isNumber }
+                ?.asBigDecimal?.longValueExact()
+        }.getOrNull()
 
         private fun com.google.gson.JsonArray.getOrNull(i: Int) =
             if (size() > i) get(i) else null

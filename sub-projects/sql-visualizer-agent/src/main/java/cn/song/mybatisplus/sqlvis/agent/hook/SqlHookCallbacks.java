@@ -73,7 +73,8 @@ public final class SqlHookCallbacks {
             if (stmt == null || AgentState.isDisabled() || WeaveGate.isProxyActive()) {
                 return 0L;
             }
-            return System.nanoTime();
+            final ExecutionScope scope = ExecutionScope.begin(stmt, "WOVEN");
+            return scope == null ? 0L : scope.sequence;
         } catch (Throwable t) {
             return 0L;
         }
@@ -90,15 +91,16 @@ public final class SqlHookCallbacks {
      */
     public static void onExecuteExit(Object stmt, String sqlParam, String op, long token,
                                      Object result, Throwable failure) {
+        if (token == 0L || stmt == null) return;
+        final ExecutionScope scope = ExecutionScope.find(token);
+        if (scope == null) return;
         try {
-            if (token == 0L || stmt == null) {
-                return;
-            }
             String sql = sqlParam;
             String url = null;
             if (sql == null || sql.isEmpty()) {
                 final StatementRegistry.Ctx ctx = StatementRegistry.getOrCountUnresolved(stmt);
                 if (ctx == null) {
+                    cn.song.mybatisplus.sqlvis.agent.transport.CaptureLedger.omitted();
                     return; // 盲区：attach 前 prepare 的 PS
                 }
                 if (isBatchOp(op) && ctx.batch.length() > 0) {
@@ -112,15 +114,18 @@ public final class SqlHookCallbacks {
                 }
                 url = ctx.url;
                 if (sql == null || sql.isEmpty()) {
+                    cn.song.mybatisplus.sqlvis.agent.transport.CaptureLedger.omitted();
                     return; // 登记在但无 SQL 可言（防御性跳过）
                 }
             }
             if (url == null) {
                 url = resolveUrl(stmt);
             }
-            WovenEvents.emit(stmt, op, sql, result, failure, token, url);
+            WovenEvents.emit(stmt, op, sql, result, failure, scope.startNanos, url, scope);
         } catch (Throwable t) {
-            // 采集红线：出口回调自吞，宿主 execute 语义不受影响
+            cn.song.mybatisplus.sqlvis.agent.transport.CaptureLedger.captureFailed();
+        } finally {
+            scope.close();
         }
     }
 
