@@ -68,6 +68,32 @@ class RemoteSqlComparisonBridgeTest {
             catch (expected: ComparisonRejected) { assertEquals("remote_text_bound_unknown", expected.message) }
         }
     }
+    @Test fun `fatal open error skips cleanup and preserves unwrapped identity`() {
+        val fatal = OutOfMemoryError("fixture fatal")
+        var releases = 0
+        try {
+            RemoteSqlComparisonBridge.releaseAfterOpenFailure(InvocationTargetException(InvocationTargetException(fatal))) { releases++ }
+        } catch (actual: OutOfMemoryError) { assertSame(fatal, actual) }
+        assertEquals(0, releases)
+    }
+    @Test fun `ordinary cleanup failure is suppressed without masking open failure`() {
+        val original = java.sql.SQLException("open failed")
+        val close = java.sql.SQLException("close failed")
+        var releases = 0
+        try {
+            RemoteSqlComparisonBridge.releaseAfterOpenFailure(InvocationTargetException(original)) { releases++; throw close }
+        } catch (actual: java.sql.SQLException) {
+            assertSame(original, actual); assertArrayEquals(arrayOf(close), actual.suppressed)
+        }
+        assertEquals(1, releases)
+    }
+    @Test fun `cleanup fatal is not downgraded to ordinary open failure`() {
+        val fatal = LinkageError("cleanup fatal")
+        try {
+            RemoteSqlComparisonBridge.releaseAfterOpenFailure(java.sql.SQLException("open failed")) { throw InvocationTargetException(fatal) }
+        } catch (actual: LinkageError) { assertSame(fatal, actual) }
+    }
+
     private fun fixture(block: (Connection) -> Unit) {
         Class.forName("org.h2.Driver")
         DriverManager.getConnection("jdbc:h2:mem:remote_compare_${UUID.randomUUID()}").use(block)

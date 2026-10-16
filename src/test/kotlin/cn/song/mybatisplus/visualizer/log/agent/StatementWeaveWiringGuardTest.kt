@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.log.agent
 
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertFalse
 import org.junit.Test
 
 /**
@@ -53,12 +54,29 @@ class StatementWeaveWiringGuardTest {
 
     @Test
     fun test接线守卫_代理层双通道去重门() {
-        val src = stripComments(agentSrc("hook/StatementHandler.java"))
-        assertTrue(
-            "代理层 invoke 原始方法期间必须置 WeaveGate（摘掉=同一条 SQL 双通道双事件）",
-            src.contains("WeaveGate.enterProxy()") && src.contains("WeaveGate.exitProxy()"),
-        )
+        val proxy = stripComments(agentSrc("hook/StatementHandler.java"))
+        val woven = stripComments(agentSrc("hook/SqlHookCallbacks.java"))
+        val scope = stripComments(agentSrc("hook/ExecutionScope.java"))
+        assertTrue("代理/织入必须共享按原对象去重的嵌套执行作用域，不能退回线程级布尔去重", sharedScopeWired(proxy, woven, scope))
+        // Negative controls remove actual production call sites, not hand-made matching snippets.
+        assertFalse(sharedScopeWired(proxy.replace("ExecutionScope.begin(raw, \"PROXY\")", "null"), woven, scope))
+        assertFalse(sharedScopeWired(proxy, woven.replace("ExecutionScope.begin(stmt, \"WOVEN\")", "null"), scope))
+        assertFalse(sharedScopeWired(proxy, woven, scope.replace("if (scope.statement == stmt) return null;", "")))
+        assertFalse(sharedScopeWired(proxy.replace("scope.close();", ""), woven, scope))
+        assertFalse(sharedScopeWired(proxy, woven.replace("scope.close();", ""), scope))
+        assertFalse(sharedScopeWired(proxy, woven, scope.replace("stack.remove(this)", "true")))
     }
+
+    private fun sharedScopeWired(proxy: String, woven: String, scope: String): Boolean =
+        proxy.contains("ExecutionScope.begin(raw, \"PROXY\")") &&
+            proxy.contains("if (scope == null) return doInvoke(method, args);") &&
+            Regex("finally\\s*\\{\\s*scope\\.close\\(\\);").containsMatchIn(proxy) &&
+            woven.contains("ExecutionScope.begin(stmt, \"WOVEN\")") &&
+            woven.contains("ExecutionScope.find(token)") &&
+            Regex("finally\\s*\\{\\s*scope\\.close\\(\\);").containsMatchIn(woven) &&
+            scope.contains("ThreadLocal<ArrayDeque<ExecutionScope>>") &&
+            scope.contains("if (scope.statement == stmt) return null;") &&
+            scope.contains("stack.push(scope)") && scope.contains("stack.remove(this)") && scope.contains("ACTIVE.remove()")
 
     @Test
     fun test接线守卫_回调五件套在场() {

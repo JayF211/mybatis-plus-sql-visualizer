@@ -192,7 +192,9 @@ class AgentManagerPremainReattachTest : BasePlatformTestCase() {
         manager.shutdownAll()
 
         enableAndConfirm()
-        manager.onProcessAppeared(FakeProcessHandler(selfPid))
+        withAllowedApplicationTarget {
+            manager.onProcessAppeared(FakeProcessHandler(selfPid))
+        }
 
         assertFalse("命中暂停通道不得进入 attach 排队", manager.pendingPids.containsKey(selfPid))
         assertFalse("onProcessAppeared 应触发 resume", channel.paused)
@@ -348,7 +350,9 @@ class AgentManagerPremainReattachTest : BasePlatformTestCase() {
         }
         manager.attachPorts[selfPid] = port
 
-        manager.onProcessAppeared(FakeProcessHandler(selfPid))
+        withAllowedApplicationTarget {
+            manager.onProcessAppeared(FakeProcessHandler(selfPid))
+        }
 
         assertFalse("P4 命中不得进入 attach 排队", manager.pendingPids.containsKey(selfPid))
         assertEquals("onProcessAppeared 应触发原端口 re-bind 恢复", 1, manager.premainChannels.size)
@@ -388,7 +392,32 @@ class AgentManagerPremainReattachTest : BasePlatformTestCase() {
         assertTrue("活 pid 的登记应保留", manager.attachPorts.containsKey(selfPid))
     }
 
+    fun test本测试JVM默认拒绝_不得借attach端口登记绕过安全闸() {
+        enableAndConfirm()
+        val port = ServerSocket(0, 1, InetAddress.getLoopbackAddress()).use { it.localPort }
+        manager.attachPorts[selfPid] = port
+        assertEquals(AgentAttachTarget.Decision.HELPER, manager.attachTargetInspector(selfPid, FakeProcessHandler(selfPid), false))
+        manager.onProcessAppeared(FakeProcessHandler(selfPid))
+        assertTrue("安全闸应在恢复通道前拒绝本IDE进程", manager.premainChannels.isEmpty())
+        assertFalse(manager.pendingPids.containsKey(selfPid))
+    }
+
     // ---------- 辅助 ----------
+
+    /** selfPid only supplies a live PID for the socket fixture. Never weaken production self/helper rejection. */
+    private fun withAllowedApplicationTarget(action: () -> Unit) {
+        val saved = manager.attachTargetInspector
+        assertEquals("前提：生产安全闸应拒绝测试JVM自身", AgentAttachTarget.Decision.HELPER,
+            saved(selfPid, FakeProcessHandler(selfPid), false))
+        try {
+            manager.attachTargetInspector = { pid, handler, readFiles ->
+                if (pid == selfPid) AgentAttachTarget.Decision.APPLICATION else saved(pid, handler, readFiles)
+            }
+            action()
+        } finally {
+            manager.attachTargetInspector = saved
+        }
+    }
 
     private fun enableAndConfirm() {
         val state = PluginSettings.getInstance().state

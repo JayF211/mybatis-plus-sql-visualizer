@@ -104,7 +104,11 @@ internal class RemoteSqlComparisonBridge(
                     ?: throw ComparisonRejected("remote_unavailable")
                 return RemoteSqlComparisonBridge(remote, loader) { cleanup { invoke(refType, ref, "close") } }
             } catch (failure: Throwable) {
-                cleanup { invoke(refType, ref, "close") }; throw failure
+                val cause = unwrap(failure)
+                // Do not perform reflective cleanup after VM/linkage failure: it may allocate or
+                // throw a second error that hides the original fatal signal.
+                if (FatalErrors.isFatal(cause)) throw cause
+                releaseAfterOpenFailure(cause) { invoke(refType, ref, "close") }
             }
         }
         internal fun invoke(type: Class<*>, receiver: Any, name: String, vararg args: Any?): Any? {
@@ -112,6 +116,25 @@ internal class RemoteSqlComparisonBridge(
             try { return type.getMethod(name, *types.toTypedArray()).invoke(receiver, *args) }
             catch (wrapped: InvocationTargetException) { throw wrapped.targetException }
         }
+        private fun unwrap(failure: Throwable): Throwable {
+            var cause = failure
+            while (cause is InvocationTargetException) cause = cause.targetException
+            return cause
+        }
+
+        internal fun releaseAfterOpenFailure(failure: Throwable, release: () -> Unit): Nothing {
+            val cause = unwrap(failure)
+            if (FatalErrors.isFatal(cause)) throw cause
+            try {
+                release()
+            } catch (closeFailure: Throwable) {
+                val closeCause = unwrap(closeFailure)
+                if (FatalErrors.isFatal(closeCause)) throw closeCause
+                if (closeCause !== cause) cause.addSuppressed(closeCause)
+            }
+            throw cause
+        }
+
         internal fun cleanup(action: () -> Unit) {
             try { action() } catch (failure: Throwable) {
                 val cause = (failure as? InvocationTargetException)?.targetException ?: failure
