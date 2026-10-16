@@ -40,6 +40,16 @@ class SqlSchemaDifferTest {
         assertFalse(result.impactComplete)
     }
 
+    @Test fun `cross database usage cannot claim exhaustive mapping impact`() {
+        val a = snapshot("v1", listOf(SqlTypedColumn("id", "INT")))
+        val b = snapshot("v2", listOf(SqlTypedColumn("id", "BIGINT")))
+        val usage = SqlObjectUsageAnalyzer.analyze(listOf(SqlUsageCandidate(AnalysisSnapshot("SELECT u.id FROM users u", databaseContext = "other"), SqlSourceLocation("/other", 0, 10), SqlCandidateKind.SQL_FILE)))
+        val report = SqlSchemaDiffer.compare(a, b, usage)
+        assertTrue(report.changes.single().affected.isEmpty())
+        assertFalse(report.impactComplete)
+        assertTrue(report.diagnostics.any { it.code == "IMPACT_COVERAGE_PARTIAL" })
+    }
+
     @Test fun `duplicate snapshots and cancellation do not publish partial diffs`() {
         val a = snapshot("v1", listOf(SqlTypedColumn("id", "INT")))
         val b = snapshot("v2", listOf(SqlTypedColumn("id", "BIGINT")))

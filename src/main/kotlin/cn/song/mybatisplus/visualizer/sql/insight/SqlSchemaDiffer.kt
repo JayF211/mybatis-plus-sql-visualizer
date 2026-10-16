@@ -62,7 +62,11 @@ object SqlSchemaDiffer {
             }
         }
         if (usageReport == null) diagnostics += SqlUsageDiagnostic("USAGE_SNAPSHOT_MISSING", "Schema changes are known, but source mapping coverage was not supplied.")
-        if (usageReport != null && (usageReport.coverage.cancelled || usageReport.coverage.truncated || usageReport.usages.any { it.databaseContext == null })) impactComplete = false
+        if (usageReport != null && (usageReport.coverage.cancelled || usageReport.coverage.truncated || usageReport.coverage.skippedFiles > 0 ||
+                usageReport.diagnostics.isNotEmpty() || usageReport.usages.any { it.databaseContext == null || it.databaseContext != before.databaseContext || it.dialect != dialect })) {
+            impactComplete = false
+            diagnostics += SqlUsageDiagnostic("IMPACT_COVERAGE_PARTIAL", "Usage coverage includes unknown/mismatched context or skipped sources; impact is not exhaustive.")
+        }
         return SqlSchemaDiffReport(before.databaseContext, before.version, after.version, changes, diagnostics.distinct(), true, impactComplete)
     }
 

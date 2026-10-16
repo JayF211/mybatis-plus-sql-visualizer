@@ -23,9 +23,10 @@ class ProjectSqlUsageServiceTest : LightJavaCodeInsightFixtureTestCase() {
 
     fun testCurrentSqlFileAndExactHostRange() {
         val file = myFixture.addFileToProject("queries/current.sql", "SELECT u.name FROM users u WHERE u.id=1")
+        val current = SqlUsageSearchScope.CurrentFile(file.virtualFile)
         val service = ProjectSqlUsageService(project)
         try {
-            val report = background { service.collect(SqlUsageSearchScope.CurrentFile(file.virtualFile), template) }
+            val report = background { service.collect(current, template) }
             assertEquals(1, report.candidates.size)
             val candidate = report.candidates.single()
             assertEquals(SqlCandidateKind.SQL_FILE, candidate.kind)
@@ -38,9 +39,10 @@ class ProjectSqlUsageServiceTest : LightJavaCodeInsightFixtureTestCase() {
 
     fun testJavaLiteralOnlyConcatenationAndNonConstantCoverage() {
         val file = myFixture.addFileToProject("Sample.java", "class Sample { String a = \"SELECT u.name \" + \"FROM users u\"; String b = \"SELECT * FROM \" + table; }")
+        val current = SqlUsageSearchScope.CurrentFile(file.virtualFile)
         val service = ProjectSqlUsageService(project)
         try {
-            val report = background { service.collect(SqlUsageSearchScope.CurrentFile(file.virtualFile), template) }
+            val report = background { service.collect(current, template) }
             assertEquals(1, report.candidates.size)
             assertEquals("SELECT u.name FROM users u", report.candidates.single().snapshot.sql)
             assertTrue(report.candidates.single().location.startOffset > 0)
@@ -50,9 +52,10 @@ class ProjectSqlUsageServiceTest : LightJavaCodeInsightFixtureTestCase() {
 
     fun testStaticMapperAndDynamicMapperAreDistinguished() {
         val file = myFixture.addFileToProject("UserMapper.xml", "<mapper namespace=\"Users\"><select id=\"plain\">SELECT u.name FROM users u</select><select id=\"dynamic\">SELECT * FROM users <where><if test=\"id != null\">id=#{id}</if></where></select></mapper>")
+        val current = SqlUsageSearchScope.CurrentFile(file.virtualFile)
         val service = ProjectSqlUsageService(project)
         try {
-            val report = background { service.collect(SqlUsageSearchScope.CurrentFile(file.virtualFile), template) }
+            val report = background { service.collect(current, template) }
             assertEquals(1, report.candidates.size)
             assertEquals("plain", report.candidates.single().location.label)
             val skipped = report.diagnostics.single { it.code == "DYNAMIC_MAPPER_SKIPPED" }
@@ -61,15 +64,29 @@ class ProjectSqlUsageServiceTest : LightJavaCodeInsightFixtureTestCase() {
         } finally { service.dispose() }
     }
 
+    fun testMapperEntitiesAndCdataProduceDecodedSqlWithoutInventedTokenRanges() {
+        val file = myFixture.addFileToProject("EscapedMapper.xml", "<mapper namespace=\"Users\"><select id=\"escaped\">SELECT u.id FROM users u WHERE u.id &lt; 7</select><select id=\"cdata\"><![CDATA[SELECT u.name FROM users u WHERE u.id > 1]]></select></mapper>")
+        val current = SqlUsageSearchScope.CurrentFile(file.virtualFile)
+        val service = ProjectSqlUsageService(project)
+        try {
+            val report = background { service.collect(current, template) }
+            assertEquals(2, report.candidates.size)
+            assertTrue(report.candidates.any { it.snapshot.sql.contains("u.id < 7") })
+            assertTrue(report.candidates.any { it.snapshot.sql.contains("u.id > 1") })
+            assertFalse(report.diagnostics.any { it.code == "PARSE_ERROR" })
+        } finally { service.dispose() }
+    }
+
     fun testExplicitModuleAndFileBudgetDoNotClaimCompleteCoverage() {
         myFixture.addFileToProject("queries/a.sql", "SELECT a.id FROM a")
         myFixture.addFileToProject("queries/b.sql", "SELECT b.id FROM b")
+        val moduleScope = SqlUsageSearchScope.ModuleFiles(module)
         val service = ProjectSqlUsageService(project)
         try {
-            val report = background { service.collect(SqlUsageSearchScope.ModuleFiles(module), template) }
+            val report = background { service.collect(moduleScope, template) }
             assertTrue(report.candidates.any { it.snapshot.sql.contains("FROM a") })
             assertTrue(report.candidates.any { it.snapshot.sql.contains("FROM b") })
-            val limited = background { service.collect(SqlUsageSearchScope.ModuleFiles(module), template, SqlUsageLimits(maxFiles = 1)) }
+            val limited = background { service.collect(moduleScope, template, SqlUsageLimits(maxFiles = 1)) }
             assertTrue(limited.coverage.truncated)
             assertTrue(limited.coverage.visitedFiles <= 1)
         } finally { service.dispose() }
@@ -77,12 +94,13 @@ class ProjectSqlUsageServiceTest : LightJavaCodeInsightFixtureTestCase() {
 
     fun testOversizedFileAndCancellationAreExplicit() {
         val file = myFixture.addFileToProject("queries/large.sql", "SELECT id FROM users " + " ".repeat(200))
+        val current = SqlUsageSearchScope.CurrentFile(file.virtualFile)
         val service = ProjectSqlUsageService(project)
         try {
-            val report = background { service.collect(SqlUsageSearchScope.CurrentFile(file.virtualFile), template, SqlUsageLimits(maxFileCharacters = 40)) }
+            val report = background { service.collect(current, template, SqlUsageLimits(maxFileCharacters = 40)) }
             assertTrue(report.candidates.isEmpty())
             assertTrue(report.diagnostics.any { it.code == "FILE_SIZE_LIMIT" })
-            val cancelled = background { service.collect(SqlUsageSearchScope.CurrentFile(file.virtualFile), template, isCancelled = { true }) }
+            val cancelled = background { service.collect(current, template, isCancelled = { true }) }
             assertTrue(cancelled.coverage.cancelled)
             assertTrue(cancelled.usages.isEmpty())
         } finally { service.dispose() }
@@ -90,6 +108,7 @@ class ProjectSqlUsageServiceTest : LightJavaCodeInsightFixtureTestCase() {
 
     fun testCallbackIsBackgroundAndNewGenerationSuppressesOldResult() {
         val file = myFixture.addFileToProject("queries/generation.sql", "SELECT u.id FROM users u")
+        val current = SqlUsageSearchScope.CurrentFile(file.virtualFile)
         val service = ProjectSqlUsageService(project)
         val oldCalled = AtomicBoolean()
         val newCalled = AtomicBoolean()
@@ -99,8 +118,8 @@ class ProjectSqlUsageServiceTest : LightJavaCodeInsightFixtureTestCase() {
         try {
             // The writer prevents the first background read until both generations are installed.
             WriteAction.run<RuntimeException> {
-                first = service.collectAsync(SqlUsageSearchScope.CurrentFile(file.virtualFile), template) { oldCalled.set(true) }
-                second = service.collectAsync(SqlUsageSearchScope.CurrentFile(file.virtualFile), template) {
+                first = service.collectAsync(current, template) { oldCalled.set(true) }
+                second = service.collectAsync(current, template) {
                     callbackEdt.set(ApplicationManager.getApplication().isDispatchThread)
                     newCalled.set(true)
                 }
@@ -115,19 +134,20 @@ class ProjectSqlUsageServiceTest : LightJavaCodeInsightFixtureTestCase() {
 
     fun testServiceDisposeSuppressesPendingCallbackAndRejectsNewWork() {
         val file = myFixture.addFileToProject("queries/dispose.sql", "SELECT u.id FROM users u")
+        val current = SqlUsageSearchScope.CurrentFile(file.virtualFile)
         val service = ProjectSqlUsageService(project)
         val called = AtomicBoolean()
         var pending: Future<*>? = null
         WriteAction.run<RuntimeException> {
-            pending = service.collectAsync(SqlUsageSearchScope.CurrentFile(file.virtualFile), template) { called.set(true) }
+            pending = service.collectAsync(current, template) { called.set(true) }
             service.dispose()
         }
         assertTrue(pending!!.isCancelled)
         // Barrier on a fresh pooled read also proves subsequent service collection stays cancelled.
-        assertTrue(background { service.collect(SqlUsageSearchScope.CurrentFile(file.virtualFile), template) }.coverage.cancelled)
+        assertTrue(background { service.collect(current, template) }.coverage.cancelled)
         assertFalse(called.get())
         try {
-            service.collectAsync(SqlUsageSearchScope.CurrentFile(file.virtualFile), template) { called.set(true) }
+            service.collectAsync(current, template) { called.set(true) }
             fail("Disposed service accepted new work")
         } catch (_: IllegalStateException) { }
     }

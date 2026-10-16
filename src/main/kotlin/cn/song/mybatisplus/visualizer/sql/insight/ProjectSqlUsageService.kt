@@ -76,7 +76,7 @@ class ProjectSqlUsageService(private val project: Project) : Disposable {
                 if (cancelled() || !vf.isValid || !seen.add(vf.path)) return@compute FileSlice(visited = false)
                 if (scope is SqlUsageSearchScope.ModuleFiles) {
                     val index = ProjectFileIndex.getInstance(project)
-                    if (index.isExcluded(vf) || index.getModuleForFile(vf) != scope.module) return@compute FileSlice(visited = false)
+                    if (index.isExcluded(vf) || index.isInLibrary(vf) || index.getModuleForFile(vf) != scope.module) return@compute FileSlice(visited = false)
                 }
                 if (vf.isDirectory) {
                     val children = vf.children
@@ -130,10 +130,10 @@ class ProjectSqlUsageService(private val project: Project) : Disposable {
             val root = file.rootTag
             if (root?.name != "mapper") return FileSlice(skipped = true)
             for (tag in root.subTags) {
-                if (cancelled()) break
+                if (cancelled() || candidates.size >= limits.maxCandidates) break
                 if (tag.name !in setOf("select", "insert", "update", "delete")) continue
                 val location = SqlSourceLocation(path, tag.textRange.startOffset, tag.textRange.endOffset, stamp, tag.getAttributeValue("id"))
-                val text = tag.value.text
+                val text = tag.value.textElements.joinToString("") { it.value }
                 if (tag.subTags.isNotEmpty() || text.contains("#{") || text.contains("\${")) {
                     diagnostics += SqlUsageDiagnostic("DYNAMIC_MAPPER_SKIPPED", "Mapper statement has dynamic tags/placeholders; no speculative SQL was produced.", location)
                 } else add(text, tag, SqlCandidateKind.MAPPER_STATEMENT, tag.getAttributeValue("id"))
