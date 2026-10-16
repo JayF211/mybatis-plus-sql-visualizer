@@ -51,8 +51,8 @@ object SqlWorkloadBaselineComparator {
         fun unknown(reason: String) = SqlWorkloadDelta(SqlBudgetStatus.INCONCLUSIVE, null, null,
             afterShapes - beforeShapes, beforeShapes - afterShapes, reason)
         if (before.contextKey.isBlank() || before.contextKey != after.contextKey) return unknown("context_mismatch")
-        if (before.qualityIssues.isNotEmpty() || after.qualityIssues.isNotEmpty() ||
-            before.generatedCount != before.events.size || after.generatedCount != after.events.size) return unknown("incomplete_observation")
+        val incomplete = before.qualityIssues.isNotEmpty() || after.qualityIssues.isNotEmpty() ||
+            before.generatedCount != before.events.size || after.generatedCount != after.events.size
         fun duration(events: List<SqlExecutionObservation>): Long? {
             var total = 0L
             for (event in events) {
@@ -64,7 +64,8 @@ object SqlWorkloadBaselineComparator {
         val oldDuration = duration(before.events) ?: return unknown("duration_overflow")
         val newDuration = duration(after.events) ?: return unknown("duration_overflow")
         val executionDelta = after.events.size - before.events.size
-        return SqlWorkloadDelta(SqlBudgetStatus.PASS, executionDelta, newDuration - oldDuration,
-            afterShapes - beforeShapes, beforeShapes - afterShapes, "comparison_complete_not_a_performance_guarantee")
+        return SqlWorkloadDelta(if (incomplete) SqlBudgetStatus.INCONCLUSIVE else SqlBudgetStatus.PASS,
+            executionDelta, newDuration - oldDuration, afterShapes - beforeShapes, beforeShapes - afterShapes,
+            if (incomplete) "observed_subset_delta_not_a_regression_verdict" else "comparison_complete_not_a_performance_guarantee")
     }
 }
