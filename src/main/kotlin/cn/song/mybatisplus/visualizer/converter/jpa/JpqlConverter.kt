@@ -68,8 +68,13 @@ object JpqlConverter {
      *                  null 时两处降级为关联元数据 / 跳过，行为与历史版本一致
      * @return Result（转换后 SQL + 语句模型）
      */
-    fun convert(jpql: String, tableInfo: TableInfo? = null, project: Project? = null): Result {
-        return convertInternal(jpql, tableInfo, project)
+    fun convert(
+        jpql: String,
+        tableInfo: TableInfo? = null,
+        project: Project? = null,
+        context: com.intellij.psi.PsiElement? = null,
+    ): Result {
+        return convertInternal(jpql, tableInfo, project, context)
     }
 
     /**
@@ -79,8 +84,15 @@ object JpqlConverter {
      * JPQL 转换器在字符串层面完成参数替换（:param → ?），但不会解析条件树
      * （conditions 为空），因此必须使用转换后的 SQL 字符串而非重新生成。
      */
-    private fun convertInternal(jpql: String, tableInfo: TableInfo?, project: Project?): Result {
-        val table = tableInfo ?: createFallbackTable()
+    private fun convertInternal(
+        jpql: String, tableInfo: TableInfo?, project: Project?, context: com.intellij.psi.PsiElement?,
+    ): Result {
+        val lookup = JpaQueryEntityLookup(project, context)
+        val rootName = JpaQueryEntityLookup.rootEntity(jpql)
+        val table = tableInfo ?: rootName?.let { lookup.resolveTable(it) } ?: createFallbackTable()
+        val resolveTable: (String) -> TableInfo? = { name ->
+            if (name == rootName && table.entityClassName.isNotBlank()) table else lookup.resolveTable(name)
+        }
 
         // 0. 检测 IN 子句参数（在命名参数替换前检测 :paramName）
         val inClauseParams = findInClauseParams(jpql)
@@ -98,7 +110,7 @@ object JpqlConverter {
         sql = NewExpressionStripper.strip(sql)
 
         // 4. 处理 JOIN FETCH / 关联 JOIN → LEFT/INNER JOIN（J7：ON 条件真实化）
-        sql = JpaJoinRewriter.rewrite(sql, table, project)
+        sql = JpaJoinRewriter.rewriteWithLookup(sql, table, lookup)
 
         // 5. 处理 MEMBER OF（降级为注释提示）
         sql = handleMemberOf(sql)
@@ -106,17 +118,19 @@ object JpqlConverter {
         // 5.5 别名作用域解析（O-57）：须在实体名→表名替换之前扫描（那时实体名还在 SQL 里），
         // 又须在第 4 步 JOIN 改写之后（改写新增的副表别名只有那时才存在）。
         // 与 [HqlConverter] 同款编排，两条链行为一致
-        val scope = JpaAliasTableResolver.resolveAliases(sql, table, project)
+        val scope = JpaAliasTableResolver.resolveAliases(sql, table, resolveTable)
 
         // 6. 实体名 → 表名映射
-        sql = mapEntityToTable(sql, table)
+        sql = mapEntityToTable(sql, table, rootName)
 
         // 6.5 子查询 FROM/JOIN 中其他实体名 → 表名（J13；需 Project，无则跳过）。
         // 别名作用域已解析出实体→表名，透传给扫描器复用，免二次 PSI 检索
-        sql = JpaFromEntityMapper.mapSubqueryEntities(sql, table, project, scope.entityTableNames)
+        sql = JpaFromEntityMapper.mapSubqueryEntities(sql, table) { name ->
+            scope.entityTableNames[name] ?: resolveTable(name)?.tableName
+        }
 
         // 7. 属性名 → 列名映射（按别名作用域分派，副表别名同样映射）
-        sql = mapPropertyToColumn(sql, table, scope)
+        if (table.entityClassName.isNotBlank()) sql = mapPropertyToColumn(sql, table, scope)
 
         // 7.5 SELECT 子句展开（T-BareFromSelect）：与 HqlConverter 共用展开器，
         // 补齐隐式查询（`from Entity` 无 SELECT）的列清单与 `SELECT u` 裸别名展开，
@@ -251,14 +265,17 @@ object JpqlConverter {
      *  - 优先使用 TableInfo 中的表名替换 JPQL 中的实体类名
      *  - 映射范围：FROM 子句和 SELECT 子句中的实体引用
      */
-    private fun mapEntityToTable(jpql: String, table: TableInfo): String {
+    private fun mapEntityToTable(jpql: String, table: TableInfo, rootName: String? = null): String {
         if (table.entityClassName.isBlank()) return jpql
         // 普查批：字面量掩码——`like '%UserEntity%'` 等单引号字面量内的实体名不得被替换
         val (masked, literals) = JpaSqlLiteralMasking.mask(jpql)
         // 替换 FROM 子句中的实体类名（简单替换，仅在确认不是更大标识符的一部分时）
         // 注意：这里只做简单替换，精确替换需要完整语法解析
-        val entityPattern = Regex("\\b${Regex.escape(table.entityClassName)}\\b")
-        return JpaSqlLiteralMasking.unmask(entityPattern.replace(masked, table.tableName), literals)
+        var result = masked
+        for (name in listOfNotNull(rootName, table.entityClassName).distinct()) {
+            result = Regex("(?<![\\w.$])${Regex.escape(name)}\\b").replace(result, table.tableName)
+        }
+        return JpaSqlLiteralMasking.unmask(result, literals)
     }
 
     /**

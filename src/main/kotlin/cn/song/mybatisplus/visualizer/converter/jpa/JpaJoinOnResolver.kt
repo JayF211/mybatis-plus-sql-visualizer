@@ -10,7 +10,7 @@ import com.intellij.psi.PsiClassType
 import com.intellij.psi.PsiField
 import com.intellij.psi.PsiLiteralExpression
 import com.intellij.psi.PsiElement
-import cn.song.mybatisplus.visualizer.psi.EntityClassResolver
+import cn.song.mybatisplus.visualizer.psi.jpa.EntityAliasSweep
 
 /**
  * JOIN ON 条件真实化解析器（J7，覆盖矩阵 §3「JOIN [LEFT/INNER] ... ON」行）。
@@ -91,7 +91,7 @@ object JpaJoinOnResolver {
         table: TableInfo? = null,
         context: PsiElement? = null,
     ): OnResolution {
-        val entityClass = runCatching { findEntityClass(project, entityClassName, context) }.getOrNull()
+        val entityClass = recoverJpaPsi { findEntityClass(project, entityClassName, context) }
             ?: return degrade(rootAlias, relationField, joinAlias, table, "实体类不可解析")
         return resolveWithPsi(entityClass, rootAlias, relationField, joinAlias, table)
     }
@@ -109,7 +109,7 @@ object JpaJoinOnResolver {
         joinAlias: String,
         table: TableInfo? = null,
     ): OnResolution {
-        return runCatching {
+        return recoverJpaPsi {
             val field = entityClass.allFields.firstOrNull { it.name == relationField }
                 ?: return degrade(rootAlias, relationField, joinAlias, table, "关联字段不可解析")
 
@@ -173,7 +173,7 @@ object JpaJoinOnResolver {
                 // 单向 @OneToMany 无 mappedBy（JPA 规范默认 @JoinTable）→ 降级
                 else -> degrade(rootAlias, relationField, joinAlias, table, "无关联注解元数据")
             }
-        }.getOrDefault(degrade(rootAlias, relationField, joinAlias, table, "PSI 读取异常"))
+        } ?: degrade(rootAlias, relationField, joinAlias, table, "PSI 读取异常")
     }
 
     /**
@@ -214,7 +214,7 @@ object JpaJoinOnResolver {
      * （此前是 projectScope 再 allScope 的 `firstOrNull()`，多模块同名时挑到哪个看索引顺序）。
      */
     private fun findEntityClass(project: Project, className: String, context: PsiElement?): PsiClass? =
-        EntityClassResolver.resolveClassByName(project, className, context)
+        EntityAliasSweep.resolve(project, className, context).psiClass
 
     /**
      * 解析关联字段的目标实体类：
@@ -224,7 +224,7 @@ object JpaJoinOnResolver {
      */
     private fun resolveTargetEntityClass(field: PsiField): PsiClass? {
         val classType = field.type as? PsiClassType ?: return null
-        val parameters = runCatching { classType.parameters }.getOrNull() ?: PsiClassType.EMPTY_ARRAY
+        val parameters = recoverJpaPsi { classType.parameters } ?: PsiClassType.EMPTY_ARRAY
         val candidate = if (parameters.isEmpty()) classType else parameters[0] as? PsiClassType
         val resolved = candidate?.resolve() ?: return null
         val qName = resolved.qualifiedName ?: return resolved
@@ -246,11 +246,11 @@ object JpaJoinOnResolver {
 
     /** 目标实体表名：`@Table(name)` 优先，缺省按类名驼峰转下划线（简化推断，无前缀后缀修饰）。 */
     private fun tableNameOf(clazz: PsiClass): String? {
-        val explicit = runCatching {
+        val explicit = recoverJpaPsi {
             clazz.modifierList?.annotations?.firstOrNull {
                 it.nameReferenceElement?.referenceName == TABLE
             }
-        }.getOrNull()
+        }
         val fromAnnotation = explicit?.let { stringAttribute(it, "name") }
         return fromAnnotation ?: clazz.name?.let { NamingStrategy.toSnakeCase(it) }
     }
@@ -261,7 +261,7 @@ object JpaJoinOnResolver {
         if (direct != null) return listOf(readJoinColumn(direct))
 
         val container = findAnnotationByShortName(field, JOIN_COLUMNS) ?: return emptyList()
-        val value = runCatching { container.findAttributeValue("value") }.getOrNull() ?: return emptyList()
+        val value = recoverJpaPsi { container.findAttributeValue("value") } ?: return emptyList()
         // 数组形态注解值是 PsiArrayInitializerMemberValue（非 Kotlin Array），需单独分支
         val members = when (value) {
             is PsiArrayInitializerMemberValue -> value.initializers.filterIsInstance<PsiAnnotation>()
@@ -281,7 +281,7 @@ object JpaJoinOnResolver {
 
     /** 读注解 String 属性值（非字面量 / 不可解析返回 null；空白视为未指定）。 */
     private fun stringAttribute(annotation: PsiAnnotation, attribute: String): String? {
-        val memberValue = runCatching { annotation.findAttributeValue(attribute) }.getOrNull() ?: return null
+        val memberValue = recoverJpaPsi { annotation.findAttributeValue(attribute) } ?: return null
         val value = (memberValue as? PsiLiteralExpression)?.value as? String ?: return null
         return value.takeIf { it.isNotBlank() }
     }

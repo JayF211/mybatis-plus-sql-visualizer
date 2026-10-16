@@ -51,14 +51,23 @@ internal object JpaJoinRewriter {
         project: Project?,
         context: com.intellij.psi.PsiElement? = null,
     ): String {
-        val afterFetch = rewriteInternal(sql, table) { rootAlias, relationField, joinAlias ->
-            project?.let {
-                JpaJoinOnResolver.resolveWithPsi(
-                    it, table.entityClassName, rootAlias, relationField, joinAlias, table, context,
-                )
-            }
+        return rewriteWithLookup(sql, table, JpaQueryEntityLookup(project, context))
+    }
+
+    /** 同一查询的根表、子查询与 JOIN 共用解析缓存，按 JOIN 左侧别名选所属实体。 */
+    internal fun rewriteWithLookup(sql: String, table: TableInfo, lookup: JpaQueryEntityLookup): String {
+        val rootName = JpaQueryEntityLookup.rootEntity(sql)
+        val (masked, literals) = JpaSqlLiteralMasking.mask(sql)
+        val owners = Regex("(?i)\\b(?:FROM|JOIN)\\s+([a-zA-Z_][a-zA-Z0-9_.$]*)\\s+(?:AS\\s+)?([a-zA-Z_][a-zA-Z0-9_]*)")
+            .findAll(masked).associate { it.groupValues[2] to it.groupValues[1] }
+        fun replace(match: MatchResult): String {
+            val name = owners[match.groupValues[3]] ?: rootName
+            val ownerTable = if (name == rootName) table else name?.let { lookup.resolveTable(it) }
+                ?: table.copy(entityClassName = "", columns = emptyList(), associations = emptyList())
+            return rewrite(match.value, ownerTable, name?.let { lookup.resolveClass(it) })
         }
-        return afterFetch
+        val fetched = JOIN_FETCH.replace(masked, ::replace)
+        return JpaSqlLiteralMasking.unmask(ASSOCIATION_JOIN.replace(fetched, ::replace), literals)
     }
 
     /**

@@ -4,8 +4,60 @@ import cn.song.mybatisplus.visualizer.model.ColumnInfo
 import cn.song.mybatisplus.visualizer.model.TableInfo
 import cn.song.mybatisplus.visualizer.psi.jpa.JpaEntityResolver
 import com.intellij.openapi.project.Project
-import com.intellij.psi.search.GlobalSearchScope
-import com.intellij.psi.search.PsiShortNamesCache
+import cn.song.mybatisplus.visualizer.psi.jpa.EntityAliasSweep
+import com.intellij.openapi.progress.ProcessCanceledException
+import com.intellij.psi.PsiClass
+import com.intellij.psi.PsiElement
+
+/** 仅恢复普通 PSI 读取失败；取消与 VM/链接错误必须穿透转换管道。 */
+internal inline fun <T> recoverJpaPsi(block: () -> T): T? = try {
+    block()
+} catch (cancelled: ProcessCanceledException) {
+    throw cancelled
+} catch (failure: Exception) {
+    if (failure is com.intellij.openapi.diagnostic.ControlFlowException) throw failure
+    null
+}
+
+/** 单次转换内共享解析结果；context 始终是查询宿主，不能换成已找到的实体文件。 */
+internal class JpaQueryEntityLookup(private val project: Project?, private val context: PsiElement?) {
+    private val classes = HashMap<String, PsiClass?>()
+    private val tables = HashMap<String, TableInfo?>()
+
+    fun resolveClass(name: String): PsiClass? {
+        if (!classes.containsKey(name)) {
+            classes[name] = recoverJpaPsi {
+                project?.let { EntityAliasSweep.resolve(it, name, context).psiClass }
+            }
+        }
+        return classes[name]
+    }
+
+    fun resolveTable(name: String): TableInfo? {
+        if (!tables.containsKey(name)) {
+            tables[name] = recoverJpaPsi { resolveClass(name)?.let { JpaEntityResolver().resolve(it) } }
+        }
+        return tables[name]
+    }
+
+    companion object {
+        private val ROOT = Regex("(?i)\\b(?:FROM|UPDATE|INTO|DELETE(?:\\s+FROM)?)\\s+([a-zA-Z_][a-zA-Z0-9_.$]*)")
+
+        /** 忽略字面量和括号内 FROM，避免 SELECT 标量子查询抢占根表。 */
+        fun rootEntity(sql: String): String? {
+            val masked = JpaSqlLiteralMasking.mask(sql).first
+            var depth = 0
+            var offset = 0
+            for (match in ROOT.findAll(masked)) {
+                while (offset < match.range.first) {
+                    when (masked[offset++]) { '(' -> depth++; ')' -> depth-- }
+                }
+                if (depth == 0) return match.groupValues[1]
+            }
+            return null
+        }
+    }
+}
 
 /**
  * 子句关键字表（沿用 [JpaJoinRewriter.normalizeAlias] 的口径，补 JOIN 族与集合运算词）。
@@ -87,16 +139,17 @@ internal object JpaAliasTableResolver {
      * @param table 根实体表信息（调用方已解析，直接绑定其别名，免重复 PSI）
      * @param project 项目；null 时全部副表别名解析不出（回落既有根实体列清单行为）
      */
-    fun resolveAliases(sql: String, table: TableInfo, project: Project?): JpaAliasScope {
-        if (project == null) return resolveAliases(sql, table) { null }
+    fun resolveAliases(
+        sql: String,
+        table: TableInfo,
+        project: Project?,
+        context: PsiElement? = null,
+    ): JpaAliasScope {
         return resolveAliases(sql, table) { entityName ->
-            runCatching {
-                val cache = PsiShortNamesCache.getInstance(project)
-                val clazz = cache.getClassesByName(entityName, GlobalSearchScope.projectScope(project))
-                    .firstOrNull()
-                    ?: cache.getClassesByName(entityName, GlobalSearchScope.allScope(project)).firstOrNull()
-                clazz?.let { JpaEntityResolver().resolve(it) }
-            }.getOrNull()
+            recoverJpaPsi {
+                project?.let { EntityAliasSweep.resolve(it, entityName, context).psiClass }
+                    ?.let { JpaEntityResolver().resolve(it) }
+            }
         }
     }
 
@@ -130,11 +183,12 @@ internal object JpaAliasTableResolver {
             val captured = match.groupValues[2].ifEmpty { match.groupValues[3] }
             val alias = captured.takeIf { it.isNotEmpty() && it.uppercase() !in CLAUSE_KEYWORDS }
 
-            if (!memo.containsKey(entity)) {
-                memo[entity] = runCatching { resolveEntity(entity) }.getOrNull()
+            // FQN 不可截成简单名后命中根表缓存：两个模块可声明同名实体。
+            if (!memo.containsKey(rawEntity)) {
+                memo[rawEntity] = recoverJpaPsi { resolveEntity(rawEntity) }
             }
-            val info = memo[entity]
-            if (info != null) registerTableName(entityTableNames, entity, info.tableName)
+            val info = memo[rawEntity]
+            if (info != null) registerTableName(entityTableNames, rawEntity, info.tableName)
 
             // 登记限定符（含解析失败者）：ON 诊断据此区分「没出现过」与「出现过但解析不出」
             alias?.let { knownQualifiers.add(it) }

@@ -3,8 +3,8 @@ package cn.song.mybatisplus.visualizer.converter.jpa
 import cn.song.mybatisplus.visualizer.model.TableInfo
 import cn.song.mybatisplus.visualizer.psi.jpa.JpaEntityResolver
 import com.intellij.openapi.project.Project
-import com.intellij.psi.search.GlobalSearchScope
-import com.intellij.psi.search.PsiShortNamesCache
+import cn.song.mybatisplus.visualizer.psi.jpa.EntityAliasSweep
+import com.intellij.psi.PsiElement
 
 /**
  * FROM/JOIN 子句实体名 → 表名扫描器（J13，覆盖矩阵 §3「标量子查询 / IN(子查询) / EXISTS」行）。
@@ -42,7 +42,7 @@ internal object JpaFromEntityMapper {
      * 实体名组保持大小写敏感——已映射表名（小写）不得再被命中。
      */
     private val ENTITY_REFERENCE = Regex(
-        "(?i:\\b(?:FROM|JOIN)\\s+)([A-Z][a-zA-Z0-9_]*)\\b",
+        "(?i:\\b(?:FROM|JOIN)\\s+)([a-zA-Z_][a-zA-Z0-9_.$]*)\\b",
     )
 
     /**
@@ -64,18 +64,16 @@ internal object JpaFromEntityMapper {
         table: TableInfo,
         project: Project?,
         knownTableNames: Map<String, String> = emptyMap(),
+        context: PsiElement? = null,
     ): String {
         if (project == null && knownTableNames.isEmpty()) return sql
         return mapSubqueryEntities(sql, table) { entityName ->
-            knownTableNames[entityName] ?: (if (project == null) null else runCatching {
-                val cache = PsiShortNamesCache.getInstance(project)
-                val clazz = cache.getClassesByName(entityName, GlobalSearchScope.projectScope(project)).firstOrNull()
-                    ?: cache.getClassesByName(entityName, GlobalSearchScope.allScope(project)).firstOrNull()
-                clazz?.let {
+            knownTableNames[entityName] ?: (if (project == null) null else recoverJpaPsi {
+                EntityAliasSweep.resolve(project, entityName, context).psiClass?.let {
                     JpaEntityResolver().resolve(it).tableName
                         .takeIf { name -> name.isNotBlank() && name != "unknown_table" }
                 }
-            }.getOrNull())
+            })
         }
     }
 
