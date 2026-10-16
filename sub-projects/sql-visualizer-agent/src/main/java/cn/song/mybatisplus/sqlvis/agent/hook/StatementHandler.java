@@ -28,6 +28,7 @@ final class StatementHandler implements InvocationHandler {
 
     /** connect 时的连接 URL（T-AgentDialectLoop：透传到事件供面板识别目标库）。 */
     private final String url;
+    private final TransactionTracker transactions;
 
     /** 参数槽：显式枚举 setXxx 捕获（index → 值文本/类型名）。 */
     private final ParamCapture params = new ParamCapture();
@@ -36,6 +37,11 @@ final class StatementHandler implements InvocationHandler {
     private final StringBuilder batchSqls = new StringBuilder();
 
     StatementHandler(Object raw, String preparedSql, String url) {
+        this(raw, preparedSql, url, null);
+    }
+
+    StatementHandler(Object raw, String preparedSql, String url, TransactionTracker transactions) {
+        this.transactions = transactions;
         this.raw = raw;
         this.preparedSql = preparedSql;
         this.url = url;
@@ -96,6 +102,10 @@ final class StatementHandler implements InvocationHandler {
         }
         final ExecutionScope scope = ExecutionScope.begin(raw, "PROXY");
         if (scope == null) return doInvoke(method, args);
+        if (transactions != null) {
+            try { transactions.sql(scope); }
+            catch (Throwable ignored) { cn.song.mybatisplus.sqlvis.agent.transport.TraceBus.hookFailed(); }
+        }
         final long startNanos = scope.startNanos;
         // T-AgentLogTime：采集时刻取 execute **开始**那一刻（与 nanoTime 同点）——日志时间相关器
         // 未命中时回落的「捕获时间」即语句开始执行时刻，与 MyBatis 打印的 Preparing 日志行

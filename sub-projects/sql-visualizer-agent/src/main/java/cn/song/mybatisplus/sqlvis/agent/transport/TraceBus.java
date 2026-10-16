@@ -74,7 +74,9 @@ public final class TraceBus {
                 + ",\"controlCleared\":" + cleared + ",\"controlEncodingFailed\":" + encodingFailed
                 + ",\"controlTransportUncertain\":" + transportUncertain + ",\"controlWritten\":" + written
                 + ",\"controlHookFailed\":" + hookFailed
-                + ",\"requestTracing\":" + requests + ",\"transactionTracing\":" + transactions;
+                + ",\"requestTracing\":" + requests + ",\"transactionTracing\":" + transactions
+                + ",\"requestCoverage\":\"SERVLET_THREAD_ONLY\",\"transactionCoverage\":\"PROXIED_CONNECTION_ONLY\""
+                + ",\"leaseIdentity\":\"OBSERVED_WRAPPER_LIFETIME\"";
     }
     static final class Frame {
         final int command; final long revision, epoch; final String body;

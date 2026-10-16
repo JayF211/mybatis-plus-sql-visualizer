@@ -24,6 +24,7 @@ public final class ConnectionHandler implements InvocationHandler {
 
     private final Object raw;
     private final String url;
+    private final TransactionTracker transactions = new TransactionTracker();
 
     ConnectionHandler(Object raw, String url) {
         this.raw = raw;
@@ -40,11 +41,21 @@ public final class ConnectionHandler implements InvocationHandler {
                     return wrapStatementSafely(stmt, (String) args[0], url);
                 }
             }
-            if (args == null && "createStatement".equals(name)) {
+            if ("createStatement".equals(name) && (args == null || args.length == 2 || args.length == 3)) {
                 final Object stmt = method.invoke(raw, args);
                 return wrapStatementSafely(stmt, null, url);
             }
-            return method.invoke(raw, args);
+            final long revision = cn.song.mybatisplus.sqlvis.agent.transport.TraceBus.revision();
+            final long epoch = cn.song.mybatisplus.sqlvis.agent.transport.CaptureLedger.captureEpoch();
+            Object result = null;
+            Throwable failure = null;
+            try { result = method.invoke(raw, args); return result; }
+            catch (java.lang.reflect.InvocationTargetException e) {
+                failure = e.getCause() == null ? e : e.getCause(); throw failure;
+            } finally {
+                try { transactions.after(name, args, result, failure, revision, epoch); }
+                catch (Throwable ignored) { cn.song.mybatisplus.sqlvis.agent.transport.TraceBus.hookFailed(); }
+            }
         } catch (java.lang.reflect.InvocationTargetException e) {
             throw e.getCause() != null ? e.getCause() : e;
         }
@@ -60,7 +71,7 @@ public final class ConnectionHandler implements InvocationHandler {
             return null;
         }
         try {
-            return ProxySupport.wrapStatement(stmt, sql, url);
+            return ProxySupport.wrapStatement(stmt, sql, url, transactions);
         } catch (Throwable t) {
             return SqlHookCallbacks.dropToRaw("wrapStatement 抛异常", t, stmt);
         }
