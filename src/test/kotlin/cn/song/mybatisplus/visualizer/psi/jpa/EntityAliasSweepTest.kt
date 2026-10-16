@@ -78,8 +78,8 @@ class EntityAliasSweepTest : BasePlatformTestCase() {
     }
 
     fun testCompleteCandidateScanDoesNotStopAtFirstAlias() {
-        val first = myFixture.addClass("@jakarta.persistence.Entity(name=\"Shared\") class First {}")
-        val second = myFixture.addClass("@jakarta.persistence.Entity(name=\"Shared\") class Second {}")
+        val first = (myFixture.addFileToProject("First.java", "@jakarta.persistence.Entity(name=\"Shared\") class First {}") as PsiJavaFile).classes.single()
+        val second = (myFixture.addFileToProject("Second.java", "@jakarta.persistence.Entity(name=\"Shared\") class Second {}") as PsiJavaFile).classes.single()
         val scan = EntityAliasSweep.findAliasCandidates("Shared", sequenceOf("First", "Second")) {
             if (it == "First") arrayOf(first) else arrayOf(second)
         }
@@ -88,7 +88,7 @@ class EntityAliasSweepTest : BasePlatformTestCase() {
     }
 
     fun testTruncatedCandidateScanDiscardsEvenAnEarlyMatch() {
-        val first = myFixture.addClass("@jakarta.persistence.Entity(name=\"Shared\") class First {}")
+        val first = (myFixture.addFileToProject("First.java", "@jakarta.persistence.Entity(name=\"Shared\") class First {}") as PsiJavaFile).classes.single()
         val scan = EntityAliasSweep.findAliasCandidates("Shared", sequenceOf("First", "Unknown"), limit = 1) {
             arrayOf(first)
         }
@@ -97,7 +97,7 @@ class EntityAliasSweepTest : BasePlatformTestCase() {
     }
 
     fun testCandidateScanUsesCaseSensitiveJpaEntityNames() {
-        val first = myFixture.addClass("@jakarta.persistence.Entity(name=\"Shared\") class First {}")
+        val first = (myFixture.addFileToProject("First.java", "@jakarta.persistence.Entity(name=\"Shared\") class First {}") as PsiJavaFile).classes.single()
         val scan = EntityAliasSweep.findAliasCandidates("shared", sequenceOf("First")) { arrayOf(first) }
         assertTrue(scan.complete)
         assertTrue(scan.candidates.isEmpty())
