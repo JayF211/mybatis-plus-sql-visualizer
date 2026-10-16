@@ -43,11 +43,20 @@ internal class ScenarioInsightView(
 ) {
     val panel = InsightDetailPanel(listOf(text("scenario.name"), text("quality"), text("scenario.parameters"), text("scenario.relations")), text("scenario.notice"))
     private var results = emptyList<XmlScenarioResult>()
+    private var expected = emptyList<cn.song.mybatisplus.visualizer.xml.XmlScenarioExpectation>()
     private val exportButton: JButton
     init {
         panel.button(text("refresh"), refresh)
         panel.button(text("cancel"), cancel)
         panel.button(text("close"), close)
+        panel.button(text("scenario.saveExpected")) {
+            expected = results.mapNotNull(cn.song.mybatisplus.visualizer.xml.XmlScenarioRegression::baseline)
+            panel.detail.text = text("scenario.expectedNotice") + "\nsaved=${expected.size}; incomplete=${results.size - expected.size}"
+        }
+        panel.button(text("scenario.verify")) {
+            panel.detail.text = if (expected.isEmpty()) text("scenario.noExpected") else
+                cn.song.mybatisplus.visualizer.xml.XmlScenarioRegression.compare(expected, results).joinToString("\n") { "${it.name}: ${it.status} ${it.differences}" }
+        }
         exportButton = panel.button(text("scenario.export")) {
             when (val exported = SqlScenarioRegressionPackage.export(results)) {
                 is SqlScenarioRegressionPackage.Export.Ready -> exportPreview(exported.json)

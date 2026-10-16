@@ -36,7 +36,7 @@ internal class RuntimeEvidencePanel(private val text: (String) -> String) : JPan
         })
         val repeated = value.requests.flatMap { it.repeatedQueries }.filter { RepeatedAlertKey(it.fingerprint, it.databaseIdentity, it.callSite) !in ignored }.take(2000)
         keys = repeated.map { RepeatedAlertKey(it.fingerprint, it.databaseIdentity, it.callSite) }
-        alerts.showRows(repeated.map { InsightDetailRow(listOf(it.fingerprint, it.executions.toString(), it.databaseIdentity ?: "UNKNOWN", it.callSite ?: "UNKNOWN"), "${it.classification}\n${it.executionIds}") })
+        alerts.showRows(repeated.map { InsightDetailRow(listOf(it.fingerprint, it.executions.toString(), runtimeTargetText(it.databaseIdentity, text), it.callSite ?: "UNKNOWN"), "${it.classification}\n${it.executionIds}") })
         alerts.status.text = text("runtime.repeatNotice") + "\nignored=${ignored.size}"
         val selected = run.selectedItem
         run.model = DefaultComboBoxModel(events.map { it.runId }.distinct().take(100).toTypedArray())

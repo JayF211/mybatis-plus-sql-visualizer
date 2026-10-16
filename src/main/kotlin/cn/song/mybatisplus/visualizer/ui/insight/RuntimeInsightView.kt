@@ -12,10 +12,10 @@ internal interface RuntimeInsightSource {
 }
 
 internal object RuntimeInsightPresentation {
-    fun workload(snapshot: RuntimeInsightSnapshot): List<InsightDetailRow> = snapshot.sessions.flatMapIndexed { index, session ->
+    fun workload(snapshot: RuntimeInsightSnapshot, text: (String) -> String = { it }): List<InsightDetailRow> = snapshot.sessions.flatMapIndexed { index, session ->
         session.groups.map { g -> InsightDetailRow(listOf("${index + 1}", g.fingerprint, g.executions.toString(), g.cumulativeDurationNanos.toString(), "${g.errors}/${g.unknownStatus}"),
             "generation=${session.generation}\nenabled=${session.enabled}\nquality=${session.qualityIssues}\n" +
-                "database=${g.databaseIdentity ?: "UNKNOWN"}\ncallSite=${g.callSite ?: "UNKNOWN"}\nmaxNanos=${g.maximumDurationNanos}\np95Nanos=${g.p95DurationNanos}\nsamples=${g.executions}") }
+                "database=${runtimeTargetText(g.databaseIdentity, text)}\ncallSite=${g.callSite ?: "UNKNOWN"}\nmaxNanos=${g.maximumDurationNanos}\np95Nanos=${g.p95DurationNanos}\nsamples=${g.executions}") }
     }.take(2000)
     fun requests(snapshot: RuntimeInsightSnapshot, budget: SqlRequestBudget): List<InsightDetailRow> = snapshot.requests.take(500).map { request ->
         val verdict = RequestSqlBudget.evaluate(request.evidence, budget)
@@ -85,7 +85,7 @@ internal class RuntimeInsightView(
         if (closed) return
         last = snapshot
         enabled.isSelected = snapshot.sessions.any { it.enabled }
-        workload.showRows(RuntimeInsightPresentation.workload(snapshot))
+        workload.showRows(RuntimeInsightPresentation.workload(snapshot, text))
         workload.status.text = text("runtime.notice") + "\n" + snapshot.sessions.mapIndexed { index, s -> "${index + 1}: enabled=${s.enabled}; quality=${s.qualityIssues}; bytes=${s.retainedBytes}" }.joinToString("\n")
         requests.showRows(RuntimeInsightPresentation.requests(snapshot, SqlRequestBudget((count.value as Number).toInt(), (millis.value as Number).toLong() * 1_000_000)))
         transactions.showRows(RuntimeInsightPresentation.transactions(snapshot))

@@ -253,6 +253,10 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
     internal var scenarioInsightView: cn.song.mybatisplus.visualizer.ui.insight.ScenarioInsightView? = null
     internal var runtimeInsightView: cn.song.mybatisplus.visualizer.ui.insight.RuntimeInsightView? = null
     internal var runtimeInsightSource: cn.song.mybatisplus.visualizer.ui.insight.RuntimeInsightSource? = null
+    internal var auxiliaryInsightDocument: com.intellij.openapi.editor.Document? = null
+    internal var auxiliaryInsightListener: com.intellij.openapi.Disposable? = null
+    internal var auxiliaryInsightGeneration = 0L
+    internal var comparisonSqlInvalidated: (() -> Unit)? = null
 
     /**
      * T-M27.2：自建 autopopup 的调度防重入标志（平台 autopopup 对非文件编辑器不生效）。
@@ -507,6 +511,7 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
             scenarioInsightView?.clear(insightText("stale"))
             // clear() 也经此入口：清空所有附加页，不把它伪装成仅关闭 JOIN。
             if (::previewTabs.isInitialized) {
+                invalidateAuxiliaryInsights()
                 if (value == null) previewTabs.clear() else previewTabs.invalidateRefreshes()
             }
         }

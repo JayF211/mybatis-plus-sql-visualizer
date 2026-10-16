@@ -67,7 +67,7 @@ internal fun SqlPreviewPanel.showExecutionCandidates() {
         val rows = matches.map { candidate ->
             val e = candidate.execution
             InsightDetailRow(listOf(e.runId, e.executionId, e.fingerprint, e.status.name),
-                "${candidate.evidence}\nscore=${candidate.score}\nstartedAtMillis=${e.startedAtMillis}\ndurationNanos=${e.durationNanos}\ndatabase=${e.databaseIdentity ?: "UNKNOWN"}\ncallSite=${e.callSite ?: "UNKNOWN"}\nrequestId=${e.requestId ?: "UNKNOWN"}")
+                "${candidate.evidence}\nscore=${candidate.score}\nstartedAtMillis=${e.startedAtMillis}\ndurationNanos=${e.durationNanos}\ndatabase=${runtimeTargetText(e.databaseIdentity, ::insightText)}\ncallSite=${e.callSite ?: "UNKNOWN"}\nrequestId=${e.requestId ?: "UNKNOWN"}")
         }
         ApplicationManager.getApplication().invokeLater {
             if (!previewDisposed && !stopped.get() && current === preview && insightDocument() === doc && doc.modificationStamp == stamp) {

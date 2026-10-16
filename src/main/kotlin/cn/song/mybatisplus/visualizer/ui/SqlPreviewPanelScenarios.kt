@@ -48,6 +48,8 @@ internal fun SqlPreviewPanel.refreshParameterScenarios() {
     // EDT snapshot only; neither selecting a scheme nor rendering into the current editor is allowed.
     val stored = paramHistoryCache.snapshotSchemesFor(key, 20)
     val values = buildHistorySnapshot().toMap()
+    val doc = insightDocument()
+    val inputVersion = ScenarioInputVersion(auxiliaryInsightGeneration, doc, doc?.modificationStamp, values)
     val selected = stored.schemes.take(19)
     val inputs = ScenarioInsightPresentation.inputs(values, selected.map { it.name to it.values })
     val labels = listOf(insightText("scenario.current")) + selected.map { it.name.ifEmpty { insightText("scenario.default") } }
@@ -62,7 +64,8 @@ internal fun SqlPreviewPanel.refreshParameterScenarios() {
                 isCancelled = { stopped.get() || Thread.currentThread().isInterrupted || System.nanoTime() - started > 5_000_000_000L })
             ApplicationManager.getApplication().invokeLater {
                 if (!previewDisposed && project?.isDisposed != true && current === result && paramHistoryCache.isCurrentGeneration() &&
-                    paramHistoryCache.generationToken() == stored.storageGeneration) {
+                    paramHistoryCache.generationToken() == stored.storageGeneration &&
+                    inputVersion.matches(auxiliaryInsightGeneration, insightDocument(), buildHistorySnapshot())) {
                     previewTabs.applyIfCurrent(ticket) {
                         view.present(rendered, labels, insightText("scenario.notice") + if (stored.schemes.size > 19) "\n${insightText("scenario.limit")}" else "")
                     }
