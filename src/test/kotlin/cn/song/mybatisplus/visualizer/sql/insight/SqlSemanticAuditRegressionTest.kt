@@ -42,6 +42,32 @@ class SqlSemanticAuditRegressionTest {
         assertFalse(output.quality == AnalysisQuality.CERTAIN && output.sources.any { it.name == "p" })
     }
 
+    @Test fun `derived alias prefix preserves remaining positions and detects resulting duplicates`() {
+        val m = analyze("SELECT d.x,d.b FROM (SELECT s.a,s.b FROM s) AS d(x)")
+        assertEquals(listOf("a", "b"), m.outputFields.map { it.sources.single().name })
+        val duplicate = analyze("SELECT d.b FROM (SELECT s.a,s.b FROM s) AS d(b)")
+        assertTrue(duplicate.outputFields.single().sources.isEmpty())
+    }
+
+    @Test fun `mysql unrelated flattened base name does not cause false sequential dependency`() {
+        val m = analyze("CREATE TEMPORARY TABLE tmp AS SELECT z AS a,a AS b FROM src; UPDATE tmp SET a=1,b=b; SELECT b FROM tmp", SqlInsightDialect.MYSQL)
+        assertEquals(AnalysisQuality.CERTAIN, m.outputFields.single().quality)
+        assertEquals(setOf("a"), m.outputFields.single().sources.map { it.name }.toSet())
+    }
+
+    @Test fun `metadata index scans supplied tables once across self joins`() {
+        var traversed = 0
+        val tables = object : AbstractList<SqlTableColumns>() {
+            override val size = 20
+            override fun get(index: Int): SqlTableColumns { traversed++; return SqlTableColumns(listOf(if (index == 0) "t" else "unused$index"), listOf("id")) }
+        }
+        val m = SqlSemanticAnalyzer.analyze(AnalysisSnapshot("SELECT a.id,b.id,c.id FROM t a CROSS JOIN t b CROSS JOIN t c", databaseContext = "db", metadataVersion = "v1",
+            metadata = SqlColumnMetadata("db", "v1", tables)))
+        assertEquals(AnalysisQuality.CERTAIN, m.quality)
+        assertEquals(20, traversed)
+        assertEquals(3, m.outputFields.map { it.sources.single().relationId }.distinct().size)
+    }
+
     private fun schema(version: String, type: String) = SqlSchemaSnapshot("db", version,
         listOf(SqlTypedTable(listOf("t"), listOf(SqlTypedColumn("c", type)))))
 
