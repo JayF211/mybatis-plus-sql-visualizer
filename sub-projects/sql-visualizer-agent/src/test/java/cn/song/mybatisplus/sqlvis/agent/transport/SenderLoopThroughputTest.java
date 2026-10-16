@@ -47,6 +47,16 @@ public class SenderLoopThroughputTest {
         // Old sender adds 3 more 1000ms timeouts between the four bursts and fails this bound.
         assertTrue("256 frames took " + millis + "ms; per-burst inbound read must not throttle a busy queue", millis < 2500);
     }
+    @Test public void controlOnlyBacklogAlsoDrainsWithoutIdleSleepPerBurst() throws Exception {
+        SenderLoop.writeFrame(out, 3, "{\"disabled\":false,\"requestTracing\":true}");
+        assertEquals(5, read()); assertEquals(6, read());
+        for (int i = 0; i < 256; i++) TraceBus.emit(7, TraceBus.revision(), CaptureLedger.captureEpoch(), TraceBus.facts("START"));
+        long start = System.nanoTime(); int received = 0;
+        while (received < 256) if (read() == 7) received++;
+        long millis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
+        System.out.println("CONTROL_DRAIN count=" + received + " wallMs=" + millis);
+        assertTrue("control backlog must count as busy: " + millis, millis < 2500);
+    }
     @Test public void stopConfigIsAcknowledgedDuringBacklogAndNoSqlFollowsAck() throws Exception {
         enqueue(2048);
         assertEquals(1, read());
