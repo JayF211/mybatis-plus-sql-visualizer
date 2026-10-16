@@ -14,6 +14,7 @@ internal fun usageLocationIsCurrent(location: SqlSourceLocation, stamp: Long, le
 /** Match PSI stamp (the collector's authority), never filesystem timestamp, before opening a reference. */
 internal fun SqlPreviewPanel.navigateUsage(location: SqlSourceLocation, status: (String) -> Unit) {
     val proj = project ?: return
+    // psi-capture: 仅捕获不可变文件路径与源码版本；PSI 在本拍 ReadAction 内按路径重取，未跨线程捕获元素，EDT 导航前再次重取并核验 stamp/范围。
     ApplicationManager.getApplication().executeOnPooledThread {
         val file = ReadAction.compute<com.intellij.openapi.vfs.VirtualFile?, RuntimeException> {
             val vf = LocalFileSystem.getInstance().findFileByPath(location.filePath) ?: return@compute null

@@ -81,6 +81,44 @@ class PreviewTabManagerTest {
         tabs.close()
     }
 
+    @Test fun `ordinary cleanup failures still release all pages and retain suppressed failures`() = onEdt {
+        val sql = JPanel()
+        val tabs = PreviewTabManager(JPanel(BorderLayout()).apply { add(sql) }, sql, "SQL")
+        val first = IllegalStateException("first cleanup")
+        val second = IllegalArgumentException("second cleanup")
+        var released = false
+        tabs.put("first", "first", JPanel(), onRemove = { throw first })
+        tabs.put("second", "second", JPanel(), onRemove = { throw second })
+        tabs.put("last", "last", JPanel(), onRemove = { released = true })
+        try {
+            tabs.clear()
+            fail("ordinary cleanup failure must be reported")
+        } catch (failure: IllegalStateException) {
+            assertSame(first, failure)
+            assertEquals(listOf(second), failure.suppressed.toList())
+        }
+        assertTrue(released)
+        assertNull(tabs.pane)
+    }
+
+    @Test fun `fatal cleanup error is never hidden behind an earlier ordinary failure`() = onEdt {
+        val sql = JPanel()
+        val tabs = PreviewTabManager(JPanel(BorderLayout()).apply { add(sql) }, sql, "SQL")
+        val ordinary = IllegalStateException("first cleanup")
+        val fatal = LinkageError("fatal cleanup")
+        var laterReleased = false
+        tabs.put("ordinary", "ordinary", JPanel(), onRemove = { throw ordinary })
+        tabs.put("fatal", "fatal", JPanel(), onRemove = { throw fatal })
+        tabs.put("later", "later", JPanel(), onRemove = { laterReleased = true })
+        var caught: Throwable? = null
+        try { tabs.clear() } catch (failure: Throwable) { caught = failure }
+        assertSame("fatal must escape as the primary failure", fatal, caught)
+        assertFalse("fatal must stop cleanup immediately", laterReleased)
+        assertTrue(ordinary.suppressed.isEmpty())
+        tabs.clear() // release the remaining ordinary page after the test has caught the synthetic fatal
+        assertTrue(laterReleased)
+    }
+
     @Test fun `late callbacks cannot cross refresh removal reopening clear or disposal`() = onEdt {
         val sql = JPanel()
         val tabs = PreviewTabManager(JPanel(BorderLayout()).apply { add(sql) }, sql, "SQL")

@@ -114,6 +114,8 @@ internal class PreviewTabManager(
             try {
                 remove(it)
             } catch (t: Throwable) {
+                // 致命错误必须立即透传，不能被较早的普通清理异常降级为 suppressed。
+                if (cn.song.mybatisplus.visualizer.util.FatalErrors.isFatal(t)) throw t
                 if (failure == null) failure = t else failure!!.addSuppressed(t)
             }
         }
