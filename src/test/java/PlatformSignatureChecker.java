@@ -42,6 +42,24 @@ public class PlatformSignatureChecker {
         }
         URLClassLoader loader = new URLClassLoader(urls.toArray(new URL[0]), null);
 
+        // UI011：跨发行物生产探测必须运行于目标 JBR，不能在 243 的 JBR 21 加载 262 的 major 69。
+        // 独立模式只运行 MCP 探测，不初始化其它平台 API；后两参为生产类与 Kotlin stdlib 位置。
+        if (args.length == 4 && "--mcp-capability-probe".equals(args[1])) {
+            int missing = checkMcpToolsetCapability(loader);
+            List<URL> probeUrls = new ArrayList<URL>();
+            probeUrls.add(new File(args[2]).toURI().toURL());
+            probeUrls.add(new File(args[3]).toURI().toURL());
+            try (URLClassLoader probeLoader = new URLClassLoader(probeUrls.toArray(new URL[0]), null)) {
+                Class<?> facade = Class.forName(
+                        "cn.song.mybatisplus.visualizer.mcp.McpToolsetDynamicRegistrarKt", false, probeLoader);
+                Object result = facade.getMethod("findMcpToolsetClass", ClassLoader.class).invoke(null, loader);
+                System.out.println("MCP_CAPABILITY=" + (result != null ? "PRESENT" : "ABSENT"));
+            }
+            loader.close();
+            if (missing != 0) System.exit(1);
+            return;
+        }
+
         int missing = 0;
         Class<?> dp = Class.forName("com.intellij.ide.plugins.DynamicPlugins", true, loader);
         Class<?> desc = Class.forName("com.intellij.ide.plugins.IdeaPluginDescriptorImpl", true, loader);

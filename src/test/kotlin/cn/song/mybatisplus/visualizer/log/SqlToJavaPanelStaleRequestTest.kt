@@ -90,13 +90,19 @@ class SqlToJavaPanelStaleRequestTest : BasePlatformTestCase() {
         finishBackground()
         assertTrue(dialogTables.isEmpty())
         finishUi()
-        assertEquals(listOf(listOf("ui_probe")), dialogTables)
+        // OLD_SQL 使用双引号标识符；解析表名保留双引号，弹窗行直接使用该原文。
+        assertEquals(listOf(listOf("\"ui_probe\"")), dialogTables)
         assertTrue(panel.resultTextForTest().contains("QueryWrapper<UiProbe>"))
-        // 正对照：有效弹窗确认仍走后台解析和生产渲染。
+        // 正对照：先替换回落输出，避免确认链未写回时仍靠旧结果假绿。
+        val pending = "pending entity confirmation"
+        panel.setResultTextForTest(pending)
         confirmations.single()(mapOf(EntitySelectionDialog.MAIN_KEY to null))
         finishBackground()
+        assertEquals(pending, panel.resultTextForTest())
         finishUi()
-        assertTrue(panel.resultTextForTest().contains("UiProbe"))
+        val confirmed = panel.resultTextForTest()
+        assertTrue(confirmed, confirmed.contains("QueryWrapper<UiProbe>"))
+        assertFalse(confirmed, confirmed.contains(pending))
     }
 
     fun testQueryToAutoThenEditRejectsOldLookupFromFormatChange() {
