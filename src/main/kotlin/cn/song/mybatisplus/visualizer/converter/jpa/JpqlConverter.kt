@@ -272,7 +272,9 @@ object JpqlConverter {
         // 替换 FROM 子句中的实体类名（简单替换，仅在确认不是更大标识符的一部分时）
         // 注意：这里只做简单替换，精确替换需要完整语法解析
         var result = masked
-        for (name in listOfNotNull(rootName, table.entityClassName).distinct()) {
+        val names = if (rootName?.contains('.') == true) listOf(rootName)
+            else listOfNotNull(rootName, table.entityClassName).distinct()
+        for (name in names) {
             result = Regex("(?<![\\w.$])${Regex.escape(name)}\\b").replace(result, table.tableName)
         }
         return JpaSqlLiteralMasking.unmask(result, literals)

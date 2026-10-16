@@ -92,7 +92,7 @@ internal object JpaFromEntityMapper {
         val (masked, literals) = JpaSqlLiteralMasking.mask(sql)
         val entityNames = ENTITY_REFERENCE.findAll(masked)
             .map { it.groupValues[1] }
-            .filter { it != table.entityClassName }
+            .filter { it != table.entityClassName && it != table.tableName }
             .distinct()
             .toList()
         if (entityNames.isEmpty()) return JpaSqlLiteralMasking.unmask(masked, literals)

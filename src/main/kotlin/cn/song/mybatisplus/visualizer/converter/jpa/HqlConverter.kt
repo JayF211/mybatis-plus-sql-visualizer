@@ -331,7 +331,10 @@ object HqlConverter {
         // 普查批：字面量掩码——`like '%UserEntity%'` 等单引号字面量内的实体名不得被替换
         val (masked, literals) = JpaSqlLiteralMasking.mask(hql)
         var result = masked
-        entityPattern(table.entityClassName)?.let { result = it.replace(result, table.tableName) }
+        // 根实体写 FQN 时不能顺带替换同名简单标识符（它仍可能有歧义）。
+        if (entityAlias?.contains('.') != true) {
+            entityPattern(table.entityClassName)?.let { result = it.replace(result, table.tableName) }
+        }
         val alias = entityAlias?.takeIf { it.isNotBlank() && it != table.entityClassName }
         if (alias != null) {
             entityPattern(alias)?.let { result = it.replace(result, table.tableName) }
