@@ -202,6 +202,10 @@ def trial(args, mode, index, classes):
                 and after["requestEnds"] - before["requestEnds"] == result["requests"]
                 and after["unmatchedRequestEnds"] == 0)) and all(result["qualityDelta"].get(k, 0) == 0 for k in losses) and not result.get("drainTimedOut", False)
         result["cpuPercentOneCore"] = result["cpuNanos"] * 100 / result["wallNanos"]
+        send("DRAINED")
+        result.update(json.loads(until("DRAIN_RESULT ")))
+        result["memoryDrained"] = windows_memory(proc.pid)
+        result["drainedCpuPercentOneCore"] = result["drainedCpuNanos"] * 100 / result["drainedWallNanos"]
         send("EXIT"); result["exitCode"] = proc.wait(timeout=15)
     finally:
         if proc.poll() is None:
@@ -246,6 +250,8 @@ def main():
             "wallIncreasePercent": (median(traced, "wallNanos") / median(base, "wallNanos") - 1) * 100,
             "cpuPercentagePointIncrease": median(traced, "cpuPercentOneCore") - median(base, "cpuPercentOneCore"),
             "heapUsedIncreaseBytes": median(traced, "heapUsedBytes") - median(base, "heapUsedBytes"),
+            "drainedWallIncreasePercent": (median(traced, "drainedWallNanos") / median(base, "drainedWallNanos") - 1) * 100,
+            "drainedCpuPercentagePointIncrease": median(traced, "drainedCpuPercentOneCore") - median(base, "drainedCpuPercentOneCore"),
             "allTracingObservationsReceived": all(r.get("captureCoverageComplete", False) for r in traced),
             "warmStableAllTrials": all(r["warmStabilityWithin15Percent"] for r in base + traced),
             "budgetConclusion": "REQUIRES_REVIEW_OF_LOSS_AND_WARMUP_NOT_AUTOMATIC_PASS",

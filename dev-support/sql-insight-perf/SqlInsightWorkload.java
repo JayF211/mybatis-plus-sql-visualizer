@@ -99,6 +99,11 @@ public final class SqlInsightWorkload {
                     + ",\"requestP95Nanos\":" + requests[(requests.length * 95 + 99) / 100 - 1]
                     + ",\"heapUsedBytes\":" + used + ",\"heapPoolPeakSumBytes\":" + peak + "}");
             System.out.flush();
+            if (!"DRAINED".equals(commands.readLine())) throw new IllegalStateException("DRAINED required");
+            System.out.println("DRAIN_RESULT {\"drainedWallNanos\":" + (System.nanoTime() - wall0)
+                    + ",\"drainedCpuNanos\":" + (os.getProcessCpuTime() - cpu0)
+                    + ",\"drainedHeapUsedBytes\":" + ManagementFactory.getMemoryMXBean().getHeapMemoryUsage().getUsed() + "}");
+            System.out.flush();
             if (!"EXIT".equals(commands.readLine())) throw new IllegalStateException("EXIT required");
             select.close();
         }
