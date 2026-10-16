@@ -44,6 +44,10 @@ internal object GeneratedProjectionCompiler {
         candidate(runCatching { anchor.protectionDomain?.codeSource?.location }.getOrNull())
         val connection = resource.openConnection().apply { useCaches = false }
         (connection as? JarURLConnection)?.let { candidate(it.jarFileURL) }
+        if (resource.protocol == "jar") {
+            val archiveUrl = resource.toExternalForm().substringAfter("jar:").substringBefore("!/")
+            candidate(URL(archiveUrl))
+        }
         val expected = connection.getInputStream().use { it.readBytes() }
         return candidates.firstOrNull { file ->
             file.isFile && runCatching {
