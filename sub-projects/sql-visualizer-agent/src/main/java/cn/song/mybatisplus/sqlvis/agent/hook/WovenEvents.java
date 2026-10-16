@@ -43,7 +43,13 @@ final class WovenEvents {
 
     static void emit(Object stmt, String op, String sql, Object result, Throwable failure,
                      long startNanos, String url) {
+        emit(stmt, op, sql, result, failure, startNanos, url, null);
+    }
+
+    static void emit(Object stmt, String op, String sql, Object result, Throwable failure,
+                     long startNanos, String url, ExecutionScope scope) {
         if (AgentState.isDisabled() || sql == null || sql.isEmpty()) {
+            if (scope != null) cn.song.mybatisplus.sqlvis.agent.transport.CaptureLedger.omitted();
             return;
         }
         if (FIRST_FIRE.compareAndSet(false, true)) {
@@ -85,6 +91,9 @@ final class WovenEvents {
         event.params = null; // 织入通道无 setXxx 拦截——参数一期不可得（类注释「结构性差异」）
         event.url = url;
         event.threadName = Thread.currentThread().getName();
+        if (scope != null) scope.apply(event);
+        else event.timestampSource = "EXIT_ESTIMATE_MILLIS";
+        EventBuilder.applyResult(event, op, result, failure);
         EventBus.offer(event);
     }
 }

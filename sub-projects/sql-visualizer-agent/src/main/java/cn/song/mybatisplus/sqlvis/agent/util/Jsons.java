@@ -17,6 +17,18 @@ public final class Jsons {
         str(sb, first, "sql", e.sql);
         num(sb, first, "ts", e.timestamp);
         num(sb, first, "dn", e.durationNanos);
+        str(sb, first, "runId", e.runId);
+        str(sb, first, "executionId", e.executionId);
+        if (e.sequence != null) num(sb, first, "sequence", e.sequence);
+        if (e.captureEpoch != null) num(sb, first, "captureEpoch", e.captureEpoch);
+        if (e.threadId != null) num(sb, first, "threadId", e.threadId);
+        if (e.startNanos != null) num(sb, first, "startNanos", e.startNanos);
+        str(sb, first, "resultStatus", e.resultStatus);
+        str(sb, first, "updateCountStatus", e.updateCountStatus);
+        str(sb, first, "captureSource", e.captureSource);
+        str(sb, first, "timestampSource", e.timestampSource);
+        str(sb, first, "errorClass", e.errorClass);
+        str(sb, first, "sqlState", e.sqlState);
         if (e.updateCount != null) {
             num(sb, first, "u", e.updateCount);
         }

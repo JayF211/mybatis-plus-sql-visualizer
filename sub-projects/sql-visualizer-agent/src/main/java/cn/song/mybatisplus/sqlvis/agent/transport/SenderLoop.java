@@ -111,6 +111,8 @@ final class SenderLoop implements Runnable {
      */
     private static final int MAX_FAST_DROPS = 10;
 
+    /** Per-connection opt-in; an old IDE never receives new command numbers. */
+    private boolean captureStateEnabled;
     private final int serverPort;
     private final long backoffInitialMs;
     private final long backoffMaxMs;
@@ -234,10 +236,14 @@ final class SenderLoop implements Runnable {
 
                 final DataOutputStream out = new DataOutputStream(socket.getOutputStream());
                 final DataInputStream in = new DataInputStream(socket.getInputStream());
-                writeFrame(out, EventBus.CMD_HELLO, "{\"pid\":" + pid() + "}");
+                captureStateEnabled = false;
+                writeFrame(out, EventBus.CMD_HELLO, "{\"pid\":" + pid()
+                        + ",\"protocolVersion\":2,\"runId\":\"" + CaptureLedger.RUN_ID
+                        + "\",\"captureStateCommand\":6}");
                 // 连接建立即补发一条心跳：即便首轮迭代被 CONFIG 读超时拖住，IDE 侧 lastSeen 也从头新鲜
                 writeFrame(out, EventBus.CMD_HEARTBEAT, "{}");
                 long lastOutboundMs = System.currentTimeMillis();
+                long lastCaptureStateNanos = System.nanoTime();
                 // T-07 看门狗：本连接是否收到过任何 CONFIG / 本连接是否已触发（每条连接只触发一次）。
                 // T-PS7-02 起与复位判据共用 [connectedAtMs]（同一时刻：拨号返回即连接成功，
                 // 与写 HELLO 后的差是毫秒级，对 15s 窗口语义无差）。
@@ -259,21 +265,20 @@ final class SenderLoop implements Runnable {
                     int burst = 0;
                     if (!AgentState.isDisabled()) {
                         while (burst < 64 && EventBus.pollEvent(slot, 0)) {
-                            try {
-                                writeFrame(out, EventBus.CMD_EVENT, EventBus.encodeEvent(slot[0]));
-                                burst++;
-                                lastOutboundMs = System.currentTimeMillis();
-                            } catch (java.io.IOException io) {
-                                throw io;
-                            } catch (Throwable t) {
-                                // 编码失败：丢弃该事件继续（EventBus.droppedCount 可观测）
-                            }
+                            burst++; // failed encodings consume the fairness budget too
+                            if (sendEvent(out, slot[0])) lastOutboundMs = System.currentTimeMillis();
                         }
                     }
                     // 2) 心跳：按真实流逝时间判（每轮都执行，不被 burst 分支包住——事件突发期间也按节奏发）
                     if (System.currentTimeMillis() - lastOutboundMs >= heartbeatIntervalMs) {
                         writeFrame(out, EventBus.CMD_HEARTBEAT, "{}");
                         lastOutboundMs = System.currentTimeMillis();
+                    }
+                    // Quality has its own monotonic cadence, even while SQL keeps the socket busy.
+                    if (captureStateEnabled && System.nanoTime() - lastCaptureStateNanos
+                            >= java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(heartbeatIntervalMs)) {
+                        writeFrame(out, EventBus.CMD_CAPTURE_STATE, CaptureLedger.snapshot());
+                        lastCaptureStateNanos = System.nanoTime();
                     }
                     // 3) 入站帧（非阻塞轮询：超时=无数据）——[len][cmd][body]，畸形帧抛异常走重连
                     try {
@@ -285,6 +290,10 @@ final class SenderLoop implements Runnable {
                         if (ack != null) {
                             // T-02：CONFIG 生效回执（IDE 侧据此判「应用侧确已收到并生效」）
                             writeFrame(out, EventBus.CMD_CONFIG_ACK, ack);
+                            if (captureStateEnabled) {
+                                writeFrame(out, EventBus.CMD_CAPTURE_STATE, CaptureLedger.snapshot());
+                                lastCaptureStateNanos = System.nanoTime();
+                            }
                             lastOutboundMs = System.currentTimeMillis();
                         }
                     } catch (java.net.SocketTimeoutException ignore) {
@@ -372,6 +381,11 @@ final class SenderLoop implements Runnable {
         }
         if (payload == null) {
             return null;
+        }
+        // New peers explicitly request independent quality/control snapshots; reconnect resets it.
+        if (payload.contains("\"captureState\"")) {
+            captureStateEnabled = java.util.regex.Pattern.compile("\\\"captureState\\\"\\s*:\\s*true\\b")
+                    .matcher(payload).find();
         }
         // 极简解析（仅两个布尔键）：{"disabled":true,"desensitize":false}
         if (payload.contains("\"disabled\"")) {
@@ -564,6 +578,32 @@ final class SenderLoop implements Runnable {
                 + ", len=" + len + " (0x" + Integer.toHexString(len) + "), 首字节=0x"
                 + Integer.toHexString(firstByte) + ", 原因=" + cause);
         return new IOException("partial inbound frame: " + what, cause);
+    }
+
+    /** Count encoding rejection separately from a potentially partially delivered socket write.
+     * A successful flush is only written, never acknowledged/received. No replay duplicates.
+     */
+    static boolean sendEvent(DataOutputStream out, cn.song.mybatisplus.sqlvis.agent.model.SqlEvent event)
+            throws IOException {
+        final String payload;
+        try {
+            payload = EventBus.encodeEvent(event);
+            if (payload.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > MAX_FRAME_LEN) {
+                CaptureLedger.encodingFailed();
+                return false;
+            }
+        } catch (Throwable failure) {
+            CaptureLedger.encodingFailed();
+            return false;
+        }
+        try {
+            writeFrame(out, EventBus.CMD_EVENT, payload);
+            CaptureLedger.written();
+            return true;
+        } catch (IOException uncertain) {
+            CaptureLedger.transportUncertain();
+            throw uncertain;
+        }
     }
 
     static void writeFrame(DataOutputStream out, int cmd, String payload) throws IOException {

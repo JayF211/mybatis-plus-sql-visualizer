@@ -57,6 +57,11 @@ final class StatementHandler implements InvocationHandler {
                 return doInvoke(method, args);
             }
         }
+        if ("clearBatch".equals(name)) {
+            Object result = doInvoke(method, args);
+            batchSqls.setLength(0);
+            return result;
+        }
         // 2) 批处理累积
         if ("addBatch".equals(name) && args != null && args.length == 1 && args[0] instanceof String) {
             if (batchSqls.length() > 0) {
@@ -86,10 +91,12 @@ final class StatementHandler implements InvocationHandler {
         if (sql == null && args != null && args.length >= 1 && args[0] instanceof String) {
             sql = (String) args[0];
         }
-        if ("executeBatch".equals(name) && batchSqls.length() > 0) {
+        if (("executeBatch".equals(name) || "executeLargeBatch".equals(name)) && batchSqls.length() > 0) {
             sql = batchSqls.toString();
         }
-        final long startNanos = System.nanoTime();
+        final ExecutionScope scope = ExecutionScope.begin(raw, "PROXY");
+        if (scope == null) return doInvoke(method, args);
+        final long startNanos = scope.startNanos;
         // T-AgentLogTime：采集时刻取 execute **开始**那一刻（与 nanoTime 同点）——日志时间相关器
         // 未命中时回落的「捕获时间」即语句开始执行时刻，与 MyBatis 打印的 Preparing 日志行
         // （打印于 execute 之前）只差毫秒级；若取在 finally（旧写法），回落值会晚一个执行耗时。
@@ -98,27 +105,29 @@ final class StatementHandler implements InvocationHandler {
         Throwable failure = null;
         // T-StatementWeave 双通道去重门（WeaveGate）：invoke 到的 raw 方法体已被语句面织入——
         // 不设门，织入通道会对同一条 SQL 再产出一条事件。置位期间织入入口钩子短路（token=0）。
-        WeaveGate.enterProxy();
         try {
-            result = method.invoke(raw, args);
-        } catch (java.lang.reflect.InvocationTargetException e) {
-            failure = e.getCause() != null ? e.getCause() : e;
+            result = doInvoke(method, args);
+        } catch (Throwable e) {
+            failure = e;
             throw failure;
         } finally {
-            WeaveGate.exitProxy();
             final long durationNanos = System.nanoTime() - startNanos;
             try {
-                emitEvent(name, sql, result, failure, durationNanos, startMillis);
+                emitEvent(name, sql, result, failure, durationNanos, startMillis, scope);
             } catch (Throwable ignore) {
-                // 事件构造/发送失败不影响执行结果
+                cn.song.mybatisplus.sqlvis.agent.transport.CaptureLedger.captureFailed();
+            } finally {
+                scope.close();
+                if ("executeBatch".equals(name) || "executeLargeBatch".equals(name)) batchSqls.setLength(0);
             }
         }
         return result;
     }
 
     private void emitEvent(String op, String sql, Object result, Throwable failure, long durationNanos,
-                           long startMillis) {
+                           long startMillis, ExecutionScope scope) {
         if (AgentState.isDisabled() || sql == null || sql.isEmpty()) {
+            cn.song.mybatisplus.sqlvis.agent.transport.CaptureLedger.omitted();
             return;
         }
         // T-AgentSourceJump：loader hint 取被织入对象（驱动/连接侧类，开发态=应用 loader）——
@@ -152,6 +161,8 @@ final class StatementHandler implements InvocationHandler {
         event.params = params.snapshot(sql, AgentState.isDesensitize());
         event.url = url; // connect 时 URL（面板据此展示目标库类型；测试/池代理下可能为 null）
         event.threadName = Thread.currentThread().getName();
+        scope.apply(event);
+        EventBuilder.applyResult(event, op, result, failure);
         EventBus.offer(event);
     }
 
