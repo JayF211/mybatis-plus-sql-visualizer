@@ -91,6 +91,14 @@ agent首轮3组各3个独立JVM，实际心跳为实验注入200ms，warm200请�
 
 **状态**：突发发送丢失瓶颈已有无损负载证据闭合，新增追踪5%初始成本目标尚未在稳定空机环境证明。三轮均标host-contention=observed-other-IDE-session，不宣称空机标准性能通过。失败目录agent-trials与agent-trials-default-warm2000保留；成功覆盖目录agent-trials-wakeup-default-warm2000/summary.json，产物agent SHA256 `8f2d1e020aa7c246f43250a193cdd753d8d6baf36dc7b77315d3f2f5cb299ad1`。后续复测必须新目录，不覆盖失败证据、不以丢弃事件换低耗时。
 
+### warm10000补测：质量通过，资源预算未通过
+
+默认10秒心跳、每进程预热10000请求、3轮×none/sql/tracing共9个独立JVM实际完成，exit0。业务每进程均10000条SQL、checksum12454200000；所有agent进程收到10000唯一SQL，tracing各500个请求起止完整配对，SQL/control loss均0，9/9预热末两块差异在15%内。质量条件通过，但退出码0仅说明实验运行成功，不代表资源预算通过。
+
+tracing相对sql的中位P95为-5.16%、wall为-1.54%，逐轮P95增量却为+21.71%/-5.16%/-28.35%，仍明显波动。单核归一CPU中位从170.61%增至190.74%，增加20.13个百分点；包含排空窗口仍增加21.23个百分点，超过既定5个百分点初始预算。RSS中位增加约5.63MiB，未GC heap差约-0.95MiB，均不冒充常驻内存证明。相对none的总成本另列：P95+22.86%、wall+15.53%、CPU+91.83个百分点，不把既有捕获成本全归因新增追踪。
+
+开跑前背景IDE约9%单核CPU，过程两次采样为0，Gradle daemon采样为0且无worker/verifier；这是明确记录背景负载的实验，不是认证空机。原始summary SHA256 `26688cf9181adacaff9515a2ecf7185f0136fb546c387593627a3724bc8bf6ff`，位于runtime树`build/MPSV-SqlInsight-Runtime-Perf/sql-insight-perf/agent-trials-wakeup-default-warm10000/summary.json`。结论：资源门不得记PASS，当前阻止最终合回dev；继续核计量分母、绝对CPU与线程热点，不放宽目标、不丢事件、不删除质量证据。任何后续生产优化都需新冻结重新验证，ab8b54b1的门禁只覆盖原冻结代码。
+
 ## 五、最终冻结与自动化门禁
 
 冻结提交 `67533aca415bf227e891d697ad45cdf33563b4ff`，基于已同步dev `5d884a5e`。专用detached工作树 `mpsv-sql-insight-gate` 生产写集为空，配置/输出仅在其build下；主控期间仅提交文档，不让在途代码改变绿灯含义。
