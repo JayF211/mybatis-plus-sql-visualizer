@@ -7,7 +7,6 @@ import com.intellij.psi.PsiAnnotationMemberValue
 import com.intellij.psi.PsiArrayInitializerMemberValue
 import com.intellij.psi.PsiClass
 import com.intellij.psi.PsiLiteralExpression
-import com.intellij.psi.search.GlobalSearchScope
 
 /**
  * JPA 命名查询信息（@NamedQuery / @NamedQueries 产物）。
@@ -102,18 +101,23 @@ object NamedQueryLocator {
      * @param queryName 命名查询名
      * @return 命中的命名查询（annotation 字段已回填，可反查实体类）；未命中返回 null
      */
-    fun findByQueryName(project: Project, queryName: String?): NamedQueryInfo? {
-        if (queryName == null || queryName.isBlank()) return null
-        val entitySimpleName = queryName.substringBefore('.', "").trim()
-        if (entitySimpleName.isBlank()) return null
-        val classes = runCatching {
-            JavaPsiFacade.getInstance(project).findClasses(entitySimpleName, GlobalSearchScope.projectScope(project))
-        }.getOrNull() ?: return null
-        for (cls in classes) {
-            val hit = locate(cls).firstOrNull { it.name == queryName }
-            if (hit != null) return hit
+    fun findByQueryName(
+        project: Project,
+        queryName: String?,
+        context: com.intellij.psi.PsiElement? = null,
+    ): NamedQueryInfo? {
+        if (queryName.isNullOrBlank() || com.intellij.openapi.project.DumbService.isDumb(project)) return null
+        val ownerName = queryName.substringBeforeLast('.', "").trim()
+        if (ownerName.isBlank()) return null
+        return try {
+            val scope = cn.song.mybatisplus.visualizer.psi.EntityClassResolver.searchScope(project, context)
+            // 命名查询宿主不一定是查询根实体，也不一定标了 @Entity；只按宿主名取类，不借实体规则误删。
+            val classes = if ('.' in ownerName) JavaPsiFacade.getInstance(project).findClasses(ownerName, scope).toList()
+            else com.intellij.psi.search.PsiShortNamesCache.getInstance(project).getClassesByName(ownerName, scope).toList()
+            classes.distinct().flatMap { locate(it) }.filter { it.name == queryName }.singleOrNull()
+        } catch (_: com.intellij.openapi.project.IndexNotReadyException) {
+            null
         }
-        return null
     }
 
     // ------------------------------------------------------------------

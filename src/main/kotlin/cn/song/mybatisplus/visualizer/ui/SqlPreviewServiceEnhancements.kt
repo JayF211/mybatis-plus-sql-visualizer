@@ -487,46 +487,35 @@ internal fun SqlPreviewService.injectTenantLineCondition(
  * @return 表名替换后的新语句（无规则命中时返回原实例）
  */
 
-internal fun SqlPreviewService.resolveHqlTable(entityClass: PsiClass?, entityClassName: String?, hql: String): TableInfo? {
+internal fun SqlPreviewService.resolveHqlTable(
+    entityClass: PsiClass?,
+    entityClassName: String?,
+    hql: String,
+    context: PsiElement? = null,
+): TableInfo? {
+    // 查询中的根实体才是权威；TypedQuery 的结果类型、NamedQuery 宿主、查询名前缀都可能不是根实体。
+    val className = extractEntityNameFromHql(hql) ?: entityClassName ?: return null
     val resolver = JpaEntityResolver()
-    // T-Fix-SettingsScope：下方 project 一律取本服务绑定的 [project]，勿用
-    // openProjects.firstOrNull()——多项目同开时后者取谁取决于 IDE 打开顺序，会在 B 项目里
-    // 按 A 项目的项目级表配置修饰表名，并使 GlobalSearchScope/JavaPsiFacade 落到错误的项目范围。
-    val className = entityClassName ?: extractEntityNameFromHql(hql)
-
-    // 路径 1：有 PsiClass 直接解析（JPA 注解）。列空不短路到「更弱的路径」——
-    // 夹具/局部类场景路径 2/3 反而找不到该类；列空仅在「有更好的候选」时被替换：
-    // 即后续路径找到的表列非空才覆盖，否则保留路径 1 结果（含表名与实体类名，
-    // 展开器照常给「列信息未解析」诊断，不丢 FROM 表名替换）。
+    val explicit = entityClass?.takeIf {
+        val entityName = cn.song.mybatisplus.visualizer.psi.jpa.JpaMetadataReader.entityNameOf(it)
+            ?.takeIf(String::isNotBlank) ?: it.name
+        className == it.qualifiedName || className == entityName
+    }
     var resolved: TableInfo? = null
-    if (entityClass != null) {
-        val table = resolver.resolve(entityClass)
-        if (table.columns.isNotEmpty()) return table
-        resolved = table
-    }
-
-    // 路径 2：按类名查找 @Entity 类（JPA 注解）；列空不短路
-    if (className != null) {
-        val scope = com.intellij.psi.search.GlobalSearchScope.allScope(project)
-        val psiClass = com.intellij.psi.JavaPsiFacade.getInstance(project).findClass(className, scope)
-            ?: findClassByShortName(project, className, scope)
-            ?: findClassByEntityName(project, className, scope)
-        if (psiClass != null) {
-            val table = resolver.resolve(psiClass)
-            if (table.columns.isNotEmpty()) return table
-            if (resolved == null) resolved = table
+    if (explicit != null) {
+        resolved = resolver.resolve(explicit)
+        if (resolved.columns.isNotEmpty()) return resolved
+    } else {
+        val resolution = cn.song.mybatisplus.visualizer.psi.jpa.EntityAliasSweep.resolve(project, className, context)
+        // 歧义是终态，不能借 XML/别名 fallback 再偷偷挑一个。
+        if (resolution.ambiguous) return null
+        resolution.psiClass?.let {
+            resolved = resolver.resolve(it)
+            if (resolved!!.columns.isNotEmpty()) return resolved
         }
     }
-
-    // 路径 3：Hibernate XML 映射文件（.hbm.xml）
-    if (className != null) {
-        val hbmMapping = HbmXmlEntityResolver.resolve(className, project)
-        if (hbmMapping != null) {
-            return convertHbmMappingToTableInfo(hbmMapping)
-        }
-    }
-
-    return resolved
+    val hbmMapping = HbmXmlEntityResolver.resolve(className, project, context)
+    return hbmMapping?.let { convertHbmMappingToTableInfo(it) } ?: resolved
 }
 
 /**
