@@ -3,6 +3,9 @@ package cn.song.mybatisplus.visualizer.log.insight
 import cn.song.mybatisplus.visualizer.log.LogSqlEntry
 import cn.song.mybatisplus.visualizer.log.agent.AgentCaptureState
 import cn.song.mybatisplus.visualizer.log.agent.AgentEvent
+import cn.song.mybatisplus.visualizer.log.agent.RequestEvent
+import cn.song.mybatisplus.visualizer.log.agent.TransactionEvent
+import cn.song.mybatisplus.visualizer.log.agent.TraceEventEnvelope
 
 /** Per socket session. Disabled until the user opts in; delayed control frames cannot authorize old events. */
 class AnalysisSessionChannel(private val store: AnalysisSessionStore = AnalysisSessionStore()) {
@@ -10,6 +13,7 @@ class AnalysisSessionChannel(private val store: AnalysisSessionStore = AnalysisS
     private var awaitingBoundary = false
     private var ticket: AnalysisSessionTicket? = null
     private var controlToken: String? = null
+    private val traces = RequestTraceStore()
 
     @Synchronized
     fun requestedToken(): String? = controlToken.takeIf { requested }
@@ -17,6 +21,7 @@ class AnalysisSessionChannel(private val store: AnalysisSessionStore = AnalysisS
     @Synchronized
     fun enable() {
         store.clear()
+        traces.clear()
         requested = true
         controlToken = java.util.UUID.randomUUID().toString().replace("-", "")
         awaitingBoundary = true
@@ -34,6 +39,7 @@ class AnalysisSessionChannel(private val store: AnalysisSessionStore = AnalysisS
     @Synchronized
     fun clear() {
         store.clear()
+        traces.clear()
         ticket = null
         if (requested) controlToken = java.util.UUID.randomUUID().toString().replace("-", "")
         awaitingBoundary = requested
@@ -83,6 +89,28 @@ class AnalysisSessionChannel(private val store: AnalysisSessionStore = AnalysisS
     }
 
     @Synchronized
+    fun onRequest(event: RequestEvent) {
+        if (acceptsControl(event.envelope)) traces.accept(event)
+    }
+
+    @Synchronized
+    fun onTransaction(event: TransactionEvent) {
+        if (acceptsControl(event.envelope)) traces.accept(event)
+    }
+
+    private fun acceptsControl(envelope: TraceEventEnvelope): Boolean {
+        val current = ticket ?: return false
+        return requested && envelope.captureStateToken == controlToken &&
+            envelope.runId == current.boundary.runId && envelope.captureEpoch == current.boundary.captureEpoch
+    }
+
+    @Synchronized
+    fun requests(): List<ObservedRequest> = traces.snapshot(store.snapshot())
+
+    @Synchronized
+    fun transactions(): List<TransactionEvent> = traces.transactionEvents()
+
+    @Synchronized
     fun snapshot(): AnalysisSessionSnapshot = store.snapshot()
 
     @Synchronized
@@ -91,5 +119,6 @@ class AnalysisSessionChannel(private val store: AnalysisSessionStore = AnalysisS
         awaitingBoundary = false
         ticket = null
         store.dispose()
+        traces.clear()
     }
 }

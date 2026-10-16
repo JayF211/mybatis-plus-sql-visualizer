@@ -33,7 +33,7 @@ object RequestSqlBudget {
         val reasons = linkedSetOf<String>()
         val seen = HashSet<String>()
         val events = evidence.observations.filter {
-            val valid = it.runId == evidence.runId && it.requestTag == evidence.requestId &&
+            val valid = it.runId == evidence.runId && it.requestId == evidence.requestId &&
                 it.executionId.isNotBlank() && it.sequence > 0 && it.durationNanos >= 0
             if (!valid) reasons += "invalid_scope_event"
             valid && seen.add(it.executionId)
