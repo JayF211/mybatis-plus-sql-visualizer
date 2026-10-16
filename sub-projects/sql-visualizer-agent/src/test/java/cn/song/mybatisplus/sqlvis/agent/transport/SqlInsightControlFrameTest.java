@@ -55,6 +55,26 @@ public class SqlInsightControlFrameTest {
             EventBus.clearQueued();
         }
     }
+    @Test public void nonceEchoIsBoundedAndReplacedOnlyByExplicitConfig() {
+        boolean saved = AgentState.isDisabled();
+        try {
+            SenderLoop loop = new SenderLoop(0);
+            assertFalse(loop.captureStateBody().contains("captureStateToken"));
+            loop.handleInbound(EventBus.CMD_CONFIG, "{\"captureState\":true,\"captureStateToken\":\"aB0123\"}");
+            assertTrue(loop.captureStateBody().contains("\"captureStateToken\":\"aB0123\""));
+            loop.handleInbound(EventBus.CMD_CONFIG, "{\"captureState\":true}");
+            assertTrue(loop.captureStateBody().contains("aB0123"));
+            loop.handleInbound(EventBus.CMD_CONFIG, "{\"captureStateToken\":\"ff22\"}");
+            assertTrue(loop.captureStateBody().contains("ff22"));
+            assertFalse(loop.captureStateBody().contains("aB0123"));
+            loop.handleInbound(EventBus.CMD_CONFIG, "{\"captureStateToken\":\"not-hex\"}");
+            assertFalse(loop.captureStateBody().contains("captureStateToken"));
+            char[] tooLong = new char[65]; java.util.Arrays.fill(tooLong, 'a');
+            loop.handleInbound(EventBus.CMD_CONFIG, "{\"captureStateToken\":\"" + new String(tooLong) + "\"}");
+            assertFalse(loop.captureStateBody().contains("captureStateToken"));
+        } finally { AgentState.setDisabled(saved); }
+    }
+
     private static Frame read(DataInputStream in) throws IOException {
         int len = in.readInt(), cmd = in.readUnsignedByte();
         byte[] bytes = new byte[len]; in.readFully(bytes);
