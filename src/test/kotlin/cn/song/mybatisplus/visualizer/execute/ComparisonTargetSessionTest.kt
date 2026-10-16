@@ -27,6 +27,15 @@ class ComparisonTargetSessionTest {
         assertTrue(session.refresh()!!.generation > changed.generation)
         present = false; assertNull(session.refresh()); assertNull(session.snapshot())
     }
+    @Test fun `late selection cannot overwrite newer input generation`() {
+        val option = ComparisonTargetOption("id", "test", "H2")
+        val session = ComparisonTargetSession { listOf(ComparisonTargetSession.Record(option, Any(), "a")) }
+        val oldGeneration = session.generationToken()
+        session.invalidateSql()
+        assertNull(session.select("id", oldGeneration))
+        assertNull(session.snapshot())
+        assertNotNull(session.select("id", session.generationToken()))
+    }
     @Test fun `ambiguous identity never selects a target`() {
         val option = ComparisonTargetOption("same", "test", "H2")
         val session = ComparisonTargetSession { listOf(ComparisonTargetSession.Record(option, Any(), "a"),

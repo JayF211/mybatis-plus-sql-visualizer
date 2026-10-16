@@ -26,9 +26,18 @@ class ComparisonTargetSession internal constructor(private val discover: () -> L
     fun listTargets(): List<ComparisonTargetOption> = discover().map { it.option }.distinctBy { it.identity }
 
     /** Explicit choice only; duplicate IDs and missing targets are rejected, never alias-fallback. */
-    fun select(identity: String): ComparisonTargetState? {
+    fun select(identity: String): ComparisonTargetState? = select(identity, generationToken())
+
+    @Synchronized fun generationToken(): Long = generation
+
+    fun select(identity: String, expectedGeneration: Long): ComparisonTargetState? {
         val match = discover().filter { it.option.identity == identity }.singleOrNull()
-        synchronized(this) { generation++; selected = match; return snapshot() }
+        synchronized(this) {
+            if (generation != expectedGeneration) return null
+            generation++
+            selected = match
+            return snapshot()
+        }
     }
     @Synchronized fun clear() { generation++; selected = null }
     @Synchronized fun invalidateSql() { generation++ }
