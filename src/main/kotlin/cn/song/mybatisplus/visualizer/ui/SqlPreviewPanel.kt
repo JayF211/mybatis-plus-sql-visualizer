@@ -257,6 +257,8 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
     internal var auxiliaryInsightListener: com.intellij.openapi.Disposable? = null
     internal var auxiliaryInsightGeneration = 0L
     internal var comparisonSqlInvalidated: (() -> Unit)? = null
+    internal var comparisonExecutionForTest: cn.song.mybatisplus.visualizer.ui.insight.ComparisonExecutionPort? = null
+    internal var comparisonTargetForTest: cn.song.mybatisplus.visualizer.execute.ComparisonTargetSession? = null
     internal var lastInsightUsageReport: cn.song.mybatisplus.visualizer.sql.insight.SqlUsageReport? = null
 
     /**
