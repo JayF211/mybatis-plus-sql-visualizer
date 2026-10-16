@@ -10,7 +10,7 @@
 
 - 合并前 dev：`66f8645e2b4d88964106da1a6cd1bdd60dc7a6ec`。
 - 当前合入 master：`d7cdfb8f`。主工作树的未跟踪 JDK8/Redis 调查计划不纳入。
-- 合并提交、实际插件 SHA/哈希：待构建后记录。
+- 合并提交：`be3ff18b`，父提交 `66f8645e`、`d7cdfb8f`；当前沙盒为该提交构建，实际插件文件哈希待记录。
 - 启动前编译：243配置下 `compileKotlin compileTestKotlin -Pkotlin.incremental=false --no-configuration-cache` 成功，2026-10-16 17:54:44退出0，3m4s；尚未执行本次定向/全量测试，不能记为UI通过。
 - 目标平台：默认 IU 2024.3.7.1（243）；不使用 gifRecord 切换262。
 - 独立沙盒容器：`build/MPSV-MasterMerge-UI243`，通过 `.local/master-merge-ui243.init.gradle` 配置并关闭runIde自动重载，防止后台修复构建改变本批在验版本；实际子目录、PID、全屏/置顶证据待启动后记录。
@@ -74,6 +74,32 @@
 
 未执行、入口缺失、真实provider没有返回、自然融合事件未出现时分别记录，不能合并写成通过。243无MCP平台能力不代表该工具已验收；需要另一个支持版本验证时单独记录版本。
 
+## 第一批实际操作记录
+
+- 环境：243沙盒JBR进程PID54712；初次信任仅演示工程，增强捕获确认框已展示采集范围/本机机制/取消冷却说明，点击同意。主窗口通过原生Enter Full Screen切换，frame-068c1c00证实1920×1080全屏；窗口ID由4591970变为4657506。系统级置顶尚未完成；动作搜索仅有Folders Always on Top（文件夹排序），不能冒充窗口置顶。
+- CUA取证：Swing弹层有独立窗口，主窗口截图不包含搜索/下拉浮层；必须list_windows定位后绑定实际窗口。UIA只显示标题栏时按截图操作，工具“unchanged”仅指稀疏结构，不等于画面无变化。菜单不得因主窗口截图缺席就判产品失败。
+- U17/U27局部：`mybatis-plus-demo/UserServiceImpl.java` 36行gutter预览成功，显示三项动态条件与`恒真·缺省`。输入username=`ui_alpha`、status=1、age=18，SQL即时回填且逻辑删除保持，frame-4ae4ef7c。行首空白处快捷键曾给“未找到源”，暂不定缺陷，后续在表达式内做对照。
+- U23局部：管理预设默认项重命名/删除禁用；另存UI-P1成功。选UI-P1后改username为ui_beta、取消status，切默认得到修改后的工作值（frame-e908acd5）；再从下拉选择UI-P1，恢复ui_alpha/status=1勾选/age18（frame-762e6444）。证明本次普通参数与条件快照未被编辑覆盖；跨方法/foreach/20上限/重启仍未验，不将U23整项标完成。
+
+- U23继续：清除按钮将三个输入清空但保持条件勾选，SQL恢复问号（frame-1c18d480）；默认/UI-P1往返能恢复已存快照，命名方案未被清除按钮删除。
+- U22局部：分享窗口七出口齐，默认Markdown；第七入口打开审阅表单，目的地公开需求池明确，无附件控件，初始正文618字节、值与标识符投影为问号/identifier_N（frame-3640075a）。取消SQL结构段后正文187字节（frame-96e2d961）；勾同意正对照frame-e25c2359后编辑正文，勾选撤销、预算变27（frame-045860ec）。输入最终超过预算实测22520/16384，同意保持未勾，提交按钮仍显示可点；尚未触发提交验证，不能据按钮外观判安全闸失效。最后点取消，未实际发送。大文本CUA paste曾粘入非预期剪贴板内容，改分段typeText且以界面字节数为准，工具传入长度不是实际录入证据。
+
+- U19无计划正例：真实更多菜单复制AI上下文，再粘入本地预览编辑区读取（随后Undo恢复原SQL），frame-3bf39ae8显示`AI context v2`、值掩码4、标识符隐藏、`EXPLAIN: not obtained`、静态tables=1/columns=12。未点击执行，未对外发送；零网络/JDBC活探针仍以此前独立证据为辅，不以无弹窗代证。
+- U28回放正例：GUI选择MySQL事务包装，保存 `build/ui243-replay-b1.sql`；文件实际包含START TRANSACTION、填实值ui_alpha/1/18的完整SELECT、单条末尾分号和COMMIT；未执行脚本。截图frame-c68d9bd3及本地导出文件构成实物；不支持事务方言与多语句边界仍待验。
+- 当前实际插件：IU-243.28141.41，SQL Visualizer 2026.10.16；沙盒lib主JAR 6,012,505 bytes，SHA-256 `b169010e96134f757bfc368607c4e7ef70225bdaca8d9160171844e0817566d1`。启动日志未检出ERROR/SEVERE。
+- 缺样准备独立demo树 `mybatis-plus-sql-visualizer-demo-ui-fixtures`：689e91a填充四型、3a74a13普通MP模型JAR、7b9806b真实ShardingSphere/H2；均已编译，后者CLI两单分片及跨分片查询真实通过。UI尚未打开该树，不冒称分片捕获已验。
+
+- U14/U16准备：首按执行在预览底部给红色“没有与MySQL匹配的已配置数据源”，可复制完整错误（frame-abd735fe）。原生Database配置正对照明确报Driver files are not downloaded（frame-791759ea）；因此先判新沙盒缺驱动，不将这次拒绝冒充双目标闸已触达或产品缺陷。已由原生按钮下载MySQL驱动，进入Test Connection，后续结果继续记录。
+
+- U14同源正例已触达真实链：补齐驱动与演示工程已有本地测试密码后Test Connection成功（MySQL8.0.12，frame-ac0e813e）。Runner弹层真实列出五个本地MySQL源，选mp_demo，日志19:03:19 `session created target=8d6c2a1b-f817-44fd-a3db-6798b116bc78/MySQL`、19:03:20 `native query SUBMITTED`；原生网格0行。取消username与age条件后再次执行，原生Result2显示37行（frame-b8ee992e），说明已绑定控制台可用；冲突/未知与重渲染负例尚未覆盖。
+- U25原生EXPLAIN正例：同面板执行计划得到真实MySQL表格一行（frame-2f41afbd），尚未启用结构化及持久化，不能关闭R90子项。
+- U16预览入口：手动编辑为`SELECT missing_ui_column FROM user`后执行，底部明确`[42S22][1054] Unknown column...`及当前库/数据源，旧结果保留但失败状态清楚（frame-e33c6cb2）。点击复制错误再本地粘贴，状态码与库上下文完整（frame-af1a791d）；Undo恢复错误SQL后点击定位，整条失败语句选中（frame-86d03436）。其他三个模板/日志入口尚未验。
+- 日志附带发现两次原生DatabaseView.PropertiesAction的SlowOperations，已派只读归因；未证本插件责任前不擅改平台相关代码。兼容回退MySQL的Wrapper在目标MySQL时直接执行也交独立复核其契约，不把未提示误判为安全缺口。
+
+- U18/U25：启用结构化和独立留存后，第一次无绑定回原生；已绑定后再点得到结构化MySQL计划、提示已保存（frame-2fad9ab2）；第二次出现无变化比较与历史基线（frame-499e339e），切历史项能只读重绘（frame-1ba5494c），基线文案缺陷UI-002另记。U19有计划复制实测`already acquired; exact match; type=ref; rows=1; filteredPercent=5.0`（frame-9c51ccd3），没有原始NOTICE条件；重启和隔离负例仍待验。
+- U04/U09：5条真实agent日志单击只选中并出一次性就地提示（frame-17f6a30a），从提示打开底部预览；编辑`SELECT 42 AS ui_draft`后选第二条仍保草稿（frame-99f47ca8），恢复后跟随第二条id=2（frame-7753cff7）。双击完整预览有参数2和栈摘要；栈弹层可见内部折叠、采集省略24帧不可展开与业务n1行（frame-c0347c60）。列表右键跳Java实际定位LogFeederController.java:58（frame-a07cd13b）。摘要仍先显示agent内部帧，列后续可读性复核，不把弹层业务可见当摘要也合格。
+- U06真实暂停/恢复：IDE Run启动MybatisPlusDemoApplication，PID24408、8081；捕捉后请求ids1~5得到5条带源码/耗时记录。暂停增强后ids6/7仍经控制台入列表，无耗时/源码（frame-c88ccc5d）；恢复后ids8/9新增两条带源码/耗时，总数9、旧暂停两条未补放重复（frame-4ab3cd15）。同结构徽章同步5→7→9；自然跨通道同次MERGED与持久历史仍待验。
+
 ## 缺陷与批次
 
 当前无UI操作结果，问题表不预填。合并冲突属于准备工作，不冒充本次UI发现。
@@ -82,6 +108,11 @@
 
 | 缺陷 | 发现批次/用例 | 复现/实际与预期 | 独立修复分支/提交 | 定向验证 | 沙盒复验 |
 |---|---|---|---|---|---|
+| UI-001 | B1/U18、U40 | Settings默认998×742，SQL Preview控件列推到右侧，开关文案与R90激活前隐私披露被截；frame-43bc71fb/766d6787。预期常规宽度可读，不靠扩大窗口/tooltip掩盖 | t-devui-settings-layout；独立代理修复中 | 待验 | 待批末合入后复验 |
+
+| UI-002 | B1/U18、U25 | 第二次结构化计划基线选项显示内部编号R61，历史项为原UTC时间+UUID；用户无法直观区分当前会话上次与历史快照。frame-499e339e/40716065 | t-devui-plan-baseline；独立代理修复中 | 待验 | 待批末复验 |
+
+| UI-003 | B1/U05；用户现场指出 | 宽日志工具栏没有可辨认的清除日志图标，第三动作显示通用占位样式；frame-9baa1a8e。源码SqlLogPanel.kt:505–509已注册ClearAction，但:1122–1129构造无图标、update只设text，其他同排动作均显式设icon。判定为图标配置遗漏，不是动作未注册或窄栏溢出。未为验证而清除当前5条日志 | 按用户要求纳入下一批统一修复；本批运行包不变 | 待补真实ActionToolbar图标回归 | 待宽/窄栏、主题及点击清除回归 |
 
 ## 依据与历史证据保全
 
