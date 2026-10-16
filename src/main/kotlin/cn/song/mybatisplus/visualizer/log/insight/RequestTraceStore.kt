@@ -74,25 +74,25 @@ class RequestTraceStore(private val maxRequests: Int = 500, private val maxTrans
         val captured = synchronized(this) { requests.map { (id, pair) -> id to pair.copy() } to controlTruncated }
         val byRequest = sql.observations.groupBy { it.runId to it.requestId }
         return captured.first.map { (id, pair) ->
-        val start = pair.start
-        val end = pair.end
-        val runId = start?.envelope?.runId ?: end?.envelope?.runId.orEmpty()
-        val events = byRequest[runId to id].orEmpty()
-        val quality = sql.qualityIssues.toMutableSet()
-        if (captured.second) quality += "control_capacity"
-        if (end?.asyncStarted != false) quality += "async_coverage_unknown"
-        if (end?.generatedSql != end?.completedSql) quality += "sql_still_active"
-        val expected = end?.completedSql?.takeIf { it in 0..Int.MAX_VALUE.toLong() }?.toInt()
-        val evidence = SqlRequestEvidence(id, runId, start != null, end != null, end?.lastSqlSequence,
-            expected, end?.sqlCaptureLost, if (end?.generatedSql != null && end.generatedSql == end.completedSql) 0 else null,
-            crossThreadCoverageProven = false,
-            supportedCapture = end?.coverage == "SERVLET_THREAD_ONLY", observations = events, qualityIssues = quality)
-        val repeated = events.groupBy { Triple(it.fingerprint, it.callSite, it.databaseIdentity) }
-            .filterValues { it.size >= 3 }.map { (key, group) ->
-                RepeatedQueryEvidence(key.first, key.second, key.third, group.size, group.take(20).map { it.executionId })
-            }
-        ObservedRequest(id, start?.parentRequestId ?: end?.parentRequestId, start, end, evidence,
-            intervalUnion(events), repeated)
+            val start = pair.start
+            val end = pair.end
+            val runId = start?.envelope?.runId ?: end?.envelope?.runId.orEmpty()
+            val events = byRequest[runId to id].orEmpty()
+            val quality = sql.qualityIssues.toMutableSet()
+            if (captured.second) quality += "control_capacity"
+            if (end?.asyncStarted != false) quality += "async_coverage_unknown"
+            if (end?.generatedSql != end?.completedSql) quality += "sql_still_active"
+            val expected = end?.completedSql?.takeIf { it in 0..Int.MAX_VALUE.toLong() }?.toInt()
+            val evidence = SqlRequestEvidence(id, runId, start != null, end != null, end?.lastSqlSequence,
+                expected, end?.sqlCaptureLost, if (end?.generatedSql != null && end.generatedSql == end.completedSql) 0 else null,
+                crossThreadCoverageProven = false,
+                supportedCapture = end?.coverage == "SERVLET_THREAD_ONLY", observations = events, qualityIssues = quality)
+            val repeated = events.groupBy { Triple(it.fingerprint, it.callSite, it.databaseIdentity) }
+                .filterValues { it.size >= 3 }.map { (key, group) ->
+                    RepeatedQueryEvidence(key.first, key.second, key.third, group.size, group.take(20).map { it.executionId })
+                }
+            ObservedRequest(id, start?.parentRequestId ?: end?.parentRequestId, start, end, evidence,
+                intervalUnion(events), repeated)
         }
     }
 

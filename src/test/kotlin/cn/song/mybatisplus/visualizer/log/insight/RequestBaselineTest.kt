@@ -14,7 +14,9 @@ class RequestBaselineTest {
     @Test fun `explicit export roundtrip contains only digests counters label and quality`() {
         val encoded = json()
         for (secret in listOf("raw-run", "raw-request", "db-secret", "secret-path", "secret-tag", "jdbc:secret-context")) assertFalse(encoded.contains(secret))
-        assertEquals(baseline(), (RequestBaselineCodec.decode(encoded) as RequestBaselineCodec.DecodeResult.Ready).baseline)
+        val imported = RequestBaselineCodec.decode(encoded) as RequestBaselineCodec.DecodeResult.Ready
+        assertEquals(baseline(), imported.baseline)
+        assertEquals("user_provided_baseline_not_capture_attestation", imported.trustNotice)
         assertEquals(SqlBudgetStatus.PASS, RequestBaselines.evaluate(baseline(), evidence(), "jdbc:secret-context").status)
         assertEquals(SqlBudgetStatus.INCONCLUSIVE, RequestBaselines.evaluate(baseline(), evidence(), "other").status)
     }
@@ -26,6 +28,31 @@ class RequestBaselineTest {
         val loaded = (RequestBaselineCodec.decode(json(partial)) as RequestBaselineCodec.DecodeResult.Ready).baseline
         assertEquals(SqlBudgetStatus.INCONCLUSIVE, RequestBaselines.evaluate(loaded, evidence(), "jdbc:secret-context").status)
         assertTrue(loaded.coverageIssues.contains("terminal_count_mismatch"))
+    }
+
+    @Test fun `baseline missing one event cannot turn fuller capture into proven regression`() {
+        val partial = baseline(evidence().copy(expectedExecutions = 2, lossCount = 1))
+        val first = evidence().observations.single()
+        val actual = evidence().copy(endWatermark = 2, expectedExecutions = 2,
+            observations = listOf(first, first.copy(executionId = "e2", sequence = 2, fingerprint = "b".repeat(64), status = ExecutionObservationStatus.ERROR)))
+        val loaded = (RequestBaselineCodec.decode(json(partial)) as RequestBaselineCodec.DecodeResult.Ready).baseline
+        val comparison = RequestBaselines.evaluate(loaded, actual, "jdbc:secret-context")
+        assertEquals(SqlBudgetStatus.INCONCLUSIVE, comparison.status)
+        assertEquals(setOf("b".repeat(64)), comparison.addedShapes)
+        assertEquals(1, comparison.observedExecutionDelta)
+        assertEquals(10L, comparison.observedCumulativeNanosDelta)
+        assertEquals(1, comparison.observedErrorDelta)
+        assertFalse(comparison.reasons.any { it.endsWith("budget_exceeded") || it == "unexpected_shape_observed" })
+        // Explicit absolute budgets are independent: their observed lower-bound FAIL remains valid.
+        assertEquals(SqlBudgetStatus.FAIL, RequestSqlBudget.evaluate(actual, SqlRequestBudget(1, 10)).status)
+    }
+
+    @Test fun `complete baseline can establish new shape failure with unchanged event count`() {
+        val actual = evidence().copy(observations = evidence().observations.map { it.copy(fingerprint = "b".repeat(64)) })
+        val comparison = RequestBaselines.evaluate(baseline(), actual, "jdbc:secret-context")
+        assertEquals(SqlBudgetStatus.FAIL, comparison.status)
+        assertEquals(setOf("b".repeat(64)), comparison.addedShapes)
+        assertEquals(0, comparison.observedExecutionDelta)
     }
 
     @Test fun `strict loading rejects duplicate fields versions counts unknown data and nested payloads`() {

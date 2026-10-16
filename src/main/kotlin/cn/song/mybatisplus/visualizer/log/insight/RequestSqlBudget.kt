@@ -28,6 +28,10 @@ data class SqlBudgetVerdict(
     val observedErrors: Int,
     val addedShapes: Set<String> = emptySet(),
     val missingShapes: Set<String> = emptySet(),
+    /** Observed-only deltas for baseline comparison; null for an absolute budget or incomparable context. */
+    val observedExecutionDelta: Int? = null,
+    val observedCumulativeNanosDelta: Long? = null,
+    val observedErrorDelta: Int? = null,
 )
 
 object RequestSqlBudget {

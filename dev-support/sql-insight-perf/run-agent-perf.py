@@ -150,7 +150,7 @@ def trial(args, mode, index, classes):
     receiver = Receiver() if mode != "none" else None
     command = [args.java, "-Xms128m", "-Xmx512m", "-Djava.awt.headless=true", "-Dsqlinsight.perf.warmRequests=" + str(args.warm_requests)]
     if receiver:
-        command += ["-Dsqlvis.agent.heartbeatMs=200", "-javaagent:" + args.agent + "=port=" + str(receiver.port)]
+        command += ["-javaagent:" + args.agent + "=port=" + str(receiver.port)]
     command += ["-cp", os.pathsep.join((str(classes), args.h2, args.servlet)), "perf.sqlinsight.SqlInsightWorkload"]
     proc = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace", bufsize=1)
     lines, output = queue.Queue(), []
@@ -232,7 +232,7 @@ def main():
     classes = Path(args.output, "classes"); classes.mkdir(exist_ok=True)
     source = Path(__file__).with_name("SqlInsightWorkload.java")
     subprocess.run([args.javac, "-encoding", "UTF-8", "-d", str(classes), "-cp", args.servlet, str(source)], check=True)
-    metadata = dict(hostContention=args.host_contention, gitSha=subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip(),
+    metadata = dict(hostContention=args.host_contention, agentHeartbeat="production-default-10000ms", gitSha=subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip(),
                     java=subprocess.check_output([args.java, "-version"], stderr=subprocess.STDOUT, text=True),
                     jars={name: hashlib.sha256(Path(getattr(args, name)).read_bytes()).hexdigest() for name in ("agent", "h2", "servlet")},
                     limitations=["local synthetic H2 + Servlet dispatch, not HTTP/container latency", "driver read/execute workload; startup excluded", "heap pool peak sum is not simultaneous peak", "RSS is sampled before/after; peakRSS includes startup", "no delivery completeness inferred from latency", "warmup block stability must be inspected; use --warm-requests to rerun a fixed longer warmup"])

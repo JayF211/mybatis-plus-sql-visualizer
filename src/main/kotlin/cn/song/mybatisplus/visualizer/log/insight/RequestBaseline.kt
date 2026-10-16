@@ -58,13 +58,32 @@ object RequestBaselines {
             coverageIssues = issues, complete = verdict.status == SqlBudgetStatus.PASS && issues.isEmpty()))
     }
 
-    /** Imported incomplete snapshots can show deltas, but never authorize a PASS against a filtered baseline. */
+    /**
+     * An incomplete baseline is an observed subset, not an absolute budget: it proves neither PASS nor FAIL.
+     * Complete imported baselines are user assertions, not authenticated capture evidence. Evaluate an explicit
+     * absolute user budget separately with RequestSqlBudget; never derive it from missing baseline observations.
+     */
     fun evaluate(baseline: RequestBaseline, actual: SqlRequestEvidence, contextKey: String): SqlBudgetVerdict {
         if (contextKey.isBlank() || baseline.contextDigest != digest(contextKey))
             return SqlBudgetVerdict(SqlBudgetStatus.INCONCLUSIVE, setOf("baseline_context_mismatch"), 0, 0, 0)
-        val guarded = if (baseline.complete) actual else actual.copy(qualityIssues = actual.qualityIssues + "baseline_incomplete")
-        return RequestSqlBudget.evaluate(guarded, SqlRequestBudget(baseline.executions, baseline.cumulativeNanos,
-            baseline.errors, baseline.shapeCounts.keys))
+        val complete = baseline.complete && baseline.coverageIssues.isEmpty()
+        val comparison = if (complete) {
+            RequestSqlBudget.evaluate(actual, SqlRequestBudget(baseline.executions, baseline.cumulativeNanos,
+                baseline.errors, baseline.shapeCounts.keys))
+        } else {
+            // Use the normal scope validator for metrics, but never use an incomplete subset as a threshold.
+            val observed = RequestSqlBudget.evaluate(actual, SqlRequestBudget(Int.MAX_VALUE, Long.MAX_VALUE, Int.MAX_VALUE))
+            val actualShapes = actual.observations.asSequence().filter {
+                it.runId == actual.runId && it.requestId == actual.requestId && it.executionId.isNotBlank() &&
+                    it.sequence > 0 && it.durationNanos >= 0
+            }.map { it.fingerprint }.toSet()
+            observed.copy(status = SqlBudgetStatus.INCONCLUSIVE,
+                reasons = observed.reasons + setOf("baseline_incomplete", "observed_subset_delta_not_regression"),
+                addedShapes = actualShapes - baseline.shapeCounts.keys, missingShapes = baseline.shapeCounts.keys - actualShapes)
+        }
+        return comparison.copy(observedExecutionDelta = comparison.observedExecutions - baseline.executions,
+            observedCumulativeNanosDelta = comparison.observedCumulativeNanos - baseline.cumulativeNanos,
+            observedErrorDelta = comparison.observedErrors - baseline.errors)
     }
 
     internal fun safeLabel(value: String) = label.matches(value) && !privateWords.containsMatchIn(value)

@@ -14,7 +14,9 @@ object RequestBaselineCodec {
         "loss_not_zero_or_unknown", "children_not_closed", "event_after_terminal_watermark", "unknown_result",
         "truncated_event", "capture_quality_incomplete")
     sealed interface DecodeResult {
-        data class Ready(val baseline: RequestBaseline) : DecodeResult
+        /** Syntax/consistency validation is not authentication of externally supplied complete=true. */
+        data class Ready(val baseline: RequestBaseline,
+            val trustNotice: String = "user_provided_baseline_not_capture_attestation") : DecodeResult
         data class Rejected(val reason: String) : DecodeResult
     }
     sealed interface EncodeResult {

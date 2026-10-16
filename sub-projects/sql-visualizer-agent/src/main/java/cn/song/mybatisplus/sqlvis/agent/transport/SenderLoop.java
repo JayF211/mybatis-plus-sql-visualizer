@@ -273,9 +273,11 @@ final class SenderLoop implements Runnable {
                         }
                     }
                     // Trace control is bounded independently and negotiated per connection.
+                    int controlBurst = 0;
                     for (int controls = 0; controls < 64; controls++) {
                         TraceBus.Frame trace = TraceBus.poll();
                         if (trace == null) break;
+                        controlBurst++;
                         try {
                             if (trace.body.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > MAX_FRAME_LEN) {
                                 TraceBus.encodedFailure(); continue;
@@ -295,7 +297,13 @@ final class SenderLoop implements Runnable {
                         writeFrame(out, EventBus.CMD_CAPTURE_STATE, captureStateBody());
                         lastCaptureStateNanos = System.nanoTime();
                     }
-                    // 3) 入站帧（非阻塞轮询：超时=无数据）——[len][cmd][body]，畸形帧抛异常走重连
+                    // A busy sender must not pay one CONFIG timeout per 64 outgoing frames.
+                    // available() gates ONLY whether to start a read. Once any byte is present,
+                    // the original parser owns the entire frame (including partial-frame timeout).
+                    // Every bounded burst still gives CONFIG a turn; idle loops retain blocking
+                    // read/pause so an empty queue cannot turn this into a CPU spin.
+                    final boolean busy = burst > 0 || controlBurst > 0;
+                    if (!busy || in.available() > 0) {
                     try {
                         final InboundFrame frame = readInboundFrame(in);
                         if (frame.cmd == EventBus.CMD_CONFIG) {
@@ -312,7 +320,8 @@ final class SenderLoop implements Runnable {
                             lastOutboundMs = System.currentTimeMillis();
                         }
                     } catch (java.net.SocketTimeoutException ignore) {
-                        // 无入站数据
+                        // No first byte: idle. A partial frame is a non-timeout IOException.
+                    }
                     }
                     // 3.5) T-07 看门狗：会话建立后 X ms 内从未收到任何 CONFIG → 主动停采（每连接一次）
                     //      用既有循环判，不新开线程；停采走 AgentState.setDisabled（顺带清队列，T-01b）
@@ -327,7 +336,7 @@ final class SenderLoop implements Runnable {
                     }
                     // 4) 空转轮询节奏（有事件突发时不睡，保持事件吞吐）；
                     //    睡眠不得跨过下一次心跳时刻，否则读阻塞会把心跳推后一整轮
-                    if (burst == 0) {
+                    if (!busy) {
                         final long remainMs = heartbeatIntervalMs
                                 - (System.currentTimeMillis() - lastOutboundMs);
                         final long sleepMs = Math.max(0L, Math.min(POLL_IDLE_MS, remainMs));
