@@ -45,6 +45,8 @@ public class McpDbSignatureChecker {
         missing += check(method(dsm, "getDataSources"), "DataSourceManager.getDataSources()");
         Class<?> das = Class.forName("com.intellij.database.model.DasDataSource", true, loader);
         missing += check(method(das, "getName"), "DasDataSource.getName()");
+        missing += check(method(Class.forName("com.intellij.database.dataSource.AbstractDataSource", true, loader),
+                "getModificationCount"), "AbstractDataSource.getModificationCount()");
         missing += check(method(das, "getConnectionConfig"), "DasDataSource.getConnectionConfig()");
         missing += check(method(Class.forName("com.intellij.database.model.RawConnectionConfig", true, loader), "getUrl"), "RawConnectionConfig.getUrl()");
 

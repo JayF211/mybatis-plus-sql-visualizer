@@ -40,7 +40,8 @@ object ProjectResultComparison {
                     val actual = ExecutionDialectGate.fromDataSource(ds)
                     // Freeze the actual connection config, not its friendly name. The digest stays
                     // local and is never exported; connection credentials are not logged.
-                    val config = (ExecDialectRouting.dataSourceUrl(ds) ?: "") + "\u0000" + actual.dialectName
+                    val config = (ExecDialectRouting.dataSourceUrl(ds) ?: "") + "\u0000" + actual.dialectName +
+                        "\u0000" + ComparisonTargetSession.configurationRevision(ds)
                     val digest = java.security.MessageDigest.getInstance("SHA-256")
                         .digest(config.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
                     if (bound == null) { bound = ds; connectionFingerprint = digest }
