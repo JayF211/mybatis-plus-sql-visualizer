@@ -105,7 +105,24 @@ agent首轮3组各3个独立JVM，实际心跳为实验注入200ms，warm200请�
 - 首轮日志SHA256 `0112fedbe1a17961004f5159828e9fb4f5e46011cf4ba645f43c3c50ef7ccd5a`；审计报告SHA256 `af7090e79bdc6e641cdaf299af45be721243b15b211aec750fd2688f41f7df9d`，均在gate树build/final-gate。4项实际skip为Windows符号链接权限1、Database测试classpath不可用2、ACP impl制品缺席1；容器用例所在后续片尚未执行，不能提前算入skip。
 - 修复使67533aca的全量读数过期，须另冻新SHA完整复跑，不把第一片绿与第二轮部分绿拼成全量。首轮归档 `.local/sql-insight-gate-round1-failed.tar.gz`，SHA256 `826fb6aacb296817000865103cfff4e8996ee8a223ad8bbcd61a6019c7682759`。
 - 六红修复：Remote fatal资源关闭语义/重挂self PID夹具局部注入正对照/ExecutionScope真实嵌套守卫收编edc9a9c0，元守卫登记214adcb5；UI fatal优先透传与导航块内PSI重取精准说明988db4fe，真实去注释负例；W43动态键模板及9实际算子键双语断言43b1a351。生产attach安全闸未放宽、没有虚造bundle父键。后端定向平台32、Meta/Wiring15绿，UI守卫组合七类39/0/0/0，含Banned/Bundle/Meta全扫描及真实导航去注释1命中、fatal/普通异常行为测试。
-- 第二轮正式冻结 `b23e890de8b46cea71f9ed5b8fb5b7df16443a0c`，已单向吸收dev `c15a63cc` 的非GUI日志几何探针。授权gate干净detached切换新SHA完整复跑5片/agent/external，本地init仅强制Test任务fresh，不clean；日志/审计进round2目录，不覆盖round1。第二轮尚未获得最终通过读数。六红修复定向独立归档 `.local/sql-insight-gatefix-evidence.tar.gz`，SHA256 `0266f92584d119dbd33802b601b92e98a30b124d2f9f9c8e462434971a20a4c7`。
+- 第二轮正式冻结 `b23e890de8b46cea71f9ed5b8fb5b7df16443a0c`，已单向吸收dev `c15a63cc` 的非GUI日志几何探针。授权gate干净detached切换新SHA完整复跑5片/agent/external，本地init仅强制Test任务fresh，不clean；日志/审计进round2目录，不覆盖round1。第二轮在第四片失败，完整情况如下。六红修复定向独立归档 `.local/sql-insight-gatefix-evidence.tar.gz`，SHA256 `0266f92584d119dbd33802b601b92e98a30b124d2f9f9c8e462434971a20a4c7`。
+
+### 第二轮完整结果与回交
+
+13分7秒后`:testShard4`失败，片5未运行；root新增63类中7类仍未入场，不作全量通过。
+
+| 桶 | 类 | tests/failures/errors/skipped |
+|---|---:|---|
+| shard1 | 160 | 1811/0/0/0 |
+| shard2 | 148 | 1443/0/0/0 |
+| shard3 | 155 | 1515/0/0/6 |
+| shard4 | 153 | 1740/2/0/3 |
+| external | 6 | 27/0/0/1 |
+| agent | 38 | 213/0/0/0 |
+
+两项为陈旧测试契约：AgentListenSyncTest期望旧JSON未含三个默认false追踪字段，原停采/脱敏值未变；JavaCodeGeneratorJoinTest期望MP核心Lambda.selectAs，本地MP3.5.17 javap证实无该API，dev UI005已改为QueryWrapper完整字符串投影，MPJ路径仍须selectAs。分别补精确字段启停闭环与真实编译/MPJ正对照，未放宽生产安全规则，定向回归后再冻第三轮。
+
+本轮10skip：Docker明确禁用5、外部jdbcUrl未给1、Database测试classpath缺席2、符号链接权限1、ACP结构性1。round2日志SHA256 `eedb0ce810b22dc89c9855799c9f462c00981a58abe53b16e2f655288754178a`，audit `f0e9425cc6a7795162efc6bb300eed58a6958e76df94ef5c9a51b1e8a972681c`；封存 `.local/sql-insight-gate-round2-failed.tar.gz`，SHA256 `f4493623a5d9e107aa161f11037998e224aa29cff79e7b3736e0f32e6114c3a4`。
 
 ### Agent JVM 验证层级
 
