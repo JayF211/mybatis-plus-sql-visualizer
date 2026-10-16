@@ -372,9 +372,9 @@ private val WHITESPACE_RUN_REGEX = Regex("""\s+""")
 internal fun logTimeKey(entry: LogSqlEntry): String = sqlFingerprint(normalizeSqlWhitespace(entry.rawSql))
 
 /**
- * T-AgentLogTime：日志时间配对的次级判别——参数**值**序列签名。
- * 同键（同一条 SQL 多次执行）时用它挑参数一致的那条；两侧渲染口径若分叉则退化为队首配对
- * （近似但不错失），故不做强制相等断言。无参语句两侧都是空串，天然相等。
+ * T-AgentLogTime：日志时间配对的参数**值**序列签名。
+ * 同键多次执行只消费签名相同的候选；两侧口径分叉则未命中，不借其他执行的时间。
+ * 无参语句两侧都是空串，天然相等，仍可按 FIFO 配对。
  * T-PS4-05：join 前逐值截断 [PARAM_SIGNATURE_MAX_CHARS]——超长 blob/JSON 参数不再整串进签名，
  * 相关器驻留有界（桥嗅探 put 与 agent take 共用本函数，截断天然等价）。
  */
@@ -480,7 +480,7 @@ internal fun isConsoleFallbackWithoutSource(entry: LogSqlEntry): Boolean =
 
 /**
  * T-PS4-05：签名单值截断上限（256 字符）。两侧（桥嗅探 put 与 agent take）走同一函数天然等价；
- * 次级判别失配本就设计为退化为队首配对（LogTimeCorrelator 注释），语义风险可控。
+ * 截断签名不同则拒绝配对；相同前缀的碰撞风险仍属于既有签名表示边界，本次不改编码。
  */
 internal const val PARAM_SIGNATURE_MAX_CHARS = 256
 
