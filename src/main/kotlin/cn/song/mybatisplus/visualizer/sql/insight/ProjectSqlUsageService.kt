@@ -89,7 +89,7 @@ class ProjectSqlUsageService(private val project: Project) : Disposable {
                 val psi = PsiManager.getInstance(project).findFile(vf) ?: return@compute FileSlice(skipped = true)
                 if (psi.textLength > limits.maxFileCharacters) return@compute FileSlice(skipped = true,
                     diagnostics = listOf(SqlUsageDiagnostic("FILE_SIZE_LIMIT", "File exceeds text budget: ${vf.path}")))
-                extract(psi, vf.path, vf.modificationStamp, template, limits, ::cancelled)
+                extract(psi, vf.path, psi.modificationStamp, template, limits, ::cancelled)
             }
             if (result.children != null) {
                 directories++
@@ -146,7 +146,10 @@ class ProjectSqlUsageService(private val project: Project) : Disposable {
         while (stack.isNotEmpty() && !cancelled() && nodes++ < limits.maxPsiNodesPerFile && candidates.size < limits.maxCandidates) {
             val element = stack.removeLast()
             if (element is PsiPolyadicExpression && element.operationTokenType == JavaTokenType.PLUS) {
-                val parts = element.operands.map { (it as? PsiLiteralExpression)?.value as? String }
+                val operands = element.operands
+                if (operands.size > limits.maxPsiNodesPerFile - nodes) return FileSlice(candidates = candidates, diagnostics = diagnostics, truncated = true)
+                nodes += operands.size
+                val parts = operands.map { (it as? PsiLiteralExpression)?.value as? String }
                 if (parts.all { it != null }) add(parts.joinToString("") { it!! }, element, SqlCandidateKind.JAVA_CONSTANT)
                 else diagnostics += SqlUsageDiagnostic("NON_CONSTANT_CONCATENATION", "Non-literal concatenation was not evaluated.",
                     SqlSourceLocation(path, element.textRange.startOffset, element.textRange.endOffset, stamp))
@@ -154,7 +157,12 @@ class ProjectSqlUsageService(private val project: Project) : Disposable {
             }
             if (element is PsiLiteralExpression) (element.value as? String)?.let { add(it, element, SqlCandidateKind.JAVA_CONSTANT) }
             var child = element.firstChild
-            while (child != null) { stack.addLast(child); child = child.nextSibling }
+            while (child != null) {
+                if (cancelled() || nodes + stack.size >= limits.maxPsiNodesPerFile)
+                    return FileSlice(candidates = candidates, diagnostics = diagnostics, truncated = true)
+                stack.addLast(child)
+                child = child.nextSibling
+            }
         }
         return FileSlice(candidates = candidates, diagnostics = diagnostics, truncated = stack.isNotEmpty())
     }

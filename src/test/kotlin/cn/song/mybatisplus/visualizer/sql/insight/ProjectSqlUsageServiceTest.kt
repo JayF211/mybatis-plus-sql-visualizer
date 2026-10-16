@@ -33,6 +33,7 @@ class ProjectSqlUsageServiceTest : LightJavaCodeInsightFixtureTestCase() {
             assertEquals(file.virtualFile.path, candidate.location.filePath)
             assertEquals(0, candidate.location.startOffset)
             assertEquals(file.textLength, candidate.location.endOffsetExclusive)
+            assertEquals(file.modificationStamp, candidate.location.modificationStamp)
             assertTrue(report.usages.any { it.tableName == "users" && it.column == "name" })
         } finally { service.dispose() }
     }
