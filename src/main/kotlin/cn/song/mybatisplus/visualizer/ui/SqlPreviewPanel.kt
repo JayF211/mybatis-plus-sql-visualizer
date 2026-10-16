@@ -251,6 +251,8 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
         }
     internal var insightController: cn.song.mybatisplus.visualizer.ui.insight.PreviewInsightController? = null
     internal var scenarioInsightView: cn.song.mybatisplus.visualizer.ui.insight.ScenarioInsightView? = null
+    internal var runtimeInsightView: cn.song.mybatisplus.visualizer.ui.insight.RuntimeInsightView? = null
+    internal var runtimeInsightSource: cn.song.mybatisplus.visualizer.ui.insight.RuntimeInsightSource? = null
 
     /**
      * T-M27.2：自建 autopopup 的调度防重入标志（平台 autopopup 对非文件编辑器不生效）。
