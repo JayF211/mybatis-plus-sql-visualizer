@@ -115,7 +115,9 @@ tracing相对sql的中位P95为-5.16%、wall为-1.54%，逐轮P95增量却为+21
 
 优化产物agent SHA256 `8616b14342320a8ff1b1128f07d55d50b7aad06e05ecb886d7e7f86ac05ac876`已重新运行H09，不沿用旧agent结果。JDK 1.8.0_181、17.0.19、21.0.11均FUNCTIONAL_PASS：各5请求起止配对、4唯一功能SQL（3请求内）、7事务帧、真实commit/rollback关联及最终库行数1；SQL generated=written=5含setup，controlGenerated=written=17，全部loss0。javax/H2边界保持，summary SHA256 `e484ca4793e52a18008a20ac58f3ae398dea8a37a07005f63256a47e4ae75d3b`，原始目录为runtime树`build/MPSV-SqlInsight-Encoding-H09/functional-8-17-21`。
 
-已单向吸收dev日志时间归属修复至be132978；新冻结`be132978e183e9f72967658da09141be23c6a799`交独立gate做第五轮非计时全量/打包/兼容预检，资源允许才启动。第五轮和性能A/B不并行；资源预算依然未通过，不因功能复验绿而提前合流。
+已单向吸收dev日志时间归属修复至be132978；第五轮冻结`be132978e183e9f72967658da09141be23c6a799`，独立gate实际完成默认五片，exit0、15分15秒。主控核round5/test-audit.json：五片各1630/1505/1565/1731/1617例，共8048；external27、agent216，总814类8291/0/0/10，实际通过8281。769个计划分片类无缺，新增64类327方法全部入场且无跳过/重复；新SenderEncoding三例、dev时间归属14/15/4例均fresh通过。10项skip分类与第四轮一致，不扩大环境覆盖。日志SHA256 `0d70d6fc32ac936504239f65b42f23fef82b430ad520b6d5ec48f3672bc4a204`，审计JSON SHA256 `da1c7235c2f1de22eed1eebcc1ab69606fd4d189c1d2b26cc19a930b8bfa358b`。打包和三代兼容尚在后续步骤；第五轮不与性能A/B并行，资源预算依然未通过，不因功能全量绿而提前合流。
+
+编码红绿、42例XML、原新agent和优化H09三JDK原始结果已独立封存至`.local/sql-insight-encoding-functional-evidence.tar.gz`，SHA256 `cac88c0fe16953738d85f763ded6828b759bc47c6735a6dc9ece0996d00d9209`。
 
 ## 五、最终冻结与自动化门禁
 
