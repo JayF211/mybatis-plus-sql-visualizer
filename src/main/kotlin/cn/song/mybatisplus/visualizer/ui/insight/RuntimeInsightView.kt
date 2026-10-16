@@ -51,6 +51,7 @@ internal class RuntimeInsightView(
     val workload = InsightDetailPanel(listOf(text("runtime.session"), text("runtime.shape"), text("runtime.count"), text("runtime.duration"), text("runtime.errors")), text("runtime.notice"))
     private val requests = InsightDetailPanel(listOf("runId", "requestId", text("runtime.verdict"), text("runtime.count"), text("runtime.union")), text("runtime.requestNotice"))
     private val transactions = InsightDetailPanel(listOf("runId", "transactionId", text("runtime.kind"), text("runtime.status"), text("runtime.outcome")), text("runtime.transactionNotice"))
+    private val evidence = RuntimeEvidencePanel(text)
     private val enabled = JCheckBox(text("runtime.enable"))
     private val count = JSpinner(SpinnerNumberModel(100, 0, 1_000_000, 1))
     private val millis = JSpinner(SpinnerNumberModel(1000, 0, 1_000_000, 100))
@@ -77,6 +78,7 @@ internal class RuntimeInsightView(
             addTab(text("runtime.workload"), workload)
             addTab(text("runtime.requests"), requests)
             addTab(text("runtime.transactions"), transactions)
+            addTab(text("runtime.evidence"), evidence)
         }, BorderLayout.CENTER)
     }
     fun present(snapshot: RuntimeInsightSnapshot) {
@@ -87,6 +89,7 @@ internal class RuntimeInsightView(
         workload.status.text = text("runtime.notice") + "\n" + snapshot.sessions.mapIndexed { index, s -> "${index + 1}: enabled=${s.enabled}; quality=${s.qualityIssues}; bytes=${s.retainedBytes}" }.joinToString("\n")
         requests.showRows(RuntimeInsightPresentation.requests(snapshot, SqlRequestBudget((count.value as Number).toInt(), (millis.value as Number).toLong() * 1_000_000)))
         transactions.showRows(RuntimeInsightPresentation.transactions(snapshot))
+        evidence.present(snapshot)
     }
     fun dispose() {
         if (closed) return

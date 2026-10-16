@@ -52,6 +52,7 @@ internal fun SqlPreviewPanel.showExecutionCandidates() {
     val stamp = doc.modificationStamp
     val preview = current
     val panel = InsightDetailPanel(listOf("runId", "executionId", insightText("runtime.shape"), insightText("runtime.status")), insightText("runtime.candidateNotice"))
+    panel.button(insightText("runtime.compareSample")) { showObservedSqlDiff() }
     panel.button(insightText("close")) { previewTabs.remove("execution-candidates") }
     previewTabs.put("execution-candidates", insightText("runtime.candidates"), panel)
     previewTabs.pane?.selectedComponent = panel
