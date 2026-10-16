@@ -483,14 +483,19 @@ class JavaCodeGeneratorJoinTest {
     }
 
     @Test
-    fun `SELECT列带别名_生成selectAs`() {
+    fun `SELECT列带别名_MP核心回落字符串投影且MPJ保留selectAs`() {
         val result = SqlReverseResult(
             tableName = "user",
             selectColumns = listOf(SelectColumn("t.name", "productName"), SelectColumn("id")),
         )
-        val code = JavaCodeGenerator.generate(result, JavaCodeGenerator.EntityTarget("User", mapOf("id" to "id", "name" to "name")), GeneratedWrapper.LAMBDA)
-        assertTrue(code, code.contains(".selectAs(User::getName, \"productName\")"))
-        assertTrue(code, code.contains(".select(User::getId)"))
+        val entity = JavaCodeGenerator.EntityTarget("User", mapOf("id" to "id", "name" to "name"))
+        val code = JavaCodeGenerator.generate(result, entity, GeneratedWrapper.LAMBDA)
+        assertTrue(code, code.contains("new QueryWrapper<User>()"))
+        assertFalse("MP core LambdaQueryWrapper has no selectAs API", code.contains(".selectAs("))
+        GeneratedProjectionCompiler.assertProjection(code, "t.name AS productName,id")
+        val mpj = JavaCodeGenerator.generate(result, entity, GeneratedWrapper.MPJ_LAMBDA)
+        assertTrue(mpj, mpj.contains(".selectAs(User::getName, \"productName\")"))
+        assertTrue(mpj, mpj.contains(".select(User::getId)"))
     }
 
     @Test
