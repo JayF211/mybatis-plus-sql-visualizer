@@ -107,7 +107,6 @@ object JavaCodeGenerator {
         invocation: InvocationTarget?,
     ): String {
         val sb = StringBuilder()
-        appendHeader(sb, result, entity, wrapperKind, invocation)
         val isJoin = result.joins.isNotEmpty()
         // T-MapResultVo v2：返回类型声明原文的 TYPED 档（非 Map/Object 族 → 按类名走 VO 语义；
         // voClass 优先保留既有 API 兼容）
@@ -134,20 +133,34 @@ object JavaCodeGenerator {
         // 合法——MPJLambdaWrapper 无 leftJoin(String)（1.5.6 实证），不能 lambda 化时一律回落 MPJ_QUERY
         // 保证编译（含用户显式选择 MPJ_LAMBDA 的场景）
         // MConsumer 子查询形态也属于 lambda 形态，需纳入判定
+        val selectColumns = result.selectColumns?.filterNot { isIgnoredColumn(it.expr) }
+        // MP core 的 Lambda 列参数只接受 SFunction；别名/表达式/未映射投影和分组
+        // 必须整链使用字符串 Wrapper，不能只把单个列参数换成字符串。
+        val needsStringProjection = result.distinct || selectColumns.orEmpty().any {
+            it.alias != null || renderSelectRef(it, entity).startsWith('"')
+        } || result.groupBy.any {
+            resolveColumn(it.columnName, entity, it.tableAlias) == null
+        }
         val effectiveKind = when {
             isJoin && !result.joins.all { canLambdaJoin(it, entity) || canMConsumerJoin(it, entity) } -> GeneratedWrapper.MPJ_QUERY
             wrapperKind in JOIN_WRAPPERS -> wrapperKind
             isJoin && entity != null -> GeneratedWrapper.MPJ_LAMBDA
             isJoin -> GeneratedWrapper.MPJ_QUERY
             voQuery -> if (entity != null) GeneratedWrapper.MPJ_LAMBDA else GeneratedWrapper.MPJ_QUERY
+            wrapperKind == GeneratedWrapper.WRAPPERS_LAMBDA && (entity == null || needsStringProjection) -> GeneratedWrapper.WRAPPERS_QUERY
+            wrapperKind == GeneratedWrapper.LAMBDA && needsStringProjection -> GeneratedWrapper.QUERY
             else -> wrapperKind
         }
-        // T-M48：MPJQueryWrapper（字符串联接）形态下列必须是字符串，不可用 lambda/selectAs(String, SFunction)
+        appendHeader(sb, result, entity, effectiveKind, invocation)
+        if (effectiveKind != wrapperKind && !isJoin && !voQuery && wrapperKind !in JOIN_WRAPPERS) {
+            sb.append("// 投影或分组需要字符串列，整条查询已回落字符串 Wrapper，保留全部投影及别名\n")
+        }
+        // 字符串形态只改变列渲染，不丢弃实体类型或调用上下文。
+        val stringCore = effectiveKind == GeneratedWrapper.QUERY || effectiveKind == GeneratedWrapper.WRAPPERS_QUERY ||
+            (effectiveKind == GeneratedWrapper.LAMBDA && entity == null)
+        val columnEntity = if (stringCore) null else entity
         val rawMode = effectiveKind == GeneratedWrapper.MPJ_QUERY
         val chain = buildString {
-            // T-M42：serialVersionUID 系列列过滤后渲染（全部被过滤 → 空列表 → 自然回落 selectAll/不生成
-            // select 调用，MP 全列语义）
-            val selectColumns = result.selectColumns?.filterNot { isIgnoredColumn(it.expr) }
             val conditions = filterConditions(result.conditions)
             if (isJoin) {
                 // 多表：主表 selectAll（列清单未显式指定时）——MPJ 语义
@@ -161,10 +174,10 @@ object JavaCodeGenerator {
                     }
                 }
                 renderJoins(result, entity).forEach { append("\n    .").append(it) }
-                conditions.forEach { append("\n    .").append(renderCondition(it, entity)) }
-                renderGroupBy(result, entity).forEach { append("\n    .").append(it) }
-                result.having?.let { append("\n    .").append(renderHaving(it, entity)) }
-                renderOrderBy(result, entity).forEach { append("\n    .").append(it) }
+                conditions.forEach { append("\n    .").append(renderCondition(it, columnEntity)) }
+                renderGroupBy(result, columnEntity).forEach { append("\n    .").append(it) }
+                result.having?.let { append("\n    .").append(renderHaving(it, columnEntity)) }
+                renderOrderBy(result, columnEntity).forEach { append("\n    .").append(it) }
                 // 分页调用形态（invocation 存在）由 page 参数承载，不再生成 last("LIMIT...")
                 if (result.limit != null && invocation == null) {
                     append("\n    .last(\"").append(javaEscape(renderLimitTail(result.limit, result.forUpdate))).append("\")")
@@ -178,6 +191,11 @@ object JavaCodeGenerator {
                         append("\n    .select(")
                             .append(javaString("DISTINCT " + selectColumns.joinToString(", ") { renderSelectRaw(it) }))
                             .append(")")
+                    } else if (stringCore) {
+                        // MP core select 是覆盖，不是追加；所有投影必须在一次调用中提交。
+                        append("\n    .select(")
+                            .append(selectColumns.joinToString(", ") { javaString(renderSelectRaw(it)) })
+                            .append(")")
                     } else if (selectColumns.any { it.alias != null }) {
                         // 含 AS 别名的列无法并入单个 .select(...)，逐列渲染 .select/.selectAs（T-M46）
                         selectColumns.forEach {
@@ -189,10 +207,10 @@ object JavaCodeGenerator {
                             .append(")")
                     }
                 }
-                conditions.forEach { append("\n    .").append(renderCondition(it, entity)) }
-                renderGroupBy(result, entity).forEach { append("\n    .").append(it) }
-                result.having?.let { append("\n    .").append(renderHaving(it, entity)) }
-                renderOrderBy(result, entity).forEach { append("\n    .").append(it) }
+                conditions.forEach { append("\n    .").append(renderCondition(it, columnEntity)) }
+                renderGroupBy(result, columnEntity).forEach { append("\n    .").append(it) }
+                result.having?.let { append("\n    .").append(renderHaving(it, columnEntity)) }
+                renderOrderBy(result, columnEntity).forEach { append("\n    .").append(it) }
                 // 分页调用形态（invocation 存在）由 page 参数承载，不再生成 last("LIMIT...")
                 if (result.limit != null && invocation == null) {
                     append("\n    .last(\"").append(javaEscape(renderLimitTail(result.limit, result.forUpdate))).append("\")")

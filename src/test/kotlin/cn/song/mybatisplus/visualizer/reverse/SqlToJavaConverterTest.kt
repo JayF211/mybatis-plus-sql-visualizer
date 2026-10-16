@@ -17,6 +17,20 @@ import org.junit.Test
  */
 class SqlToJavaConverterTest {
 
+    @Test
+    fun `UI005_AUTO及显式形态聚合结果真实编译且保留两列`() {
+        val parsed = SqlToJavaConverter.parse(
+            "SELECT status, COUNT(*) AS cnt FROM user GROUP BY status HAVING COUNT(*) > 1",
+        )
+        for (format in listOf(ReverseWrapperFormat.AUTO, ReverseWrapperFormat.LAMBDA,
+            ReverseWrapperFormat.QUERY, ReverseWrapperFormat.WRAPPERS)) {
+            for (selected in listOf(null, candidate("User"))) {
+                val code = SqlToJavaConverter.generateCode(parsed, selected, format)
+                GeneratedProjectionCompiler.assertProjection(code, "status,COUNT(*) AS cnt", "GROUP BY status", "HAVING COUNT(*) > 1")
+            }
+        }
+    }
+
     private val result = SqlToJavaConverter.parse(
         "SELECT id, name FROM user WHERE name = '张三' AND age > 18 ORDER BY id ASC LIMIT 10",
     )
