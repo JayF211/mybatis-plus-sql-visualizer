@@ -8,7 +8,7 @@ import org.junit.Test
 /**
  * R10 T-ShardingSphereCompat 第四解析器判别测试（骨架首版，V36 语料采样外部动作缺位）。
  *
- * **夹具全部 synthetic**：按 ShardingSphere 5.x 公开文档 sql-show 输出形态合成
+ * UI-008 新增真实 5.5.2/H2 原始日志；以下原有夹具为 synthetic，按旧公开样例合成
  * （`Logic SQL: …` / `Actual SQL: <ds> ::: <sql> ::: Parameters: [v, …]`），
  * **不是**真实用户环境采到的双段日志语料——语料到位后的行为细节（参数值含 ", " 的拆分、
  * 4.x 形态、与 MyBatis 行交错的配对语义 V11a）登记在解析器 TODO 与计划 §实施记录，勿当作已验证。
@@ -17,6 +17,127 @@ import org.junit.Test
  * LogSqlEntry.actualSql / BridgeLineContext 第四解析器参数均未定义）。
  */
 class ShardingSphereLogParserTest {
+
+    // UI-008：真实 ShardingSphere 5.5.2 + H2 2.2.224 main both 的原始输出（非合成 Parameters 形态）。
+    private val real552 = """
+        18:32:08.911 INFO  [main] ShardingSphere-SQL - Logic SQL: SELECT order_id, reference_code FROM ui_order WHERE order_id = ? AND reference_code = ?
+        18:32:08.914 INFO  [main] ShardingSphere-SQL - Actual SQL: ds_0 ::: SELECT order_id, reference_code FROM ui_order_0 WHERE order_id = ? AND reference_code = ? ::: [100, BOOK,100]
+        PASS route 100 rows=[100:BOOK,100]
+        18:32:08.949 INFO  [main] ShardingSphere-SQL - Logic SQL: SELECT order_id, reference_code FROM ui_order WHERE order_id = ? AND reference_code = ?
+        18:32:08.949 INFO  [main] ShardingSphere-SQL - Actual SQL: ds_1 ::: SELECT order_id, reference_code FROM ui_order_1 WHERE order_id = ? AND reference_code = ? ::: [101, BOOK,101]
+        PASS route 101 rows=[101:BOOK,101]
+        18:32:08.963 INFO  [main] ShardingSphere-SQL - Logic SQL: SELECT order_id, reference_code FROM ui_order WHERE state_code = ? ORDER BY order_id
+        18:32:08.963 INFO  [main] ShardingSphere-SQL - Actual SQL: ds_0 ::: SELECT order_id, reference_code FROM ui_order_0 WHERE state_code = ? ORDER BY order_id ::: [1]
+        18:32:08.963 INFO  [main] ShardingSphere-SQL - Actual SQL: ds_1 ::: SELECT order_id, reference_code FROM ui_order_1 WHERE state_code = ? ORDER BY order_id ::: [1]
+        PASS cross-shard rows=[100:BOOK,100, 101:BOOK,101]
+    """.trimIndent().lines()
+
+    @Test
+    fun `真实552三查询两分片_逗号保真且不伪造类型`() {
+        val parser = ShardingSphereLogParser()
+        real552.forEach(parser::feed)
+        parser.closePending()
+        val entries = parser.takeEntries()
+        assertEquals(3, entries.size)
+        assertEquals(listOf("100", "BOOK,100"), entries[0].params.map { it.value })
+        assertEquals(listOf("101", "BOOK,101"), entries[1].params.map { it.value })
+        assertEquals(listOf("1"), entries[2].params.map { it.value })
+        assertTrue(entries.flatMap { it.params }.all { it.type == null })
+        assertTrue(entries[0].restoredSql.endsWith("order_id = 100 AND reference_code = 'BOOK,100'"))
+        assertTrue(entries[1].restoredSql.endsWith("order_id = 101 AND reference_code = 'BOOK,101'"))
+        assertTrue(entries[2].restoredSql.endsWith("state_code = 1 ORDER BY order_id"))
+        assertEquals(2, entries[2].actualSql!!.lines().size)
+        assertTrue(entries[2].actualSql!!.contains("ds_0 :::"))
+        assertTrue(entries[2].actualSql!!.contains("ds_1 :::"))
+    }
+
+    @Test
+    fun `真实格式交错线程_不串参数和路由`() {
+        val parser = ShardingSphereLogParser()
+        listOf(real552[0].replace("[main]", "[worker-1]"),
+            real552[3].replace("[main]", "[worker-2]"),
+            real552[4].replace("[main]", "[worker-2]"),
+            real552[1].replace("[main]", "[worker-1]")).forEach(parser::feed)
+        parser.closePending()
+        val entries = parser.takeEntries().associateBy { it.params.first().value }
+        assertEquals(2, entries.size)
+        assertEquals("BOOK,100", entries["100"]!!.params[1].value)
+        assertTrue(entries["100"]!!.actualSql!!.startsWith("ds_0 :::"))
+        assertEquals("BOOK,101", entries["101"]!!.params[1].value)
+        assertTrue(entries["101"]!!.actualSql!!.startsWith("ds_1 :::"))
+    }
+
+    private fun parseActual(suffix: String, sql: String = "SELECT * FROM t WHERE a = ? AND b = ?"): LogSqlEntry {
+        val parser = ShardingSphereLogParser()
+        parser.feed("Logic SQL: $sql")
+        parser.feed("Actual SQL: ds_0 ::: $sql$suffix")
+        parser.closePending()
+        return parser.takeEntries().single()
+    }
+
+    @Test
+    fun `未知不完整和歧义参数整组拒绝_原文仍在`() {
+        listOf(" ::: [100, BOOK, 100]", " ::: [100]", " ::: [100, BOOK,100",
+            " ::: [100, null]", " ::: [100, [a, b]]", " ::: Bindings: [100, abc]",
+            " ::: [100, abc] trailing", " ::: [100, ]", " ::: [100, x ::: [abc]]", "").forEach { suffix ->
+            val entry = parseActual(suffix)
+            assertTrue("不得猜测 $suffix", entry.params.isEmpty())
+            assertEquals(entry.rawSql, entry.restoredSql)
+            assertTrue(entry.actualSql!!.endsWith(suffix))
+        }
+    }
+
+    @Test
+    fun `逗号空格单参数可由占位数消歧_旧格式并存`() {
+        val sql = "SELECT '?' FROM t WHERE name = ? /* ? */"
+        assertEquals(listOf("BOOK, 100"), parseActual(" ::: [BOOK, 100]", sql).params.map { it.value })
+        assertEquals(listOf("100", "BOOK,100"), parseActual(" ::: Parameters: [100, BOOK,100]").params.map { it.value })
+        assertTrue(parseActual(" ::: [100, BOOK,100]", sql).params.single().type == null)
+    }
+
+    @Test
+    fun `实际占位数不同和分片参数不同不回填逻辑SQL`() {
+        val parser = ShardingSphereLogParser()
+        parser.feed(real552[0])
+        parser.feed(real552[1])
+        parser.feed(real552[4])
+        parser.closePending()
+        val entry = parser.takeEntries().single()
+        assertTrue(entry.params.isEmpty())
+        assertEquals(entry.rawSql, entry.restoredSql)
+        assertEquals(2, entry.actualSql!!.lines().size)
+        parser.feed(real552[0])
+        parser.feed("18:32:08.914 INFO  [main] ShardingSphere-SQL - Actual SQL: ds_0 ::: SELECT ? ::: [100, BOOK,100]")
+        parser.closePending()
+        assertTrue(parser.takeEntries().single().params.isEmpty())
+    }
+
+    @Test
+    fun `真实格式桥分派开关和其余三族互不干扰`() {
+        for (enabled in listOf(true, false)) {
+            val ctx = newCtx().apply { shardingEnabled = enabled }
+            val entries = real552.flatMap { processConsoleLine(it, ctx, null, {}) }.toMutableList()
+            ctx.shardingParser.closePending()
+            entries += ctx.shardingParser.takeEntries()
+            assertEquals(if (enabled) 3 else 0, entries.size)
+            val otherLines = listOf(
+                "Preparing: SELECT * FROM mb WHERE id = ?", "Parameters: 7(Integer)",
+                "Hibernate: SELECT * FROM hb WHERE id = ?",
+                "binding parameter [1] as [INTEGER] - [8]",
+                "Executing prepared SQL statement [SELECT * FROM jd WHERE id = ?]",
+                "Setting SQL statement parameter value: column index 1, parameter value [9], value class [java.lang.Integer], SQL type 4",
+            )
+            val others = otherLines.flatMap { processConsoleLine(it, ctx, null, {}) }.toMutableList()
+            ctx.hibernateParser.closePending()
+            ctx.jdbcParser.closePending()
+            others += ctx.hibernateParser.takeEntries()
+            others += ctx.jdbcParser.takeEntries()
+            assertEquals(setOf(SqlSource.MYBATIS, SqlSource.HIBERNATE, SqlSource.JDBC), others.map { it.source }.toSet())
+            assertTrue(others.any { it.restoredSql.contains("id = 7") })
+            assertTrue(others.any { it.restoredSql.contains("id = 8") })
+            assertTrue(others.any { it.restoredSql.contains("id = 9") })
+        }
+    }
 
     // ---------- 合成夹具（synthetic，5.x 公开文档形态） ----------
 

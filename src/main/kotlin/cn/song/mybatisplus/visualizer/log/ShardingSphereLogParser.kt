@@ -1,16 +1,13 @@
 package cn.song.mybatisplus.visualizer.log
 
 /**
- * ShardingSphere 双段日志解析器（R10 T-ShardingSphereCompat，**骨架首版**）。
+ * ShardingSphere 双段日志解析器。
  *
- * 支持的日志形态（ShardingSphere 5.x sql-show 公开文档形态，**真实语料未采样——V36**）：
- * - Logic SQL 行：`Logic SQL: select ...`（逻辑 SQL，占位符形态）
- * - Actual SQL 行：`Actual SQL: ds_0 ::: select ... ::: Parameters: [1, abc]`
- *   （路由后真实执行片段；`::: Parameters:` 段无参时缺省）
- *
- * D1=A 定案：**Logic SQL 为主条目**（可还原参数执行——参数取首个 Actual 的 `Parameters:`
- * 段，同语句各分片绑定值相同），**Actual SQL 段折叠为附注**（[LogSqlEntry.actualSql]，
- * 逐行原文，面板对照渲染等语料）。
+ * UI-008：以真实 5.5.2/H2 内存 fixture 的 sql-show 输出为兼容锚点：
+ * - `Logic SQL: select ...` 为主条目；
+ * - `Actual SQL: ds_0 ::: select ... ::: [100, BOOK,100]` 为路由原文；
+ * - 兼容旧 `::: Parameters: [...]` 形态，参数不捏造类型，复用无类型还原规则。
+ * 只有各分片完整参数一致且与逻辑/实际占位数一致时回填；歧义保留问号与原始附注。
  *
  * 三态状态机（循 [HibernateLogParser] 等待态配对先例 + [LogThreadRouter] 线程分桶）：
  * - IDLE：等待 Logic SQL 行；
@@ -19,10 +16,8 @@ package cn.song.mybatisplus.visualizer.log
  * - 噪声行在 PENDING 态**不闭合**（保守：与 MyBatis 行交错的场景 V11a 未采样，先保配对；
  *   代价是条目滞后一条语句产出，面板可见性由静默冲刷兜底）。
  *
- * TODO(等语料/V36)：真实双段日志语料到位后补全——①`Parameters: [..]` 值含 ", "（字符串内逗号）
- * 的拆分规则（骨架按文档样例「逗号+空格分隔」直拆）；②4.x 输出形态（D2=A 登记不支持）；③与
- * MyBatis `Preparing:` 行交错的配对语义与去重兜底（V11a）；④参数类型标注是否在位（当前按无类型
- * 还原，走 [LogSqlRestorer] 启发式，V11b 的复用结论=可复用）；⑤Actual 折叠附注的面板对照渲染（T-03）。
+ * 边界：List.toString 不携带类型，数值形文本不能证明 JDBC 类型；还原仅为无类型预览。
+ * 多参数值含 ", " 导致数量不齐时整组拒绝，不靠列名推断或合并片段；4.x 不在本次范围。
  */
 class ShardingSphereLogParser(
     private val restorer: LogSqlRestorer = LogSqlRestorer(),
@@ -55,8 +50,9 @@ class ShardingSphereLogParser(
          */
         var actualJoinedLength = 0
 
-        /** 参数（取首个带 `Parameters:` 段的 Actual 行）。 */
+        /** 仅当全部已见分片的参数完整且相同，才可用于逻辑 SQL。 */
         val pendingParams = mutableListOf<LogSqlParam>()
+        var paramsRejected = false
     }
 
     private val router = LogThreadRouter(
@@ -97,9 +93,16 @@ class ShardingSphereLogParser(
                 if (bucket.actualLines.isNotEmpty()) bucket.actualJoinedLength++ // 行间分隔符
                 bucket.actualJoinedLength += segment.length
                 bucket.actualLines += segment
-                if (bucket.pendingParams.isEmpty()) {
-                    bucket.pendingParams += extractParams(actualSegment)
+                val parsed = extractParams(actualSegment, logic)
+                if (parsed == null || (bucket.pendingParams.isNotEmpty() && bucket.pendingParams != parsed)) {
+                    bucket.paramsRejected = true
+                    bucket.pendingParams.clear()
+                } else if (!bucket.paramsRejected && bucket.pendingParams.isEmpty()) {
+                    bucket.pendingParams += parsed
                 }
+            } else {
+                bucket.paramsRejected = true
+                bucket.pendingParams.clear()
             }
             return
         }
@@ -160,6 +163,7 @@ class ShardingSphereLogParser(
         bucket.actualLines.clear()
         bucket.actualJoinedLength = 0
         bucket.pendingParams.clear()
+        bucket.paramsRejected = false
         if (logic.isBlank()) return null
         val entry = LogSqlEntry(
             rawSql = logic,
@@ -181,17 +185,32 @@ class ShardingSphereLogParser(
     }
 
     /**
-     * 从 Actual 段提取 `Parameters: [...]` 绑定值（无类型标注；还原走 [LogSqlRestorer] 启发式）。
-     * TODO(等语料)：值文本含 ", " 的拆分、空参形态 `[]`、null 字面量形态——骨架按公开文档样例直拆。
+     * 5.5.2 的 List.toString 无转义、无类型：只按确切的 ", " 分隔，裸逗号保真。
+     * 同时核对逻辑/实际 SQL 占位数；数量不齐不拼接猜测。单参数可包含 ", "。
+     * null、嵌套集合、截断及分隔符混入值均保守拒绝；不伪造 JDBC/Java 类型。
+     * 旧 `::: Parameters: [...]` 仍走同一边界，不扩大到其他版本协议。
      */
-    private fun extractParams(actualSegment: String): List<LogSqlParam> {
-        val idx = actualSegment.lastIndexOf(PARAMETERS_KEYWORD)
-        if (idx < 0) return emptyList()
-        val bracket = actualSegment.substring(idx + PARAMETERS_KEYWORD.length).trim()
-        if (!bracket.startsWith("[") || !bracket.endsWith("]")) return emptyList()
+    private fun extractParams(actualSegment: String, logic: String): List<LogSqlParam>? {
+        if (actualSegment.length > maxParseLength || logic.length >= maxParseLength) return null
+        val routeEnd = actualSegment.indexOf(" ::: ")
+        if (routeEnd <= 0) return null
+        val sqlAndParams = actualSegment.substring(routeEnd + 5)
+        val paramsStart = sqlAndParams.lastIndexOf(" ::: ")
+        // 分隔符若同时出现在 SQL 字面量或参数内，没有转义协议可据以拆分，拒绝猜测。
+        if (paramsStart < 0 || sqlAndParams.indexOf(" ::: ") != paramsStart) return null
+        val actualSql = sqlAndParams.substring(0, paramsStart)
+        val expected = countPlaceholders(logic)
+        if (countPlaceholders(actualSql) != expected) return null
+        val bracket = sqlAndParams.substring(paramsStart + 5).removePrefix(PARAMETERS_KEYWORD).trim()
+        if (!bracket.startsWith("[") || !bracket.endsWith("]")) return null
         val content = bracket.substring(1, bracket.length - 1)
-        if (content.isBlank()) return emptyList()
-        return content.split(", ").map { LogSqlParam(value = it, type = null) }
+        if (expected == 0) return if (content.isEmpty()) emptyList() else null
+        val values = if (expected == 1) listOf(content) else content.split(", ")
+        if (values.size != expected || values.any {
+                it.isBlank() || it != it.trim() || it.equals("null", ignoreCase = true) ||
+                    it.contains('[') || it.contains(']') || it.contains(" ::: ")
+            }) return null
+        return values.map { LogSqlParam(value = it, type = null) }
     }
 
     companion object {
