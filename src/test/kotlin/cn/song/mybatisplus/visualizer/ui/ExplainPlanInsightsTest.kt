@@ -42,6 +42,16 @@ class ExplainPlanInsightsTest {
     }
 
     @Test
+    fun `every operator explanation key resolves in both bundles`() {
+        val keys = listOf("sequentialScan", "indexAccess", "nestedLoop", "hashJoin", "mergeJoin", "sort", "aggregate", "limit", "other")
+        for (resource in listOf("messages/MpSqlVisualizerBundle.properties", "messages/MpSqlVisualizerBundle_zh.properties")) {
+            val properties = java.util.Properties()
+            javaClass.classLoader.getResourceAsStream(resource)!!.reader(Charsets.UTF_8).use { properties.load(it) }
+            for (key in keys) assertTrue("$resource: insight.plan.$key", !properties.getProperty("insight.plan.$key").isNullOrBlank())
+        }
+    }
+
+    @Test
     fun `unsupported truncated and malformed plans return no interpretation`() {
         assertNull(ExplainPlanInsights.inspect(raw("garbage"), ExplainOutputFormat.JSON))
         assertNull(ExplainPlanInsights.inspect(raw("[]", truncated = true), ExplainOutputFormat.JSON))

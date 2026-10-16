@@ -195,7 +195,7 @@ class ExplainPlanResultView(
                 append(MpSqlVisualizerBundle.message("insight.plan.boundary")).append('\n')
                 for (operator in insights.operators) {
                     append('\n').append(operator.label).append('\n')
-                    append(MpSqlVisualizerBundle.message("insight.plan." + operator.explanationKey)).append('\n')
+                    append(MpSqlVisualizerBundle.message("insight.plan.${operator.explanationKey}")).append('\n')
                     operator.estimatedRows?.let { append(MpSqlVisualizerBundle.message("insight.plan.estimatedRows", it)).append('\n') }
                     operator.estimatedCost?.let { append(MpSqlVisualizerBundle.message("insight.plan.estimatedCost", it)).append('\n') }
                     operator.actualRowsPerLoop?.let { append(MpSqlVisualizerBundle.message("insight.plan.actualRows", it)).append('\n') }
