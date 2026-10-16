@@ -68,6 +68,11 @@ class AnalysisSessionChannel(private val store: AnalysisSessionStore = AnalysisS
     }
 
     @Synchronized
+    fun recordFailure(reason: String) {
+        ticket?.let { store.recordIssue(it, reason) }
+    }
+
+    @Synchronized
     fun onEvent(event: AgentEvent, entry: LogSqlEntry, policyAllows: Boolean) {
         val current = ticket ?: return
         if (!requested) return

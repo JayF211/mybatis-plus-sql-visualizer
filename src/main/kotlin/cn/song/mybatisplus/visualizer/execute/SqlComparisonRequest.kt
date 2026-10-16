@@ -13,6 +13,10 @@ data class SqlComparisonRequest private constructor(
     val timeoutSeconds: Int,
     val fingerprint: String,
 ) {
+    private val executionAuthorized = java.util.concurrent.atomic.AtomicBoolean(false)
+    internal fun authorizeExecution() { executionAuthorized.set(true) }
+    internal fun claimExecution(): Boolean = executionAuthorized.compareAndSet(true, false)
+
     fun matches(baseline: String, candidate: String, target: String, generation: Long): Boolean =
         baselineSql == baseline && candidateSql == candidate && targetIdentity == target && targetGeneration == generation
 
@@ -67,6 +71,6 @@ class SqlComparisonConsent(private val request: SqlComparisonRequest) {
         consumed = true
         return request.takeIf {
             explicitlyApproved && it.matches(currentBaseline, currentCandidate, currentTarget, currentGeneration)
-        }
+        }?.also { it.authorizeExecution() }
     }
 }

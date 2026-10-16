@@ -198,7 +198,7 @@ class AgentManager(private val project: Project) : Disposable {
     fun setUserPaused(paused: Boolean) {
         if (userPaused == paused) return
         userPaused = paused
-        if (paused) setSqlAnalysisEnabled(false)
+        if (paused) sessions.forEach { it.analysisChannel.disable() }
         LOG.info("增强捕获用户暂停切换：$paused（暂停只停 agent 通道，控制台通道照常；连接与 CONFIG 链不动）")
         updateOnline()
         publishStatusChanged()

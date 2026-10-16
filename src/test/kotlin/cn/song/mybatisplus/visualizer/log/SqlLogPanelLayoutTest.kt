@@ -580,16 +580,78 @@ class SqlLogPanelLayoutTest : BasePlatformTestCase() {
             waitForEdt()
             val history = tabs.selectedInfo?.component as? HistorySqlLogPanel
             assertNotNull("切到历史 tab 后应选中历史面板", history)
-            // headless 下 tabs.select 可能只更新 selectedInfo、没有真实 SHOWING_CHANGED；
-            // 等价模拟历史页实际显示，验证漏掉页签回调时仍能启动首扫。
-            if (history!!.refreshInvocationCountForTest == 0) {
-                history.scheduleInitialScanIfShowing { true }
-                waitForEdt()
-            }
-            assertEquals("真实显示后的首扫保障应恰好发起一次刷新",
-                1, history.refreshInvocationCountForTest)
+            // UI-004：只允许真实 JBTabs.select 触发生产监听，不能用模拟 showing 补刷掩盖接线错误。
+            assertEquals("进入历史页的真实选中回调应恰好发起一次刷新",
+                1, history!!.refreshInvocationCountForTest)
         } finally {
             panel.dispose()
+        }
+    }
+
+    /**
+     * UI-004：设置在隐藏页扫描空目录后，真实页签选择仍须刷新；离开不刷，再进更新。
+     * 不创建窗口，不调用 refresh/refreshForTest/模拟 showing；任务派发和列表应用均走生产路径。
+     */
+    fun testUI004_设置空扫后真实切入刷新_离开不刷_再进入更新() {
+        val settings = PluginSettings.getInstance()
+        val previousState = settings.state.copy()
+        val root = java.nio.file.Files.createTempDirectory("ui004-history-").toFile()
+        val oldDir = java.io.File(root, "old").apply { mkdirs() }
+        val emptyDir = java.io.File(root, "empty").apply { mkdirs() }
+        fun entry(id: Int) = "-- source: Ui004.java:$id | time: 1ms | 2026-10-16 23:43:31.000 --\nSELECT $id;\n\n"
+        java.io.File(oldDir, "previous.sql").writeText(entry(0))
+        settings.state.logAutoSaveEnabled = false
+        settings.state.logAutoSavePath = oldDir.absolutePath
+        val panel = SqlLogPanel(project, manager)
+        try {
+            waitForEdt()
+            val tabs = panel.tabsForTest
+            val logs = tabs.selectedInfo!!
+            val historyInfo = tabs.tabs.single { it.component is HistorySqlLogPanel }
+            val history = historyInfo.component as HistorySqlLogPanel
+            assertFalse("不挂真实窗口；本测试不能被 showing 首扫兜底救绿", history.isShowing)
+            assertEquals("构造不扫描", 0, history.refreshInvocationCountForTest)
+            fun publishSettings() {
+                com.intellij.openapi.application.ApplicationManager.getApplication().messageBus
+                    .syncPublisher(PluginSettings.SETTINGS_CHANGE_TOPIC).settingsChanged()
+                waitForEdt()
+            }
+            fun awaitFiles(message: String, condition: () -> Boolean) {
+                com.intellij.testFramework.PlatformTestUtil.waitWithEventsDispatching(message, { condition() }, 10)
+            }
+            // 先建立非空旧快照：后续变空必须由生产扫描真正应用，不能把初始空模型当作完成。
+            publishSettings()
+            awaitFiles("旧目录扫描应落入模型") { history.fileListEntries.singleOrNull()?.displayName == "previous.sql" }
+            settings.state.logAutoSaveEnabled = true
+            settings.state.logAutoSavePath = emptyDir.absolutePath
+            publishSettings()
+            awaitFiles("新空目录扫描必须替换旧快照") { history.fileListEntries.isEmpty() }
+            assertSame("设置空扫期间仍停留日志页", logs, tabs.selectedInfo)
+            val afterEmptyScan = history.refreshInvocationCountForTest
+            assertEquals("两次设置广播各扫描一次", 2, afterEmptyScan)
+
+            val file = java.io.File(emptyDir, "sql-history-2026-10-16.sql")
+            file.writeText((1..7).joinToString("") { entry(it) })
+            tabs.select(historyInfo, false)
+            waitForEdt()
+            assertSame(historyInfo, tabs.selectedInfo)
+            assertEquals("进入时必须刷新；错误 old/new 顺序会停在空扫计数", afterEmptyScan + 1, history.refreshInvocationCountForTest)
+            awaitFiles("首次切入应读到后来产生的7条，不允许手动刷新") {
+                history.fileListEntries.singleOrNull()?.let { it.displayName == file.name && it.sqlCount == 7 } == true
+            }
+
+            tabs.select(logs, false)
+            waitForEdt()
+            assertEquals("离开历史页不得刷新", afterEmptyScan + 1, history.refreshInvocationCountForTest)
+            file.appendText(entry(8))
+            tabs.select(historyInfo, false)
+            waitForEdt()
+            assertEquals("再次进入必须重新扫描", afterEmptyScan + 2, history.refreshInvocationCountForTest)
+            awaitFiles("再次切入应更新为8条") { history.fileListEntries.singleOrNull()?.sqlCount == 8 }
+        } finally {
+            com.intellij.openapi.util.Disposer.dispose(panel)
+            settings.loadState(previousState)
+            root.deleteRecursively()
         }
     }
 

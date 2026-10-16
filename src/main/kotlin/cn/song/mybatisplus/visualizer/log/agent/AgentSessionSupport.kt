@@ -477,6 +477,7 @@ internal class AgentSession(
                 livenessFrameSeen = true
                 val event = AgentEvent.parse(body)
                 if (event == null) {
+                    analysisChannel.recordFailure("capture_failed")
                     LOG.warn("EVENT 帧解析失败丢弃（pid=$pid, dropped=${eventDropped.incrementAndGet()}, bodyLen=${body.length}, head=${body.take(120)}）")
                     return
                 }
@@ -498,6 +499,7 @@ internal class AgentSession(
                     //  ② stampLogTime 会**消费**日志时间相关器的暂存匹配（未命中才回落），先丢弃再
                     //     调用会把本该留给控制台通道的匹配白白取走。
                     if (!listenActiveProvider()) {
+                        analysisChannel.recordFailure("omitted_capture")
                         val n = intakeDropped.incrementAndGet()
                         if (n == 1L || n % AgentManager.INTAKE_DROP_WARN_STEP == 0L) {
                             LOG.warn(
@@ -523,6 +525,7 @@ internal class AgentSession(
                     // 状态栏据此显示「暂停中且通道活着」而非「通道断了」）。只丢入列表，
                     // 连接/心跳/CONFIG ACK 链一概不动（暂停≠关闭，V80② 自洽）。
                     if (pausedProvider()) {
+                        analysisChannel.recordFailure("omitted_capture")
                         val n = pausedDropped.incrementAndGet()
                         if (n == 1L || n % AgentManager.INTAKE_DROP_WARN_STEP == 0L) {
                             LOG.info(
