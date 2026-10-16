@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **实体来自依赖 JAR 时，嵌入列命名约定探测不到（T-JarEmbedded W1）**：`@Embedded` 嵌入列前缀（`qty.baseQty` → `qty_base_qty`）的判定此前只在**实体所在模块**的 `application*.yml/.properties` 里找信号；而实体类常来自共享模型 JAR（无源码，模块根不可知），且命名策略往往**写在 Java 代码里**（`props.put("hibernate.implicit_naming_strategy", ImplicitNamingStrategyComponentPathImpl.class)`）或声明在 `META-INF/persistence.xml` —— 这些位置此前一个都不看，于是即便装上支持前缀的版本，这类工程仍会渲染出丢前缀的列名。现在模块不可知时退到**工程级信号**：配置文件扩到 `persistence.xml` / `orm.xml` / `hibernate.cfg.xml`（含 `META-INF/`），并用词索引在工程源码里找命名策略类名（代码式配置）；模块已知时行为不变（只看该模块，防兄弟模块配置外溢）
+
 ## [2026.10.16] - 2026-10-16
 
 ### Added
