@@ -65,6 +65,20 @@ import cn.song.mybatisplus.visualizer.config.PluginSettingsPanel.Companion.SECTI
 // T-M53-II（2026-10-10）：以下为 PluginSettingsPanel 的「设置页各分区构建」内聚成员，
 // 以同包扩展函数形式搬出——方法体逐字符搬运，被触及的私有成员已按需放宽为 internal。
 
+/**
+ * 使用 Swing 原生 HTML 换行，保留完整文案（尤其是 R90 的事前隐私披露）。
+ * 480 个逻辑像素给默认 Settings 约 700px 内容区留出边框、复选图标和滚动条；
+ * 更窄窗口仍交给 Settings 自带的滚动容器，不通过裁字或 tooltip 隐藏说明。
+ */
+internal fun wrapPreviewText(text: String): String {
+    val body = if (text.startsWith("<html>", ignoreCase = true)) {
+        text.removePrefix("<html>").removeSuffix("</html>")
+    } else {
+        text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    }
+    return "<html><table width='${JBUI.scale(480)}' cellpadding='0' cellspacing='0'><tr><td>$body</td></tr></table></html>"
+}
+
 internal fun PluginSettingsPanel.buildSections(panel: JPanel) {
     val gbc = GridBagConstraints().apply {
         gridx = 0
@@ -74,6 +88,36 @@ internal fun PluginSettingsPanel.buildSections(panel: JPanel) {
     }
 
     fun addRow(panel: JPanel, gbc: GridBagConstraints, label: String, component: JComponent, fill: Int = GridBagConstraints.NONE) {
+        // 独立开关和事前披露不是字段值，不应占据第二列、继承标签列的缩进。
+        // 仅 SQL Preview / Code Generation 使用整行；其余页保留原有排布。
+        if (component === reverseFormatCombo) {
+            gbc.gridx = 0
+            gbc.gridwidth = 2
+            gbc.weightx = 1.0
+            gbc.fill = GridBagConstraints.HORIZONTAL
+            panel.add(JBLabel(label), gbc)
+            gbc.gridy++
+            panel.add(component, gbc)
+            gbc.gridy++
+            gbc.gridwidth = 1
+            gbc.fill = GridBagConstraints.NONE
+            return
+        }
+        if (label.isEmpty() && panel.getClientProperty("previewFullWidthRows") == true) {
+            when (component) {
+                is JBCheckBox -> component.text = wrapPreviewText(component.text)
+                is JBLabel -> component.text = wrapPreviewText(component.text)
+            }
+            gbc.gridx = 0
+            gbc.gridwidth = 2
+            gbc.weightx = 1.0
+            gbc.fill = GridBagConstraints.HORIZONTAL
+            panel.add(component, gbc)
+            gbc.gridwidth = 1
+            gbc.fill = GridBagConstraints.NONE
+            gbc.gridy++
+            return
+        }
         gbc.gridx = 0
         gbc.weightx = 0.0
         panel.add(JBLabel(label), gbc)
@@ -90,17 +134,20 @@ internal fun PluginSettingsPanel.buildSections(panel: JPanel) {
         titleKey: String,
         content: (JPanel, GridBagConstraints) -> Unit,
     ) {
-        val contentPanel = JPanel(GridBagLayout())
+        val contentPanel = JPanel(GridBagLayout()).apply {
+            putClientProperty("previewFullWidthRows", titleKey in setOf("settings.section.preview", "settings.section.codeGen"))
+        }
         val inner = GridBagConstraints().apply {
             gridx = 0; gridy = 0; anchor = GridBagConstraints.WEST; insets = Insets(2, 6, 2, 6)
         }
         content(contentPanel, inner)
 
-        // 计算内容区标签最大宽度，统一列宽
+        // 只统计真正的首列标签。第二列状态/披露及跨列说明绝不能反过来撑大首列。
         val layout = contentPanel.layout as GridBagLayout
         var maxLabelWidth = 0
         for (comp in contentPanel.components) {
-            if (comp is JBLabel) {
+            val constraints = layout.getConstraints(comp)
+            if (comp is JBLabel && constraints.gridx == 0 && constraints.gridwidth == 1) {
                 maxLabelWidth = maxOf(maxLabelWidth, comp.preferredSize.width)
             }
         }
@@ -148,7 +195,7 @@ internal fun PluginSettingsPanel.buildSections(panel: JPanel) {
             emptyParamFillGroup.add(emptyParamFillPlaceholderRadio)
             emptyParamFillGroup.add(emptyParamFillNullRadio)
             emptyParamFillGroup.add(emptyParamFillEmptyRadio)
-            addRow(p, g, MpSqlVisualizerBundle.message("settings.emptyParamFill"), JPanel().apply {
+            addRow(p, g, MpSqlVisualizerBundle.message("settings.emptyParamFill"), JPanel(java.awt.GridLayout(0, 1)).apply {
                 add(emptyParamFillPlaceholderRadio)
                 add(emptyParamFillNullRadio)
                 add(emptyParamFillEmptyRadio)
@@ -259,6 +306,14 @@ internal fun PluginSettingsPanel.buildSections(panel: JPanel) {
         sectionGroup("settings.section.codeGen") { p, g ->
             addRow(p, g, MpSqlVisualizerBundle.message("settings.reverseWrapperFormat"), reverseFormatCombo.apply {
                 model = DefaultComboBoxModel(reverseFormatOptions())
+                // 选项包含完整解释，使用同一多行 renderer 保留选中值和下拉列表的全文。
+                renderer = object : javax.swing.DefaultListCellRenderer() {
+                    override fun getListCellRendererComponent(
+                        list: javax.swing.JList<*>?, value: Any?, index: Int, isSelected: Boolean, cellHasFocus: Boolean,
+                    ): Component = super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus).also {
+                        text = wrapPreviewText(value?.toString().orEmpty())
+                    }
+                }
                 toolTipText = MpSqlVisualizerBundle.message("settings.reverseWrapperFormat.tip")
                 selectedItem = reverseFormatOptions().firstOrNull { it.value == settings.state.reverseWrapperFormat }
                     ?: reverseFormatOptions().first()

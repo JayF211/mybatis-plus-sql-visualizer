@@ -1193,14 +1193,14 @@ class PluginSettingsPanel @JvmOverloads constructor(
 
     /** 全局设置不把首个打开项目的方言冒充其他项目；项目唯一时展示决策状态。 */
     internal fun refreshInferredLabel() {
-        dialectInferredLabel.text = when (dialectCombo.selectedItem as? String) {
+        dialectInferredLabel.text = wrapPreviewText(when (dialectCombo.selectedItem as? String) {
             autoDialectItem -> {
                 val projects = ProjectManager.getInstance().openProjects.filterNot { it.isDisposed }
                 val decision = projects.singleOrNull()?.let { DialectRegistry.decision(it) }
                 DialectSettingsStatusText.describe(projects.size, decision)
             }
             else -> MpSqlVisualizerBundle.message("settings.dialect.manual", dialectCombo.selectedItem as? String ?: "")
-        }
+        })
     }
 
     private fun isModifiedPreview(s: PluginSettings.State): Boolean =
