@@ -17,11 +17,22 @@ public class SenderLoopThroughputTest {
     private Thread sender;
     private DataInputStream in;
     private DataOutputStream out;
+    private final CountDownLatch idleRead = new CountDownLatch(1);
+    private final java.util.concurrent.atomic.AtomicBoolean armIdle = new java.util.concurrent.atomic.AtomicBoolean();
     @Before public void before() throws Exception {
         disabled = AgentState.isDisabled(); heartbeat = System.getProperty(SenderLoop.HEARTBEAT_MS_PROP);
         System.clearProperty(SenderLoop.HEARTBEAT_MS_PROP); AgentState.setDisabled(false); EventBus.clearQueued();
         server = new ServerSocket(0, 1, InetAddress.getLoopbackAddress()); server.setSoTimeout(5000);
-        sender = new Thread(new SenderLoop(server.getLocalPort(), 1, 1, 2000, 1)); sender.setDaemon(true); sender.start();
+        sender = new Thread(new SenderLoop(server.getLocalPort(), 1, 1, 2000, 1, (host, port) -> new Socket(host, port) {
+            @Override public InputStream getInputStream() throws IOException {
+                return new FilterInputStream(super.getInputStream()) {
+                    @Override public int read() throws IOException {
+                        if (armIdle.compareAndSet(true, false)) idleRead.countDown();
+                        return super.read();
+                    }
+                };
+            }
+        })); sender.setDaemon(true); sender.start();
         peer = server.accept(); peer.setSoTimeout(6000);
         in = new DataInputStream(peer.getInputStream()); out = new DataOutputStream(peer.getOutputStream());
         assertEquals(4, read()); assertEquals(2, read());
@@ -35,6 +46,15 @@ public class SenderLoopThroughputTest {
     }
     private static void enqueue(int count) {
         for (int i = 0; i < count; i++) { SqlEvent e = new SqlEvent(); e.sql = "SELECT " + i; EventBus.offer(e); }
+    }
+    @Test public void queueArrivalWakesSenderWhileInboundReadIsIdle() throws Exception {
+        armIdle.set(true);
+        assertTrue("reader must reach a real idle read", idleRead.await(3, TimeUnit.SECONDS));
+        long start = System.nanoTime(); enqueue(1);
+        while (read() != 1) { }
+        long millis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
+        System.out.println("IDLE_TO_SQL firstFrameMs=" + millis + " inboundTimeoutMs=" + SenderLoop.configReadTimeoutMs(10000));
+        assertTrue("SQL arrival must wake send independently of idle CONFIG read: " + millis, millis < 400);
     }
     @Test public void fourBurstsDrainWithoutOneReadTimeoutPerBurst() throws Exception {
         long drops = EventBus.droppedCount(); enqueue(256);

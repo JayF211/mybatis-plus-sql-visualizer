@@ -52,6 +52,7 @@ public final class TraceBus {
             body.put("captureEpoch", entryEpoch); body.put("sequence", sequence);
             body.put("threadId", Thread.currentThread().getId()); body.put("ts", System.currentTimeMillis());
             if (!QUEUE.offer(new Frame(command, revision, entryEpoch, Jsons.writeObject(body)))) dropped++;
+            else SenderWakeup.signal();
         } catch (Throwable failure) { encodingFailed++; }
         return sequence;
     }

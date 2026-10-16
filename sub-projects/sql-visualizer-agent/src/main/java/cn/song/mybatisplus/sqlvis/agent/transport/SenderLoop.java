@@ -218,6 +218,7 @@ final class SenderLoop implements Runnable {
         int fastDrops = 0;
         while (true) {
             Socket socket = null;
+            InboundPump inbound = null;
             boolean connected = false;
             // T-PerfSweep7 T-PS7-02：连接成功那一刻另记（拨号返回后），复位与 fastDrops 的
             // 「存活时长」判据改按本时刻起算——attemptStartMs 把**拨号耗时**也算进存活，
@@ -247,6 +248,8 @@ final class SenderLoop implements Runnable {
                 writeFrame(out, EventBus.CMD_HEARTBEAT, "{}");
                 long lastOutboundMs = System.currentTimeMillis();
                 long lastCaptureStateNanos = System.nanoTime();
+                inbound = new InboundPump(in);
+                inbound.start();
                 // T-07 看门狗：本连接是否收到过任何 CONFIG / 本连接是否已触发（每条连接只触发一次）。
                 // T-PS7-02 起与复位判据共用 [connectedAtMs]（同一时刻：拨号返回即连接成功，
                 // 与写 HELLO 后的差是毫秒级，对 15s 窗口语义无差）。
@@ -297,15 +300,14 @@ final class SenderLoop implements Runnable {
                         writeFrame(out, EventBus.CMD_CAPTURE_STATE, captureStateBody());
                         lastCaptureStateNanos = System.nanoTime();
                     }
-                    // A busy sender must not pay one CONFIG timeout per 64 outgoing frames.
-                    // available() gates ONLY whether to start a read. Once any byte is present,
-                    // the original parser owns the entire frame (including partial-frame timeout).
-                    // Every bounded burst still gives CONFIG a turn; idle loops retain blocking
-                    // read/pause so an empty queue cannot turn this into a CPU spin.
+                    // The reader owns blocking frame reads; this sole writer applies CONFIG.
+                    // At most four control commands per bounded outgoing burst, never an unbounded
+                    // drain. A STOP clears queued SQL before any next outgoing burst can run.
                     final boolean busy = burst > 0 || controlBurst > 0;
-                    if (!busy || in.available() > 0) {
-                    try {
-                        final InboundFrame frame = readInboundFrame(in);
+                    inbound.checkFailure();
+                    for (int commands = 0; commands < 4; commands++) {
+                        final InboundFrame frame = inbound.poll();
+                        if (frame == null) break;
                         if (frame.cmd == EventBus.CMD_CONFIG) {
                             configSeen = true;
                         }
@@ -319,9 +321,6 @@ final class SenderLoop implements Runnable {
                             }
                             lastOutboundMs = System.currentTimeMillis();
                         }
-                    } catch (java.net.SocketTimeoutException ignore) {
-                        // No first byte: idle. A partial frame is a non-timeout IOException.
-                    }
                     }
                     // 3.5) T-07 看门狗：会话建立后 X ms 内从未收到任何 CONFIG → 主动停采（每连接一次）
                     //      用既有循环判，不新开线程；停采走 AgentState.setDisabled（顺带清队列，T-01b）
@@ -341,13 +340,18 @@ final class SenderLoop implements Runnable {
                                 - (System.currentTimeMillis() - lastOutboundMs);
                         final long sleepMs = Math.max(0L, Math.min(POLL_IDLE_MS, remainMs));
                         if (sleepMs > 0L) {
-                            Thread.sleep(sleepMs);
+                            SenderWakeup.await(sleepMs);
                         }
                     }
                 }
             } catch (Throwable t) {
                 TraceBus.disconnected();
                 closeQuietly(socket);
+                if (inbound != null) inbound.stop();
+                if (t instanceof VirtualMachineError) throw (VirtualMachineError) t;
+                if (t instanceof LinkageError) throw (LinkageError) t;
+                if (t instanceof ThreadDeath) throw (ThreadDeath) t;
+                if (t instanceof InterruptedException) { Thread.currentThread().interrupt(); return; }
                 // T-PerfSweep6 T-PS6-05：退避复位点后移 + 「连上即被关」连续计数。
                 // 判据只看「是否建连成功」与「存活时长」，与异常类型无关（断开形态多样：
                 // EOFException / SocketException / 读超时后写失败…，逐类型分支必漏）。
@@ -382,7 +386,54 @@ final class SenderLoop implements Runnable {
                 backoffMs = Math.min(backoffMs * 2, backoffMaxMs);
             } finally {
                 closeQuietly(socket);
+                if (inbound != null) inbound.stop();
             }
+        }
+    }
+
+    /** One reader per live connection. Never writes or applies state. Mailbox bounds memory;
+     * closing the socket unblocks reads and interrupt unblocks a full mailbox put. */
+    private static final class InboundPump implements Runnable {
+        private final DataInputStream input;
+        private final java.util.concurrent.ArrayBlockingQueue<InboundFrame> frames =
+                new java.util.concurrent.ArrayBlockingQueue<InboundFrame>(4);
+        private final Thread thread;
+        private volatile boolean stopped;
+        private volatile Throwable failure;
+        InboundPump(DataInputStream input) {
+            this.input = input;
+            thread = new Thread(this, "sqlvis-agent-config-reader");
+            thread.setDaemon(true);
+        }
+        void start() { thread.start(); }
+        InboundFrame poll() { return frames.poll(); }
+        void checkFailure() throws Throwable { if (failure != null) throw failure; }
+        @Override public void run() {
+            try {
+                while (!stopped) {
+                    try {
+                        InboundFrame frame = readInboundFrame(input);
+                        frames.put(frame);
+                        SenderWakeup.signal();
+                    } catch (java.net.SocketTimeoutException idle) {
+                        // No first byte arrived. Original parser wraps partial timeouts as IOException.
+                    }
+                }
+            } catch (Throwable t) {
+                if (!stopped) failure = t;
+                SenderWakeup.signal();
+                if (t instanceof VirtualMachineError) throw (VirtualMachineError) t;
+                if (t instanceof LinkageError) throw (LinkageError) t;
+                if (t instanceof ThreadDeath) throw (ThreadDeath) t;
+                if (t instanceof InterruptedException) Thread.currentThread().interrupt();
+            }
+        }
+        void stop() {
+            stopped = true;
+            thread.interrupt();
+            try { thread.join(1500); }
+            catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); }
+            frames.clear();
         }
     }
 

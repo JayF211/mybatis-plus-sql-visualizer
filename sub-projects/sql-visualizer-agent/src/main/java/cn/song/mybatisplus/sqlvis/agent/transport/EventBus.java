@@ -60,6 +60,7 @@ public final class EventBus {
                 return false;
             }
             if (event == null || !QUEUE.offer(event)) { DROPPED.incrementAndGet(); return false; }
+            SenderWakeup.signal();
             return true;
         }
     }
