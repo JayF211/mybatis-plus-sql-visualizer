@@ -134,6 +134,23 @@ R3三红修复已收编为638a5740（原babc87c5），仅修改AliasDualTrackDef
 
 第四轮冻结 `ab8b54b15e5723003c0d3af1ab3799a057380b2d`，已单向吸收dev `bfbe5b4c` 的属性门控日志几何诊断及其测试。专用gate树从片1完整复跑默认五片、agent与external；强制Test新执行，沿用独立沙盒、Docker显式禁用及非UI边界。通过后才依次打包与三代离线兼容验证。前三轮失败独立保留，不拼接部分结果，不预填本轮通过。门禁期间主控只更新文档，同时独立只读复核31工作包和17项需求的实际消费者与证据边界。
 
+### 第四轮完整测试结果
+
+冻结ab8b54b1，`:testShards`实际exit0，用时15分26秒。主控核对`round4/test-audit.json`：769个计划根分片类全部有本轮XML；新增63类（根55、agent8）全部入场，324个声明测试方法均匹配，无缺类、无跨片同FQCN/方法重复、无陈旧XML混入。冻结后集成树仅两份文档变化。
+
+| 桶 | 类数 | tests/failures/errors/skipped |
+|---|---:|---|
+| shard1 | 159 | 1611/0/0/2 |
+| shard2 | 155 | 1561/0/0/6 |
+| shard3 | 152 | 1448/0/0/1 |
+| shard4 | 151 | 1641/0/0/0 |
+| shard5 | 152 | 1783/0/0/0 |
+| external | 6 | 27/0/0/1 |
+| agent | 38 | 213/0/0/0 |
+| 合计 | 813 | 8284/0/0/10 |
+
+10项跳过分别为禁用Docker5、未配置外部数据库1、Database测试classpath缺席2、Windows符号链接权限1、ACP结构性1，不是这些环境验证通过。日志SHA256 `b1ea4db163fcb49e4de3b7a24ab5ff404cb28238356ce5fa723a8d4d72320695`；审计JSON SHA256 `70328bad987792c10b755bc404e14e2f110165d1e02a7120c2447c06a3053cb8`。这是首轮完整自动化测试通过结果，不拼接前三轮局部绿；打包、ZIP内容核验和三代兼容仍在后续步骤，不预填成功。
+
 ### Agent JVM 验证层级
 
 第二轮fresh XML已经证明既有 `AttachGateTest.attach门禁_JDK8目标` 与 `AttachPoolWarmGateTest.模式B2_JDK8目标_Hikari池存量连接复用` 均实际执行、未skip；测试源码明确启动本机JDK8子进程。新增ServletRequestWeaveTest最初6例只在JDK17宿主隔离ClassLoader运行，major52仅是字节码证据，故随后补H09真实目标JVM验证。
@@ -161,7 +178,7 @@ H09同份fixture经`javac --release 8`后，实际java.version分别为1.8.0_181
 - [ ] 真实语义、请求身份/质量、事务状态与权限安全无阻断。
 - [ ] 定向测试实际XML入场、必要反向红/恢复绿已留证。
 - [ ] 性能/资源预算有对照，不只空载。
-- [ ] 最终吸收dev后的冻结SHA完成权威全量与agent验证。
+- [x] 冻结ab8b54b1完成权威全量与agent验证，8284/0/0/10；合流前如dev再有生产变化需另行核对，不能沿用到未测试代码。
 - [ ] 新平台面三代兼容验证及构建校验完成。
 - [ ] 独立复核闭环、未验UI与其他受限项逐条披露。
 - [ ] 最后一次ff-only合回dev，落地树与已验树一致，未push/发布/回流master。
