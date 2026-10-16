@@ -64,8 +64,9 @@ public final class SqlHookCallbacks {
     // ---------- T-StatementWeave：语句面/prepare 面织入回调（签名被 StatementWeaver 字节码硬编码，改动两侧同步） ----------
 
     /**
-     * execute 族**入口**（织入在方法头）：返回计时起点 token（nanoTime），0 = 短路
-     * （停采 volatile 短路 / 代理层门禁——双通道去重红线，见 [WeaveGate]）。出口 token==0 直返。
+     * execute 族入口：返回共享 ExecutionScope 的 sequence token，0 = 停采/同对象重入。
+     * scope 在投递之前记录身份、入口墙钟及 nanoTime；出口 token==0 直返。
+     * WeaveGate 仅保留旧调用方兼容，新代理按对象身份仲裁，不屏蔽异对象嵌套。
      * 织入侧零分支：一切判定收在本回调，异常自吞返回 0。
      */
     public static long onStatementEnter(Object stmt) {

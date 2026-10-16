@@ -103,8 +103,8 @@ final class StatementHandler implements InvocationHandler {
         final long startMillis = System.currentTimeMillis();
         Object result = null;
         Throwable failure = null;
-        // T-StatementWeave 双通道去重门（WeaveGate）：invoke 到的 raw 方法体已被语句面织入——
-        // 不设门，织入通道会对同一条 SQL 再产出一条事件。置位期间织入入口钩子短路（token=0）。
+        // ExecutionScope owns this raw statement across proxy and woven paths. Unlike the
+        // old thread-wide gate, a nested execute on a different statement remains observable.
         try {
             result = doInvoke(method, args);
         } catch (Throwable e) {
