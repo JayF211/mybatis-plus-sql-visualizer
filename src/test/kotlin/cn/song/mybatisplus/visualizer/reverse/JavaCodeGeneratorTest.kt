@@ -21,6 +21,14 @@ import org.junit.Test
 class JavaCodeGeneratorTest {
 
     @Test
+    fun `UI005_双引号表名只在Java类名推导剥壳`() {
+        val result = SqlReverseParser.parse("SELECT \"id\" FROM \"ui_probe\" WHERE \"name\" = 'alpha'")
+        val code = JavaCodeGenerator.generate(result)
+        assertEquals("UiProbe", JavaCodeGenerator.entityClassName(result.tableName))
+        GeneratedProjectionCompiler.assertProjection(code, "\"id\"", "\"name\" =")
+    }
+
+    @Test
     fun `UI005_聚合投影在所有MP核心形态真实编译且不覆盖`() {
         val sql = "SELECT status, COUNT(*) AS cnt FROM user GROUP BY status HAVING COUNT(*) > 1"
         val result = SqlReverseParser.parse(sql)

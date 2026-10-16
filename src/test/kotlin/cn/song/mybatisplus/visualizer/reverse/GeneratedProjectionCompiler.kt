@@ -52,8 +52,9 @@ internal object GeneratedProjectionCompiler {
                         public Integer getStatus() { return 1; }
                         public String getName() { return "x"; }
                     }
+                    public static class UiProbe extends User {}
                     public static String[] inspect() {
-                        Wrapper<User> wrapper =
+                        Wrapper<?> wrapper =
                         $code
                         return new String[] {wrapper.getSqlSelect(), wrapper.getSqlSegment()};
                     }

@@ -1259,7 +1259,7 @@ object JavaCodeGenerator {
 
     /** 表名 → 实体类名推断（下划线 → 驼峰首字母大写）：`car_device_info` → `CarDeviceInfo`。 */
     internal fun entityClassName(tableName: String): String =
-        tableName.split('_').joinToString("") { seg ->
+        tableName.removeSurrounding("\"").split('_').joinToString("") { seg ->
             seg.replaceFirstChar { it.uppercase() }
         }
 }
