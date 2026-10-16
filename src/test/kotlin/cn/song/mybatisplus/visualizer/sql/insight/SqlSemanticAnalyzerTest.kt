@@ -121,7 +121,7 @@ class SqlSemanticAnalyzerTest {
     }
 
     @Test fun `unsupported multi table dml and set operations are explicit`() {
-        for (sql in listOf("UPDATE users SET name=t.name FROM teams t WHERE users.id=t.id", "DELETE FROM users USING teams WHERE users.id=teams.id", "SELECT t.id FROM t UNION SELECT u.id FROM u")) {
+        for (sql in listOf("UPDATE users SET name=t.name FROM teams t WHERE users.id=t.id", "DELETE FROM users USING teams WHERE users.id=teams.id", "SELECT t.id FROM t INTERSECT SELECT u.id FROM u")) {
             val m = analyze(sql)
             assertTrue(sql, m.diagnostics.any { it.code == DiagnosticCode.UNSUPPORTED_STATEMENT })
             assertTrue(m.dependencies.none { it.kind == DependencyKind.ASSIGNMENT })

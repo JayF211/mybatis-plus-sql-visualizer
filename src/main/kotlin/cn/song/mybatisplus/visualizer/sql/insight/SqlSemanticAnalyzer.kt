@@ -44,7 +44,7 @@ object SqlSemanticAnalyzer {
         )
         private data class Cte(val scopeId: String?, val outputs: List<SemanticProjection>)
         private data class Frame(val id: String, val parent: String?, val label: String, val bindings: MutableList<Binding> = mutableListOf(),
-            val correlation: Frame? = null, var ctes: Map<String, Cte> = emptyMap(), var reserved: Set<String> = emptySet())
+            val correlation: Frame? = null, var ctes: Map<String, Cte> = emptyMap(), var reserved: Set<String> = emptySet(), var coalescedJoin: Boolean = false)
         private data class Resolved(val sources: Set<SemanticColumn>, val quality: AnalysisQuality = AnalysisQuality.CERTAIN,
             val derived: Boolean = false, val conditions: Set<SemanticColumn> = emptySet())
         private val aggregates = setOf("SUM", "AVG", "MIN", "MAX", "COUNT")
@@ -182,7 +182,28 @@ object SqlSemanticAnalyzer {
                 table.fullyQualifiedName, alias, roles, snapshot.databaseContext, cte?.scopeId)
             relations += relation
             val qualifiers = if (alias != null) setOf(key(alias)) else setOf(key(table.name), qualifiedKey(table))
-            return Binding(relation, qualifiers, if (invalidCte || !verified) emptyList() else cte?.outputs).also { f.bindings += it }
+            val outputs = if (invalidCte || !verified) emptyList() else cte?.outputs ?: metadataOutputs(table, relation)
+            return Binding(relation, qualifiers, outputs).also { f.bindings += it }
+        }
+
+        private fun metadataOutputs(table: Table, relation: SemanticRelation): List<SemanticProjection>? {
+            val metadata = snapshot.metadata ?: return null
+            checkpoint()
+            if (metadata.databaseContext.isBlank() || metadata.version.isBlank() || metadata.databaseContext != snapshot.databaseContext || metadata.version != snapshot.metadataVersion) {
+                diagnostic(DiagnosticCode.METADATA_MISMATCH, "Metadata database/version does not match this snapshot.", relation.scopeId)
+                return null
+            }
+            val parts = table.nameParts.asReversed().map(::key)
+            val matches = metadata.tables.filter { it.nameParts.map(::key) == parts }
+            if (matches.isEmpty()) return null
+            if (matches.size != 1 || matches.single().columns.map(::key).distinct().size != matches.single().columns.size) {
+                diagnostic(DiagnosticCode.METADATA_MISMATCH, "Metadata table or columns are duplicated.", relation.scopeId)
+                return emptyList()
+            }
+            return matches.single().columns.mapIndexed { i, name ->
+                checkpoint()
+                SemanticProjection(i, name, name, setOf(SemanticColumn(relation.id, name)), AnalysisQuality.CERTAIN)
+            }
         }
 
         private fun from(item: FromItem, f: Frame, ctes: Map<String, Cte>, reserved: Set<String>) {
@@ -259,6 +280,7 @@ object SqlSemanticAnalyzer {
                 val child = select(node.select, f.id, label, ctes, reserved, correlation)
                 return finish(f, SqlOperation.SELECT, child.projections)
             }
+            if (node is SetOperationList) return union(node, f, ctes, reserved, correlation)
             if (node !is PlainSelect) {
                 diagnostic(DiagnosticCode.UNSUPPORTED_STATEMENT, "Unsupported SELECT body: ${node.javaClass.simpleName}", f.id)
                 return finish(f, SqlOperation.SELECT)
@@ -270,14 +292,20 @@ object SqlSemanticAnalyzer {
             node.fromItem?.let { from(it, f, ctes, reserved) }
             node.joins.orEmpty().forEach { join ->
                 from(join.rightItem, f, ctes, reserved)
-                if (join.isNatural || !join.usingColumns.isNullOrEmpty())
+                if (join.isNatural || !join.usingColumns.isNullOrEmpty()) {
+                    f.coalescedJoin = true
                     diagnostic(DiagnosticCode.UNSUPPORTED_CLAUSE, "NATURAL/USING column coalescing requires verified metadata semantics.", f.id)
+                }
                 join.onExpressions.orEmpty().forEach { dependency(it, DependencyKind.JOIN, f) }
             }
-            val outputs = node.selectItems.mapIndexed { index, item ->
-                val resolved = expression(item.expression, f)
-                val name = item.alias?.name ?: (item.expression as? Column)?.columnName
-                projection(index, name, item.expression.toString(), resolved, f)
+            val outputs = mutableListOf<SemanticProjection>()
+            node.selectItems.forEach { item ->
+                if (item.expression is AllColumns) outputs += expandStar(item.expression as AllColumns, f, outputs.size)
+                else {
+                    val resolved = expression(item.expression, f)
+                    val name = item.alias?.name ?: (item.expression as? Column)?.columnName
+                    outputs += projection(outputs.size, name, item.expression.toString(), resolved, f)
+                }
             }
             node.where?.let { dependency(it, DependencyKind.FILTER, f) }
             node.having?.let { dependency(it, DependencyKind.FILTER, f) }
@@ -289,6 +317,43 @@ object SqlSemanticAnalyzer {
                 !node.windowDefinitions.isNullOrEmpty() || !node.groupBy?.groupingSets.isNullOrEmpty() || node.groupBy?.isMysqlWithRollup == true ||
                 node.distinct != null || node.limit != null || node.offset != null || node.fetch != null || node.top != null)
                 diagnostic(DiagnosticCode.UNSUPPORTED_CLAUSE, "Some cardinality/window/dialect clauses are not explained; proven direct column origins are retained.", f.id)
+            return finish(f, SqlOperation.SELECT, outputs)
+        }
+
+        private fun expandStar(star: AllColumns, f: Frame, offset: Int): List<SemanticProjection> {
+            val inputs = if (star is AllTableColumns) f.bindings.filter { qualifiedKey(star.table) in it.qualifiers } else f.bindings
+            val unsupported = !star.exceptColumns.isNullOrEmpty() || !star.replaceExpressions.isNullOrEmpty() || f.coalescedJoin
+            if (unsupported || inputs.isEmpty() || inputs.any { it.outputs.isNullOrEmpty() } || (star is AllTableColumns && inputs.size != 1)) {
+                val value = diagnostic(DiagnosticCode.STAR_REQUIRES_METADATA, "Star needs complete ordered columns for each visible relation and supported join semantics.", f.id, AnalysisQuality.UNKNOWN)
+                return listOf(projection(offset, null, star.toString(), value, f))
+            }
+            return inputs.flatMap { it.outputs.orEmpty() }.mapIndexed { i, p ->
+                checkpoint()
+                projection(offset + i, p.name, star.toString(), Resolved(p.sources, p.quality, p.derived, p.conditionSources), f)
+            }
+        }
+
+        private fun union(node: SetOperationList, f: Frame, ctes: Map<String, Cte>, reserved: Set<String>, correlation: Frame?): SemanticScope {
+            if (node.operations.any { it !is UnionOp }) {
+                diagnostic(DiagnosticCode.UNSUPPORTED_STATEMENT, "Only UNION/UNION ALL set operations are verified.", f.id)
+                return finish(f, SqlOperation.SELECT)
+            }
+            val branches = node.selects.mapIndexed { i, child -> select(child, f.id, "UNION branch $i", ctes, reserved, correlation) }
+            if (branches.isEmpty() || branches.map { it.projections.size }.distinct().size != 1 || branches.first().projections.isEmpty()) {
+                diagnostic(DiagnosticCode.COLUMN_COUNT_MISMATCH, "UNION branches require equal nonempty projection counts.", f.id)
+                return finish(f, SqlOperation.SELECT)
+            }
+            val outputs = branches.first().projections.indices.map { i ->
+                val parts = branches.map { it.projections[i] }
+                val value = combine(parts.map { Resolved(it.sources, it.quality, it.derived, it.conditionSources) }, true)
+                projection(i, parts.first().name, "UNION column ${i + 1}", value, f)
+            }
+            if (node.operations.any { !(it as UnionOp).isAll })
+                dependencies += SemanticDependency(DependencyKind.DEDUPLICATION, f.id, "UNION DISTINCT", outputs.flatMap { it.sources }.toSet(),
+                    quality = quality(outputs.map { it.quality }))
+            node.orderByElements.orEmpty().forEach { dependency(it.expression, DependencyKind.ORDER, f, outputs, true) }
+            if (node.limit != null || node.offset != null || node.fetch != null)
+                diagnostic(DiagnosticCode.UNSUPPORTED_CLAUSE, "Set-level pagination is not explained.", f.id)
             return finish(f, SqlOperation.SELECT, outputs)
         }
 
