@@ -50,6 +50,11 @@ data class AgentEvent(
     val timestampSource: String? = null,
     val errorClass: String? = null,
     val sqlState: String? = null,
+    val requestId: String? = null,
+    val parentRequestId: String? = null,
+    val connectionId: String? = null,
+    val leaseId: String? = null,
+    val transactionId: String? = null,
 ) {
     companion object {
         /** 解析 EVENT 帧 body；结构不符返回 null（丢弃并计数，不断流）。 */
@@ -102,6 +107,11 @@ data class AgentEvent(
                 timestampSource = o.optionalText("timestampSource"),
                 errorClass = o.optionalText("errorClass"),
                 sqlState = o.optionalText("sqlState"),
+                requestId = o.optionalText("requestId"),
+                parentRequestId = o.optionalText("parentRequestId"),
+                connectionId = o.optionalText("connectionId"),
+                leaseId = o.optionalText("leaseId"),
+                transactionId = o.optionalText("transactionId"),
             )
         }.getOrNull()
 
