@@ -1,10 +1,13 @@
 package cn.song.mybatisplus.visualizer.ui
 
+import cn.song.mybatisplus.visualizer.psi.EntityClassFinder
+import cn.song.mybatisplus.visualizer.reverse.SqlToJavaConverter
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.icons.AllIcons
 import com.intellij.ide.util.gotoByName.ChooseByNamePopup
 import com.intellij.ide.util.gotoByName.ChooseByNamePopupComponent
 import com.intellij.ide.util.gotoByName.GotoClassModel2
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.project.Project
@@ -14,6 +17,7 @@ import com.intellij.ui.components.JBLabel
 import cn.song.mybatisplus.visualizer.util.IconScaler
 import com.intellij.util.ui.JBUI
 import com.intellij.util.ui.UIUtil
+import java.awt.BorderLayout
 import java.awt.Dimension
 import java.awt.FlowLayout
 import javax.swing.BoxLayout
@@ -50,7 +54,21 @@ class EntitySelectionDialog(
         val label: String,
         /** 自动推断候选（可能为空——行内空置，用户手动挑选）。 */
         val candidates: List<PsiClass>,
+        /**
+         * SQL 表名（T-JarEmbedded 方案 2 用）：点「在依赖库中查找」后按它重新解析候选；
+         * null = 该行不参与重解析（纯展示行）。
+         */
+        val tableName: String? = null,
     )
+
+    /** 行集合（「在依赖库中查找」后就地替换并重建 UI）。 */
+    private val currentRows: MutableList<TableRow> = rows.toMutableList()
+
+    /** 行容器（重建 UI 用）。 */
+    private var rowsPanel: JPanel? = null
+
+    /** 「在依赖库中查找」按钮（扫描期禁用，防重复投递）。 */
+    private var scanButton: JButton? = null
 
     /** 每行当前选择（key → 实体或 null=未指定）。 */
     private val selections = mutableMapOf<String, PsiClass?>()
@@ -65,13 +83,91 @@ class EntitySelectionDialog(
 
     override fun createCenterPanel(): JComponent {
         val panel = JPanel().apply { layout = BoxLayout(this, BoxLayout.Y_AXIS) }
-        for (row in rows) {
+        rowsPanel = panel
+        for (row in currentRows) {
             panel.add(buildRow(row))
             selections[row.key] = row.candidates.firstOrNull()
         }
-        return JScrollPane(panel).apply {
-            preferredSize = Dimension(DIALOG_WIDTH, (rows.size * ROW_HEIGHT + DIALOG_PADDING).coerceAtMost(DIALOG_MAX_HEIGHT))
+        val content = JPanel(BorderLayout())
+        content.add(
+            JScrollPane(panel).apply {
+                preferredSize = Dimension(
+                    DIALOG_WIDTH,
+                    (currentRows.size * ROW_HEIGHT + DIALOG_PADDING).coerceAtMost(DIALOG_MAX_HEIGHT),
+                )
+            },
+            BorderLayout.CENTER,
+        )
+        content.add(buildScanBar(), BorderLayout.SOUTH)
+        return content
+    }
+
+    /**
+     * 底部「在依赖库中查找」栏（T-JarEmbedded 优化方案 2）。
+     *
+     * 为什么要有它：按表名找实体时，**依赖库**里的实体若类名与表名约定不符（`LegacyBooking` ↔
+     * `t_booking`），只能靠 `@TableName` 认出——那需要扫全库类。插件默认把这次扫描放到后台
+     * （每项目版本一次，见设置项「后台扫描依赖库以反查实体」）；关掉后台扫描、或想立刻要结果时，
+     * 用户在这里点一下**显式触发**同一趟扫描，扫完就地刷新各表候选。
+     */
+    private fun buildScanBar(): JComponent = JPanel(FlowLayout(FlowLayout.LEFT, 8, 2)).apply {
+        isOpaque = false
+        val button = JButton(MpSqlVisualizerBundle.message("dialog.selectEntity.scanLibraries")).apply {
+            toolTipText = MpSqlVisualizerBundle.message("dialog.selectEntity.scanLibraries.tip")
+            addActionListener { scanLibrariesAndRefresh() }
         }
+        scanButton = button
+        add(button)
+    }
+
+    /** 显式触发一次「依赖库全库扫描」并刷新各表候选（BGT 扫描 → EDT 重建 UI）。 */
+    private fun scanLibrariesAndRefresh() {
+        if (currentRows.none { it.tableName != null }) return
+        scanButton?.isEnabled = false
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val refreshed = runCatching {
+                ReadAction.compute<List<TableRow>, RuntimeException> { refreshCandidatesFromLibraries() }
+            }.getOrNull()
+            ApplicationManager.getApplication().invokeLater(
+                {
+                    scanButton?.isEnabled = true
+                    if (refreshed != null) {
+                        currentRows.clear()
+                        currentRows.addAll(refreshed)
+                        rebuildRows()
+                    }
+                },
+                ModalityState.any(),
+            )
+        }
+    }
+
+    /**
+     * 「扫描依赖库 + 按新候选重解析各表」的**同步内核**（按钮路径与测试共用；须在 ReadAction 内调用）。
+     *
+     * 抽出来是为了可测：按钮那条路是 BGT + EDT 异步，测试直接调本方法就能确定性断言「扫完之后
+     * 候选确实变了」。
+     */
+    internal fun refreshCandidatesFromLibraries(): List<TableRow> {
+        EntityClassFinder(project).runLibrarySweepNow()
+        return resolveCandidatesFromFinder()
+    }
+
+    /** 按**当前**实体反查结果（含库扫描缓存）重解析各表候选（须在 ReadAction 内调用）。 */
+    internal fun resolveCandidatesFromFinder(): List<TableRow> = currentRows.map { row ->
+        val table = row.tableName ?: return@map row
+        row.copy(candidates = SqlToJavaConverter.findCandidates(project, table).map { it.psiClass })
+    }
+
+    /** 重建行 UI（保留用户已选：`selections` 不重置，由 [buildRow] → [refreshRow] 按既有选择渲染）。 */
+    private fun rebuildRows() {
+        val panel = rowsPanel ?: return
+        panel.removeAll()
+        for (row in currentRows) {
+            panel.add(buildRow(row))
+        }
+        panel.revalidate()
+        panel.repaint()
     }
 
     /** 单行：表名 label + 已选实体显示 + 选择… + 清除。 */
@@ -163,7 +259,7 @@ class EntitySelectionDialog(
 
     /** 测试访问器：清除某行选择（与 ✕ 按钮同一路径）。 */
     internal fun clearSelectionForTest(key: String) {
-        val row = rows.firstOrNull { it.key == key } ?: return
+        val row = currentRows.firstOrNull { it.key == key } ?: return
         clearSelection(row, selectionLabels[key] ?: JBLabel(" "))
     }
 

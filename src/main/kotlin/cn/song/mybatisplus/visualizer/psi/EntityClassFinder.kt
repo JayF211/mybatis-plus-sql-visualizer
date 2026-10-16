@@ -1,5 +1,8 @@
 package cn.song.mybatisplus.visualizer.psi
 
+import cn.song.mybatisplus.visualizer.config.PluginSettings
+import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Key
 import com.intellij.psi.PsiClass
@@ -55,7 +58,122 @@ class EntityClassFinder(private val project: Project) {
         findByCandidateNames(tableName, resolver, libraryScope())
             .takeIf { it.isNotEmpty() }
             ?.let { return it }
-        return findByTableNameAnnotationCached(tableName)
+        // 项目慢路径（@TableName 反查，既有缓存）
+        findByTableNameAnnotationCached(tableName).takeIf { it.isNotEmpty() }?.let { return it }
+        // T-JarEmbedded 优化方案 1：库内**非常规命名**的实体（类名与表名约定不符，只能靠 @TableName 认出）
+        // 查「全库一次性扫描」的缓存；未就绪则投递一次后台扫描，**本次原样返回空**（不阻塞、不等待）
+        return findByLibrarySweepCached(tableName)
+    }
+
+    /**
+     * 库内实体的一次性全库扫描（T-JarEmbedded 优化方案 1）。
+     *
+     * 为什么需要它：库里的实体若类名与表名约定不符（`LegacyBooking` ↔ `t_booking`），快路径的候选名
+     * 一个都不沾，只能靠 `@TableName` 反查；而「扫全库类名 + 逐类读注解」是 O(库类数) 的 PSI 访问，
+     * 直接放在反查热路径上会拖慢「表名根本没有对应实体」这条最常见也最敏感的路径。
+     *
+     * 做法（照 [cn.song.mybatisplus.visualizer.psi.ColumnNameCalibrator] 的既有护栏模式）：把全库扫描
+     * 挪到**后台一次性执行**，结果按「表名 → 类」落**项目级缓存**（`PsiModificationTracker` 失效，
+     * 即每个项目版本最多扫一次）；反查时只读缓存，未就绪就投递一次并**本次原样返回空**——
+     * 由调用方按既有回落（字符串列名形态）走，下一次反查（缓存已就绪）即可命中。
+     *
+     * 三道闸：设置开关（可关）/ 每项目版本只投递一次 / 全局在途上限。
+     */
+    private fun findByLibrarySweepCached(tableName: String): List<PsiClass> {
+        val cached = librarySweepCache()?.tables?.get(tableName.lowercase())
+        if (cached != null) return cached.mapNotNull { restoreMatched(it) }
+        requestLibrarySweep()
+        return emptyList()
+    }
+
+    /** 当前项目版本的库扫描缓存（版本不符返回 null，视为未就绪）。 */
+    private fun librarySweepCache(): LibrarySweepCache? {
+        val current = PsiModificationTracker.getInstance(project).modificationCount
+        return project.getUserData(LIBRARY_SWEEP_CACHE_KEY)?.takeIf { it.count == current }
+    }
+
+    /**
+     * 投递一次「全库 @TableName 扫描」（方案 1）。三道闸任一未过即本次不投递（不阻塞、不等待）：
+     *  1. 设置开关关闭（[isLibrarySweepEnabled]）；
+     *  2. 本版本已投递过（[markSweepDispatched]，每项目版本一次）；
+     *  3. 全局在途上限（[MAX_IN_FLIGHT_SWEEP]，防多项目同开时并发扫库）。
+     *
+     * 线程口径照 [ColumnNameCalibrator]：BGT 执行、内部自带 ReadAction、异常在下游被吞。
+     */
+    private fun requestLibrarySweep() {
+        if (!isLibrarySweepEnabled()) return
+        if (!markSweepDispatched()) return
+        if (inFlightSweep.get() >= MAX_IN_FLIGHT_SWEEP) return
+        sweepDispatchForTest?.let { sink ->
+            sink(project)
+            return
+        }
+        val app = ApplicationManager.getApplication() ?: return
+        inFlightSweep.incrementAndGet()
+        val future = runCatching {
+            app.executeOnPooledThread {
+                try {
+                    ReadAction.compute<Unit, RuntimeException> { runLibrarySweepNow() }
+                } finally {
+                    inFlightSweep.decrementAndGet()
+                }
+            }
+        }.getOrNull()
+        // 没投出去（无 Application / 排程抛错）→ 立刻归还计数，避免在途数泄漏把后续投递全挡掉
+        if (future == null) inFlightSweep.decrementAndGet()
+    }
+
+    /** 本版本是否已投递过库扫描；未投递则登记并返回 true。 */
+    private fun markSweepDispatched(): Boolean {
+        val current = PsiModificationTracker.getInstance(project).modificationCount
+        val existing = project.getUserData(LIBRARY_SWEEP_CACHE_KEY)
+        if (existing != null && existing.count == current) {
+            if (existing.dispatched) return false
+            existing.dispatched = true
+            return true
+        }
+        project.putUserData(LIBRARY_SWEEP_CACHE_KEY, LibrarySweepCache(current, mutableMapOf(), dispatched = true))
+        return true
+    }
+
+    /** 扫描开关（项目设置不可用时的兜底默认开）；测试缝优先。 */
+    private fun isLibrarySweepEnabled(): Boolean =
+        sweepEnabledForTest
+            ?: runCatching { PluginSettings.getInstance().state.libraryEntitySweepEnabled }.getOrDefault(true)
+
+    /**
+     * 执行一次全库 `@TableName` 扫描并落缓存（**须在 ReadAction 内调用**）。
+     *
+     * 与项目慢路径 [scanAllClassesByTableName] 同一套判定（`@TableName` 注解值 > 按类名推断），
+     * 区别只在 scope（库）与结果形态（一次扫全部表，而非只找一张表）——这样扫描成本摊到
+     * 「每个项目版本一次」，而不是「每张表一次」。方案 2 的显式触发也复用本方法。
+     *
+     * @return 扫到的「表名 → 类」条目数（0 = 库里没有可识别的实体）
+     */
+    internal fun runLibrarySweepNow(): Int {
+        // 版本号**先取**：扫描期间 PSI 若发生变化，落盘的 count 仍是扫描开始时的版本 ⇒ 缓存立即
+        // 被判为过期（下次反查重投），不会把「基于旧 PSI 的结果」当成当前版本的有效缓存
+        val startedAt = PsiModificationTracker.getInstance(project).modificationCount
+        val namesCache = PsiShortNamesCache.getInstance(project)
+        val scope = libraryScope()
+        val tables = mutableMapOf<String, MutableList<MatchedClass>>()
+        for (shortName in namesCache.getAllClassNames()) {
+            if (shortName.endsWithIgnoreCase("VO") || shortName.endsWithIgnoreCase("DTO")) continue
+            for (clazz in namesCache.getClassesByName(shortName, scope)) {
+                if (clazz.isInterface || clazz.isEnum || clazz.isAnnotationType) continue
+                if (isVoDto(clazz)) continue
+                val className = clazz.name ?: continue
+                val table = tableNameAnnotation(clazz)
+                    ?: EntityResolver.inferDecoratedTableName(className, clazz.project)
+                if (table.isBlank()) continue
+                tables.getOrPut(table.lowercase()) { mutableListOf() } += MatchedClass(shortName, clazz.qualifiedName)
+            }
+        }
+        project.putUserData(
+            LIBRARY_SWEEP_CACHE_KEY,
+            LibrarySweepCache(startedAt, tables, dispatched = true),
+        )
+        return tables.size
     }
 
     /** 按候选类名在给定 scope 内找表名精确匹配的实体（快路径）。 */
@@ -122,7 +240,9 @@ class EntityClassFinder(private val project: Project) {
 
     /** 缓存条目按类名重取 PsiClass（shortName 索引查询 + qualifiedName 精确比对防同名误配）。 */
     private fun restoreMatched(matched: MatchedClass): PsiClass? {
-        val scope = GlobalSearchScope.projectScope(project)
+        // 用 allScope：慢路径缓存里是**项目类**，而库扫描缓存（方案 1）里是**依赖库里的类**——
+        // 只查 projectScope 会让库扫描结果永远取不回来（qualifiedName 精确比对仍防同名误配）。
+        val scope = GlobalSearchScope.allScope(project)
         return PsiShortNamesCache.getInstance(project)
             .getClassesByName(matched.shortName, scope)
             .firstOrNull { it.qualifiedName == matched.qualifiedName && !isVoDto(it) }
@@ -196,6 +316,19 @@ class EntityClassFinder(private val project: Project) {
     /** 缓存条目：短名（索引查询键）+ 全限定名（精确比对防同名误配）。 */
     private data class MatchedClass(val shortName: String, val qualifiedName: String?)
 
+    /**
+     * 库内实体的一次性全库扫描缓存（T-JarEmbedded 优化方案 1；Project userData，
+     * `PsiModificationTracker` 失效——即每个项目版本最多扫一次）。
+     */
+    private data class LibrarySweepCache(
+        /** 扫描时的 modificationCount——PSI 修改后失效重建。 */
+        val count: Long,
+        /** 表名（小写）→ 库内匹配类（短名 + 全限定名）。 */
+        val tables: Map<String, List<MatchedClass>>,
+        /** 本版本是否已投递过后台扫描（每项目版本一次）。 */
+        var dispatched: Boolean = false,
+    )
+
     private fun reverseLookupCache(): ReverseLookupCache {
         // 失效计数：PsiModificationTracker（IPGP 中位于 com.intellij.psi.util 包，编译实证；
         // PSI 任何修改递增，缓存自动失效重扫）
@@ -212,6 +345,53 @@ class EntityClassFinder(private val project: Project) {
 
         private val REVERSE_LOOKUP_CACHE_KEY = Key.create<ReverseLookupCache>("mp-visualizer.reverseLookupCache")
 
+        /** 库扫描缓存键（T-JarEmbedded 方案 1）。 */
+        private val LIBRARY_SWEEP_CACHE_KEY = Key.create<LibrarySweepCache>("mp-visualizer.librarySweepCache")
+
+        /** 全局在途库扫描上限（方案 1；多项目同开时防并发扫库，照 ColumnNameCalibrator 的在途闸）。 */
+        private const val MAX_IN_FLIGHT_SWEEP = 1
+
+        /** 在途库扫描计数。 */
+        private val inFlightSweep = java.util.concurrent.atomic.AtomicInteger(0)
+
+        /** 测试缝：库扫描开关替身（null = 读设置）。 */
+        internal var sweepEnabledForTest: Boolean? = null
+
+        /** 测试缝：库扫描**投递**替身（null = 投递 executeOnPooledThread）——照 ColumnNameCalibrator.prefetchSinkForTest。 */
+        internal var sweepDispatchForTest: ((Project) -> Unit)? = null
+
+        /**
+         * 测试缝：注入一条库扫描结果（验「缓存 → find 命中」这条接线）。
+         *
+         * 真扫由 `runLibrarySweepNow()` 的正向用例覆盖（真实库类）；这里注入是为了在**不依赖**
+         * 「库里恰好有个 @TableName 与类名不符的类」的前提下，确定性验证缓存命中路径。
+         */
+        internal fun seedLibrarySweepForTest(project: Project, table: String, clazz: PsiClass) {
+            val current = PsiModificationTracker.getInstance(project).modificationCount
+            val existing = project.getUserData(LIBRARY_SWEEP_CACHE_KEY)
+            val tables = if (existing != null && existing.count == current) {
+                existing.tables.toMutableMap()
+            } else {
+                mutableMapOf()
+            }
+            val shortName = clazz.name ?: return
+            tables[table.lowercase()] = listOf(MatchedClass(shortName, clazz.qualifiedName))
+            project.putUserData(LIBRARY_SWEEP_CACHE_KEY, LibrarySweepCache(current, tables, dispatched = true))
+        }
+
+        /** 测试访问器：本版本是否已投递过库扫描（每项目版本一次）。 */
+        internal fun sweepDispatchedForTest(project: Project): Boolean =
+            project.getUserData(LIBRARY_SWEEP_CACHE_KEY)?.dispatched ?: false
+
+        /** 测试访问器：库扫描缓存条目数（0 = 未扫或库里没有可识别实体）。 */
+        internal fun sweepTableCountForTest(project: Project): Int =
+            project.getUserData(LIBRARY_SWEEP_CACHE_KEY)?.tables?.size ?: 0
+
+        /** 清除库扫描缓存（与 [clearReverseLookupCache] 同步清）。 */
+        internal fun clearLibrarySweepCache(project: Project) {
+            project.putUserData(LIBRARY_SWEEP_CACHE_KEY, null)
+        }
+
         /** 测试访问器：项目级全量反查扫描次数（缓存命中后不再增长）。 */
         internal fun scanCountForTest(project: Project): Int =
             project.getUserData(REVERSE_LOOKUP_CACHE_KEY)?.scans ?: 0
@@ -225,6 +405,8 @@ class EntityClassFinder(private val project: Project) {
         /** 清除项目级反查缓存（设置页「清除缓存」；下次 find 重新全量扫描）。 */
         internal fun clearReverseLookupCache(project: Project) {
             project.putUserData(REVERSE_LOOKUP_CACHE_KEY, null)
+            // T-JarEmbedded 方案 1：库扫描缓存同类，一并清（否则「清除缓存」后库内实体仍按旧结果命中）
+            clearLibrarySweepCache(project)
         }
 
         /**

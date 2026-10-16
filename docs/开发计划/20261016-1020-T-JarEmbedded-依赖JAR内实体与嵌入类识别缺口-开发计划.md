@@ -280,3 +280,171 @@ create table wms_inventory_jar_demo (
 `ProjectJdkTable.addJdk`（并在 tearDown 里 `removeJdk` 防污染）；`LibraryTablesRegistrar.createLibrary`
 必须在写动作内；测试 JVM **无 javac**（临时 jar 造不出来）；「库源码根」形态的类不进索引。
 
+### 7.4 优化方案 1+2 已实施（同日）：库内「非常规命名」实体的反查
+
+**背景**＝§7.3 的已知边界：库里的实体若类名与表名约定不符（`LegacyBooking` ↔ `t_booking`），只能靠
+`@TableName` 认出；而「扫全库类名 + 逐类读注解」是 O(库类数) 的 PSI 访问，直接放在反查热路径上会
+拖慢「表名根本没有对应实体」这条最常见也最敏感的路径。
+
+**方案 1（默认开）**：把全库扫描挪到**后台一次性执行**，结果按「表名 → 类」落**项目级缓存**
+（`PsiModificationTracker` 失效 ⇒ 每项目版本最多扫一次）；反查时**只读缓存**，未就绪就投递一次并
+**本次原样返回空**——调用方按既有回落（字符串列名形态）走，下一次反查即命中。三道闸与
+`ColumnNameCalibrator` 的后台预热同款：设置开关 / 每项目版本只投递一次 / 全局在途上限；
+测试缝也同款（`sweepEnabledForTest` / `sweepDispatchForTest` 投递替身 / `seedLibrarySweepForTest`）。
+设置页「清除缓存」（`clearReverseLookupCache`）同步清库扫描缓存。
+
+- 新增设置项 `libraryEntitySweepEnabled`（默认开，「代码生成」组，中英 bundle 齐）——关掉即不投递。
+- 扫描判定与项目慢路径同一套（`@TableName` 注解值 > 按类名推断），区别只在 scope（库）与结果形态
+  （一次扫全部表，而非只找一张表）⇒ 成本从「每张表一次」摊成「每项目版本一次」。
+
+**方案 2（显式触发，默认零成本）**：实体选择弹窗底部新增「在依赖库中查找」按钮——用户点了才跑
+一次同一趟扫描（BGT 扫库 → 按新结果重解析各表候选 → EDT 就地重建行、保留用户已选）。
+`EntitySelectionDialog.TableRow` 增 `tableName`（4 个生产构造点带上），供重解析；
+同步内核 `refreshCandidatesFromLibraries()` / `resolveCandidatesFromFinder()` 抽为 internal 以便确定性断言。
+
+**测试**：
+- `EntityClassFinderIntegrationTest` +5：真扫（挂本机 JDK 当 SDK，断言 `runLibrarySweepNow()` 在**真实
+  库类**上扫出条目、且缓存条目数与返回值一致）/ 缓存→命中接线（注入 `t_booking → LegacyBooking` 后
+  `find("t_booking")` 命中，而该名字既不在候选类名里、慢路径也认不出）/ 反向对照（无缓存 + 不投递 →
+  同一表名找不到）/ 开关关闭不投递 / 每项目版本只投递一次（投递缝计数，不产生真实后台线程）。
+- `EntitySelectionDialogTest` +3：按钮内核确实跑了库扫描 / 扫描结果被用于重解析各表候选 / 无结果不虚增候选。
+- **未新增二进制 jar 夹具**（`src/test/resources` 里无先例）：注解读取那一环由 W3 的取证覆盖，这里用
+  「真扫 + 注入缓存接线」两条互补用例代替，不依赖「库里恰好有个 @TableName 与类名不符的类」这种环境巧合。
+
+**读数**（`--rerun-tasks` 强制重编译，10 个类 100 例 0 失败；与本轮改动相邻的既有回归类一并在场）
+
+```
+ok   PluginSettingsPanelBindingTest             tests= 15 fail=0
+ok   SettingsRealityGuardTest                   tests=  4 fail=0
+ok   SettingsTruthTest                          tests=  5 fail=0
+ok   BundleParityGuardTest                      tests=  5 fail=0
+ok   EntityClassFinderIntegrationTest           tests= 16 fail=0
+ok   EntityClassFinderHeavyTest                 tests= 17 fail=0
+ok   EntitySelectionDialogTest                  tests=  6 fail=0
+ok   JpaJarClassFileAnnotationTest              tests=  5 fail=0
+ok   SqlToJavaConverterTest                     tests= 22 fail=0
+ok   PluginCacheManagerCoverageTest             tests=  5 fail=0
+TOTAL 100 FAILURES 0
+```
+
+其中 `JpaJarClassFileAnnotationTest`（W3 的取证）在本轮改动**全部在场**时同批通过，交叉印证两条线不互斥。
+
+**反向验证**（把 `findByLibrarySweepCached` 的缓存查询那一档摘掉——只留 `requestLibrarySweep()` 后直接
+`return emptyList()`，其余一字不动）：`GRADLE_EXIT=1`，**恰 3 红**，且红在预期的那三处——
+
+```
+EntityClassFinderIntegrationTest  tests=16 fail=2
+  testLibrarySweepCacheHitForUnconventionalTableName :: 库扫描缓存命中应返回该实体 expected:<1> but was:<0>
+  testLibrarySweepCacheRestoresLibraryClass         :: 库扫描缓存命中应取回库类 expected:<1> but was:<0>
+EntitySelectionDialogTest         tests= 6 fail=1
+  testScanResultRefreshesRowCandidates               :: 重解析后该表应拿到新候选 expected:<1> but was:<0>
+```
+
+第三处红证明方案 2 的「重解析」确实经过 `find` 的库缓存这一档，不是自己另走一条路；随后恢复修复
+并 `--rerun-tasks` 复跑回到上表全绿。
+
+**过程踩坑（记一笔，防下次假绿）**：复跑时我把其中 7 个类的 FQCN 写错了包名（`EntityClassFinderHeavyTest`
+实际在 `…visualizer.heavy`、`SqlToJavaConverterTest` 在 `…visualizer.reverse`、守卫三家族在
+`…config`/`…i18n`/`…util`，我却按 `psi`/`ui.gutter` 写了）。Gradle 在**只有部分** `--tests` 过滤式
+匹配不上时**不报错**——于是那一轮 `BUILD SUCCESSFUL`、`GRADLE_EXIT=0`，却只跑了 3 个类 27 例，看上去
+像「跑过了一遍验证集」。**判据：看 `build/test-results/test/` 下 XML 的类数**，不看退出码。上表 100 例
+是用正确 FQCN 复跑得到的读数。
+
+**自审修正两处**（提交前自查发现，均非测试暴露）：
+- `restoreMatched` 原先用 `projectScope` 还原——但扫描缓存里装的是**库类**，该 scope 恒取不回，等于
+  「缓存写进去了、读不出来」。已改 `allScope`，并补 `testLibrarySweepCacheRestoresLibraryClass`
+  （注入 `java.lang.Object` 挂 `t_object`）堵住这个盲区——原先那条注入用例用的是工程内类，把这个
+  缺陷盖住了。
+- `runLibrarySweepNow` 原先在扫完之后才读 `modificationCount` 作为缓存版本号，扫描期间若 PSI 有改动，
+  会把「扫的是旧状态」标成「当前版本有效」。已改为进循环前先取版本号。
+
+**未做**：真机走查（弹窗按钮观感、后台扫描在超大工程上的耗时）。
+
+### 7.5 W3 已取证（同日）：class 文件（依赖 JAR）上的注解判定——**证伪：无缺口，落回归护栏**
+
+**取证方式**：新增 `JpaJarClassFileAnnotationTest`（`HeavyPlatformTestCase`）。把 §7.2 的模型 JAR
+（`jpa-jar-model-lib-1.0.0.jar`：`@Entity` + 三个 `@Embedded` + `WmsItemKey` 内静态嵌套 `@Embeddable`，
+注解**全部是 `javax.persistence.*`**）拷到 `java.io.tmpdir` 后按 `jar://…!/` 挂成测试模块的库根
+（`ModuleRootModificationUtil.addModuleLibrary`），`IndexingTestUtil.waitUntilIndexesAreReady` 后对判定
+函数逐项取数。**先证伪再动手：本轮未改任何生产代码。**
+
+**读数（原文，落盘 `build/w3-jar-readings-<用例名>.txt`；树内含主控未提交改动，本用例不依赖那几个类）**
+
+夹具可见性：`allScope.findClass` / `everythingScope` / `shortNameCache` 三处都命中
+`cn.song.jarlib.entity.WmsInventoryEntity`，`findPackage("cn.song.jarlib.entity") = true`，
+`entity.containingFile.path = …jar!/cn/song/jarlib/entity/WmsInventoryEntity.class`（确认是 class 文件 PSI）。
+
+class 文件上注解的三要素（**本节核心反证**）：
+
+```
+entity.annotation = qName=javax.persistence.Entity refName=Entity resolved=null text=@javax.persistence.Entity
+entity.annotation = qName=javax.persistence.Table refName=Table resolved=null text=@javax.persistence.Table(name = "wms_inventory_jar_demo")
+```
+
+即 `nameReferenceElement.referenceName` **非空**（`Entity`/`Table`）、`qualifiedName` 是全限定名，而
+`resolveAnnotationType()` 为 **null**（`javax.persistence` 确实不在测试 classpath）——「class 文件 PSI 没有
+`nameReferenceElement`」「按注解全名判定要求注解类在 classpath」两条前提同时被实测推翻。
+
+判定函数逐项（全部正常）：
+
+- `findFlex(entity, FQN_TABLE)` → `javax.persistence.Table`，`name` = `wms_inventory_jar_demo`（jakarta→javax 轨命中）
+- `findFlex(qty, FQN_EMBEDDABLE)` / `findFlex(lotInfo, FQN_EMBEDDABLE)` → `javax.persistence.Embeddable`（**嵌套类同样命中**）
+- `findFlex(qtyField, FQN_EMBEDDED)` → `javax.persistence.Embedded`；`isEmbeddedField(qtyField) = true`，`isEmbeddedField(warehouseId) = false`
+- `isLikelyMappedEntityClass`：entity = true；`qty`/`itemKey`/`lotInfo`（`@Embeddable`）= false
+- `isSpringDataEmbeddedField(qtyField) = false`、`springDataEmbeddedPrefixOf(qtyField) = ""`（SD 轨不误伤 jakarta/javax 的 `@Embedded`）
+- `findFlex(warehouseField, FQN_COLUMN)?.name = warehouse_id`、`columnValueOrSnake(warehouseId) = warehouse_id`
+- `generatedValueStrategy(idField) = IDENTITY`（枚举属性同样可从 class 文件读出）
+- `attributeOverrides(entity) = {}`、`hasTransientLikeAnnotation(qtyField) = false`、`readClassMeta(entity)` 各字段空/空表（本夹具确实没有这些注解）
+- 展平：`qty` → `base_qty` / `qtyBaseQty`；`sku` → `inventory_status` / `skuInventoryStatus`；`itemKey` **两层递归** → `received_date` / `itemKeyLotInfoReceivedDate`；COMPONENT_PATH → `item_key_lot_info_received_date`
+- `JpaEntityResolver.resolve`：表名 `wms_inventory_jar_demo`；列清单（NONE）`[id, warehouse_id, base_qty, inventory_status, received_date]`，逐列 `embedded=true` + `embeddedParent`（qty/sku/itemKey）+ `embeddedPath` 均正确；COMPONENT_PATH 档 `[id, warehouse_id, qty_base_qty, sku_inventory_status, item_key_lot_info_received_date]` —— **与 §7.2 demo 侧真库 `/jar-model/columns` 读数逐字一致**
+- `EntityClassFinder.find("wms_inventory_jar_demo") = []`（**只记录不硬断言**：该 finder 是 MP `@TableName` 侧反查，JPA `@Table` 不在其轨；JPA 前向解析走 allScope，见 §2.2.2）
+
+**结论：§2.2.3 的五条怀疑全部证伪，无缺口，不改生产代码。**
+
+| §2.2.3 怀疑 | 实测 |
+|---|---|
+| ① `findFlex` 第三轨（`nameReferenceElement`）对 class 文件恒不命中 | 证伪：`refName=Entity`/`Table`；平台源码/javap 双证 `ClsAnnotationImpl.getNameReferenceElement()` 非空（243 与 262 同） |
+| ② `isLikelyMappedEntityClass` 的 `annotation.qualifiedName` 取不到 | 证伪：`qName=javax.persistence.Entity` → 判 true（且它根本不走 `findFlex`，走 `qualifiedName` 直查） |
+| ③ `isSpringDataEmbeddedField` / `springDataEmbeddedPrefixOf` 短名/文本轨 | 正常：false / `""`，无误判 |
+| ④ `isEmbeddedField` / `hasTransientLikeAnnotation` / `attributeOverrides` / `EntityClassFinder.tableNameAnnotation` | 正常（前三个有读数；`tableNameAnnotation` 依赖同一个 `qualifiedName` + `nameReferenceElement` 机制，见 ①） |
+| ⑤ javax/jakarta 混用、注解类不在 classpath → 整轨漏判 | 证伪：`resolved=null`（注解类确实不在 classpath）下，jakarta→javax FQN 轨照常命中，展平与列清单全对 |
+
+**平台侧依据（先证伪再动手）**：`ClsAnnotationImpl`（243 sources 与 262 javap 双证）——
+
+```java
+public @NotNull String getQualifiedName() { return myReferenceElement.getValue().getCanonicalText(); }
+public PsiJavaCodeReferenceElement getNameReferenceElement() { return myReferenceElement.getValue(); }
+```
+
+`myReferenceElement` 由**注解文本**（class 文件常量池，形如 `@javax.persistence.Table(name = "…")`）惰性构造，
+`getReferenceName()` 取末段短名——故「class 文件没有 `nameReferenceElement`」不成立。
+
+**反向验证（证明护栏不空绿）**：把 `JpaMetadataReader.findFlex` 临时降为**只留 jakarta FQN 第一轨**
+（正是 §2.2.3 假设的退化态，即前两轨按全名、第三轨失效）→ `JpaJarClassFileAnnotationTest` **5 例 3 红**
+（`testJarClassFileAnnotationsAreReadable` / `testJarEmbeddedFlattenReadings` / `testJarEntityResolveReadings`；
+夹具诊断与 MP 反查两例按设计保持绿，`GRADLE_EXIT=1`），红档读数：
+
+```
+findFlex(entity, jakarta.Table)?.qualifiedName = null
+isEmbeddedField(qtyField) = false
+flatten(itemKey, NONE) = [lot_info|lotInfo|path=itemKeyLotInfo]
+resolve(NONE).columns = [id:id:…, warehouseId:warehouse_id:…, qty:qty:…, sku:sku:…, itemKey:item_key:…]
+```
+
+还原后复跑 **5 例 0 失败 0 错误**（`BUILD SUCCESSFUL`）——退化态的产物（嵌入段整体不展平、`itemKey` 塌成
+单列）与用户报障「jar 里的嵌套类没正常识别」同形，说明这组断言确实钉住了该能力。
+
+**环境坑（记录备查）**：`HeavyPlatformTestCase` 的 `VfsRootAccess` 只放行「测试临时目录 + 默认条目」，
+仓外 jar 直接 `refreshAndFindFileByIoFile` 抛 `VfsRootAccessNotAllowedError`（先拷 `java.io.tmpdir` 即可，
+且 `java.io` 拷贝不经 VFS）；`ModuleRootModificationUtil.addModuleLibrary` 断言库根 URL **必须是
+`jar://…!/`**（传本地文件 URL 报 `jar file is expected, local file is used`）；**普通 `.jar` 文件 VF 当
+`OrderRootType.CLASSES` 根不会进类索引**——首轮 `findClass` 全返 null 就是这个原因，不是能力问题。
+另：本仓 JUnit3 形态的 Heavy 用例里 `assumeTrue` 会被平台 runner 记成红任务，夹具缺件要走
+「println + return」的显式绿跳。
+
+**测试**：新增 `JpaJarClassFileAnnotationTest` 5 例（夹具可见性诊断 / 注解读取 / 嵌入展平 / 实体解析 /
+MP 反查读数）；**只跑本类**（未跑全量、未跑门禁）。
+
+**未做**：真机走查（用户工程形态的端到端预览）；`EntityClassFinder` 的 JPA 侧反查（不是它的职责，
+见 §2.2.2，其库兜底由 §7.3 W2 覆盖）。
+

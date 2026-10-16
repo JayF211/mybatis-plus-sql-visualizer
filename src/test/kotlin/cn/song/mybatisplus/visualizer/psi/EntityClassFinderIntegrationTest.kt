@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.psi
 
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.projectRoots.JavaSdk
 import com.intellij.openapi.projectRoots.ProjectJdkTable
@@ -386,5 +387,109 @@ class EntityClassFinderIntegrationTest : HeavyPlatformTestCase() {
         assertEquals("快路径应命中项目里的实体", 1, found.size)
         assertEquals("com.example.Random", found[0].qualifiedName)
         assertEquals("快路径命中不应触发慢路径全量扫描", 0, EntityClassFinder.scanCountForTest(project))
+    }
+
+    // ------------------------------------------------------------------
+    // T-JarEmbedded 优化方案 1：库内实体的一次性全库扫描 + 项目级缓存
+    // ------------------------------------------------------------------
+
+    /**
+     * 真扫：`runLibrarySweepNow()` 在**真实库类**上应能扫出「表名 → 类」（这里把本机 JDK 当库）。
+     *
+     * 断言的是「扫描机制在真实库类上可用」；「缓存 → find 命中」这条接线由下面的注入式用例覆盖——
+     * 两者合起来才是完整路径，且不依赖「库里恰好有个 @TableName 与类名不符的类」这种环境巧合。
+     */
+    fun testLibrarySweepScansRealLibraryClasses() {
+        attachJdkAsSdk()
+        val entries = ReadAction.compute<Int, RuntimeException> {
+            EntityClassFinder(project).runLibrarySweepNow()
+        }
+        assertTrue("全库扫描应扫到库类并按表名建索引（entries=$entries）", entries > 0)
+        assertEquals(
+            "缓存条目数应与扫描返回值一致",
+            entries,
+            EntityClassFinder.sweepTableCountForTest(project),
+        )
+    }
+
+    /**
+     * 缓存 → 命中接线：注入一条「t_booking → LegacyBooking」的扫描结果后，`find("t_booking")` 应命中它。
+     *
+     * 这正是「库内实体类名与表名约定不符、只能靠 @TableName 认出」的形态：`LegacyBooking` 不在
+     * `t_booking` 的候选类名（TBooking/TBookingEntity/Booking/BookingEntity）里，慢路径按名推断也认不出。
+     */
+    fun testLibrarySweepCacheHitForUnconventionalTableName() {
+        val clazz = addClassFile(
+            "LegacyBooking.java",
+            "package com.example; public class LegacyBooking { private Long id; }",
+        )
+        EntityClassFinder.seedLibrarySweepForTest(project, "t_booking", clazz)
+
+        val found = EntityClassFinder(project).find("t_booking")
+        assertEquals("库扫描缓存命中应返回该实体", 1, found.size)
+        assertEquals("com.example.LegacyBooking", found[0].qualifiedName)
+    }
+
+    /**
+     * 库类也要能经缓存取回（堵测试盲点）：上一条注入的是**项目类**，`restoreMatched` 即便只查
+     * projectScope 也会绿——而方案 1 的缓存里存的恰恰是**依赖库里的类**。这里注入
+     * 「t_object → java.lang.Object」（该表名快路径/慢路径都认不出），断言能取回库类本身。
+     */
+    fun testLibrarySweepCacheRestoresLibraryClass() {
+        attachJdkAsSdk()
+        val objectClass = JavaPsiFacade.getInstance(project)
+            .findClass("java.lang.Object", GlobalSearchScope.allScope(project))
+        assertNotNull("挂了 JDK 后应能解析 java.lang.Object", objectClass)
+
+        EntityClassFinder.seedLibrarySweepForTest(project, "t_object", objectClass!!)
+        val found = EntityClassFinder(project).find("t_object")
+
+        assertEquals("库扫描缓存命中应取回库类", 1, found.size)
+        assertEquals("java.lang.Object", found[0].qualifiedName)
+    }
+
+    /** 反向对照：不注入缓存且关掉自动投递 → 同一表名找不到（证明上一条走的确实是缓存那条路）。 */
+    fun testUnconventionalTableNameMissesWithoutSweepCache() {
+        addClassFile("LegacyBooking.java", "package com.example; public class LegacyBooking { private Long id; }")
+        EntityClassFinder.clearLibrarySweepCache(project)
+        EntityClassFinder.sweepEnabledForTest = false
+        try {
+            assertTrue(
+                "无缓存 + 不投递时非常规命名找不到（既有行为，无回归）",
+                EntityClassFinder(project).find("t_booking").isEmpty(),
+            )
+        } finally {
+            EntityClassFinder.sweepEnabledForTest = null
+        }
+    }
+
+    /** 开关：关闭「后台扫描依赖库」→ 未命中时**不投递**（用投递缝断言，不产生真实后台线程）。 */
+    fun testLibrarySweepNotDispatchedWhenDisabled() {
+        var dispatched = 0
+        EntityClassFinder.sweepDispatchForTest = { dispatched++ }
+        EntityClassFinder.sweepEnabledForTest = false
+        try {
+            EntityClassFinder(project).find("t_booking")
+            assertEquals("开关关闭时不得投递库扫描", 0, dispatched)
+        } finally {
+            EntityClassFinder.sweepEnabledForTest = null
+            EntityClassFinder.sweepDispatchForTest = null
+        }
+    }
+
+    /** 每项目版本只投递一次：同一版本内多次未命中不得重复投递（多表 JOIN 场景常见）。 */
+    fun testLibrarySweepDispatchedOncePerProjectVersion() {
+        var dispatched = 0
+        EntityClassFinder.sweepDispatchForTest = { dispatched++ }
+        try {
+            val finder = EntityClassFinder(project)
+            finder.find("t_booking")
+            finder.find("t_booking")
+            finder.find("another_missing_table")
+            assertEquals("同一项目版本只投递一次库扫描", 1, dispatched)
+            assertTrue("投递后应已登记", EntityClassFinder.sweepDispatchedForTest(project))
+        } finally {
+            EntityClassFinder.sweepDispatchForTest = null
+        }
     }
 }

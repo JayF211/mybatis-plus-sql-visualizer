@@ -261,6 +261,10 @@ internal fun PluginSettingsPanel.buildSections(panel: JPanel) {
                 text = MpSqlVisualizerBundle.message("settings.reverseManualEntitySelection")
                 toolTipText = MpSqlVisualizerBundle.message("settings.reverseManualEntitySelection.tip")
             })
+            addRow(p, g, "", librarySweepCheck.apply {
+                text = MpSqlVisualizerBundle.message("settings.libraryEntitySweep")
+                toolTipText = MpSqlVisualizerBundle.message("settings.libraryEntitySweep.tip")
+            })
         }
     }
 
