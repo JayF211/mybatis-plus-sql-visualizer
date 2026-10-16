@@ -1,46 +1,42 @@
 # -*- coding: utf-8 -*-
-"""A2 从调用栈跳转（sql-log-stack-jump.gif）20261011 v3（弹窗已开态起录）：
-预览弹窗在场（prep 双击条目打开）→ 悬停 meta 行「调用栈:」→ Frames 弹层（12 帧全展开）→
-点「nested UserController:46」→ 编辑器打开 UserController.java 落 46 行。
-标定（20261011 mouseMoved 修复后，弹窗 @ (100,148) 实测）：悬停点 (613,251)；nested 行 (556,624)。
-"""
-import sys
-import time
-
-from gifkit import Recorder, click, move
-
-REGION = (277, 25, 1370, 984)
-OUT = "perf/a2_stackjump.mp4"
-
-HOVER = (613, 251)
-AWAY = (600, 760)
-FRAME_CTRL = (556, 624)
-EDITOR_LAND = (500, 430)
+"""预览调用栈弹层中点击业务 Controller 帧并验证目标源码。"""
+from pathlib import Path
+import sys,time
+HERE=Path(__file__).resolve().parent;sys.path.insert(0,str(HERE))
+import robot,anchor,pyautogui
+from gifkit import Recorder
+from locate import sandbox_pid,windows
+REGION=(277,25,1370,984)
+OUT=HERE/'perf'/'a2_stackjump_native.mp4'
+LABEL='//div[contains(@class,"JBLabel") and contains(@accessiblename,"调用栈")]'
+TREE='//div[contains(@class,"JTree")]'
 
 
 def main():
-    import pyautogui
-    pyautogui.FAILSAFE = False
-    pyautogui.PAUSE = 0
+    pid=sandbox_pid()
+    robot.require_component(LABEL)
+    pyautogui.moveTo(540,750,duration=.2);time.sleep(.7)
+    if robot.find_one(TREE):
+        pyautogui.press('esc');time.sleep(.4)
+    robot.require_component(LABEL)
+    rec=Recorder(REGION,str(OUT));rec.start()
+    try:
+        point=robot.component_screen_center(LABEL)
+        pyautogui.moveTo(*point,duration=.3);time.sleep(1)
+        c=robot.require_component(TREE);cx,cy=robot.component_screen_center(TREE,c)
+        hit=anchor.require_anchor('native_stack_controller',region=(cx-c['width']//2,cy-c['height']//2,c['width'],c['height']))
+        robot.screenshot(out=str(HERE/'shots'/'stack-native-popup.png'))
+        pyautogui.moveTo(hit[0],hit[1],duration=.3);time.sleep(.3);pyautogui.click(hit[0],hit[1]);time.sleep(1.2)
+        if not any(p==pid and 'UserController.java' in title for _,p,title,r in windows()):
+            robot.screenshot(out=str(HERE/'shots'/'stack-native-failed.png'))
+            raise RuntimeError('Business Controller navigation not confirmed')
+        if not robot.click_component('//div[contains(@accessiblename,"取消")]'):
+            raise RuntimeError('Cannot dismiss preview to show target source')
+        time.sleep(.5)
+        if robot.find_one(LABEL):
+            raise RuntimeError('Preview still obscures target source')
+        pyautogui.moveTo(1510,650,duration=.2);time.sleep(1)
+        robot.screenshot(out=str(HERE/'shots'/'stack-native-final.png'))
+    finally:print('frames',rec.stop(),'output',OUT,flush=True)
 
-    r = Recorder(REGION, OUT)
-    r.start()
-    time.sleep(0.4)
-
-    # 1. 鼠标从远离态移回 meta 行 → 400ms 后弹层
-    move(*HOVER, dur=0.25)  # 快于 400ms 计时器，锚点=最终落点
-    time.sleep(1.3)
-
-    # 2. 点 Controller 帧 → 编辑器跳转
-    click(*FRAME_CTRL, move_dur=0.35, pauses=(0.2, 0.2))
-    time.sleep(2.6)
-
-    # 3. 鼠标滑向编辑器落点
-    move(*EDITOR_LAND, dur=0.5)
-    time.sleep(1.0)
-
-    print("frames:", r.stop())
-
-
-if __name__ == "__main__":
-    sys.exit(main())
+if __name__=='__main__':main()

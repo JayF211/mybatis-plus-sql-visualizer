@@ -39,6 +39,31 @@ class RobotProtocolTest(unittest.TestCase):
         with self.assertRaises(robot.RobotServerError):
             robot.component_center({"id": "hidden", "x": 0, "y": 0, "width": 0, "height": 40})
 
+    def test_popup_window_coordinates_are_already_on_screen(self):
+        comp = {"id": "jump", "className": "ActionMenuItem", "x": 1, "y": 162,
+                "width": 247, "height": 26}
+        chain = [{"className": "com.intellij.openapi.wm.impl.IdeFrameImpl", "x": 277, "y": 25},
+                 {"className": "javax.swing.Popup$HeavyWeightWindow", "x": 1263, "y": 213},
+                 {"className": "JRootPane", "x": 0, "y": 0}]
+        with patch.object(robot, "find_components", return_value=chain):
+            self.assertEqual((1387, 388), robot.component_screen_center("//div", comp))
+
+    def test_nested_dialog_and_popup_use_nearest_window_origin(self):
+        comp = {"x": 8, "y": 4, "width": 100, "height": 34}
+        chain = [
+            {"className": "com.intellij.openapi.wm.impl.IdeFrameImpl", "x": 277, "y": 25},
+            {"className": "DialogWrapperPeerImpl$MyDialog", "x": 367, "y": 166},
+            {"className": "DialogRootPane", "x": 8, "y": 0},
+        ]
+        with patch.object(robot, "find_components", return_value=chain):
+            self.assertEqual((433, 187), robot.component_screen_center("//div", comp))
+        floating = [chain[0], {"className": "NonModalWindowWrapper$FloatDialog", "x": 367, "y": 166}, chain[2]]
+        with patch.object(robot, "find_components", return_value=floating):
+            self.assertEqual((433, 187), robot.component_screen_center("//div", comp))
+        popup = chain + [{"className": "javax.swing.Popup$HeavyWeightWindow", "x": 680, "y": 240}]
+        with patch.object(robot, "find_components", return_value=popup):
+            self.assertEqual((738, 261), robot.component_screen_center("//div", comp))
+
     def test_screenshot_decodes_signed_byte_array(self):
         png = b"\x89PNG\r\n\x1a\n" + b"payload"
         with patch.object(robot, "_request", return_value={

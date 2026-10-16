@@ -108,6 +108,10 @@ def component_screen_center(xpath, comp=None, base=DEFAULT_BASE, offset=(0, 0), 
     chain = find_components("(%s)/ancestor::div" % xpath, base=base, timeout=timeout)
     if not chain or not any(c.get("className", "").endswith("IdeFrameImpl") for c in chain):
         raise RobotServerError("没有 IDE 主窗口到组件的完整祖先链，拒绝猜坐标：%s" % xpath)
+    window_roots = [i for i, parent in enumerate(chain)
+                    if parent.get("className", "").endswith(("HeavyWeightWindow", "$MyDialog", "$FloatDialog"))]
+    if window_roots:
+        chain = chain[window_roots[-1]:]
     screen_x = local_x + sum(int(parent["x"]) for parent in chain)
     screen_y = local_y + sum(int(parent["y"]) for parent in chain)
     return screen_x, screen_y
