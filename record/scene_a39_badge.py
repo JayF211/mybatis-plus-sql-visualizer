@@ -1,36 +1,32 @@
 # -*- coding: utf-8 -*-
-"""A39 数据源上下文角标（datasource-badge.gif）20261011：
-设置页（SQL Log，已滚动到开关可见）勾选「数据源角标显示完整上下文」→ OK →
-列表角标 [MySQL] → [MySQL · mp_demo@localhost:xxxx] 即时切换。
-标定（20261011 实测）：复选框 (907,374)、OK (1242,914)。
-"""
-import sys
+"""数据源角标完整上下文开关，结束恢复原先关闭状态。"""
+from pathlib import Path
 import time
-
-from gifkit import Recorder, click
-
-REGION = (277, 25, 1370, 984)
-OUT = "perf/a39_badge.mp4"
-
-CHECKBOX = (907, 374)
-OK_BTN = (1242, 914)
+import robot,pyautogui
+from gifkit import Recorder
+from scene_a8_list_display import reveal_mode,click,MODE,SETTINGS
+HERE=Path(__file__).resolve().parent
+REGION=(277,25,1370,984)
+OUT=HERE/'perf'/'a39_badge_native.mp4'
+BADGE='//div[contains(@class,"CheckBox") and contains(@accessiblename,"数据源角标显示完整上下文")]'
 
 
 def main():
-    r = Recorder(REGION, OUT)
-    r.start()
-    time.sleep(0.4)
+    click(SETTINGS);robot.require_component(MODE);reveal_mode();robot.require_component(BADGE)
+    rec=Recorder(REGION,str(OUT));rec.start()
+    changed=False
+    try:
+        time.sleep(.7);click(BADGE);changed=True
+        robot.screenshot(out=str(HERE/'shots'/'badge-native-setting.png'))
+        click('//div[@accessiblename="OK"]');time.sleep(1)
+        pyautogui.moveTo(1510,650,duration=.2);time.sleep(.9)
+        robot.screenshot(out=str(HERE/'shots'/'badge-native-final.png'))
+    finally:
+        print('frames',rec.stop(),'output',OUT,flush=True)
+        if changed:
+            if not robot.find_one(MODE):click(SETTINGS)
+            robot.require_component(MODE);reveal_mode();click(BADGE)
+            click('//div[@accessiblename="OK"]');time.sleep(.6)
+            robot.screenshot(out=str(HERE/'shots'/'badge-native-reset.png'))
 
-    # 1. 勾选「数据源角标显示完整上下文」
-    click(*CHECKBOX, move_dur=0.3, pauses=(0.2, 0.3))
-    time.sleep(0.8)
-
-    # 2. OK 关闭设置
-    click(*OK_BTN, move_dur=0.4, pauses=(0.2, 0.2))
-    time.sleep(2.4)  # 列表角标重渲染
-
-    print("frames:", r.stop())
-
-
-if __name__ == "__main__":
-    sys.exit(main())
+if __name__=='__main__':main()

@@ -566,6 +566,9 @@ class PluginSettingsPanel @JvmOverloads constructor(
     /** 反向转换手动选择实体类开关（自动推断未命中/多表 JOIN 时弹实体选择弹窗）。 */
     internal val manualEntityCheck = JBCheckBox()
 
+    /** 后台扫描依赖库反查实体开关（T-JarEmbedded 方案 1）。 */
+    internal val librarySweepCheck = JBCheckBox()
+
     /** 插件缓存信息（统一条目总数——所有打开项目汇总；不细分缓存类型）。 */
     internal val cacheInfoLabel = JBLabel(" ")
 
@@ -1018,6 +1021,11 @@ class PluginSettingsPanel @JvmOverloads constructor(
         manualEntityCheck.isSelected = checked
     }
 
+    /** 后台扫描依赖库开关设置入口（测试用）——与用户勾选同一路径（isModified/apply 检测）。 */
+    internal fun setLibrarySweepCheck(checked: Boolean) {
+        librarySweepCheck.isSelected = checked
+    }
+
     /** T-PT-04 / O-79：空参数填充策略选择入口（测试用）——与用户点选同一路径（isModified/apply 检测）。 */
     internal fun selectEmptyParamFill(value: String) {
         when (value) {
@@ -1233,6 +1241,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
     private fun isModifiedCodeGen(s: PluginSettings.State): Boolean =
         (reverseFormatCombo.selectedItem as? ReverseFormatOption)?.value != s.reverseWrapperFormat
             || manualEntityCheck.isSelected != s.reverseManualEntitySelection
+            || librarySweepCheck.isSelected != s.libraryEntitySweepEnabled
 
     private fun isModifiedSqlLog(s: PluginSettings.State): Boolean =
         logSqlPrefixField.text.trim() != s.logSqlPrefix
@@ -1361,6 +1370,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
         if (SECTION_CODE_GEN in sections) {
             s.reverseWrapperFormat = (reverseFormatCombo.selectedItem as? ReverseFormatOption)?.value ?: PluginSettings.REVERSE_AUTO
             s.reverseManualEntitySelection = manualEntityCheck.isSelected
+            s.libraryEntitySweepEnabled = librarySweepCheck.isSelected
         }
         if (SECTION_SQL_LOG in sections) {
             s.logSqlPrefix = logSqlPrefixField.text.trim()
@@ -1530,6 +1540,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             reverseFormatCombo.selectedItem = reverseFormatOptions().firstOrNull { it.value == s.reverseWrapperFormat }
                 ?: reverseFormatOptions().first()
             manualEntityCheck.isSelected = s.reverseManualEntitySelection
+            librarySweepCheck.isSelected = s.libraryEntitySweepEnabled
         }
         if (SECTION_UI in sections) {
             gutterIconCheck.isSelected = s.showGutterIcon

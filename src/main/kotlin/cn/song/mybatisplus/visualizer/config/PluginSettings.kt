@@ -256,6 +256,17 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
          */
         var reverseManualEntitySelection: Boolean = true,
 
+        /**
+         * 允许**后台扫描依赖库**以反查实体（T-JarEmbedded 优化方案 1，默认开）。
+         *
+         * SQL→Java 反向转换按表名找实体时，库里的实体若类名与表名约定不符（`LegacyBooking` ↔
+         * `t_booking`），只能靠 `@TableName` 认出——那需要扫全库类。为不拖慢「表名没有对应实体」
+         * 这条最常见的路径，扫描被挪到后台**每项目版本一次**，结果落项目级缓存；本次转换先按
+         * 字符串列名形态回落，缓存就绪后的下一次转换即可命中。
+         * 关闭后完全不投递后台扫描（可在实体选择处用「在依赖库中查找」显式触发一次）。
+         */
+        var libraryEntitySweepEnabled: Boolean = true,
+
         // ---------- T-M31.14 SQL 日志配置（参考 MybatisCodeHelper-Pro「MyBatis Log Setting」） ----------
 
         /** 日志 SQL 前缀（Preparing 行定位关键字）。 */

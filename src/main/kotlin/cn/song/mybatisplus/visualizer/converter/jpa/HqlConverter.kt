@@ -88,8 +88,9 @@ object HqlConverter {
         tableInfo: TableInfo? = null,
         project: Project? = null,
         entityAlias: String? = null,
+        context: com.intellij.psi.PsiElement? = null,
     ): Result {
-        return convertInternal(hql, tableInfo, project, entityAlias, null)
+        return convertInternal(hql, tableInfo, project, entityAlias, null, context)
     }
 
     /**
@@ -105,7 +106,7 @@ object HqlConverter {
         entityAlias: String? = null,
         resolveEntity: (String) -> TableInfo?,
     ): Result {
-        return convertInternal(hql, tableInfo, null, entityAlias, resolveEntity)
+        return convertInternal(hql, tableInfo, null, entityAlias, resolveEntity, null)
     }
 
     private fun convertInternal(
@@ -114,8 +115,19 @@ object HqlConverter {
         project: Project?,
         entityAlias: String?,
         resolveEntity: ((String) -> TableInfo?)?,
+        context: com.intellij.psi.PsiElement?,
     ): Result {
-        val table = tableInfo ?: createFallbackTable()
+        val lookup = JpaQueryEntityLookup(project, context)
+        val rootName = JpaQueryEntityLookup.rootEntity(hql)
+        val table = tableInfo ?: rootName?.let { lookup.resolveTable(it) } ?: createFallbackTable()
+        val mappedRootName = rootName?.takeIf {
+            tableInfo == null || it.substringAfterLast('.') == table.entityClassName || it == entityAlias ||
+                lookup.resolveClass(it)?.name == table.entityClassName
+        }
+        val resolveTable: (String) -> TableInfo? = { name ->
+            if (name == mappedRootName && table.entityClassName.isNotBlank()) table
+            else resolveEntity?.invoke(name) ?: lookup.resolveTable(name)
+        }
 
         // 0. 检测 IN 子句参数（在命名参数替换前检测）
         val inClauseParams = findInClauseParams(hql)
@@ -136,7 +148,8 @@ object HqlConverter {
         sql = NewExpressionStripper.strip(sql)
 
         // 5. 处理 JOIN FETCH / 关联 JOIN → LEFT/INNER JOIN（J7：ON 条件真实化）
-        sql = JpaJoinRewriter.rewrite(sql, table, project)
+        // 复用同一次查询的实体解析（含 @Entity(name)）；不可改用根实体文件作为 context。
+        sql = JpaJoinRewriter.rewriteWithLookup(sql, table, lookup)
 
         // 6. 处理 MEMBER OF（降级为注释提示）
         sql = handleMemberOf(sql)
@@ -144,15 +157,11 @@ object HqlConverter {
         // 6.5 别名作用域解析（O-57）：须在实体名→表名替换之前扫描——那时 FROM/JOIN 后的
         // 实体标识符还在 SQL 里，替换成表名后 PSI 短名检索不再命中；
         // 又须在第 5 步 JOIN 改写之后——改写新增的副表别名只有那时才存在
-        val scope = if (resolveEntity != null) {
-            JpaAliasTableResolver.resolveAliases(sql, table, resolveEntity)
-        } else {
-            JpaAliasTableResolver.resolveAliases(sql, table, project)
-        }
+        val scope = JpaAliasTableResolver.resolveAliases(sql, table, resolveTable)
 
         // 7. 实体名 → 表名映射
         if (!table.entityClassName.isBlank()) {
-            sql = mapEntityToTable(sql, table, entityAlias)
+            sql = mapEntityToTable(sql, table, entityAlias ?: mappedRootName)
             // 8. 关联字段路径映射：alias.field.id → 外键列名（须在属性映射之前）
             sql = mapAssociationPath(sql, table)
             // 9. 属性名 → 列名映射（按别名作用域分派，副表别名同样映射）
@@ -164,7 +173,9 @@ object HqlConverter {
 
         // 8.5 子查询 FROM/JOIN 中其他实体名 → 表名（J13；需 Project，无则跳过）。
         // 别名作用域已解析出实体→表名，透传给扫描器复用，免二次 PSI 检索
-        sql = JpaFromEntityMapper.mapSubqueryEntities(sql, table, project, scope.entityTableNames)
+        sql = JpaFromEntityMapper.mapSubqueryEntities(sql, table) { name ->
+            scope.entityTableNames[name]
+        }
 
         // 9. SELECT 子句展开（T-HQL-SELECT-01 / T-BareFromSelect）
         // 必须排在步骤 5（JOIN 改写）之后——JOIN 别名只有改写后才存在，
@@ -324,7 +335,10 @@ object HqlConverter {
         // 普查批：字面量掩码——`like '%UserEntity%'` 等单引号字面量内的实体名不得被替换
         val (masked, literals) = JpaSqlLiteralMasking.mask(hql)
         var result = masked
-        entityPattern(table.entityClassName)?.let { result = it.replace(result, table.tableName) }
+        // 根实体写 FQN 时不能顺带替换同名简单标识符（它仍可能有歧义）。
+        if (entityAlias?.contains('.') != true) {
+            entityPattern(table.entityClassName)?.let { result = it.replace(result, table.tableName) }
+        }
         val alias = entityAlias?.takeIf { it.isNotBlank() && it != table.entityClassName }
         if (alias != null) {
             entityPattern(alias)?.let { result = it.replace(result, table.tableName) }
@@ -334,7 +348,7 @@ object HqlConverter {
 
     /** 实体标识符全词匹配 Pattern（词边界防子串误伤；构造失败容错返回 null）。 */
     private fun entityPattern(identifier: String): Regex? =
-        runCatching { Regex("\\b${Regex.escape(identifier)}\\b") }.getOrNull()
+        Regex("(?<![\\w.$])${Regex.escape(identifier)}\\b")
 
     // ------------------------------------------------------------------
     // 关联字段路径映射

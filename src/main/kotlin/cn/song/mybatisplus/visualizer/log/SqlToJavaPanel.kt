@@ -1219,6 +1219,7 @@ class SqlToJavaPanel(
                     key = EntitySelectionDialog.MAIN_KEY,
                     label = "${MpSqlVisualizerBundle.message("dialog.selectEntity.mainTable")} ${result.tableName}",
                     candidates = mainCandidates.map { it.psiClass },
+                    tableName = result.tableName,
                 ),
             )
             result.joins.forEach { join ->
@@ -1228,6 +1229,7 @@ class SqlToJavaPanel(
                             key = alias,
                             label = "${MpSqlVisualizerBundle.message("dialog.selectEntity.joinTable")} $alias ${join.tableName}",
                             candidates = subCandidates[alias].orEmpty().map { it.psiClass },
+                            tableName = join.tableName,
                         ),
                     )
                 }

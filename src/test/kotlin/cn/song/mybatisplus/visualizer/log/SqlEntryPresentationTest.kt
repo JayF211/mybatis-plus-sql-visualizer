@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.log
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
+import cn.song.mybatisplus.visualizer.util.MpvsUiColors
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import com.intellij.ui.SimpleTextAttributes
 import java.awt.Color
@@ -33,6 +34,27 @@ class SqlEntryPresentationTest : BasePlatformTestCase() {
             assertTrue(log.any { it.text.contains("2 rows") })
         } finally {
             settings.state.logTimestampEnabled = old
+        }
+    }
+
+    fun test列表耗时按阈值分档且无耗时保持灰色() {
+        val settings = PluginSettings.getInstance()
+        val oldThreshold = settings.state.slowQueryThresholdMs
+        try {
+            settings.state.slowQueryThresholdMs = 1000
+            fun duration(ms: Long?, selected: Boolean = false): SqlTextFragment {
+                val entry = LogSqlEntry(rawSql = "SELECT 1", restoredSql = "SELECT 1", params = emptyList(), executionTimeMs = ms)
+                return SqlEntryPresentation.metadata(entry, selected, true, emptyMap())
+                    .single { it.text == (ms?.let { value -> "${value}ms " } ?: "— ") }
+            }
+            assertSame(MpvsUiColors.DURATION_OK, duration(1).attributes.fgColor)
+            assertSame(MpvsUiColors.DURATION_OK, duration(499).attributes.fgColor)
+            assertSame(MpvsUiColors.DURATION_WARN, duration(500).attributes.fgColor)
+            assertSame(MpvsUiColors.DURATION_SLOW, duration(1000).attributes.fgColor)
+            assertSame(MpvsUiColors.DURATION_NONE, duration(null).attributes.fgColor)
+            assertSame(MpvsUiColors.DURATION_SELECTED, duration(1, selected = true).attributes.fgColor)
+        } finally {
+            settings.state.slowQueryThresholdMs = oldThreshold
         }
     }
 

@@ -7,7 +7,6 @@ import com.intellij.psi.PsiAnnotationMemberValue
 import com.intellij.psi.PsiArrayInitializerMemberValue
 import com.intellij.psi.PsiClass
 import com.intellij.psi.PsiLiteralExpression
-import com.intellij.psi.search.GlobalSearchScope
 
 /**
  * JPA 命名查询信息（@NamedQuery / @NamedQueries 产物）。
@@ -102,29 +101,48 @@ object NamedQueryLocator {
      * @param queryName 命名查询名
      * @return 命中的命名查询（annotation 字段已回填，可反查实体类）；未命中返回 null
      */
-    fun findByQueryName(project: Project, queryName: String?): NamedQueryInfo? {
-        if (queryName == null || queryName.isBlank()) return null
-        val entitySimpleName = queryName.substringBefore('.', "").trim()
-        if (entitySimpleName.isBlank()) return null
-        val classes = runCatching {
-            JavaPsiFacade.getInstance(project).findClasses(entitySimpleName, GlobalSearchScope.projectScope(project))
-        }.getOrNull() ?: return null
-        return uniqueHit(classes.asIterable(), queryName)
+    fun findByQueryName(
+        project: Project,
+        queryName: String?,
+        context: com.intellij.psi.PsiElement? = null,
+    ): NamedQueryInfo? = findCandidatesByQueryName(project, queryName, context).singleOrNull()
+
+    /** 保留歧义信息供预览阻断 HBM fallback，避免 null 被误当作「Java 定义不存在」。 */
+    internal fun findCandidatesByQueryName(
+        project: Project,
+        queryName: String?,
+        context: com.intellij.psi.PsiElement? = null,
+    ): List<NamedQueryInfo> {
+        if (queryName.isNullOrBlank() || com.intellij.openapi.project.DumbService.isDumb(project)) return emptyList()
+        val ownerName = queryName.substringBeforeLast('.', "").trim()
+        if (ownerName.isBlank()) return emptyList()
+        return try {
+            val scope = cn.song.mybatisplus.visualizer.psi.EntityClassResolver.searchScope(project, context)
+            // 命名查询宿主不一定是查询根实体，也不一定标了 @Entity；只按宿主名取类，不借实体规则误删。
+            val classes = if ('.' in ownerName) JavaPsiFacade.getInstance(project).findClasses(ownerName, scope).toList()
+            else com.intellij.psi.search.PsiShortNamesCache.getInstance(project).getClassesByName(ownerName, scope).toList()
+            queryHits(classes.distinct(), queryName)
+        } catch (_: com.intellij.openapi.project.IndexNotReadyException) {
+            emptyList()
+        }
     }
 
     /** 索引候选收口独立于测试框架的项目索引：跨文件歧义不能被空索引假绿掩盖。 */
-    internal fun uniqueHit(classes: Iterable<PsiClass>, queryName: String): NamedQueryInfo? {
-        // 同名实体可跨包/模块共存；没有唯一的定义 owner 就不能取索引返回的首项。
-        // 有界扫描：第二个命中即可判歧义，避免无谓枚举后续注解。
-        var unique: NamedQueryInfo? = null
+    internal fun uniqueHit(classes: Iterable<PsiClass>, queryName: String): NamedQueryInfo? =
+        queryHits(classes, queryName).singleOrNull()
+
+    /** 与生产索引入口共用消歧内核；第二个命中即可判歧义，不再枚举后续注解。 */
+    private fun queryHits(classes: Iterable<PsiClass>, queryName: String): List<NamedQueryInfo> {
+        val matches = mutableListOf<NamedQueryInfo>()
         for (cls in classes) {
+            com.intellij.openapi.progress.ProgressManager.checkCanceled()
             for (hit in locate(cls)) {
                 if (hit.name != queryName) continue
-                if (unique != null) return null
-                unique = hit
+                matches += hit
+                if (matches.size == 2) return matches
             }
         }
-        return unique
+        return matches
     }
 
     // ------------------------------------------------------------------

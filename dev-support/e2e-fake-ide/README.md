@@ -20,6 +20,9 @@
 - 覆盖项：`-Pe2eDemoDir=<demo 路径>`、`-Pe2eMvn=<mvn 路径>`、`-Pe2eJavaHome=<jdk 路径>`
   （Gradle daemon 的 PATH 不含交互式 shell 的 JDK，任务把 JDK 交给脚本，脚本再把
   `$JAVA_HOME/bin` 前置进 PATH）。
+- 应用默认使用 8082；被占用时从该端口起向后找最多 10 个空闲端口，并给应用显式传
+  `--server.port`、为探针生成相同端口的请求脚本。手动运行可用 `APP_PORT` 改变起始端口；
+  全部候选被占用则在启动前失败。收尾仅清理本轮 agent HELLO 对应的进程，不按端口误杀他人应用。
 
 手动运行（排障用，等价）：
 

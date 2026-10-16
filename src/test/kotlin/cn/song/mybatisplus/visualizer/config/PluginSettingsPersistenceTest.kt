@@ -210,10 +210,11 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
             // R60 T-LaneB D96：展示/导出链脱敏开关（displayMaskCheck）+1 后为 42；
             // T-CountSimToggle：分页 COUNT 子开关（paginationCountCheck）+1 后为 43；
             // T-DataSourceBadgeMode：数据源角标完整上下文开关（dataSourceBadgeDetailCheck）+1 后为 44；
+            // R90：独立默认关闭的原始计划保留授权 +1 后为 45，不与结构化渲染共用；
+            // T-JarEmbedded 优化方案 2：后台扫描依赖库以反查实体开关（librarySweepCheck）+1 后为 46。
             // 同步先例 ccd0f74（R2 设置页六组 gutter 复选框曾 31→37 同步）
-            // R90：独立默认关闭的原始计划保留授权 +1，不与结构化渲染共用。
             assertTrue(texts.any { it.contains("Retain raw EXPLAIN plans") })
-            assertEquals("复选框总数应为 45", 45, texts.size)
+            assertEquals("复选框总数应为 46", 46, texts.size)
         } finally {
             settings.state.language = old
         }

@@ -37,15 +37,22 @@ object HbmXmlEntityResolver {
     /** T-Perf-18：负命中缓存上限（超过整体清空）。 */
     private const val NEGATIVE_CACHE_MAX = 4096
 
-    private val cache = ConcurrentHashMap<String, HbmXmlMapping.ClassMapping>()
+    private data class LookupKey(val name: String, val scope: GlobalSearchScope)
+    private class LookupCache(val psiStamp: Long, val rootStamp: Long, val generation: Long) {
+        val classes = ConcurrentHashMap<LookupKey, List<HbmXmlMapping.ClassMapping>>()
+        val queries = ConcurrentHashMap<LookupKey, List<HbmXmlMapping.NamedQuery>>()
+    }
+    private val CACHE_KEY = com.intellij.openapi.util.Key.create<LookupCache>("mp-visualizer.scopedHbmMappings")
+    private val generation = java.util.concurrent.atomic.AtomicLong()
 
-    /**
-     * T-Perf-18：负命中缓存（项目名+类名 → true 表示该实体无 hbm 映射）。
-     * 此前每个无 hbm 实体每次预览都重跑 FilenameIndex 全量索引查询（heavy 热路径）；
-     * 负命中仅在 [clearCache] / 缓存封顶清空时失效（hbm 文件增删属开发期低频事件，
-     * 设置页「清除缓存」可手动刷新）。
-     */
-    private val negativeCache: MutableSet<String> = ConcurrentHashMap.newKeySet()
+    private fun cacheFor(project: Project): LookupCache {
+        val psi = com.intellij.psi.util.PsiModificationTracker.getInstance(project).modificationCount
+        val roots = com.intellij.openapi.roots.ProjectRootModificationTracker.getInstance(project).modificationCount
+        val epoch = generation.get()
+        val previous = project.getUserData(CACHE_KEY)
+        if (previous != null && previous.psiStamp == psi && previous.rootStamp == roots && previous.generation == epoch) return previous
+        return LookupCache(psi, roots, epoch).also { project.putUserData(CACHE_KEY, it) }
+    }
 
     /**
      * 根据实体类名查找映射信息。
@@ -54,27 +61,26 @@ object HbmXmlEntityResolver {
      * @param project         当前项目
      * @return 映射信息，找不到返回 null
      */
-    fun resolve(entityClassName: String, project: Project): HbmXmlMapping.ClassMapping? {
-        val cacheKey = "${project.name}:$entityClassName"
-        cache[cacheKey]?.let { return it }
-        if (cacheKey in negativeCache) return null
-
-        // 搜索所有 .hbm.xml 文件（T-DepApi 无需介入：本路径走 FileTypeIndex + projectScope，
-        // 未使用全平台标 deprecated 的 FilenameIndex.getFilesByName）
-        for (file in findHbmXmlFiles(project)) {
-            for (mapping in parseHbmFile(file)) {
-                // 按简单类名和全限定名索引
-                if (mapping.entityClassName == entityClassName || mapping.fullClassName == entityClassName) {
-                    cache[cacheKey] = mapping
-                    return mapping
-                }
+    fun resolve(
+        entityClassName: String,
+        project: Project,
+        context: com.intellij.psi.PsiElement? = null,
+    ): HbmXmlMapping.ClassMapping? {
+        if (entityClassName.isBlank() || com.intellij.openapi.project.DumbService.isDumb(project)) return null
+        return try {
+            val scope = cn.song.mybatisplus.visualizer.psi.EntityClassResolver.searchScope(project, context)
+            val cache = cacheFor(project).classes
+            val key = LookupKey(entityClassName, scope)
+            cache[key]?.let { return it.singleOrNull() }
+            val matches = findHbmXmlFiles(project, scope).flatMap { parseHbmFile(it) }.filter {
+                it.entityClassName == entityClassName || it.fullClassName == entityClassName
             }
+            if (cache.size >= NEGATIVE_CACHE_MAX) cache.clear()
+            cache[key] = matches
+            matches.singleOrNull()
+        } catch (_: com.intellij.openapi.project.IndexNotReadyException) {
+            null
         }
-
-        // T-Perf-18：记入负命中缓存（封顶防膨胀）
-        if (negativeCache.size >= NEGATIVE_CACHE_MAX) negativeCache.clear()
-        negativeCache.add(cacheKey)
-        return null
     }
 
     /**
@@ -86,56 +92,87 @@ object HbmXmlEntityResolver {
      * @param queryName 完整查询名（如 `LegacyItem.findLowStockHql`）
      * @param project   当前项目
      */
-    fun findNamedQuery(queryName: String, project: Project): HbmXmlMapping.NamedQuery? {
-        val matches = namedQueryMatches(queryName, project)
-        val first = matches.firstOrNull { it.queryText.isNotBlank() } ?: return null
-        // 同 kind/name 第二份定义即使文本不同也不能首取 SQL；不缓存以免新增重复后旧首项继续命中。
-        return first.takeUnless { selected -> matches.count { it.kind == selected.kind } > 1 }
-    }
+    fun findNamedQuery(
+        queryName: String,
+        project: Project,
+        context: com.intellij.psi.PsiElement? = null,
+    ): HbmXmlMapping.NamedQuery? =
+        namedQueryMatches(queryName, project, context).singleOrNull()?.takeIf { it.queryText.isNotBlank() }
 
     /** 调用点区分「未找到」与「重名歧义」，后者禁止把名字再当 HQL 字面量预览。 */
-    fun hasAmbiguousNamedQuery(queryName: String, project: Project): Boolean =
-        namedQueryMatches(queryName, project).groupBy { it.kind }.any { (_, matches) -> matches.size > 1 }
+    fun hasAmbiguousNamedQuery(
+        queryName: String,
+        project: Project,
+        context: com.intellij.psi.PsiElement? = null,
+    ): Boolean = namedQueryMatches(queryName, project, context).size > 1
 
-    private fun namedQueryMatches(queryName: String, project: Project): List<HbmXmlMapping.NamedQuery> {
-        if (queryName.isBlank()) return emptyList()
-        val matches = mutableListOf<HbmXmlMapping.NamedQuery>()
-        for (file in findHbmXmlFiles(project)) {
-            val rootTag = file.rootTag ?: continue
-            if (rootTag.name != "hibernate-mapping") continue
-            for (tag in rootTag.subTags) {
-                val kind = when (tag.name) {
-                    "query" -> HbmXmlMapping.QueryKind.HQL
-                    "sql-query" -> HbmXmlMapping.QueryKind.NATIVE
-                    else -> continue
+    private fun namedQueryMatches(
+        queryName: String,
+        project: Project,
+        context: com.intellij.psi.PsiElement?,
+    ): List<HbmXmlMapping.NamedQuery> {
+        if (queryName.isBlank() || com.intellij.openapi.project.DumbService.isDumb(project)) return emptyList()
+        return try {
+            val scope = cn.song.mybatisplus.visualizer.psi.EntityClassResolver.searchScope(project, context)
+            val cache = cacheFor(project).queries
+            val key = LookupKey(queryName, scope)
+            cache[key]?.let { return it }
+            val matches = mutableListOf<HbmXmlMapping.NamedQuery>()
+            for (file in findHbmXmlFiles(project, scope)) {
+                com.intellij.openapi.progress.ProgressManager.checkCanceled()
+                val rootTag = file.rootTag ?: continue
+                if (rootTag.name != "hibernate-mapping") continue
+                for (tag in rootTag.subTags) {
+                    val kind = when (tag.name) {
+                        "query" -> HbmXmlMapping.QueryKind.HQL
+                        "sql-query" -> HbmXmlMapping.QueryKind.NATIVE
+                        else -> continue
+                    }
+                    val name = tag.getAttributeValue("name") ?: continue
+                    if (name != queryName) continue
+                    val text = extractNamedQueryText(tag)
+                    // 空文本定义也参与消歧，不能过滤后把另一份同名定义虚构成唯一 owner。
+                    matches += HbmXmlMapping.NamedQuery(name, kind, text)
                 }
-                if (tag.getAttributeValue("name") != queryName) continue
-                val text = extractNamedQueryText(tag)
-                matches += HbmXmlMapping.NamedQuery(name = queryName, kind = kind, queryText = text)
             }
+            if (cache.size >= NEGATIVE_CACHE_MAX) cache.clear()
+            cache[key] = matches
+            matches
+        } catch (_: com.intellij.openapi.project.IndexNotReadyException) {
+            emptyList()
         }
-        return matches
     }
 
     /** 仅为预览决策查找定义标签；不缓存 PSI/URI，避免把调用点误认成 XML owner。 */
-    fun findNamedQueryDefinition(query: HbmXmlMapping.NamedQuery, project: Project): XmlTag? {
-        var owner: XmlTag? = null
-        for (file in findHbmXmlFiles(project)) {
-            val root = file.rootTag ?: continue
-            if (root.name != "hibernate-mapping") continue
-            for (tag in root.subTags) {
-                val kind = when (tag.name) {
-                    "query" -> HbmXmlMapping.QueryKind.HQL
-                    "sql-query" -> HbmXmlMapping.QueryKind.NATIVE
-                    else -> continue
-                }
-                if (kind == query.kind && tag.getAttributeValue("name") == query.name) {
-                    if (owner != null || directTextOf(tag) != query.queryText) return null
-                    owner = tag
+    fun findNamedQueryDefinition(
+        query: HbmXmlMapping.NamedQuery,
+        project: Project,
+        context: com.intellij.psi.PsiElement? = null,
+    ): XmlTag? {
+        if (com.intellij.openapi.project.DumbService.isDumb(project)) return null
+        return try {
+            val scope = cn.song.mybatisplus.visualizer.psi.EntityClassResolver.searchScope(project, context)
+            var owner: XmlTag? = null
+            for (file in findHbmXmlFiles(project, scope)) {
+                com.intellij.openapi.progress.ProgressManager.checkCanceled()
+                val root = file.rootTag ?: continue
+                if (root.name != "hibernate-mapping") continue
+                for (tag in root.subTags) {
+                    val kind = when (tag.name) {
+                        "query" -> HbmXmlMapping.QueryKind.HQL
+                        "sql-query" -> HbmXmlMapping.QueryKind.NATIVE
+                        else -> continue
+                    }
+                    if (kind == query.kind && tag.getAttributeValue("name") == query.name) {
+                        if (owner != null || directTextOf(tag) != query.queryText) return null
+                        owner = tag
+                    }
                 }
             }
+            owner
+        } catch (_: com.intellij.openapi.project.IndexNotReadyException) {
+            null
         }
-        return owner
     }
 
     /**
@@ -153,15 +190,18 @@ object HbmXmlEntityResolver {
      * @param project 当前项目
      * @return 键为实体简单名 / 全限定名，值为对应映射；同名字段首个命中优先。无映射文件时返回空 Map
      */
-    fun resolveAll(project: Project): Map<String, HbmXmlMapping.ClassMapping> {
-        val index = LinkedHashMap<String, HbmXmlMapping.ClassMapping>()
-        for (file in findHbmXmlFiles(project)) {
-            for (mapping in parseHbmFile(file)) {
-                index.putIfAbsent(mapping.entityClassName, mapping)
-                index.putIfAbsent(mapping.fullClassName, mapping)
-            }
+    fun resolveAll(project: Project, context: com.intellij.psi.PsiElement? = null): Map<String, HbmXmlMapping.ClassMapping> {
+        if (com.intellij.openapi.project.DumbService.isDumb(project)) return emptyMap()
+        return try {
+            val scope = cn.song.mybatisplus.visualizer.psi.EntityClassResolver.searchScope(project, context)
+            val mappings = findHbmXmlFiles(project, scope).flatMap { parseHbmFile(it) }
+            mappings.flatMap { mapping -> setOf(mapping.entityClassName, mapping.fullClassName).map { it to mapping } }
+                .groupBy({ it.first }, { it.second }).mapNotNull { (name, candidates) ->
+                    candidates.singleOrNull()?.let { name to it }
+                }.toMap()
+        } catch (_: com.intellij.openapi.project.IndexNotReadyException) {
+            emptyMap()
         }
-        return index
     }
 
     // ------------------------------------------------------------------
@@ -175,15 +215,17 @@ object HbmXmlEntityResolver {
      * （.hbm.xml 以 `.xml` 结尾归 XML 文件类型），再按文件名后缀精确过滤。
      * 任何索引异常按空列表处理（优雅降级，绝不抛出）。
      */
-    private fun findHbmXmlFiles(project: Project): List<XmlFile> = runCatching {
+    private fun findHbmXmlFiles(project: Project, scope: GlobalSearchScope): List<XmlFile> {
         // XmlFileType 在 262 平台不可直接引用（IPGP 裁剪），按项目惯例用 FileTypeManager 取标准 XML 类型
         val xmlFileType = FileTypeManager.getInstance().getStdFileType("XML")
-        FileTypeIndex.getFiles(xmlFileType, GlobalSearchScope.projectScope(project))
+        return FileTypeIndex.getFiles(xmlFileType, scope)
             .asSequence()
             .filter { it.name.endsWith(".hbm.xml", ignoreCase = true) }
-            .mapNotNull { virtualFile -> PsiManager.getInstance(project).findFile(virtualFile) as? XmlFile }
-            .toList()
-    }.getOrDefault(emptyList())
+            .mapNotNull { virtualFile ->
+                com.intellij.openapi.progress.ProgressManager.checkCanceled()
+                PsiManager.getInstance(project).findFile(virtualFile) as? XmlFile
+            }.toList()
+    }
 
     // ------------------------------------------------------------------
     // 解析
@@ -255,12 +297,9 @@ object HbmXmlEntityResolver {
         return tag.getAttributeValue("column")
     }
 
-    /**
-     * 清除实体正/负缓存；命名查询为防止新增同名定义后仍命中旧首项，不缓存。
-     */
+    /** 清除实体与命名查询正/负缓存；PSI 或项目根变更也会自动失效，新增重复定义不会沿用旧首项。 */
     fun clearCache() {
-        cache.clear()
-        negativeCache.clear()
+        generation.incrementAndGet()
     }
 
 }

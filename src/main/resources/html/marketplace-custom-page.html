@@ -263,7 +263,7 @@ JdbcTemplate 字符串 SQL 渲染为可读可执行的真实 SQL，参数值自�
     <tr>
       <td>调用栈悬停 <span class="tag tag-new">New</span></td>
       <td>悬停预览面板调用栈区域</td>
-      <td>调试器风格弹层，结构化解析帧、跳过尾部基础设施帧、锚定最深业务帧；帧数可配置（默认 24，范围 12~64）</td>
+      <td>调试器风格弹层，优先呈现已采集的业务帧、折叠相邻内部帧；摘要可单击打开，支持逐帧跳转与原文复制；帧数可配置（默认 24，范围 12~64）</td>
     </tr>
   </tbody>
 </table>
@@ -285,9 +285,9 @@ JdbcTemplate 字符串 SQL 渲染为可读可执行的真实 SQL，参数值自�
       <td>挂载轻量 agent 直接采集 JDBC 真实执行——不依赖日志格式，附目标库、毫秒级耗时与影响行数</td>
     </tr>
     <tr>
-      <td>单击预览 <span class="tag tag-new">New</span></td>
-      <td>单击日志列表条目</td>
-      <td>高亮可编辑轻量预览，改完即复制（双击仍开完整弹窗）</td>
+      <td>快速预览 <span class="tag tag-new">New</span></td>
+      <td>工具栏「快速预览」打开底部预览区</td>
+      <td>单击日志或历史条目只选中，打开底部预览后可连续查看、编辑与复制；双击仍打开完整预览</td>
     </tr>
     <tr>
       <td>类型颜色标记 <span class="tag tag-new">New</span></td>
@@ -296,7 +296,7 @@ JdbcTemplate 字符串 SQL 渲染为可读可执行的真实 SQL，参数值自�
     </tr>
     <tr>
       <td>显示模式 <span class="tag tag-new">New</span></td>
-      <td>工具栏下拉</td>
+      <td>设置页「列表显示」</td>
       <td>单行 / 关键字换行 / 格式化，跨会话保留</td>
     </tr>
     <tr>

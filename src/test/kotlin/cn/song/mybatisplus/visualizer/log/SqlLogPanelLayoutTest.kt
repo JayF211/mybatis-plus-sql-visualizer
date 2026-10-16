@@ -2,6 +2,9 @@ package cn.song.mybatisplus.visualizer.log
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import com.intellij.openapi.actionSystem.ActionPlaces
+import com.intellij.openapi.actionSystem.AnActionEvent
+import com.intellij.openapi.actionSystem.DataContext
 import com.intellij.openapi.actionSystem.DefaultActionGroup
 import com.intellij.ui.tabs.impl.JBTabsImpl
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
@@ -470,10 +473,15 @@ class SqlLogPanelLayoutTest : BasePlatformTestCase() {
                 MpSqlVisualizerBundle.message("log.filter.type.label") + MpSqlVisualizerBundle.message("log.filter.all"),
                 panel.typeFilterButtonForTest.toolTipText,
             )
+            val sortAction = panel.sortActionForTest
+            val sortEvent = AnActionEvent.createFromAnAction(
+                sortAction, null, ActionPlaces.TOOLBAR, DataContext.EMPTY_CONTEXT,
+            )
+            sortAction.update(sortEvent)
             assertEquals(
                 "排序动作 tooltip 应为「排序：」+ 当前方式",
                 MpSqlVisualizerBundle.message("log.sort.label") + MpSqlVisualizerBundle.message("log.sort.time.asc"),
-                panel.sortActionTooltipForTest(),
+                sortEvent.presentation.description,
             )
             // 当前方式显示名（工具窗工具栏只渲染图标，显示名进 tooltip 与菜单选中态）
             assertEquals("时间升序", panel.sortButtonTextForTest)

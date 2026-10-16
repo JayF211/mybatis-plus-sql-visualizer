@@ -40,16 +40,36 @@ internal object JpaJoinRewriter {
         RegexOption.IGNORE_CASE,
     )
 
-    /** 改写 SQL 中的全部 JOIN FETCH 与关联 JOIN；无匹配原样返回。 */
-    fun rewrite(sql: String, table: TableInfo, project: Project?): String {
-        val afterFetch = rewriteInternal(sql, table) { rootAlias, relationField, joinAlias ->
-            project?.let {
-                JpaJoinOnResolver.resolveWithPsi(
-                    it, table.entityClassName, rootAlias, relationField, joinAlias, table,
-                )
-            }
+    /**
+     * 改写 SQL 中的全部 JOIN FETCH 与关联 JOIN；无匹配原样返回。
+     *
+     * @param context T-EntityNameScope：HQL 所在 PSI 元素，透传给根实体解析做同名消歧；null = 无上下文
+     */
+    fun rewrite(
+        sql: String,
+        table: TableInfo,
+        project: Project?,
+        context: com.intellij.psi.PsiElement? = null,
+    ): String {
+        return rewriteWithLookup(sql, table, JpaQueryEntityLookup(project, context))
+    }
+
+    /** 同一查询的根表、子查询与 JOIN 共用解析缓存，按 JOIN 左侧别名选所属实体。 */
+    internal fun rewriteWithLookup(sql: String, table: TableInfo, lookup: JpaQueryEntityLookup): String {
+        val rootName = JpaQueryEntityLookup.rootEntity(sql)
+        val (masked, literals) = JpaSqlLiteralMasking.mask(sql)
+        val owners = Regex("(?i)\\b(?:FROM|JOIN)\\s+([a-zA-Z_][a-zA-Z0-9_.$]*)\\s+(?:AS\\s+)?([a-zA-Z_][a-zA-Z0-9_]*)")
+            .findAll(masked)
+            .filter { !it.groupValues[1].equals("FETCH", ignoreCase = true) }
+            .associate { it.groupValues[2] to it.groupValues[1] }
+        fun replace(match: MatchResult): String {
+            val name = owners[match.groupValues[3]] ?: rootName
+            val ownerTable = if (name == rootName) table else name?.let { lookup.resolveTable(it) }
+                ?: table.copy(entityClassName = "", columns = emptyList(), associations = emptyList())
+            return rewrite(match.value, ownerTable, name?.let { lookup.resolveClass(it) })
         }
-        return afterFetch
+        val fetched = JOIN_FETCH.replace(masked, ::replace)
+        return JpaSqlLiteralMasking.unmask(ASSOCIATION_JOIN.replace(fetched, ::replace), literals)
     }
 
     /**

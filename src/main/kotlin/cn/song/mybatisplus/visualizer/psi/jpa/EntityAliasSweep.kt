@@ -1,7 +1,20 @@
 package cn.song.mybatisplus.visualizer.psi.jpa
 
+import cn.song.mybatisplus.visualizer.psi.EntityClassResolver
 import com.intellij.openapi.progress.ProgressManager
+import com.intellij.openapi.project.DumbService
+import com.intellij.openapi.project.IndexNotReadyException
+import com.intellij.openapi.project.Project
+import com.intellij.openapi.roots.ProjectRootModificationTracker
+import com.intellij.openapi.util.Key
 import com.intellij.psi.PsiClass
+import com.intellij.psi.PsiElement
+import com.intellij.psi.SmartPointerManager
+import com.intellij.psi.SmartPsiElementPointer
+import com.intellij.psi.search.GlobalSearchScope
+import com.intellij.psi.search.PsiShortNamesCache
+import com.intellij.psi.util.PsiModificationTracker
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * 实体别名反查的**有界扫描**（T-GutterDupFreeze S3，20261008 用户真机冻结事故）。
@@ -22,12 +35,99 @@ import com.intellij.psi.PsiClass
 internal object EntityAliasSweep {
 
     /**
+     * 预览与转换器共用的实体名入口。普通类名已有候选（包括歧义）就不扫描别名；
+     * 仅旧慢路径执行有界完整扫描，不能在首个别名命中处停止并伪装成唯一命中。
+     * 索引未就绪不写负缓存；**扫描触顶也落缓存**（见下），取消异常自然向上传播。
+     */
+    fun resolve(project: Project, name: String, context: PsiElement? = null): EntityClassResolver.Resolution {
+        if (name.isBlank() || DumbService.isDumb(project)) return unresolved()
+        return try {
+            val direct = EntityClassResolver.resolveByName(project, name, context)
+            if (direct.psiClass != null || direct.candidates.isNotEmpty()) return direct
+            val scope = EntityClassResolver.searchScope(project, context)
+            val stamp = PsiModificationTracker.getInstance(project).modificationCount
+            val roots = ProjectRootModificationTracker.getInstance(project).modificationCount
+            val existing = project.getUserData(CACHE_KEY)
+            val cache = if (existing != null && existing.psiStamp == stamp && existing.rootStamp == roots) existing
+            else LookupCache(stamp, roots).also { project.putUserData(CACHE_KEY, it) }
+            val key = LookupKey(name, scope)
+            val cached = cache.entries[key]
+            if (cached != null) {
+                val classes = cached.mapNotNull { it.element }
+                if (classes.size == cached.size) {
+                    return EntityClassResolver.resolveWithAliasCandidates(project, name, context, classes)
+                }
+                cache.entries.remove(key)
+            }
+            val namesCache = PsiShortNamesCache.getInstance(project)
+            scanCount.incrementAndGet()
+            val scan = findAliasCandidates(name, namesCache.allClassNames.asSequence(), scanLimitForTest ?: SCAN_LIMIT) {
+                namesCache.getClassesByName(it, scope)
+            }
+            // 触顶（未扫完）**同样落缓存**（空候选）：
+            // 20261016 实测——真实工程的短名空间（含 JDK）恒大于 [SCAN_LIMIT]，故触顶是常态而非例外；
+            // 触顶后按未解析返回且不缓存，等于**同一个名字每次预览都重扫整整一段预算**（单次约 1s，而该扫描
+            // 跑在预览的阻塞读动作里，即持读锁 1s）。缓存空候选**不改变结果**（触顶本来就恒为「未解析」），
+            // 只去掉重复代价；缓存随 PSI/根版本失效，工程变小后仍会重扫。直接命中在缓存查询之前就已返回，
+            // 故空缓存不会遮蔽真实实体（见本函数开头两条 return）。
+            if (cache.entries.size >= CACHE_LIMIT) cache.entries.clear()
+            cache.entries[key] = scan.candidates.map { SmartPointerManager.getInstance(project).createSmartPsiElementPointer(it) }
+            if (!scan.complete) return unresolved()
+            EntityClassResolver.resolveWithAliasCandidates(project, name, context, scan.candidates)
+        } catch (_: IndexNotReadyException) {
+            unresolved()
+        }
+    }
+
+    internal data class AliasCandidates(val candidates: List<PsiClass>, val complete: Boolean)
+
+    internal fun findAliasCandidates(
+        aliasName: String,
+        names: Sequence<String>,
+        limit: Int = SCAN_LIMIT,
+        lookup: (String) -> Array<PsiClass>,
+    ): AliasCandidates {
+        val candidates = LinkedHashSet<PsiClass>()
+        var scanned = 0
+        for (shortName in names) {
+            if (scanned >= limit) return AliasCandidates(emptyList(), false)
+            if (scanned % CANCEL_CHECK_INTERVAL == 0) ProgressManager.checkCanceled()
+            scanned++
+            for (clazz in lookup(shortName)) {
+                if (clazz.isInterface || clazz.isEnum || clazz.isAnnotationType) continue
+                if (JpaMetadataReader.entityNameOf(clazz) == aliasName) candidates.add(clazz)
+            }
+        }
+        return AliasCandidates(candidates.toList(), true)
+    }
+
+    private fun unresolved() = EntityClassResolver.Resolution(null, emptyList())
+    private data class LookupKey(val name: String, val scope: GlobalSearchScope)
+    private class LookupCache(val psiStamp: Long, val rootStamp: Long) {
+        val entries = ConcurrentHashMap<LookupKey, List<SmartPsiElementPointer<PsiClass>>>()
+    }
+    private const val CACHE_LIMIT = 4096
+    private val CACHE_KEY = Key.create<LookupCache>("mp-visualizer.scopedEntityAliases")
+
+    /**
      * 单次反查允许遍历的类短名数上限。
      *
      * 取 5000：常规工程（含多模块 demo）的全量短名在千级，功能上等于不设限；真正起作用的是
      * 病态/超大工程下把「冷索引逐名随机读」的最坏代价钉住（配合取消检查，平台需要写锁时可中断）。
      */
     internal const val SCAN_LIMIT: Int = 5000
+
+    /** 已执行的扫描次数（测试访问器：验「触顶结果落缓存、不重复扫」）。 */
+    private val scanCount = java.util.concurrent.atomic.AtomicInteger(0)
+
+    /** 测试缝：扫描上限替身（null = [SCAN_LIMIT]）——置 0 可确定性地制造「触顶」。 */
+    internal var scanLimitForTest: Int? = null
+
+    internal fun scanCountForTest(): Int = scanCount.get()
+
+    internal fun resetScanCountForTest() {
+        scanCount.set(0)
+    }
 
     /** 取消检查间隔（每 N 个短名查一次）：`checkCanceled` 自身有开销，不必逐个查。 */
     private const val CANCEL_CHECK_INTERVAL: Int = 64

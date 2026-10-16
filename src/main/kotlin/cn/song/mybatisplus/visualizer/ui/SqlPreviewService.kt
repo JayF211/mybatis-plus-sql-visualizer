@@ -63,7 +63,6 @@ import cn.song.mybatisplus.visualizer.psi.jpa.DerivedMethodLocator
 import cn.song.mybatisplus.visualizer.psi.jpa.HbmXmlEntityResolver
 import cn.song.mybatisplus.visualizer.psi.jpa.HbmXmlMapping
 import cn.song.mybatisplus.visualizer.psi.jpa.JpaEntityResolver
-import cn.song.mybatisplus.visualizer.psi.jpa.JpaMetadataReader
 import cn.song.mybatisplus.visualizer.psi.jpa.JpqlQueryLocator
 import cn.song.mybatisplus.visualizer.psi.jpa.NamedQueryLocator
 import cn.song.mybatisplus.visualizer.psource.JdbcTemplateSqlLocator
@@ -611,13 +610,13 @@ class SqlPreviewService(internal val project: Project) {
      * 注释行以 `-- ` 前缀追加 SQL 尾部（对齐 JpaCrudOperationConverter notes 惯例）；
      * 全程无注解/无参数时返回原文（存量字节级行为零变化）。
      */
-    internal fun countQueryNotes(method: PsiMethod, table: TableInfo?): List<String> = runCatching {
-        val countJpql = JpaQueryEnhancer.countQueryAttribute(method) ?: return@runCatching emptyList()
-        // 注释前缀 "-- " 由 applyJpaMethodEnhancements 统一追加，此处只给内容行
-        listOf("@Query.countQuery（Page 返回的 count 伴随查询）：") + runCatching {
-            table?.let { t -> JpqlConverter.convert(countJpql, t, project).sql } ?: countJpql
-        }.getOrDefault(countJpql).lines()
-    }.getOrDefault(emptyList())
+    internal fun countQueryNotes(method: PsiMethod, table: TableInfo?): List<String> {
+        val countJpql = JpaQueryEnhancer.countQueryAttribute(method) ?: return emptyList()
+        val countTable = if (extractEntityNameFromHql(countJpql) == null) table
+        else resolveHqlTable(null, null, countJpql, method)
+        val sql = JpqlConverter.convert(countJpql, countTable, project, context = method).sql
+        return listOf("@Query.countQuery（Page 返回的 count 伴随查询）：") + sql.lines()
+    }
 
     /**
      * 从 SQL 文本探测主表别名（EntityGraph JOIN 的 ON 左值用）：
@@ -674,11 +673,8 @@ class SqlPreviewService(internal val project: Project) {
         val paramNames = extractJpqlParamNames(method)
         // 解析实体类 → TableInfo
         val entityClass = info.entityClass
-        val table = if (entityClass != null) {
-            JpaEntityResolver().resolve(entityClass)
-        } else {
-            null
-        }
+        val table = if (info.isNative) entityClass?.let { JpaEntityResolver().resolve(it) }
+        else resolveHqlTable(entityClass, null, jpql, method)
         // O-145：Java 方法宿主的非 URL 来源证据；不将 JPQL 字面量冒充 SqlFile。
         val decision = jpaSourceDecision(method)
         val dialect = dialectOf(decision)
@@ -713,7 +709,7 @@ class SqlPreviewService(internal val project: Project) {
         // 关键：使用转换后的 SQL 字符串（含 ? 占位符）直接用于面板显示和参数回填。
         // 若用 SqlGenerator 重新生成，条件树为空会丢失 WHERE 子句和 ? 占位符。
         // Wave1 第三参 project：激活 PSI 级 JOIN ON（@JoinColumn 真实化）与子查询实体映射
-        val result = JpqlConverter.convert(jpql, table, project)
+        val result = JpqlConverter.convert(jpql, table, project, context = method)
         // T-J10/J15/J22：方法级增强（LIMIT/ORDER BY/FOR UPDATE/EntityGraph JOIN/notes/count SQL）
         val enhancedSql = applyJpaMethodEnhancements(method, result.sql, table, native = false, dialectOverride = dialect)
         return buildJpaPreviewResult(
@@ -915,11 +911,13 @@ class SqlPreviewService(internal val project: Project) {
         // T-PreviewShortcut：createNamedQuery("name") 按名回查实体 @NamedQuery，解析真实 JPQL；
         // 跨文件 / 命名不规范解析不到时优雅降级为把名字当 HQL 处理（不抛、不挂起）。
         if (info.createQueryMethodName == "createNamedQuery") {
-            val named = runCatching { NamedQueryLocator.findByQueryName(project, info.hql) }.getOrNull()
+            val namedCandidates = NamedQueryLocator.findCandidatesByQueryName(project, info.hql, info.method ?: anchor)
+            if (namedCandidates.size > 1) return null
+            val named = namedCandidates.singleOrNull()
             if (named != null && named.query.isNotBlank()) {
                 val entityClass = named.annotation?.let { PsiTreeUtil.getParentOfType(it, PsiClass::class.java, false) }
-                val table = entityClass?.let { JpaEntityResolver().resolve(it) }
-                val result = JpqlConverter.convert(named.query, table, project)
+                val table = resolveHqlTable(entityClass, null, named.query, info.method ?: anchor)
+                val result = JpqlConverter.convert(named.query, table, project, context = info.method ?: anchor)
                 val paramNames = extractParamNamesFromHql(named.query)
                 // 命名查询以定义注解的文件为 owner，而非 createNamedQuery 的调用文件。
                 val decision = jpaSourceDecision(named.annotation)
@@ -940,20 +938,21 @@ class SqlPreviewService(internal val project: Project) {
                 )
             }
             // T-H3：Java @NamedQuery 未命中 → hbm 命名查询 fallback（hbm 纯 POJO 项目无注解可查）
-            val hbm = runCatching { HbmXmlEntityResolver.findNamedQuery(info.hql, project) }.getOrNull()
+            val hbm = HbmXmlEntityResolver.findNamedQuery(info.hql, project, info.method ?: anchor)
             if (hbm != null) {
-                return previewHbmNamedQuery(hbm, info.method)
+                return previewHbmNamedQuery(hbm, info.method, context = info.method ?: anchor)
             }
             // 同名 hbm 定义歧义不能把首项 SQL 或查询名误当 HQL 发给用户。
-            if (HbmXmlEntityResolver.hasAmbiguousNamedQuery(info.hql, project)) return null
+            if (HbmXmlEntityResolver.hasAmbiguousNamedQuery(info.hql, project, info.method ?: anchor)) return null
         }
 
-        val table = resolveHqlTable(info.entityClass, info.entityClassName, info.hql)
+        val table = resolveHqlTable(info.entityClass, info.entityClassName, info.hql, info.method ?: anchor)
         // Wave1 第三参 project：激活 PSI 级 JOIN ON 与子查询实体映射
         // T-HqlInhCols：@Entity(name=...) 实体别名透传，别名形态 HQL 实体名才能被表名替换
         val result = HqlConverter.convert(
             info.hql, table, project,
-            entityAlias = info.entityClass?.let { runCatching { JpaMetadataReader.entityNameOf(it) }.getOrNull() },
+            entityAlias = extractEntityNameFromHql(info.hql),
+            context = info.method ?: anchor,
         )
         // 参数名提取：
         // 1. 追踪 setParameter 结果（位置参数用 valueExpr 即变量名，命名参数用 paramName）
@@ -1044,8 +1043,8 @@ class SqlPreviewService(internal val project: Project) {
         // 优先取光标所在那一条 @NamedQuery（注解引用匹配）；多选 fallback 取第一条
         val info = infos.firstOrNull { it.annotation === annotation } ?: infos.first()
         val jpql = info.query
-        val table = JpaEntityResolver().resolve(cls)
-        val result = JpqlConverter.convert(jpql, table, project)
+        val table = resolveHqlTable(cls, null, jpql, annotation)
+        val result = JpqlConverter.convert(jpql, table, project, context = annotation)
         val paramNames = extractParamNamesFromHql(jpql)
         val decision = jpaSourceDecision(info.annotation ?: annotation)
         return buildJpaPreviewResult(
@@ -1081,11 +1080,13 @@ class SqlPreviewService(internal val project: Project) {
             )
         }
         if (info.kind == DaoQueryKind.NAMED_QUERY) {
-            val named = runCatching { NamedQueryLocator.findByQueryName(project, info.hql) }.getOrNull()
+            val namedCandidates = NamedQueryLocator.findCandidatesByQueryName(project, info.hql, info.method ?: anchor)
+            if (namedCandidates.size > 1) return null
+            val named = namedCandidates.singleOrNull()
             if (named != null && named.query.isNotBlank()) {
                 val entityClass = named.annotation?.let { PsiTreeUtil.getParentOfType(it, PsiClass::class.java, false) }
-                val table = entityClass?.let { JpaEntityResolver().resolve(it) }
-                val result = JpqlConverter.convert(named.query, table, project)
+                val table = resolveHqlTable(entityClass, null, named.query, info.method ?: anchor)
+                val result = JpqlConverter.convert(named.query, table, project, context = info.method ?: anchor)
                 val paramNames = extractParamNamesFromHql(named.query)
                 val decision = jpaSourceDecision(named.annotation)
                 return buildJpaPreviewResult(
@@ -1100,27 +1101,21 @@ class SqlPreviewService(internal val project: Project) {
                 )
             }
             // T-H3：Java @NamedQuery 未命中 → hbm 命名查询 fallback（与 previewHql 同款）
-            val hbm = runCatching { HbmXmlEntityResolver.findNamedQuery(info.hql, project) }.getOrNull()
+            val hbm = HbmXmlEntityResolver.findNamedQuery(info.hql, project, info.method ?: anchor)
             if (hbm != null) {
-                return previewHbmNamedQuery(hbm, info.method)
+                return previewHbmNamedQuery(hbm, info.method, context = info.method ?: anchor)
             }
             // 回查失败：优雅降级占位（跨文件/命名不规范），不出错误 SQL
             return placeholderPreview(
                 "-- 命名查询 \"${info.hql}\"：未能回查到 @NamedQuery 定义（跨文件/命名不规范），无法静态解析 JPQL",
             )
         }
-        val table = resolveHqlTable(null, info.entityClassName, info.hql)
-        // Wave1 第三参 project：激活 PSI 级 JOIN ON 与子查询实体映射
-        // T-HqlInhCols：别名反查命中时从解析出的 PsiClass 读实体别名透传（此链无 entityClass 入参）
-        val resolvedEntityClass = table?.entityClassName?.takeIf { it.isNotBlank() }?.let {
-            runCatching {
-                com.intellij.psi.JavaPsiFacade.getInstance(project)
-                    .findClass(info.entityClassName ?: it, com.intellij.psi.search.GlobalSearchScope.allScope(project))
-            }.getOrNull()
-        }
+        val table = resolveHqlTable(null, info.entityClassName, info.hql, info.method ?: anchor)
+        // 使用已解析查询根名替换别名，不再全项目二次找类；JAR 实体也保留 DAO 的模块上下文。
         val result = HqlConverter.convert(
             info.hql, table, project,
-            entityAlias = resolvedEntityClass?.let { runCatching { JpaMetadataReader.entityNameOf(it) }.getOrNull() },
+            entityAlias = extractEntityNameFromHql(info.hql),
+            context = info.method ?: anchor,
         )
         val paramNames = info.parameters.map { if (it.isPositional) it.valueExpr else it.paramName }.ifEmpty {
             extractParamNamesFromHql(info.hql)
@@ -1159,11 +1154,15 @@ class SqlPreviewService(internal val project: Project) {
      * 供 hbm 文件 gutter（[cn.song.mybatisplus.visualizer.ui.gutter.HbmNamedQueryGutterLineMarkerProvider]）
      * 与 createNamedQuery / 自定义 DAO 回查 fallback 共用。
      */
-    fun previewHbmNamedQuery(query: HbmXmlMapping.NamedQuery, hostMethod: PsiMethod? = null,
-                             definitionTag: com.intellij.psi.xml.XmlTag? = null): PreviewResult? {
+    fun previewHbmNamedQuery(
+        query: HbmXmlMapping.NamedQuery,
+        hostMethod: PsiMethod? = null,
+        definitionTag: com.intellij.psi.xml.XmlTag? = null,
+        context: PsiElement? = definitionTag ?: hostMethod,
+    ): PreviewResult? {
         if (query.queryText.isBlank()) return null
         // 命名查询的 owner 是定义 XML 标签，绝不是跨文件 createNamedQuery 调用方法。
-        val owner = definitionTag ?: HbmXmlEntityResolver.findNamedQueryDefinition(query, project)
+        val owner = definitionTag ?: HbmXmlEntityResolver.findNamedQueryDefinition(query, project, context)
         val decision = jpaSourceDecision(owner)
         val dialect = dialectOf(decision)
         val paramNames = extractParamNamesFromHql(query.queryText)
@@ -1187,12 +1186,9 @@ class SqlPreviewService(internal val project: Project) {
                 )
             }
             HbmXmlMapping.QueryKind.HQL -> {
-                // 查询名前缀（LegacyItem.findLowStockHql → LegacyItem）优先，回落 FROM 子句实体
-                val entityName = query.name.substringBefore('.', "").trim()
-                    .ifBlank { null } ?: extractEntityNameFromHql(query.queryText)
-                val table = resolveHqlTable(null, entityName, query.queryText)
-                // T-HqlInhCols：hbm 项目实体别名多由 XML <entity-name> 承载，注解读不到即 null，安全
-                val result = HqlConverter.convert(query.queryText, table, project)
+                val entityName = extractEntityNameFromHql(query.queryText)
+                val table = resolveHqlTable(null, entityName, query.queryText, context)
+                val result = HqlConverter.convert(query.queryText, table, project, entityAlias = entityName, context = context)
                 val enhancedSql = applyJpaMethodEnhancements(hostMethod, result.sql, table, native = false, dialectOverride = dialect)
                 buildJpaPreviewResult(
                     statement = result.statement,
@@ -1217,7 +1213,11 @@ class SqlPreviewService(internal val project: Project) {
         // 文本提取复用 resolver 的解析口径（直属 XmlText、CDATA 剥包裹、排除子标签）；
         // tag 与 findNamedQuery 同源
         val text = directTextOf(tag)
-        return previewHbmNamedQuery(HbmXmlMapping.NamedQuery(name = name, kind = kind, queryText = text), definitionTag = tag)
+        return previewHbmNamedQuery(
+            HbmXmlMapping.NamedQuery(name = name, kind = kind, queryText = text),
+            definitionTag = tag,
+            context = tag,
+        )
     }
 
     /**
@@ -1766,58 +1766,11 @@ class SqlPreviewService(internal val project: Project) {
         project: com.intellij.openapi.project.Project,
         entityName: String,
         scope: com.intellij.psi.search.GlobalSearchScope,
-    ): PsiClass? {
-        if (entityName.isBlank()) return null
-        // T-GutterDupFreeze（S3 护栏一）：索引构建期不做索引反查——此时 StubIndex 查询会等索引扫描
-        // 推进（转储实证：FileBasedIndexImpl.ensureUpToDate ← UnindexedFilesScanner 扫描中），
-        // 在不可取消的读动作里表现为长时间持读锁。降级为未命中，且不过缓存（见 KDoc）。
-        if (runCatching { com.intellij.openapi.project.DumbService.isDumb(project) }.getOrDefault(false)) {
-            LOG.info("[T-GutterDupFreeze] 索引构建中，跳过实体别名反查：$entityName")
-            return null
+        context: PsiElement? = null,
+    ): PsiClass? = cn.song.mybatisplus.visualizer.psi.jpa.EntityAliasSweep.resolve(project, entityName, context)
+        .psiClass?.takeIf { candidate ->
+            candidate.containingFile?.virtualFile?.let { scope.contains(it) } == true
         }
-        val current = com.intellij.psi.util.PsiModificationTracker.getInstance(project).modificationCount
-        val existing = project.getUserData(ENTITY_NAME_CACHE_KEY)
-        val cache = if (existing != null && existing.count == current) existing
-        else EntityNameLookupCache(current, mutableMapOf()).also { project.putUserData(ENTITY_NAME_CACHE_KEY, it) }
-
-        val key = entityName.lowercase()
-        val cached = cache.names[key]
-        if (cached != null) {
-            val shortName = cached.substringAfterLast('.')
-            return com.intellij.psi.search.PsiShortNamesCache.getInstance(project)
-                .getClassesByName(shortName, scope)
-                .firstOrNull { it.qualifiedName == cached }
-        }
-        if (cached != null || (cached == null && cache.names.containsKey(key) && cache.names[key] == null)) return null
-        // 已知未命中（空串哨兵值）快速返回
-        if (cache.names.containsKey(key)) return null
-
-        // 慢路径：扫项目类短名匹配 @Entity(name=...) 注解值（jakarta/javax/短名三轨）——
-        // T-GutterDupFreeze（S3 护栏二）：上限 + 取消检查 + 命中即止，收口 EntityAliasSweep
-        val namesCache = com.intellij.psi.search.PsiShortNamesCache.getInstance(project)
-        var truncated = false
-        val matched = cn.song.mybatisplus.visualizer.psi.jpa.EntityAliasSweep.findAliasOwner(
-            aliasName = entityName,
-            names = namesCache.getAllClassNames().asSequence(),
-            lookup = { shortName -> namesCache.getClassesByName(shortName, scope) },
-            onTruncated = { scanned ->
-                truncated = true
-                LOG.info("[T-GutterDupFreeze] 实体别名反查触顶（已扫 $scanned 个短名），按未命中降级：$entityName")
-            },
-        )
-        // 触顶＝「没查到」而非「确认不存在」：不写负缓存，避免大工程里合法别名被一次性截断后永久记成未命中
-        if (!truncated) cache.names[key] = matched?.qualifiedName ?: ""
-        return matched
-    }
-
-    /** 实体别名反查缓存条目：modificationCount + 实体名→全限定名（空串=已知未命中）。 */
-    private data class EntityNameLookupCache(
-        val count: Long,
-        val names: MutableMap<String, String>,
-    )
-
-    private val ENTITY_NAME_CACHE_KEY =
-        com.intellij.openapi.util.Key.create<EntityNameLookupCache>("mp-visualizer.entityNameLookupCache")
 
     /**
      * 从 HQL 提取实体类名（T-HqlUpdateEntityMap S1 起委托共享提取器）。
@@ -1859,17 +1812,15 @@ class SqlPreviewService(internal val project: Project) {
 
     /**
      * 按短类名查找 PsiClass（JavaPsiFacade.findClass 需要全限定名）。
-     * 使用 PsiShortNamesManager 按短名搜索，返回第一个匹配的类。
+     * 复用共享消歧规则；不把索引顺序当优先级。
      */
     internal fun findClassByShortName(
         project: com.intellij.openapi.project.Project,
         shortName: String,
         scope: com.intellij.psi.search.GlobalSearchScope,
-    ): PsiClass? {
-        val shortNamesCache = com.intellij.psi.search.PsiShortNamesCache.getInstance(project)
-        val classes = shortNamesCache.getClassesByName(shortName, scope)
-        return classes.firstOrNull()
-    }
+        context: PsiElement? = null,
+    ): PsiClass? = cn.song.mybatisplus.visualizer.psi.EntityClassResolver.resolveClassByName(project, shortName, context)
+        ?.takeIf { candidate -> candidate.containingFile?.virtualFile?.let { scope.contains(it) } == true }
 
     /**
      * 清空缓存（编辑器文件切换/项目关闭时由持有方调用）。

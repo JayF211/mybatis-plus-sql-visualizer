@@ -69,6 +69,28 @@ PROBE_PORT="${PROBE_PORT:-53999}"
 APP_PORT="${APP_PORT:-8082}"
 LOGLEVEL="${LOGLEVEL:-info}"
 
+case "$APP_PORT" in
+  ''|*[!0-9]*) echo "无效应用端口：$APP_PORT" >&2; exit 3 ;;
+esac
+if [ "$APP_PORT" -lt 1 ] || [ "$APP_PORT" -gt 65525 ]; then
+  echo "应用端口超出可回退范围：$APP_PORT" >&2
+  exit 3
+fi
+REQUESTED_APP_PORT="$APP_PORT"
+for candidate in $(seq "$APP_PORT" "$((APP_PORT + 10))"); do
+  if ! netstat -ano 2>/dev/null | grep -q ":$candidate .*LISTENING"; then
+    APP_PORT="$candidate"
+    break
+  fi
+done
+if netstat -ano 2>/dev/null | grep -q ":$APP_PORT .*LISTENING"; then
+  echo "应用端口 $REQUESTED_APP_PORT 起连续 11 个端口均被占用，本轮 E2E 不启动。" >&2
+  exit 3
+fi
+if [ "$APP_PORT" != "$REQUESTED_APP_PORT" ]; then
+  echo "应用端口 $REQUESTED_APP_PORT 已被占用，改用 $APP_PORT；原监听进程不会被清理。"
+fi
+
 LOGS="$HERE/evidence"
 PROBE_LOG="$LOGS/probe.log"
 APP_LOG="$LOGS/app.log"
@@ -85,6 +107,8 @@ echo "=== T-AgentE2EFakeIde 端到端验证 ==="
 echo "[1/6] 编译假 IDE 探针"
 mkdir -p "$HERE/build"
 javac -encoding UTF-8 -d "$HERE/build" "$HERE/FakeIde.java" || { echo "探针编译失败"; exit 3; }
+RESOLVED_SCRIPT="$HERE/build/script-e2e-$APP_PORT.txt"
+sed "s|http://localhost:8082/|http://localhost:$APP_PORT/|g" "$HERE/script-e2e.txt" > "$RESOLVED_SCRIPT" || exit 3
 
 # ── 2) agent 产物检查 ─────────────────────────────────────────
 if [ ! -f "$AGENT_JAR" ]; then
@@ -120,7 +144,7 @@ APP_CP="$(winpath "$DEMO_DIR/target/classes");$(cat "$CP_FILE")"
 # ── 4) 起探针（必须先于应用：agent 在 premain 阶段回连） ──────
 echo "[3/6] 启动假 IDE 探针 127.0.0.1:$PROBE_PORT"
 MSYS2_ARG_CONV_EXCL='*' java -cp "$(winpath "$HERE/build")" FakeIde \
-  --port "$PROBE_PORT" --script "$(winpath "$HERE/script-e2e.txt")" --log "$(winpath "$PROBE_LOG")" \
+  --port "$PROBE_PORT" --script "$(winpath "$RESOLVED_SCRIPT")" --log "$(winpath "$PROBE_LOG")" \
   > "$PROBE_CONSOLE" 2>&1 &
 PROBE_PID=$!
 
@@ -157,7 +181,7 @@ MSYS2_ARG_CONV_EXCL='*' java \
   -Dfile.encoding=UTF-8 \
   -cp "$APP_CP" \
   cn.song.mpjdemo.MybatisPlusJoinDemoApplication \
-  --spring.profiles.active=mysql \
+  --spring.profiles.active=mysql --server.port="$APP_PORT" \
   > "$APP_LOG" 2>&1 &
 APP_PID=$!
 echo "      应用已启动（pid=$APP_PID），日志：$APP_LOG"
@@ -186,12 +210,15 @@ echo "[6/6] 关闭应用（pid=$APP_PID）"
 kill "$APP_PID" 2>/dev/null
 sleep 1
 kill -9 "$APP_PID" 2>/dev/null
-# MSYS 的 PID 与 Windows PID 不同域：kill 无效时按监听端口兜底收口
+# MSYS PID 与 Windows PID 不同域；只允许按本轮 agent HELLO 身份收口，不能杀端口的新占用者。
 if netstat -ano 2>/dev/null | grep -q ":$APP_PORT .*LISTENING"; then
   WIN_PID="$(netstat -ano 2>/dev/null | grep ":$APP_PORT .*LISTENING" | head -1 | awk '{print $NF}')"
-  if [ -n "${WIN_PID:-}" ]; then
-    echo "      端口 $APP_PORT 仍在监听，taskkill Windows PID=$WIN_PID"
+  AGENT_WIN_PID="$(grep -am1 -oE 'HELLO pid=[0-9]+' "$PROBE_LOG" | cut -d= -f2)"
+  if [ -n "${WIN_PID:-}" ] && [ "$WIN_PID" = "$AGENT_WIN_PID" ]; then
+    echo "      本轮应用仍监听端口 $APP_PORT，taskkill Windows PID=$WIN_PID"
     taskkill //F //PID "$WIN_PID" >/dev/null 2>&1
+  else
+    echo "      端口 $APP_PORT 的监听进程不属于本轮应用，不执行 taskkill"
   fi
 fi
 

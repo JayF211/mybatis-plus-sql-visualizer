@@ -129,6 +129,13 @@ object DataSourceSelector {
     /** T-ExecSlowOps F2：exec 预热进行中标记（并发预览只跑一条真实链，其余直接返回）。 */
     private val execPrewarmInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
 
+    /**
+     * T-PrewarmWilDeadlock W2：exec 预热整链预算——预热是投机性增强，链内任何平台等待
+     * （VFS refresh / readAction / EDT 派发）挂死都必须有界放弃（曾因 BGT WIRA×同步 refresh
+     * 自锁而永久驻留），超时放弃后弹窗冷路径按需重建兜底。
+     */
+    private const val EXEC_PREWARM_BUDGET_MS = 30_000L
+
     /** M36.5.6：结果区换入回调（准备阶段挂 ContentManager 监听，任一路径出结果即换入；复用时由新面板接管）。 */
     internal var pendingOnConsole: ((javax.swing.JComponent) -> Unit)? = null
 
@@ -1675,8 +1682,32 @@ object DataSourceSelector {
             LOG.info("[M36] exec prewarm skipped (another prewarm in flight)")
             return
         }
-        try {
+        // T-PrewarmWilDeadlock W2：有界预热——真实链独立执行 + 预算等待，超时 cancel(true) 放弃本轮
+        // 并照常清在途标记（否则一次挂死会让后续预热全部 skip，预热能力静默报废）；弹窗冷路径按需
+        // 重建兜底。中断能否真正唤醒平台内部等待不作依赖（RefreshSessionImpl.waitFor 的
+        // runBlockingMaybeCancellable 通常响应中断）；即便不可中断，业务也已脱困，滞留线程无 WIL 在身。
+        val prewarmFuture = com.intellij.util.concurrency.AppExecutorUtil.getAppExecutorService().submit {
             prewarmExecTempFileInner(project, sql, LOG, renderedDialectName)
+        }
+        try {
+            prewarmFuture.get(EXEC_PREWARM_BUDGET_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
+        } catch (e: java.util.concurrent.TimeoutException) {
+            prewarmFuture.cancel(true)
+            LOG.warn(
+                "[M36] exec prewarm exceeded ${EXEC_PREWARM_BUDGET_MS}ms — cancelled & abandoned " +
+                    "(best-effort; cold path rebuilds on demand) (T-PrewarmWilDeadlock W2)",
+            )
+        } catch (e: java.util.concurrent.ExecutionException) {
+            // T-FatalPassthrough：内层 fatal 经 ExecutionException 包装，拆包后原样上浮给池线程
+            // 平台处理器（与直跑语义一致，previewAsync 侧 runCatching 的 fatal 放行链不受影响）；
+            // 非 fatal 仅 warn（与内层既有 catch 同形态）。
+            val cause = e.cause ?: e
+            if (FatalErrors.isFatal(cause)) throw cause
+            LOG.warn("[M36] exec prewarm failed: ${cause.javaClass.simpleName}: ${cause.message}")
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+            prewarmFuture.cancel(true)
+            LOG.warn("[M36] exec prewarm waiter interrupted — abandoned (T-PrewarmWilDeadlock W2)")
         } finally {
             execPrewarmInFlight.set(false)
         }
