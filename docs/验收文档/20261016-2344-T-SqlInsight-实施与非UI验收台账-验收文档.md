@@ -161,6 +161,8 @@ R3三红修复已收编为638a5740（原babc87c5），仅修改AliasDualTrackDef
 
 构建、自动化测试和离线兼容已通过，但计划G-final的资源预算仍须单列：稳定5%新增开销尚未证明，不能仅因这些门禁全绿便把资源门或最终合流预填通过。
 
+本轮完整报告、测试XML、三代verifier报告和实际ZIP已封存至`.local/sql-insight-round4-passed.tar.gz`，SHA256 `8a3c310be2f78d253efd194a845b3107e911dac7e12ff1c679a8de13ba3e19b4`。门禁登记已注销且后台任务结束。随后在无其他构建的窗口启动warm10000、3轮×3模式独立JVM性能补测，使用新目录不覆盖前三轮；背景IDE采样约9%单核CPU已记录为非认证空机环境，结果尚未形成，不能提前记性能通过。
+
 ### Agent JVM 验证层级
 
 第二轮fresh XML已经证明既有 `AttachGateTest.attach门禁_JDK8目标` 与 `AttachPoolWarmGateTest.模式B2_JDK8目标_Hikari池存量连接复用` 均实际执行、未skip；测试源码明确启动本机JDK8子进程。新增ServletRequestWeaveTest最初6例只在JDK17宿主隔离ClassLoader运行，major52仅是字节码证据，故随后补H09真实目标JVM验证。
