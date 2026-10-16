@@ -9,7 +9,7 @@ import org.junit.Test
 class XmlScenarioMatrixTest {
     private fun model(body: String): XmlPreviewModel {
         val statement = XmlMapperParser().parse("<mapper namespace=\"fixture\"><select id=\"find\">$body</select></mapper>").statements.single()
-        return XmlPreviewModel.from(statement)
+        return XmlPreviewModel.from(statement, emptyList())
     }
 
     @Test
