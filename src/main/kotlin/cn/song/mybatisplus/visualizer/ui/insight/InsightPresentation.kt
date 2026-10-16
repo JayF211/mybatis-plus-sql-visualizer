@@ -30,7 +30,8 @@ internal object InsightPresenter {
             if (++rows > MAX_ROWS) { limited = true; return null }
             return InsightItem(label, range, children)
         }
-        val relations = model.relations.associateBy { it.id }
+        val relations = model.relations.take(MAX_ROWS).associateBy { check(); it.id }
+        if (model.relations.size > MAX_ROWS || model.scopes.size > MAX_ROWS) limited = true
         fun origin(c: SemanticColumn): String = "${relations[c.relationId]?.let { it.name + (it.alias?.let { a -> " [$a]" } ?: "") } ?: c.relationId}.${c.name}"
         val structure = model.scopes.take(MAX_ROWS).mapNotNull { scope ->
             item("${scope.label} · ${scope.operation}", children = scope.relationIds.take(MAX_ROWS).mapNotNull { id ->

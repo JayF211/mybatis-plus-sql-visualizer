@@ -117,7 +117,7 @@ internal class InsightGraph(private val navigate: (SqlSourceRange?) -> Unit) : J
                 g.fillRoundRect(b.x, b.y, b.width, b.height, 12, 12)
                 g.color = UIManager.getColor("Label.foreground") ?: Color.BLACK
                 g.drawRoundRect(b.x, b.y, b.width, b.height, 12, 12)
-                vertex.text.chunked(28).take(2).forEachIndexed { index, line -> g.drawString(line, b.x + 8, b.y + 24 + index * 18) }
+                vertex.text.take(56).chunked(28).forEachIndexed { index, line -> g.drawString(line, b.x + 8, b.y + 24 + index * 18) }
             }
         } finally { g.dispose() }
     }
