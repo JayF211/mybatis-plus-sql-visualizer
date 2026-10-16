@@ -501,6 +501,13 @@
             </action>
         </group>
 
+        <!-- UI015：自建预览保留基础编辑菜单，仅追加既有模板组，不引入主文件编辑器的全部动作。 -->
+        <group id="cn.song.mybatisplus.visualizer.PreviewEditorPopupMenu">
+            <reference ref="BasicEditorPopupMenu"/>
+            <separator/>
+            <reference ref="cn.song.mybatisplus.visualizer.SqlTemplateGroup"/>
+        </group>
+
         <!-- T-ErrReport：帮助菜单反馈入口（手动形态报告对话框，提交直达官网需求池；
              对话框底部提供带 source/ideVersion/pluginVersion 参数的浏览器兜底链接） -->
         <action id="cn.song.mybatisplus.visualizer.Feedback"

@@ -63,6 +63,37 @@ class PlatformSignatureCrossVersionTest {
     class CommandLineMissing
 
     @Test
+    fun previewEditorPopupSignatureIsExact() {
+        fun check(type: Class<*>) = PlatformSignatureChecker.checkPreviewEditorPopupSignatures(type)
+        assertEquals(0, check(PopupPublic::class.java))
+        assertEquals(0, check(PopupInherited::class.java))
+        assertEquals(1, check(PopupWrongReturn::class.java))
+        assertEquals(1, check(PopupWrongArgument::class.java))
+        assertEquals(1, check(PopupStatic::class.java))
+        assertEquals(2, check(PopupMissing::class.java))
+        assertEquals(1, PlatformSignatureChecker.checkPreviewEditorPopupApis(object : ClassLoader(null) {}))
+    }
+
+    open class PopupPublic {
+        fun setContextMenuGroupId(id: String) {}
+        fun getContextMenuGroupId(): String = "unused"
+    }
+    class PopupInherited : PopupPublic()
+    class PopupWrongReturn {
+        fun setContextMenuGroupId(id: String): String = id
+        fun getContextMenuGroupId(): String = "unused"
+    }
+    class PopupWrongArgument {
+        fun setContextMenuGroupId(id: Int) {}
+        fun getContextMenuGroupId(): String = "unused"
+    }
+    class PopupStatic {
+        companion object { @JvmStatic fun setContextMenuGroupId(id: String) {} }
+        fun getContextMenuGroupId(): String = "unused"
+    }
+    class PopupMissing
+
+    @Test
     fun dynamicInstallApisResolveOnAllLocalTargetPlatforms() {
         val distros = SignatureDistroDiscovery.ideaDistros
         assumeTrue("本机未发现任何 IDEA 发行版，跨版本签名核验无从执行", distros.isNotEmpty())
@@ -91,6 +122,13 @@ class PlatformSignatureCrossVersionTest {
             }
             assertTrue("IU-$family 必须实际执行UI-007签名登记，不能仅凭RESULT OK空绿：\n${result.output}",
                 result.output.lineSequence().any { it.startsWith("OK   BaseProcessHandler.getCommandLine[] -> ") })
+            for (signature in listOf(
+                "EditorEx.setContextMenuGroupId[class java.lang.String]",
+                "EditorEx.getContextMenuGroupId[]",
+            )) {
+                assertTrue("IU-$family 必须实际执行UI015签名登记：$signature\n${result.output}",
+                    result.output.lineSequence().any { it.startsWith("OK   $signature -> ") })
+            }
         }
         assumeTrue("未发现可运行的目标平台发行版", covered.isNotEmpty())
         println("跨版本签名核验覆盖平台: ${covered.joinToString("、")}")

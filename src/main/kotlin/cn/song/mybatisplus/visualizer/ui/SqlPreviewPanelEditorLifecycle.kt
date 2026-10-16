@@ -568,6 +568,8 @@ internal fun SqlPreviewPanel.assemblePreviewEditor(sql: String, prewarmed: Pair<
     // 重建 PSI 后补全落入空映射，实体表/列补全静默失效（documentContexts 恒空、level 3 死路径）。
     created.document.let { SqlCompletionContributor.registerContext(it, ctx) }
     (created as EditorEx).apply {
+        // UI015：EditorFactory 默认只有 Cut/Copy/Paste；专用组复用基础菜单与模板组。
+        setContextMenuGroupId("cn.song.mybatisplus.visualizer.PreviewEditorPopupMenu")
         // F-CASE：自研 SQL 高亮器（SqlLexer 将 CASE/WHEN/THEN/ELSE/END 标记为 KEYWORD，
         // 字段名标记为 IDENTIFIER → 双击选择不会跨 token 粘连；不依赖 Database 插件）
         highlighter = LexerEditorHighlighter(

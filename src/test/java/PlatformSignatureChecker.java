@@ -125,6 +125,7 @@ public class PlatformSignatureChecker {
         missing += checkModuleCountApi(loader);
         missing += checkPreviewSourceContextApis(loader, dbnLib.isDirectory());
         missing += checkSqlLogTabsApis(loader);
+        missing += checkPreviewEditorPopupApis(loader);
         missing += checkAttachTargetApis(loader);
         missing += checkMcpToolsetCapability(loader);
 
@@ -480,6 +481,22 @@ public class PlatformSignatureChecker {
             System.out.println("MISS SqlLogPanel JBTabs API types: " + t);
             return 1;
         }
+    }
+
+    /** UI015：自建预览专用菜单；243 已实证，三代按精确参数/返回值/实例方法登记。 */
+    public static int checkPreviewEditorPopupApis(ClassLoader loader) {
+        try {
+            return checkPreviewEditorPopupSignatures(
+                    Class.forName("com.intellij.openapi.editor.ex.EditorEx", false, loader));
+        } catch (Throwable t) {
+            System.out.println("MISS PreviewEditor popup API: " + t);
+            return 1;
+        }
+    }
+
+    public static int checkPreviewEditorPopupSignatures(Class<?> editor) {
+        return checkExact(editor, "setContextMenuGroupId", void.class, false, String.class)
+                + checkExact(editor, "getContextMenuGroupId", String.class, false);
     }
 
     /** UI-007：AgentAttachTarget 在 handler 上反射读取命令；公共实例零参 String，不能仅按名字匹配。 */

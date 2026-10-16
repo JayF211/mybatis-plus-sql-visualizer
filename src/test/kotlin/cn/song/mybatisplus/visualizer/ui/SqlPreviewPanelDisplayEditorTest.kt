@@ -59,6 +59,94 @@ import javax.swing.KeyStroke
  */
 class SqlPreviewPanelDisplayEditorTest: BasePlatformTestCase() {
 
+    private val previewPopupId = "cn.song.mybatisplus.visualizer.PreviewEditorPopupMenu"
+    private val templateActionIds = listOf(
+        "cn.song.mybatisplus.visualizer.ExplainSelectedTable",
+        "cn.song.mybatisplus.visualizer.CountSelectedTable",
+        "cn.song.mybatisplus.visualizer.SampleSelectedTable",
+    )
+
+    /** 从真实面板创建的编辑器取菜单，不另造注册组或 Editor 替身。 */
+    private fun popupLeaves(editor: com.intellij.openapi.editor.ex.EditorEx): List<com.intellij.openapi.actionSystem.AnAction> {
+        assertEquals(previewPopupId, editor.contextMenuGroupId)
+        val manager = com.intellij.openapi.actionSystem.ActionManager.getInstance()
+        val root = manager.getAction(editor.contextMenuGroupId!!)
+        assertTrue("预览专用菜单必须由 plugin.xml 注册", root is com.intellij.openapi.actionSystem.ActionGroup)
+        fun leaves(action: com.intellij.openapi.actionSystem.AnAction): List<com.intellij.openapi.actionSystem.AnAction> =
+            when (action) {
+                is com.intellij.openapi.actionSystem.Separator -> emptyList()
+                is com.intellij.openapi.actionSystem.ActionGroup -> action.getChildren(null).flatMap { leaves(it) }
+                else -> listOf(action)
+            }
+        return leaves(root!!)
+    }
+
+    fun testPreviewPopupContainsOnlyOriginalEditActionsAndExistingTemplates() {
+        val panel = SqlPreviewPanel(project)
+        try {
+            panel.showResult(result(sql = "SELECT * FROM user", compact = "SELECT * FROM user"))
+            val editor = panel.editorForTest() as com.intellij.openapi.editor.ex.EditorEx
+            val manager = com.intellij.openapi.actionSystem.ActionManager.getInstance()
+            val actions = popupLeaves(editor)
+            val expected = listOf("\$Cut", "\$Copy", "\$Paste") + templateActionIds
+            assertEquals("不能漏模板或灌入完整 EditorPopupMenu", expected, actions.map { manager.getId(it) })
+            expected.zip(actions).forEach { (id, action) ->
+                assertSame("必须复用原动作而非替换行为：$id", manager.getAction(id), action)
+            }
+        } finally {
+            panel.dispose()
+        }
+    }
+
+    fun testPreviewPopupTemplateEnablementUsesRealEditorSelection() {
+        val panel = SqlPreviewPanel(project)
+        try {
+            panel.showResult(result(sql = "SELECT * FROM user", compact = "SELECT * FROM user"))
+            val editor = panel.editorForTest() as com.intellij.openapi.editor.ex.EditorEx
+            val manager = com.intellij.openapi.actionSystem.ActionManager.getInstance()
+            val templates = popupLeaves(editor).filter { manager.getId(it) in templateActionIds }
+            assertEquals(3, templates.size)
+            val context = com.intellij.testFramework.MapDataContext().apply {
+                put(CommonDataKeys.EDITOR.name, editor)
+                put(CommonDataKeys.PROJECT.name, project)
+            }
+            val start = editor.document.text.indexOf("user")
+            assertTrue(start >= 0)
+            editor.selectionModel.setSelection(start, start + 4)
+            assertEquals("user", editor.selectionModel.selectedText)
+            templates.forEach { action ->
+                val event = AnActionEvent.createFromAnAction(action, null, "test", context)
+                action.update(event)
+                assertTrue("选 user 应启用：${manager.getId(action)}", event.presentation.isEnabled)
+            }
+            editor.selectionModel.setSelection(0, editor.document.textLength)
+            templates.forEach { action ->
+                val event = AnActionEvent.createFromAnAction(action, null, "test", context)
+                action.update(event)
+                assertFalse("整条 SELECT 不能当表名：${manager.getId(action)}", event.presentation.isEnabled)
+            }
+        } finally {
+            panel.dispose()
+        }
+    }
+
+    fun testPreviewPopupSurvivesEditorRecreationWithoutChangingMainEditor() {
+        myFixture.configureByText("source.txt", "SELECT * FROM user")
+        val source = myFixture.editor as com.intellij.openapi.editor.ex.EditorEx
+        val originalPopup = source.contextMenuGroupId
+        val panel = SqlPreviewPanel(project)
+        try {
+            repeat(2) {
+                panel.showResult(result(sql = "SELECT * FROM user", compact = "SELECT * FROM user"))
+                assertEquals(6, popupLeaves(panel.editorForTest() as com.intellij.openapi.editor.ex.EditorEx).size)
+                assertEquals("不得修改主编辑器菜单", originalPopup, source.contextMenuGroupId)
+                panel.clear()
+            }
+        } finally {
+            panel.dispose()
+        }
+    }
+
     fun testReformatShortcutRegistered() {
         // T-M26.6：格式化快捷键注册——action 实例存在（跟随 IDE keymap 的 Reformat Code，
         // 兜底 Ctrl+Alt+L），触发走 [SqlPreviewPanel.formatSql]（与「格式化」按钮同逻辑）
