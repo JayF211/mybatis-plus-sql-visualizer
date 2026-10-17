@@ -466,7 +466,7 @@ U28导出入口（本轮）：日志条目右键菜单完整列出「导出可�
 
 - UI024（存储按钮裁切）已合 dev `da85fb11`；UI026（英文设置页横向溢出）已合 dev `22691596`，合流后定向 `StorageRowLayoutTest` 3/0/0/0。
 - UI025 已合 dev `688c649d`；其真实场景缺口 UI029 的修复已合 dev `e0f3681f`，合流后定向 `testDbSchemaAnnotator` 41/0/0/0（反向摘回落分支恰 3 红）。
-- 全量门禁：UI029 合流后新一轮默认 5 片 `testShards --continue --no-configuration-cache` 已启动（本机 Docker 不可用，按项目定例自动跳过 Docker 测试）；上一轮不含 UI029 的权威读数为 7867/0/0/9（tip `70878f6c`）。
+- 全量门禁：UI029 合流后新一轮默认 5 片 `testShards --continue --no-configuration-cache` 已绿：**7867 例 / 9 跳过 / 0 失败 / 0 错误**（14m34s，tip `f17b2895` 之前的 `e0f3681f` 源码树）；本机 Docker 不可用，按项目定例自动跳过 Docker 测试。
 - 243/253/262 兼容与构建门禁按用户要求排在全部验收之后，尚未执行；未执行前不声称通过。
 
 ## 全量门禁首轮红灯与处置（2026-10-17 晚）
