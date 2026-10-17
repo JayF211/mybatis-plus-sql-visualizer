@@ -550,32 +550,19 @@ class DbConsoleIntegrationTest : BasePlatformTestCase() {
         }
     }
 
-    /** UI016 专用真实重项目，避免模拟关闭事件污染跨用例复用的 light project。 */
+    /**
+     * 使用平台已完整登记的 light project；仅发送关闭前通知，不真的销毁它。
+     * 首轮另建未打开重项目触发 ValueLookupManager 的 ProjectEntity 找不到项目，
+     * 属夹具前提失败；不能忽略该错误。每例自有 client/source 均在 finally 精确清理。
+     */
     private fun withUi016NativeViews(body: (Ui016NativeViews) -> Unit) {
         ui016LifecycleOnly = true
-        val directory = java.nio.file.Files.createTempDirectory("mpsv-ui016-native-")
-        val manager = com.intellij.openapi.project.ex.ProjectManagerEx.getInstanceEx()
-        val owner = requireNotNull(manager.newProject(directory, com.intellij.ide.impl.OpenProjectTask {
-            isNewProject = true
-            useDefaultProjectAsTemplate = false
-            projectName = "UI016-native-view"
-        }))
-        var fixture: Ui016NativeViews? = null
+        val fixture = Ui016NativeViews(project)
         try {
-            val created = Ui016NativeViews(owner)
-            fixture = created
-            body(created)
+            body(fixture)
         } finally {
             // 清理放在断言之后，且只清本夹具显式登记的资源。不得全局 release allEditors 救绿。
-            try {
-                fixture?.close()
-            } finally {
-                try {
-                    manager.closeAndDispose(owner)
-                } finally {
-                    directory.toFile().deleteRecursively()
-                }
-            }
+            fixture.close()
         }
     }
 
