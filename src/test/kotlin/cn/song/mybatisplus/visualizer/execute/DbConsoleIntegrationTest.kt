@@ -618,7 +618,7 @@ class DbConsoleIntegrationTest : BasePlatformTestCase() {
     fun testUi016SessionLogViewAlsoReleasedBeforeProjectBus() {
         withUi016NativeViews { fixture ->
             val service = com.intellij.database.console.session.DatabaseSessionViewService.getInstance()
-            val client = fixture.create("mpsql-exec.sql")
+            val client = fixture.createRetained("mpsql-exec.sql")
             val sessionView = com.intellij.openapi.application.WriteIntentReadAction.compute<Any> {
                 service.getView(client.session)
             } as com.intellij.database.console.session.DatabaseSessionLogView
@@ -646,7 +646,7 @@ class DbConsoleIntegrationTest : BasePlatformTestCase() {
         var closed = false
         val busErrors = mutableListOf<Throwable>()
         try {
-            val client = fixture.create("mpsql-exec.sql")
+            val client = fixture.createRetained("mpsql-exec.sql")
             val service = com.intellij.database.console.session.DatabaseSessionViewService.getInstance()
             val output = com.intellij.openapi.application.WriteIntentReadAction.compute<Any> {
                 service.getView(client.session)
@@ -713,8 +713,18 @@ class DbConsoleIntegrationTest : BasePlatformTestCase() {
         fun create(name: String): com.intellij.database.console.JdbcConsole = create(
             com.intellij.testFramework.LightVirtualFile(name, com.intellij.sql.SqlFileType.INSTANCE, "SELECT 1"))
 
-        fun create(file: com.intellij.openapi.vfs.VirtualFile): com.intellij.database.console.JdbcConsole {
-            val session = com.intellij.database.console.session.DatabaseSessionManager.getSession(owner, source, file.name)
+        fun createRetained(name: String): com.intellij.database.console.JdbcConsole = create(
+            com.intellij.testFramework.LightVirtualFile(name, com.intellij.sql.SqlFileType.INSTANCE, "SELECT 1"), true)
+
+        fun create(file: com.intellij.openapi.vfs.VirtualFile, retained: Boolean = false): com.intellij.database.console.JdbcConsole {
+            // Wallet.canClose在unit-test mode强制回收普通session，掩盖真机autoClose=false的保留。
+            // 空初始title使原生isService=true，原生逻辑明确保留，不改应用全局isUnitTestMode。
+            val session = com.intellij.database.console.session.DatabaseSessionManager.getSession(owner, source,
+                if (retained) "" else file.name)
+            if (retained) {
+                check(session.isService) { "前提：保留session不能被单测canClose短路回收" }
+                session.title = "SELECT * FROM user WHERE id IN (71,72,73)"
+            }
             val client = requireNotNull(com.intellij.openapi.application.WriteIntentReadAction.compute<com.intellij.database.console.JdbcConsole?> {
                 com.intellij.database.console.JdbcConsoleProvider.attachConsole(owner, session, file)
             })
