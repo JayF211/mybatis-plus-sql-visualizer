@@ -126,11 +126,11 @@
 | UI-013 | B4/U31 | 真100/101两次Logic相同但Actual分别ds0/100与ds1/101；去重合为一行×2仅留ds0，重复分支跳过保存；基线已存在，不能把两执行拼成一次跨片 | t-devui-sharding-dedup：91e15538/ba0deb91→dev cc151a87/3393dc66；Sharding执行级保真，其他日志族不改 | B5四类90绿，摘两生产闸门90项恰6红（五保真、一徽章），恢复并加诊断测试后92/0/0/0 | B6新包真框架PASS、去重勾选下by-id为独立#3/#4；07:23:39历史两条独立o147-id，pd.a分别ds0/100/BOOK,100与ds1/101/BOOK,101，主SQL问号、params空（frame-a2505757）；逐次保存/路由保真已验，同模板无Actual尾条未归因，全部flush边界不判通过 |
 | UI-014 | B6/U14、U15；B7新回归 | 原未知QUERY确认No未见SUBMITTED却误报已提交，runner final-step同步模态另有焦点SEVERE；B7修复把60秒选择思考时间计入prepare预算，并有popup选择dispose触发canceled问题，直接CANCELLED未到确认，不是原No路径通过 | 原修复dev 32f36cb4、90122af6、5f44b0db；续修381a9ad8→dev e47e2877，choiceAccepted防误取消、用户交互暂停预算、后台真超时BLOCKED | 原独立56绿/撤owner比较24项2红/恢复56绿；B7七类111/0/0/0；续修独立60绿/撤保护44项4红/恢复60绿；B8合流及诊断清理后七类115/0/0/0，fresh XML2026-10-17 10:15:22～52 | B7直接CANCELLED回归保留；B8源选择等253秒仍进入正确MySQL会话/确认，确认再等约505秒点No显示已取消、无SUBMITTED及原焦点SEVERE（frame-935a2641/66c752e3）；重试两阶段Yes后10:45:44.405 SUBMITTED，真实id=1一行且回执正确（frame-2b825722）。原取消误报、交互等待超时及选择dispose误取消路径复验通过，不代证U14/U15整组或合并两阶段安全确认 |
 | UI-015 | B6/U15 | 注解预览选中user右键只有Cut/Copy/Paste，模板仅挂EditorPopupMenu而自建Editor用BasicEditorPopupMenu，非选区错误；frame-46060b15/5a314a84 | dev a8748dbc、8a5480ae；保留基础动作并挂既有模板组 | 独立四类69绿/摘模板引用69项恰3红/恢复69绿，243/253/262 EditorEx菜单签名已核；B7七类合流111/0/0/0；B8七类115/0/0/0 | B7预览选user基础动作保留、三模板启用，整SQL三项禁用（frame-43056bbb/1474e441/00a5fa50）；B8同入口COUNT于11:05:47.751 SUBMITTED返回41（frame-a02fdf2f），抽样取回10行（frame-38181c91），原预览SQL/id71不变。菜单正反及预览COUNT/抽样实执行已验；预览快捷模板EXPLAIN、长WHERE等业务边界仍待，不升级U15整组 |
-| UI-016 | B8登记/U41；08:58:47退出现场 | Bus is already disposed、Double release of editor、RunnerLayoutUi保存状态访问已销毁project；243原生clientView挂应用级服务、JdbcConsole挂project，插件共享view关闭协议待修。首次释放栈不在idea.log，未归因为插件直接双重释放 | 独立树草稿50b09deb/b164c8b4，经9489f1df/64cbb2a5修正夹具前提，生产修复在途 | 真实testDbConsole两例1绿1红，唯一目标红UI016-OWNED-VIEW-RETAINED，fresh XML 2026-10-17T04:04:19.152Z；原生destroy协议正对照绿。此前编译及ProjectEntity失败不计目标红 | B8退出仍有Bus/ClientSession/RunnerLayoutUi同族错误，没有新增Double release；正常退出0不代证已修。待新包退出复验；主动INFO Throwable与Y盘访问拒绝不列入缺陷 |
+| UI-016 | B8登记/U41；08:58:47退出现场 | Bus is already disposed、Double release of editor、RunnerLayoutUi保存状态访问已销毁project；243原生clientView挂应用级服务、JdbcConsole挂project，插件共享view关闭协议待修。首次释放栈不在idea.log，未归因为插件直接双重释放 | 独立修复458f6950/d832d2c4及边界/签名提交已合dev c75c17d9/0d9743f1等，最终签名1c93c99d | 真实初始两例1绿1目标红UI016-OWNED-VIEW-RETAINED；仅撤关闭前释放三例恰1红，恢复与异常边界最终5/0/0/0（04:40:18Z）；243/253/262签名4/0/0/0（04:49:30Z），主控核XML。编译/ProjectEntity/grid缺依赖前提失败不计目标红 | B8退出仍有Bus/ClientSession/RunnerLayoutUi同族错误，没有新增Double release；正常退出0不代证已修。待新包退出复验；主动INFO Throwable与Y盘访问拒绝不列入缺陷 |
 | UI-017 | B8/U23 | foreach已存UI-Shared（三值71/72/73），另一selectByAnnotationId默认id91、列表仅默认，另存同名两次报已存在（frame-25d8a81d）；与跨语句同名独立快照文案冲突 | 独立8b10f9bd/c31cc9d7→dev177da143/f2da12ce；验证证据1bc062b5→fe0bef4c | 与UI019三类最终60/0/0/0（缓存28、对话框11、面板21）；只撤按键查重3例全红，恢复60绿，主控核XML | 待新包跨语句同名隔离、同语句重复保护及独立快照复验；自动测试通过不代证GUI |
 | UI-018 | B8/U37 | 有效单列TSV先生成回滚INSERT，改invalid_snapshot后生成报错却仍留旧INSERT、黄色可执行提示与执行/复制按钮（frame-9d584547）；应失效旧模型及操作入口，现场未点击执行 | 独立f283b0c6/79716ad2→dev823cef4f/68500208；监听输入及主键失效、失败撤旧，保留重生成元数据 | 三类最终75/0/0/0（Generator49、Dialog15、Panel11），XML 04:23:33–41Z主控核对；分别摘监听、生成前失效、元数据保留各2例全红，恢复75绿 | 待新包输入失效/生成失败路径复验；有效TSV只证明生成，未执行写SQL，U37该子项未通过 |
 | UI-019 | B8后定向测试/U23 | UI017新面板回归返回foreach方法，缓存/权威map已有81,82但重建输入框为空；首轮57项1失败，不用额外切预设救绿 | 独立2d3dd7cc→dev1bda62be；监听注册前初始化字段，保留原失败断言 | 首轮57项1失败；修复后与UI017最终60绿；只撤初始化3例2红1绿，无值null负对照通过；恢复最终60/0/0/0，主控核XML | 待新包默认/命名/null重新打开及方法往返复验，不冒充已实测UI缺陷 |
-| UI-020 | B8后代码复核/U37 | executeRollback调用返回Unit的executeAdhocSql后无条件标执行；DML确认No直接return，旧对话框仍标成功。属于代码确认，未在GUI点击回滚执行 | UI018同树另批处理：回执透传prepared/nonprepared，只在SUBMITTED留痕 | 待判别测试，不把Boolean就绪或调用返回当提交 | 待仅取消的安全GUI负例；真实回滚写入未授权，不能用自动测试代称写库实测 |
+| UI-020 | B8后代码复核/U37 | executeRollback调用返回Unit的executeAdhocSql后无条件标执行；DML确认No直接return，旧对话框仍标成功。属于代码确认，未在GUI点击回滚执行 | 独立b2fa9e02→dev58ad8dce：透传prepared/nonprepared回执，仅SUBMITTED留痕；关闭弹窗不丢真实提交记录但禁止迟到改UI | 五类最终119/0/0/0（04:50:33–46Z）主控核XML；恢复旧假成功3红、断prepared回执1红、撤恰一次保护3红，全部恢复。旧ABI 3例NoSuchMethodError经强制重编译排除；不把Boolean就绪或调用返回当提交 | 待仅取消的安全GUI负例；真实回滚写入未授权，不能用自动测试代称写库实测 |
 
 ## 第二批修复合流与复验
 
@@ -319,6 +319,22 @@ U37回滚入口补验：INSERT纯合成参数只预览，提示整行等值定�
 UI018新登记（U37未通过）：上面的成功快照随后改为单行`invalid_snapshot`再生成，错误提示出现，但旧INSERT、黄色“回滚可执行”和执行/复制按钮仍在（frame-9d584547）。已派独立树核真实回调并修输入失效/生成失败的旧模型残留，未点击执行。CSV不是支持格式，先前两列逗号文本被作单列不计正例；Computer Use的typeText吞Tab、paste实际带入旧剪贴板，已按真实界面纠正，以明确键入的单列TSV作为有效对照，不拿工具回执冒充文本落地。
 
 B8退出：PID57840正常GUI退出，runIde退出0并自动注销，未强杀；主demo git工作树干净。
+
+## 第九批合流门禁
+
+生产冻结`58ad8dce`，包含UI016～UI020全部修复（UI019/020为测试/代码发现待GUI）。合流后根`:test`十一类fresh XML时间2026-10-17T04:57:33～04:58:03Z，227/0/0/0：预设缓存28、预设对话框11、预设面板21、回滚对话框22、回滚面板15、回滚生成器49、日志转SQL18、执行方言闸17、准备单飞26、错误处理16、跨版签名4。使用`-Pkotlin.incremental=false --no-configuration-cache`避免新默认参数的旧测试ABI缓存；主控逐文件核实，不把独立60/75/119相加冒充合流读数。真实native view五例仍为独立testDbConsole证据，最终统一全量未执行。
+
+第九批runIde已启动：PID37948、主窗口21499930，243/Light125%、1920×1080全屏，autoReload关闭。运行JAR6,074,072字节、SHA256 `31998253e1473e6525eb88610edd8117ca786e895a1df537b75e4c87525d7753`；系统级置顶仍未完成，不混称全屏置顶。
+
+UI018原路径复验：DELETE id71回滚输入单列快照id/71生成INSERT正例（frame-48df74a9）；替换为invalid_snapshot并生成后旧SQL清空、红色无法回滚、执行和复制禁用（frame-2c68673f）。恢复有效快照再生成可用。UI020真实取消负例：点击执行回滚仅进入INSERT写确认（frame-dd9edf95），明确点No后保持未提交横幅，没有假成功（frame-aff95c61）；本批启动后native query SUBMITTED为0。未批准或执行INSERT，真实数据库写成功不在本轮证据内。
+
+第九批预设复验：单值方法id91另存UI-Shared成功（frame-946b3529），同方法重复另存仍拒绝（frame-36633304），预览显示该名与id91（frame-72ba5454），UI017原路径通过。另一foreach方法重开字段仍为71,72,73，未串入91，但SQL仅IN(71,72)（frame-0cfc8b88），另登记UI021：召回值未同步展开长度。原代理已先红5例3失败，修复769f314a及测试51537491、证据13c23393，最终65绿，待合入及新包复验；不能把UI019字段恢复当整个foreach渲染通过。
+
+U36/U29万条真实UI补验：将已核合成文件不覆盖复制到当前ui004-b5目录，刷新后显示10000条（frame-eac690af），打开首屏同结构徽章10000（frame-b50185e7）。搜索UI_MATCH显示1000条（frame-289d20ac），精准搜索id = 10000 AND能取得末条#10000（frame-914a1052）；小写ui_match开启大小写敏感为0条，关闭立刻恢复1000条（frame-fecdb046/835c2f5e）。End先到当前30条批次末端，下一次再触发追加；已核既有30条惰性模型，不误报数据丢失，尚未以连续滚动遍历全万条。
+
+用户现场新增需求：SQL历史页参照日志页增加“滚动到底部”按钮。已派独立工作树`mpsv-devui-history-bottom`/分支`t-devui-history-bottom`后台实施，要求复用现有图标文案、跳到当前过滤集合真实末条而非仅已加载30条；不阻塞主控其他验收。首件2cdd1b12已合dev83b70283，真实工具栏动作三类46/0/0/0（新动作5、导航17、搜索24），摘批量补齐5项3红，恢复46绿，主控核XML。复用ArrowDown与中性scrollBottom文案，不宣称实时跟随；文件态隐藏、空态禁用，一次addAll补齐过滤全集后同步到底。待下一包GUI及窄宽复验。
+
+主控同时继续U29/U36：返回文件态后搜索2026-10-17恰一文件（frame-f3c8e1ff）；打开真实658条文件后SQL搜索框清空且首屏恢复真实来源（frame-532c15e5），搜索合成哨兵UI_MATCH为0（frame-9b16c06e），没有把另一万条文件混入。该顺序验证文件边界，不代证受控迟到竞态。
 
 ## 第九批并行准备产物
 
