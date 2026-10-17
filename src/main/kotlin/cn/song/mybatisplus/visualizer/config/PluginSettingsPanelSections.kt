@@ -479,14 +479,25 @@ internal fun PluginSettingsPanel.buildSections(panel: JPanel) {
                 g.gridx = 0
                 g.gridwidth = 2
                 g.weightx = 1.0
-                g.fill = GridBagConstraints.HORIZONTAL
-                p.add(JPanel(BorderLayout(8, 0)).apply {
+                // UI024：本行不随整页拉宽。页面其他分区（源码捕获分栏等）的 preferred 宽度仍可能
+                // 大于视口；若本行 fill=HORIZONTAL，右对齐按钮会被推到页面右缘之外而裁切。
+                g.fill = GridBagConstraints.NONE
+                // UI024：说明与操作纵向排列（操作右对齐换到下一行）。原先说明固定 500px、操作在
+                // EAST 同行，两者宽度相加把「自动保存」组 preferred 宽度撑到 848px（整页 894px），
+                // 默认设置窗口内容区下三个按钮被右缘裁切并出现横向滚动条；换行后行宽只取两者
+                // 最大值（约 650px），且不随页面溢出宽度移动，按钮始终落在可视区内。
+                p.add(JPanel(BorderLayout(0, 4)).apply {
                     isOpaque = false
                     add(JBLabel("<html><body style='width: 500px'>" +
                         MpSqlVisualizerBundle.message(key) + "</body></html>").apply {
                         foreground = JBUI.CurrentTheme.ContextHelp.FOREGROUND
                     }, BorderLayout.CENTER)
-                    if (action != null) add(action, BorderLayout.EAST)
+                    if (action != null) {
+                        add(JPanel(BorderLayout()).apply {
+                            isOpaque = false
+                            add(action, BorderLayout.EAST)
+                        }, BorderLayout.SOUTH)
+                    }
                 }, g)
                 g.gridwidth = 1
                 g.fill = GridBagConstraints.NONE
