@@ -348,7 +348,7 @@ internal fun PluginSettingsPanel.buildSections(panel: JPanel) {
                     isOpaque = false
                     add(
                         JBLabel(
-                            "<html>" + MpSqlVisualizerBundle.message("settings.sourceFrameSkipPrefixes.hint") + "</html>",
+                            wrapPreviewText(MpSqlVisualizerBundle.message("settings.sourceFrameSkipPrefixes.hint")),
                         ).apply { foreground = JBUI.CurrentTheme.ContextHelp.FOREGROUND },
                         BorderLayout.CENTER,
                     )
