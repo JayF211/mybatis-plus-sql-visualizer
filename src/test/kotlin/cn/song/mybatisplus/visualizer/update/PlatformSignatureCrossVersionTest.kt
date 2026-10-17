@@ -74,6 +74,20 @@ class PlatformSignatureCrossVersionTest {
         assertEquals(1, PlatformSignatureChecker.checkPreviewEditorPopupApis(object : ClassLoader(null) {}))
     }
 
+    /**
+     * UI025：ExternalAnnotator 四段调度签名 + AnnotationBuilder 落点 API。
+     * 空 ClassLoader 必须整体拒绝（证明本项真的在核平台类，而不是空绿）。
+     */
+    @Test
+    fun externalAnnotatorSignatureIsExact() {
+        assertEquals(0, PlatformSignatureChecker.checkExternalAnnotatorApis(javaClass.classLoader))
+        assertEquals(
+            "平台类缺失必须拒绝",
+            1,
+            PlatformSignatureChecker.checkExternalAnnotatorApis(object : ClassLoader(null) {}),
+        )
+    }
+
     open class PopupPublic {
         fun setContextMenuGroupId(id: String) {}
         fun getContextMenuGroupId(): String = "unused"

@@ -277,6 +277,18 @@
         <codeInsight.inlayProvider language="SQL"
                                    implementationClass="cn.song.mybatisplus.visualizer.ui.inlay.PreviewInsertColumnInlayProvider"/>
 
+        <!-- UI025：预览编辑器「表中无此列」红色波浪 + 悬停建议。
+             EP 名与形态按 243/253 平台 META-INF/LangExtensionPoints.xml 实测：
+             `name="externalAnnotator" beanClass="com.intellij.lang.LanguageExtensionPoint"`
+             （`<with attribute="implementationClass" implements="...ExternalAnnotator"/>`），
+             注册属性为 language + implementationClass（与 inlayProvider 同为 language 级）。
+             **注册是 language 级**——对 IDE 内所有 SQL 编辑器生效，故 annotator 首行做
+             预览面板专用作用域闸门（预览临时文件名紧致判据 + 插件自有 exec 控制台路径），
+             用户自己的 .sql 文件零标注，见 PreviewSchemaAnnotationScope KDoc。
+             数据侧只读已预热的精确目标缓存（SchemaValidationGate 三参入口），无 DB I/O。 -->
+        <externalAnnotator language="SQL"
+                           implementationClass="cn.song.mybatisplus.visualizer.ui.annotate.PreviewUnknownColumnAnnotator"/>
+
         <!-- M9→原生SQL：补全注册到 SQL 语言。实测全语言注册（无 language）在补全调度时不被
      CompletionContributor.forLanguage 返回（M34 补全失效根因之一），必须显式 language；
      SQL 文件（IDEA DatabaseTools：com.intellij.sql.SqlLanguage，id="SQL"）由

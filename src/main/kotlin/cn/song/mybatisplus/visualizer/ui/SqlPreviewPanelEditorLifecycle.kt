@@ -607,6 +607,9 @@ internal fun SqlPreviewPanel.assemblePreviewEditor(sql: String, prewarmed: Pair<
     EditorCommentShortcuts.install(created)
     editor = created
     bindAutoPopup(created)
+    // UI025：配置目录（.idea）下的预览编辑器不走 daemon，错列波浪线由编辑器级通道兜底。
+    // 非 .idea 文件由 PreviewUnknownColumnAnnotator 负责，两条通道在各自 recompute 内互斥。
+    cn.song.mybatisplus.visualizer.ui.annotate.PreviewSchemaHighlighter.install(created)
     // T-AutoFold F4-a：createEditor 支链（含内存文档降级，同一函数收口）——新编辑器按初始内容应用
     cn.song.mybatisplus.visualizer.ui.highlight.SqlAutoFolding.applyTo(created, sql)
 }
@@ -856,6 +859,8 @@ internal fun SqlPreviewPanel.bindAutoPopup(created: Editor) {
 
 internal fun SqlPreviewPanel.disposeCurrentEditorOnly() {
     editor?.let {
+        // UI025：先摘编辑器级错列标注通道（监听 + RangeHighlighter），再释放编辑器
+        cn.song.mybatisplus.visualizer.ui.annotate.PreviewSchemaHighlighter.uninstall(it)
         // T-M52：监听器由 Disposable 管理，dispose 即移除（无需手动 removeDocumentListener，
         // 也不再有 listener 字段需要置 null——T-RA-02 删除）
         autoPopupDisposable?.let { d -> Disposer.dispose(d) }
