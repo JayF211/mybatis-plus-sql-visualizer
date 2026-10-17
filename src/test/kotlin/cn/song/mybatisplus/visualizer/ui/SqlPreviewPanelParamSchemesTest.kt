@@ -343,7 +343,7 @@ class SqlPreviewPanelParamSchemesTest : BasePlatformTestCase() {
         )
     }
 
-    /** UI017：走面板接线的管理对话框另存，而不是直接调缓存 API 绕过 UI 查重。 */
+    /** 走面板接线的管理对话框另存，而不是直接调缓存 API 绕过 UI 查重。 */
     fun testUI017_dialogSaveAsAcrossMethodsKeepsForeachAndDefaultSnapshotsIndependent() {
         val p = openPanel()
         val cache = p.paramHistoryCacheForTest()

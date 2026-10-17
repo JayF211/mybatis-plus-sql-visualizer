@@ -103,6 +103,28 @@ class ParamSchemeManagerDialogTest : BasePlatformTestCase() {
         d.dispose()
     }
 
+    fun testSaveAsRejectsDefaultReservedNameWithEmptyDefaultBucket() {
+        assertEquals(0, cache.size())
+        assertTrue(cache.schemeNames().isEmpty())
+        val d = openDialog()
+        for (name in listOf(ParamHistoryCache.DEFAULT_SCHEME, " \t ")) {
+            assertFalse("默认保留名经规范化必须在写入前拒绝", d.saveAsForTest(name))
+            assertEquals(bundle("panel.scheme.dialog.blank"), d.statusTextForTest())
+        }
+        assertEquals(0, changedCount)
+        assertEquals(0, cache.size())
+        assertTrue(cache.schemeNames().isEmpty())
+        assertEquals(1, d.schemeCountForTest())
+        assertEquals(ParamHistoryCache.DEFAULT_SCHEME, cache.activeSchemeFor("stmt-key"))
+        assertEquals(
+            "缓存层也必须拒绝默认保留名",
+            ParamHistoryCache.SchemeOpResult.INVALID,
+            cache.saveAsScheme(ParamHistoryCache.DEFAULT_SCHEME, "stmt-key", snapshotStub!!.second),
+        )
+        assertEquals(0, cache.size())
+        assertTrue(cache.schemeNames().isEmpty())
+    }
+
     fun testUI017_saveAsReusesNameForAnotherStatementWithoutOverwritingSnapshots() {
         val foreachKey = "UserMapper.selectByAnnotationForeach"
         val idKey = "UserMapper.selectByAnnotationId"
