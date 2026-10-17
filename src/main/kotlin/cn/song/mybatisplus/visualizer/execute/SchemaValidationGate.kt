@@ -68,12 +68,19 @@ object SchemaValidationGate {
         val statement = statements.singleOrNull() ?: return Outcome.Skipped
         val table = when (statement) {
             is net.sf.jsqlparser.statement.update.Update -> {
-                if (statement.fromItem != null || !statement.startJoins.isNullOrEmpty()) return Outcome.Skipped
+                if (statement.fromItem != null || !statement.startJoins.isNullOrEmpty() ||
+                    !statement.withItemsList.isNullOrEmpty()
+                ) return Outcome.Skipped
                 statement.table
             }
-            is net.sf.jsqlparser.statement.delete.Delete -> statement.table
-            is net.sf.jsqlparser.statement.select.PlainSelect ->
+            is net.sf.jsqlparser.statement.delete.Delete -> {
+                if (!statement.usingList.isNullOrEmpty() || !statement.withItemsList.isNullOrEmpty()) return Outcome.Skipped
+                statement.table
+            }
+            is net.sf.jsqlparser.statement.select.PlainSelect -> {
+                if (!statement.withItemsList.isNullOrEmpty()) return Outcome.Skipped
                 statement.fromItem as? net.sf.jsqlparser.schema.Table
+            }
             else -> null
         } ?: return Outcome.Skipped
         if (table.fullyQualifiedName != table.name) return Outcome.Skipped

@@ -142,6 +142,24 @@ class SqlPreviewSchemaGateTest : BasePlatformTestCase() {
         assertNoSubmission()
     }
 
+    fun testPreparedEditorMismatchDoesNotBorrowAnotherPreviewTarget() {
+        warm()
+        val p = preview()
+        DataSourceSelector.preparedEditor = null
+        p.executeSql()
+        assertFalse(dialogs.single(), dialogs.single().contains("usernme"))
+        assertNoSubmission()
+    }
+
+    fun testChangedDatabaseDoesNotBorrowOriginalDatabaseCache() {
+        warm()
+        val p = preview()
+        DataSourceSelector.schemaTargetReaderForTest = { SchemaValidationGate.Target(source, "other_db") }
+        p.executeSql()
+        assertFalse(dialogs.single(), dialogs.single().contains("usernme"))
+        assertNoSubmission()
+    }
+
     fun testComplexSubquerySkipsSchemaWarningButKeepsWriteConfirmation() {
         warm()
         preview("UPDATE user SET usernme=(SELECT username FROM user) WHERE id=71").executeSql()

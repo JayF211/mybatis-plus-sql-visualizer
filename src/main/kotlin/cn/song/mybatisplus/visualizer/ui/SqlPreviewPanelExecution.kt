@@ -929,15 +929,17 @@ internal fun SqlPreviewPanel.explainSql() {
         issues: List<cn.song.mybatisplus.visualizer.sql.schema.SchemaValidator.Issue>,
     ) {
         val body = cn.song.mybatisplus.visualizer.execute.SchemaValidationGate.renderNotification(issues) ?: return
-        val notification = Notification(
-            NOTIFICATION_GROUP_ID,
-            MpSqlVisualizerBundle.message("schema.check.notification.title"),
-            body,
-            NotificationType.WARNING,
-        )
-        schemaNotificationForTest?.let { it(notification); return }
-        if (ApplicationManager.getApplication().isUnitTestMode) return
-        runCatching { notification.notify(proj) }
+        if (ApplicationManager.getApplication().isUnitTestMode && schemaNotificationForTest == null) return
+        runCatching {
+            val notification = Notification(
+                NOTIFICATION_GROUP_ID,
+                MpSqlVisualizerBundle.message("schema.check.notification.title"),
+                body,
+                NotificationType.WARNING,
+            )
+            val observer = schemaNotificationForTest
+            if (observer != null) observer(notification) else notification.notify(proj)
+        }
     }
 
 internal fun SqlPreviewPanel.submitExplainDirect(

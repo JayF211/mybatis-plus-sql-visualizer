@@ -76,6 +76,8 @@ class SchemaValidationTargetTest : BasePlatformTestCase() {
             "UPDATE user SET usernme='x' FROM other_table WHERE id=71",
             "UPDATE user JOIN other_table ON user.id=other_table.id SET usernme='x'",
             "SELECT usernme FROM user JOIN other_table ON user.id=other_table.id",
+            "WITH user AS (SELECT 1 AS usernme) SELECT usernme FROM user",
+            "DELETE FROM user USING other_table WHERE usernme=71",
             "USE other_db; UPDATE user SET usernme='x' WHERE id=71",
             "not valid sql !",
         )) {
