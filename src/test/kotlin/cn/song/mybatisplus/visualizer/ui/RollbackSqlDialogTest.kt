@@ -210,7 +210,15 @@ class RollbackSqlDialogTest : BasePlatformTestCase() {
 
     /** 隔离输入监听，单独钉住“生成失败先撤旧模型”的防线，避免监听让失败分支测试空绿。 */
     fun testUI018FailedGenerationInvalidatesEvenWithoutInputNotification() {
-        for ((kind, pasted) in listOf("DELETE" to "invalid_snapshot", "UPDATE" to "id\n71")) {
+        assertFailedGenerationInvalidates("DELETE", "invalid_snapshot")
+    }
+
+    fun testUI018MissingColumnGenerationInvalidatesEvenWithoutInputNotification() {
+        assertFailedGenerationInvalidates("UPDATE", "id\n71")
+    }
+
+    private fun assertFailedGenerationInvalidates(kind: String, pasted: String) {
+        run {
             val original = RollbackSqlGenerator.generate(
                 if (kind == "DELETE") "DELETE FROM user WHERE id = 71" else "UPDATE user SET age = 3 WHERE id = 71",
             )
