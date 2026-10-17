@@ -18,6 +18,7 @@ import cn.song.mybatisplus.visualizer.util.EditorCommentShortcuts
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.xml.XmlPreviewModel
 import com.intellij.notification.Notification
+import com.intellij.notification.NotificationAction
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.command.WriteCommandAction
@@ -1039,6 +1040,8 @@ internal fun SqlPreviewPanel.submitExplainOrStructured(
     dialect: cn.song.mybatisplus.visualizer.sql.Dialect,
     explainSql: String,
     dialectGateRequest: cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Request,
+    /** T-UI030：重试路径禁止再弹数据源选择器（防「取消 → 再弹 → 再取消」循环）。 */
+    allowDataSourcePrompt: Boolean = true,
 ) {
     val settings = PluginSettings.getInstance().state
     val boundDs = runCatching {
@@ -1053,6 +1056,7 @@ internal fun SqlPreviewPanel.submitExplainOrStructured(
             { message -> resultPanel.showError(message) },
         )) return
     val format = cn.song.mybatisplus.visualizer.sql.ExplainSupport.formatFor(dialect.name)
+    val databaseAvailable = cn.song.mybatisplus.visualizer.mcp.McpDbExecutor.isDatabaseAvailable()
     // R33 真机走查修复：编辑器文本就是回填链的终点产物（参数击键防抖重渲染），此处残留
     // `?`（串感知位点，字符串/注释里的 `?` 不计）即真未填——不下发结构化探测（字面 `?`
     // 送 JDBC = 语法错），按响亮失败回退并明示「存在未回填参数」
@@ -1061,17 +1065,41 @@ internal fun SqlPreviewPanel.submitExplainOrStructured(
         val verdict = cn.song.mybatisplus.visualizer.execute.ExplainPanelChannel.decide(
             enabled = settings.explainStructuredRender,
             format = format,
-            databaseAvailable = cn.song.mybatisplus.visualizer.mcp.McpDbExecutor.isDatabaseAvailable(),
+            databaseAvailable = databaseAvailable,
             hasBoundDataSource = boundDs != null,
             hasUnfilledParams = hasUnfilledParams,
         )
     ) {
-        cn.song.mybatisplus.visualizer.execute.ExplainPanelChannel.Decision.DirectSilent ->
+        cn.song.mybatisplus.visualizer.execute.ExplainPanelChannel.Decision.DirectSilent -> {
+            // T-UI030：开关关闭时不再只是「静默直送」——该方言确有结构化面且 Database 插件
+            // 在场时给一条带「启用结构化并重试」动作的通知；TEXT/XML/Community 不提示（开启
+            // 也没用，只会变成噪音）。不点动作时行为与改前逐字一致（仍直送原生控制台）。
+            if (cn.song.mybatisplus.visualizer.execute.ExplainFallbackGuidance.shouldOfferStructuredEnable(
+                    settings.explainStructuredRender, format, databaseAvailable,
+                )
+            ) {
+                notifyStructuredExplainDisabled(proj) {
+                    enableStructuredExplainAndRetry(proj, dialect, explainSql, dialectGateRequest)
+                }
+            }
             submitExplainDirect(proj, explainSql, dialectGateRequest)
+        }
 
         is cn.song.mybatisplus.visualizer.execute.ExplainPanelChannel.Decision.DirectFallback -> {
-            notifyExplainStructuredFallback(proj, verdict.reason, detail = null)
-            submitExplainDirect(proj, explainSql, dialectGateRequest)
+            if (verdict.reason == cn.song.mybatisplus.visualizer.execute.ExplainPanelChannel.FallbackReason.NO_DATA_SOURCE) {
+                if (allowDataSourcePrompt) {
+                    // T-UI030：真机反馈这条「已回退原生控制台」只是告知、没有下一步。改为直接弹
+                    // 既有数据源选择器（与执行 SQL 同一个 runner 选择器，只绑定不执行任何 SQL），
+                    // 选中后自动重试结构化；用户取消则只给说明，绝不再弹第二次。
+                    promptDataSourceThenRetryStructured(proj, dialect, explainSql, dialectGateRequest)
+                } else {
+                    // 重试仍未绑定：只给现有回退说明，不再触发直送链（直送链会再次弹选择器）。
+                    notifyExplainStructuredFallback(proj, verdict.reason, detail = null)
+                }
+            } else {
+                notifyExplainStructuredFallback(proj, verdict.reason, detail = null)
+                submitExplainDirect(proj, explainSql, dialectGateRequest)
+            }
         }
 
         cn.song.mybatisplus.visualizer.execute.ExplainPanelChannel.Decision.Structured -> {
@@ -1189,6 +1217,184 @@ internal fun SqlPreviewPanel.notifyExplainStructuredFallback(
             NotificationType.INFORMATION,
         ).notify(proj)
     }
+}
+
+/**
+ * T-UI030：无已绑数据源时**直接复用既有数据源选择/准备链**（与执行 SQL/执行计划同一个
+ * runner 选择器），只绑定、不执行任何 SQL；绑定落地后自动重试结构化 EXPLAIN。
+ *
+ * 为什么不走「通知 + 动作」：真机反馈里用户已经点了「执行计划」，这一刻缺的是数据源上下文
+ * 本身——让用户再点一次通知动作只是把同一次决策拆成两步，且通知动作本身还要解释「点了会
+ * 发生什么」。直接弹平台原生的 runner 选择器，用户当场选一个（或静默复用 last-used），
+ * 选择即完成绑定、随后自动重试，路径最短且完全复用既有链（不新造选择 UI / runner）。
+ *
+ * 并发纪律：已有准备链在飞时**只等待**，不再走 chooseAndPrepare（预览准备是 PASS_THROUGH，
+ * 会建第二条会话/控制台）。用户取消选择会把单飞位复位，轮询下一拍即收口为「不再弹第二次」。
+ */
+internal fun SqlPreviewPanel.promptDataSourceThenRetryStructured(
+    proj: Project,
+    dialect: cn.song.mybatisplus.visualizer.sql.Dialect,
+    explainSql: String,
+    dialectGateRequest: cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Request,
+) {
+    val errorShown = java.util.concurrent.atomic.AtomicBoolean(false)
+    // 代际快照：等待绑定期间用户可能切预览/再次点执行计划（SqlPreviewPanelSqlView 会递增）——
+    // 过期等待不得把旧 SQL 的 EXPLAIN 提交到新预览上。
+    val generation = explainStructuredGeneration
+    if (cn.song.mybatisplus.visualizer.execute.ExplainFallbackGuidance.shouldPromptForDataSource(
+            cn.song.mybatisplus.visualizer.execute.DataSourceSelector.isPrepareInFlight(),
+        )
+    ) {
+        // 绑定用的 SQL 取面板当前预览原文（不是包了 EXPLAIN 的文本）：只写进控制台文档，
+        // 不执行；真正的 EXPLAIN 由下面的重试提交，用户 SQL 不被改写。
+        val previewSql = nativeEditorDoc?.text?.takeIf { it.isNotBlank() }
+            ?: editor?.document?.text?.takeIf { it.isNotBlank() }
+            ?: explainSql
+        // executeAfterPrepare=false = 只准备/绑定，不提交任何语句（DML/DDL 零自动执行）。
+        // 不传 dialectGateRequest：绑定与方言无关，门禁在重试的结构化提交里照旧生效。
+        cn.song.mybatisplus.visualizer.execute.DataSourceSelector.prepareConsole(
+            proj,
+            previewSql,
+            onError = { message ->
+                errorShown.set(true)
+                resultPanel.showError(message)
+            },
+        )
+    }
+    awaitDataSourceBoundThenRetry(proj, dialect, explainSql, dialectGateRequest, errorShown, generation)
+}
+
+/** 绑定等待轮询间隔（EDT；只读判定，不碰 JDBC）。 */
+private const val EXPLAIN_DS_BIND_POLL_MS = 250
+
+/** 轮询硬上限，只防定时器泄漏；正常收口由准备链终结（已绑定或取消）驱动。 */
+private const val EXPLAIN_DS_BIND_MAX_TICKS = 480
+
+/**
+ * T-UI030：等待既有/新建准备链把数据源绑定落地，然后重试一次结构化 EXPLAIN。
+ *
+ * 判定全部委托 [cn.song.mybatisplus.visualizer.execute.ExplainFallbackGuidance.dataSourceBindTick]
+ * （纯函数，取消/超时路径可单测）。收到取消/失败（单飞位复位）即停表并只给现有回退说明，
+ * 绝不再弹选择器；重试路径传 `allowDataSourcePrompt=false`，即使仍未绑定也不会形成循环。
+ */
+internal fun SqlPreviewPanel.awaitDataSourceBoundThenRetry(
+    proj: Project,
+    dialect: cn.song.mybatisplus.visualizer.sql.Dialect,
+    explainSql: String,
+    dialectGateRequest: cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Request,
+    errorShown: java.util.concurrent.atomic.AtomicBoolean,
+    generation: Int,
+) {
+    var ticks = 0
+    val timer = javax.swing.Timer(EXPLAIN_DS_BIND_POLL_MS) { event ->
+        ticks++
+        if (Disposer.isDisposed(this) || proj.isDisposed) {
+            (event.source as javax.swing.Timer).stop()
+            return@Timer
+        }
+        // 预览已切换/又点了一次执行计划：这次等待与重试都已过期，静默停表即可。
+        if (generation != explainStructuredGeneration) {
+            (event.source as javax.swing.Timer).stop()
+            return@Timer
+        }
+        val bound = runCatching {
+            cn.song.mybatisplus.visualizer.execute.DataSourceSelector.boundConsoleDataSource()
+        }.getOrNull() != null
+        val inFlight = cn.song.mybatisplus.visualizer.execute.DataSourceSelector.isPrepareInFlight()
+        when (cn.song.mybatisplus.visualizer.execute.ExplainFallbackGuidance.dataSourceBindTick(
+            bound = bound,
+            prepareInFlight = inFlight,
+            timeoutReached = ticks >= EXPLAIN_DS_BIND_MAX_TICKS,
+        )) {
+            cn.song.mybatisplus.visualizer.execute.ExplainFallbackGuidance.DataSourceBindTick.RETRY -> {
+                (event.source as javax.swing.Timer).stop()
+                submitExplainOrStructured(
+                    proj, dialect, explainSql, dialectGateRequest, allowDataSourcePrompt = false,
+                )
+            }
+            cn.song.mybatisplus.visualizer.execute.ExplainFallbackGuidance.DataSourceBindTick.GIVE_UP -> {
+                (event.source as javax.swing.Timer).stop()
+                // 选择失败（无数据源/驱动错误）已在面板行内显示既有错误文案；只有「用户取消」
+                // 这类没有错误文案的收口才补一条说明——两条提示不重复。
+                if (!errorShown.get()) notifyExplainDataSourceNotBound(proj)
+            }
+            cn.song.mybatisplus.visualizer.execute.ExplainFallbackGuidance.DataSourceBindTick.WAIT -> Unit
+        }
+    }
+    timer.isRepeats = true
+    timer.start()
+}
+
+/** T-UI030：用户取消数据源选择（或等待未绑定）后的说明——如实说明「未执行」，并给出下一步。 */
+internal fun SqlPreviewPanel.notifyExplainDataSourceNotBound(proj: Project) {
+    if (ApplicationManager.getApplication().isUnitTestMode) return
+    runCatching {
+        Notification(
+            NOTIFICATION_GROUP_ID,
+            MpSqlVisualizerBundle.message("panel.explain"),
+            MpSqlVisualizerBundle.message("panel.explain.structured.noDataSourceDeclined"),
+            NotificationType.INFORMATION,
+        ).notify(proj)
+    }
+}
+
+/**
+ * T-UI030：开关关闭通知里的一个可操作项（文案 key + 点击行为）。
+ *
+ * 用「key + runnable」而非直接构造 [NotificationAction]（照
+ * `SqlTemplateErrorAction` 先例）：让「挂了哪些动作、点了做什么」成为不依赖平台事件即可
+ * 断言的纯逻辑，[NotificationAction] 的点击回调只能由真机/平台事件驱动。
+ */
+internal class StructuredExplainNotificationAction(val titleKey: String, val run: () -> Unit)
+
+/** T-UI030：开关关闭通知的动作清单——恒给「启用结构化并重试」一项。 */
+internal fun structuredExplainDisabledActions(
+    onEnableAndRetry: () -> Unit,
+): List<StructuredExplainNotificationAction> =
+    listOf(
+        StructuredExplainNotificationAction("panel.explain.structured.enableAndRetry", onEnableAndRetry),
+    )
+
+/**
+ * T-UI030：结构化开关关闭时的可操作通知——带「启用结构化并重试」动作。
+ * 动作由纯函数 [cn.song.mybatisplus.visualizer.execute.ExplainFallbackGuidance.shouldOfferStructuredEnable]
+ * 决定是否值得出现（TEXT/XML/Community 不提示）；动作回调只写该开关并重试，不改其它设置。
+ */
+internal fun buildStructuredExplainDisabledNotification(onEnableAndRetry: () -> Unit): Notification {
+    val notification = Notification(
+        NOTIFICATION_GROUP_ID,
+        MpSqlVisualizerBundle.message("panel.explain"),
+        MpSqlVisualizerBundle.message("panel.explain.structured.disabled"),
+        NotificationType.INFORMATION,
+    )
+    for (action in structuredExplainDisabledActions(onEnableAndRetry)) {
+        notification.addAction(
+            NotificationAction.createSimpleExpiring(MpSqlVisualizerBundle.message(action.titleKey)) { action.run() },
+        )
+    }
+    return notification
+}
+
+internal fun SqlPreviewPanel.notifyStructuredExplainDisabled(proj: Project, onEnableAndRetry: () -> Unit) {
+    if (ApplicationManager.getApplication().isUnitTestMode) return
+    runCatching { buildStructuredExplainDisabledNotification(onEnableAndRetry).notify(proj) }
+}
+
+/**
+ * T-UI030：「启用结构化并重试」动作——写设置（与设置页 apply 同一字段、同一变更主题）后
+ * 立即重试一次 EXPLAIN。设置语义不变：默认仍关闭，只有用户显式点这个动作才打开。
+ */
+internal fun SqlPreviewPanel.enableStructuredExplainAndRetry(
+    proj: Project,
+    dialect: cn.song.mybatisplus.visualizer.sql.Dialect,
+    explainSql: String,
+    dialectGateRequest: cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Request,
+) {
+    if (Disposer.isDisposed(this) || proj.isDisposed) return
+    PluginSettings.getInstance().state.explainStructuredRender = true
+    ApplicationManager.getApplication().messageBus
+        .syncPublisher(PluginSettings.SETTINGS_CHANGE_TOPIC).settingsChanged()
+    submitExplainOrStructured(proj, dialect, explainSql, dialectGateRequest)
 }
 
 /**

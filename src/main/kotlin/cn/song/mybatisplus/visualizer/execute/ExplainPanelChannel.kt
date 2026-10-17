@@ -28,6 +28,13 @@ object ExplainPanelChannel {
     /** 结构化渲染认得的输出格式：仅 MySQL 家族表格行与 PG 家族单列 JSON 文本。 */
     private val STRUCTURED_FORMATS = setOf(ExplainOutputFormat.TABLE, ExplainOutputFormat.JSON)
 
+    /**
+     * T-UI030：该输出格式是否有结构化渲染面（TEXT/XML/未知一律无——不硬解析红线）。
+     * 供「开关关闭时是否值得提示启用」复用同一份格式白名单，避免第二处硬编码。
+     */
+    fun supportsStructuredFormat(format: ExplainOutputFormat?): Boolean =
+        format != null && format in STRUCTURED_FORMATS
+
     /** 通道判定结果（三类可区分——提示文案不同，合并会让用户拿到错的解释，ExplainGate 同款口径）。 */
     sealed interface Decision {
         /** 走结构化通道（自建执行链 + 面板渲染）。 */
