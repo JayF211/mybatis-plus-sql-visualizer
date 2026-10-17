@@ -143,7 +143,9 @@ tracing相对sql的中位P95为-5.16%、wall为-1.54%，逐轮P95增量却为+21
 
 合后真实反例已运行：preview检查点8bddfbf1仅提取原prepareDefaultConsole两闭包作为受控派发入口，未添加失效修复。主控读取原始XML核实5例/4失败/0错误/0跳过，活跃编辑器正例通过；四红分别为A.clear后旧回调复活nativeDoc、A.dispose后旧回调仍保留nativeDoc、同面板替换内容后旧回调释放新editor，以及clear后迟到console重新嵌入。失败均为实际副作用断言，不是环境异常；证据在preview树`build/prepare-boundary-evidence/red-original`。此处覆盖面板生产消费边界，不冒充DatabaseTools会话端到端。
 
-修复在独立preview树进行：独立consolePrepareGeneration使新请求/current替换/clear/dispose作废旧准备，在onConsole/onEditor及延后EDT副作用前校验；拒绝旧回调只返回，不释放外部拥有的editor/console。dev owner/receipt/cancel及独立ComparisonTargetSession保持不变。正在补同current重复prepare、B已接管、已排EDT任务后clear反例；修复后定向、摘保护反向与恢复尚待结果，不预填通过。
+修复已收编为18722bdd（测试缝与初始反例9f97013e）：独立consolePrepareGeneration使新请求/current每次赋值（含同对象）/clear/dispose作废旧准备，在onConsole/onEditor、方言及延后EDT副作用前校验；拒绝旧回调只返回，不释放外部拥有的editor/console。dev owner/receipt/cancel及独立ComparisonTargetSession保持不变。新增同current重复prepare、B已接管、已排EDT任务后clear反例后，精确摘代际比较而保留current/disposed，2例均真实变红；恢复后平台7类85/0/0/0、快桶2类38/0/0/0，主控读取red-original、red-token、green-restored、fast实际XML核对。无新增平台API，临时探针与沙盒恢复、工作树干净。
+
+新冻结`18722bdd28db31f11b1f98e945b4f35887a427d7`已交独立gate资源预检后完整执行第六轮五片、打包及三代离线兼容，不沿用旧生产树绿灯。主控在门禁期间仅写文档；第六轮结果尚待返回，资源预算仍未通过。
 
 ## 五、最终冻结与自动化门禁
 
