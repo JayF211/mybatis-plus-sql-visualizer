@@ -533,6 +533,8 @@ U22 分享出口本轮真机：预览「更多 → 分享」打开「分享 SQL�
 
 收口清理：`t-devui-en-hint`、`t-devui-storage-row`、`t-devui-schema-annotator`、`t-ui029-annotator-target` 四个已合分支及其工作树已移除（git 侧 deregister + 长路径 `\\?\` 删除，31 个工作树保留为历史在途项）；主仓与 demo 仓工作树均干净；未 push、未发布、未 dev→master。
 
+U25/U12/U13 本轮真机（重建后沙盒）：方法预览头部显示 `方言: MySQL（模块已学数据源）  XML select: annotation`，证明方言由模块数据源学习得出；「执行计划」绑定数据源后执行 `EXPLAIN SELECT * FROM mp_demo.user WHERE id = 91`，Database 控制台返回原生 MySQL 计划表格（列：id/select_type/table/partitions/type/possible_keys/key/key_len/ref/rows/filtered/Extra），同时弹出「结构化执行计划视图不可用，已回退原生控制台：当前无结果集含有可解释数据源（先在控制台里执行一次查询即可）」——结构化开关默认关闭时的回退文案与 B1 原生表格路径均复现。为打通该路径，把 kotlin_demo@localhost 数据源密码补齐为 demo 应用 `application.yml` 中的本地 MySQL 口令（root/root，仅本地测试库）。
+
 ## 依据与历史证据保全
 
 - 十九轮UI11组、Runner12组及R90/R91/R92/R94/O147/V178专册。
