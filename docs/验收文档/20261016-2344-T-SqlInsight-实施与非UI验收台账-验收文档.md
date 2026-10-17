@@ -145,7 +145,11 @@ tracing相对sql的中位P95为-5.16%、wall为-1.54%，逐轮P95增量却为+21
 
 修复已收编为18722bdd（测试缝与初始反例9f97013e）：独立consolePrepareGeneration使新请求/current每次赋值（含同对象）/clear/dispose作废旧准备，在onConsole/onEditor、方言及延后EDT副作用前校验；拒绝旧回调只返回，不释放外部拥有的editor/console。dev owner/receipt/cancel及独立ComparisonTargetSession保持不变。新增同current重复prepare、B已接管、已排EDT任务后clear反例后，精确摘代际比较而保留current/disposed，2例均真实变红；恢复后平台7类85/0/0/0、快桶2类38/0/0/0，主控读取red-original、red-token、green-restored、fast实际XML核对。无新增平台API，临时探针与沙盒恢复、工作树干净。
 
-新冻结`18722bdd28db31f11b1f98e945b4f35887a427d7`已交独立gate资源预检后完整执行第六轮五片、打包及三代离线兼容，不沿用旧生产树绿灯。主控在门禁期间仅写文档；第六轮结果尚待返回，资源预算仍未通过。
+第六轮冻结`18722bdd28db31f11b1f98e945b4f35887a427d7`实际完整测试exit0，用时15分48秒。主控核round6/test-audit.json：五片1851/1341/1629/1569/1691共8081例，external28、agent216，总815类8325/0/0/10，实际通过8315；770个计划分片类齐全，新增65类336方法全部fresh、无缺席/跳过/重复。生命周期9例全部通过，changed-tests-audit的8类119例也全部通过；菜单跨版本签名三个方法实际覆盖243/253/262。10项skip仍为Docker5、外部库1、Database classpath2、symlink1、ACP1，不扩称环境覆盖。
+
+第六轮日志SHA256 `58132017ca3f25e5032a8f4814cadbb6be9436aec396c356514abb27c1ada1e9`；test-audit SHA256 `47688e868ba7fc7a261ff1fe6346ba14c7136f2c5cfaa6ffaacb049916071b63`；changed-tests-audit SHA256 `f22e88dabeb25b3ab755bedbfec714b37f1469361dd19cb328afdc8cbb0dc4f2`。冻结后主控仅改文档。打包和同ZIP三代离线兼容继续执行，尚未预填通过；资源预算仍未通过。
+
+生命周期红绿证据归档`.local/sql-insight-prepare-boundary-evidence.tar.gz` SHA256 `6b185ad59758e185ce785a56d29b0e1e34f5e132ddb88c1f59a059ba46a07199`；长窗竞争证据归档`.local/sql-insight-paired5000-contention.tar.gz` SHA256 `c2831c3be27d8c241c4515bc658ff6fe28ba13057e00215b31ce1b494d6e14bb`。
 
 ## 五、最终冻结与自动化门禁
 
