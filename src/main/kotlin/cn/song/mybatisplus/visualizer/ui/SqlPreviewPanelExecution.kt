@@ -901,6 +901,9 @@ internal fun SqlPreviewPanel.explainSql() {
  * 本函数：直送链只此一份，绝不新增第二套执行链。
  */
 
+    /** UI023：仅观察最终通知对象，不替代校验、渲染或执行分支。 */
+    internal var schemaNotificationForTest: ((Notification) -> Unit)? = null
+
     /**
      * R46：查询链的未识别对象轻通知（非模态、不阻断执行——与 DML 确认弹窗同源同文案）。
      * 无发现或单测模式不弹（弹窗/通知克制红线；真机才提示）。
@@ -910,15 +913,15 @@ internal fun SqlPreviewPanel.explainSql() {
         issues: List<cn.song.mybatisplus.visualizer.sql.schema.SchemaValidator.Issue>,
     ) {
         val body = cn.song.mybatisplus.visualizer.execute.SchemaValidationGate.renderNotification(issues) ?: return
+        val notification = Notification(
+            NOTIFICATION_GROUP_ID,
+            MpSqlVisualizerBundle.message("schema.check.notification.title"),
+            body,
+            NotificationType.WARNING,
+        )
+        schemaNotificationForTest?.let { it(notification); return }
         if (ApplicationManager.getApplication().isUnitTestMode) return
-        runCatching {
-            Notification(
-                NOTIFICATION_GROUP_ID,
-                MpSqlVisualizerBundle.message("schema.check.notification.title"),
-                body,
-                NotificationType.WARNING,
-            ).notify(proj)
-        }
+        runCatching { notification.notify(proj) }
     }
 
 internal fun SqlPreviewPanel.submitExplainDirect(

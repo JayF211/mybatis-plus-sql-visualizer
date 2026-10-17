@@ -303,6 +303,23 @@ object DataSourceSelector {
         }
     }
 
+    /** UI023：仅替代 DBN 状态读取；测试仍走 preparedEditor 身份检查和真实缓存读取。 */
+    internal var schemaTargetReaderForTest: ((Any) -> SchemaValidationGate.Target?)? = null
+
+    internal fun schemaValidationTarget(editor: com.intellij.openapi.editor.Editor?): SchemaValidationGate.Target? {
+        // 执行快路径用 preparedConsole，不能拿 sharedConsole 或另一个预览的编辑器作证据。
+        if (editor == null || editor !== preparedEditor) return null
+        val console = preparedConsole ?: return null
+        schemaTargetReaderForTest?.let { return it(console) }
+        if (!ExecuteSqlSupport.isAvailable()) return null
+        return runCatching {
+            if (console.javaClass.getMethod("isValid").invoke(console) != true) return@runCatching null
+            ReadAction.compute<SchemaValidationGate.Target?, RuntimeException> {
+                ExecConsoleContext.schemaValidationTarget(console)
+            }
+        }.getOrNull()
+    }
+
     /**
      * O-95 T-PreviewEdtGuard S3：当前预览会话绑定数据源**名**（预览面板绑定指示行数据源）。
      * 选择链与 [boundConsoleDataSource] 完全同源（共享/已备控制台二者取一 + isValid 先探 +

@@ -53,6 +53,39 @@ object SchemaValidationGate {
         return Outcome.Checked(SchemaValidator.validate(sql, snapshot))
     }
 
+    /** UI023：执行控制台已证实的目标；不从项目首个数据源或历史记忆猜测。 */
+    internal data class Target(val dataSource: Any, val database: String)
+
+    /**
+     * UI023：主预览执行入口的限定目标校验。目标缺席、目标未预热或 SQL 作用域不明确时跳过。
+     * 只读该对象/库的缓存；旧两参入口的既有消费方保持原行为，不借本次接线扩大改造范围。
+     */
+    internal fun check(project: Project?, sql: String, target: Target?): Outcome {
+        if (project == null || target == null || target.database.isBlank()) return Outcome.Skipped
+        val statements = runCatching { SqlAstParser.parseStatements(sql) }.getOrNull()
+            ?: return Outcome.Skipped
+        // 单条、裸表名才可借控制台当前库解释；USE/多语句/显式库.schema 均不猜。
+        val statement = statements.singleOrNull() ?: return Outcome.Skipped
+        val table = when (statement) {
+            is net.sf.jsqlparser.statement.update.Update -> {
+                if (statement.fromItem != null || !statement.startJoins.isNullOrEmpty()) return Outcome.Skipped
+                statement.table
+            }
+            is net.sf.jsqlparser.statement.delete.Delete -> statement.table
+            is net.sf.jsqlparser.statement.select.PlainSelect ->
+                statement.fromItem as? net.sf.jsqlparser.schema.Table
+            else -> null
+        } ?: return Outcome.Skipped
+        if (table.fullyQualifiedName != table.name) return Outcome.Skipped
+        val tables = SchemaValidator.tableNames(sql)
+        if (tables.size != 1) return Outcome.Skipped
+        val cached = runCatching {
+            DatabaseSchemaResolver.columnNamesCachedForTarget(target.dataSource, target.database, tables)
+        }.getOrNull().orEmpty()
+        if (cached.isEmpty()) return Outcome.Skipped
+        return Outcome.Checked(SchemaValidator.validate(sql, SchemaSnapshot.of(cached)))
+    }
+
     /** 发现清单 → 确认弹窗/通知的展示行（带 `• ` 前缀，供 [ExecuteConfirmMessages] 直接拼接）。 */
     fun renderLines(issues: List<SchemaValidator.Issue>): List<String> = issues.map { issue ->
         when (issue) {
