@@ -94,6 +94,7 @@ class SqlPreviewPanelDisplayEditorTest: BasePlatformTestCase() {
                 assertSame("必须复用原动作而非替换行为：$id", manager.getAction(id), action)
             }
         } finally {
+            panel.clear()
             panel.dispose()
         }
     }
@@ -126,6 +127,7 @@ class SqlPreviewPanelDisplayEditorTest: BasePlatformTestCase() {
                 assertFalse("整条 SELECT 不能当表名：${manager.getId(action)}", event.presentation.isEnabled)
             }
         } finally {
+            panel.clear()
             panel.dispose()
         }
     }
@@ -143,6 +145,7 @@ class SqlPreviewPanelDisplayEditorTest: BasePlatformTestCase() {
                 panel.clear()
             }
         } finally {
+            panel.clear()
             panel.dispose()
         }
     }
