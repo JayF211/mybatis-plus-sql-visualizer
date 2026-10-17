@@ -283,6 +283,14 @@ object DataSourceSelector {
     fun isPrepared(): Boolean = preparedConsole != null
 
     /**
+     * T-UI030：是否有准备链正在飞。结构化 EXPLAIN 在无已绑数据源时要弹既有选择器，
+     * 但已有准备链在飞时**只能等待**——预览准备对并发是 PASS_THROUGH，再走一次
+     * chooseAndPrepare 会建第二条会话/控制台（T-FirstExecResultInvisible F1 已实证的坑）。
+     */
+    @JvmStatic
+    fun isPrepareInFlight(): Boolean = prepareGate.prepareInFlight.get()
+
+    /**
      * R33 EXPLAIN 结构化通道：当前预览会话已绑控制台的 DBN 数据源（共享/已备控制台二者取一，
      * 循 T-ConsoleDbContext 既有选择形态——预览会话用哪条数据源，EXPLAIN 就在同一条上跑）。
      *
