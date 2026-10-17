@@ -29,6 +29,12 @@ public class PlatformSignatureChecker {
         File dbnLib = new File(distroRoot, "plugins/DatabaseTools/lib");
         collectJars(dbnLib, urls);
         collectJars(new File(dbnLib, "modules"), urls);
+        // 原生控制台client/view超接口引用独立grid模块，必须与Database Tools一起加载。
+        for (String plugin : new String[]{"grid-core-impl", "grid-impl"}) {
+            File gridLib = new File(distroRoot, "plugins/" + plugin + "/lib");
+            collectJars(gridLib, urls);
+            collectJars(new File(gridLib, "modules"), urls);
+        }
         File miscLib = new File(distroRoot, "plugins/libraries-misc-plugin/lib");
         collectJars(miscLib, urls);
         collectJars(new File(miscLib, "modules"), urls);
