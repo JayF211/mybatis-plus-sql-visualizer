@@ -482,10 +482,13 @@ class PaginationSimTest : BasePlatformTestCase() {
         val changed = pageStatements(panel)
         assertTrue(changed[0], changed[0].contains("status = 2"))
         assertTrue(changed[1], changed[1].contains("status = 2"))
-        PluginSettings.getInstance().state.formatSql = true
-        panel.renderSqlForTest()
+        panel.setDisplayMode(SqlPreviewPanel.PreviewDisplayMode.FORMAT)
         com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
-        assertFalse("Formatting/refresh must not restore placeholders", panel.lastRenderedSqlForTest()!!.contains('?'))
+        assertFalse("Formatting must not restore placeholders", panel.lastRenderedSqlForTest()!!.contains('?'))
+        panel.refreshView()
+        com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+        assertFalse("Refresh must not restore placeholders", panel.lastRenderedSqlForTest()!!.contains('?'))
+        assertEquals(2, Regex("status\\s*=\\s*2").findAll(panel.lastRenderedSqlForTest()!!).count())
     }
 
     fun testUI022RepeatedStatusKeepsOccurrenceOrder() = annotationPagePanel(
