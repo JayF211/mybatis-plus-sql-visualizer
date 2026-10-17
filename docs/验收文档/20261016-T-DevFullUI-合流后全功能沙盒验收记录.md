@@ -374,6 +374,18 @@ U27手写LIMIT正对照：XML219 selectUserPageLimitXml真实预览填status1/of
 
 U30日志还原补验：双行Preparing/Parameters输入Timestamp含.123及O'Reilly，实际还原TIMESTAMP字面量毫秒不丢、字符串转义O''Reilly、SQL字符串'?'和块注释/* keep ? */均保留（frame-bbd74af7），未执行。先前DDL带明确Parameters的还原会代入7属于显式参数替换，不是要测的“字面量恢复”门禁，未误报缺陷。另造明确synthetic历史两条正反：DDL DEFAULT7/VARCHAR80/'keep ? literal'完整预览无参数输入且原值保留（frame-b2d3a0f8）；同值SELECT完整预览恢复param1=7、param2=keep ? literal（frame-7ec44910），门禁真实触达。合成文件`sql-history-2099-01-02-ui-ddl-literals.sql`仅本地展示，没有执行CREATE或SELECT。
 
+U30剪贴板边界增量：在日志输入编辑器内造双行id314日志，Ctrl+A/C复制后删除输入，再点还原只提示“请先粘贴MyBatis日志”，未自动读剪贴板（frame-2fa2b34a）；只有点专用剪贴板按钮才读回两行并还原id314（frame-8b61f733）。复制三个空格再清输入，点专用按钮提示“剪贴板中没有文本”，未读回旧日志（frame-8a658d66）。Ctrl+A只选输入区，未改左侧XML；旧输出保留但未执行，真正null剪贴板尚未造，空白分支已触达。
+
+UI022独立23330aaf/d92a2657已合dev11e96331/9c0887ff。真实PSI链先红8项6失败，修后70绿，撤三个修复入口再次8项6红，恢复70/0/0/0（09:36:44～09:37:18Z，主控核XML）；手写LIMIT两正对照保持绿。运行262包未更新，GUI原样本复验仍待换包。UI023已完成隔离树代码，第二槽接续定向正反验证在途，未预填绿。
+
+UI023独立25925ae2/2dc1f681/5ed9148d/5b22953a已合dev afea7f3d～7e065275。十类147/0/0/0（10:04:59～10:05:32Z，主控核XML）；摘主入口20项4红，跨源/库缓存4红，面板所有权/编辑器/限定表/当前库4红，复杂SQL3红，全部恢复。新接线仅对本面板匹配且库上下文可证明的MySQL/MariaDB精确缓存启用，不以项目首缓存猜目标；其他场景保守跳过。运行旧262包不能验证新接线，原样本仍待换包。
+
+U28选择集CSV导出：历史两条合成DDL/SELECT仅选SELECT导出，实际`build/ui262-history-selection.csv`为一行表头＋一条SELECT，未含未选DDL，GUI通知“已导出1条”（frame-4ec00fc2）。真实格式菜单是CSV/TSV/TXT/SQL（frame-95e80143），不是JSON/Markdown。Windows原生保存对话框拒绝正斜杠全路径，改反斜杠后实际落盘，不误报导出功能失败；另三格式仍待验。
+
+262首批正常GUI退出，runIde退出0。主dev已合UI022/023及session续修，下一批合流定向25类已后台启动，未用各独立读数相加冒充整体通过。
+
+下一批合流定向已完成：生产7e065275，25类463/0/0/0，fresh XML 2026-10-17T10:36:37～10:38:15Z逐文件核对。覆盖分页/参数类型/显示、Schema实际执行入口与目标作用域、动态批次/注入/未知参数/方言错误、历史到底/导航/搜索、预设、回滚与提交回执。默认243沙盒已后台启动，准备UI016/022/023真实原路径复验；不是最终testShards全量。
+
 ## 第九批并行准备产物
 
 主控在UI016/UI020后台定向期间完成以下准备，不占第三路Gradle，不把准备结果计为UI验收通过：
