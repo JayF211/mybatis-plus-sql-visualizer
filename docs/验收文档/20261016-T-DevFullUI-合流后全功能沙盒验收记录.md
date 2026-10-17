@@ -514,6 +514,10 @@ U28 可移植 CSV（本轮真机落盘）：同一预览「更多 → 导出可�
 
 UI029 真机闭环（2026-10-18，新包）：重建 243 沙盒后，开启捕捉并用 `/user/fixture/unknown-col` 产生条目 `#2 [2026-10-18 00:56:56] 11ms MySQL SQLSyntaxErrorException: Unknown column 'usernme' in 'field list' [UserController.java:80]`；双击打开「SQL 预览」，编辑器第 2 行 `usernme` 出现红色波浪下划线（放大取证 `build/ui243-shots/ui029-redwave-zoom.png`），与顶部执行报错横幅并存。UI025 在“日志条目预览 + 无附着控制台”真实场景下由 UI029 的 last-used 目标回落生效，红色波浪视觉闭环；悬停建议文案本轮未截到（自动化用例断言在场）。demo 临时夹具（mapper 两个方法与 controller 两个端点）已在验证后撤销。
 
+243/253/262 兼容门禁（2026-10-18，UI029 合流后）：`verifyGate` BUILD SUCCESSFUL（2m5s），三个目标均 **Compatible**——IU-243.28141.41（5 scheduled-for-removal / 36 deprecated / 96 experimental）、IU-253.33514.17（6/47/94）、IU-262.10968.63（8/118/94），各 1 internal API 与 1 override-only 违规，均为既有已知项；报告在 `build/reports/pluginVerifierGate/<build>/`。
+
+U40 更新与诊断页（本轮真机）：About 页显示当前版本 2026.10.16、内部构建号 `MPV-Build: 1792256102736 (2026-10-18 00:55:02)`（新包）、插件缓存 0 B（0 项）与「清除缓存」、「抢先体验：启用 Gitee 更新通道」未勾选、报告问题/需求池入口、设置导入/导出。点击「检查更新」后按钮右侧出现「暂无可用更新」，更新检查当前态可达；更新可用的另一态与检查失败态未造出。
+
 ## 依据与历史证据保全
 
 - 十九轮UI11组、Runner12组及R90/R91/R92/R94/O147/V178专册。
