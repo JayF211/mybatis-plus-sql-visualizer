@@ -85,6 +85,24 @@ class SchemaValidationTargetTest : BasePlatformTestCase() {
         }
     }
 
+    fun testUpdateFromCannotBorrowSingleTableScope() {
+        warm()
+        assertSame(SchemaValidationGate.Outcome.Skipped,
+            SchemaValidationGate.check(project, "UPDATE user SET usernme='x' FROM other_table WHERE id=71", target))
+    }
+
+    fun testCteShadowingCannotBorrowPhysicalTable() {
+        warm()
+        assertSame(SchemaValidationGate.Outcome.Skipped,
+            SchemaValidationGate.check(project, "WITH user AS (SELECT 1 AS usernme) SELECT usernme FROM user", target))
+    }
+
+    fun testDeleteUsingCannotBorrowSingleTableScope() {
+        warm()
+        assertSame(SchemaValidationGate.Outcome.Skipped,
+            SchemaValidationGate.check(project, "DELETE FROM user USING other_table WHERE usernme=71", target))
+    }
+
     fun testOnlyProvenMysqlOrMariaDbCurrentDatabaseIsAccepted() {
         assertEquals("mp_demo", ExecConsoleContext.schemaValidationDatabase("jdbc:mysql://localhost/mp_demo", "mp_demo"))
         assertEquals("mp_demo", ExecConsoleContext.schemaValidationDatabase("jdbc:mariadb://localhost/mp_demo", "mp_demo"))
