@@ -94,6 +94,35 @@ class PlatformSignatureCrossVersionTest {
     class PopupMissing
 
     @Test
+    fun nativeConsoleLifetimeSignatureIsExact() {
+        fun check(type: Class<*>) = PlatformSignatureChecker.checkNativeConsoleViewLifetimeSignatures(
+            type, LifetimeClient::class.java, LifetimeView::class.java)
+        assertEquals(0, check(LifetimeService::class.java))
+        assertEquals(1, check(LifetimeWrongReturn::class.java))
+        assertEquals(1, check(LifetimeStaticLookup::class.java))
+        assertEquals(2, check(LifetimeMissing::class.java))
+        assertEquals(1, PlatformSignatureChecker.checkNativeConsoleViewLifetimeApis(object : ClassLoader(null) {}, true))
+    }
+
+    class LifetimeClient
+    class LifetimeView
+    class LifetimeService {
+        companion object { @JvmStatic fun getInstance(): LifetimeService = LifetimeService() }
+        fun getClientViewIfAny(client: LifetimeClient): LifetimeView? = null
+    }
+    class LifetimeWrongReturn {
+        companion object { @JvmStatic fun getInstance(): LifetimeWrongReturn = LifetimeWrongReturn() }
+        fun getClientViewIfAny(client: LifetimeClient): Any? = null
+    }
+    class LifetimeStaticLookup {
+        companion object {
+            @JvmStatic fun getInstance(): LifetimeStaticLookup = LifetimeStaticLookup()
+            @JvmStatic fun getClientViewIfAny(client: LifetimeClient): LifetimeView? = null
+        }
+    }
+    class LifetimeMissing
+
+    @Test
     fun dynamicInstallApisResolveOnAllLocalTargetPlatforms() {
         val distros = SignatureDistroDiscovery.ideaDistros
         assumeTrue("本机未发现任何 IDEA 发行版，跨版本签名核验无从执行", distros.isNotEmpty())
@@ -125,6 +154,8 @@ class PlatformSignatureCrossVersionTest {
             for (signature in listOf(
                 "EditorEx.setContextMenuGroupId[class java.lang.String]",
                 "EditorEx.getContextMenuGroupId[]",
+                "DatabaseSessionViewService.getInstance[]",
+                "DatabaseSessionViewService.getClientViewIfAny[DatabaseSessionClientWithFile]",
             )) {
                 assertTrue("IU-$family 必须实际执行UI015签名登记：$signature\n${result.output}",
                     result.output.lineSequence().any { it.startsWith("OK   $signature -> ") })

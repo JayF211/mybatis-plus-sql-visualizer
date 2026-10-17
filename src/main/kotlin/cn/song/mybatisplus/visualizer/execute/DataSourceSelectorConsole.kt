@@ -173,6 +173,8 @@ internal fun DataSourceSelector.prepareAfterEditorResolved(
 
         // 4.1 触发内容构建（独立 try-catch）
         if (logView != null) {
+            // 单测/惰性平台在attach时尚未建view；这里getView后补登记同一资源。
+            NativeConsoleViewLifetime.remember(project, console)
             runCatching {
                 logView.javaClass.getMethod("ensureContentInitialized").invoke(logView)
             }.onFailure { e ->
@@ -1141,6 +1143,8 @@ internal fun DataSourceSelector.prepareInConsole(
             return
         }
 
+        // UI016：在回调/后续准备可能失败之前登记已创建的原生view；不依赖prepared/shared缓存。
+        NativeConsoleViewLifetime.remember(project, console)
         val consoleClass = Class.forName(CONSOLE_CLASS)
 
         // 2. 执行用编辑器：按 console 文档反查（先于内嵌——编辑器随 console 创建即初始化）。

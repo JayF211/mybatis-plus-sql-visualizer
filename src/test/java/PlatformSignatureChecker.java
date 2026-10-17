@@ -126,6 +126,7 @@ public class PlatformSignatureChecker {
         missing += checkPreviewSourceContextApis(loader, dbnLib.isDirectory());
         missing += checkSqlLogTabsApis(loader);
         missing += checkPreviewEditorPopupApis(loader);
+        missing += checkNativeConsoleViewLifetimeApis(loader, dbnLib.isDirectory());
         missing += checkAttachTargetApis(loader);
         missing += checkRunnerFinalStepApi(loader);
         missing += checkMcpToolsetCapability(loader);
@@ -135,6 +136,47 @@ public class PlatformSignatureChecker {
             System.exit(1);
         }
         System.out.println("RESULT OK");
+    }
+
+    /** UI016：精确核验生产查既有view入口；不初始化或创建数据库会话。 */
+    public static int checkNativeConsoleViewLifetimeApis(ClassLoader loader, boolean databaseBundled) {
+        if (!databaseBundled) {
+            System.out.println("SKIP native console lifetime: Database Tools not bundled");
+            return 0;
+        }
+        try {
+            Class<?> service = Class.forName("com.intellij.database.console.session.DatabaseSessionViewService", false, loader);
+            Class<?> client = Class.forName("com.intellij.database.console.client.DatabaseSessionClientWithFile", false, loader);
+            Class<?> view = Class.forName("com.intellij.database.run.session.LogView", false, loader);
+            Class<?> disposable = Class.forName("com.intellij.openapi.Disposable", false, loader);
+            if (!disposable.isAssignableFrom(view)) {
+                System.out.println("MISS native console LogView must implement Disposable");
+                return 1;
+            }
+            return checkNativeConsoleViewLifetimeSignatures(service, client, view);
+        } catch (Throwable t) {
+            System.out.println("MISS native console lifetime: " + t);
+            return 1;
+        }
+    }
+
+    public static int checkNativeConsoleViewLifetimeSignatures(Class<?> service, Class<?> client, Class<?> view) {
+        int missing = 0;
+        try {
+            Method method = service.getMethod("getInstance");
+            if (method.getReturnType() != service || !java.lang.reflect.Modifier.isStatic(method.getModifiers())) {
+                System.out.println("MISS DatabaseSessionViewService.getInstance[] shape");
+                missing++;
+            } else missing += check(method, "DatabaseSessionViewService.getInstance[]");
+        } catch (NoSuchMethodException e) { missing++; }
+        try {
+            Method method = service.getMethod("getClientViewIfAny", client);
+            if (method.getReturnType() != view || java.lang.reflect.Modifier.isStatic(method.getModifiers())) {
+                System.out.println("MISS DatabaseSessionViewService.getClientViewIfAny shape");
+                missing++;
+            } else missing += check(method, "DatabaseSessionViewService.getClientViewIfAny[DatabaseSessionClientWithFile]");
+        } catch (NoSuchMethodException e) { missing++; }
+        return missing;
     }
 
     /** UI014：数据源选择完成后再弹确认，精确登记生产调用签名。 */
