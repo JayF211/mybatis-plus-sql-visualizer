@@ -368,6 +368,12 @@ UI023/U26：已内省mp_demo并通过MCP返回13列，UI Resolver日志16:56:31�
 
 U40首次引导增量：262新沙盒打开UserMapper后“检测到可预览的SQL代码”通知，点“立即试用”出现本文件候选列表（frame-4f25dfaf），选第一项成功进入预览（frame-528a06f8）；尚未重启验证一次性持久化。
 
+U27手写LIMIT正对照：XML219 selectUserPageLimitXml真实预览填status1/offset20/pageSize10，得到status=1及唯一LIMIT20,10（frame-3ae26ccf）；取消status条件后其谓词移除而LIMIT20,10保持（frame-57661617）。无COUNT符合当前applyPaginationShared手写LIMIT直接返回的保守设计，旧demo注释“并列COUNT”已过时，不据注释登记产品缺陷；本项不抵消UI022自动分页漏参数问题。
+
+日期参数UI增量：XML234 selectByTimeRangeXml三类型Date/Timestamp/sql.Date输入2026-01-01 00:00:00、2026-02-01 12:34:56.123、2026-01-15，格式化后三个SQL字面量逐字保留含毫秒精度（frame-696e9b39），未执行；仅覆盖XML参数面板日期回填，不代证日志还原DDL/日期全组。
+
+U30日志还原补验：双行Preparing/Parameters输入Timestamp含.123及O'Reilly，实际还原TIMESTAMP字面量毫秒不丢、字符串转义O''Reilly、SQL字符串'?'和块注释/* keep ? */均保留（frame-bbd74af7），未执行。先前DDL带明确Parameters的还原会代入7属于显式参数替换，不是要测的“字面量恢复”门禁，未误报缺陷。另造明确synthetic历史两条正反：DDL DEFAULT7/VARCHAR80/'keep ? literal'完整预览无参数输入且原值保留（frame-b2d3a0f8）；同值SELECT完整预览恢复param1=7、param2=keep ? literal（frame-7ec44910），门禁真实触达。合成文件`sql-history-2099-01-02-ui-ddl-literals.sql`仅本地展示，没有执行CREATE或SELECT。
+
 ## 第九批并行准备产物
 
 主控在UI016/UI020后台定向期间完成以下准备，不占第三路Gradle，不把准备结果计为UI验收通过：
