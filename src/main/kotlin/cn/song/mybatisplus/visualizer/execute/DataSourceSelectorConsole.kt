@@ -28,7 +28,7 @@ internal fun DataSourceSelector.prepareAfterEditorResolved(
     editor: com.intellij.openapi.editor.Editor,
     onErrorRich: ((ExecutionErrorInfo) -> Unit)? = null,
     wholeScriptExec: Boolean = false,
-    ownsPrepareGate: Boolean = false,
+    prepareOwner: QueuedExecuteIntent? = null,
     dialectGateRequest: ExecutionDialectGate.Request? = null,
     onDialectGate: ((ExecutionDialectGate.Verdict) -> Unit)? = null,
     onSubmission: ((ExecutionSubmission) -> Unit)? = null,
@@ -82,7 +82,7 @@ internal fun DataSourceSelector.prepareAfterEditorResolved(
                 .getMethod("getDefaultExecOption").invoke(null)
         }.getOrNull() ?: execOptionClass.getDeclaredConstructor().newInstance()
         if (scriptModel == null) {
-            failPrepareRequests(prepareGate, ownsPrepareGate, onSubmission, onError, queuedIntent,
+            failPrepareRequests(prepareGate, prepareOwner, onSubmission, onError, queuedIntent,
                 MpSqlVisualizerBundle.message("execute.failed", "scriptModel unavailable"))
             return
         }
@@ -158,8 +158,8 @@ internal fun DataSourceSelector.prepareAfterEditorResolved(
         // executePrepared 口径执行（见下方消费块）。仅门持有链可消费——PASS_THROUGH
         // 预览链消费会把别人的执行意图打在自己的 SQL 上。
         if (!isPrepareActive()) return
-        if (ownsPrepareGate) {
-            queuedIntent = prepareGate.consumePendingExecute()
+        if (prepareOwner != null) {
+            queuedIntent = prepareGate.consumePendingExecute(prepareOwner)
             if (queuedIntent != null) {
                 LOG.info("[M36][T-FirstExec F1] queued execute intent consumed after prepare (executeAfterPrepare=$executeAfterPrepare)")
             }
@@ -206,7 +206,7 @@ internal fun DataSourceSelector.prepareAfterEditorResolved(
         }
         LOG.info("[M36] resultComponent=$resultComponent, editorComponent=$editorComponentRaw")
         if (editorComponentRaw == null) {
-            failPrepareRequests(prepareGate, ownsPrepareGate, onSubmission, onError, queuedIntent,
+            failPrepareRequests(prepareGate, prepareOwner, onSubmission, onError, queuedIntent,
                 consoleEditorUnavailableMessage("editorComponent"))
             return
         }
@@ -445,7 +445,7 @@ internal fun DataSourceSelector.prepareAfterEditorResolved(
         // onError/onErrorRich/wholeScriptExec 用意图自身回调（面板 showLoading 的解除与错误
         // 投递归意图，不借预览链的静默 onError——否则排队执行失败即静默卡死）。
         if (executeNow) {
-            if (ownsPrepareGate) prepareGate.beginSubmission()
+            if (prepareOwner != null && !prepareGate.beginSubmission(prepareOwner)) return
             queuedIntent?.let { qi -> qi.onEditor?.invoke(editor) }
             // 2026-09-23 真机走查补：此处原**漏传** onErrorRich（默认 null）⇒ 这条路径上的错误
             // 投递收口只能回退旧通道，定位按钮永不出现。本函数签名里一直有该参数，只是没往下传
@@ -481,7 +481,7 @@ internal fun DataSourceSelector.prepareAfterEditorResolved(
         onSubmission?.invoke(ExecutionSubmission.BLOCKED)
         onError?.invoke(failureMsg)
         // 消费前异常也必须结算仍在门里的排队请求，不能只复位后丢弃。
-        if (ownsPrepareGate) prepareGate.abort(ExecutionSubmission.BLOCKED, failureMsg)
+        if (prepareOwner != null) prepareGate.abort(prepareOwner, ExecutionSubmission.BLOCKED, failureMsg)
         // 消费后的请求已离开门，仍须单独结算。
         val qi = queuedIntent
         if (qi != null && !queuedExecuted) {
@@ -492,7 +492,7 @@ internal fun DataSourceSelector.prepareAfterEditorResolved(
 
     // T-FirstExecResultInvisible F1：单飞位复位（成功/失败同尽；排队意图的消费与回落都在
     // 上方完成）——仅门持有链；PASS_THROUGH 预览链不得触碰别人的门。
-    if (ownsPrepareGate) prepareGate.finishPrepare()
+    if (prepareOwner != null) prepareGate.finishPrepare(prepareOwner)
 }
 
 /**
@@ -1097,7 +1097,7 @@ internal fun DataSourceSelector.prepareInConsole(
     onError: ((String) -> Unit)?,
     onErrorRich: ((ExecutionErrorInfo) -> Unit)? = null,
     wholeScriptExec: Boolean = false,
-    ownsPrepareGate: Boolean = false,
+    prepareOwner: QueuedExecuteIntent? = null,
     dialectGateRequest: ExecutionDialectGate.Request? = null,
     onDialectGate: ((ExecutionDialectGate.Verdict) -> Unit)? = null,
     onSubmission: ((ExecutionSubmission) -> Unit)? = null,
@@ -1137,7 +1137,7 @@ internal fun DataSourceSelector.prepareInConsole(
         LOG.info("[M36] attachConsole -> $console")
         if (console == null) {
             onSubmission?.invoke(ExecutionSubmission.BLOCKED)
-            abortPrepareGate(ownsPrepareGate, null, LOG)
+            abortPrepareGate(prepareOwner, null, LOG)
             return
         }
 
@@ -1182,7 +1182,7 @@ internal fun DataSourceSelector.prepareInConsole(
                 }, com.intellij.openapi.application.ModalityState.any())
                 // T-FirstExecResultInvisible F1：链就此终结（未到消费点）——门持有链复位 +
                 // 排队执行意图回落错误回调（原子位操作任意线程可调）
-                abortPrepareGate(ownsPrepareGate, consoleEditorUnavailableMessage("sync"), LOG)
+                abortPrepareGate(prepareOwner, consoleEditorUnavailableMessage("sync"), LOG)
                 return
             }
             val ed = editor
@@ -1190,7 +1190,7 @@ internal fun DataSourceSelector.prepareInConsole(
             onEditor?.invoke(ed)
             prepareAfterEditorResolved(
                 project, vf, executeAfterPrepare, dataSourceName, onConsole, onError, console, document, ed,
-                onErrorRich, wholeScriptExec, ownsPrepareGate, dialectGateRequest, onDialectGate, onSubmission,
+                onErrorRich, wholeScriptExec, prepareOwner, dialectGateRequest, onDialectGate, onSubmission,
                 isPrepareActive,
             )
         } else {
@@ -1214,7 +1214,7 @@ internal fun DataSourceSelector.prepareInConsole(
                         runCatching {
                             prepareAfterEditorResolved(
                                 project, vf, executeAfterPrepare, dataSourceName, onConsole, onError, console,
-                                document, resolved, onErrorRich, wholeScriptExec, ownsPrepareGate,
+                                document, resolved, onErrorRich, wholeScriptExec, prepareOwner,
                                 dialectGateRequest, onDialectGate, onSubmission, isPrepareActive,
                             )
                         }.onFailure { e ->
@@ -1223,7 +1223,7 @@ internal fun DataSourceSelector.prepareInConsole(
                             onError?.invoke(cause.message ?: cause.toString())
                             // T-FirstExecResultInvisible F1：准备链在此终结（未到消费点）——
                             // 门持有链复位 + 排队执行意图回落错误回调
-                            abortPrepareGate(ownsPrepareGate, cause.message ?: cause.toString(), LOG)
+                            abortPrepareGate(prepareOwner, cause.message ?: cause.toString(), LOG)
                         }
                     } else {
                         // T-TS-09：原为「无 else」——EDT 调用方（测试/面板准备链的常态）轮询 400ms
@@ -1233,7 +1233,7 @@ internal fun DataSourceSelector.prepareInConsole(
                         LOG.warn("[M36] console editor unavailable after 400ms wait (async path), abort prepare")
                         onError?.invoke(consoleEditorUnavailableMessage("async"))
                         // T-FirstExecResultInvisible F1：同上——链终结复位 + 意图回落
-                        abortPrepareGate(ownsPrepareGate, consoleEditorUnavailableMessage("async"), LOG)
+                        abortPrepareGate(prepareOwner, consoleEditorUnavailableMessage("async"), LOG)
                     }
                 }, com.intellij.openapi.application.ModalityState.nonModal())
             }
@@ -1258,7 +1258,7 @@ internal fun DataSourceSelector.prepareInConsole(
         onError?.invoke(failureMsg)
         // T-FirstExecResultInvisible F1：准备链在此终结（未到消费点）——门持有链复位 +
         // 排队执行意图回落错误回调
-        abortPrepareGate(ownsPrepareGate, failureMsg, LOG)
+        abortPrepareGate(prepareOwner, failureMsg, LOG)
     }
 }
 

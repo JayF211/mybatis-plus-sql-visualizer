@@ -57,6 +57,7 @@ object SqlExecutor {
             onError = if (onSubmission == null) onError else { message ->
                 receipt(ExecutionSubmission.BLOCKED)
                 onError?.invoke(message)
+                Unit
             },
             // 富错误通道仍按既有优先级投递，未提供时不可用空 lambda 吞掉旧通道。
             onErrorRich = if (onSubmission == null) onErrorRich else onErrorRich?.let { sink -> { info: ExecutionErrorInfo ->

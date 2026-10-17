@@ -857,11 +857,11 @@ object DataSourceSelector {
      *
      * @param dataSourceName 所选数据源名（M36.5.5 共享缓存记忆与复用判定用；可 null）
      */
-    internal fun abortPrepareGate(ownsGate: Boolean, failureMessage: String?, LOG: com.intellij.openapi.diagnostic.Logger) {
-        if (!ownsGate) return
-        LOG.warn("[M36][T-FirstExec F1] prepare chain aborted - settle current and queued requests")
-        prepareGate.abort(ExecutionSubmission.BLOCKED,
-            failureMessage ?: MpSqlVisualizerBundle.message("execute.tempFile.failed", "prepare aborted"))
+    internal fun abortPrepareGate(prepareOwner: QueuedExecuteIntent?, failureMessage: String?, LOG: com.intellij.openapi.diagnostic.Logger) {
+        if (prepareGate.abort(prepareOwner, ExecutionSubmission.BLOCKED,
+                failureMessage ?: MpSqlVisualizerBundle.message("execute.tempFile.failed", "prepare aborted"))) {
+            LOG.warn("[M36][T-FirstExec F1] prepare chain aborted - settle current and queued requests")
+        }
     }
 
     /**

@@ -32,7 +32,14 @@ internal class PrepareSingleFlightGate {
 
     /** 提交确认已接管回执，不再由准备超时伪报取消。 */
     @Synchronized
-    fun beginSubmission() { submissionStarted = true }
+    fun beginSubmission(expectedOwner: QueuedExecuteIntent?): Boolean {
+        if (!matchesOwner(expectedOwner)) return false
+        submissionStarted = true
+        return true
+    }
+
+    private fun matchesOwner(expectedOwner: QueuedExecuteIntent?): Boolean =
+        expectedOwner != null && prepareInFlight.get() && owner === expectedOwner
 
     @Synchronized
     fun isOwner(intent: QueuedExecuteIntent): Boolean = prepareInFlight.get() && owner === intent
@@ -40,19 +47,21 @@ internal class PrepareSingleFlightGate {
     /** 超时只结算所属链，迟到的旧回调不得清除新链。 */
     @Synchronized
     fun expire(intent: QueuedExecuteIntent) {
-        if (owner === intent && !submissionStarted) abort(ExecutionSubmission.CANCELLED)
-        else if (pendingIntent === intent) consumePendingExecute()?.complete(ExecutionSubmission.CANCELLED)
+        if (owner === intent && !submissionStarted) abort(intent, ExecutionSubmission.CANCELLED)
+        else if (pendingIntent === intent) takePendingExecute()?.complete(ExecutionSubmission.CANCELLED)
     }
 
     /** 先清空门和队列再通知，避免回调重入把旧请求遗留给下一链。 */
     @Synchronized
-    fun abort(outcome: ExecutionSubmission, message: String? = null) {
+    fun abort(expectedOwner: QueuedExecuteIntent?, outcome: ExecutionSubmission, message: String? = null): Boolean {
+        if (!matchesOwner(expectedOwner)) return false
         val current = owner
-        val queued = consumePendingExecute()
+        val queued = takePendingExecute()
         owner = null
         prepareInFlight.set(false)
         current?.complete(outcome, message)
         queued?.complete(outcome, message)
+        return true
     }
 
     /** 当前门持有链的起始时刻（卡死逃生判定基准；仅 PROCEED/接管时写）。 */
@@ -86,7 +95,7 @@ internal class PrepareSingleFlightGate {
         if (!submissionStarted && nowMs - inFlightSinceMs > STUCK_ESCAPE_MS) {
             // 卡死逃生：接管所有权（CompareAndSet 已被旧链持有，直接 set 覆盖）并清陈旧排队
             val expiredOwner = owner
-            val expiredQueued = consumePendingExecute()
+            val expiredQueued = takePendingExecute()
             prepareInFlight.set(true)
             inFlightSinceMs = nowMs
             owner = intent
@@ -109,7 +118,13 @@ internal class PrepareSingleFlightGate {
      * （prepareAfterEditorResolved 缓存落地后）；PASS_THROUGH 链不得调用。
      */
     @Synchronized
-    fun consumePendingExecute(): QueuedExecuteIntent? {
+    fun consumePendingExecute(expectedOwner: QueuedExecuteIntent?): QueuedExecuteIntent? {
+        if (!matchesOwner(expectedOwner)) return null
+        return takePendingExecute()
+    }
+
+    /** 仅在门内同步临界区调用，不向链暴露无身份消费入口。 */
+    private fun takePendingExecute(): QueuedExecuteIntent? {
         if (!pendingExecute.getAndSet(false)) return null
         val intent = pendingIntent
         pendingIntent = null
@@ -118,11 +133,13 @@ internal class PrepareSingleFlightGate {
 
     /** 门持有链终结复位（成功/失败/复用收敛均须调用；PASS_THROUGH 链不得调用）。 */
     @Synchronized
-    fun finishPrepare() {
-        val leftover = consumePendingExecute()
+    fun finishPrepare(expectedOwner: QueuedExecuteIntent?): Boolean {
+        if (!matchesOwner(expectedOwner)) return false
+        val leftover = takePendingExecute()
         owner = null
         prepareInFlight.set(false)
         leftover?.complete(ExecutionSubmission.CANCELLED)
+        return true
     }
 
     companion object {
@@ -175,14 +192,14 @@ internal class QueuedExecuteIntent(
 /** 准备失败可能发生在消费排队请求之前或之后，两种形态都结算当前和排队请求。 */
 internal fun failPrepareRequests(
     gate: PrepareSingleFlightGate,
-    ownsGate: Boolean,
+    expectedOwner: QueuedExecuteIntent?,
     current: ((ExecutionSubmission) -> Unit)?,
     currentError: ((String) -> Unit)?,
     consumed: QueuedExecuteIntent?,
     message: String,
 ) {
-    if (ownsGate) {
-        gate.abort(ExecutionSubmission.BLOCKED, message)
+    if (expectedOwner != null) {
+        gate.abort(expectedOwner, ExecutionSubmission.BLOCKED, message)
     } else {
         current?.invoke(ExecutionSubmission.BLOCKED)
         currentError?.invoke(message)
