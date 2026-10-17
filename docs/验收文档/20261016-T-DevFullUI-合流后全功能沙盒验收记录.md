@@ -320,6 +320,17 @@ UI018新登记（U37未通过）：上面的成功快照随后改为单行`inval
 
 B8退出：PID57840正常GUI退出，runIde退出0并自动注销，未强杀；主demo git工作树干净。
 
+## 第九批并行准备产物
+
+主控在UI016/UI020后台定向期间完成以下准备，不占第三路Gradle，不把准备结果计为UI验收通过：
+
+- 万条历史合成文件：`build/ui243-history/sql-history-2099-01-01-ui-synthetic-10000.sql`，1,765,788字节，SHA256 `dc6b3055af135f74f385e81f470b37a9f40d90a078cb65cbaadbed069c023634`。来源显式标synthetic，编号1～10000，`UI_MATCH`恰1000条；五种耗时循环0/12/500/1500/未知。没有覆盖原记录或伪装自然捕获。该目录仍有既有证据，禁止在此测试保留策略删除。
+- 用第八批实际插件JAR的`SqlLogFileReader`读取，实得10000条；同JAR的`HistorySearchService`检索实得1000命中、返回100且truncated=true、scanTruncated=false。首版探针误期望返回1000，被硬上限100正确挡住；核源码HARD_MAX_RESULTS后纠正探针并通过，不作为产品缺陷。GUI首进/搜索/末行/切文件迟到/滚动仍待做。
+- 既有导出产物回核：`build/ui243-replay-b1.sql` 494字节，SHA256 `eb4aa8a1036e681498a706a7d00e148224c7c22247f578aa1d2ac1b84d1eecc3`，实含MySQL事务包装与末尾分号；`build/sql-diagnostic-report.html` 1650字节，SHA256 `a3b226aa6dc2e9fdc3d011d5ca5b9ae01278d93a6732acb9198740d8e02f4c07`。未执行回放或外发报告。
+- 支持平台MCP待执行用例：`.local/ui-mcp-acceptance-cases.json`，14个正负场景覆盖11个不同声明工具，已与生产`@McpTool`名称集合逐项比对，缺项0、未知0。现有通用suite的11次调用含重复render、漏history_search，不能据调用数声称11工具覆盖；本批清单补历史100上限、坏正则、写语句EXPLAIN拒绝、禁用直调。只读数据库调用明确绑定mp_demo@localhost，禁止自动跑到日常IDE或其他数据源。该清单尚未连接支持平台执行。
+
+下一批操作顺序固定为：先UI017/UI019同名与返回方法回填→UI018无效快照撤旧/UI020取消不标提交→当前已创建原生控制台的关闭复验；随后批量做万条历史搜索/末行/切文件、预设与历史边界、来源方言/Schema；支持平台MCP另批，不能用243缺接口代证。
+
 ## 依据与历史证据保全
 
 - 十九轮UI11组、Runner12组及R90/R91/R92/R94/O147/V178专册。
