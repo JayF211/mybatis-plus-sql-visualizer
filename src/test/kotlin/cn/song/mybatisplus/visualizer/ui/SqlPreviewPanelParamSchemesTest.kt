@@ -343,6 +343,75 @@ class SqlPreviewPanelParamSchemesTest : BasePlatformTestCase() {
         )
     }
 
+    /** UI017：走面板接线的管理对话框另存，而不是直接调缓存 API 绕过 UI 查重。 */
+    fun testUI017_dialogSaveAsAcrossMethodsKeepsForeachAndDefaultSnapshotsIndependent() {
+        val p = openPanel()
+        val cache = p.paramHistoryCacheForTest()
+        val foreachKey = p.historyCacheKeyForTest()!!
+        p.setForEachValuesForTest("statusList", listOf("71", "72", "73"))
+        p.applyXmlForEachValuesForTest("statusList", "71,72,73")
+        p.flushHistoryForTest()
+        val foreachSnapshot = p.buildHistorySnapshotForTest()
+        p.createSchemeManagerDialog(project).let { d ->
+            try {
+                assertTrue(d.saveAsForTest("UI-Shared"))
+            } finally {
+                d.dispose()
+            }
+        }
+        assertEquals("UI-Shared", p.schemeComboForTest()!!.selectedItem)
+
+        // 编辑命名预设时，foreach 新值只能写入默认工作区，命名快照必须保持原值。
+        p.setForEachValuesForTest("statusList", listOf("81", "82"))
+        p.applyXmlForEachValuesForTest("statusList", "81,82")
+        p.flushHistoryForTest()
+        assertEquals(foreachSnapshot, cache.recallFromScheme("UI-Shared", foreachKey))
+        p.switchSchemeForTest(ParamHistoryCache.DEFAULT_SCHEME)
+        assertEquals("81,82", p.forEachValueFieldTextForTest("statusList"))
+        val foreachDefault = cache.recall(foreachKey)!!
+
+        p.showResult(buildPlainParamsResult(listOf("id"), "SELECT * FROM t_order WHERE id = ?"))
+        com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+        val idKey = p.historyCacheKeyForTest()!!
+        assertFalse(foreachKey == idKey)
+        assertEquals("新方法只能看到默认方案", 1, p.schemeComboForTest()!!.itemCount)
+        p.paramFieldForSourceForTest("id")!!.text = "91"
+        p.flushHistoryForTest()
+        val idSnapshot = p.buildHistorySnapshotForTest()
+        p.createSchemeManagerDialog(project).let { d ->
+            try {
+                assertEquals(1, d.schemeCountForTest())
+                assertTrue("其他方法已有同名时，真实保存入口仍应成功", d.saveAsForTest("UI-Shared"))
+                assertEquals("UI-Shared", p.schemeComboForTest()!!.selectedItem)
+                assertEquals("91", p.paramFieldForSourceForTest("id")?.text)
+                p.paramFieldForSourceForTest("id")!!.text = "92"
+                p.flushHistoryForTest()
+                assertFalse("同一方法重复另存不能覆盖命名快照", d.saveAsForTest("UI-Shared"))
+            } finally {
+                d.dispose()
+            }
+        }
+        assertEquals(idSnapshot, cache.recallFromScheme("UI-Shared", idKey))
+        assertEquals(foreachSnapshot, cache.recallFromScheme("UI-Shared", foreachKey))
+        p.switchSchemeForTest(ParamHistoryCache.DEFAULT_SCHEME)
+        assertEquals("92", p.paramFieldForSourceForTest("id")?.text)
+        p.switchSchemeForTest("UI-Shared")
+        assertEquals("91", p.paramFieldForSourceForTest("id")?.text)
+
+        // 返回 foreach 方法：激活态、工作区及命名快照都必须仍属于该方法。
+        p.showResult(buildProbePreviewResult())
+        com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+        assertEquals(foreachKey, p.historyCacheKeyForTest())
+        assertEquals(ParamHistoryCache.DEFAULT_SCHEME, p.schemeComboForTest()!!.selectedItem)
+        assertEquals(foreachDefault, cache.recall(foreachKey))
+        assertEquals("81,82", p.forEachValueFieldTextForTest("statusList"))
+        p.switchSchemeForTest("UI-Shared")
+        assertEquals(listOf("71", "72", "73"), p.forEachValuesForTest()["statusList"])
+        assertEquals("71,72,73", p.forEachValueFieldTextForTest("statusList"))
+        assertEquals(foreachSnapshot, cache.recallFromScheme("UI-Shared", foreachKey))
+        assertEquals(idSnapshot, cache.recallFromScheme("UI-Shared", idKey))
+    }
+
     // ==== O-88：预设行折叠件（平台标准 HideableTitledPanel） ====
 
     /** O-88 ①：缺省折叠——折叠件在场、isExpanded=false、锚点方案行在内容区但不可见。
