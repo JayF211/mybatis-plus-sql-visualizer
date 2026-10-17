@@ -45,8 +45,9 @@ import java.util.WeakHashMap
  *
  * ## 数据与作用域（与 ExternalAnnotator 完全同源）
  *
- * 只对 [PreviewSchemaAnnotationScope.isPreviewSurface] 且位于 `.idea` 下的文件生效；目标仍取
- * [DataSourceSelector.schemaValidationTarget]（已备控制台的执行文档身份），列集仍只读
+ * 只对 [PreviewSchemaAnnotationScope.isPreviewSurface] 且位于 `.idea` 下的文件生效；目标优先取
+ * [DataSourceSelector.schemaValidationTarget]（已备控制台的执行文档身份），仅在其为 null 时回落
+ * [PreviewFallbackTarget]（面板「数据源（上次使用）」记忆，UI029 日志条目预览场景）；列集仍只读
  * [SchemaValidationGate.check] 三参入口的已预热缓存，位点仍由
  * [PreviewUnknownColumnPlanner] 从 AST token 换算。无目标/缓存冷/作用域不可证 → 清空标注。
  *
@@ -151,7 +152,9 @@ internal object PreviewSchemaHighlighter {
                 clear(token)
                 return
             }
-            val target = runCatching { DataSourceSelector.schemaValidationTarget(document) }.getOrNull()
+            // 旧入口零变化：仅在其返回 null 时，才用面板自身已确定的目标（last-used 记忆）回落。
+            val legacyTarget = runCatching { DataSourceSelector.schemaValidationTarget(document) }.getOrNull()
+            val target = legacyTarget ?: runCatching { PreviewFallbackTarget.resolve(project, text) }.getOrNull()
             val marks = if (target == null) {
                 emptyList()
             } else {

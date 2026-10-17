@@ -58,11 +58,15 @@ internal object PreviewSchemaAnnotationScope {
  *
  * ## 数据来源（只读、零 DB I/O）
  *
- * 目标取自 [DataSourceSelector.schemaValidationTarget]：**只认当前已备/共享控制台的执行文档**
- * （文档身份相等 + 控制台 isValid + MySQL/MariaDB 的 URL 库与当前库一致）。无绑定目标、目标
- * 失效、库范围无法证明 → 不标注。列集只读
+ * 目标优先取自 [DataSourceSelector.schemaValidationTarget]：**只认当前已备/共享控制台的执行文档**
+ * （文档身份相等 + 控制台 isValid + MySQL/MariaDB 的 URL 库与当前库一致）。仅当它返回 null 时，
+ * 才回落到 [PreviewFallbackTarget]——面板指示行已展示的「数据源（上次使用）」记忆，且要求
+ * MySQL/MariaDB、库名非空、目标缓存已热。列集只读
  * [cn.song.mybatisplus.visualizer.ui.highlight.DatabaseSchemaResolver.columnNamesCachedForTarget]
  * 的已预热缓存（经 [SchemaValidationGate.check] 三参入口），**绝不触发内省/建连**。
+ *
+ * 从 SQL 日志条目打开的预览没有已备控制台，旧入口恒为 null——回落分支正是为该场景而设
+ * （UI029）；用户自己的 `.sql` 文件仍在作用域闸门处被挡下，不经过回落。
  *
  * ## 作用域与诚实降级
  *
@@ -97,7 +101,10 @@ class PreviewUnknownColumnAnnotator :
         if (!PreviewSchemaAnnotationScope.isPreviewSurface(file)) return null
         val text = editor.document.text
         if (text.isBlank()) return null
-        val target = DataSourceSelector.schemaValidationTarget(editor.document) ?: return null
+        // 旧入口零变化：仅在其返回 null 时，才用面板自身已确定的目标（last-used 记忆）回落。
+        val target = DataSourceSelector.schemaValidationTarget(editor.document)
+            ?: PreviewFallbackTarget.resolve(file.project, text)
+            ?: return null
         return Info(file.project, text, target)
     }
 
