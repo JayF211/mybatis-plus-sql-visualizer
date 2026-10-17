@@ -392,6 +392,14 @@ UI016最终原路径GUI闭环：243 PID34400最新启动18:41:01，18:52:12与18
 
 UI023新包GUI仍未闭环：243已原生选择mp_demo内省tables10，日志18:59:52 resolved=1，绑定并执行只读SELECT成功，主按钮对错列UPDATE仍仅普通确认（frame-370b30c8），No取消无写；回交原代理核真实对象和假夹具差异，未按147绿冒称功能通过。主控转视觉/入口批次，不阻塞等续查。
 
+视觉批次局部证据（243 Light125%，合成VisualMatrix五条，未执行）：实际阈值1000ms（frame-e2a232e2），12ms/0ms绿色、500ms橙色、1500ms红色、未知破折号灰色，CRUD四色边条（frame-ea2098fb）。选中UPDATE行统一高对比文本（frame-d02512a1），焦点移到源码后仍可读（frame-7a97582c）。三显示模式在相同文件真实切换：关键字换行、单行（frame-8d0378f8）、完整格式化（frame-62b75ab1）；长句列表省略后Ctrl+C粘入本地输入仍保末尾ORDER BY created_at DESC,id ASC（frame-a99e2cce）。此为历史面Light125局部，日志/底部/完整预览同源及Dark/100矩阵仍待。
+
+UI023二次续修已合dev f99f32bd/701a0b1c/a3e2ff63。真实onNativeEditorReady→embedConsole会清nativeConsoleEditor而保nativeEditorDoc；前轮手工设编辑器夹具漏该顺序。改以实际文档对象身份匹配preparedEditor.document；先红15项3失败，文档保护摘闸3红，精确撤修fresh15项3红，恢复十类149/0/0/0（主控核XML）。运行视觉包不热替，下一包真实绑定错列复验仍待，不能据149绿标完成。
+
+视觉矩阵补充（Dark125/Dark100）：同一历史文件在Dark125下四档耗时色与CRUD边条清晰（frame-ea2098fb），选中行高对比、焦点移出后仍可读（frame-d02512a1/7a97582c）；三种显示模式切换真实生效（关键字换行、单行frame-8d0378f8、格式化frame-62b75ab1），长SQL省略后复制仍含末尾ORDER BY（frame-a99e2cce）。Alt+Shift+0重置100%后日志页工具栏与四页签单行可见（frame-6014e8e3）。动作搜索可查到“Submit Feedback (SQL Visualizer)”“SQL Visualizer设置/项目设置”（frame-42c35f98），帮助入口存在但二维码三态未触达。Light100及日志/底部同源色仍待。
+
+工具侧发现（影响验收效率，非产品缺陷）：Swing弹层出现后主窗坐标绑定会停留在弹层尺寸，随后坐标点击报“outside 159x38/670x694”；须先静默重抓画面（getScreenshot emit:false）再点击，且100%缩放时页签行y由78变为66。已按此调整操作节奏；电脑操控慢的根因另派只读子代理量化排查。
+
 ## 第九批并行准备产物
 
 主控在UI016/UI020后台定向期间完成以下准备，不占第三路Gradle，不把准备结果计为UI验收通过：
