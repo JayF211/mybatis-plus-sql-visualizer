@@ -523,6 +523,8 @@ class DbConsoleIntegrationTest : BasePlatformTestCase() {
             assertNotSame("前提：确实经过生产 attach 替换 client", seed, owned)
             assertSame("前提：原生服务复用已有真实 view", seedView, owned.view)
             val view = owned.view
+            var releaseCount = 0
+            com.intellij.openapi.util.Disposer.register(view) { releaseCount++ }
             val executionEditor = owned.consoleView.consoleEditor
             val historyEditor = owned.consoleView.historyViewer
             val ui = requireNotNull(owned.ui) { "前提：原生 view 必须提供 RunnerLayoutUi" }
@@ -547,6 +549,34 @@ class DbConsoleIntegrationTest : BasePlatformTestCase() {
             assertTrue("关闭前必须释放 RunnerLayoutUi，避免晚保存布局访问已销毁项目", ui.isDisposed)
             assertSame("不得遍历销毁用户的原生控制台", foreignView, service.getClientViewIfAny(foreign))
             assertFalse("用户控制台不属于插件自有清理集合", foreignEditor.isDisposed)
+            ApplicationManager.getApplication().messageBus
+                .syncPublisher(com.intellij.openapi.project.ProjectManager.TOPIC).projectClosing(fixture.owner)
+            assertEquals("重复close只释放一次", 1, releaseCount)
+            assertSame("重复close仍不伤用户view", foreignView, service.getClientViewIfAny(foreign))
+        }
+    }
+
+    fun testUi016UserRecreatedViewForSameFileSurvivesPluginClose() {
+        withUi016NativeViews { fixture ->
+            val service = com.intellij.database.console.session.DatabaseSessionViewService.getInstance()
+            val old = fixture.create("mpsql-exec.sql")
+            val oldView = old.view
+            val file = old.virtualFile
+            val lifetime = fixture.owner.getService(NativeConsoleViewLifetime::class.java)
+            lifetime.remember(old)
+            service.destroyView(old)
+            assertNull("前提：旧view的原生销毁必须清缓存", service.getClientViewIfAny(old))
+            // 同一个VirtualFile，而不是仅同名文件；该原生重建不经过插件登记。
+            val replacement = fixture.create(file)
+            val newView = replacement.view
+            val newEditor = replacement.consoleView.consoleEditor
+            assertNotSame("前提：是真正重建view，不是原生复用旧view", oldView, newView)
+            assertSame("前提：旧client按file查询已经指向用户新view", newView, service.getClientViewIfAny(old))
+            ApplicationManager.getApplication().messageBus
+                .syncPublisher(com.intellij.openapi.project.ProjectManager.TOPIC).projectClosing(fixture.owner)
+            assertSame("UI016-REPLACEMENT-VIEW：旧client不得按file销毁用户重建view", newView,
+                service.getClientViewIfAny(replacement))
+            assertFalse("用户新view的执行编辑器保持存活", newEditor.isDisposed)
         }
     }
 
@@ -584,9 +614,11 @@ class DbConsoleIntegrationTest : BasePlatformTestCase() {
             if (clients.none { it === client }) clients.add(client)
         }
 
-        fun create(name: String): com.intellij.database.console.JdbcConsole {
-            val file = com.intellij.testFramework.LightVirtualFile(name, com.intellij.sql.SqlFileType.INSTANCE, "SELECT 1")
-            val session = com.intellij.database.console.session.DatabaseSessionManager.getSession(owner, source, name)
+        fun create(name: String): com.intellij.database.console.JdbcConsole = create(
+            com.intellij.testFramework.LightVirtualFile(name, com.intellij.sql.SqlFileType.INSTANCE, "SELECT 1"))
+
+        fun create(file: com.intellij.openapi.vfs.VirtualFile): com.intellij.database.console.JdbcConsole {
+            val session = com.intellij.database.console.session.DatabaseSessionManager.getSession(owner, source, file.name)
             val client = requireNotNull(com.intellij.openapi.application.WriteIntentReadAction.compute<com.intellij.database.console.JdbcConsole?> {
                 com.intellij.database.console.JdbcConsoleProvider.attachConsole(owner, session, file)
             })
