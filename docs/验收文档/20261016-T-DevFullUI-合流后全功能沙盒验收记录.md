@@ -386,6 +386,12 @@ U28选择集CSV导出：历史两条合成DDL/SELECT仅选SELECT导出，实际`
 
 下一批合流定向已完成：生产7e065275，25类463/0/0/0，fresh XML 2026-10-17T10:36:37～10:38:15Z逐文件核对。覆盖分页/参数类型/显示、Schema实际执行入口与目标作用域、动态批次/注入/未知参数/方言错误、历史到底/导航/搜索、预设、回滚与提交回执。默认243沙盒已后台启动，准备UI016/022/023真实原路径复验；不是最终testShards全量。
 
+UI022新包243原路径复验通过：PID34400，注解175填1/20/10后LIMIT20,10（frame-04ffddbb）、COUNT内部status1（frame-208f57b9）；改status2并点刷新，主查询status2/LIMIT20,10与COUNT内部status2同时保持（frame-0147e002/37062d78），不再残留问号。合成分页两输入现为数字提示，不再page.size对象JSON提示。仅静态预览未执行该分页脚本；参数区长表达式导致输入右侧裁剪仍属视觉矩阵待核，未据此改分页逻辑。
+
+UI016最终原路径GUI闭环：243 PID34400最新启动18:41:01，18:52:12与18:59:52两次native query SUBMITTED，中间关闭预览重开并复用，19:05:52正常SHUTDOWN、runIde退出0；该启动段无SEVERE/Bus is already disposed/Double release/Failed to dispose及view disposal failed。有真实client/session控制台而非空沙盒正对照，原退出问题本轮复验通过。
+
+UI023新包GUI仍未闭环：243已原生选择mp_demo内省tables10，日志18:59:52 resolved=1，绑定并执行只读SELECT成功，主按钮对错列UPDATE仍仅普通确认（frame-370b30c8），No取消无写；回交原代理核真实对象和假夹具差异，未按147绿冒称功能通过。主控转视觉/入口批次，不阻塞等续查。
+
 ## 第九批并行准备产物
 
 主控在UI016/UI020后台定向期间完成以下准备，不占第三路Gradle，不把准备结果计为UI验收通过：
