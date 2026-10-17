@@ -491,6 +491,8 @@ UI025 真机观察（待归因，不直接判缺陷）：在增强条目预览�
 
 UI028 复核结论（撤销待归因）：预览「执行 SQL」弹出的「选择数据源」五项列表可正常操作；鼠标点击条目曾记录 `popup selected: null`（自动化落点问题），改用键盘 Down×3+Enter 选中 mp_demo 后得到明确终态——底部红字「执行失败：已阻止执行：当前 SQL 按 未知 渲染，但所选数据源的实际方言是 MySQL……请重新生成 SQL 或切换目标后再执行」。这是 B6 已验的未知渲染方言阻断在编辑后 ad-hoc 文本上的再次命中，属设计内 fail-closed，不是缺陷；同时解释此前「执行中…」实为等待选择数据源。该路径可用于 U14 未知方言写入负例，但不能据它证明 MyBatis 原生执行链。
 
+UI025 入口复核（2026-10-18）：为拿到“插件生成、带错列的 SQL 预览”，在 demo 仓临时加 `@Select("SELECT usernme FROM user …")` 与 `/user/fixture/unknown-col` 端点，并在 UserMapper 注解行做 gutter 放大取证：该行只渲染黄色意图灯泡，插件 `sqlGutter.svg` 预览图标未出现（`showGutterIcon` 与 `gutterGroupAnnotation` 默认均为 true，配置无覆盖），点击灯泡得到普通意图菜单而非预览。随后尝试从 IDE Run 重启应用以捕获错列 SQL，外部 kill 后 Services 节点保持红色、Run 不再产生新进程/新控制台页，无法继续。demo 仓临时夹具已全部 `git checkout` 撤销。结论：UI025 真机视觉在本轮沙盒仍无法验证，入口缺失与 IDE Run 失效两处环境问题均未归因，保持“待归因”，不以自动化 27/27 代替。
+
 ## 依据与历史证据保全
 
 - 十九轮UI11组、Runner12组及R90/R91/R92/R94/O147/V178专册。
