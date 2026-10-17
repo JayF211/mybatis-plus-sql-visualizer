@@ -489,6 +489,8 @@ UI024/UI026 新包 GUI 观察（2026-10-17 深夜，重建 243 沙盒、英文 I
 
 UI025 真机观察（待归因，不直接判缺陷）：在增强条目预览里输入 `SELECT usernme FROM user`，编辑器未见 `usernme` 红色波浪；当时面板处于“执行中…”且预览头只显示“数据源（上次使用）：mp_demo@localhost”，无法证明精确目标已绑定。与 `testDbSchemaAnnotator` 27/27（含 RangeHighlighter 通道与 token 偏移）不一致，暂记为待归因项，需单独复核目标解析时机与通道安装；不因此关闭或升级 UI025。
 
+UI028（待归因，影响预览执行链验收）：预览面板点「执行 SQL」后弹出「选择数据源」五项列表（jpa_demo/mpj_demo/mp_demo/kotlin_demo/selfdev_demo），点击 mp_demo 条目后 idea.log 记录 `[M36] popup selected: null`，弹层消失但面板保持「执行中…」；重复一次结果相同。注意：上一轮 B8 同一入口选 mp_demo 可正常 SUBMITTED，故可能是本轮窗口层级/焦点（预览窗与原生控制台弹层）或自动化点击落点问题，需真机人工再点一次确认，不直接判产品缺陷。该阻断同时挡住 U15/U16/U27 的预览侧验证。
+
 ## 依据与历史证据保全
 
 - 十九轮UI11组、Runner12组及R90/R91/R92/R94/O147/V178专册。
