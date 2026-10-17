@@ -497,6 +497,8 @@ UI029 新登记（UI025 真实场景缺口，已派独立修复）：demo 临时
 
 U09/U16 本轮补证：日志条目预览头部显示调用栈摘要（`调用栈: cn.song.mybatisplus.sqlvis.agent.hook.StatementHandler#emitEvent136<~cn.song.my…`），日志条目右键含「复制调用方法栈」；错列条目预览顶部完整显示 `java.sql.SQLSyntaxErrorException: Unknown column 'usernme' in 'field list'` 并提供「复制错误信息」，与 U16 的富错误披露一致。未执行「最近执行」弹窗与栈弹层的展开交互，不升级整组。
 
+U08 展示层脱敏（本轮真机）：临时只读端点 `/user/fixture/by-password?pwd=secret_pwd_123` 产生条目 `#2 [2026-10-18 00:31:57] 2ms MySQL [UserController.java:123]`，列表行显示 `WHERE password = '***' AND deleted = 0;`；原生控制台仍为原始 `Parameters: secret_pwd_123(String)`（插件不改写控制台），双击打开的 SQL 预览对话框里参数与 SQL 保持原值（可编辑/可执行面需要真值）。与设置项描述“日志列表、单击预览浮层与导出文件打码”一致；采集层与展示层解耦成立。六出口中的导出文件脱敏与“原文件不擦写”仍需单独验。
+
 ## 依据与历史证据保全
 
 - 十九轮UI11组、Runner12组及R90/R91/R92/R94/O147/V178专册。
