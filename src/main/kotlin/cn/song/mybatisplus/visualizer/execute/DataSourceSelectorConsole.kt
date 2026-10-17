@@ -464,6 +464,7 @@ internal fun DataSourceSelector.prepareAfterEditorResolved(
             if (queuedIntent != null) queuedExecuted = true
         }
     }.onFailure { e ->
+        NativeConsoleViewLifetime.unwrapAndRethrowCritical(e)
         LOG.warn("[M36] prepareInConsole FAILED: ${e.javaClass.simpleName}: ${e.message}", e)
         // M36.3：通知调用方错误，确保 UI 从「执行中」状态恢复
         val cause = (e as? java.lang.reflect.InvocationTargetException)?.targetException ?: e
@@ -1143,7 +1144,7 @@ internal fun DataSourceSelector.prepareInConsole(
             return
         }
 
-        // UI016：在回调/后续准备可能失败之前登记已创建的原生view；不依赖prepared/shared缓存。
+        // 在回调/后续准备可能失败之前登记已创建的原生view；不依赖prepared/shared缓存。
         NativeConsoleViewLifetime.remember(project, console)
         val consoleClass = Class.forName(CONSOLE_CLASS)
 
@@ -1222,6 +1223,7 @@ internal fun DataSourceSelector.prepareInConsole(
                                 dialectGateRequest, onDialectGate, onSubmission, isPrepareActive,
                             )
                         }.onFailure { e ->
+                            NativeConsoleViewLifetime.unwrapAndRethrowCritical(e)
                             LOG.warn("[M36] prepareInConsole(editor async wait) FAILED: ${e.javaClass.simpleName}: ${e.message}", e)
                             val cause = (e as? java.lang.reflect.InvocationTargetException)?.targetException ?: e
                             onError?.invoke(cause.message ?: cause.toString())
@@ -1243,6 +1245,7 @@ internal fun DataSourceSelector.prepareInConsole(
             }
         }
     }.onFailure { e ->
+        NativeConsoleViewLifetime.unwrapAndRethrowCritical(e)
         LOG.warn("[M36] prepareInConsole FAILED: ${e.javaClass.simpleName}: ${e.message}", e)
         // M36.3：通知调用方错误，确保 UI 从「执行中」状态恢复
         val cause = (e as? java.lang.reflect.InvocationTargetException)?.targetException ?: e

@@ -13,7 +13,7 @@ import java.lang.reflect.InvocationTargetException
 import java.util.IdentityHashMap
 
 /**
- * UI016：attachConsole 的 client 挂项目，但 native view 挂应用级 DatabaseSessionViewService。
+ * attachConsole 的 client 挂项目，但 native view 挂应用级 DatabaseSessionViewService。
  * 只记录本插件实际取得的 view 身份，在项目关闭前释放；面板关闭/clearPrepared 不触碰它。
  *
  * 243 destroyView(client) 按(project,file)查 view 后就是 Disposer.dispose(view)。这里保存具体
@@ -73,7 +73,26 @@ internal class NativeConsoleViewLifetime(private val project: Project) : Disposa
         private val LOG = Logger.getInstance(NativeConsoleViewLifetime::class.java)
 
         fun remember(project: Project, console: Any) {
-            project.getService(NativeConsoleViewLifetime::class.java).remember(console)
+            bestEffortRegistration({
+                project.getService(NativeConsoleViewLifetime::class.java).remember(console)
+            }) { LOG.warn("Native console lifetime registration failed; keep existing prepare behavior", it) }
+        }
+
+        internal fun bestEffortRegistration(register: () -> Unit, report: (Throwable) -> Unit) {
+            try {
+                register()
+            } catch (failure: Throwable) {
+                if (FatalErrors.isFatal(failure)) throw failure
+                val cause = unwrapAndRethrowCritical(failure)
+                report(cause)
+            }
+        }
+
+        internal fun unwrapAndRethrowCritical(failure: Throwable): Throwable {
+            var cause = failure
+            while (cause is InvocationTargetException && cause.targetException != null) cause = cause.targetException
+            if (FatalErrors.isFatal(cause) || cause is com.intellij.openapi.progress.ProcessCanceledException) throw cause
+            return cause
         }
     }
 }

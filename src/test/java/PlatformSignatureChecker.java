@@ -138,7 +138,7 @@ public class PlatformSignatureChecker {
         System.out.println("RESULT OK");
     }
 
-    /** UI016：精确核验生产查既有view入口；不初始化或创建数据库会话。 */
+    /** 精确核验生产查既有view入口；不初始化或创建数据库会话。 */
     public static int checkNativeConsoleViewLifetimeApis(ClassLoader loader, boolean databaseBundled) {
         if (!databaseBundled) {
             System.out.println("SKIP native console lifetime: Database Tools not bundled");

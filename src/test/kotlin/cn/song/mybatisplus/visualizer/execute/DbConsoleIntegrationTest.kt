@@ -556,6 +556,40 @@ class DbConsoleIntegrationTest : BasePlatformTestCase() {
         }
     }
 
+    fun testUi016RegistrationFailureDoesNotAbortOrdinaryPrepare() {
+        ui016LifecycleOnly = true
+        val reported = mutableListOf<Throwable>()
+        var continued = false
+        NativeConsoleViewLifetime.bestEffortRegistration({
+            throw java.lang.reflect.InvocationTargetException(IllegalAccessException("fixture registration unavailable"))
+        }, reported::add)
+        continued = true
+        assertTrue("普通登记异常不改变原有准备链后续执行", continued)
+        assertEquals(1, reported.size)
+        assertTrue("完整根因交给日志通道而不是吞没", reported.single() is IllegalAccessException)
+    }
+
+    fun testUi016CriticalRegistrationFailuresEscapePrepareCatch() {
+        ui016LifecycleOnly = true
+        for (critical in listOf<Throwable>(com.intellij.openapi.progress.ProcessCanceledException(),
+            LinkageError("fixture critical"))) {
+            var reported = false
+            var thrown: Throwable? = null
+            try {
+                // 模拟生产外层runCatching：内层登记已透传，外层也不得又吞回onError。
+                runCatching {
+                    NativeConsoleViewLifetime.bestEffortRegistration({
+                        throw java.lang.reflect.InvocationTargetException(critical)
+                    }) { reported = true }
+                }.onFailure { NativeConsoleViewLifetime.unwrapAndRethrowCritical(it) }
+            } catch (failure: Throwable) {
+                thrown = failure
+            }
+            assertSame("取消/致命错误必须保持同一根因透传", critical, thrown)
+            assertFalse("取消/致命错误不得作为普通登记失败降级", reported)
+        }
+    }
+
     fun testUi016UserRecreatedViewForSameFileSurvivesPluginClose() {
         withUi016NativeViews { fixture ->
             val service = com.intellij.database.console.session.DatabaseSessionViewService.getInstance()
