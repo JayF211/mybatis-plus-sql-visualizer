@@ -483,6 +483,8 @@ UI025 已合 dev `688c649d`：ExternalAnnotator 只认预览临时文件与插�
 
 第三轮之后又发现同族过时断言 `JavaCodeGeneratorJoinTest.SELECT列带别名_生成selectAs`（普通 LAMBDA 也按不存在的 API 断言），按同一契约校正；MPJ_LAMBDA 的 selectAs 断言保持不变（MPJ wrapper 自身提供该重载）。反向包 298/0/0/0，提交 `70878f6c`。第五轮全量改为 `--continue`，让五个分片一次跑完以便一次看全失败面。
 
+UI024/UI026 新包 GUI 观察（2026-10-17 深夜，重建 243 沙盒、英文 IDE UI）：设置窗口在较宽默认尺寸下，SQL Log 页「自动保存」区三个存储按钮完整可见、右缘无裁切；把窗口缩到 998×742 的尝试被设置窗口自身尺寸策略回弹（SetWindowPos 报成功但界面未变），所以 998 默认宽的真机画面仍未取到，不能以宽窗截图代证。UI026 的英文文案场景也未触发：IDE 是英文，但插件界面按插件侧语言显示中文；英文溢出仍以 `StorageRowLayoutTest` 的真实 JBScrollPane/880/998 断言为准。UI025 的红色波浪视觉复验未完成：新沙盒未打开 SQL 日志工具窗、注解 gutter 图标点击未唤出预览对话框，只有自动化 27/27（含 RangeHighlighter 通道与 token 偏移）覆盖，按「未真机复验」记录。
+
 ## 依据与历史证据保全
 
 - 十九轮UI11组、Runner12组及R90/R91/R92/R94/O147/V178专册。
