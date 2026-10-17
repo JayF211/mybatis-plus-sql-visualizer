@@ -614,6 +614,27 @@ class DbConsoleIntegrationTest : BasePlatformTestCase() {
         }
     }
 
+    /** 原生attach在unit-test mode跳过session initView，必须显式补出真实运行态的第二个view。 */
+    fun testUi016SessionLogViewAlsoReleasedBeforeProjectBus() {
+        withUi016NativeViews { fixture ->
+            val service = com.intellij.database.console.session.DatabaseSessionViewService.getInstance()
+            val client = fixture.create("mpsql-exec.sql")
+            val sessionView = com.intellij.openapi.application.WriteIntentReadAction.compute<Any> {
+                service.getView(client.session)
+            } as com.intellij.database.console.session.DatabaseSessionLogView
+            val sessionEditor = sessionView.consoleView.consoleEditor
+            assertNotSame("两个独立view：client view不能代表session output", client.view, sessionView)
+            assertTrue("session output编辑器是标题LightVirtualFile而非exec文件",
+                sessionEditor.virtualFile is com.intellij.testFramework.LightVirtualFile)
+            NativeConsoleViewLifetime.remember(fixture.owner, client)
+            ApplicationManager.getApplication().messageBus
+                .syncPublisher(com.intellij.openapi.project.ProjectManager.TOPIC).projectClosing(fixture.owner)
+            assertNull("原client清理已经生效", service.getClientViewIfAny(client))
+            assertTrue("UI016-SESSION-VIEW-RETAINED：真实attach的session output不能活到project bus释放",
+                sessionEditor.isDisposed)
+        }
+    }
+
     /**
      * 使用平台已完整登记的 light project；仅发送关闭前通知，不真的销毁它。
      * 首轮另建未打开重项目触发 ValueLookupManager 的 ProjectEntity 找不到项目，
@@ -665,11 +686,13 @@ class DbConsoleIntegrationTest : BasePlatformTestCase() {
         override fun close() {
             val service = com.intellij.database.console.session.DatabaseSessionViewService.getInstance()
             try {
+                val sessions = clients.map { it.session }.distinct()
                 clients.asReversed().forEach { client ->
                     // getClientViewIfAny 不会新建 view；相同(project,file)新旧client共享key，清理幂等。
                     service.destroyView(client)
                     com.intellij.openapi.util.Disposer.dispose(client)
                 }
+                sessions.forEach { com.intellij.openapi.util.Disposer.dispose(it) }
             } finally {
                 DataSourceSelector.releaseForPanel()
                 sources.removeDataSource(source)
