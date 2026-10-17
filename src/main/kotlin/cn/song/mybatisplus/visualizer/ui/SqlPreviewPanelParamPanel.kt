@@ -1487,6 +1487,8 @@ internal fun SqlPreviewPanel.recallFromHistory() {
                 val values = value.split(",").map { it.trim() }.filter { it.isNotEmpty() }
                 if (values.isNotEmpty()) {
                     xmlForEachValues[expr] = values
+                    // 首次召回尚无字段监听，必须在渲染映射前同步展开长度，不能依赖文本变更补齐。
+                    xmlForEachCounts[expr] = values.size
                     xmlForEachValueFields.firstOrNull { it.first == expr }?.second?.text = value
                     stateRestored = true
                 }
