@@ -255,6 +255,36 @@ UI004原路径补验完成：在日志页设置新专属build/ui243-history/ui00
 
 第六批UI012真机原路径复验：IDE35652、业务28932、Light125%；真实storm463条→清空→明确时间升序→n1 ids1~10，底部#9/#10、顶部#1/#2/#3，未再出现9/10排最前（frame-3a8109d7/4f35873c）。日志无时间StdOut候选保持空、回落执行时间，35绿/7红/恢复35绿对应两处保真修复；本原场景闭环，不外推所有带真实时间日志的跨线程顺序。
 
+UI013新包真框架复验：第六批ShardingH2Demo再次PASS，SQL去重保持勾选，暂停增强后both的by-id两次分别为#3/#4，不再合成×2（frame-a2505757）。同一专属历史文件07:23:39两条各有独立o147-id，pd.a分别为ds0物理路由100/BOOK,100及ds1路由101/BOOK,101，主SQL仍问号、params空；证实逐次保存回调保留附注。还观察到同模板无Actual尾条，尚未归因，不能据本项通过声称分片解析所有flush边界完成。
+
+U14/U15日志还原安全负例：真实Preparing/Parameters还原SELECT，执行选择mp_demo出现未知渲染方言确认（frame-ffc7cb5f），点No后未见native query SUBMITTED，但底部误称已提交（frame-430c895b），登记UI014独立修复，不能按状态字样认真实执行。改EXPLAIN SELECT同入口明确红字阻断未知渲染原始DML/EXPLAIN（frame-61c7c5f2）；改DELETE触发前置写确认并点No，保持已转换状态（frame-651ab311/585eeb17），没有批准写库，也未越过写确认去证明后续未知DML闸。UI014还查到runner popup final-step内同步弹模态导致焦点SEVERE，交同任务按真实回执修复，不改变安全策略。
+
+U32引用导航五点实测：UserMapper.xml namespace→UserMapper.java22（frame-98ae8b7f）；property=username→User.java41（frame-a9c4c5c8）；include refid→XML20片段（frame-57dea2c1）；select resultMap→XML5（frame-e20e0c81）；selectUserBatchByIds id→Java121（frame-9927a6ce）。均主编辑器Ctrl+B真实落点，未修改源码，不覆盖补全/全部gutter/共存矩阵。
+
+UI015预览快捷模板入口漏接：注解预览已选中user，右键只有Cut/Copy/Paste（frame-46060b15/5a314a84），不是选区错误。平台243自建Editor默认BasicEditorPopupMenu，模板仅挂EditorPopupMenu，原PreviewUx计划明确包含预览编辑器；已派独立修复保留基础动作并加既有模板组，不把所有主编辑器动作整包搬入。主编辑器XML为既有可用入口，后续从该入口继续COUNT/抽样。
+
+UI015独立四类69绿、摘模板引用69项恰3红、恢复69绿，跨243/253/262 EditorEx菜单API签名已核；合dev a8748dbc/8a5480ae，当前运行包尚未包含，待下一批GUI。UI014首版静态复核指出排队覆盖/取消和缺编辑器路径可能漏终态，已回交补齐，未合入。主编辑器XML里右键未弹与全局快捷键warning未证因果：实际warning发生预览关闭恢复动作，只LOG.warn不throw，不能凭此归菜单失败。
+
+退出A/B对照在途：关闭增强设置后停止旧agent进程28932仍需第二次原生强停，随后同IDE/同JDK8/同MybatisPlus配置重新Run，PID18824父35652，实查命令行MPSV-agent=false、idea_rt=true。执行同十条只读查询后按同一普通Stop，后台WaitForExit(90s)实测Exited=false、ObservedMs=90015（call_nQz5uTwwBD2vPfmGSLJjA5GA-stdout.log）。无MPSV agent仍复现普通Stop不退出，故MPSV agent不是必要条件，不按插件ShutdownHook死锁修；不能进一步外推IDE侧插件完全无影响。未把“关闭采集但agent仍在”冒充无agent对照。
+
+U15主编辑器模板正例：Java注解27行选user，右键SQL快捷模板三项可见；COUNT选mp_demo，原生结果41（frame-9a780984），08:46:28明确native query SUBMITTED。随后抽样10行复用本地目标，原生Output实证`SELECT * FROM user LIMIT 10`并取回10行（frame-a13f4c1c），不能依据仍显示COUNT的旧控制台标题判断实际SQL。预览模板待UI015新包；XML注入区菜单未触达而Java可达，仍不据无菜单推断模板业务执行失败。
+
+UI014最终owner补齐后独立56绿、摘owner比较24项恰2红、恢复56绿；只读复核确认旧链迟到abort/finish不能清新链，三个提交合dev32f36cb4/90122af6/5f44b0db。当前沙盒未含此修复，合流后定向及GUI待下一批。其修复不扩executePrepared回执覆盖口径。
+
+## 第七批准备
+
+第六批内存分片已quit，无agent MP对照90秒未退后由原生强停结束，确认进程结束后退出IDE；runIde退出0，本次无遗留运行确认阻挡。UI014/015合流生产5f44b0db，七类合流定向111/0/0/0（日志还原执行16/方言闸16/单飞24/错误处理16/预览编辑器31/抽样5/三代签名3），fresh XML2026-10-17 09:01:06～32，不把独立56绿与69绿相加冒充合流绿。第七批新沙盒已后台启动，本地诊断属性关闭，诊断生产代码最终清除待做。增强设置目前为对照而关闭、展示脱敏开启，后续采集复验须显式恢复增强。
+
+第七批PID22516、生产5f44b0db。UI015原路径复验：注解gutter直开预览，选user右键保留Cut/Copy/Paste并出现SQL快捷模板（frame-43056bbb），子菜单三项启用（frame-1474e441）；Ctrl+A整SQL后同三项灰色禁用（frame-00a5fa50），未误把整SQL当表名。
+
+UI014新包复验未通过：09:13:02弹数据源选择，09:14:57选择mp_demo直接CANCELLED，未到未知QUERY确认。原代理核实新增60秒prepare Timer把用户思考时间计入、提前过期，属于修复引入的交互回归；已回交暂停用户选择/确认阶段预算、恢复后台超时且区分超时与主动取消，同时核canceled/finalRunnable生命周期。不能把显示“已取消”当No原路径已验。
+
+U23命名快照继续：注解selectByAnnotationId设id71另存UI-Shared，改输入72后默认/命名往返回71（frame-78b72363）；管理重命名UI-Renamed后保持原71快照（frame-8e0335b8），没有将编辑默认值覆盖命名快照。跨方法同名、删除及20上限尚未补，不将本轮局部升级整项。
+
+UI014续修381a9ad8已合dev e47e2877：真实popup选择dispose也会canceled，新增choiceAccepted防误取消；用户选择/确认期间暂停后台预算，后台真超时单独BLOCKED。独立60绿/撤保护44项4红/恢复60绿，当前运行包仍旧，下一批需合流门禁及长等待GUI复验。临时几何诊断清理cb9811b6已合94718343，独立TailFollow11绿，最终统一门禁仍待。
+
+第七批退出前发现无MPSV-agent业务PID61704（父22516）实际仍在运行，09:29:15启动，日志明确enhanced-disabled且未attach。对应此前Shift+F10尝试“上下文菜单”，该键在IDE默认实际为Run，故这不是后台自启或产品缺陷；已勘误“不启动业务应用”的操作记录，后续不再用Shift+F10当菜单键。该次应用在已授权只读demo范围，无新写库操作。退出确认按实际存活进程处理，未把它当死会话直接Disconnect。
+
 ## 依据与历史证据保全
 
 - 十九轮UI11组、Runner12组及R90/R91/R92/R94/O147/V178专册。
