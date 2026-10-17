@@ -147,7 +147,11 @@ tracing相对sql的中位P95为-5.16%、wall为-1.54%，逐轮P95增量却为+21
 
 第六轮冻结`18722bdd28db31f11b1f98e945b4f35887a427d7`实际完整测试exit0，用时15分48秒。主控核round6/test-audit.json：五片1851/1341/1629/1569/1691共8081例，external28、agent216，总815类8325/0/0/10，实际通过8315；770个计划分片类齐全，新增65类336方法全部fresh、无缺席/跳过/重复。生命周期9例全部通过，changed-tests-audit的8类119例也全部通过；菜单跨版本签名三个方法实际覆盖243/253/262。10项skip仍为Docker5、外部库1、Database classpath2、symlink1、ACP1，不扩称环境覆盖。
 
-第六轮日志SHA256 `58132017ca3f25e5032a8f4814cadbb6be9436aec396c356514abb27c1ada1e9`；test-audit SHA256 `47688e868ba7fc7a261ff1fe6346ba14c7136f2c5cfaa6ffaacb049916071b63`；changed-tests-audit SHA256 `f22e88dabeb25b3ab755bedbfec714b37f1469361dd19cb328afdc8cbb0dc4f2`。冻结后主控仅改文档。打包和同ZIP三代离线兼容继续执行，尚未预填通过；资源预算仍未通过。
+第六轮日志SHA256 `58132017ca3f25e5032a8f4814cadbb6be9436aec396c356514abb27c1ada1e9`；test-audit SHA256 `47688e868ba7fc7a261ff1fe6346ba14c7136f2c5cfaa6ffaacb049916071b63`；changed-tests-audit SHA256 `f22e88dabeb25b3ab755bedbfec714b37f1469361dd19cb328afdc8cbb0dc4f2`。冻结后主控仅改文档。随后打包、内容检查及同ZIP三代离线兼容全部通过，门禁任务已注销，报告停止写入；资源预算仍未通过。
+
+第六轮ZIP为10,213,883字节，SHA256 `0345468c14de6b25df2a3ab603c0c709ce6e2f9c76fc5a544e9df3e17525ca3a`，主JAR `41253280014e418e898b08ef4ee911bc75c7d6acc972fc788100996e297967fa`；内嵌agent仍`eeff454d3655e24c880c6ca8832363b3f2ede0bb10debe717116fc058cf37557`，与优化H09的147个条目内容及顺序一致，仅date_time不同。243/253/262新鲜verdict均Compatible，scheduled/deprecated/experimental/internal提示分别5/34/96/1、6/44/94/1、8/116/94/1；并非零警告或Marketplace在线验收。result.json SHA256 `5b64eee75952e254f831d598318d08c5f0228118760b49ba7d34d9d334ebe8b1`。
+
+第六轮结束时实际登记表为空，允许重新核查现场后固定执行最终优化产物的原500请求预算（none/sql/tracing各3轮、warm10000），使用新目录保留所有失败及受污染历史，不再重复原新18进程或长窗。启动前后及中途记录真实竞争；若再次有竞争则不判通过，若有效实验仍超预算则判失败，不把环境解释作为免验理由。该资源复验尚待结果，未授权停其他应用或修改全局协调配置。
 
 生命周期红绿证据归档`.local/sql-insight-prepare-boundary-evidence.tar.gz` SHA256 `6b185ad59758e185ce785a56d29b0e1e34f5e132ddb88c1f59a059ba46a07199`；长窗竞争证据归档`.local/sql-insight-paired5000-contention.tar.gz` SHA256 `c2831c3be27d8c241c4515bc658ff6fe28ba13057e00215b31ce1b494d6e14bb`。
 
