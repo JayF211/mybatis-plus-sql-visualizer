@@ -46,6 +46,20 @@ class SampleSelectedTableActionLimitTest : BasePlatformTestCase() {
         withLimit(99999) { assertEquals("SELECT * FROM t LIMIT 10000", templateOf("t")) }
     }
 
+    fun testPreviewMenuReusesReadOnlyTemplateSqlContract() {
+        val expected = mapOf(
+            SelectedTableTemplateKind.EXPLAIN to "EXPLAIN SELECT * FROM user",
+            SelectedTableTemplateKind.COUNT to "SELECT COUNT(*) FROM user",
+            SelectedTableTemplateKind.SAMPLE to "SELECT * FROM user LIMIT 10",
+        )
+        for ((kind, sql) in expected) {
+            val actual = renderSelectedTableTemplate(kind, "user", MySqlDialect, 10)
+            assertEquals(sql, actual)
+            org.junit.Assert.assertTrue("模板必须保持只读：$kind",
+                cn.song.mybatisplus.visualizer.execute.SqlTypeClassifier.isQuery(actual!!))
+        }
+    }
+
     fun `test 抽样与EXPLAIN按捕获方言渲染`() {
         assertEquals(
             "SELECT * FROM t FETCH FIRST 25 ROWS ONLY",

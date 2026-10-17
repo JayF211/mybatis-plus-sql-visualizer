@@ -354,13 +354,31 @@ class LogToSqlPanel(
             if (confirm != com.intellij.openapi.ui.Messages.YES) return
         }
         val dialectGateRequest = cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.rawSqlRequest(sql)
-        status(MpSqlVisualizerBundle.message("logToSql.execute.submitted"), error = false)
+        status(MpSqlVisualizerBundle.message("logToSql.execute.pending"), error = false)
         cn.song.mybatisplus.visualizer.execute.SqlExecutor.execute(
             project, sql, null, isQuery,
             onError = { errorMsg -> showExecutionError(errorMsg) },
             onErrorRich = { info -> showExecutionErrorRich(info) },
             dialectGateRequest = dialectGateRequest,
+            onSubmission = ::showSubmission,
         )
+    }
+
+    private fun showSubmission(outcome: cn.song.mybatisplus.visualizer.execute.ExecutionSubmission) {
+        if (!ApplicationManager.getApplication().isDispatchThread) {
+            ApplicationManager.getApplication().invokeLater(
+                { showSubmission(outcome) }, com.intellij.openapi.application.ModalityState.any(),
+            )
+            return
+        }
+        when (outcome) {
+            cn.song.mybatisplus.visualizer.execute.ExecutionSubmission.SUBMITTED ->
+                status(MpSqlVisualizerBundle.message("logToSql.execute.submitted"), error = false)
+            cn.song.mybatisplus.visualizer.execute.ExecutionSubmission.CANCELLED ->
+                status(MpSqlVisualizerBundle.message("logToSql.execute.cancelled"), error = false)
+            cn.song.mybatisplus.visualizer.execute.ExecutionSubmission.BLOCKED ->
+                showExecutionError(MpSqlVisualizerBundle.message("logToSql.execute.blocked"))
+        }
     }
 
     /** T-Perf-14：后台转换进行中标志（防重入）。 */

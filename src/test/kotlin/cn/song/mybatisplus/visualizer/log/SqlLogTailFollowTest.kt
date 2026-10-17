@@ -256,73 +256,13 @@ class SqlLogTailFollowTest : BasePlatformTestCase() {
         }
     }
 
-    fun testUi012DiagnosticsDisabledDoesNotEmit() {
-        checkUi012DiagnosticOutput(enabled = false)
-    }
-
-    fun testUi012DiagnosticsEnabledContainsGeometryWithoutEntryData() {
-        checkUi012DiagnosticOutput(enabled = true)
-    }
-
-    private fun checkUi012DiagnosticOutput(enabled: Boolean) {
-        val property = "mpsv.ui012.diagnostics"
-        val saved = System.getProperty(property)
-        System.setProperty(property, enabled.toString())
-        var manager: SqlLogManager? = null
-        var panel: SqlLogPanel? = null
-        try {
-            val logManager = SqlLogManager(project).also { manager = it }
-            val logPanel = SqlLogPanel(project, logManager).also { panel = it }
-            logManager.entries.setPaused(false)
-            val secret = "UI012_PRIVATE_SQL_AND_PARAMETER"
-            logManager.entries.addEntry(LogSqlEntry("SELECT '$secret'", "SELECT '$secret'", emptyList()))
-            UIUtil.dispatchAllInvocationEvents()
-            val messages = mutableListOf<String>()
-            val sizeBefore = logPanel.list.size
-            val scroll = requireNotNull(logPanel.listScrollPaneForTest)
-            val positionBefore = scroll.viewport.viewPosition
-            val layoutsBefore = logPanel.list.diagnosticLayouts
-            val preferredReadsBefore = logPanel.list.diagnosticPreferredReads
-            logPanel.emitUi012Geometry("before", 1) { messages.add(it) }
-            if (!enabled) {
-                assertTrue("未开启属性时不得发出诊断日志", messages.isEmpty())
-                assertEquals("关闭时不得探测首选尺寸", preferredReadsBefore, logPanel.list.diagnosticPreferredReads)
-            } else {
-                assertEquals("每次采样只发一行", 1, messages.size)
-                val line = messages.single()
-                listOf("UI012 phase=before action=1", "edt=", "buffer=1", "model=1", "ui=", "fixed=",
-                    "size=", "visible=", "view=", "extent=", "position=", "bar=", "first=", "last=",
-                    "preferred=", "paints=", "layouts=", "preferredReads=", "rendererCalls=",
-                    "queryLayoutDelta=", "queryRendererDelta=", "ancestors=").forEach { field ->
-                    assertTrue("诊断缺少字段 $field", line.contains(field))
-                }
-                assertFalse("不得输出条目正文或参数", line.contains(secret))
-                assertFalse("不得输出SQL", line.contains("SELECT"))
-                assertFalse("不得输出项目路径", project.basePath?.let(line::contains) == true)
-                assertFalse("不得输出组件toString携带的换行", line.contains('\n') || line.contains('\r'))
-            }
-            assertEquals("诊断不得主动执行布局", layoutsBefore, logPanel.list.diagnosticLayouts)
-            assertEquals("诊断不得修改列表尺寸", sizeBefore, logPanel.list.size)
-            assertEquals("诊断不得滚动视口", positionBefore, scroll.viewport.viewPosition)
-        } finally {
-            try {
-                panel?.dispose()
-            } finally {
-                try {
-                    manager?.dispose()
-                } finally {
-                    if (saved == null) System.clearProperty(property) else System.setProperty(property, saved)
-                }
-            }
-        }
-    }
-
     /**
-     * UI012 复现探针：完整面板（JBTabs → previewHost → scrollPane → list），不是裸 JList。
+     * UI012 调查保留的完整容器几何回归：完整面板（JBTabs → previewHost → scrollPane → list），不是裸 JList。
      * 不开 JFrame、不驱动 GUI。测试比例不等同于原生 Zoom/LAF；通过仅能说明此夹具未复现。
-     * 已知差异：settle 每步递归四次 doLayout，可能主动补齐真机缺失的布局；绿灯不排除 UI012。
-     * 100%/125% 已跑出的实际行高均为107，比例设置不等价于原生Zoom的字体/LAF变化。
-     * 虽未调用 updateUI/revalidate 或重新设置行高，仍不是零干预观察，真机另用属性门控日志。
+     * 已知差异：settle 每步递归四次 doLayout，可能主动补齐真机缺失的布局，不能作为现场根因证据。
+     * 100%/125% 此前跑出的实际行高均为107，比例设置不等价于原生Zoom的字体/LAF变化。
+     * 虽未调用 updateUI/revalidate 或重新设置行高，仍不是零干预观察。
+     * 本轮 UI012 已定位为时间关联错序；此几何夹具不是该根因的复现或修复证明，临时生产诊断已移除。
      */
     fun testUi012FullContainerGeometryAt100Percent() = checkUi012Geometry(1.0f)
 

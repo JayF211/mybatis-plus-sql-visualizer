@@ -6,6 +6,9 @@ import com.intellij.notification.NotificationType
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
 
+/** 提交回执，不代表数据库执行成功；与旧准备/选择 Boolean 回调分离。 */
+enum class ExecutionSubmission { SUBMITTED, CANCELLED, BLOCKED }
+
 /**
  * SQL 执行引擎（M36，反射隔离）：弹出原生数据源选择 → Database 控制台内嵌执行。
  *
@@ -41,13 +44,26 @@ object SqlExecutor {
         wholeScriptExec: Boolean = false,
         dialectGateRequest: ExecutionDialectGate.Request? = null,
         onDialectGate: ((ExecutionDialectGate.Verdict) -> Unit)? = null,
+        onSubmission: ((ExecutionSubmission) -> Unit)? = null,
     ) {
+        val completed = java.util.concurrent.atomic.AtomicBoolean(false)
+        val receipt: (ExecutionSubmission) -> Unit = { outcome ->
+            if (completed.compareAndSet(false, true)) onSubmission?.invoke(outcome)
+        }
         DataSourceSelector.selectAndExecute(
             project, sql,
             onConsole = onConsole,
             onEditor = onEditor,
-            onError = onError,
-            onErrorRich = onErrorRich,
+            onError = if (onSubmission == null) onError else { message ->
+                receipt(ExecutionSubmission.BLOCKED)
+                onError?.invoke(message)
+                Unit
+            },
+            // 富错误通道仍按既有优先级投递，未提供时不可用空 lambda 吞掉旧通道。
+            onErrorRich = if (onSubmission == null) onErrorRich else onErrorRich?.let { sink -> { info: ExecutionErrorInfo ->
+                receipt(ExecutionSubmission.BLOCKED)
+                sink(info)
+            } },
             callback = { success ->
                 if (!success) {
                     // Community 或失败时提示
@@ -59,6 +75,7 @@ object SqlExecutor {
             wholeScriptExec = wholeScriptExec,
             dialectGateRequest = dialectGateRequest,
             onDialectGate = onDialectGate,
+            onSubmission = if (onSubmission == null) null else receipt,
         )
     }
 

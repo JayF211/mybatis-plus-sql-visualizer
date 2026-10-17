@@ -227,6 +227,25 @@ class ExecutionDialectGateTest {
     }
 
     @Test
+    fun `submission receipt is threaded through cold reuse queued and native fallback paths`() {
+        val root = repoRoot()
+        val results = File(root, "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResults.kt").readText()
+        val console = File(root, "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorConsole.kt").readText()
+        val panel = File(root, "src/main/kotlin/cn/song/mybatisplus/visualizer/log/LogToSqlPanel.kt").readText()
+        assertTrue(results.contains("dialectGateRequest, onDialectGate, onSubmission,"))
+        assertTrue(results.contains("onSubmission = onSubmission"))
+        assertTrue(console.contains("onSubmission = selectPrepareSubmission(queuedIntent, onSubmission)"))
+        assertEquals("native 与 fallback 均从既有 afterSubmitted 转发回执", 2,
+            console.lineSequence().count { it.contains("afterSubmitted(project") && it.contains("onSubmission = onSubmission") })
+        val entry = sourceSlice(panel, "private fun executeSql(sql: String)", "private fun showSubmission(")
+        assertFalse("发起执行不能预报成功", entry.contains("logToSql.execute.submitted"))
+        assertTrue(entry.contains("logToSql.execute.pending"))
+        assertTrue(entry.contains("onSubmission = ::showSubmission"))
+        val runner = sourceSlice(results, "internal fun DataSourceSelector.runRunner(", "internal fun DataSourceSelector.execSilentProbe(")
+        assertFalse("runner 返回不能发成功回执", runner.contains("ExecutionSubmission.SUBMITTED"))
+    }
+
+    @Test
     fun `all explicit execution entry points carry requests and uncovered list is empty`() {
         val root = repoRoot()
         val preview = File(root, "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelExecution.kt").readText()

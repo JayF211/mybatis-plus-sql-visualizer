@@ -179,10 +179,12 @@ internal fun DataSourceSelector.chooseAndPrepare(
     wholeScriptExec: Boolean = false,
     dialectGateRequest: ExecutionDialectGate.Request? = null,
     onDialectGate: ((ExecutionDialectGate.Verdict) -> Unit)? = null,
+    onSubmission: ((ExecutionSubmission) -> Unit)? = null,
 ) {
     val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
     if (!ExecuteSqlSupport.isAvailable()) {
         LOG.warn("[M36] database plugin NOT available, abort")
+        onSubmission?.invoke(ExecutionSubmission.BLOCKED)
         onError?.invoke(MpSqlVisualizerBundle.message("execute.noDatabase"))
         callback?.invoke(false)
         return
@@ -193,12 +195,12 @@ internal fun DataSourceSelector.chooseAndPrepare(
     // 两条链的 executionGeneration++ 与提交/取消判定交错 → 提交被取消或结果组件被换掉
     //（结果区空白、二击正常的 H1 根因）。单飞判定先于共享复用：冷启时 sharedConsole 尚未
     // 落地，复用必不命中，单飞是唯一闸门。
-    val queuedIntent = if (executeAfterPrepare) {
-        QueuedExecuteIntent(
-            onConsole, onEditor, onError, onErrorRich, wholeScriptExec,
-            dialectGateRequest, onDialectGate,
-        )
-    } else null
+    // 预览也持有身份，超时后旧 session 回调不能消费下一链的队列。
+    val queuedIntent = QueuedExecuteIntent(
+        onConsole, onEditor, onError, onErrorRich, wholeScriptExec,
+        dialectGateRequest, onDialectGate, onSubmission,
+    )
+    val onSubmission = queuedIntent.onSubmission
     var ownsGate = false
     when (prepareGate.tryEnter(executeAfterPrepare, queuedIntent)) {
         PrepareGateDecision.QUEUE_ONLY -> {
@@ -211,6 +213,12 @@ internal fun DataSourceSelector.chooseAndPrepare(
             LOG.info("[M36][T-FirstExec F1] prepare chain in flight: preview prepare passes through (no gate ownership)")
     }
 
+    val prepareOwner = queuedIntent.takeIf { ownsGate }
+    // 只有 owner 看守后台；排队 B 不另开计时器截断 A 的用户交互。
+    if (prepareOwner != null) javax.swing.Timer(1000) { event ->
+        if (prepareGate.expire(prepareOwner)) (event.source as javax.swing.Timer).stop()
+    }.start()
+
     // T-MysqlGStrip T-MG-02：提交链总口——SQL 文本进入 exec 文件/控制台文档之前剥离 MySQL CLI
     // 的 `\G` 后缀（DBX #35）。此点数据源尚未选定（runner 弹窗在下方），方言不可得 → 按计划
     // §三 定案默认剥离（`\G` 非任何方言合法语法，剥离无害）。剥后文本写入 exec 文件，
@@ -222,11 +230,11 @@ internal fun DataSourceSelector.chooseAndPrepare(
     // 显式执行路径同样复用（结果落在已嵌入面板）；用户切换数据源走弹窗 → 新建并替换共享缓存。
     if (reuseSharedConsole(
             project, submitSql, executeAfterPrepare, onConsole, onEditor, onError, callback, onErrorRich,
-            wholeScriptExec, dialectGateRequest, onDialectGate,
+            wholeScriptExec, dialectGateRequest, onDialectGate, onSubmission, prepareOwner,
         )) {
         // T-FirstExecResultInvisible F1：复用路径同步收敛（不建链、不经 prepareAfterEditorResolved）
         // ——门持有链就地终结复位；PASS_THROUGH 预览链不动门。
-        if (ownsGate) prepareGate.finishPrepare()
+        if (ownsGate) prepareGate.finishPrepare(prepareOwner)
         return
     }
 
@@ -236,9 +244,8 @@ internal fun DataSourceSelector.chooseAndPrepare(
         // T-ExecCopyFix F2a：携带阶段原因（stage 标识/异常摘要），本地化文案——
         // 用户真机曾只见笼统英文 "Failed to create temporary SQL file"，无从归因
         LOG.warn("[M36] createTempPsiFile failed (reason=${lastTempFileFailure}), abort")
-        onError?.invoke(MpSqlVisualizerBundle.message("execute.tempFile.failed", lastTempFileFailure ?: "unknown"))
-        // T-FirstExecResultInvisible F1：链就此终结，复位单飞位（否则后续执行被永久排队）
-        if (ownsGate) prepareGate.finishPrepare()
+        failPrepareRequests(prepareGate, prepareOwner, onSubmission, onError, null,
+            MpSqlVisualizerBundle.message("execute.tempFile.failed", lastTempFileFailure ?: "unknown"))
         callback?.invoke(false)
         return
     }
@@ -246,23 +253,34 @@ internal fun DataSourceSelector.chooseAndPrepare(
 
     // consumer：runner.run 建好 session 后回调 → 续接准备链（attachConsole → 拼合 → 可选执行）
     var chosenRunnerName: String? = null
+    fun isPrepareActive(): Boolean = !queuedIntent.isCompleted && (!ownsGate || prepareGate.isOwner(queuedIntent))
+    val runnerError: (String) -> Unit = { message ->
+        if (isPrepareActive()) failPrepareRequests(prepareGate, prepareOwner, onSubmission, onError, null, message)
+    }
     val sessionConsumer = com.intellij.util.Consumer<Any> { session ->
+        if (!isPrepareActive()) return@Consumer
         val actualTarget = ExecutionDialectGate.fromSession(session)
         LOG.info(
             "[M36][O-145] session created: ${session?.javaClass?.name}, " +
                 "target=${actualTarget?.stableId}/${actualTarget?.dialectName}, execute=$executeAfterPrepare",
         )
-        if (!allowDialectGate(project, dialectGateRequest, actualTarget, onDialectGate, onError)) {
-            abortPrepareGate(ownsGate, dialectGateRequest?.let {
+        val allowed = prepareGate.duringInteraction(prepareOwner) {
+            allowDialectGate(project, dialectGateRequest, actualTarget, onDialectGate, onError, onSubmission)
+        }
+        if (!allowed) {
+            abortPrepareGate(prepareOwner, dialectGateRequest?.let {
                 dialectGateMessage(ExecutionDialectGate.evaluate(it, actualTarget?.dialectName))
             }, LOG)
             callback?.invoke(false)
             return@Consumer
         }
+        // 确认框的模态事件泵期间可能超时/被替代，返回 Yes 也不能复活旧准备链。
+        if (!isPrepareActive()) return@Consumer
         prepareInConsole(
             project, session, vf, executeAfterPrepare, chosenRunnerName, onConsole, onEditor, onError,
-            onErrorRich, wholeScriptExec, ownsPrepareGate = ownsGate,
+            onErrorRich, wholeScriptExec, prepareOwner = prepareOwner,
             dialectGateRequest = dialectGateRequest, onDialectGate = onDialectGate,
+            onSubmission = onSubmission, isPrepareActive = ::isPrepareActive,
         )
     }
 
@@ -293,7 +311,7 @@ internal fun DataSourceSelector.chooseAndPrepare(
             val matchedName = getRunnerName(matched)
             LOG.info("[M36] silent reuse last runner: $matchedName (memory id=${memory.dataSourceId})")
             chosenRunnerName = matchedName
-            runRunner(project, matched, silent = true, onError)
+            runRunner(project, matched, silent = true, runnerError)
             callback?.invoke(true)
             return
         }
@@ -327,18 +345,22 @@ internal fun DataSourceSelector.chooseAndPrepare(
             // 补全 M36.5 预览路径（onError=null）设计意图，避免每次双击预览抢占侧边栏。
             // M36.3：无数据源时通知 UI 从「执行中」恢复
             // T-FirstExecResultInvisible F1：链就此终结，复位单飞位（否则后续执行被永久排队）
-            if (ownsGate) prepareGate.finishPrepare()
+            onSubmission(ExecutionSubmission.BLOCKED)
+            if (ownsGate) prepareGate.abort(prepareOwner, ExecutionSubmission.BLOCKED)
             callback?.invoke(false)
         }
         runners.size == 1 && shouldBeChosenIfAlone(runners.first()) -> {
             LOG.info("[M36] single runner, run directly")
             chosenRunnerName = getRunnerName(runners.first())
-            runRunner(project, runners.first(), silent = !executeAfterPrepare, onError)
+            runRunner(project, runners.first(), silent = !executeAfterPrepare, runnerError)
             callback?.invoke(true)
         }
         else -> {
             LOG.info("[M36] show popup with ${runners.size} runners")
+            prepareGate.beginInteraction(prepareOwner)
             showRunnerPopup(project, runners) { runner ->
+                prepareGate.endInteraction(prepareOwner)
+                if (!isPrepareActive()) return@showRunnerPopup
                 LOG.info("[M36] popup selected: ${runner?.let { getRunnerName(it) }}")
                 // M36.5：记住选择（prepareConsole 路径下次静默复用；控制台创建时也会统一记忆）
                 if (!executeAfterPrepare && runner != null) {
@@ -347,9 +369,12 @@ internal fun DataSourceSelector.chooseAndPrepare(
                 if (runner != null) chosenRunnerName = getRunnerName(runner)
                 callback?.invoke(runner != null)
                 // T-FirstExecResultInvisible F1：用户取消弹窗 = 链就此终结，复位单飞位
-                if (runner == null && ownsGate) prepareGate.finishPrepare()
+                if (runner == null) {
+                    if (ownsGate) prepareGate.abort(prepareOwner, ExecutionSubmission.CANCELLED)
+                    onSubmission(ExecutionSubmission.CANCELLED)
+                }
                 // 弹窗中用户刚做了主动选择，失败仍需模态引导（silent=false）
-                if (runner != null) runRunner(project, runner, onError = onError)
+                if (runner != null) runRunner(project, runner, onError = runnerError)
             }
         }
     }
@@ -372,6 +397,8 @@ internal fun DataSourceSelector.reuseSharedConsole(
     wholeScriptExec: Boolean = false,
     dialectGateRequest: ExecutionDialectGate.Request? = null,
     onDialectGate: ((ExecutionDialectGate.Verdict) -> Unit)? = null,
+    onSubmission: ((ExecutionSubmission) -> Unit)? = null,
+    prepareOwner: QueuedExecuteIntent? = null,
 ): Boolean {
     val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
     val console = sharedConsole ?: return false
@@ -514,12 +541,14 @@ internal fun DataSourceSelector.reuseSharedConsole(
     clearConsolePrompt(console, LOG)
     LOG.info("[M36] shared console reused (ds=$dsName, execute=$executeAfterPrepare, liveResult=${liveResult != null})")
     if (executeAfterPrepare) {
+        if (prepareOwner != null && !prepareGate.beginSubmission(prepareOwner)) return true
         executeOnConsole(
             project, console, editor, refreshedModel ?: scriptModel, execOption, sharedUi,
             onResultsReady = null, onError = onError, onErrorRich = onErrorRich,
             wholeScriptExec = wholeScriptExec,
             dialectGateRequest = dialectGateRequest ?: sharedDialectGateRequest,
             onDialectGate = onDialectGate ?: sharedDialectGateCallback,
+            onSubmission = onSubmission,
         )
     }
     callback?.invoke(true)
@@ -842,7 +871,9 @@ internal fun DataSourceSelector.afterSubmitted(
     demotedOverride: Boolean = false,
     sqlText: String? = null,
     onErrorRich: ((ExecutionErrorInfo) -> Unit)? = null,
+    onSubmission: ((ExecutionSubmission) -> Unit)? = null,
 ) {
+    onSubmission?.invoke(ExecutionSubmission.SUBMITTED)
     // M36.5.44：真实提交时刻递增换入代际——作废上一个执行遗留的 refresh Timer（防滞后一轮）。
     swapGeneration++
     // write-safe: UI-only（纯 Swing/只读，无文档写）

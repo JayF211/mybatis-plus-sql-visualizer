@@ -1,6 +1,12 @@
 package cn.song.mybatisplus.visualizer.log
 
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import cn.song.mybatisplus.visualizer.execute.DataSourceSelector
+import cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate
+import cn.song.mybatisplus.visualizer.execute.ExecutionSubmission
+import cn.song.mybatisplus.visualizer.execute.afterSubmitted
+import cn.song.mybatisplus.visualizer.execute.runRunner
+import cn.song.mybatisplus.visualizer.execute.executeOnConsole
 import cn.song.mybatisplus.visualizer.ui.DegradationBanner
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
@@ -78,6 +84,174 @@ class LogToSqlPanelExecuteTest : BasePlatformTestCase() {
         UiTextClipboard.copy("sentinel")
         copy.doClick()
         assertEquals(expected, UiTextClipboard.readText())
+    }
+
+    private fun submissionSink(): (ExecutionSubmission) -> Unit {
+        val method = panel.javaClass.getDeclaredMethod("showSubmission", ExecutionSubmission::class.java)
+            .apply { isAccessible = true }
+        return { method.invoke(panel, it); Unit }
+    }
+
+    private fun errorSink(): (String) -> Unit {
+        val method = panel.javaClass.getDeclaredMethod("showExecutionError", String::class.java)
+            .apply { isAccessible = true }
+        return { method.invoke(panel, it); Unit }
+    }
+
+    /** 与真实 runner 一样：run 返回 Unit，session consumer 可以拒绝且不抛异常。 */
+    class CallbackRunner(private val callback: () -> Unit) {
+        fun run() = callback()
+        fun getName(): String = "mp_demo"
+    }
+
+    fun testUnknownQueryNoCancelsWithoutSubmissionEvenWhenRunnerReturnsNormally() {
+        val receipt = submissionSink()
+        val target = ExecutionDialectGate.Target(Any(), "ds-1", "mp_demo", "MySQL", "MySQL")
+        var reachedSubmit = false
+        DataSourceSelector.unknownTargetQueryConfirmationForTest = { false }
+        try {
+            val runner = CallbackRunner {
+                if (DataSourceSelector.allowDialectGate(project,
+                        ExecutionDialectGate.rawSqlRequest("SELECT * FROM user WHERE id=1"),
+                        target, null, errorSink(), receipt)) {
+                    reachedSubmit = true
+                }
+            }
+            DataSourceSelector.runRunner(project, runner, silent = true, onError = errorSink())
+            assertFalse("No 必须阻断提交续链", reachedSubmit)
+            assertEquals(MpSqlVisualizerBundle.message("logToSql.execute.cancelled"), panel.statusForTest())
+        } finally {
+            DataSourceSelector.unknownTargetQueryConfirmationForTest = null
+        }
+    }
+
+    fun testRawExplainIsBlockedNotCancelledAndKeepsDetailedError() {
+        val request = ExecutionDialectGate.rawSqlRequest("EXPLAIN SELECT * FROM user WHERE id=1")
+        val target = ExecutionDialectGate.Target(Any(), "ds-1", "mp_demo", "MySQL", "MySQL")
+        val outcomes = mutableListOf<ExecutionSubmission>()
+        DataSourceSelector.unknownTargetQueryConfirmationForTest = { error("EXPLAIN 不应弹查询确认") }
+        try {
+            assertFalse(DataSourceSelector.allowDialectGate(project, request, target, null, errorSink()) {
+                outcomes += it
+                submissionSink()(it)
+            })
+            assertEquals(listOf(ExecutionSubmission.BLOCKED), outcomes)
+            assertEquals(DataSourceSelector.dialectGateMessage(ExecutionDialectGate.evaluate(request, "MySQL")),
+                panel.statusForTest())
+            assertFalse(panel.statusForTest() == MpSqlVisualizerBundle.message("logToSql.execute.cancelled"))
+        } finally {
+            DataSourceSelector.unknownTargetQueryConfirmationForTest = null
+        }
+    }
+
+    fun testYesAndRunnerReturnDoNotReportSuccessUntilExistingSubmissionReceipt() {
+        val receipt = submissionSink()
+        val before = panel.statusForTest()
+        DataSourceSelector.unknownTargetQueryConfirmationForTest = { true }
+        try {
+            DataSourceSelector.runRunner(project, CallbackRunner {
+                assertTrue(DataSourceSelector.allowDialectGate(project,
+                    ExecutionDialectGate.rawSqlRequest("SELECT 1"), null, null, errorSink(), receipt))
+            }, silent = true, onError = errorSink())
+            assertEquals("确认 Yes 和 runner 返回均非提交", before, panel.statusForTest())
+            val oldGeneration = DataSourceSelector.swapGeneration
+            try {
+                // 调真实提交收口而非直接伪造 success 状态；ui=null 不开启结果轮询。
+                DataSourceSelector.afterSubmitted(project, null, Any(), null, null,
+                    com.intellij.openapi.diagnostic.Logger.getInstance(javaClass), onSubmission = receipt)
+                assertEquals(MpSqlVisualizerBundle.message("logToSql.execute.submitted"), panel.statusForTest())
+                com.intellij.testFramework.PlatformTestUtil.dispatchAllEventsInIdeEventQueue()
+            } finally {
+                DataSourceSelector.swapGeneration = oldGeneration
+            }
+        } finally {
+            DataSourceSelector.unknownTargetQueryConfirmationForTest = null
+        }
+    }
+
+    fun testUnknownQueryConfirmationOverOneMinuteKeepsNoAndYesDistinct() {
+        for (yes in listOf(false, true)) {
+            var now = 0L
+            val gate = cn.song.mybatisplus.visualizer.execute.PrepareSingleFlightGate(clock = { now })
+            val outcomes = mutableListOf<ExecutionSubmission>()
+            val request = cn.song.mybatisplus.visualizer.execute.QueuedExecuteIntent(null, null, errorSink(), null, false,
+                submissionSink = { outcomes += it; submissionSink()(it) })
+            gate.tryEnter(true, request)
+            DataSourceSelector.unknownTargetQueryConfirmationForTest = {
+                now += 120_000
+                assertFalse(gate.expire(request)) // 手动timer，复现模态事件泵，不sleep
+                yes
+            }
+            try {
+                val allowed = gate.duringInteraction(request) {
+                    DataSourceSelector.allowDialectGate(project, ExecutionDialectGate.rawSqlRequest("SELECT 1"),
+                        null, null, errorSink(), request.onSubmission)
+                }
+                assertEquals(yes, allowed)
+                if (yes) {
+                    assertTrue("Yes本身不是提交", outcomes.isEmpty())
+                    assertFalse("确认返回后旧timer仍不得立即过期", gate.expire(request))
+                    val oldGeneration = DataSourceSelector.swapGeneration
+                    try {
+                        DataSourceSelector.afterSubmitted(project, null, Any(), null, null,
+                            com.intellij.openapi.diagnostic.Logger.getInstance(javaClass), onSubmission = request.onSubmission)
+                        com.intellij.testFramework.PlatformTestUtil.dispatchAllEventsInIdeEventQueue()
+                    } finally { DataSourceSelector.swapGeneration = oldGeneration }
+                    assertEquals(listOf(ExecutionSubmission.SUBMITTED), outcomes)
+                } else {
+                    assertEquals(listOf(ExecutionSubmission.CANCELLED), outcomes)
+                    assertEquals(MpSqlVisualizerBundle.message("logToSql.execute.cancelled"), panel.statusForTest())
+                }
+            } finally { DataSourceSelector.unknownTargetQueryConfirmationForTest = null }
+        }
+    }
+
+    fun testConsoleSubmissionGateNoStopsBeforeMutationOrNativeReflection() {
+        val editor = myFixture.configureByText("query.sql", "SELECT 1").let { myFixture.editor }
+        val before = editor.document.text
+        DataSourceSelector.unknownTargetQueryConfirmationForTest = { false }
+        try {
+            // 假 console 无原生方法：若 No 后越过真实总口闸门，就会进反射失败而覆盖取消状态。
+            DataSourceSelector.executeOnConsole(project, Any(), editor, Any(), Any(), null,
+                onResultsReady = null, onError = errorSink(),
+                dialectGateRequest = ExecutionDialectGate.rawSqlRequest(before), onSubmission = submissionSink())
+            assertEquals(before, editor.document.text)
+            assertEquals(MpSqlVisualizerBundle.message("logToSql.execute.cancelled"), panel.statusForTest())
+        } finally {
+            DataSourceSelector.unknownTargetQueryConfirmationForTest = null
+        }
+    }
+
+    fun testPlatformPopupSelectionDisposeIsNotUserCancellation() {
+        val runner = CallbackRunner { }
+        val selected = mutableListOf<Any?>()
+        val step = DataSourceSelector.createRunnerPopupStep(project, listOf(runner)) { selected += it }
+        val popup = com.intellij.ui.popup.list.ListPopupImpl(project, step)
+        try {
+            popup.list.selectedIndex = 0
+            // headless 不创建窗口；只置平台 SHOWN 状态，随后完整走真实
+            // handleSelect → disposeAllParents → AbstractPopup.dispose → WizardPopup.cancel。
+            // 不直接调 step.onChosen/canceled/getFinalRunnable，必须覆盖现场的 cancel-before-final。
+            val state = com.intellij.ui.popup.AbstractPopup::class.java.getDeclaredField("myState")
+                .apply { isAccessible = true }
+            state.set(popup, state.type.enumConstants.single { (it as Enum<*>).name == "SHOWN" })
+            popup.handleSelect(true)
+            com.intellij.testFramework.PlatformTestUtil.dispatchAllEventsInIdeEventQueue()
+            assertEquals("平台选择关闭不得先送 null", listOf(runner), selected)
+            assertTrue(popup.isDisposed)
+        } finally {
+            if (!popup.isDisposed) com.intellij.openapi.util.Disposer.dispose(popup)
+        }
+    }
+
+    fun testPlatformPopupEscapeReportsCancellationOnce() {
+        val selected = mutableListOf<Any?>()
+        val popup = com.intellij.ui.popup.list.ListPopupImpl(project,
+            DataSourceSelector.createRunnerPopupStep(project, listOf(CallbackRunner { })) { selected += it })
+        popup.cancel()
+        com.intellij.testFramework.PlatformTestUtil.dispatchAllEventsInIdeEventQueue()
+        assertEquals(listOf<Any?>(null), selected)
+        assertTrue(popup.isDisposed)
     }
 
     // ---------- #2：诚实降级横幅 ----------

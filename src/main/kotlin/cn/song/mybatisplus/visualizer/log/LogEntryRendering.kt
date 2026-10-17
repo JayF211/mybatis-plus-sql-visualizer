@@ -311,9 +311,6 @@ internal fun formatSourceFragment(entry: LogSqlEntry, isSelected: Boolean): Pair
  * 抽为具名 internal 类，便于单元测试直接渲染各种条目状态、锁定配色语义。
  */
 internal class LogEntryListCellRenderer : JPanel(BorderLayout()), javax.swing.ListCellRenderer<Any?> {
-    internal var diagnosticRendererCalls = 0L
-        private set
-
     /** 去重丢弃计数快照（徽章渲染数据源；由 [SqlLogPanel.refreshList] 更新）。 */
     var dedupeCounts: Map<String, Int> = emptyMap()
 
@@ -377,7 +374,6 @@ internal class LogEntryListCellRenderer : JPanel(BorderLayout()), javax.swing.Li
         isSelected: Boolean,
         cellHasFocus: Boolean,
     ): java.awt.Component {
-        if (ui012DiagnosticsEnabled()) diagnosticRendererCalls++
         val entry = value as? LogSqlEntry
 
         // T-CrudColor：标记形态分派（读设置 + 纯函数；热路径零分配）
