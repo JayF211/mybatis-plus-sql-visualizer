@@ -479,6 +479,10 @@ U28导出入口（本轮）：日志条目右键菜单完整列出「导出可�
 
 UI025 已合 dev `688c649d`：ExternalAnnotator 只认预览临时文件与插件自有 exec 路径、只读预热缓存；平台不分析 `.idea` 配置目录，故补 RangeHighlighter 兜底通道（红波浪/错误条/悬停建议），两通道按路径互斥；偏移取 JSqlParser token。合流后定向 `testDbSchemaAnnotator` 27/0/0/0、`PlatformSignatureCrossVersionTest` 6/0/0/0、plugin.xml 两组结构测试 BUILD SUCCESSFUL，随后以包含该提交的 tip 重跑默认 5 片全量。
 
+第三轮全量又暴露一处约定守卫红灯（`BannedApiScanServiceStateTest`）：`SqlPreviewSchemaGateTest` 在 tearDown 里再次 `project.getService(RollbackSnapshotStore)`。已改为 setUp 捕获服务引用、tearDown 只对引用调 `clearForTest()`，守卫 4/0/0/0、夹具 15/0/0/0，提交 `dfae16f5`。第四轮默认 5 片全量在无 IDE 干扰、清理旧分片结果后重跑。
+
+第三轮之后又发现同族过时断言 `JavaCodeGeneratorJoinTest.SELECT列带别名_生成selectAs`（普通 LAMBDA 也按不存在的 API 断言），按同一契约校正；MPJ_LAMBDA 的 selectAs 断言保持不变（MPJ wrapper 自身提供该重载）。反向包 298/0/0/0，提交 `70878f6c`。第五轮全量改为 `--continue`，让五个分片一次跑完以便一次看全失败面。
+
 ## 依据与历史证据保全
 
 - 十九轮UI11组、Runner12组及R90/R91/R92/R94/O147/V178专册。
