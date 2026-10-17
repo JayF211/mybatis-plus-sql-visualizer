@@ -475,7 +475,7 @@ class DbConsoleIntegrationTest : BasePlatformTestCase() {
     }
 
     /**
-     * UI016 WIP（未编译、未执行）：生产 attach 登记的 view 应在 projectClosing 阶段释放。
+     * UI016 WIP（未编译、未执行）：生产 attach 后准备中断的 view 应在 projectClosing 阶段释放。
      *
      * 这里只同步发项目关闭前通知，不销毁 BasePlatformTestCase 的共享 light project，
      * 不启动 GUI；断言时项目服务/总线仍可用。它检验关闭协议接线，不冒充完整 IDE Exit。
@@ -492,7 +492,8 @@ class DbConsoleIntegrationTest : BasePlatformTestCase() {
             val seedEditor = seed.consoleView.consoleEditor
             val file = seed.virtualFile
             var reachedNativeEditor = false
-            var active = true
+            var stoppedAfterAttach = false
+            val stopAfterAttach = "UI016_TEST_STOP_AFTER_NATIVE_ATTACH"
             val failures = mutableListOf<String>()
             DataSourceSelector.prepareInConsole(
                 project = fixture.owner,
@@ -504,15 +505,19 @@ class DbConsoleIntegrationTest : BasePlatformTestCase() {
                 onEditor = { editor ->
                     reachedNativeEditor = true
                     assertSame("必须借用真实 native 执行编辑器", seedEditor, editor)
-                    // 只测 attach 资源归属；阻止后段 schema 对齐、文档同步与延迟模型/结果轮询。
-                    active = false
+                    // 主动终止已 attach 但未完成准备的链：不得留下 view 到 application 退出。
+                    // 不把 isPrepareActive 置 false，避免把本例变成「取消入口应立即清理」的另一契约。
+                    // 此终止还阻止 schema 对齐、文档同步和延迟模型/结果轮询，不连接数据库。
+                    throw IllegalStateException(stopAfterAttach)
                 },
-                onError = { failures.add(it) },
-                isPrepareActive = { active },
+                onError = {
+                    if (it == stopAfterAttach) stoppedAfterAttach = true else failures.add(it)
+                },
             )
-            // 不吞错/不 assume skip；前提失败与末端生命周期断言分开。
+            // 仅接受精确哨兵；其他异常不吞、不 assume skip，前提失败与生命周期断言分开。
             assertTrue("前提：生产 attach 必须同步拿到真实 editor，errors=$failures", reachedNativeEditor)
-            assertTrue("前提：生产 attach 不得报错，errors=$failures", failures.isEmpty())
+            assertTrue("前提：必须在 attach 后通过精确哨兵终止准备链", stoppedAfterAttach)
+            assertTrue("前提：生产 attach 不得有哨兵以外的错误，errors=$failures", failures.isEmpty())
             val owned = requireNotNull(com.intellij.database.console.JdbcConsoleProvider.getConsole(fixture.owner, file))
             fixture.track(owned)
             assertNotSame("前提：确实经过生产 attach 替换 client", seed, owned)
