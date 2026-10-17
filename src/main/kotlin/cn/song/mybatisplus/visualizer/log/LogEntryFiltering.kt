@@ -151,33 +151,8 @@ internal open class SqlEntryList(model: ListModel<LogSqlEntry>) : TextCopyList<L
     internal fun textFor(element: LogSqlEntry): String = withTerminator(element.restoredSql)
 }
 
-internal fun ui012DiagnosticsEnabled(): Boolean =
-    System.getProperty("mpsv.ui012.diagnostics") == "true"
-
 internal class ViewportWidthSqlEntryList(model: ListModel<LogSqlEntry>) : SqlEntryList(model) {
-    internal var diagnosticPaints = 0L
-        private set
-    internal var diagnosticLayouts = 0L
-        private set
-    internal var diagnosticPreferredReads = 0L
-        private set
-
     override fun getScrollableTracksViewportWidth(): Boolean = true
-
-    override fun paintComponent(g: Graphics) {
-        if (ui012DiagnosticsEnabled()) diagnosticPaints++
-        super.paintComponent(g)
-    }
-
-    override fun doLayout() {
-        if (ui012DiagnosticsEnabled()) diagnosticLayouts++
-        super.doLayout()
-    }
-
-    override fun getPreferredSize(): Dimension {
-        if (ui012DiagnosticsEnabled()) diagnosticPreferredReads++
-        return super.getPreferredSize()
-    }
 }
 
 /**
