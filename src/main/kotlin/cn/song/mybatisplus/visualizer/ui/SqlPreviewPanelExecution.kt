@@ -650,17 +650,33 @@ internal fun SqlPreviewPanel.executeSql() {
     com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
         .info("[M36] executeSql: len=${sql.length}, prepared=${SqlExecutor.isPrepared()}")
 
+    // UI023：只读本面板已绑定目标的缓存。首次未绑定/控制台失联/库范围无法证明时跳过，
+    // 不猜项目首个数据源，不在 EDT 预热；后续选择、写确认和目标闸仍走原链。
+    val schemaTarget = if (consoleAttachedToMe()) {
+        cn.song.mybatisplus.visualizer.execute.DataSourceSelector.schemaValidationTarget(nativeConsoleEditor)
+    } else null
+    val schemaIssues = when (val outcome = cn.song.mybatisplus.visualizer.execute.SchemaValidationGate.check(proj, sql, schemaTarget)) {
+        is cn.song.mybatisplus.visualizer.execute.SchemaValidationGate.Outcome.Checked -> outcome.issues
+        else -> emptyList()
+    }
     // 1. SQL 类型分类 → 非查询语句二次确认
     val isQuery = SqlTypeClassifier.isQuery(sql)
     if (!isQuery) {
         val keyword = SqlTypeClassifier.getFirstKeyword(sql) ?: "SQL"
         val confirm = Messages.showYesNoDialog(
             proj,
-            cn.song.mybatisplus.visualizer.execute.ExecuteConfirmMessages.build(sql, keyword),
+            cn.song.mybatisplus.visualizer.execute.ExecuteConfirmMessages.build(
+                sql,
+                keyword,
+                current?.effectiveDialect,
+                cn.song.mybatisplus.visualizer.execute.SchemaValidationGate.renderLines(schemaIssues),
+            ),
             MpSqlVisualizerBundle.message("execute.confirm.dml"),
             Messages.getWarningIcon(),
         )
         if (confirm != Messages.YES) return
+    } else {
+        notifySchemaIssues(proj, schemaIssues)
     }
     // T-InjectionGate T-IG-02：`${}` raw 拼接段确认门（DML 分类判定之后追加——预览产物里的
     // raw 段带的是模拟值，执行前须用户确认值真实性；NO 直接中止，不落快照不执行）
