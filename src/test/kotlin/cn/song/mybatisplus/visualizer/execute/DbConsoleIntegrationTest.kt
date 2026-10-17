@@ -627,12 +627,23 @@ class DbConsoleIntegrationTest : BasePlatformTestCase() {
             assertTrue("session output控制台持有标题LightVirtualFile而非exec文件",
                 sessionView.consoleView.virtualFile is com.intellij.testFramework.LightVirtualFile)
             assertNotSame(client.virtualFile, sessionView.consoleView.virtualFile)
+            val foreign = fixture.create("user-session.sql")
+            val foreignView = com.intellij.openapi.application.WriteIntentReadAction.compute<Any> {
+                service.getView(foreign.session)
+            } as com.intellij.database.console.session.DatabaseSessionLogView
             NativeConsoleViewLifetime.remember(fixture.owner, client)
+            DataSourceSelector.releaseForPanel()
+            assertFalse("预览关闭不能释放session output", sessionEditor.isDisposed)
             ApplicationManager.getApplication().messageBus
                 .syncPublisher(com.intellij.openapi.project.ProjectManager.TOPIC).projectClosing(fixture.owner)
             assertNull("原client清理已经生效", service.getClientViewIfAny(client))
             assertTrue("UI016-SESSION-VIEW-RETAINED：真实attach的session output不能活到project bus释放",
                 sessionEditor.isDisposed)
+            assertFalse("只提前释放UI，不提前销毁session/连接", com.intellij.openapi.util.Disposer.isDisposed(client.session))
+            assertSame("缓存按原生协议等session销毁后移除", sessionView, service.getViewIfAny(client.session))
+            assertFalse("其他原生session output不得被枚举清理", foreignView.consoleView.consoleEditor.isDisposed)
+            com.intellij.openapi.util.Disposer.dispose(client.session)
+            assertNull("session原生销毁完成后缓存必须移除", service.getViewIfAny(client.session))
         }
     }
 
@@ -668,6 +679,7 @@ class DbConsoleIntegrationTest : BasePlatformTestCase() {
             })
             assertTrue("必须完成真实项目销毁，不能仅发送人工通知", closed)
             assertTrue("关闭后真实session editor必须已释放", editor.isDisposed)
+            assertNull("真实关闭最终必须清除sessionViews缓存", service.getViewIfAny(client.session))
             assertTrue("UI016-REAL-CLOSE-BUS：session output晚于项目总线释放，count=${busErrors.size}", busErrors.isEmpty())
         } finally {
             if (!closed) fixture.close()

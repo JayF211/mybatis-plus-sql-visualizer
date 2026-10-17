@@ -23,12 +23,16 @@ import java.util.IdentityHashMap
 @Service(Service.Level.PROJECT)
 internal class NativeConsoleViewLifetime(private val project: Project) : Disposable {
     private val views = IdentityHashMap<Disposable, Boolean>()
+    private val sessions = IdentityHashMap<Disposable, Boolean>()
 
     init {
         ApplicationManager.getApplication().messageBus.connect(this)
             .subscribe(ProjectManager.TOPIC, object : ProjectManagerListener {
                 override fun projectClosing(closing: Project) {
-                    if (closing === project) releaseViews()
+                    if (closing === project) {
+                        releaseSessionOutputs()
+                        releaseViews()
+                    }
                 }
             })
     }
@@ -40,11 +44,35 @@ internal class NativeConsoleViewLifetime(private val project: Project) : Disposa
         val clientType = Class.forName(CLIENT_CLASS, false, loader)
         val service = serviceType.getMethod("getInstance").invoke(null)
         val view = serviceType.getMethod("getClientViewIfAny", clientType).invoke(service, console) as? Disposable
-            ?: return
         synchronized(views) {
             views.keys.removeIf { Disposer.isDisposed(it) }
-            views[view] = true
+            if (view != null) views[view] = true
         }
+        // Session output与client view不是同一棵树；它可能稍后才建，关闭时只查既有view。
+        val session = clientType.getMethod("getSession").invoke(console) as? Disposable ?: return
+        synchronized(sessions) {
+            sessions.keys.removeIf { Disposer.isDisposed(it) }
+            sessions[session] = true
+        }
+    }
+
+    private fun releaseSessionOutputs() {
+        val owned = synchronized(sessions) { sessions.keys.toList().also { sessions.clear() } }
+        for (session in owned) {
+            bestEffortRegistration({
+                if (!Disposer.isDisposed(session)) {
+                    val loader = session.javaClass.classLoader
+                    val serviceType = Class.forName(SERVICE_CLASS, false, loader)
+                    val sessionType = Class.forName(SESSION_CLASS, false, loader)
+                    val service = serviceType.getMethod("getInstance").invoke(null)
+                    val output = serviceType.getMethod("getViewIfAny", sessionType).invoke(service, session) as? Disposable
+                    if (output != null && !Disposer.isDisposed(output)) Disposer.dispose(output)
+                }
+            }) { LOG.warn("Native session output disposal failed", it) }
+        }
+        // sessionViews的缓存移除回调挂session，真实关闭后续由平台销毁session并清缓存。
+        // 此处只提前释放UI，不销毁session/连接、不触发提交回滚；仅projectClosing执行，
+        // 插件卸载或预览关闭不能破坏仍可用的共享session output。
     }
 
     private fun releaseViews() {
@@ -65,11 +93,13 @@ internal class NativeConsoleViewLifetime(private val project: Project) : Disposa
     override fun dispose() {
         // 插件卸载也需要释放；正常项目关闭时projectClosing已清空，不重复释放。
         releaseViews()
+        synchronized(sessions) { sessions.clear() }
     }
 
     companion object {
         private const val SERVICE_CLASS = "com.intellij.database.console.session.DatabaseSessionViewService"
         private const val CLIENT_CLASS = "com.intellij.database.console.client.DatabaseSessionClientWithFile"
+        private const val SESSION_CLASS = "com.intellij.database.console.session.DatabaseSession"
         private val LOG = Logger.getInstance(NativeConsoleViewLifetime::class.java)
 
         fun remember(project: Project, console: Any) {

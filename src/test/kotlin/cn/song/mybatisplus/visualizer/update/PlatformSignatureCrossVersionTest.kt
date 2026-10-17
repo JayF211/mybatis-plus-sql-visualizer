@@ -123,6 +123,21 @@ class PlatformSignatureCrossVersionTest {
     class LifetimeMissing
 
     @Test
+    fun sessionOutputSignatureIsExact() {
+        fun check(service: Class<*>, client: Class<*>) = PlatformSignatureChecker.checkSessionOutputSignatures(
+            service, client, SessionType::class.java, SessionType::class.java, LifetimeView::class.java)
+        assertEquals(0, check(SessionLookup::class.java, SessionClient::class.java))
+        assertEquals(1, check(SessionLookupWrong::class.java, SessionClient::class.java))
+        assertEquals(1, check(SessionLookup::class.java, SessionClientWrong::class.java))
+        assertEquals(2, check(LifetimeMissing::class.java, LifetimeMissing::class.java))
+    }
+    class SessionType
+    class SessionClient { fun getSession(): SessionType = SessionType() }
+    class SessionClientWrong { fun getSession(): Any = SessionType() }
+    class SessionLookup { fun getViewIfAny(session: SessionType): LifetimeView? = null }
+    class SessionLookupWrong { fun getViewIfAny(session: SessionType): Any? = null }
+
+    @Test
     fun dynamicInstallApisResolveOnAllLocalTargetPlatforms() {
         val distros = SignatureDistroDiscovery.ideaDistros
         assumeTrue("本机未发现任何 IDEA 发行版，跨版本签名核验无从执行", distros.isNotEmpty())
@@ -156,6 +171,8 @@ class PlatformSignatureCrossVersionTest {
                 "EditorEx.getContextMenuGroupId[]",
                 "DatabaseSessionViewService.getInstance[]",
                 "DatabaseSessionViewService.getClientViewIfAny[DatabaseSessionClientWithFile]",
+                "DatabaseSessionClientWithFile.getSession[]",
+                "DatabaseSessionViewService.getViewIfAny[DatabaseSession]",
             )) {
                 assertTrue("IU-$family 必须实际执行UI015签名登记：$signature\n${result.output}",
                     result.output.lineSequence().any { it.startsWith("OK   $signature -> ") })

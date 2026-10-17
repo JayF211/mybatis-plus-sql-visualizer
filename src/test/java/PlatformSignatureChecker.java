@@ -159,7 +159,10 @@ public class PlatformSignatureChecker {
                 System.out.println("MISS native console LogView must implement Disposable");
                 return 1;
             }
-            return checkNativeConsoleViewLifetimeSignatures(service, client, view);
+            Class<?> session = Class.forName("com.intellij.database.console.session.DatabaseSession", false, loader);
+            Class<?> baseSession = Class.forName("com.intellij.database.run.session.Session", false, loader);
+            return checkNativeConsoleViewLifetimeSignatures(service, client, view)
+                    + checkSessionOutputSignatures(service, client, session, baseSession, view);
         } catch (Throwable t) {
             System.out.println("MISS native console lifetime: " + t);
             return 1;
@@ -181,6 +184,22 @@ public class PlatformSignatureChecker {
                 System.out.println("MISS DatabaseSessionViewService.getClientViewIfAny shape");
                 missing++;
             } else missing += check(method, "DatabaseSessionViewService.getClientViewIfAny[DatabaseSessionClientWithFile]");
+        } catch (NoSuchMethodException e) { missing++; }
+        return missing;
+    }
+
+    public static int checkSessionOutputSignatures(Class<?> service, Class<?> client, Class<?> session,
+                                                   Class<?> baseSession, Class<?> view) {
+        int missing = 0;
+        try {
+            Method m = client.getMethod("getSession");
+            if (m.getReturnType() != baseSession || java.lang.reflect.Modifier.isStatic(m.getModifiers())) missing++;
+            else missing += check(m, "DatabaseSessionClientWithFile.getSession[]");
+        } catch (NoSuchMethodException e) { missing++; }
+        try {
+            Method m = service.getMethod("getViewIfAny", session);
+            if (m.getReturnType() != view || java.lang.reflect.Modifier.isStatic(m.getModifiers())) missing++;
+            else missing += check(m, "DatabaseSessionViewService.getViewIfAny[DatabaseSession]");
         } catch (NoSuchMethodException e) { missing++; }
         return missing;
     }
