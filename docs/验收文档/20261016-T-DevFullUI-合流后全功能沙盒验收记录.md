@@ -342,6 +342,32 @@ U36/U29万条真实UI补验：将已核合成文件不覆盖复制到当前ui004
 
 第十批PID50152/主窗235412392，Light125%全屏。用户新增历史到底按钮真实复验通过：文件态隐藏（frame-5a6fe6aa），万条列表首屏点击一次后末项#10000完整可见（frame-52bcf869），过滤UI_MATCH的1000条结果点击一次仍直达原始#10000而不是前30条末项（frame-751eac3d）；无匹配时按钮灰化（frame-f42c3d5c）。收窄右栏到约255图像像素（当前截图1280×720，非声称255物理像素）后按钮仍直接可见可用，再点仍到#10000（frame-6bca7f2f）。未引入实时跟随，合流278绿与本次真实按钮证据互相补充。
 
+UI021真实首开复验：第十批直接gutter打开foreach预览，未编辑或切换预设，字段71,72,73与SQL IN(71,72,73)一致（frame-500c5c4a）；选本地mp_demo只读执行得到0行，原生SQL仍为三项（frame-ea57ad12）。关闭预览重开后再次执行正常、第二结果页可见（frame-e7a03a10），没有因关闭预览销毁共享查询能力。
+
+UI016完整IDE退出复验未完全通过：本批15:17:02/15:20:30两次native query SUBMITTED，15:42:47退出仍有一条Bus is already disposed，15:42:48正常SHUTDOWN且runIde退出0。此前ClientSession/RunnerLayoutUi/Double release其余错误本批未见，但不能据减少错误标完成。原代理续查锁定项目session log view（与已修应用client view不同）并补真实双view对照；主控并行启动独立262能力沙盒准备U39实调，不等待此续修。
+
+## 支持平台MCP真实验收
+
+独立262.9437.185沙盒`build/MPSV-FullUI-MCP262`，PID3128，主窗口39260140已全屏；未在日常IDE操作，未开启试用或代登录。通过既有gifRecord配置启动，仅用于支持能力验证，不作为243门禁或发行包。运行JAR6,069,984字节、SHA256 `9ca4d8442cff2baa8e86cad4e2daa68acdbaacbac0108b369f988b7ed07c9a0c`。原生UI启用MCP，监听127.0.0.1:64342归属PID3128已实查。
+
+- 真实tools/list恰11个sqlv工具。8个静态工具逐个调用成功并核正文：片段渲染、日志还原、无WHERE危险检查、无before-image回滚拒绝、性能建议、实体CRUD、SQL转Java、Mapper检查。完整请求/响应保存在`build/ui262-mcp-static-first.json`，日志8条MCP-AUDIT为OK。不以声明数代证调用成功。
+- 单项关sqlv_render_logs并Apply后，直接已知工具名调用返回isError=true/Tool not found，平台已移除注册且未执行工具；这是平台拒绝证据，不冒充插件内部TOOL_DISABLED路径。恢复后调用成功。
+- MCP输出脱敏开关开启后，以合成M19_FAKE_PASSWORD调用日志还原，实际返回`password = '***'`，原敏感哨兵不在返回正文；没有数据库执行。
+- 历史目录在GUI指向ui004-b5，保留上限0保护既有证据。真实history_search命中1000、maxResults1000被钳到100、最新首项id10000，坏正则返回INVALID_ARGUMENT。产物`build/ui262-mcp-history-first.json`。
+- 初次本地schema返回SCHEMA_NOT_AVAILABLE（模型0表），EXPLAIN返回DATASOURCE_UNREACHABLE；原生连接正对照证实新沙盒缺MySQL驱动与密码。经原生Download补驱动、只为本地mp_demo补既有测试凭据，Test Connection成功MySQL8.0.12（frame-8a3ba70f），随后重测在途。DELETE传给EXPLAIN明确MCP_READ_ONLY拒绝，未执行写SQL。未修改或连接其他远程业务源。
+
+UI016续修已完整合入dev121a9c60～c5b4d4fb，保留session、只提前释放LanguageConsoleImpl子树；独立真实项目关闭8绿，撤session早释8项恰2红，恢复8绿，跨版签名5绿，主控核XML。纯原生保留session对照也复现同Bus栈，明确为平台释放时序被执行链触发。运行262包仍旧，最终原路径退出复验尚待换包。
+
+MCP数据库复测完成：`build/ui262-mcp-database-connected.json`中schema-local返回真实user的13列与中文注释，明确source=mp_demo@localhost；explain-local返回MySQL PRIMARY/const/rows1计划及原生notice；DELETE仍MCP_READ_ONLY。11个不同sqlv工具均已有本次实际成功调用（8静态＋history＋schema＋explain），未以首轮环境错误代证成功。项目外受控文件参数返回SOURCE_NOT_FOUND，未读取正文；审计包含对应EXPECTED_ERROR。合成密码脱敏调用返回***，审计行不含M19_FAKE_PASSWORD。禁用直调为平台Tool not found，不声称已走到内部TOOL_DISABLED；内部闸仍以定向测试补充。网络传输仅本机沙盒端口，未外发诊断内容。
+
+## 支持平台新增问题
+
+UI022/U27：UserMapper.selectUserPageAnnotation第175行真实gutter预览，status=1、合成offset=20、page.size=10，主查询status正确回填，但LIMIT仍?,?且COUNT内status仍?；格式化与刷新不恢复（frame-284ae366/e048b229），未执行。独立`t-devui-pagination-params`正在先红与修复，主控继续其他项。
+
+UI023/U26：已内省mp_demo并通过MCP返回13列，UI Resolver日志16:56:31也明确resolved=1。预览主执行按钮对手改UPDATE user SET usernme='U26_SYNTHETIC' WHERE id=71仅给普通写确认；绑定只读SELECT成功后重试仍无建议（frame-ad831d39），均No取消未写。只读源码＋运行JAR javap交叉证实executeSql完全未调用SchemaValidationGate，只有executeAdhocSql已接；不是UPDATE SET不支持或一直未预热。已派`t-devui-schema-gate`补真实入口及判别测试，数据源作用域首缓存行为作为必须避免误报的边界保留。
+
+U40首次引导增量：262新沙盒打开UserMapper后“检测到可预览的SQL代码”通知，点“立即试用”出现本文件候选列表（frame-4f25dfaf），选第一项成功进入预览（frame-528a06f8）；尚未重启验证一次性持久化。
+
 ## 第九批并行准备产物
 
 主控在UI016/UI020后台定向期间完成以下准备，不占第三路Gradle，不把准备结果计为UI验收通过：
