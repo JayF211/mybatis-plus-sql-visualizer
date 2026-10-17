@@ -499,6 +499,8 @@ U09/U16 本轮补证：日志条目预览头部显示调用栈摘要（`调用�
 
 U08 展示层脱敏（本轮真机）：临时只读端点 `/user/fixture/by-password?pwd=secret_pwd_123` 产生条目 `#2 [2026-10-18 00:31:57] 2ms MySQL [UserController.java:123]`，列表行显示 `WHERE password = '***' AND deleted = 0;`；原生控制台仍为原始 `Parameters: secret_pwd_123(String)`（插件不改写控制台），双击打开的 SQL 预览对话框里参数与 SQL 保持原值（可编辑/可执行面需要真值）。与设置项描述“日志列表、单击预览浮层与导出文件打码”一致；采集层与展示层解耦成立。六出口中的导出文件脱敏与“原文件不擦写”仍需单独验。
 
+U22/U28 导出回放脚本（本轮真机落盘）：预览「更多 → 导出回放脚本」勾选「事务包裹」后确认，实际生成 `build/replay.sql`（368 字节，2026-10-18 00:34:41），头部声明 `dialect: MySQL`、`statements: 1`、`transaction: START TRANSACTION ... COMMIT`、`masked: literal values replaced with *** (display mask enabled)`；正文为 `START TRANSACTION; SELECT id, username FROM user WHERE password = '***' AND deleted = 0; COMMIT;`。同时证明导出文件走展示层脱敏。
+
 ## 依据与历史证据保全
 
 - 十九轮UI11组、Runner12组及R90/R91/R92/R94/O147/V178专册。
