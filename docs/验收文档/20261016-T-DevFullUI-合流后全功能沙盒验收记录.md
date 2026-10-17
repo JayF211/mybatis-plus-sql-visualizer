@@ -501,6 +501,8 @@ U08 展示层脱敏（本轮真机）：临时只读端点 `/user/fixture/by-pas
 
 U22/U28 导出回放脚本（本轮真机落盘）：预览「更多 → 导出回放脚本」勾选「事务包裹」后确认，实际生成 `build/replay.sql`（368 字节，2026-10-18 00:34:41），头部声明 `dialect: MySQL`、`statements: 1`、`transaction: START TRANSACTION ... COMMIT`、`masked: literal values replaced with *** (display mask enabled)`；正文为 `START TRANSACTION; SELECT id, username FROM user WHERE password = '***' AND deleted = 0; COMMIT;`。同时证明导出文件走展示层脱敏。
 
+U28 可移植 CSV（本轮真机落盘）：同一预览「更多 → 导出可移植 SQL」选默认 CSV，生成 `build/sql-portable.csv`（123 字节，2026-10-18 00:38），表头 `dialect,kind,upsert,sql`，行内 `MySQL,CRUD,no,"SELECT … WHERE password = '***' …"`——方言、类型、UPSERT 能力与脱敏后的 SQL 同表导出。TSV/TXT 与 SQL 三格式未逐一落盘。
+
 ## 依据与历史证据保全
 
 - 十九轮UI11组、Runner12组及R90/R91/R92/R94/O147/V178专册。
