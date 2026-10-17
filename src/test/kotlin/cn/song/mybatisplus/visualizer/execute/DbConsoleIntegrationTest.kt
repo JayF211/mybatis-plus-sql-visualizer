@@ -648,7 +648,11 @@ class DbConsoleIntegrationTest : BasePlatformTestCase() {
     }
 
     /** 真实打开并关闭独立项目，捕获目标Bus错误；无关平台错误仍按默认规则失败。 */
-    fun testUi016RealProjectCloseDoesNotLeaveSessionOutput() {
+    fun testUi016RealProjectCloseDoesNotLeaveSessionOutput() = realProjectCloseSessionOutput(true)
+
+    fun testUi016NativeOnlyRetainedSessionReproducesSameBusFailure() = realProjectCloseSessionOutput(false)
+
+    private fun realProjectCloseSessionOutput(pluginOwned: Boolean) {
         ui016LifecycleOnly = true
         val directory = java.nio.file.Files.createTempDirectory("mpsv-native-close-")
         val parent = com.intellij.openapi.util.Disposer.newDisposable("native-close-test")
@@ -663,7 +667,8 @@ class DbConsoleIntegrationTest : BasePlatformTestCase() {
                 service.getView(client.session)
             } as com.intellij.database.console.session.DatabaseSessionLogView
             val editor = output.consoleView.consoleEditor
-            NativeConsoleViewLifetime.remember(owner, client)
+            if (pluginOwned) NativeConsoleViewLifetime.remember(owner, client)
+            else service.destroyView(client) // 原生对照只留session output，与已修client链保持同一状态。
             com.intellij.testFramework.LoggedErrorProcessor.executeWith(object : com.intellij.testFramework.LoggedErrorProcessor() {
                 override fun processError(category: String, message: String, details: Array<out String>, t: Throwable?): Set<Action> {
                     if (message == "Bus is already disposed" && t != null &&
@@ -680,7 +685,14 @@ class DbConsoleIntegrationTest : BasePlatformTestCase() {
             assertTrue("必须完成真实项目销毁，不能仅发送人工通知", closed)
             assertTrue("关闭后真实session editor必须已释放", editor.isDisposed)
             assertNull("真实关闭最终必须清除sessionViews缓存", service.getViewIfAny(client.session))
-            assertTrue("UI016-REAL-CLOSE-BUS：session output晚于项目总线释放，count=${busErrors.size}", busErrors.isEmpty())
+            if (pluginOwned) {
+                assertTrue("UI016-REAL-CLOSE-BUS：session output晚于项目总线释放，count=${busErrors.size}", busErrors.isEmpty())
+            } else {
+                assertEquals("纯原生保留session应复现相同单个Bus错误，证明不是插件直接releaseEditor", 1, busErrors.size)
+                assertTrue("必须是project服务销毁期的同族栈", busErrors.single().stackTrace.any {
+                    it.className == "com.intellij.serviceContainer.ComponentManagerImpl" && it.methodName == "dispose"
+                })
+            }
         } finally {
             if (!closed) fixture.close()
             com.intellij.openapi.util.Disposer.dispose(parent)
