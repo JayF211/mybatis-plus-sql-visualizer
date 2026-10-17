@@ -531,6 +531,8 @@ U22 分享出口本轮真机：预览「更多 → 分享」打开「分享 SQL�
 - 未验：U04、U10、U17、U20、U29、U30、U33、U42、U43、视觉窄栏 11 动作溢出、二维码三态、同源色。
 - 阻断：需真实 PostgreSQL/其他方言库的 U18/U25 子项、需真实 JAR 工程的 U43、需专用剪贴板/快捷键注入的 U30、需模板选中表并执行控制台的 U15/U27 行为面——本轮沙盒的“未知渲染方言”fail-closed 会拦下手工编辑过的 ad-hoc 文本执行，插件生成预览的 gutter 入口在本沙盒不可点达。
 
+收口清理：`t-devui-en-hint`、`t-devui-storage-row`、`t-devui-schema-annotator`、`t-ui029-annotator-target` 四个已合分支及其工作树已移除（git 侧 deregister + 长路径 `\\?\` 删除，31 个工作树保留为历史在途项）；主仓与 demo 仓工作树均干净；未 push、未发布、未 dev→master。
+
 ## 依据与历史证据保全
 
 - 十九轮UI11组、Runner12组及R90/R91/R92/R94/O147/V178专册。
