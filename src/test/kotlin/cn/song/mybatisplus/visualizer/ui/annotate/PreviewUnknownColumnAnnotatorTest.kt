@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.ui.annotate
 
 import cn.song.mybatisplus.visualizer.execute.DataSourceSelector
 import cn.song.mybatisplus.visualizer.execute.SchemaValidationGate
+import cn.song.mybatisplus.visualizer.sql.DataSourceUrlProbe
 import cn.song.mybatisplus.visualizer.sql.schema.SchemaValidator
 import cn.song.mybatisplus.visualizer.ui.highlight.DatabaseSchemaResolver
 import cn.song.mybatisplus.visualizer.ui.inlay.PreviewInlayScope
@@ -41,11 +42,18 @@ class PreviewUnknownColumnAnnotatorTest : BasePlatformTestCase() {
     private val wrongSql = "UPDATE user SET usernme='x' WHERE id=71"
     private val correctSql = "UPDATE user SET username='x' WHERE id=71"
 
+    private val LAST_USED_ID = "uuid-ui029"
+    private val LAST_USED_NAME = "mp_demo@localhost"
+    private val MYSQL_URL = "jdbc:mysql://localhost:3306/mp_demo"
+
     override fun setUp() {
         super.setUp()
         DatabaseSchemaResolver.invalidateAll()
         DatabaseSchemaResolver.clearNegativeCache()
         DatabaseSchemaResolver.dataSourceDatabaseForTest = { "mp_demo" }
+        DataSourceUrlProbe.invalidateAllForTest()
+        PreviewFallbackTarget.dataSourceByNameForTest = null
+        DataSourceSelector.rememberedLookupForTest = null
     }
 
     override fun tearDown() {
@@ -54,6 +62,11 @@ class PreviewUnknownColumnAnnotatorTest : BasePlatformTestCase() {
             DataSourceSelector.schemaTargetReaderForTest = null
             DataSourceSelector.preparedEditor = null
             DataSourceSelector.preparedConsole = null
+            runCatching { DataSourceSelector.plantLastUsedMemoryForTest(project, null, null) }
+            DataSourceSelector.rememberedLookupForTest = null
+            PreviewFallbackTarget.dataSourceByNameForTest = null
+            DataSourceUrlProbe.probeByNameForTest = null
+            DataSourceUrlProbe.invalidateAllForTest()
             DatabaseSchemaResolver.dataSourceDatabaseForTest = null
             DatabaseSchemaResolver.invalidateAll()
             DatabaseSchemaResolver.clearNegativeCache()
@@ -78,6 +91,31 @@ class PreviewUnknownColumnAnnotatorTest : BasePlatformTestCase() {
         DataSourceSelector.preparedEditor = myFixture.editor
         DataSourceSelector.preparedConsole = source
         DataSourceSelector.schemaTargetReaderForTest = { SchemaValidationGate.Target(source, database) }
+    }
+
+    /**
+     * UI029 日志条目预览场景：**不做 bind**（没有已备控制台），只布置面板自身已确定的目标——
+     * last-used 记忆指向在籍 MySQL/MariaDB 数据源；数据源对象与 URL 经测试缝注入（headless
+     * 无 Database 插件），其余判定（方言/库名/缓存热度/作用域）全部走生产真链。
+     */
+    private fun configureLastUsed(
+        name: String = LAST_USED_NAME,
+        url: String = MYSQL_URL,
+        dataSource: Any? = source,
+    ) {
+        DataSourceSelector.plantLastUsedMemoryForTest(project, LAST_USED_ID, name)
+        DataSourceSelector.rememberedLookupForTest = { _ ->
+            listOf(name) to { id: String -> name.takeIf { id == LAST_USED_ID } }
+        }
+        PreviewFallbackTarget.dataSourceByNameForTest = { _, requested ->
+            dataSource.takeIf { requested == name }
+        }
+        DataSourceUrlProbe.probeByNameForTest = { _, requested -> url.takeIf { requested == name } }
+    }
+
+    /** 日志条目预览（无已备控制台）：只造预览文件，不调用 [bind]。 */
+    private fun configureLogPreview(name: String, sql: String) {
+        myFixture.configureByText(name, sql)
     }
 
     /** ExternalAnnotator 通道：非 `.idea` 的 fixture 文件（daemon 会分析）。 */
@@ -178,6 +216,107 @@ class PreviewUnknownColumnAnnotatorTest : BasePlatformTestCase() {
         assertTrue("无绑定目标不得标注", annotatorErrors().isEmpty())
     }
 
+    /**
+     * UI029 根因证据：从 SQL 日志条目打开的预览由面板自建编辑器，**没有已备控制台**
+     * （preparedEditor/preparedConsole 均为 null）→ 旧目标链
+     * [DataSourceSelector.schemaValidationTarget] 必然返回 null，标注整链被跳过。
+     * 本用例只断言旧入口的 null 事实，不受回落分支影响。
+     */
+    fun testLogPreviewWithoutPreparedConsoleHasNoLegacyTarget() {
+        warm()
+        myFixture.configureByText(PreviewInlayScope.PREVIEW_FILE_NAME_SAMPLE, wrongSql)
+        assertNull(
+            "日志预览无已备控制台：旧目标链必须为 null",
+            DataSourceSelector.schemaValidationTarget(myFixture.editor.document),
+        )
+    }
+
+    // ------------------------------------------------------------------
+    // UI029：日志条目预览的回落目标（last-used 记忆，无已备控制台）
+    // ------------------------------------------------------------------
+
+    fun testLogPreviewWithLastUsedMysqlGetsExactlyOneRed() {
+        warm()
+        configureLastUsed()
+        configureLogPreview(PreviewInlayScope.PREVIEW_FILE_NAME_SAMPLE, wrongSql)
+        val errors = annotatorErrors()
+        assertEquals("日志预览应恰有一条错列标注", 1, errors.size)
+        val info = errors.single()
+        val text = myFixture.editor.document.text
+        assertEquals("标注必须落在真实列 token 上", "usernme", text.substring(info.startOffset, info.endOffset))
+        assertEquals("偏移必须等于 AST token 起点", text.indexOf("usernme"), info.startOffset)
+        assertTrue("文案应含建议列名：${info.description}", info.description!!.contains("username"))
+        assertTrue("文案应含错列名：${info.description}", info.description!!.contains("usernme"))
+    }
+
+    fun testLogPreviewWithLastUsedMariaDbGetsOneRed() {
+        warm()
+        configureLastUsed(url = "jdbc:mariadb://localhost:3306/mp_demo")
+        configureLogPreview(PreviewInlayScope.PREVIEW_FILE_NAME_SAMPLE, wrongSql)
+        assertEquals("MariaDB 同属可证方言", 1, annotatorErrors().size)
+    }
+
+    fun testLogPreviewWithoutLastUsedMemoryProducesNoRed() {
+        warm()
+        configureLogPreview(PreviewInlayScope.PREVIEW_FILE_NAME_SAMPLE, wrongSql)
+        assertTrue("last-used 缺失不得标注", annotatorErrors().isEmpty())
+    }
+
+    fun testLogPreviewNonMySqlSourceProducesNoRed() {
+        warm()
+        configureLastUsed(url = "jdbc:postgresql://localhost:5432/mp_demo")
+        configureLogPreview(PreviewInlayScope.PREVIEW_FILE_NAME_SAMPLE, wrongSql)
+        assertTrue("方言不可证为 MySQL/MariaDB 不得标注", annotatorErrors().isEmpty())
+    }
+
+    fun testLogPreviewUnresolvableSourceUrlProducesNoRed() {
+        warm()
+        configureLastUsed(url = "")
+        configureLogPreview(PreviewInlayScope.PREVIEW_FILE_NAME_SAMPLE, wrongSql)
+        assertTrue("URL 取不到（方言未知）不得标注", annotatorErrors().isEmpty())
+    }
+
+    fun testLogPreviewEmptyDatabaseProducesNoRed() {
+        warm()
+        configureLastUsed()
+        DatabaseSchemaResolver.dataSourceDatabaseForTest = { "" }
+        configureLogPreview(PreviewInlayScope.PREVIEW_FILE_NAME_SAMPLE, wrongSql)
+        assertTrue("库名为空不得标注", annotatorErrors().isEmpty())
+    }
+
+    fun testLogPreviewColdCacheProducesNoRed() {
+        configureLastUsed()
+        configureLogPreview(PreviewInlayScope.PREVIEW_FILE_NAME_SAMPLE, wrongSql)
+        assertTrue("缓存冷不得标注", annotatorErrors().isEmpty())
+    }
+
+    fun testLogPreviewJoinProducesNoRed() {
+        warm()
+        configureLastUsed()
+        configureLogPreview(
+            PreviewInlayScope.PREVIEW_FILE_NAME_SAMPLE,
+            "SELECT u.usernme FROM user u JOIN other o ON u.id = o.id",
+        )
+        assertTrue("JOIN 不得标注", annotatorErrors().isEmpty())
+    }
+
+    fun testLogPreviewMultipleStatementsProduceNoRed() {
+        warm()
+        configureLastUsed()
+        configureLogPreview(
+            PreviewInlayScope.PREVIEW_FILE_NAME_SAMPLE,
+            "UPDATE user SET usernme='x' WHERE id=1; UPDATE user SET username='y' WHERE id=2",
+        )
+        assertTrue("多语句不得标注", annotatorErrors().isEmpty())
+    }
+
+    fun testLogPreviewFallbackDoesNotAnnotateUserSqlFile() {
+        warm()
+        configureLastUsed()
+        configureLogPreview("demo.sql", wrongSql)
+        assertTrue("回落不得越出预览作用域（用户自己的 .sql 零标注）", annotatorErrors().isEmpty())
+    }
+
     fun testDifferentDatabaseDoesNotBorrowWarmedCache() {
         warm()
         configurePreview(PreviewInlayScope.PREVIEW_FILE_NAME_SAMPLE, wrongSql)
@@ -268,6 +407,53 @@ class PreviewUnknownColumnAnnotatorTest : BasePlatformTestCase() {
         warm()
         configureDotIdea(PreviewInlayScope.PREVIEW_FILE_NAME_SAMPLE, wrongSql)
         assertEquals(1, highlighterMarks().size)
+    }
+
+    /**
+     * UI029 真机可见面：日志条目预览的真实载体在 `.idea/sql-visualizer/preview/` 下，平台 daemon
+     * 不分析配置目录 → 只能靠 Highlighter 通道。无已备控制台时由 last-used 回落目标供标注。
+     */
+    fun testDotIdeaLogPreviewWithoutConsoleGetsRedWave() {
+        warm()
+        configureLastUsed()
+        val psi = myFixture.addFileToProject(
+            ".idea/sql-visualizer/preview/${PreviewInlayScope.PREVIEW_FILE_NAME_SAMPLE}",
+            wrongSql,
+        )
+        myFixture.configureFromExistingVirtualFile(psi.virtualFile!!)
+        PreviewSchemaHighlighter.install(myFixture.editor)
+        val marks = highlighterMarks()
+        assertEquals("日志预览应恰有一条编辑器级标注", 1, marks.size)
+        val mark = marks.single()
+        val text = myFixture.editor.document.text
+        assertEquals("usernme", text.substring(mark.startOffset, mark.endOffset))
+        assertEquals(text.indexOf("usernme"), mark.startOffset)
+        val tooltip = mark.errorStripeTooltip as String
+        assertTrue("悬停文案应含建议：$tooltip", tooltip.contains("username"))
+        assertTrue("悬停文案应含错列：$tooltip", tooltip.contains("usernme"))
+    }
+
+    fun testDotIdeaLogPreviewWithoutLastUsedProducesNoMark() {
+        warm()
+        val psi = myFixture.addFileToProject(
+            ".idea/sql-visualizer/preview/${PreviewInlayScope.PREVIEW_FILE_NAME_SAMPLE}",
+            wrongSql,
+        )
+        myFixture.configureFromExistingVirtualFile(psi.virtualFile!!)
+        PreviewSchemaHighlighter.install(myFixture.editor)
+        assertTrue("无面板确定目标不得标注", highlighterMarks().isEmpty())
+    }
+
+    fun testDotIdeaLogPreviewNonMySqlProducesNoMark() {
+        warm()
+        configureLastUsed(url = "jdbc:postgresql://localhost:5432/mp_demo")
+        val psi = myFixture.addFileToProject(
+            ".idea/sql-visualizer/preview/${PreviewInlayScope.PREVIEW_FILE_NAME_SAMPLE}",
+            wrongSql,
+        )
+        myFixture.configureFromExistingVirtualFile(psi.virtualFile!!)
+        PreviewSchemaHighlighter.install(myFixture.editor)
+        assertTrue("方言不可证不得标注", highlighterMarks().isEmpty())
     }
 
     fun testHighlighterCorrectColumnProducesNoMark() {
