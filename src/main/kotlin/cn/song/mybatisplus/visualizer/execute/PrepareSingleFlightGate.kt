@@ -15,7 +15,12 @@ package cn.song.mybatisplus.visualizer.execute
  * 门状态转换串行化；取消/失败通知沿请求回调交付，UI 消费者负责归位 EDT。
  * 每请求终态一次性，后到覆盖、超时和准备失败均不丢弃未结算请求。
  */
-internal class PrepareSingleFlightGate {
+internal class PrepareSingleFlightGate(
+    private val clock: () -> Long = { System.nanoTime() / 1_000_000 },
+    private val timeoutMessage: () -> String = {
+        cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message("execute.prepare.timeout")
+    },
+) {
 
     /** 门持有链终结（完成/失败/复用收敛）即复位；复位后新链可重新持有。 */
     val prepareInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
@@ -29,6 +34,30 @@ internal class PrepareSingleFlightGate {
 
     private var owner: QueuedExecuteIntent? = null
     private var submissionStarted = false
+    private var interactionDepth = 0
+
+    @Synchronized
+    fun beginInteraction(expectedOwner: QueuedExecuteIntent?): Boolean {
+        if (!matchesOwner(expectedOwner)) return false
+        interactionDepth++
+        return true
+    }
+
+    /** 用户结束选择/确认后重新给后台完整预算；旧 timer tick 必须重新检查时间。 */
+    @Synchronized
+    fun endInteraction(expectedOwner: QueuedExecuteIntent?) {
+        if (!matchesOwner(expectedOwner) || interactionDepth == 0) return
+        interactionDepth--
+        if (interactionDepth == 0) inFlightSinceMs = clock()
+    }
+
+    fun <T> duringInteraction(expectedOwner: QueuedExecuteIntent?, action: () -> T): T {
+        val paused = beginInteraction(expectedOwner)
+        return try { action() } finally { if (paused) endInteraction(expectedOwner) }
+    }
+
+    private fun backgroundExpired(nowMs: Long): Boolean =
+        !submissionStarted && interactionDepth == 0 && nowMs - inFlightSinceMs >= STUCK_ESCAPE_MS
 
     /** 提交确认已接管回执，不再由准备超时伪报取消。 */
     @Synchronized
@@ -46,9 +75,12 @@ internal class PrepareSingleFlightGate {
 
     /** 超时只结算所属链，迟到的旧回调不得清除新链。 */
     @Synchronized
-    fun expire(intent: QueuedExecuteIntent) {
-        if (owner === intent && !submissionStarted) abort(intent, ExecutionSubmission.CANCELLED)
-        else if (pendingIntent === intent) takePendingExecute()?.complete(ExecutionSubmission.CANCELLED)
+    fun expire(intent: QueuedExecuteIntent, nowMs: Long = clock()): Boolean {
+        if (!matchesOwner(intent)) return true // 旧 timer 不操作新 owner 或新队列
+        if (submissionStarted) return true
+        if (!backgroundExpired(nowMs)) return false
+        abort(intent, ExecutionSubmission.BLOCKED, timeoutMessage())
+        return true
     }
 
     /** 先清空门和队列再通知，避免回调重入把旧请求遗留给下一链。 */
@@ -84,15 +116,16 @@ internal class PrepareSingleFlightGate {
     fun tryEnter(
         executeAfterPrepare: Boolean,
         intent: QueuedExecuteIntent? = null,
-        nowMs: Long = System.currentTimeMillis(),
+        nowMs: Long = clock(),
     ): PrepareGateDecision {
         if (prepareInFlight.compareAndSet(false, true)) {
             inFlightSinceMs = nowMs
             owner = intent
             submissionStarted = false
+            interactionDepth = 0
             return PrepareGateDecision.PROCEED
         }
-        if (!submissionStarted && nowMs - inFlightSinceMs > STUCK_ESCAPE_MS) {
+        if (backgroundExpired(nowMs)) {
             // 卡死逃生：接管所有权（CompareAndSet 已被旧链持有，直接 set 覆盖）并清陈旧排队
             val expiredOwner = owner
             val expiredQueued = takePendingExecute()
@@ -100,8 +133,10 @@ internal class PrepareSingleFlightGate {
             inFlightSinceMs = nowMs
             owner = intent
             submissionStarted = false
-            expiredOwner?.complete(ExecutionSubmission.CANCELLED)
-            expiredQueued?.complete(ExecutionSubmission.CANCELLED)
+            interactionDepth = 0
+            val message = timeoutMessage()
+            expiredOwner?.complete(ExecutionSubmission.BLOCKED, message)
+            expiredQueued?.complete(ExecutionSubmission.BLOCKED, message)
             return PrepareGateDecision.PROCEED
         }
         if (!executeAfterPrepare) return PrepareGateDecision.PASS_THROUGH

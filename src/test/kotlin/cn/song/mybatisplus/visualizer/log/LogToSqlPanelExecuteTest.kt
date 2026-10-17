@@ -169,6 +169,43 @@ class LogToSqlPanelExecuteTest : BasePlatformTestCase() {
         }
     }
 
+    fun testUnknownQueryConfirmationOverOneMinuteKeepsNoAndYesDistinct() {
+        for (yes in listOf(false, true)) {
+            var now = 0L
+            val gate = cn.song.mybatisplus.visualizer.execute.PrepareSingleFlightGate(clock = { now })
+            val outcomes = mutableListOf<ExecutionSubmission>()
+            val request = cn.song.mybatisplus.visualizer.execute.QueuedExecuteIntent(null, null, errorSink(), null, false,
+                submissionSink = { outcomes += it; submissionSink()(it) })
+            gate.tryEnter(true, request)
+            DataSourceSelector.unknownTargetQueryConfirmationForTest = {
+                now += 120_000
+                assertFalse(gate.expire(request)) // 手动timer，复现模态事件泵，不sleep
+                yes
+            }
+            try {
+                val allowed = gate.duringInteraction(request) {
+                    DataSourceSelector.allowDialectGate(project, ExecutionDialectGate.rawSqlRequest("SELECT 1"),
+                        null, null, errorSink(), request.onSubmission)
+                }
+                assertEquals(yes, allowed)
+                if (yes) {
+                    assertTrue("Yes本身不是提交", outcomes.isEmpty())
+                    assertFalse("确认返回后旧timer仍不得立即过期", gate.expire(request))
+                    val oldGeneration = DataSourceSelector.swapGeneration
+                    try {
+                        DataSourceSelector.afterSubmitted(project, null, Any(), null, null,
+                            com.intellij.openapi.diagnostic.Logger.getInstance(javaClass), onSubmission = request.onSubmission)
+                        com.intellij.testFramework.PlatformTestUtil.dispatchAllEventsInIdeEventQueue()
+                    } finally { DataSourceSelector.swapGeneration = oldGeneration }
+                    assertEquals(listOf(ExecutionSubmission.SUBMITTED), outcomes)
+                } else {
+                    assertEquals(listOf(ExecutionSubmission.CANCELLED), outcomes)
+                    assertEquals(MpSqlVisualizerBundle.message("logToSql.execute.cancelled"), panel.statusForTest())
+                }
+            } finally { DataSourceSelector.unknownTargetQueryConfirmationForTest = null }
+        }
+    }
+
     fun testConsoleSubmissionGateNoStopsBeforeMutationOrNativeReflection() {
         val editor = myFixture.configureByText("query.sql", "SELECT 1").let { myFixture.editor }
         val before = editor.document.text
@@ -185,17 +222,36 @@ class LogToSqlPanelExecuteTest : BasePlatformTestCase() {
         }
     }
 
-    fun testRunnerPopupDefersCallbackUntilFinalStepAndReportsEscape() {
+    fun testPlatformPopupSelectionDisposeIsNotUserCancellation() {
         val runner = CallbackRunner { }
         val selected = mutableListOf<Any?>()
         val step = DataSourceSelector.createRunnerPopupStep(project, listOf(runner)) { selected += it }
-        step.onChosen(step.values.single(), true)
-        assertTrue("onChosen 不能同步建 session 或弹方言确认", selected.isEmpty())
-        step.finalRunnable!!.run()
-        assertEquals(listOf(runner), selected)
-        val cancelled = DataSourceSelector.createRunnerPopupStep(project, listOf(runner)) { selected += it }
-        cancelled.canceled()
-        assertEquals(listOf(runner, null), selected)
+        val popup = com.intellij.ui.popup.list.ListPopupImpl(project, step)
+        try {
+            popup.list.selectedIndex = 0
+            // headless 不创建窗口；只置平台 SHOWN 状态，随后完整走真实
+            // handleSelect → disposeAllParents → AbstractPopup.dispose → WizardPopup.cancel。
+            // 不直接调 step.onChosen/canceled/getFinalRunnable，必须覆盖现场的 cancel-before-final。
+            val state = com.intellij.ui.popup.AbstractPopup::class.java.getDeclaredField("myState")
+                .apply { isAccessible = true }
+            state.set(popup, state.type.enumConstants.single { (it as Enum<*>).name == "SHOWN" })
+            popup.handleSelect(true)
+            com.intellij.testFramework.PlatformTestUtil.dispatchAllEventsInIdeEventQueue()
+            assertEquals("平台选择关闭不得先送 null", listOf(runner), selected)
+            assertTrue(popup.isDisposed)
+        } finally {
+            if (!popup.isDisposed) com.intellij.openapi.util.Disposer.dispose(popup)
+        }
+    }
+
+    fun testPlatformPopupEscapeReportsCancellationOnce() {
+        val selected = mutableListOf<Any?>()
+        val popup = com.intellij.ui.popup.list.ListPopupImpl(project,
+            DataSourceSelector.createRunnerPopupStep(project, listOf(CallbackRunner { })) { selected += it })
+        popup.cancel()
+        com.intellij.testFramework.PlatformTestUtil.dispatchAllEventsInIdeEventQueue()
+        assertEquals(listOf<Any?>(null), selected)
+        assertTrue(popup.isDisposed)
     }
 
     // ---------- #2：诚实降级横幅 ----------

@@ -175,9 +175,9 @@ class PrepareSingleFlightGateTest {
         gate.tryEnter(true, a.request, 0)
         gate.tryEnter(true, b.request, 10)
         gate.tryEnter(true, c.request, PrepareSingleFlightGate.STUCK_ESCAPE_MS + 1)
-        assertEquals(listOf(ExecutionSubmission.CANCELLED), a.outcomes)
-        assertEquals(listOf(ExecutionSubmission.CANCELLED), b.outcomes)
-        gate.expire(a.request)
+        assertEquals(listOf(ExecutionSubmission.BLOCKED), a.outcomes)
+        assertEquals(listOf(ExecutionSubmission.BLOCKED), b.outcomes)
+        gate.expire(a.request, 60_001)
         gate.expire(b.request)
         assertTrue(gate.isOwner(c.request))
         assertTrue(c.outcomes.isEmpty())
@@ -192,10 +192,10 @@ class PrepareSingleFlightGateTest {
         val b = RequestProbe()
         gate.tryEnter(false, a.request, 0)
         gate.tryEnter(true, b.request, 10)
-        gate.expire(a.request)
-        gate.expire(a.request)
-        assertEquals(listOf(ExecutionSubmission.CANCELLED), a.outcomes)
-        assertEquals(listOf(ExecutionSubmission.CANCELLED), b.outcomes)
+        gate.expire(a.request, 60_001)
+        gate.expire(a.request, 60_001)
+        assertEquals(listOf(ExecutionSubmission.BLOCKED), a.outcomes)
+        assertEquals(listOf(ExecutionSubmission.BLOCKED), b.outcomes)
         assertFalse(gate.prepareInFlight.get())
         assertNull(gate.consumePendingExecute(owner))
     }
@@ -230,7 +230,7 @@ class PrepareSingleFlightGateTest {
         val owner = a.request
         gate.tryEnter(true, a.request, 0)
         gate.beginSubmission(owner)
-        gate.expire(a.request)
+        gate.expire(a.request, 60_001)
         assertTrue(gate.isOwner(a.request))
         assertTrue(a.outcomes.isEmpty())
         a.request.onSubmission(ExecutionSubmission.CANCELLED)
@@ -257,7 +257,7 @@ class PrepareSingleFlightGateTest {
             val queuedB = RequestProbe()
             gate.tryEnter(true, a.request, 0)
             // 控制时序，不 sleep：A 尚在后台等待，超时后 B 已取得门。
-            gate.expire(a.request)
+            gate.expire(a.request, 60_001)
             assertEquals(PrepareGateDecision.PROCEED, gate.tryEnter(true, b.request, 60_001))
             gate.tryEnter(true, queuedB.request, 60_002)
             if (lateFailure) {
@@ -275,8 +275,8 @@ class PrepareSingleFlightGateTest {
             assertTrue(b.outcomes.isEmpty())
             assertTrue(b.errors.isEmpty())
             assertTrue(queuedB.outcomes.isEmpty())
-            assertEquals(listOf(ExecutionSubmission.CANCELLED), a.outcomes)
-            assertTrue(a.errors.isEmpty())
+            assertEquals(listOf(ExecutionSubmission.BLOCKED), a.outcomes)
+            assertEquals(1, a.errors.size) // 仅后台超时原因，迟到 A 失败不覆写
             // B 自身正常消费、提交和收尾照常，不被旧 A 的 false 返回污染。
             assertSame(queuedB.request, gate.consumePendingExecute(b.request))
             selectPrepareSubmission(queuedB.request, b.request.onSubmission)!!.invoke(ExecutionSubmission.SUBMITTED)
@@ -303,6 +303,51 @@ class PrepareSingleFlightGateTest {
     }
 
     @Test
+    fun `用户选择超过一分钟仍有效且B排队不能超时接管A`() {
+        var now = 0L
+        val gate = PrepareSingleFlightGate(clock = { now }, timeoutMessage = { "background timeout" })
+        val a = RequestProbe()
+        val b = RequestProbe()
+        gate.tryEnter(true, a.request)
+        gate.beginInteraction(a.request)
+        now = 120_000
+        assertFalse("手动触发旧timer不能杀用户选择", gate.expire(a.request))
+        assertEquals(PrepareGateDecision.QUEUE_ONLY, gate.tryEnter(true, b.request))
+        assertTrue(gate.isOwner(a.request))
+        assertTrue(a.outcomes.isEmpty())
+        assertTrue(b.outcomes.isEmpty())
+        gate.endInteraction(a.request)
+        assertFalse("离开交互后到达的旧tick不能沿用旧预算", gate.expire(a.request))
+        now += 59_999
+        assertFalse(gate.expire(a.request))
+        assertTrue(gate.isOwner(a.request))
+        assertSame(b.request, gate.consumePendingExecute(a.request))
+    }
+
+    @Test
+    fun `后台仍会到期且消息明确不是主动取消`() {
+        var now = 0L
+        val gate = PrepareSingleFlightGate(clock = { now }, timeoutMessage = { "background timeout" })
+        val a = RequestProbe()
+        gate.tryEnter(true, a.request)
+        gate.beginInteraction(a.request)
+        now = 180_000
+        gate.endInteraction(a.request)
+        now += 60_000
+        assertTrue(gate.expire(a.request))
+        assertEquals(listOf(ExecutionSubmission.BLOCKED), a.outcomes)
+        assertEquals(listOf("background timeout"), a.errors)
+        val b = RequestProbe()
+        gate.tryEnter(true, b.request)
+        gate.beginInteraction(b.request)
+        now += 120_000
+        assertTrue(gate.expire(a.request))
+        assertTrue(gate.isOwner(b.request))
+        assertTrue(b.outcomes.isEmpty())
+        assertFalse(gate.expire(b.request))
+    }
+
+    @Test
     fun `所有真实准备出口携带owner并在门内校验`() {
         val selector = selectorUnion()
         assertFalse(selector.contains("abortPrepareGate(owns"))
@@ -325,7 +370,10 @@ class PrepareSingleFlightGateTest {
     fun `真实资源缺失分支和弹窗取消接入终结器`() {
         val selector = selectorUnion()
         assertTrue(selector.contains("if (ownsGate) prepareGate.abort(prepareOwner, ExecutionSubmission.CANCELLED)"))
-        assertTrue(selector.contains("prepareGate.expire(queuedIntent)"))
+        assertTrue(selector.contains("prepareGate.expire(prepareOwner)"))
+        assertTrue(selector.contains("prepareGate.beginInteraction(prepareOwner)"))
+        assertTrue(selector.contains("prepareGate.endInteraction(prepareOwner)"))
+        assertTrue(selector.contains("prepareGate.duringInteraction(prepareOwner)"))
         val console = sourceOf("src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorConsole.kt")
         for (branch in listOf("if (scriptModel == null)", "if (editorComponentRaw == null)")) {
             val body = console.substringAfter(branch).substringBefore("return")

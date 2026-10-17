@@ -202,10 +202,6 @@ internal fun DataSourceSelector.chooseAndPrepare(
     )
     val onSubmission = queuedIntent.onSubmission
     var ownsGate = false
-    // 独立于再次点击的超时回执；只清仍属本请求的准备/排队，不伪报异步 SQL 已提交。
-    javax.swing.Timer(PrepareSingleFlightGate.STUCK_ESCAPE_MS.toInt()) {
-        prepareGate.expire(queuedIntent)
-    }.apply { isRepeats = false; start() }
     when (prepareGate.tryEnter(executeAfterPrepare, queuedIntent)) {
         PrepareGateDecision.QUEUE_ONLY -> {
             LOG.info("[M36][T-FirstExec F1] prepare chain in flight: execute intent queued, no second session/console chain")
@@ -218,6 +214,10 @@ internal fun DataSourceSelector.chooseAndPrepare(
     }
 
     val prepareOwner = queuedIntent.takeIf { ownsGate }
+    // 只有 owner 看守后台；排队 B 不另开计时器截断 A 的用户交互。
+    if (prepareOwner != null) javax.swing.Timer(1000) { event ->
+        if (prepareGate.expire(prepareOwner)) (event.source as javax.swing.Timer).stop()
+    }.start()
 
     // T-MysqlGStrip T-MG-02：提交链总口——SQL 文本进入 exec 文件/控制台文档之前剥离 MySQL CLI
     // 的 `\G` 后缀（DBX #35）。此点数据源尚未选定（runner 弹窗在下方），方言不可得 → 按计划
@@ -264,7 +264,10 @@ internal fun DataSourceSelector.chooseAndPrepare(
             "[M36][O-145] session created: ${session?.javaClass?.name}, " +
                 "target=${actualTarget?.stableId}/${actualTarget?.dialectName}, execute=$executeAfterPrepare",
         )
-        if (!allowDialectGate(project, dialectGateRequest, actualTarget, onDialectGate, onError, onSubmission)) {
+        val allowed = prepareGate.duringInteraction(prepareOwner) {
+            allowDialectGate(project, dialectGateRequest, actualTarget, onDialectGate, onError, onSubmission)
+        }
+        if (!allowed) {
             abortPrepareGate(prepareOwner, dialectGateRequest?.let {
                 dialectGateMessage(ExecutionDialectGate.evaluate(it, actualTarget?.dialectName))
             }, LOG)
@@ -354,7 +357,9 @@ internal fun DataSourceSelector.chooseAndPrepare(
         }
         else -> {
             LOG.info("[M36] show popup with ${runners.size} runners")
+            prepareGate.beginInteraction(prepareOwner)
             showRunnerPopup(project, runners) { runner ->
+                prepareGate.endInteraction(prepareOwner)
                 if (!isPrepareActive()) return@showRunnerPopup
                 LOG.info("[M36] popup selected: ${runner?.let { getRunnerName(it) }}")
                 // M36.5：记住选择（prepareConsole 路径下次静默复用；控制台创建时也会统一记忆）

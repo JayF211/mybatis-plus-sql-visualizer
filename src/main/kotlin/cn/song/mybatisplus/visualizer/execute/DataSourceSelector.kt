@@ -1242,17 +1242,27 @@ object DataSourceSelector {
             title,
             items,
         ) {
+            private var choiceAccepted = false
+            private var delivered = false
+            private fun deliver(runner: Any?) {
+                if (delivered) return
+                delivered = true
+                callback(runner)
+            }
+
             override fun getTextFor(value: RunnerItem): String = value.name
             override fun getIconFor(value: RunnerItem): Icon? = value.icon
             override fun onChosen(selectedValue: RunnerItem?, finalChoice: Boolean): com.intellij.openapi.ui.popup.PopupStep<*>? {
                 com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
                     .info("[M36] popup onChosen: ${selectedValue?.name}")
                 // 243 禁止在 onChosen 内开模态确认；runner/session 续链须在弹窗关闭后启动。
-                return doFinalStep { callback(selectedValue?.runner) }
+                choiceAccepted = true
+                return doFinalStep { deliver(selectedValue?.runner) }
             }
 
             override fun canceled() {
-                callback(null)
+                // 243 的已显示 popup 在选择后 dispose 也经 cancel；不是用户按 Esc。
+                if (!choiceAccepted) deliver(null)
             }
         }
         return step
