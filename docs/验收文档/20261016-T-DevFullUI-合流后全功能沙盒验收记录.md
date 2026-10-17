@@ -510,7 +510,9 @@ U28 可移植 CSV（本轮真机落盘）：同一预览「更多 → 导出可�
 - U16：错列条目预览完整展示 `SQLSyntaxErrorException` 并提供「复制错误信息」；缺表/语法错/失效连接/原生超时未验，保持部分。
 - U22：回放脚本与可移植 SQL 两个出口已真实落盘；分享、差异对比、AI 上下文（剪贴板读取被上游拒绝，未能核验内容）与旧六出口未验，保持部分。
 - U28：回放脚本（SQL）与可移植 CSV 已落盘并核对表头与脱敏；TSV/TXT/可移植 SQL 三格式未逐一执行，保持部分。
-- UI029 修复已合 dev `e0f3681f`，定向 `testDbSchemaAnnotator` 41/0/0/0；真机红色波浪待新包复验。
+- UI029 修复已合 dev `e0f3681f`，定向 `testDbSchemaAnnotator` 41/0/0/0，含 UI029 的新一轮全量为 7867/0/0/9。
+
+UI029 真机闭环（2026-10-18，新包）：重建 243 沙盒后，开启捕捉并用 `/user/fixture/unknown-col` 产生条目 `#2 [2026-10-18 00:56:56] 11ms MySQL SQLSyntaxErrorException: Unknown column 'usernme' in 'field list' [UserController.java:80]`；双击打开「SQL 预览」，编辑器第 2 行 `usernme` 出现红色波浪下划线（放大取证 `build/ui243-shots/ui029-redwave-zoom.png`），与顶部执行报错横幅并存。UI025 在“日志条目预览 + 无附着控制台”真实场景下由 UI029 的 last-used 目标回落生效，红色波浪视觉闭环；悬停建议文案本轮未截到（自动化用例断言在场）。demo 临时夹具（mapper 两个方法与 controller 两个端点）已在验证后撤销。
 
 ## 依据与历史证据保全
 
