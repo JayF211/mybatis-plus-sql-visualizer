@@ -263,6 +263,8 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
     internal var observedBackgroundForTest: (((() -> Unit)) -> Unit)? = null
     /** 仅替换默认控制台准备的派发端，测试交付的仍是生产构造的回调。 */
     internal var prepareConsoleForTest: ((String, (JComponent) -> Unit, (Editor) -> Unit) -> Unit)? = null
+    /** 面板准备接收代际，不替代 DataSourceSelector 的请求 owner 或洞察文档代际。 */
+    internal var consolePrepareGeneration = 0L
     internal var lastInsightUsageReport: cn.song.mybatisplus.visualizer.sql.insight.SqlUsageReport? = null
     internal val analysisMetadataBinding = cn.song.mybatisplus.visualizer.sql.insight.AnalysisMetadataBinding()
 
@@ -514,6 +516,7 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
 
     internal var current: PreviewResult? = null
         set(value) {
+            consolePrepareGeneration++
             field = value
             insightController?.invalidate()
             scenarioInsightView?.clear(insightText("stale"))
@@ -844,6 +847,7 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
      * 工具窗口模式下面板可能长期存活，由 [SqlPreviewDialog] 或工具窗口工厂调用释放。
      */
     override fun dispose() {
+        consolePrepareGeneration++
         previewDisposed = true
         insightController?.dispose()
         insightController = null

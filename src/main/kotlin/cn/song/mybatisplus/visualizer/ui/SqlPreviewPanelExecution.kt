@@ -1236,13 +1236,19 @@ internal fun SqlPreviewPanel.onNativeEditorReady(consoleEditor: com.intellij.ope
  */
 
 internal fun SqlPreviewPanel.prepareDefaultConsole() {
+    val generation = ++consolePrepareGeneration
+    val result = current
     val proj = project ?: return
+    if (previewDisposed || proj.isDisposed) return
+    fun acceptsDelivery(): Boolean = !previewDisposed && !proj.isDisposed &&
+        consolePrepareGeneration == generation && current === result
     val sql = editor?.document?.text?.takeIf { it.isNotBlank() } ?: return
     val gateRequest = executionDialectGateRequest(
         if (SqlTypeClassifier.isQuery(sql)) cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Intent.QUERY
         else cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Intent.DML,
     )
-    val onConsole: (javax.swing.JComponent) -> Unit = { consoleComponent ->
+    val onConsole: (javax.swing.JComponent) -> Unit = delivery@{ consoleComponent ->
+        if (!acceptsDelivery()) return@delivery
         // M36.5.58：预览换入控制台组件后**清空状态栏**——预览是干净上下文，不应残留上次
         // 执行的结果/错误（用户"执行第二个 SQL 后预览第一个，状态栏还显示之前的错误"）。
         // 嵌入后 showEmpty 清空；执行路径走 onResultsReady（成功）清 / onError（失败）显示，
@@ -1270,14 +1276,16 @@ internal fun SqlPreviewPanel.prepareDefaultConsole() {
             // （见 DocWriteContext KDoc 与计划 20260917-1555 §一）。nonModal 的代价是模态弹窗存续期
             // 回填延后到弹窗关闭——这正是平台对「改文档」要求的语义。
             ApplicationManager.getApplication().invokeLater({
-                if (com.intellij.openapi.util.Disposer.isDisposed(this)) return@invokeLater
+                if (!acceptsDelivery()) return@invokeLater
                 runCatching { renderSql() }.onFailure { e ->
                     com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
                         .warn("[M36] post-attach re-render FAILED: ${e.javaClass.simpleName}: ${e.message}")
                 }
             }, com.intellij.openapi.application.ModalityState.nonModal())
     }
-    val onEditor: (com.intellij.openapi.editor.Editor) -> Unit = { consoleEditor -> onNativeEditorReady(consoleEditor) }
+    val onEditor: (com.intellij.openapi.editor.Editor) -> Unit = { consoleEditor ->
+        if (acceptsDelivery() && !consoleEditor.isDisposed) onNativeEditorReady(consoleEditor)
+    }
     prepareConsoleForTest?.let { dispatch -> dispatch(sql, onConsole, onEditor); return }
     SqlExecutor.prepareConsole(
         proj, sql,
@@ -1286,7 +1294,7 @@ internal fun SqlPreviewPanel.prepareDefaultConsole() {
         // 默认准备失败（无数据源等）静默——不打扰预览；方言冲突由专用回调诚实显示
         onError = null,
         dialectGateRequest = gateRequest,
-        onDialectGate = { verdict -> onExecutionDialectGate(verdict) },
+        onDialectGate = { verdict -> if (acceptsDelivery()) onExecutionDialectGate(verdict) },
     )
 }
 

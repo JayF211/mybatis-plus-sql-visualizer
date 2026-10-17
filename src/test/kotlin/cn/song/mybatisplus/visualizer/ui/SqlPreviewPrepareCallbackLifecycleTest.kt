@@ -87,6 +87,59 @@ class SqlPreviewPrepareCallbackLifecycleTest : BasePlatformTestCase() {
         assertNull(panel.nativeEditorDoc)
     }
 
+    fun testSameCurrentIdentityNewPrepareInvalidatesEarlierDelivery() {
+        val (panel, deliveries) = panel()
+        val same = result("SELECT 1")
+        panel.showResult(same)
+        val old = deliveries.single()
+        panel.prepareDefaultConsole()
+        val live = deliveries.last()
+        val native = readyEditor("SELECT 1")
+        live.editor(native)
+        old.editor(readyEditor("SELECT stale"))
+        assertSame(same, panel.current)
+        assertSame(native.document, panel.nativeEditorDoc)
+        assertFalse(native.isDisposed)
+    }
+
+    fun testOldPanelDeliveryDoesNotReclaimEditorAlreadyOwnedByLivePanel() {
+        val (a, first) = panel()
+        a.showResult(result("SELECT 1"))
+        val late = first.single()
+        a.clear()
+        val (b, second) = panel()
+        b.showResult(result("SELECT 2"))
+        val shared = readyEditor("SELECT 2")
+        second.single().editor(shared)
+        late.editor(shared)
+        assertNull(a.nativeEditorDoc)
+        assertSame(shared.document, b.nativeEditorDoc)
+        assertSame(shared, b.nativeConsoleEditor)
+        assertFalse("rejecting an old delivery must not dispose the new owner's editor", shared.isDisposed)
+    }
+
+    fun testSameCurrentReassignedInvalidatesOldDeliveryWithoutNewPrepare() {
+        val (panel, deliveries) = panel()
+        val same = result("SELECT 1")
+        panel.showResult(same)
+        panel.current = same
+        deliveries.single().editor(readyEditor("SELECT 1"))
+        assertNull(panel.nativeEditorDoc)
+        assertNotNull(panel.editorForTest())
+    }
+
+    fun testAlreadyQueuedPostAttachRenderCannotRenderReplacementAfterClear() {
+        val (panel, deliveries) = panel()
+        panel.showResult(result("SELECT 1"))
+        deliveries.single().console(JPanel()) // actual onConsole queues its nonModal post-attach render
+        panel.clear()
+        panel.current = result("SELECT 987654") // new result identity before its own render/prepare
+        val generation = panel.auxiliaryInsightGeneration
+        com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+        assertEquals("old queued render must not enter replacement rendering", generation, panel.auxiliaryInsightGeneration)
+        assertNull(panel.editorForTest())
+    }
+
     fun testClearedPanelRejectsOldConsoleComponent() {
         val (panel, deliveries) = panel()
         panel.showResult(result("SELECT 1"))
