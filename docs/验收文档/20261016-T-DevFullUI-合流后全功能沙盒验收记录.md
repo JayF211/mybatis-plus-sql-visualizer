@@ -469,6 +469,16 @@ U28导出入口（本轮）：日志条目右键菜单完整列出「导出可�
 - UI025（预览编辑器错列标红）由独立工作树 `t-devui-schema-annotator` 实施中，尚未提交；合流后需补跑其定向与跨版本签名测试，本记录的最终全量读数须以包含该提交的 tip 复跑为准。
 - 243/253/262 兼容与构建门禁排在 UI025 合流之后执行，未执行前不声称通过。
 
+## 全量门禁首轮红灯与处置（2026-10-17 晚）
+
+首轮默认 5 片 `testShards` 在 shard2 确定性红（隔离复跑同样红），两类共 5 例，均非本轮 UI 修复引入：
+
+- `AliasDualTrackDefenseTest` 3 例：断言 lambda 链产出 `selectAs(...)`。javap 实证 MP core 3.5.14/3.5.17 的 `Query`/`AbstractWrapper`/`LambdaQueryWrapper`/`QueryWrapper` 均无 `selectAs` 重载，lambda 链无法表达“列 AS 别名”，带别名投影必须整链回落 `QueryWrapper.select(String...)`（现行生成物可编译）。原测试按不存在的 API 断言，属过时契约；已按现行契约校正三例并在生成器回落分支补 javap 依据，未放宽任何产品行为。
+- `AgentManagerPremainReattachTest` 2 例：T-AttachTarget 接入后 `onProcessAppeared` 先做目标探测，`NON_JAVA/HELPER` 直接返回，暂停通道与 attach 端口的恢复判定被挡在后面，导致“重开增强即恢复”失效。修复为恢复判定前移（通道/端口本身已证明该 pid 曾是本插件目标），`doAttachAsync` 同位置补防御性判定。
+- 修复后复跑：`AliasDualTrackDefenseTest` 7/0/0/0、`AgentManagerPremainReattachTest` 16/0/0/0，提交 `fe6d16c9`。
+
+UI025 已合 dev `688c649d`：ExternalAnnotator 只认预览临时文件与插件自有 exec 路径、只读预热缓存；平台不分析 `.idea` 配置目录，故补 RangeHighlighter 兜底通道（红波浪/错误条/悬停建议），两通道按路径互斥；偏移取 JSqlParser token。合流后定向 `testDbSchemaAnnotator` 27/0/0/0、`PlatformSignatureCrossVersionTest` 6/0/0/0、plugin.xml 两组结构测试 BUILD SUCCESSFUL，随后以包含该提交的 tip 重跑默认 5 片全量。
+
 ## 依据与历史证据保全
 
 - 十九轮UI11组、Runner12组及R90/R91/R92/R94/O147/V178专册。
