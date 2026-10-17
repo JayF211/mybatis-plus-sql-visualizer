@@ -58,6 +58,10 @@ internal fun SqlPreviewPanel.refreshCompletionContext() {
         console.putUserData(SqlCompletionContext.KEY, ctx)
         SqlCompletionContributor.registerContext(console.document, ctx)
     }
+    // UI025：schema 预热完成会经本函数刷新上下文——同时给两条错列标注通道补一拍，
+    // 让「缓存刚变热」无需用户输入即可出波浪线（无目标/缓存冷时通道内部自行清空）。
+    cn.song.mybatisplus.visualizer.ui.annotate.PreviewSchemaHighlighter.refresh(editor)
+    cn.song.mybatisplus.visualizer.ui.annotate.PreviewSchemaHighlighter.refresh(nativeConsoleEditor)
 }
 
 /**

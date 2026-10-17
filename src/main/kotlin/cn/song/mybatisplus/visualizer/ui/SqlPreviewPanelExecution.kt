@@ -1240,6 +1240,9 @@ internal fun SqlPreviewPanel.onNativeEditorReady(consoleEditor: com.intellij.ope
     nativeConsoleEditor?.takeIf { it !== consoleEditor }?.let(EditorCommentShortcuts::uninstall)
     nativeConsoleEditor = consoleEditor
     EditorCommentShortcuts.install(consoleEditor)
+    // UI025：exec 文件在 .idea 下，daemon 不分析 → 编辑器级错列标注通道（与预览编辑器同源）。
+    // install 内部首拍延迟 300ms/1500ms，覆盖 preparedEditor 与 schema 缓存晚到的窗口。
+    cn.song.mybatisplus.visualizer.ui.annotate.PreviewSchemaHighlighter.install(consoleEditor)
     cn.song.mybatisplus.visualizer.ui.highlight.SqlAutoFolding.applyTo(
         consoleEditor,
         consoleEditor.document.text,
@@ -1247,6 +1250,26 @@ internal fun SqlPreviewPanel.onNativeEditorReady(consoleEditor: com.intellij.ope
     if (editor != null) {
         releaseEditor()
         editorHolder.removeAll()
+    }
+    // UI025：控制台编辑器的 ExternalAnnotator 需要「文档 → 已备控制台目标」身份，而
+    // preparedEditor 在本回调返回后才由 prepareAfterEditorResolved 赋值。下一拍重启一次 daemon，
+    // 让首轮 collect 就能读到目标（否则要等用户下一次输入才出现错列波浪线）。
+    // 单元测试直接驱动 doHighlighting，不做全局 daemon 重启（避免拖慢/扰动其他用例）。
+    if (!ApplicationManager.getApplication().isUnitTestMode) {
+        ApplicationManager.getApplication().invokeLater({
+            val proj = project
+            if (proj != null && !proj.isDisposed) {
+                runCatching {
+                    @Suppress("DEPRECATION") // T-M52：243 编译目标仅此重载可用
+                    val psi = com.intellij.openapi.application.ReadAction.compute<com.intellij.psi.PsiFile?, Throwable> {
+                        com.intellij.psi.PsiDocumentManager.getInstance(proj).getPsiFile(consoleEditor.document)
+                    }
+                    if (psi != null) {
+                        com.intellij.codeInsight.daemon.DaemonCodeAnalyzer.getInstance(proj).restart(psi)
+                    }
+                }
+            }
+        }, com.intellij.openapi.application.ModalityState.any())
     }
 }
 

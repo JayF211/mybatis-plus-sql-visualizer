@@ -136,6 +136,9 @@ public class PlatformSignatureChecker {
         missing += checkAttachTargetApis(loader);
         missing += checkRunnerFinalStepApi(loader);
         missing += checkMcpToolsetCapability(loader);
+        // UI025：预览错列 ExternalAnnotator 的编译期 API 面（243 app-client / 253 app 实测同形）——
+        // 生产不反射，但跨版本核验保证「注册后 annotator 真能被平台调度」的四段签名不漂移。
+        missing += checkExternalAnnotatorApis(loader);
 
         if (missing > 0) {
             System.out.println("RESULT MISSING " + missing);
@@ -623,6 +626,57 @@ public class PlatformSignatureChecker {
     /** 与真实发行版登记共用的精确签名核验，供形态漂移负例调用。 */
     public static int checkAttachTargetCommandLine(Class<?> handler) {
         return checkExact(handler, "getCommandLine", String.class, false);
+    }
+
+    /**
+     * UI025：ExternalAnnotator 调度面 + 标注落点 API 的跨版本签名核验。
+     *
+     * 核验四段（243 app-client.jar / 253 app.jar 双版 javap 实测同形）：
+     *  - `collectInformation(PsiFile)` / `collectInformation(PsiFile, Editor, boolean)`；
+     *  - `doAnnotate(Object)`（泛型擦除）；
+     *  - `apply(PsiFile, Object, AnnotationHolder)`；
+     *  - `AnnotationHolder.newAnnotation(HighlightSeverity, String)` → `AnnotationBuilder.range(TextRange)`
+     *    → `create()`，以及 `HighlightSeverity.ERROR` 静态字段。
+     * 任一漂移 → 注册后的 annotator 不会被平台正确调度或标不到红，本项即红。
+     */
+    public static int checkExternalAnnotatorApis(ClassLoader loader) {
+        int missing = 0;
+        try {
+            Class<?> annotator = Class.forName("com.intellij.lang.annotation.ExternalAnnotator", false, loader);
+            if (!java.lang.reflect.Modifier.isAbstract(annotator.getModifiers())) {
+                System.out.println("MISS ExternalAnnotator is no longer abstract");
+                missing++;
+            }
+            Class<?> psiFile = Class.forName("com.intellij.psi.PsiFile", false, loader);
+            Class<?> editor = Class.forName("com.intellij.openapi.editor.Editor", false, loader);
+            Class<?> holder = Class.forName("com.intellij.lang.annotation.AnnotationHolder", false, loader);
+            Class<?> builder = Class.forName("com.intellij.lang.annotation.AnnotationBuilder", false, loader);
+            Class<?> severity = Class.forName("com.intellij.lang.annotation.HighlightSeverity", false, loader);
+            Class<?> textRange = Class.forName("com.intellij.openapi.util.TextRange", false, loader);
+            missing += checkExact(annotator, "collectInformation", Object.class, false, psiFile);
+            missing += checkExact(annotator, "collectInformation", Object.class, false, psiFile, editor, boolean.class);
+            missing += checkExact(annotator, "doAnnotate", Object.class, false, Object.class);
+            missing += checkExact(annotator, "apply", void.class, false, psiFile, Object.class, holder);
+            missing += checkExact(holder, "newAnnotation", builder, false, severity, String.class);
+            missing += checkExact(builder, "range", builder, false, textRange);
+            missing += checkExact(builder, "create", void.class, false);
+            try {
+                java.lang.reflect.Field error = severity.getField("ERROR");
+                if (!java.lang.reflect.Modifier.isStatic(error.getModifiers()) || error.getType() != severity) {
+                    System.out.println("MISS HighlightSeverity.ERROR static field mismatch: " + error);
+                    missing++;
+                } else {
+                    System.out.println("OK   HighlightSeverity.ERROR static field");
+                }
+            } catch (Throwable t) {
+                System.out.println("MISS HighlightSeverity.ERROR: " + t);
+                missing++;
+            }
+        } catch (Throwable t) {
+            System.out.println("MISS ExternalAnnotator API: " + t);
+            missing++;
+        }
+        return missing;
     }
 
     private static int checkExact(Class<?> owner, String name, Class<?> returns, boolean isStatic, Class<?>... args) {
