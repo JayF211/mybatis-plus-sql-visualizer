@@ -412,6 +412,49 @@ class SqlPreviewPanelParamSchemesTest : BasePlatformTestCase() {
         assertEquals(idSnapshot, cache.recallFromScheme("UI-Shared", idKey))
     }
 
+    fun testUI019_reopenedForeachInitializesDefaultNamedAndNullSnapshots() {
+        val p = openPanel()
+        val cache = p.paramHistoryCacheForTest()
+        val key = p.historyCacheKeyForTest()!!
+        for (scheme in listOf(ParamHistoryCache.DEFAULT_SCHEME, "Saved-Values")) {
+            for (isNull in listOf(false, true)) {
+                val snapshot = mapOf(
+                    "__fev__:statusList" to "71,72,73",
+                    "__fnull__:statusList" to if (isNull) "1" else "0",
+                )
+                assertTrue(cache.saveForScheme(scheme, key, snapshot))
+                cache.switchScheme(scheme, key)
+                // 真正重开预览，不通过额外切换方案修补字段显示。
+                p.showResult(buildProbePreviewResult())
+                com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+                assertEquals(scheme, p.schemeComboForTest()!!.selectedItem)
+                assertEquals("71,72,73", p.forEachValueFieldTextForTest("statusList"))
+                assertEquals(listOf("71", "72", "73"), p.forEachValuesForTest()["statusList"])
+                assertEquals(isNull, "statusList" in p.forEachNullsForTest())
+                assertEquals(isNull, p.forEachNullSelectedForTest("statusList"))
+                assertEquals("初始化不得覆盖快照或反向污染权威值", snapshot, cache.recall(key))
+            }
+        }
+    }
+
+    fun testUI019_reopenedForeachWithoutValuesDoesNotInheritPreviousText() {
+        val p = openPanel()
+        val cache = p.paramHistoryCacheForTest()
+        val key = p.historyCacheKeyForTest()!!
+        p.setForEachValuesForTest("statusList", listOf("71", "72", "73"))
+        p.applyXmlForEachValuesForTest("statusList", "71,72,73")
+        p.flushHistoryForTest()
+        assertEquals("71,72,73", p.forEachValueFieldTextForTest("statusList"))
+        val nullOnly = mapOf("__fnull__:statusList" to "1")
+        assertTrue(cache.saveForScheme(ParamHistoryCache.DEFAULT_SCHEME, key, nullOnly))
+        p.showResult(buildProbePreviewResult())
+        com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+        assertEquals("", p.forEachValueFieldTextForTest("statusList"))
+        assertTrue(p.forEachValuesForTest()["statusList"].isNullOrEmpty())
+        assertEquals(true, p.forEachNullSelectedForTest("statusList"))
+        assertEquals(nullOnly, cache.recall(key))
+    }
+
     // ==== O-88：预设行折叠件（平台标准 HideableTitledPanel） ====
 
     /** O-88 ①：缺省折叠——折叠件在场、isExpanded=false、锚点方案行在内容区但不可见。

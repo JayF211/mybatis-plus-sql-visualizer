@@ -967,6 +967,8 @@ internal fun SqlPreviewPanel.buildXmlForEachRow(view: XmlForEachView, labelWidth
         border = JBUI.Borders.empty(0, 8, 0, 0)
     })
     val valuesField = JBTextField(8).apply {
+        // 召回先于参数区重建；注册监听前回填权威值，避免初始文本写入触发保存或改写集合。
+        text = xmlForEachValues[view.collectionExpr]?.joinToString(",").orEmpty()
         toolTipText = "集合值（逗号分隔，如 2,3；留空 = 默认展开 ${XmlPreviewModel.DEFAULT_FOREACH_SIZE} 项）"
         document.addDocumentListener(object : DocumentListener {
             override fun insertUpdate(e: DocumentEvent?) = onXmlForEachValuesChanged(view, this@apply.text)
