@@ -71,21 +71,24 @@ class SqlPreviewSchemaGateTest : BasePlatformTestCase() {
     private fun preview(text: String = sql, bound: Boolean = true): SqlPreviewPanel {
         val p = SqlPreviewPanel(project)
         panel = p
-        // 不调用 showResult，避免无关异步预热；当前模型仍为原 SELECT，验证实际读取手改文档。
-        p.current = PreviewResult("SELECT id FROM user WHERE id=1", "SELECT id FROM user WHERE id=1", emptyList(), null, null, tableName = "user")
+        // 复现生产顺序：onEditor 回调先到，prepared 缓存赋值后才 onConsole 嵌入。
+        // 前轮夹具手设 nativeConsoleEditor+组件，漏掉 embedConsole 内 detachConsole 清引用。
         val factory = EditorFactory.getInstance()
         val editor = factory.createEditor(factory.createDocument(text), project)
         input = editor
-        p.nativeConsoleEditor = editor
-        p.nativeEditorDoc = editor.document
-        val component = JPanel()
-        p.consoleHost.add(component)
-        p.embeddedConsole = component
+        p.onNativeEditorReady(editor)
+        assertSame(editor, p.nativeConsoleEditor)
         if (bound) {
             DataSourceSelector.preparedEditor = editor
             DataSourceSelector.preparedConsole = source
             DataSourceSelector.schemaTargetReaderForTest = { SchemaValidationGate.Target(source, "mp_demo") }
         }
+        p.embedConsole(JPanel())
+        assertNull("真实首次嵌入会清理编辑器辅助引用，不得手工补回救绿", p.nativeConsoleEditor)
+        assertSame("执行文档仍归原控制台", editor.document, p.nativeEditorDoc)
+        assertTrue(p.consoleAttachedToMe())
+        // current 在回调后赋值，避免无关后台预热；保留原 SELECT 模型验证手改文档实际生效。
+        p.current = PreviewResult("SELECT id FROM user WHERE id=1", "SELECT id FROM user WHERE id=1", emptyList(), null, null, tableName = "user")
         return p
     }
 
@@ -148,6 +151,24 @@ class SqlPreviewSchemaGateTest : BasePlatformTestCase() {
         DataSourceSelector.preparedEditor = null
         p.executeSql()
         assertFalse(dialogs.single(), dialogs.single().contains("usernme"))
+        assertNoSubmission()
+    }
+
+    fun testDifferentDocumentDoesNotBorrowPreparedTargetAfterEmbed() {
+        warm()
+        val p = preview()
+        p.nativeEditorDoc = EditorFactory.getInstance().createDocument(sql)
+        p.executeSql()
+        assertFalse(dialogs.single(), dialogs.single().contains("usernme"))
+        assertNoSubmission()
+    }
+
+    fun testNullNativeDocumentDoesNotBorrowPreparedTargetAfterEmbed() {
+        warm()
+        val p = preview()
+        p.nativeEditorDoc = null
+        p.executeSql()
+        assertTrue(dialogs.isEmpty())
         assertNoSubmission()
     }
 
