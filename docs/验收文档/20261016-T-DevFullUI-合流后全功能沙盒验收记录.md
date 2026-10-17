@@ -537,6 +537,8 @@ U25/U12/U13 本轮真机（重建后沙盒）：方法预览头部显示 `方言
 
 U15/U27 本轮真机：方法预览中选中表名 `user` 后右键「SQL 快捷模板」子菜单完整列出 EXPLAIN 选中表 / COUNT 选中表 / 抽样 10 行；点击「COUNT 选中表」后 Database 控制台实际执行 `SELECT COUNT(*) FROM user`（111ms），返回 `[42000][1146] Table 'kotlin_demo.user' doesn't exist` 并提示当前库为 kotlin_demo——模板动作与执行链已真实触达，报错仅因目标库缺少该表；待用 `mp_demo.user` 限定名复验成功路径。
 
+UI030（用户现场 UX 改进，已合 `650ef6b3`）：「结构化执行计划视图不可用，已回退原生控制台：当前预览会话没有已绑数据源」原为纯告知。改为——无已绑数据源时**直接弹既有数据源选择器**（与执行 SQL 同一 runner 选择器），只绑定不执行任何语句，用户选中后自动重试结构化 EXPLAIN；取消则收口为一次明确说明，不重复弹窗、不形成循环；结构化开关关闭时通知附带「启用结构化并重试」动作。定向 `ExplainFallbackGuidanceTest` 10/0、`ExplainFallbackNotificationTest` 3/0、`ExplainPanelWiringGuardTest` 10/0、`ExplainPanelChannelTest` 12/0；反向摘动作/改取消判定/摘调用各恰 1~2 红。真机弹窗时序与通知动作点击仍需 runIde 复验。
+
 ## 依据与历史证据保全
 
 - 十九轮UI11组、Runner12组及R90/R91/R92/R94/O147/V178专册。
