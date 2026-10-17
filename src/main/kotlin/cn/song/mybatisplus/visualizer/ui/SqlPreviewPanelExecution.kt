@@ -653,7 +653,7 @@ internal fun SqlPreviewPanel.executeSql() {
     // UI023：只读本面板已绑定目标的缓存。首次未绑定/控制台失联/库范围无法证明时跳过，
     // 不猜项目首个数据源，不在 EDT 预热；后续选择、写确认和目标闸仍走原链。
     val schemaTarget = if (consoleAttachedToMe()) {
-        cn.song.mybatisplus.visualizer.execute.DataSourceSelector.schemaValidationTarget(nativeConsoleEditor)
+        cn.song.mybatisplus.visualizer.execute.DataSourceSelector.schemaValidationTarget(nativeEditorDoc)
     } else null
     val schemaIssues = when (val outcome = cn.song.mybatisplus.visualizer.execute.SchemaValidationGate.check(proj, sql, schemaTarget)) {
         is cn.song.mybatisplus.visualizer.execute.SchemaValidationGate.Outcome.Checked -> outcome.issues

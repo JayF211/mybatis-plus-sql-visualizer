@@ -303,12 +303,13 @@ object DataSourceSelector {
         }
     }
 
-    /** UI023：仅替代 DBN 状态读取；测试仍走 preparedEditor 身份检查和真实缓存读取。 */
+    /** UI023：仅替代 DBN 状态读取；测试仍走执行文档身份检查和真实缓存读取。 */
     internal var schemaTargetReaderForTest: ((Any) -> SchemaValidationGate.Target?)? = null
 
-    internal fun schemaValidationTarget(editor: com.intellij.openapi.editor.Editor?): SchemaValidationGate.Target? {
-        // 执行快路径用 preparedConsole，不能拿 sharedConsole 或另一个预览的编辑器作证据。
-        if (editor == null || editor !== preparedEditor) return null
+    internal fun schemaValidationTarget(document: com.intellij.openapi.editor.Document?): SchemaValidationGate.Target? {
+        // 首次 onEditor→embedConsole 会清 nativeConsoleEditor 辅助引用，但保留实际执行文档。
+        // 只认本面板执行文档与 preparedEditor.document 同一对象；不得借共享或其他预览文档。
+        if (document == null || document !== preparedEditor?.document) return null
         val console = preparedConsole ?: return null
         schemaTargetReaderForTest?.let { return it(console) }
         if (!ExecuteSqlSupport.isAvailable()) return null
