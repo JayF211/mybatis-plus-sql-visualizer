@@ -173,6 +173,7 @@ class PlatformSignatureCrossVersionTest {
                 "DatabaseSessionViewService.getClientViewIfAny[DatabaseSessionClientWithFile]",
                 "DatabaseSessionClientWithFile.getSession[]",
                 "DatabaseSessionViewService.getViewIfAny[DatabaseSession]",
+                "BaseLogView.getConsoleView[]",
             )) {
                 assertTrue("IU-$family 必须实际执行UI015签名登记：$signature\n${result.output}",
                     result.output.lineSequence().any { it.startsWith("OK   $signature -> ") })

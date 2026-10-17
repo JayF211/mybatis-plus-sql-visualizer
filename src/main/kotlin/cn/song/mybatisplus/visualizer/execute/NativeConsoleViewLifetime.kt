@@ -66,12 +66,17 @@ internal class NativeConsoleViewLifetime(private val project: Project) : Disposa
                     val sessionType = Class.forName(SESSION_CLASS, false, loader)
                     val service = serviceType.getMethod("getInstance").invoke(null)
                     val output = serviceType.getMethod("getViewIfAny", sessionType).invoke(service, session) as? Disposable
-                    if (output != null && !Disposer.isDisposed(output)) Disposer.dispose(output)
+                    if (output != null && !Disposer.isDisposed(output)) {
+                        val baseViewType = Class.forName("com.intellij.database.run.session.BaseLogView", false, loader)
+                        val languageConsole = baseViewType.getMethod("getConsoleView").invoke(output) as? Disposable
+                        if (languageConsole != null && !Disposer.isDisposed(languageConsole)) Disposer.dispose(languageConsole)
+                    }
                 }
             }) { LOG.warn("Native session output disposal failed", it) }
         }
         // sessionViews的缓存移除回调挂session，真实关闭后续由平台销毁session并清缓存。
-        // 此处只提前释放UI，不销毁session/连接、不触发提交回滚；仅projectClosing执行，
+        // 只提前释放语言控制台子树。dispose整个BaseLogView会经Content disposer销毁target
+        // session，故保留外层view/布局至平台原树收尾；不触及连接/事务。仅projectClosing执行，
         // 插件卸载或预览关闭不能破坏仍可用的共享session output。
     }
 

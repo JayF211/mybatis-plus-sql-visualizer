@@ -161,7 +161,13 @@ public class PlatformSignatureChecker {
             }
             Class<?> session = Class.forName("com.intellij.database.console.session.DatabaseSession", false, loader);
             Class<?> baseSession = Class.forName("com.intellij.database.run.session.Session", false, loader);
-            return checkNativeConsoleViewLifetimeSignatures(service, client, view)
+            Class<?> baseView = Class.forName("com.intellij.database.run.session.BaseLogView", false, loader);
+            Class<?> languageConsole = Class.forName("com.intellij.execution.console.LanguageConsoleView", false, loader);
+            Method getConsole = baseView.getMethod("getConsoleView");
+            int consoleMissing = getConsole.getReturnType() == languageConsole &&
+                    !java.lang.reflect.Modifier.isStatic(getConsole.getModifiers()) && disposable.isAssignableFrom(languageConsole)
+                    ? check(getConsole, "BaseLogView.getConsoleView[]") : 1;
+            return consoleMissing + checkNativeConsoleViewLifetimeSignatures(service, client, view)
                     + checkSessionOutputSignatures(service, client, session, baseSession, view);
         } catch (Throwable t) {
             System.out.println("MISS native console lifetime: " + t);
