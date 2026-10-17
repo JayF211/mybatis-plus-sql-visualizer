@@ -11,7 +11,11 @@ import com.intellij.openapi.editor.Editor
 import com.intellij.testFramework.LightProjectDescriptor
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNotSame
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Test
@@ -45,6 +49,9 @@ class DbConsoleIntegrationTest : BasePlatformTestCase() {
 
     /** 控制台编辑器夹具的持有标记（造/释放见 [DbIntegrationProjectSupport.installExecEditor]）。 */
     private var execEditor: Editor? = null
+
+    /** UI016 使用自身精确清理，不走历史夹具的全局 allEditors 释放。 */
+    private var ui016LifecycleOnly = false
 
     /**
      * 稳定 light 工程目录（testDatabase 通道五类共用，根因见 [DbIntegrationProjectSupport] 类注释）：
@@ -431,12 +438,195 @@ class DbConsoleIntegrationTest : BasePlatformTestCase() {
         return diag.toString()
     }
 
+    /**
+     * UI016 WIP（未编译、未执行）：真实 native view 的关闭协议正对照。
+     *
+     * 不借 installExecEditor/releaseExecEditors 伪造生命周期；显式 getView 绕过 JdbcConsole
+     * 构造器在 unit-test mode 不建视图的分支。只建 localhost/mp_demo 的未执行 session 描述，
+     * 不读 demo XML/凭据、不 introspect、不提交 SQL。首次运行先核夹具能否离线成立；
+     * 服务/模型初始化失败属于夹具失败，不能算 UI016 复现红。
+     */
+    fun testUi016NativeViewDestroyProtocolControl() {
+        withUi016NativeViews { fixture ->
+            val service = com.intellij.database.console.session.DatabaseSessionViewService.getInstance()
+            val owned = fixture.create("mpsql-exec.sql")
+            val foreign = fixture.create("user-console.sql")
+            val view = owned.view
+            val languageConsole = owned.consoleView
+            val executionEditor = languageConsole.consoleEditor
+            val historyEditor = languageConsole.historyViewer
+            val ui = owned.ui
+            val foreignView = foreign.view
+            val foreignEditor = foreign.consoleView.consoleEditor
+
+            assertSame("前提：应用服务必须持有本次真实 view", view, service.getClientViewIfAny(owned))
+            assertFalse("前提：必须有真实执行编辑器", executionEditor.isDisposed)
+            assertFalse("前提：必须有真实 history 编辑器", historyEditor.isDisposed)
+            assertFalse("前提：view 不得已经被 facade 清扫", ui.isDisposed)
+            service.destroyView(owned)
+
+            assertNull("原生 destroyView 必须移除应用服务缓存", service.getClientViewIfAny(owned))
+            assertTrue("原生协议负责释放执行编辑器", executionEditor.isDisposed)
+            assertTrue("原生协议负责释放 history 编辑器", historyEditor.isDisposed)
+            assertTrue("原生协议负责释放 RunnerLayoutUi", ui.isDisposed)
+            assertSame("销毁一个 client 不得影响另一个 view", foreignView, service.getClientViewIfAny(foreign))
+            assertFalse("其他控制台编辑器仍存活", foreignEditor.isDisposed)
+        }
+    }
+
+    /**
+     * UI016 WIP（未编译、未执行）：生产 attach 登记的 view 应在 projectClosing 阶段释放。
+     *
+     * 这里只同步发项目关闭前通知，不销毁 BasePlatformTestCase 的共享 light project，
+     * 不启动 GUI；断言时项目服务/总线仍可用。它检验关闭协议接线，不冒充完整 IDE Exit。
+     * 预期缺陷断言是 UI016-OWNED-VIEW-RETAINED；若先在真实 view 构造/生产 attach 前提失败，
+     * 必须修夹具再判红，不能把 CNFE/模型失效/准备失败归为生命周期复现。
+     */
+    fun testUi016OwnedNativeViewReleasedBeforeProjectServices() {
+        withUi016NativeViews { fixture ->
+            val service = com.intellij.database.console.session.DatabaseSessionViewService.getInstance()
+            // 单测模式不会自动建 native view，先用原生 API 显式建出来；按(project,file)缓存。
+            // 生产 attachConsole 会替换 client，原生服务复用该 view；不手建 EditorFactory editor。
+            val seed = fixture.create("mpsql-exec.sql")
+            val seedView = seed.view
+            val seedEditor = seed.consoleView.consoleEditor
+            val file = seed.virtualFile
+            var reachedNativeEditor = false
+            var active = true
+            val failures = mutableListOf<String>()
+            DataSourceSelector.prepareInConsole(
+                project = fixture.owner,
+                session = seed.session,
+                vf = file,
+                executeAfterPrepare = false,
+                dataSourceName = null,
+                onConsole = null,
+                onEditor = { editor ->
+                    reachedNativeEditor = true
+                    assertSame("必须借用真实 native 执行编辑器", seedEditor, editor)
+                    // 只测 attach 资源归属；阻止后段 schema 对齐、文档同步与延迟模型/结果轮询。
+                    active = false
+                },
+                onError = { failures.add(it) },
+                isPrepareActive = { active },
+            )
+            // 不吞错/不 assume skip；前提失败与末端生命周期断言分开。
+            assertTrue("前提：生产 attach 必须同步拿到真实 editor，errors=$failures", reachedNativeEditor)
+            assertTrue("前提：生产 attach 不得报错，errors=$failures", failures.isEmpty())
+            val owned = requireNotNull(com.intellij.database.console.JdbcConsoleProvider.getConsole(fixture.owner, file))
+            fixture.track(owned)
+            assertNotSame("前提：确实经过生产 attach 替换 client", seed, owned)
+            assertSame("前提：原生服务复用已有真实 view", seedView, owned.view)
+            val view = owned.view
+            val executionEditor = owned.consoleView.consoleEditor
+            val historyEditor = owned.consoleView.historyViewer
+            val ui = owned.ui
+            val foreign = fixture.create("user-console.sql")
+            val foreignView = foreign.view
+            val foreignEditor = foreign.consoleView.consoleEditor
+            assertFalse("前提：被测 view 必须在关闭通知前存活", com.intellij.openapi.util.Disposer.isDisposed(view))
+
+            DataSourceSelector.releaseForPanel()
+            assertSame("预览关闭只清缓存，不得提前销毁共享结果", view, service.getClientViewIfAny(owned))
+            assertFalse("预览关闭后共享执行编辑器仍存活", executionEditor.isDisposed)
+
+            ApplicationManager.getApplication().messageBus
+                .syncPublisher(com.intellij.openapi.project.ProjectManager.TOPIC)
+                .projectClosing(fixture.owner)
+
+            assertFalse("观测边界：项目服务尚未销毁", fixture.owner.isDisposed)
+            assertNull("UI016-OWNED-VIEW-RETAINED：关闭前应移除自有 view，不能留到 application dispose",
+                service.getClientViewIfAny(owned))
+            assertTrue("关闭前必须经原生协议释放执行编辑器", executionEditor.isDisposed)
+            assertTrue("关闭前必须释放 history 编辑器", historyEditor.isDisposed)
+            assertTrue("关闭前必须释放 RunnerLayoutUi，避免晚保存布局访问已销毁项目", ui.isDisposed)
+            assertSame("不得遍历销毁用户的原生控制台", foreignView, service.getClientViewIfAny(foreign))
+            assertFalse("用户控制台不属于插件自有清理集合", foreignEditor.isDisposed)
+        }
+    }
+
+    /** UI016 专用真实重项目，避免模拟关闭事件污染跨用例复用的 light project。 */
+    private fun withUi016NativeViews(body: (Ui016NativeViews) -> Unit) {
+        ui016LifecycleOnly = true
+        val directory = java.nio.file.Files.createTempDirectory("mpsv-ui016-native-")
+        val manager = com.intellij.openapi.project.ex.ProjectManagerEx.getInstanceEx()
+        val owner = requireNotNull(manager.newProject(directory, com.intellij.ide.impl.OpenProjectTask {
+            isNewProject = true
+            useDefaultProjectAsTemplate = false
+            projectName = "UI016-native-view"
+        }))
+        var fixture: Ui016NativeViews? = null
+        try {
+            val created = Ui016NativeViews(owner)
+            fixture = created
+            body(created)
+        } finally {
+            // 清理放在断言之后，且只清本夹具显式登记的资源。不得全局 release allEditors 救绿。
+            try {
+                fixture?.close()
+            } finally {
+                try {
+                    manager.closeAndDispose(owner)
+                } finally {
+                    directory.toFile().deleteRecursively()
+                }
+            }
+        }
+    }
+
+    private class Ui016NativeViews(val owner: com.intellij.openapi.project.Project) : AutoCloseable {
+        private val clients = mutableListOf<com.intellij.database.console.JdbcConsole>()
+        private val sources = LocalDataSourceManager.getInstance(owner)
+        private val source = sources.createEmpty().apply {
+            name = "UI016-offline-mp_demo"
+            url = "jdbc:mysql://localhost:3306/mp_demo"
+            driverClass = "com.mysql.cj.jdbc.Driver"
+            isAutoSynchronize = false
+            javaClass.getDeclaredMethod("setDriverRef", String::class.java).apply { isAccessible = true }
+                .invoke(this, "mysql.8")
+            resolveDriver()
+            sources.addDataSource(this)
+        }
+
+        fun track(client: com.intellij.database.console.JdbcConsole) {
+            if (clients.none { it === client }) clients.add(client)
+        }
+
+        fun create(name: String): com.intellij.database.console.JdbcConsole {
+            val file = com.intellij.testFramework.LightVirtualFile(name, com.intellij.sql.SqlFileType.INSTANCE, "SELECT 1")
+            val session = com.intellij.database.console.session.DatabaseSessionManager.getSession(owner, source, name)
+            val client = requireNotNull(com.intellij.openapi.application.WriteIntentReadAction.compute<com.intellij.database.console.JdbcConsole?> {
+                com.intellij.database.console.JdbcConsoleProvider.attachConsole(owner, session, file)
+            })
+            track(client)
+            // getView 会创建真正的 ConsoleExecutionEditor/history editor/RunnerLayoutUi。
+            com.intellij.openapi.application.WriteIntentReadAction.compute<Any> { client.view }
+            return client
+        }
+
+        override fun close() {
+            val service = com.intellij.database.console.session.DatabaseSessionViewService.getInstance()
+            try {
+                clients.asReversed().forEach { client ->
+                    // getClientViewIfAny 不会新建 view；相同(project,file)新旧client共享key，清理幂等。
+                    service.destroyView(client)
+                    com.intellij.openapi.util.Disposer.dispose(client)
+                }
+            } finally {
+                DataSourceSelector.releaseForPanel()
+                sources.removeDataSource(source)
+            }
+        }
+    }
+
     override fun tearDown() {
         introspectRef?.let { runCatching { it.close() } }
         introspectRef = null
         // 夹具编辑器必须先释放：平台 TestApplicationKt.checkEditorsReleased 对每个存活编辑器硬抛
-        DbIntegrationProjectSupport.detachDbnConsole(project)
-        DbIntegrationProjectSupport.releaseExecEditors(project)
+        if (!ui016LifecycleOnly) {
+            DbIntegrationProjectSupport.detachDbnConsole(project)
+            DbIntegrationProjectSupport.releaseExecEditors(project)
+        }
         // 单例的 prepared/shared 槽位跨用例存活——面板关闭语义的清理是 releaseForPanel
         // （clearPrepared + dropSharedConsole + 清 pendingOnConsole），用例边界用它，避免下个用例
         // 经 reuseSharedConsole 命中本用例的控制台/编辑器（详见 DataSourceSelectorIntegrationTest 同款注释）
