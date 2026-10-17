@@ -624,14 +624,55 @@ class DbConsoleIntegrationTest : BasePlatformTestCase() {
             } as com.intellij.database.console.session.DatabaseSessionLogView
             val sessionEditor = sessionView.consoleView.consoleEditor
             assertNotSame("两个独立view：client view不能代表session output", client.view, sessionView)
-            assertTrue("session output编辑器是标题LightVirtualFile而非exec文件",
-                sessionEditor.virtualFile is com.intellij.testFramework.LightVirtualFile)
+            assertTrue("session output控制台持有标题LightVirtualFile而非exec文件",
+                sessionView.consoleView.virtualFile is com.intellij.testFramework.LightVirtualFile)
+            assertNotSame(client.virtualFile, sessionView.consoleView.virtualFile)
             NativeConsoleViewLifetime.remember(fixture.owner, client)
             ApplicationManager.getApplication().messageBus
                 .syncPublisher(com.intellij.openapi.project.ProjectManager.TOPIC).projectClosing(fixture.owner)
             assertNull("原client清理已经生效", service.getClientViewIfAny(client))
             assertTrue("UI016-SESSION-VIEW-RETAINED：真实attach的session output不能活到project bus释放",
                 sessionEditor.isDisposed)
+        }
+    }
+
+    /** 真实打开并关闭独立项目，捕获目标Bus错误；无关平台错误仍按默认规则失败。 */
+    fun testUi016RealProjectCloseDoesNotLeaveSessionOutput() {
+        ui016LifecycleOnly = true
+        val directory = java.nio.file.Files.createTempDirectory("mpsv-native-close-")
+        val parent = com.intellij.openapi.util.Disposer.newDisposable("native-close-test")
+        val owner = com.intellij.testFramework.PlatformTestUtil.loadAndOpenProject(directory, parent)
+        val fixture = Ui016NativeViews(owner)
+        var closed = false
+        val busErrors = mutableListOf<Throwable>()
+        try {
+            val client = fixture.create("mpsql-exec.sql")
+            val service = com.intellij.database.console.session.DatabaseSessionViewService.getInstance()
+            val output = com.intellij.openapi.application.WriteIntentReadAction.compute<Any> {
+                service.getView(client.session)
+            } as com.intellij.database.console.session.DatabaseSessionLogView
+            val editor = output.consoleView.consoleEditor
+            NativeConsoleViewLifetime.remember(owner, client)
+            com.intellij.testFramework.LoggedErrorProcessor.executeWith(object : com.intellij.testFramework.LoggedErrorProcessor() {
+                override fun processError(category: String, message: String, details: Array<out String>, t: Throwable?): Set<Action> {
+                    if (message == "Bus is already disposed" && t != null &&
+                        t.stackTrace.any { it.className == "com.intellij.execution.console.ConsoleExecutionEditor" }) {
+                        busErrors.add(t)
+                        return Action.NONE
+                    }
+                    return super.processError(category, message, details, t)
+                }
+            }, com.intellij.util.ThrowableRunnable<Throwable> {
+                com.intellij.testFramework.PlatformTestUtil.forceCloseProjectWithoutSaving(owner)
+                closed = owner.isDisposed
+            })
+            assertTrue("必须完成真实项目销毁，不能仅发送人工通知", closed)
+            assertTrue("关闭后真实session editor必须已释放", editor.isDisposed)
+            assertTrue("UI016-REAL-CLOSE-BUS：session output晚于项目总线释放，count=${busErrors.size}", busErrors.isEmpty())
+        } finally {
+            if (!closed) fixture.close()
+            com.intellij.openapi.util.Disposer.dispose(parent)
+            directory.toFile().deleteRecursively()
         }
     }
 
