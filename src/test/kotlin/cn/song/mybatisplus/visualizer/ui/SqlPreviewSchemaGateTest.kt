@@ -167,6 +167,7 @@ class SqlPreviewSchemaGateTest : BasePlatformTestCase() {
         warm()
         val p = preview()
         p.nativeEditorDoc = null
+        assertNull("控制台已备也必须拒绝null文档", DataSourceSelector.schemaValidationTarget(null))
         p.executeSql()
         assertTrue(dialogs.isEmpty())
         assertNoSubmission()
