@@ -44,7 +44,7 @@ class AliasDualTrackDefenseTest {
             e
         }
 
-    // ---------- 路径 1：lambda 生成（实名 ref + 别名第二参，双轨同现不互染） ----------
+    // ---------- 路径 1：别名投影整链回落（MP core 无 selectAs，双轨在字符串形态下仍不互染） ----------
 
     @Test
     fun `路径1_lambda生成_别名走selectAs第二参_列归属用实名`() {
@@ -52,11 +52,12 @@ class AliasDualTrackDefenseTest {
         // 解析层即双字段分离（expr 实名原文 / alias 展示名）
         assertEquals(listOf(SelectColumn("psn_no", "psn"), SelectColumn("psn_name")), result.selectColumns)
         val code = JavaCodeGenerator.generate(result, personnel, GeneratedWrapper.LAMBDA)
-        assertTrue(code, code.contains(".selectAs(Personnel::getPsnNo, \"psn\")"))
-        assertTrue(code, code.contains(".select(Personnel::getPsnName)"))
-        // 别名不得冒充实名进入列归属（不存在 Personnel::getPsn 字段的引用形态）
-        assertFalse("别名不得进入 lambda 实名轨", code.contains("Personnel::getPsn)"))
-        assertFalse("lambda 模式不得回落整串形态", code.contains("psn_no AS psn"))
+        // javap 实证：MP core 3.5.14/3.5.17 的 Query/AbstractWrapper/LambdaQueryWrapper/QueryWrapper
+        // 均无 selectAs 重载，lambda 链无法表达 `列 AS 别名`——带别名的投影必须整链回落字符串
+        // QueryWrapper.select(String...)，否则生成物不可编译。UI-005 修复后的现行契约如此。
+        assertTrue(code, code.contains(".select(\"psn_no AS psn\", \"psn_name\")"))
+        assertFalse("MP core 无 selectAs 重载，生成物不得引用", code.contains("selectAs"))
+        assertFalse("别名不得冒充实名进入列归属", code.contains("Personnel::getPsn)"))
     }
 
     // ---------- 路径 2：rawMode 整串保留（有意行为，测试按现状锁） ----------
@@ -92,10 +93,12 @@ class AliasDualTrackDefenseTest {
 
     @Test
     fun `路径3c_未映射列回落字符串_表别名前缀保留_别名单列第二参`() {
-        // 实体映射失败 → 整串回落字符串（含表别名前缀），别名仍独立第二参——回落不合并双轨
+        // 实体映射失败 → 整串回落字符串（含表别名前缀）；MP core 无 selectAs(String, String)，
+        // 别名只能随表达式并入 select 串，不产 selectAs
         val result = SqlReverseParser.parse("SELECT t.unknown_col AS total FROM personnel t")
         val code = JavaCodeGenerator.generate(result, personnel, GeneratedWrapper.LAMBDA)
-        assertTrue(code, code.contains(".selectAs(\"t.unknown_col\", \"total\")"))
+        assertTrue(code, code.contains(".select(\"t.unknown_col AS total\")"))
+        assertFalse("MP core 无 selectAs 重载", code.contains("selectAs"))
     }
 
     // ---------- 路径 4：WHERE / ORDER BY 取实名，别名不污染条件轨 ----------
@@ -104,9 +107,11 @@ class AliasDualTrackDefenseTest {
     fun `路径4_WHERE与ORDER BY取实名_lambda化不受别名干扰`() {
         val result = SqlReverseParser.parse("SELECT psn_no AS psn FROM personnel WHERE psn_no = '1' ORDER BY psn_no")
         val code = JavaCodeGenerator.generate(result, personnel, GeneratedWrapper.LAMBDA)
-        assertTrue(code, code.contains(".selectAs(Personnel::getPsnNo, \"psn\")"))
-        assertTrue("WHERE 条件列实名 lambda", code.contains(".eq(Personnel::getPsnNo, \"1\")"))
-        assertTrue("ORDER BY 列实名 lambda", code.contains("orderByAsc(Personnel::getPsnNo)"))
+        // 别名投影整链回落字符串 Wrapper：列归属仍取 WHERE/ORDER BY 实名原文，不被别名改写
+        assertTrue(code, code.contains(".select(\"psn_no AS psn\")"))
+        assertTrue("WHERE 条件列取实名", code.contains(".eq(\"psn_no\", \"1\")"))
+        assertTrue("ORDER BY 列取实名", code.contains("orderByAsc(\"psn_no\")"))
+        assertFalse("别名不得污染条件轨", code.contains(".eq(\"psn\""))
     }
 
     @Test

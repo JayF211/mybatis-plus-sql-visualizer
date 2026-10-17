@@ -136,6 +136,8 @@ object JavaCodeGenerator {
         val selectColumns = result.selectColumns?.filterNot { isIgnoredColumn(it.expr) }
         // MP core 的 Lambda 列参数只接受 SFunction；别名/表达式/未映射投影和分组
         // 必须整链使用字符串 Wrapper，不能只把单个列参数换成字符串。
+        // （javap 实证：MP core 3.5.14/3.5.17 的 Query/AbstractWrapper/LambdaQueryWrapper/
+        //  QueryWrapper 均无 selectAs 重载——lambda 链无法表达 `列 AS 别名`，只能整链回落。）
         val needsStringProjection = result.distinct || selectColumns.orEmpty().any {
             it.alias != null || renderSelectRef(it, entity).startsWith('"')
         } || result.groupBy.any {
