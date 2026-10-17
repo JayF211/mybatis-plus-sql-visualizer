@@ -455,6 +455,79 @@ class SqlPreviewPanelParamSchemesTest : BasePlatformTestCase() {
         assertEquals(nullOnly, cache.recall(key))
     }
 
+    private fun assertFirstForeachRecallSql(scheme: String, values: List<String>, isNull: Boolean = false) {
+        val parsed = XmlMapperParser().parse("""
+            <mapper namespace="com.example.UserMapper">
+              <select id="selectByAnnotationForeach">
+                SELECT * FROM t_user
+                <where>
+                  <if test="ids != null and ids.size() > 0">
+                    id IN <foreach collection="ids" item="id" open="(" separator="," close=")" nullable="true">#{id}</foreach>
+                  </if>
+                </where>
+              </select>
+            </mapper>
+        """.trimIndent())
+        val model = XmlPreviewModel.from(
+            parsed.statements.single(), parsed.errors,
+            paramTypes = mapOf("ids" to ParamTypeInfo(ParamKind.COLLECTION, elementKind = ParamKind.NUMBER)),
+        )
+        val rendered = model.renderSql()
+        val result = PreviewResult(
+            sql = rendered.sql,
+            compactSql = rendered.sql.replace(Regex("\\s+"), " ").trim(),
+            unresolvedParams = rendered.mappings.map { it.property },
+            paramTable = ParameterReplacer.buildParamTable(rendered.mappings.map { it.property }),
+            wrapperType = null, tableName = null, xmlModel = model,
+        )
+        val p = SqlPreviewPanel(project)
+        panel = p
+        Disposer.register(testRootDisposable, p)
+        val cache = p.paramHistoryCacheForTest()
+        val key = cache.computeKey(null, result.sql)!!
+        val snapshot = mapOf(
+            "__fev__:ids" to values.joinToString(","),
+            "__fnull__:ids" to if (isNull) "1" else "0",
+        )
+        assertTrue(cache.saveForScheme(scheme, key, snapshot))
+        cache.switchScheme(scheme, key)
+
+        // 首次打开：没有旧字段监听，不输入文本、不切换预设、不手动追加渲染。
+        p.showResult(result)
+        com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+        assertEquals(scheme, p.schemeComboForTest()!!.selectedItem)
+        assertEquals(values.joinToString(","), p.forEachValueFieldTextForTest("ids"))
+        assertEquals(isNull, p.forEachNullSelectedForTest("ids"))
+        val sql = p.lastRenderedSqlForTest()!!
+        val inClause = Regex("(?i)\\bIN\\s*\\(([^)]*)\\)").find(sql)
+        if (isNull) {
+            assertNull("null 集合不能残留 IN 展开项：$sql", inClause)
+            assertFalse("null 集合不能残留参数占位符：$sql", sql.contains("?"))
+        } else {
+            assertNotNull("应生成 IN 集合：$sql", inClause)
+            val actualItems = inClause!!.groupValues[1].split(",").map { it.trim() }
+            val expected = values.ifEmpty { List(XmlPreviewModel.DEFAULT_FOREACH_SIZE) { "?" } }
+            assertEquals("首次召回必须按权威集合长度生成 SQL：$sql", expected.size, actualItems.size)
+            assertEquals("SQL 每项须与快照一致，不能仅检查输入框", expected, actualItems)
+        }
+        assertEquals("首次渲染不得反写命名或默认快照", snapshot, cache.recall(key))
+    }
+
+    fun testUI021_firstNamedRecallRendersAllThreeIds() =
+        assertFirstForeachRecallSql("UI-Shared", listOf("71", "72", "73"))
+
+    fun testUI021_firstDefaultRecallRendersSingleId() =
+        assertFirstForeachRecallSql(ParamHistoryCache.DEFAULT_SCHEME, listOf("91"))
+
+    fun testUI021_firstDefaultRecallRendersFourIds() =
+        assertFirstForeachRecallSql(ParamHistoryCache.DEFAULT_SCHEME, listOf("71", "72", "73", "74"))
+
+    fun testUI021_firstNamedNullRecallSuppressesAllItems() =
+        assertFirstForeachRecallSql("UI-Shared", listOf("71", "72", "73"), isNull = true)
+
+    fun testUI021_firstRecallWithoutValuesKeepsDefaultExpansion() =
+        assertFirstForeachRecallSql(ParamHistoryCache.DEFAULT_SCHEME, emptyList())
+
     // ==== O-88：预设行折叠件（平台标准 HideableTitledPanel） ====
 
     /** O-88 ①：缺省折叠——折叠件在场、isExpanded=false、锚点方案行在内容区但不可见。
