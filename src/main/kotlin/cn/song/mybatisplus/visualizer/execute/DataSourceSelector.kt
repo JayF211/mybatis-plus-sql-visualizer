@@ -859,11 +859,9 @@ object DataSourceSelector {
      */
     internal fun abortPrepareGate(ownsGate: Boolean, failureMessage: String?, LOG: com.intellij.openapi.diagnostic.Logger) {
         if (!ownsGate) return
-        prepareGate.consumePendingExecute()?.let { queued ->
-            LOG.warn("[M36][T-FirstExec F1] prepare chain aborted with queued execute intent - surface failure to intent onError")
-            queued.onError?.invoke(failureMessage ?: MpSqlVisualizerBundle.message("execute.tempFile.failed", "prepare aborted"))
-        }
-        prepareGate.finishPrepare()
+        LOG.warn("[M36][T-FirstExec F1] prepare chain aborted - settle current and queued requests")
+        prepareGate.abort(ExecutionSubmission.BLOCKED,
+            failureMessage ?: MpSqlVisualizerBundle.message("execute.tempFile.failed", "prepare aborted"))
     }
 
     /**

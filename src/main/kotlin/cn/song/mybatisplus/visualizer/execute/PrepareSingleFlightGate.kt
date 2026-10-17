@@ -12,8 +12,8 @@ package cn.song.mybatisplus.visualizer.execute
  * 消除方式（结构性）：执行意图到达而已有准备链在飞时，**只排队不建链**——准备链完成时消费
  * 排队意图按 executePrepared 口径执行。无论 H1 是否终审定案都是纯增益（消除重复会话/连接）。
  *
- * 线程纪律：`tryEnter`/`consumePendingExecute`/`finishPrepare` 只碰原子位与 volatile 字段，
- * 任意线程可调；排队意图回调的**触发**仍归 EDT（prepareAfterEditorResolved 消费点已在 EDT）。
+ * 门状态转换串行化；取消/失败通知沿请求回调交付，UI 消费者负责归位 EDT。
+ * 每请求终态一次性，后到覆盖、超时和准备失败均不丢弃未结算请求。
  */
 internal class PrepareSingleFlightGate {
 
@@ -26,6 +26,34 @@ internal class PrepareSingleFlightGate {
     /** 最后一个排队执行意图（同窗口连点执行时后到覆盖先到——最新用户意图优先）。 */
     @Volatile
     internal var pendingIntent: QueuedExecuteIntent? = null
+
+    private var owner: QueuedExecuteIntent? = null
+    private var submissionStarted = false
+
+    /** 提交确认已接管回执，不再由准备超时伪报取消。 */
+    @Synchronized
+    fun beginSubmission() { submissionStarted = true }
+
+    @Synchronized
+    fun isOwner(intent: QueuedExecuteIntent): Boolean = prepareInFlight.get() && owner === intent
+
+    /** 超时只结算所属链，迟到的旧回调不得清除新链。 */
+    @Synchronized
+    fun expire(intent: QueuedExecuteIntent) {
+        if (owner === intent && !submissionStarted) abort(ExecutionSubmission.CANCELLED)
+        else if (pendingIntent === intent) consumePendingExecute()?.complete(ExecutionSubmission.CANCELLED)
+    }
+
+    /** 先清空门和队列再通知，避免回调重入把旧请求遗留给下一链。 */
+    @Synchronized
+    fun abort(outcome: ExecutionSubmission, message: String? = null) {
+        val current = owner
+        val queued = consumePendingExecute()
+        owner = null
+        prepareInFlight.set(false)
+        current?.complete(outcome, message)
+        queued?.complete(outcome, message)
+    }
 
     /** 当前门持有链的起始时刻（卡死逃生判定基准；仅 PROCEED/接管时写）。 */
     @Volatile
@@ -43,6 +71,7 @@ internal class PrepareSingleFlightGate {
      * ④ 在飞且本链为显式执行 → 排队意图、QUEUE_ONLY（调用方 callback(true) 后返回，
      * 不再建第二条临时文件/会话/控制台）。
      */
+    @Synchronized
     fun tryEnter(
         executeAfterPrepare: Boolean,
         intent: QueuedExecuteIntent? = null,
@@ -50,20 +79,28 @@ internal class PrepareSingleFlightGate {
     ): PrepareGateDecision {
         if (prepareInFlight.compareAndSet(false, true)) {
             inFlightSinceMs = nowMs
+            owner = intent
+            submissionStarted = false
             return PrepareGateDecision.PROCEED
         }
-        if (nowMs - inFlightSinceMs > STUCK_ESCAPE_MS) {
+        if (!submissionStarted && nowMs - inFlightSinceMs > STUCK_ESCAPE_MS) {
             // 卡死逃生：接管所有权（CompareAndSet 已被旧链持有，直接 set 覆盖）并清陈旧排队
+            val expiredOwner = owner
+            val expiredQueued = consumePendingExecute()
             prepareInFlight.set(true)
-            pendingExecute.set(false)
-            pendingIntent = null
             inFlightSinceMs = nowMs
+            owner = intent
+            submissionStarted = false
+            expiredOwner?.complete(ExecutionSubmission.CANCELLED)
+            expiredQueued?.complete(ExecutionSubmission.CANCELLED)
             return PrepareGateDecision.PROCEED
         }
         if (!executeAfterPrepare) return PrepareGateDecision.PASS_THROUGH
         // F1 核心：已 in-flight 且本次 executeAfterPrepare=true → 只排队，不建第二链
+        val replaced = pendingIntent
         pendingIntent = intent
         pendingExecute.set(true)
+        replaced?.complete(ExecutionSubmission.CANCELLED)
         return PrepareGateDecision.QUEUE_ONLY
     }
 
@@ -71,6 +108,7 @@ internal class PrepareSingleFlightGate {
      * 消费排队执行意图（一次性；无排队返回 null）。由门持有链在完成准备时调用
      * （prepareAfterEditorResolved 缓存落地后）；PASS_THROUGH 链不得调用。
      */
+    @Synchronized
     fun consumePendingExecute(): QueuedExecuteIntent? {
         if (!pendingExecute.getAndSet(false)) return null
         val intent = pendingIntent
@@ -79,8 +117,12 @@ internal class PrepareSingleFlightGate {
     }
 
     /** 门持有链终结复位（成功/失败/复用收敛均须调用；PASS_THROUGH 链不得调用）。 */
+    @Synchronized
     fun finishPrepare() {
+        val leftover = consumePendingExecute()
+        owner = null
         prepareInFlight.set(false)
+        leftover?.complete(ExecutionSubmission.CANCELLED)
     }
 
     companion object {
@@ -117,8 +159,45 @@ internal class QueuedExecuteIntent(
     val wholeScriptExec: Boolean,
     val dialectGateRequest: ExecutionDialectGate.Request? = null,
     val onDialectGate: ((ExecutionDialectGate.Verdict) -> Unit)? = null,
-    val onSubmission: ((ExecutionSubmission) -> Unit)? = null,
-)
+    private val submissionSink: ((ExecutionSubmission) -> Unit)? = null,
+) {
+    private val completed = java.util.concurrent.atomic.AtomicBoolean(false)
+    val isCompleted: Boolean get() = completed.get()
+    val onSubmission: (ExecutionSubmission) -> Unit = { complete(it) }
+
+    fun complete(outcome: ExecutionSubmission, message: String? = null) {
+        if (!completed.compareAndSet(false, true)) return
+        submissionSink?.invoke(outcome)
+        if (message != null) onError?.invoke(message)
+    }
+}
+
+/** 准备失败可能发生在消费排队请求之前或之后，两种形态都结算当前和排队请求。 */
+internal fun failPrepareRequests(
+    gate: PrepareSingleFlightGate,
+    ownsGate: Boolean,
+    current: ((ExecutionSubmission) -> Unit)?,
+    currentError: ((String) -> Unit)?,
+    consumed: QueuedExecuteIntent?,
+    message: String,
+) {
+    if (ownsGate) {
+        gate.abort(ExecutionSubmission.BLOCKED, message)
+    } else {
+        current?.invoke(ExecutionSubmission.BLOCKED)
+        currentError?.invoke(message)
+    }
+    consumed?.complete(ExecutionSubmission.BLOCKED, message)
+}
+
+/** 后到请求替代当前显式执行，当前不能借用后到请求的 submitted。 */
+internal fun selectPrepareSubmission(
+    queued: QueuedExecuteIntent?, current: ((ExecutionSubmission) -> Unit)?,
+): ((ExecutionSubmission) -> Unit)? {
+    if (queued == null) return current
+    current?.invoke(ExecutionSubmission.CANCELLED)
+    return queued.onSubmission
+}
 
 /**
  * T-FirstExecResultInvisible F3：控制台内嵌模式的折叠判定（纯函数，可单测）。

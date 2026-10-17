@@ -127,6 +127,7 @@ public class PlatformSignatureChecker {
         missing += checkSqlLogTabsApis(loader);
         missing += checkPreviewEditorPopupApis(loader);
         missing += checkAttachTargetApis(loader);
+        missing += checkRunnerFinalStepApi(loader);
         missing += checkMcpToolsetCapability(loader);
 
         if (missing > 0) {
@@ -136,12 +137,24 @@ public class PlatformSignatureChecker {
         System.out.println("RESULT OK");
     }
 
-    /**
-     * 校验 `ObjectKind.COLUMN` 可按静态字段读出；Database Tools 缺席时打印 SKIP 返回 0。
-     *
-     * 同时打印 `enumConstants` 实况——该值恒为 null 是「不能按枚举取」的直接证据，
-     * 漂移时这一行就是判据。
-     */
+    /** UI014：数据源选择完成后再弹确认，精确登记生产调用签名。 */
+    private static int checkRunnerFinalStepApi(ClassLoader loader) {
+        try {
+            Class<?> step = Class.forName("com.intellij.openapi.ui.popup.util.BaseStep", false, loader);
+            Method method = step.getMethod("doFinalStep", Runnable.class);
+            if (!"com.intellij.openapi.ui.popup.PopupStep".equals(method.getReturnType().getName()) ||
+                    java.lang.reflect.Modifier.isStatic(method.getModifiers())) {
+                System.out.println("MISS BaseStep.doFinalStep(Runnable): unexpected return type or modifiers");
+                return 1;
+            }
+            return check(method, "BaseStep.doFinalStep(Runnable)");
+        } catch (Throwable t) {
+            System.out.println("MISS BaseStep.doFinalStep(Runnable): " + t);
+            return 1;
+        }
+    }
+
+    /** 校验 ObjectKind.COLUMN 静态字段，Database Tools 缺席时跳过。 */
     private static int checkObjectKindColumn(ClassLoader loader) {
         try {
             Class<?> kind = Class.forName("com.intellij.database.model.ObjectKind", true, loader);

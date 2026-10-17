@@ -106,6 +106,153 @@ class PrepareSingleFlightGateTest {
         assertEquals(PrepareGateDecision.PROCEED, gate.tryEnter(executeAfterPrepare = false, nowMs = PrepareSingleFlightGate.STUCK_ESCAPE_MS + 2))
     }
 
+    private class RequestProbe {
+        val outcomes = mutableListOf<ExecutionSubmission>()
+        val errors = mutableListOf<String>()
+        val request = QueuedExecuteIntent(null, null, { errors += it }, null, false,
+            submissionSink = { outcomes += it })
+    }
+
+    @Test
+    fun `取消准备A同时结算排队B且下一链无遗留`() {
+        val gate = PrepareSingleFlightGate()
+        val a = RequestProbe()
+        val b = RequestProbe()
+        gate.tryEnter(false, a.request, 0)
+        gate.tryEnter(true, b.request, 10)
+        gate.abort(ExecutionSubmission.CANCELLED)
+        assertEquals(listOf(ExecutionSubmission.CANCELLED), a.outcomes)
+        assertEquals(listOf(ExecutionSubmission.CANCELLED), b.outcomes)
+        assertFalse(gate.pendingExecute.get())
+        val next = RequestProbe()
+        assertEquals(PrepareGateDecision.PROCEED, gate.tryEnter(true, next.request, 20))
+        assertNull(gate.consumePendingExecute())
+        assertTrue(gate.isOwner(next.request))
+        assertTrue(next.outcomes.isEmpty())
+    }
+
+    @Test
+    fun `ABC覆盖只最新请求可提交且当前A明确取消`() {
+        val gate = PrepareSingleFlightGate()
+        val a = RequestProbe()
+        val b = RequestProbe()
+        val c = RequestProbe()
+        gate.tryEnter(true, a.request, 0)
+        gate.tryEnter(true, b.request, 10)
+        gate.tryEnter(true, c.request, 20)
+        assertEquals(listOf(ExecutionSubmission.CANCELLED), b.outcomes)
+        val queued = gate.consumePendingExecute()
+        assertSame(c.request, queued)
+        val receipt = selectPrepareSubmission(queued, a.request.onSubmission)
+        assertEquals(listOf(ExecutionSubmission.CANCELLED), a.outcomes)
+        assertTrue(c.outcomes.isEmpty())
+        receipt!!.invoke(ExecutionSubmission.SUBMITTED)
+        gate.finishPrepare()
+        // 迟到回执不得翻转被替代请求，也不能产生第二个终态。
+        a.request.onSubmission(ExecutionSubmission.SUBMITTED)
+        b.request.onSubmission(ExecutionSubmission.SUBMITTED)
+        c.request.onSubmission(ExecutionSubmission.BLOCKED)
+        assertEquals(listOf(ExecutionSubmission.CANCELLED), a.outcomes)
+        assertEquals(listOf(ExecutionSubmission.CANCELLED), b.outcomes)
+        assertEquals(listOf(ExecutionSubmission.SUBMITTED), c.outcomes)
+    }
+
+    @Test
+    fun `超时接管结算AB且旧定时器不清C`() {
+        val gate = PrepareSingleFlightGate()
+        val a = RequestProbe()
+        val b = RequestProbe()
+        val c = RequestProbe()
+        gate.tryEnter(true, a.request, 0)
+        gate.tryEnter(true, b.request, 10)
+        gate.tryEnter(true, c.request, PrepareSingleFlightGate.STUCK_ESCAPE_MS + 1)
+        assertEquals(listOf(ExecutionSubmission.CANCELLED), a.outcomes)
+        assertEquals(listOf(ExecutionSubmission.CANCELLED), b.outcomes)
+        gate.expire(a.request)
+        gate.expire(b.request)
+        assertTrue(gate.isOwner(c.request))
+        assertTrue(c.outcomes.isEmpty())
+        assertNull(gate.consumePendingExecute())
+    }
+
+    @Test
+    fun `无下一次点击也能超时结算准备与排队`() {
+        val gate = PrepareSingleFlightGate()
+        val a = RequestProbe()
+        val b = RequestProbe()
+        gate.tryEnter(false, a.request, 0)
+        gate.tryEnter(true, b.request, 10)
+        gate.expire(a.request)
+        gate.expire(a.request)
+        assertEquals(listOf(ExecutionSubmission.CANCELLED), a.outcomes)
+        assertEquals(listOf(ExecutionSubmission.CANCELLED), b.outcomes)
+        assertFalse(gate.prepareInFlight.get())
+        assertNull(gate.consumePendingExecute())
+    }
+
+    @Test
+    fun `缺scriptModel在消费前结算当前与排队`() = assertPrepareFailure(consumed = false, "scriptModel")
+
+    @Test
+    fun `缺editorComponent在消费后结算当前与排队`() = assertPrepareFailure(consumed = true, "editorComponent")
+
+    private fun assertPrepareFailure(consumed: Boolean, message: String) {
+        val gate = PrepareSingleFlightGate()
+        val a = RequestProbe()
+        val b = RequestProbe()
+        gate.tryEnter(true, a.request, 0)
+        gate.tryEnter(true, b.request, 10)
+        val pending = if (consumed) gate.consumePendingExecute() else null
+        failPrepareRequests(gate, true, a.request.onSubmission, a.request.onError, pending, message)
+        assertEquals(listOf(ExecutionSubmission.BLOCKED), a.outcomes)
+        assertEquals(listOf(ExecutionSubmission.BLOCKED), b.outcomes)
+        assertEquals(listOf(message), a.errors)
+        assertEquals(listOf(message), b.errors)
+        assertFalse(gate.prepareInFlight.get())
+        assertNull(gate.consumePendingExecute())
+    }
+
+    @Test
+    fun `提交确认已接管时准备超时不伪报取消`() {
+        val gate = PrepareSingleFlightGate()
+        val a = RequestProbe()
+        gate.tryEnter(true, a.request, 0)
+        gate.beginSubmission()
+        gate.expire(a.request)
+        assertTrue(gate.isOwner(a.request))
+        assertTrue(a.outcomes.isEmpty())
+        a.request.onSubmission(ExecutionSubmission.CANCELLED)
+        gate.finishPrepare()
+        assertEquals(listOf(ExecutionSubmission.CANCELLED), a.outcomes)
+    }
+
+    @Test
+    fun `缺准备资源的直通请求也有终态`() {
+        val gate = PrepareSingleFlightGate()
+        val a = RequestProbe()
+        failPrepareRequests(gate, false, a.request.onSubmission, a.request.onError, null, "missing")
+        assertEquals(listOf(ExecutionSubmission.BLOCKED), a.outcomes)
+        assertEquals(listOf("missing"), a.errors)
+    }
+
+    @Test
+    fun `真实资源缺失分支和弹窗取消接入终结器`() {
+        val selector = selectorUnion()
+        assertTrue(selector.contains("if (ownsGate) prepareGate.abort(ExecutionSubmission.CANCELLED)"))
+        assertTrue(selector.contains("prepareGate.expire(queuedIntent)"))
+        val console = sourceOf("src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorConsole.kt")
+        for (branch in listOf("if (scriptModel == null)", "if (editorComponentRaw == null)")) {
+            val body = console.substringAfter(branch).substringBefore("return")
+            assertTrue("$branch 必须结算当前及排队", body.contains("failPrepareRequests("))
+            assertTrue(body.contains("onSubmission, onError, queuedIntent"))
+        }
+        assertTrue(console.contains("selectPrepareSubmission(queuedIntent, onSubmission)"))
+        assertTrue(console.contains("if (!isPrepareActive()) return@invokeLater"))
+        val signatures = sourceOf("src/test/java/PlatformSignatureChecker.java")
+        assertTrue(signatures.contains("missing += checkRunnerFinalStepApi(loader)"))
+        assertTrue(signatures.contains("getMethod(\"doFinalStep\", Runnable.class)"))
+    }
+
     // ------------------------------------------------------------------
     // 第二组：F3 折叠判定
     // ------------------------------------------------------------------

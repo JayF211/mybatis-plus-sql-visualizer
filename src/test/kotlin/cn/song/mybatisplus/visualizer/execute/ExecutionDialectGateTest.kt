@@ -234,7 +234,7 @@ class ExecutionDialectGateTest {
         val panel = File(root, "src/main/kotlin/cn/song/mybatisplus/visualizer/log/LogToSqlPanel.kt").readText()
         assertTrue(results.contains("dialectGateRequest, onDialectGate, onSubmission,"))
         assertTrue(results.contains("onSubmission = onSubmission"))
-        assertTrue(console.contains("onSubmission = queuedIntent?.onSubmission ?: onSubmission"))
+        assertTrue(console.contains("onSubmission = selectPrepareSubmission(queuedIntent, onSubmission)"))
         assertEquals("native 与 fallback 均从既有 afterSubmitted 转发回执", 2,
             console.lineSequence().count { it.contains("afterSubmitted(project") && it.contains("onSubmission = onSubmission") })
         val entry = sourceSlice(panel, "private fun executeSql(sql: String)", "private fun showSubmission(")

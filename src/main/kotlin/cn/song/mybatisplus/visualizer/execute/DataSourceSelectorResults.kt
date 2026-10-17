@@ -184,6 +184,7 @@ internal fun DataSourceSelector.chooseAndPrepare(
     val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
     if (!ExecuteSqlSupport.isAvailable()) {
         LOG.warn("[M36] database plugin NOT available, abort")
+        onSubmission?.invoke(ExecutionSubmission.BLOCKED)
         onError?.invoke(MpSqlVisualizerBundle.message("execute.noDatabase"))
         callback?.invoke(false)
         return
@@ -194,13 +195,17 @@ internal fun DataSourceSelector.chooseAndPrepare(
     // 两条链的 executionGeneration++ 与提交/取消判定交错 → 提交被取消或结果组件被换掉
     //（结果区空白、二击正常的 H1 根因）。单飞判定先于共享复用：冷启时 sharedConsole 尚未
     // 落地，复用必不命中，单飞是唯一闸门。
-    val queuedIntent = if (executeAfterPrepare) {
-        QueuedExecuteIntent(
-            onConsole, onEditor, onError, onErrorRich, wholeScriptExec,
-            dialectGateRequest, onDialectGate, onSubmission,
-        )
-    } else null
+    // 预览也持有身份，超时后旧 session 回调不能消费下一链的队列。
+    val queuedIntent = QueuedExecuteIntent(
+        onConsole, onEditor, onError, onErrorRich, wholeScriptExec,
+        dialectGateRequest, onDialectGate, onSubmission,
+    )
+    val onSubmission = queuedIntent.onSubmission
     var ownsGate = false
+    // 独立于再次点击的超时回执；只清仍属本请求的准备/排队，不伪报异步 SQL 已提交。
+    javax.swing.Timer(PrepareSingleFlightGate.STUCK_ESCAPE_MS.toInt()) {
+        prepareGate.expire(queuedIntent)
+    }.apply { isRepeats = false; start() }
     when (prepareGate.tryEnter(executeAfterPrepare, queuedIntent)) {
         PrepareGateDecision.QUEUE_ONLY -> {
             LOG.info("[M36][T-FirstExec F1] prepare chain in flight: execute intent queued, no second session/console chain")
@@ -237,9 +242,8 @@ internal fun DataSourceSelector.chooseAndPrepare(
         // T-ExecCopyFix F2a：携带阶段原因（stage 标识/异常摘要），本地化文案——
         // 用户真机曾只见笼统英文 "Failed to create temporary SQL file"，无从归因
         LOG.warn("[M36] createTempPsiFile failed (reason=${lastTempFileFailure}), abort")
-        onError?.invoke(MpSqlVisualizerBundle.message("execute.tempFile.failed", lastTempFileFailure ?: "unknown"))
-        // T-FirstExecResultInvisible F1：链就此终结，复位单飞位（否则后续执行被永久排队）
-        if (ownsGate) prepareGate.finishPrepare()
+        failPrepareRequests(prepareGate, ownsGate, onSubmission, onError, null,
+            MpSqlVisualizerBundle.message("execute.tempFile.failed", lastTempFileFailure ?: "unknown"))
         callback?.invoke(false)
         return
     }
@@ -247,24 +251,31 @@ internal fun DataSourceSelector.chooseAndPrepare(
 
     // consumer：runner.run 建好 session 后回调 → 续接准备链（attachConsole → 拼合 → 可选执行）
     var chosenRunnerName: String? = null
+    fun isPrepareActive(): Boolean = !queuedIntent.isCompleted && (!ownsGate || prepareGate.isOwner(queuedIntent))
+    val runnerError: (String) -> Unit = { message ->
+        if (isPrepareActive()) failPrepareRequests(prepareGate, ownsGate, onSubmission, onError, null, message)
+    }
     val sessionConsumer = com.intellij.util.Consumer<Any> { session ->
+        if (!isPrepareActive()) return@Consumer
         val actualTarget = ExecutionDialectGate.fromSession(session)
         LOG.info(
             "[M36][O-145] session created: ${session?.javaClass?.name}, " +
                 "target=${actualTarget?.stableId}/${actualTarget?.dialectName}, execute=$executeAfterPrepare",
         )
         if (!allowDialectGate(project, dialectGateRequest, actualTarget, onDialectGate, onError, onSubmission)) {
-            abortPrepareGate(ownsGate, dialectGateRequest?.let {
+            abortPrepareGate(ownsGate && prepareGate.isOwner(queuedIntent), dialectGateRequest?.let {
                 dialectGateMessage(ExecutionDialectGate.evaluate(it, actualTarget?.dialectName))
             }, LOG)
             callback?.invoke(false)
             return@Consumer
         }
+        // 确认框的模态事件泵期间可能超时/被替代，返回 Yes 也不能复活旧准备链。
+        if (!isPrepareActive()) return@Consumer
         prepareInConsole(
             project, session, vf, executeAfterPrepare, chosenRunnerName, onConsole, onEditor, onError,
             onErrorRich, wholeScriptExec, ownsPrepareGate = ownsGate,
             dialectGateRequest = dialectGateRequest, onDialectGate = onDialectGate,
-            onSubmission = onSubmission,
+            onSubmission = onSubmission, isPrepareActive = ::isPrepareActive,
         )
     }
 
@@ -295,7 +306,7 @@ internal fun DataSourceSelector.chooseAndPrepare(
             val matchedName = getRunnerName(matched)
             LOG.info("[M36] silent reuse last runner: $matchedName (memory id=${memory.dataSourceId})")
             chosenRunnerName = matchedName
-            runRunner(project, matched, silent = true, onError)
+            runRunner(project, matched, silent = true, runnerError)
             callback?.invoke(true)
             return
         }
@@ -329,18 +340,20 @@ internal fun DataSourceSelector.chooseAndPrepare(
             // 补全 M36.5 预览路径（onError=null）设计意图，避免每次双击预览抢占侧边栏。
             // M36.3：无数据源时通知 UI 从「执行中」恢复
             // T-FirstExecResultInvisible F1：链就此终结，复位单飞位（否则后续执行被永久排队）
-            if (ownsGate) prepareGate.finishPrepare()
+            onSubmission(ExecutionSubmission.BLOCKED)
+            if (ownsGate) prepareGate.abort(ExecutionSubmission.BLOCKED)
             callback?.invoke(false)
         }
         runners.size == 1 && shouldBeChosenIfAlone(runners.first()) -> {
             LOG.info("[M36] single runner, run directly")
             chosenRunnerName = getRunnerName(runners.first())
-            runRunner(project, runners.first(), silent = !executeAfterPrepare, onError)
+            runRunner(project, runners.first(), silent = !executeAfterPrepare, runnerError)
             callback?.invoke(true)
         }
         else -> {
             LOG.info("[M36] show popup with ${runners.size} runners")
             showRunnerPopup(project, runners) { runner ->
+                if (!isPrepareActive()) return@showRunnerPopup
                 LOG.info("[M36] popup selected: ${runner?.let { getRunnerName(it) }}")
                 // M36.5：记住选择（prepareConsole 路径下次静默复用；控制台创建时也会统一记忆）
                 if (!executeAfterPrepare && runner != null) {
@@ -350,11 +363,11 @@ internal fun DataSourceSelector.chooseAndPrepare(
                 callback?.invoke(runner != null)
                 // T-FirstExecResultInvisible F1：用户取消弹窗 = 链就此终结，复位单飞位
                 if (runner == null) {
-                    if (ownsGate) prepareGate.finishPrepare()
-                    onSubmission?.invoke(ExecutionSubmission.CANCELLED)
+                    if (ownsGate) prepareGate.abort(ExecutionSubmission.CANCELLED)
+                    onSubmission(ExecutionSubmission.CANCELLED)
                 }
                 // 弹窗中用户刚做了主动选择，失败仍需模态引导（silent=false）
-                if (runner != null) runRunner(project, runner, onError = onError)
+                if (runner != null) runRunner(project, runner, onError = runnerError)
             }
         }
     }
@@ -520,6 +533,7 @@ internal fun DataSourceSelector.reuseSharedConsole(
     clearConsolePrompt(console, LOG)
     LOG.info("[M36] shared console reused (ds=$dsName, execute=$executeAfterPrepare, liveResult=${liveResult != null})")
     if (executeAfterPrepare) {
+        prepareGate.beginSubmission()
         executeOnConsole(
             project, console, editor, refreshedModel ?: scriptModel, execOption, sharedUi,
             onResultsReady = null, onError = onError, onErrorRich = onErrorRich,
