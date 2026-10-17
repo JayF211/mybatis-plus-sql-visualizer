@@ -1082,7 +1082,8 @@ internal fun SqlPreviewPanel.buildParamRow(source: String, labelWidth: Int): JBP
 /** 参数 source 的类型类别（无类型信息 → UNKNOWN，行为=升级前）。 */
 
 internal fun SqlPreviewPanel.paramKindOf(source: String): ParamKind =
-    current?.xmlModel?.kindFor(source) ?: ParamKind.UNKNOWN
+    if (source in current?.paginationParamSources.orEmpty()) ParamKind.NUMBER
+    else current?.xmlModel?.kindFor(source) ?: ParamKind.UNKNOWN
 
 /** 占位提示（emptyText）：有类型信息按类别；UNKNOWN 走参数命名启发式（zMyBatis 同款，仅提示）。 */
 

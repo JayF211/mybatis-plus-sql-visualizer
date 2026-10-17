@@ -7,6 +7,8 @@ import cn.song.mybatisplus.visualizer.execute.SqlTypeClassifier
 import cn.song.mybatisplus.visualizer.execute.SqlExecutor
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.sql.MySqlDialect
+import cn.song.mybatisplus.visualizer.sql.ParamHint
+import cn.song.mybatisplus.visualizer.sql.interceptor.PaginationSimulator
 import cn.song.mybatisplus.visualizer.sql.ParameterReplacer
 import cn.song.mybatisplus.visualizer.sql.SqlGenerator
 import cn.song.mybatisplus.visualizer.share.ui.ShareDialog
@@ -204,8 +206,6 @@ internal fun SqlPreviewPanel.renderSql() {        // T-WSC-01：写安全自愈�
             rendered.bindValues.forEach { (name, value) ->
                 if (paramValues[name].isNullOrEmpty()) paramValues[name] = value
             }
-            val base = withPaginationLimitLine(rendered.sql)
-            val sql = if (compactMode) base.replace(WHITESPACE_REGEX, " ").trim() else base
             val sources = rendered.mappings.map { it.property }
             // T-M29.5：参数回填引号按 mapper 方法参数 Java 类型判定（XmlParamTypeResolver 注入
             // model.paramQuotes：DTO 字段 LocalDate→引号/Integer→裸渲染，贴近真实绑定效果）；
@@ -213,9 +213,21 @@ internal fun SqlPreviewPanel.renderSql() {        // T-WSC-01：写安全自愈�
             // O-81 T-XmlListParamSplit：提示组装抽为 xmlBackfillHints——签名集合参数
             // （List<String> 等）无条件按逗号多值渲染 + 引号按元素类别派生，
             // 形态探测（detectInClauseParams）降级为无签名信息参数的兜底通道
-            val inListIndices = detectInClauseParams(sql)
+            val base = if (compactMode) rendered.sql.replace(WHITESPACE_REGEX, " ").trim() else rendered.sql
+            val inListIndices = detectInClauseParams(base)
             val xmlHints = xmlBackfillHints(xml, sources, inListIndices, xmlMappings)
-            showSql(backfillParamsBySource(sql, sources, xmlHints))
+            // UI022：先回填本轮未分页语句，COUNT 与主查询共享此结果；不能追加旧 COUNT 模板。
+            val filledBase = backfillParamsBySource(base, sources, xmlHints)
+            val count = result.countSql?.let {
+                PaginationSimulator.wrapCountSql(filledBase)
+            }
+            val withLimit = withPaginationLimitLine(base)
+            val addedSources = if (withLimit != base) result.paginationParamSources else emptyList()
+            val filledMain = backfillParamsBySource(
+                withLimit, sources + addedSources,
+                xmlHints + addedSources.map { ParamHint(quote = false) },
+            )
+            showSql(filledMain, count)
         }
         // T-M23-04：批量列级勾选路径——BatchModel.renderSql 按活跃列重建 + 按列序回填
         batch != null -> {
@@ -600,7 +612,7 @@ internal fun SqlPreviewPanel.clear() {
 
 /** 渲染 SQL 到可编辑编辑器；已存在时更新文档（保留焦点/撤销）。 */
 
-internal fun SqlPreviewPanel.showSql(sql: String) {
+internal fun SqlPreviewPanel.showSql(sql: String, countSql: String? = current?.countSql) {
     // R33：新预览作废在途结构化 EXPLAIN 回调（慢计划不覆盖用户已切换的新预览）
     explainStructuredGeneration++
     // T-RefreshDbSteal：三分支走查埋点——真机故障期症状②（左参数不再同步右侧 SQL）的
@@ -609,7 +621,7 @@ internal fun SqlPreviewPanel.showSql(sql: String) {
     // T-MpjFill：追加 fill 附加查询段（MPJ 1.5.1+）——在主 SQL 之后渲染 fill 附加 SELECT
     val withFill = appendFillSection(sql)
     // R12 T-PaginationSim：追加分页 COUNT 包裹段（D1=A 预览附第二条语句，对齐捕获侧 COUNT 独立条目口径）
-    val withFillAndCount = appendCountSection(withFill)
+    val withFillAndCount = appendCountSection(withFill, countSql)
     // T-PreviewDisplayMode：显示模式在渲染管线内统一套用（唯一收敛点——XML/批量/模型/旧文本
     // 四条重建路径都经此处，故参数输入/勾选/foreach 变更后形态保持）
     val text = applyDisplayMode(withFillAndCount)
@@ -730,9 +742,8 @@ internal fun SqlPreviewPanel.appendFillSection(sql: String): String {
  * 复制到控制台执行时分页语句与 COUNT 语句粘连（用户实验收实测）；已带分号不重复追加。
  */
 
-internal fun SqlPreviewPanel.appendCountSection(sql: String): String {
-    val result = current ?: return sql
-    val countSql = result.countSql ?: return sql
+internal fun SqlPreviewPanel.appendCountSection(sql: String, countSql: String? = current?.countSql): String {
+    if (countSql == null) return sql
     val terminatedMain = sql.trimEnd().let { if (it.endsWith(";")) it else "$it;" }
     val terminatedCount = countSql.trimEnd().let { if (it.endsWith(";")) it else "$it;" }
     return StringBuilder(terminatedMain)

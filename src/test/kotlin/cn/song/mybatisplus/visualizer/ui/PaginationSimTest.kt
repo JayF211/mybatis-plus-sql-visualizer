@@ -409,6 +409,176 @@ class PaginationSimTest : BasePlatformTestCase() {
         )
     }
 
+    /** UI022：真实注解 PSI → 服务分页后处理 → showResult → 可见输入框 → 编辑器文本。 */
+    private fun annotationPagePanel(
+        sql: String = "SELECT id, username, age, status FROM user WHERE deleted = 0 AND status = #{status} ORDER BY id",
+        countEnabled: Boolean = true,
+        verify: (SqlPreviewPanel) -> Unit,
+    ) {
+        setManualDialect("MySQL")
+        PluginSettings.getInstance().state.formatSql = false
+        PluginSettings.getInstance().state.paginationCountEnabled = countEnabled
+        myFixture.addFileToProject("com/baomidou/mybatisplus/core/metadata/IPage.java", """
+            package com.baomidou.mybatisplus.core.metadata;
+            public interface IPage<T> { long getCurrent(); long getSize(); }
+        """.trimIndent())
+        myFixture.addFileToProject("org/apache/ibatis/annotations/Select.java",
+            "package org.apache.ibatis.annotations; public @interface Select { String[] value(); }")
+        myFixture.addFileToProject("org/apache/ibatis/annotations/Param.java",
+            "package org.apache.ibatis.annotations; public @interface Param { String value(); }")
+        myFixture.configureByText("UserMapper.java", """
+            import com.baomidou.mybatisplus.core.metadata.IPage;
+            import org.apache.ibatis.annotations.Select;
+            import org.apache.ibatis.annotations.Param;
+            interface UserMapper {
+                @Select("$sql")
+                IPage<User> selectUserPageAnnotation(IPage<User> page, @Param("status") Integer status,
+                    @Param("age") Integer age);
+            }
+            class User { Long id; String username; Integer age; Integer status; }
+        """.trimIndent())
+        val annotation = PsiTreeUtil.findChildrenOfType(myFixture.file, com.intellij.psi.PsiAnnotation::class.java)
+            .first { it.qualifiedName == "org.apache.ibatis.annotations.Select" }
+        val result = AnnotationSqlPreviewService.preview(annotation, project)
+        assertNotNull("Must exercise the annotation XML render model", result.xmlModel)
+        val panel = SqlPreviewPanel(project)
+        Disposer.register(testRootDisposable, panel)
+        try {
+            panel.showResult(result)
+            com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+            panel.paramFields.forEach { it.text = "" }
+            verify(panel)
+        } finally {
+            panel.clear()
+            Disposer.dispose(panel)
+        }
+    }
+
+    private fun fillPage(panel: SqlPreviewPanel, status: String = "1") {
+        val values = mapOf("status" to status, "(page.current - 1) * page.size" to "20", "page.size" to "10", "age" to "30")
+        panel.paramFields.forEach { field ->
+            values[field.getClientProperty(SqlPreviewPanel.PROP_FIELD_SOURCE)]?.let { field.text = it }
+        }
+        panel.renderSqlForTest()
+        com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+    }
+
+    private fun pageStatements(panel: SqlPreviewPanel): List<String> =
+        panel.lastRenderedSqlForTest()!!.lineSequence().filterNot { it.trimStart().startsWith("--") }
+            .joinToString(" ").replace(Regex("\\s+"), " ").split(';').map { it.trim() }.filter { it.isNotEmpty() }
+
+    fun testUI022AnnotationMainLimitUsesSyntheticInputs() = annotationPagePanel { panel ->
+        fillPage(panel)
+        assertEquals("SELECT id, username, age, status FROM user WHERE deleted = 0 AND status = 1 ORDER BY id LIMIT 20, 10",
+            pageStatements(panel)[0])
+        assertNull("Synthetic slots must reconcile with their sources", panel.placeholderReconciliation)
+    }
+
+    fun testUI022AnnotationCountSharesStatusAndRefresh() = annotationPagePanel { panel ->
+        fillPage(panel)
+        assertEquals("SELECT COUNT(*) FROM (SELECT id, username, age, status FROM user WHERE deleted = 0 AND status = 1 ORDER BY id) TOTAL",
+            pageStatements(panel)[1])
+        fillPage(panel, "2")
+        val changed = pageStatements(panel)
+        assertTrue(changed[0], changed[0].contains("status = 2"))
+        assertTrue(changed[1], changed[1].contains("status = 2"))
+        PluginSettings.getInstance().state.formatSql = true
+        panel.renderSqlForTest()
+        com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+        assertFalse("Formatting/refresh must not restore placeholders", panel.lastRenderedSqlForTest()!!.contains('?'))
+    }
+
+    fun testUI022RepeatedStatusKeepsOccurrenceOrder() = annotationPagePanel(
+        "SELECT id FROM user WHERE status = #{status} AND age = #{age} OR status = #{status} ORDER BY id",
+    ) { panel ->
+        fillPage(panel)
+        assertEquals(listOf(
+            "SELECT id FROM user WHERE status = 1 AND age = 30 OR status = 1 ORDER BY id LIMIT 20, 10",
+            "SELECT COUNT(*) FROM (SELECT id FROM user WHERE status = 1 AND age = 30 OR status = 1 ORDER BY id) TOTAL",
+        ), pageStatements(panel))
+        fillPage(panel, "2")
+        assertEquals(4, Regex("status = 2").findAll(pageStatements(panel).joinToString()).count())
+    }
+
+    fun testUI022SyntheticPageInputsAreNumbersNotObjectJson() = annotationPagePanel { panel ->
+        assertEquals(cn.song.mybatisplus.visualizer.xml.ParamKind.NUMBER, panel.paramKindOf("page.size"))
+        assertEquals(cn.song.mybatisplus.visualizer.xml.ParamKind.NUMBER, panel.paramKindOf("(page.current - 1) * page.size"))
+        val index = panel.paramFields.indexOfFirst { it.getClientProperty(SqlPreviewPanel.PROP_FIELD_SOURCE) == "page.size" }
+        assertEquals(MpSqlVisualizerBundle.message("panel.param.emptyText.number"), panel.paramEmptyTextForTest(index))
+        assertEquals(cn.song.mybatisplus.visualizer.xml.ParamKind.OBJECT, panel.current!!.xmlModel!!.kindFor("page"))
+    }
+
+    fun testUI022HandwrittenLimitNotDuplicated() = annotationPagePanel(
+        "SELECT id FROM user WHERE status = #{status} LIMIT 5, 7",
+    ) { panel ->
+        fillPage(panel)
+        assertEquals(listOf("SELECT id FROM user WHERE status = 1 LIMIT 5, 7"), pageStatements(panel))
+        assertEquals(1, panel.paramFields.size)
+    }
+
+    fun testUI022XmlHandwrittenLimitInputsRemainUnchanged() {
+        setManualDialect("MySQL")
+        PluginSettings.getInstance().state.formatSql = false
+        myFixture.addFileToProject("org/apache/ibatis/annotations/Param.java",
+            "package org.apache.ibatis.annotations; public @interface Param { String value(); }")
+        myFixture.addFileToProject("com/example/UserMapper.java", """
+            package com.example;
+            import org.apache.ibatis.annotations.Param;
+            interface IPage<T> { long getSize(); long getCurrent(); }
+            class User { Long id; }
+            public interface UserMapper {
+                IPage<User> selectUserPageLimitXml(IPage<User> page, @Param("status") Integer status,
+                    @Param("offset") long offset, @Param("pageSize") long pageSize);
+            }
+        """.trimIndent())
+        val xml = """
+            <mapper namespace="com.example.UserMapper"><select id="selectUserPageLimitXml">
+                SELECT id FROM user WHERE deleted = 0 AND status = #{status} ORDER BY id LIMIT #{offset}, #{pageSize}
+            </select></mapper>
+        """.trimIndent()
+        myFixture.addFileToProject("com/example/UserMapper.xml", xml)
+        val result = XmlPreviewService.preview(xml, "selectUserPageLimitXml", project)
+        assertNull("V13c: handwritten LIMIT deliberately skips COUNT simulation", result.countSql)
+        assertNull(result.paginationLimitLine)
+        val panel = SqlPreviewPanel(project)
+        Disposer.register(testRootDisposable, panel)
+        try {
+            panel.showResult(result)
+            com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+            val values = mapOf("status" to "1", "offset" to "20", "pageSize" to "10")
+            panel.paramFields.forEach { it.text = values[it.getClientProperty(SqlPreviewPanel.PROP_FIELD_SOURCE)]!! }
+            panel.renderSqlForTest()
+            com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+            assertEquals(3, panel.paramFields.size)
+            assertEquals(listOf("SELECT id FROM user WHERE deleted = 0 AND status = 1 ORDER BY id LIMIT 20, 10"),
+                pageStatements(panel))
+        } finally {
+            panel.clear()
+            Disposer.dispose(panel)
+        }
+    }
+
+    fun testUI022CountDisabledKeepsAllMainParameters() = annotationPagePanel(countEnabled = false) { panel ->
+        fillPage(panel)
+        assertEquals(listOf("SELECT id, username, age, status FROM user WHERE deleted = 0 AND status = 1 ORDER BY id LIMIT 20, 10"),
+            pageStatements(panel))
+        fillPage(panel, "2")
+        assertTrue(pageStatements(panel).single().endsWith("status = 2 ORDER BY id LIMIT 20, 10"))
+    }
+
+    fun testUI022DynamicConditionChangesCountAndSlotOrder() = annotationPagePanel(
+        "<script>SELECT id FROM user WHERE deleted = 0 <if test='status != null'>AND status = #{status}</if> AND age = #{age} ORDER BY id</script>",
+    ) { panel ->
+        fillPage(panel)
+        panel.enabledIds.clear()
+        panel.renderSqlForTest()
+        com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+        assertEquals(listOf(
+            "SELECT id FROM user WHERE deleted = 0 AND age = 30 ORDER BY id LIMIT 20, 10",
+            "SELECT COUNT(*) FROM (SELECT id FROM user WHERE deleted = 0 AND age = 30 ORDER BY id) TOTAL",
+        ), pageStatements(panel))
+    }
+
     // ------------------------------------------------------------------
     // T-02：COUNT 包裹预览（D1=A 第二条目 / D2=A 基础形态 / D3=A searchCount）
     // ------------------------------------------------------------------
