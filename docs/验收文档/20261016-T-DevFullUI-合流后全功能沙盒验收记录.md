@@ -520,6 +520,8 @@ U40 更新与诊断页（本轮真机）：About 页显示当前版本 2026.10.1
 
 设置页本轮观察（真机，243 英文 IDE + 中文插件 UI）：SQL Preview 页含「数据库方言：智能推断（跟随数据源）」与「项目候选方言不一致：预览兼容按 MySQL、执行前核对目标」、占位符替换、空参数策略三选、格式化/竖向列注释/自动折叠阈值、逻辑删除自动追加、多租户列与 INSERT 追加、「模拟分页拦截器（COUNT 查询预览）」「附分页 COUNT 查询预览」两开关；MCP Tools 页声明本插件 11 个工具并逐一列名（sqlv_render_sql/schema_context/explain/render_logs/check_sql/rollback_plan/perf_advice/crud_sql/reverse_sql/mapper_check/history_search）、启用总开关、MCP 输出脱敏、全部禁用。属设置面存在性与默认值证据，不代证对应行为组（U20/U21/U27/U39）整组通过。
 
+U22 分享出口本轮真机：预览「更多 → 分享」打开「分享 SQL」对话框，来源 `UserController.java:123`，七项出口完整列出——复制为 Markdown（默认）/ Markdown 表格 / 可执行 SQL / 导出 HTML 报告 / 复制诊断报告（Markdown）/ 导出诊断报告（HTML）/ 审阅诊断报告并反馈。选「导出 HTML 报告」后实际生成 `build/sql-report.html`（2309 字节，2026-10-18 01:13，`<title>SQL Report</title>`，含 SELECT 与 Parameters 段）；未执行任何公网发送，「审阅并反馈」只打开审阅面。
+
 ## 依据与历史证据保全
 
 - 十九轮UI11组、Runner12组及R90/R91/R92/R94/O147/V178专册。
