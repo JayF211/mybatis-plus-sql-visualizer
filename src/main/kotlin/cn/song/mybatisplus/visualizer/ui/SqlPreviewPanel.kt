@@ -261,6 +261,8 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
     internal var comparisonTargetForTest: cn.song.mybatisplus.visualizer.execute.ComparisonTargetSession? = null
     internal var comparisonBackgroundForTest: (((() -> Unit)) -> Unit)? = null
     internal var observedBackgroundForTest: (((() -> Unit)) -> Unit)? = null
+    /** 仅替换默认控制台准备的派发端，测试交付的仍是生产构造的回调。 */
+    internal var prepareConsoleForTest: ((String, (JComponent) -> Unit, (Editor) -> Unit) -> Unit)? = null
     internal var lastInsightUsageReport: cn.song.mybatisplus.visualizer.sql.insight.SqlUsageReport? = null
     internal val analysisMetadataBinding = cn.song.mybatisplus.visualizer.sql.insight.AnalysisMetadataBinding()
 

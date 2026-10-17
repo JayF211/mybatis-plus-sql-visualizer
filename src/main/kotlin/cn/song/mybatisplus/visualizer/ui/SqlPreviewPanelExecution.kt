@@ -1242,13 +1242,11 @@ internal fun SqlPreviewPanel.prepareDefaultConsole() {
         if (SqlTypeClassifier.isQuery(sql)) cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Intent.QUERY
         else cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Intent.DML,
     )
-    SqlExecutor.prepareConsole(
-        proj, sql,
+    val onConsole: (javax.swing.JComponent) -> Unit = { consoleComponent ->
         // M36.5.58：预览换入控制台组件后**清空状态栏**——预览是干净上下文，不应残留上次
         // 执行的结果/错误（用户"执行第二个 SQL 后预览第一个，状态栏还显示之前的错误"）。
         // 嵌入后 showEmpty 清空；执行路径走 onResultsReady（成功）清 / onError（失败）显示，
         // 与本预览回调互不影响。
-        onConsole = { consoleComponent ->
             // T-FirstExecResultInvisible F3：预览准备链显式 PREVIEW——旧形态传默认值
             //（布尔 false=execute 语义）靠 DS 侧折叠兜底，语义拧置归口 embedMode 后显式化
             embedConsole(consoleComponent, embedMode = ConsoleEmbedMode.PREVIEW)
@@ -1278,8 +1276,13 @@ internal fun SqlPreviewPanel.prepareDefaultConsole() {
                         .warn("[M36] post-attach re-render FAILED: ${e.javaClass.simpleName}: ${e.message}")
                 }
             }, com.intellij.openapi.application.ModalityState.nonModal())
-        },
-        onEditor = { consoleEditor -> onNativeEditorReady(consoleEditor) },
+    }
+    val onEditor: (com.intellij.openapi.editor.Editor) -> Unit = { consoleEditor -> onNativeEditorReady(consoleEditor) }
+    prepareConsoleForTest?.let { dispatch -> dispatch(sql, onConsole, onEditor); return }
+    SqlExecutor.prepareConsole(
+        proj, sql,
+        onConsole = onConsole,
+        onEditor = onEditor,
         // 默认准备失败（无数据源等）静默——不打扰预览；方言冲突由专用回调诚实显示
         onError = null,
         dialectGateRequest = gateRequest,
