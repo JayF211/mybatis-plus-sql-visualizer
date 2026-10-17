@@ -139,7 +139,11 @@ tracing相对sql的中位P95为-5.16%、wall为-1.54%，逐轮P95增量却为+21
 
 原始目录runtime树`build/MPSV-SqlInsight-Encoding/paired-5000`：summary SHA256 `26641272d9dcad29b3596e211a7740c64fbcbc0cf25849d2c5ac95a87c157d18`，背景证据 `fab24f86c20438a8f0656b3761fd92ca866068c409279af9f822eee63fc5d58c`，evaluation `30d3d66d011233f5cadd3c7999c3457ebad07ca3d92ee71c3433afe798c6c3d5`。实验任务已注销，无新实验自动重试。
 
-同期只读核dev预览/执行准备增量后，整体单向吸收至`e494c0fac1e1a095bd00d5521fd7a9a34ad573cd`（含dev b5ac5647）。必须保留执行receipt/owner/取消/交互超时完整链与洞察文档generation的独立职责；新增组合验证关注面板clear/关闭后迟到原生准备回调，不把owner校验等同面板生命周期保障。该交界尚待真实定向反例裁定，不先称缺陷。第五轮be132978绿灯不覆盖这些新增生产变更，需重新冻结验证。
+同期只读核dev预览/执行准备增量后，整体单向吸收至`e494c0fac1e1a095bd00d5521fd7a9a34ad573cd`（含dev b5ac5647）。必须保留执行receipt/owner/取消/交互超时完整链与洞察文档generation的独立职责；新增组合验证关注面板clear/关闭后迟到原生准备回调，不把owner校验等同面板生命周期保障。第五轮be132978绿灯不覆盖这些新增生产变更，需重新冻结验证。
+
+合后真实反例已运行：preview检查点8bddfbf1仅提取原prepareDefaultConsole两闭包作为受控派发入口，未添加失效修复。主控读取原始XML核实5例/4失败/0错误/0跳过，活跃编辑器正例通过；四红分别为A.clear后旧回调复活nativeDoc、A.dispose后旧回调仍保留nativeDoc、同面板替换内容后旧回调释放新editor，以及clear后迟到console重新嵌入。失败均为实际副作用断言，不是环境异常；证据在preview树`build/prepare-boundary-evidence/red-original`。此处覆盖面板生产消费边界，不冒充DatabaseTools会话端到端。
+
+修复在独立preview树进行：独立consolePrepareGeneration使新请求/current替换/clear/dispose作废旧准备，在onConsole/onEditor及延后EDT副作用前校验；拒绝旧回调只返回，不释放外部拥有的editor/console。dev owner/receipt/cancel及独立ComparisonTargetSession保持不变。正在补同current重复prepare、B已接管、已排EDT任务后clear反例；修复后定向、摘保护反向与恢复尚待结果，不预填通过。
 
 ## 五、最终冻结与自动化门禁
 
