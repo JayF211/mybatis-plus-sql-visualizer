@@ -312,9 +312,17 @@ internal fun SqlPreviewPanel.executeAdhocSql(
     sql: String,
     dmlConfirmed: Boolean = false,
     rollbackOfEntry: cn.song.mybatisplus.visualizer.sql.rollback.RollbackSnapshotStore.SnapshotEntry? = null,
+    onSubmission: ((cn.song.mybatisplus.visualizer.execute.ExecutionSubmission) -> Unit)? = null,
 ) {
-    val proj = project ?: return
-    if (sql.isBlank()) return
+    val completed = java.util.concurrent.atomic.AtomicBoolean(false)
+    val receipt: (cn.song.mybatisplus.visualizer.execute.ExecutionSubmission) -> Unit = { outcome ->
+        if (completed.compareAndSet(false, true)) onSubmission?.invoke(outcome)
+    }
+    val proj = project
+    if (proj == null || sql.isBlank()) {
+        receipt(cn.song.mybatisplus.visualizer.execute.ExecutionSubmission.BLOCKED)
+        return
+    }
     val isQuery = SqlTypeClassifier.isQuery(sql)
     val dialectGateRequest = cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.rawSqlRequest(sql)
     // O-64/T-RollbackIdentityParse（P19/D2=A）：identity 包装产物整批直跑。识别特征=
@@ -342,7 +350,10 @@ internal fun SqlPreviewPanel.executeAdhocSql(
             MpSqlVisualizerBundle.message("execute.confirm.dml"),
             Messages.getWarningIcon(),
         )
-        if (confirm != Messages.YES) return
+        if (confirm != Messages.YES) {
+            receipt(cn.song.mybatisplus.visualizer.execute.ExecutionSubmission.CANCELLED)
+            return
+        }
     } else {
         // 查询链无二次确认弹窗——未识别对象走轻通知（非模态、不阻断；与 R52 确认链互补）
         notifySchemaIssues(proj, schemaIssues)
@@ -365,6 +376,7 @@ internal fun SqlPreviewPanel.executeAdhocSql(
                     onErrorRich = { info -> showErrorRichWithLocate(info) },
                     wholeScriptExec = wholeScriptExec,
                     dialectGateRequest = dialectGateRequest,
+                    onSubmission = receipt,
                 )
                 return
             }
@@ -383,6 +395,7 @@ internal fun SqlPreviewPanel.executeAdhocSql(
             onErrorRich = { info -> showErrorRichWithLocate(info) },
             wholeScriptExec = wholeScriptExec,
             dialectGateRequest = dialectGateRequest,
+            onSubmission = receipt,
         )
         if (executed) return
     }
@@ -394,6 +407,7 @@ internal fun SqlPreviewPanel.executeAdhocSql(
         onErrorRich = { info -> showErrorRichWithLocate(info) },
         wholeScriptExec = wholeScriptExec,
         dialectGateRequest = dialectGateRequest,
+        onSubmission = receipt,
     )
 }
 

@@ -457,6 +457,7 @@ object DataSourceSelector {
         wholeScriptExec: Boolean = false,
         dialectGateRequest: ExecutionDialectGate.Request? = null,
         onDialectGate: ((ExecutionDialectGate.Verdict) -> Unit)? = null,
+        onSubmission: ((ExecutionSubmission) -> Unit)? = null,
     ): Boolean {
         val console = preparedConsole ?: return false
         val editor = preparedEditor ?: return false
@@ -467,7 +468,9 @@ object DataSourceSelector {
             wholeScriptExec = wholeScriptExec,
             dialectGateRequest = dialectGateRequest ?: preparedDialectGateRequest,
             onDialectGate = onDialectGate ?: preparedDialectGateCallback,
+            onSubmission = onSubmission,
         )
+        // true 仍仅表示已进入准备好的控制台路径；提交结果只由 onSubmission 回报。
         return true
     }
 

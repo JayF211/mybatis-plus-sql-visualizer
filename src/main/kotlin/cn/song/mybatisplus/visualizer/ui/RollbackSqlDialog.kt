@@ -1,5 +1,9 @@
 package cn.song.mybatisplus.visualizer.ui
 
+import cn.song.mybatisplus.visualizer.execute.ExecutionSubmission
+import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ModalityState
+import java.util.concurrent.atomic.AtomicBoolean
 import cn.song.mybatisplus.visualizer.sql.rollback.RollbackSqlGenerator
 import cn.song.mybatisplus.visualizer.sql.rollback.RollbackSnapshotStore
 import cn.song.mybatisplus.visualizer.ui.highlight.DatabaseSchemaResolver
@@ -236,13 +240,28 @@ class RollbackSqlDialog(
     internal fun executeRollback() {
         val sql = currentResult.statements.joinToString("\n")
         if (sql.isBlank()) return
-        panel?.executeAdhocSql(sql, rollbackOfEntry = snapshotEntry)
-        // F6 留痕：回滚已提交执行——快照条目置终态 + 横幅更新（执行结果反馈走面板 resultPanel）
-        snapshotEntry?.let { entry ->
-            project?.getService(RollbackSnapshotStore::class.java)?.markRollbackExecuted(entry)
+        panel?.executeAdhocSql(sql, rollbackOfEntry = snapshotEntry, onSubmission = rollbackSubmissionReceipt())
+    }
+
+    /** 每次请求仅结算一次；真实提交后保留业务留痕，关闭弹窗仅抑制迟到的 UI 更新。 */
+    internal fun rollbackSubmissionReceipt(): (ExecutionSubmission) -> Unit {
+        val completed = AtomicBoolean(false)
+        val submittedResult = currentResult
+        val store = project?.getService(RollbackSnapshotStore::class.java)
+        return receipt@{ outcome ->
+            if (!completed.compareAndSet(false, true) || outcome != ExecutionSubmission.SUBMITTED) return@receipt
+            // SUBMITTED 来自底层 afterSubmitted，不代表数据库执行成功或事务已提交。
+            snapshotEntry?.let { store?.markRollbackExecuted(it) }
+            val updateBanner = {
+                if (!isDisposed && currentResult === submittedResult) {
+                    bannerLabel.text = MpSqlVisualizerBundle.message("rollback.banner.executed")
+                    bannerLabel.foreground = SUCCESS_COLOR
+                }
+            }
+            val app = ApplicationManager.getApplication()
+            if (app.isDispatchThread) updateBanner()
+            else app.invokeLater({ updateBanner() }, ModalityState.any())
         }
-        bannerLabel.text = MpSqlVisualizerBundle.message("rollback.banner.executed")
-        bannerLabel.foreground = SUCCESS_COLOR
     }
 
     /** 「复制」：回滚 SQL 入剪贴板。 */

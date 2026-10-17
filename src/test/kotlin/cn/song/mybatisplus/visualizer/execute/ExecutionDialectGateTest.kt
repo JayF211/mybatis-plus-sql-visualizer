@@ -292,6 +292,27 @@ class ExecutionDialectGateTest {
         assertTrue(ExecutionDialectGate.uncoveredEntryPoints.isEmpty())
     }
 
+    @Test
+    fun `UI020 rollback receipt is wired through both full paths and prepared facade`() {
+        val root = repoRoot()
+        val preview = File(root, "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelExecution.kt").readText()
+        val adhoc = sourceSlice(preview, "internal fun SqlPreviewPanel.executeAdhocSql(",
+            "T-RollbackSql P2-F5/F6：UPDATE/DELETE 执行前登记快照条目")
+        assertEquals("两个全链落点和一个prepared落点必须均接回执", 3, adhoc.countOccurrences("onSubmission = receipt"))
+        val executor = File(root, "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/SqlExecutor.kt").readText()
+        val prepared = sourceSlice(executor, "fun executePrepared(", "/** 控制台是否已就绪")
+        assertTrue(prepared.contains("onSubmission = if (onSubmission == null) null else receipt"))
+        assertTrue("prepared错误和富错误均须结算未提交", prepared.countOccurrences("receipt(ExecutionSubmission.BLOCKED)") == 2)
+        val selector = File(root, "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelector.kt").readText()
+        val selectorPrepared = sourceSlice(selector, "fun executePrepared(", "fun selectAndExecute(")
+        assertTrue(selectorPrepared.contains("onSubmission = onSubmission"))
+        assertFalse("Boolean true不得制造提交回执", selectorPrepared.contains("ExecutionSubmission.SUBMITTED"))
+        val dialog = File(root, "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/RollbackSqlDialog.kt").readText()
+        val entry = sourceSlice(dialog, "internal fun executeRollback()", "internal fun rollbackSubmissionReceipt()")
+        assertTrue(entry.contains("onSubmission = rollbackSubmissionReceipt()"))
+        assertFalse(entry.contains("markRollbackExecuted("))
+    }
+
     private fun sourceSlice(source: String, startMarker: String, endMarker: String): String {
         val start = source.indexOf(startMarker)
         assertTrue("missing source marker: $startMarker", start >= 0)

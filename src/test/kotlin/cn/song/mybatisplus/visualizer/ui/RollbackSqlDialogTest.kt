@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.ui
 
+import cn.song.mybatisplus.visualizer.execute.afterSubmitted
 import cn.song.mybatisplus.visualizer.sql.SqlServerDialect
 import cn.song.mybatisplus.visualizer.sql.rollback.RollbackSqlGenerator
 import cn.song.mybatisplus.visualizer.sql.rollback.RollbackSnapshotStore
@@ -291,6 +292,154 @@ class RollbackSqlDialogTest : BasePlatformTestCase() {
             } finally {
                 dialog.doDispose()
             }
+        }
+    }
+
+    // ======================== UI020：真实提交回执，不以调用返回冒充成功 ========================
+
+    private fun registeredDelete(): RollbackSnapshotStore.SnapshotEntry =
+        project.getService(RollbackSnapshotStore::class.java).register(
+            "DELETE FROM user WHERE id = 71", "user", "SELECT * FROM user WHERE id = 71;",
+        )
+
+    private fun snapshotDialog(entry: RollbackSnapshotStore.SnapshotEntry) =
+        newDialog(RollbackSqlGenerator.generate(entry.sql), "DELETE", entry).also {
+            it.pasteAreaForTest().text = "id\n71"
+            it.generateFromPaste()
+        }
+
+    fun testUI020DmlNoLeavesRegisteredEntryAndBannerUnchanged() {
+        val store = project.getService(RollbackSnapshotStore::class.java)
+        val entry = registeredDelete()
+        val dialog = snapshotDialog(entry)
+        try {
+            val before = dialog.bannerTextForTest()
+            var confirmations = 0
+            TestDialogManager.setTestDialog(TestDialog { confirmations++; Messages.NO }, testRootDisposable)
+            dialog.executeRollback()
+            assertEquals(1, confirmations)
+            assertEquals(before, dialog.bannerTextForTest())
+            assertSame("No 不得复制或修改原快照条目", entry, store.findBySql(entry.sql))
+            assertEquals(RollbackSnapshotStore.Status.REGISTERED, store.findBySql(entry.sql)!!.status)
+        } finally {
+            dialog.doDispose()
+            store.clearForTest()
+        }
+    }
+
+    fun testUI020DmlNoWithoutSnapshotEntryDoesNotClaimSubmitted() {
+        val dialog = newDialog(completeInsertResult(), "INSERT")
+        try {
+            val before = dialog.bannerTextForTest()
+            TestDialogManager.setTestDialog(TestDialog { Messages.NO }, testRootDisposable)
+            dialog.executeRollback()
+            assertEquals(before, dialog.bannerTextForTest())
+        } finally { dialog.doDispose() }
+    }
+
+    fun testUI020NonPreparedUnavailableBackendDoesNotMarkSubmitted() {
+        assertFalse("本例验证无Database插件的真实阻断，不伪称验证数据库提交", cn.song.mybatisplus.visualizer.execute.ExecuteSqlSupport.isAvailable())
+        val store = project.getService(RollbackSnapshotStore::class.java)
+        val entry = registeredDelete()
+        val dialog = snapshotDialog(entry)
+        try {
+            val before = dialog.bannerTextForTest()
+            TestDialogManager.setTestDialog(TestDialog { Messages.YES }, testRootDisposable)
+            dialog.executeRollback()
+            assertEquals(before, dialog.bannerTextForTest())
+            assertSame(entry, store.findBySql(entry.sql))
+        } finally {
+            dialog.doDispose()
+            store.clearForTest()
+        }
+    }
+
+    fun testUI020CancelledOrBlockedReceiptCannotBeOverwrittenByLateSubmitted() {
+        val store = project.getService(RollbackSnapshotStore::class.java)
+        for (outcome in listOf(
+            cn.song.mybatisplus.visualizer.execute.ExecutionSubmission.CANCELLED,
+            cn.song.mybatisplus.visualizer.execute.ExecutionSubmission.BLOCKED,
+        )) {
+            val entry = registeredDelete()
+            val dialog = snapshotDialog(entry)
+            try {
+                val before = dialog.bannerTextForTest()
+                val receipt = dialog.rollbackSubmissionReceipt()
+                receipt(outcome)
+                receipt(cn.song.mybatisplus.visualizer.execute.ExecutionSubmission.SUBMITTED)
+                assertEquals(before, dialog.bannerTextForTest())
+                assertSame(entry, store.findBySql(entry.sql))
+            } finally {
+                dialog.doDispose()
+                store.clearForTest()
+            }
+        }
+    }
+
+    private fun submitThroughProductionReceipt(receipt: (cn.song.mybatisplus.visualizer.execute.ExecutionSubmission) -> Unit) {
+        val selector = cn.song.mybatisplus.visualizer.execute.DataSourceSelector
+        val before = selector.swapGeneration
+        try {
+            // 调真实提交收口；不直接调用成功状态。无原生console/ui，不执行SQL、不启轮询。
+            selector.afterSubmitted(project, null, Any(), null, null,
+                com.intellij.openapi.diagnostic.Logger.getInstance(javaClass), onSubmission = receipt)
+            com.intellij.testFramework.PlatformTestUtil.dispatchAllEventsInIdeEventQueue()
+        } finally { selector.swapGeneration = before }
+    }
+
+    fun testUI020OnlyActualSubmissionMarksOnceAndLateErrorsDoNotUndoSubmission() {
+        val store = project.getService(RollbackSnapshotStore::class.java)
+        val entry = registeredDelete()
+        val dialog = snapshotDialog(entry)
+        try {
+            val before = dialog.bannerTextForTest()
+            val receipt = dialog.rollbackSubmissionReceipt()
+            assertSame("创建请求/等待无超时，也不是已提交", entry, store.findBySql(entry.sql))
+            assertEquals(before, dialog.bannerTextForTest())
+            submitThroughProductionReceipt(receipt)
+            val submitted = store.findBySql(entry.sql)!!
+            assertEquals(RollbackSnapshotStore.Status.ROLLBACK_EXECUTED, submitted.status)
+            assertEquals(MpSqlVisualizerBundle.message("rollback.banner.executed"), dialog.bannerTextForTest())
+            submitThroughProductionReceipt(receipt)
+            receipt(cn.song.mybatisplus.visualizer.execute.ExecutionSubmission.BLOCKED)
+            assertSame("重复回执不得再次调用mark生成副本；提交后错误不抹掉真实提交事实", submitted, store.findBySql(entry.sql))
+        } finally {
+            dialog.doDispose()
+            store.clearForTest()
+        }
+    }
+
+    fun testUI020DisposedDialogStillRecordsLateSubmissionExactlyOnceWithoutUpdatingUi() {
+        val store = project.getService(RollbackSnapshotStore::class.java)
+        val entry = registeredDelete()
+        val dialog = snapshotDialog(entry)
+        val before = dialog.bannerTextForTest()
+        val receipt = dialog.rollbackSubmissionReceipt()
+        dialog.doDispose()
+        try {
+            submitThroughProductionReceipt(receipt)
+            val submitted = store.findBySql(entry.sql)!!
+            assertEquals(RollbackSnapshotStore.Status.ROLLBACK_EXECUTED, submitted.status)
+            assertEquals("关闭后只留业务事实，不更新UI", before, dialog.bannerTextForTest())
+            submitThroughProductionReceipt(receipt)
+            assertSame(submitted, store.findBySql(entry.sql))
+        } finally { store.clearForTest() }
+    }
+
+    fun testUI020EditedSnapshotDoesNotShowOldRequestSubmissionBanner() {
+        val store = project.getService(RollbackSnapshotStore::class.java)
+        val entry = registeredDelete()
+        val dialog = snapshotDialog(entry)
+        try {
+            val receipt = dialog.rollbackSubmissionReceipt()
+            dialog.pasteAreaForTest().text = "invalid_snapshot"
+            submitThroughProductionReceipt(receipt)
+            assertEquals("提交是旧请求的事实，仍应留痕", RollbackSnapshotStore.Status.ROLLBACK_EXECUTED, store.findBySql(entry.sql)!!.status)
+            assertEquals(MpSqlVisualizerBundle.message("rollback.banner.unable"), dialog.bannerTextForTest())
+            assertFalse(dialog.executeActionForTest().isEnabled)
+        } finally {
+            dialog.doDispose()
+            store.clearForTest()
         }
     }
 

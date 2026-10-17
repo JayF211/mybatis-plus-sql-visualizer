@@ -126,11 +126,28 @@ object SqlExecutor {
         wholeScriptExec: Boolean = false,
         dialectGateRequest: ExecutionDialectGate.Request? = null,
         onDialectGate: ((ExecutionDialectGate.Verdict) -> Unit)? = null,
+        onSubmission: ((ExecutionSubmission) -> Unit)? = null,
     ): Boolean {
         if (!ExecuteSqlSupport.isAvailable()) return false
+        val completed = java.util.concurrent.atomic.AtomicBoolean(false)
+        val receipt: (ExecutionSubmission) -> Unit = { outcome ->
+            if (completed.compareAndSet(false, true)) onSubmission?.invoke(outcome)
+        }
         return DataSourceSelector.executePrepared(
-            project, onResultsReady, onError, onErrorRich, wholeScriptExec,
-            dialectGateRequest, onDialectGate,
+            project, onResultsReady,
+            onError = if (onSubmission == null) onError else { message ->
+                receipt(ExecutionSubmission.BLOCKED)
+                onError?.invoke(message)
+                Unit
+            },
+            onErrorRich = if (onSubmission == null) onErrorRich else onErrorRich?.let { sink -> { info: ExecutionErrorInfo ->
+                receipt(ExecutionSubmission.BLOCKED)
+                sink(info)
+            } },
+            wholeScriptExec = wholeScriptExec,
+            dialectGateRequest = dialectGateRequest,
+            onDialectGate = onDialectGate,
+            onSubmission = if (onSubmission == null) null else receipt,
         )
     }
 
