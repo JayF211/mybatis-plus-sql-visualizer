@@ -384,7 +384,10 @@ class PluginSettingsPanel @JvmOverloads constructor(
      * T-SourceJumpFunnel P1-3：源码捕获帧过滤前缀（一行一个前缀，如 `com.corp.engine.`）。
      * Apply 后经 CONFIG 热下发 agent（即时生效，无需重启应用），IDE 侧候选解析同步过滤。
      */
-    internal val frameSkipPrefixesField = com.intellij.ui.components.JBTextArea(5, 40).apply {
+    internal val frameSkipPrefixesField = com.intellij.ui.components.JBTextArea(5, 24).apply {
+        // UI026：列宽只影响 preferred（实际宽度由分栏 CENTER + fill=HORIZONTAL 拉伸），
+        // 40 列在英文 UI 下与「源码捕获帧过滤前缀」标签相加会把设置页撑出横向滚动条；
+        // 24 列让 preferred 落回默认内容区，默认窗口下可见宽度不变。
         // T-SourceJumpFunnel：空态灰色占位提示（悬停 tooltip 之外的第一眼引导）
         emptyText.text = MpSqlVisualizerBundle.message("settings.sourceFrameSkipPrefixes.placeholder")
         lineWrap = true
@@ -424,7 +427,8 @@ class PluginSettingsPanel @JvmOverloads constructor(
      * 语义与 [frameSkipPrefixesField] 相反——名单内包名的帧即使来自 JAR 也按业务帧对待；
      * Apply 后随 CONFIG 热下发 agent。
      */
-    internal val bizJarPrefixesField = com.intellij.ui.components.JBTextArea(5, 40).apply {
+    internal val bizJarPrefixesField = com.intellij.ui.components.JBTextArea(5, 24).apply {
+        // UI026：同 [frameSkipPrefixesField]，24 列仅收敛 preferred，避免英文 UI 横向溢出。
         emptyText.text = MpSqlVisualizerBundle.message("settings.sourceFrameBizJarPrefixes.placeholder")
         lineWrap = true
         wrapStyleWord = true

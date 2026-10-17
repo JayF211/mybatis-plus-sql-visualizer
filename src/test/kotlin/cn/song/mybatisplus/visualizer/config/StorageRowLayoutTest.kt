@@ -19,9 +19,11 @@ import javax.swing.SwingUtilities
  * 本测试取 880px 复现 UI024（修复前整页 preferred=894，溢出 17px；修复后=857，不再溢出）。
  * 另保留 998px 纯内容宽度回归。
  *
- * 语言说明：英文 UI 下同页还有独立的 sourceFrameSkipPrefixes.hint 单行说明把整页撑到 1116px
- * （与 UI024 无关，本次未动），故英文用例只断言「按钮完整可见 + 本行 preferred 宽度」，
- * 不断言整页无横向滚动；中文用例同时断言无横向滚动。
+ * 语言说明：英文 UI 下同页独立的 sourceFrameSkipPrefixes.hint 说明行曾是不折行 HTML
+ * （英文文案更长，修复前整页 preferred=1116px > 880px 视口并出横向滚动条）。
+ * 仅折行该说明行后仍为 1014px：同页「源码捕获」组的两个 40 列前缀文本域在英文标签
+ * 旁把组撑到 968px（标签列 214 + 分栏 738）。两处都收敛后整页 838px。
+ * 中英文用例采用同一口径：根面板 preferred <= 视口、无横向滚动条、三个存储按钮完整可见。
  */
 class StorageRowLayoutTest : BasePlatformTestCase() {
 
@@ -110,14 +112,14 @@ class StorageRowLayoutTest : BasePlatformTestCase() {
         }
     }
 
-    fun test默认设置内容区_三按钮完整可见且中文页无横向滚动() {
+    fun test默认设置内容区_三按钮完整可见且中英文均无横向滚动() {
         assertStorageRowFits("zh", 880, requireNoHorizontalScroll = true)
-        assertStorageRowFits("en", 880, requireNoHorizontalScroll = false)
+        assertStorageRowFits("en", 880, requireNoHorizontalScroll = true)
     }
 
-    fun test998内容宽度_三按钮完整可见且中文页无横向滚动() {
+    fun test998内容宽度_三按钮完整可见且中英文均无横向滚动() {
         assertStorageRowFits("zh", 998, requireNoHorizontalScroll = true)
-        assertStorageRowFits("en", 998, requireNoHorizontalScroll = false)
+        assertStorageRowFits("en", 998, requireNoHorizontalScroll = true)
     }
 
     fun test存储行preferred宽度_中英文均不超保守内容宽度() {
