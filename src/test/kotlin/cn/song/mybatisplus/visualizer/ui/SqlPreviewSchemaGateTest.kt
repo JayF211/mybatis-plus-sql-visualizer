@@ -28,6 +28,8 @@ class SqlPreviewSchemaGateTest : BasePlatformTestCase() {
     private val notifications = mutableListOf<Notification>()
     private var attempts = 0
     private var answer = Messages.NO
+    /** setUp 捕获的服务引用：tearDown 只碰该标识符，不在收尾窗口再取项目服务。 */
+    private var rollbackStore: RollbackSnapshotStore? = null
     private val sql = "UPDATE user SET usernme='U26_SYNTHETIC' WHERE id=71"
 
     override fun setUp() {
@@ -38,7 +40,10 @@ class SqlPreviewSchemaGateTest : BasePlatformTestCase() {
         TestDialogManager.setTestDialog(TestDialog { message -> dialogs += message; answer }, testRootDisposable)
         SqlExecutor.executionAttemptForTest = { attempts++ }
         schemaNotificationForTest = { notifications += it }
-        project.getService(RollbackSnapshotStore::class.java).clearForTest()
+        project.getService(RollbackSnapshotStore::class.java).also {
+            rollbackStore = it
+            it.clearForTest()
+        }
     }
 
     override fun tearDown() {
@@ -53,7 +58,8 @@ class SqlPreviewSchemaGateTest : BasePlatformTestCase() {
             DatabaseSchemaResolver.dataSourceDatabaseForTest = null
             DatabaseSchemaResolver.invalidateAll()
             DatabaseSchemaResolver.clearNegativeCache()
-            project.getService(RollbackSnapshotStore::class.java).clearForTest()
+            rollbackStore?.clearForTest()
+            rollbackStore = null
         } finally {
             super.tearDown()
         }
