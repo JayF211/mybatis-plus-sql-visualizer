@@ -455,7 +455,7 @@ class DbConsoleIntegrationTest : BasePlatformTestCase() {
             val languageConsole = owned.consoleView
             val executionEditor = languageConsole.consoleEditor
             val historyEditor = languageConsole.historyViewer
-            val ui = owned.ui
+            val ui = requireNotNull(owned.ui) { "前提：原生 view 必须提供 RunnerLayoutUi" }
             val foreignView = foreign.view
             val foreignEditor = foreign.consoleView.consoleEditor
 
@@ -525,7 +525,7 @@ class DbConsoleIntegrationTest : BasePlatformTestCase() {
             val view = owned.view
             val executionEditor = owned.consoleView.consoleEditor
             val historyEditor = owned.consoleView.historyViewer
-            val ui = owned.ui
+            val ui = requireNotNull(owned.ui) { "前提：原生 view 必须提供 RunnerLayoutUi" }
             val foreign = fixture.create("user-console.sql")
             val foreignView = foreign.view
             val foreignEditor = foreign.consoleView.consoleEditor
