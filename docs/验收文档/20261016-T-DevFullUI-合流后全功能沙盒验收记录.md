@@ -493,6 +493,10 @@ UI028 复核结论（撤销待归因）：预览「执行 SQL」弹出的「选�
 
 UI025 入口复核（2026-10-18）：为拿到“插件生成、带错列的 SQL 预览”，在 demo 仓临时加 `@Select("SELECT usernme FROM user …")` 与 `/user/fixture/unknown-col` 端点，并在 UserMapper 注解行做 gutter 放大取证：该行只渲染黄色意图灯泡，插件 `sqlGutter.svg` 预览图标未出现（`showGutterIcon` 与 `gutterGroupAnnotation` 默认均为 true，配置无覆盖），点击灯泡得到普通意图菜单而非预览。随后尝试从 IDE Run 重启应用以捕获错列 SQL，外部 kill 后 Services 节点保持红色、Run 不再产生新进程/新控制台页，无法继续。demo 仓临时夹具已全部 `git checkout` 撤销。结论：UI025 真机视觉在本轮沙盒仍无法验证，入口缺失与 IDE Run 失效两处环境问题均未归因，保持“待归因”，不以自动化 27/27 代替。
 
+UI029 新登记（UI025 真实场景缺口，已派独立修复）：demo 临时夹具 `/user/fixture/unknown-col`（mapper `@Select("SELECT usernme FROM user …")`）触发后，日志条目为 `#1 [2026-10-18 00:20:52] 10ms [MySQL] SQLSyntaxErrorException: Unknown column 'usernme' in 'field list' [UserController.java:80]`；双击打开「SQL 预览」，编辑器显示 `SELECT usernme FROM user WHERE id = 1;`、顶部有执行报错横幅，但 `usernme` 上仍无红色波浪与悬停提示。根因方向：该预览没有附着控制台，`DataSourceSelector.schemaValidationTarget(nativeEditorDoc)` 返回 null，标注器直接跳过（自动化 27/27 用的是测试缝目标，覆盖不到这一形态）。已派独立工作树 `t-ui029-annotator-target` 实现“日志预览可用预览自身已确定的数据源/库 + 预热缓存”回落，并保持 MySQL/MariaDB、库非空、缓存热、作用域明确四道 fail-closed 闸门；修复后用同一夹具复验。
+
+U09/U16 本轮补证：日志条目预览头部显示调用栈摘要（`调用栈: cn.song.mybatisplus.sqlvis.agent.hook.StatementHandler#emitEvent136<~cn.song.my…`），日志条目右键含「复制调用方法栈」；错列条目预览顶部完整显示 `java.sql.SQLSyntaxErrorException: Unknown column 'usernme' in 'field list'` 并提供「复制错误信息」，与 U16 的富错误披露一致。未执行「最近执行」弹窗与栈弹层的展开交互，不升级整组。
+
 ## 依据与历史证据保全
 
 - 十九轮UI11组、Runner12组及R90/R91/R92/R94/O147/V178专册。
