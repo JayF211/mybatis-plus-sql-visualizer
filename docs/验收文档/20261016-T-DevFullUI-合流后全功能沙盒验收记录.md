@@ -400,6 +400,12 @@ UI023二次续修已合dev f99f32bd/701a0b1c/a3e2ff63。真实onNativeEditorRead
 
 工具侧发现（影响验收效率，非产品缺陷）：Swing弹层出现后主窗坐标绑定会停留在弹层尺寸，随后坐标点击报“outside 159x38/670x694”；须先静默重抓画面（getScreenshot emit:false）再点击，且100%缩放时页签行y由78变为66。已按此调整操作节奏；电脑操控慢的根因另派只读子代理量化排查。
 
+UI023新包真实GUI通过：Light100默认243，预览绑定mp_demo并执行只读SELECT（0行），随后改错列UPDATE，确认框显示“执行前自检发现以下问题：• 表 user 上无此列 [usernme] —— 是否想写 [username]?”（frame-4dbaba02），点No未写库。日志确认schema预热resolved=1且两次native SUBMITTED，修复链真实可达，不再是Skipped。
+
+环境：新沙盒1920×1080全屏，系统级置顶已用SetWindowPos(HWND_TOPMOST)设置并读回扩展样式ex=0x8（topmost=True），全屏+置顶两项均落实。
+
+UI024新登记（U11/U01视觉）：设置页SQL Log在默认998×742、Light100下，“自动保存”区右侧三个本地数据操作按钮（打开捕获目录/清除预览历史/清除参数历史）被右边缘裁切，仅露出“清除”片段，底部出现横向滚动条（frame-3498aa78）；125%较宽对话框下曾可见。清理确认流程本轮未完成，不能用已裁切截图代证。
+
 ## 第九批并行准备产物
 
 主控在UI016/UI020后台定向期间完成以下准备，不占第三路Gradle，不把准备结果计为UI验收通过：
