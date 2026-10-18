@@ -53,7 +53,7 @@
 | U28 | R36/O91/R4导出 | 回放事务/分号/块、可移植CRUD/回滚、日志历史四格式、过滤/选择集及脱敏 | 部分：已验B1 MySQL单SELECT回放文件含START TRANSACTION/实值/末尾分号/COMMIT，未执行；待多语句/块及不支持事务方言、可移植CRUD/回滚、日志历史四格式、过滤/选择集与脱敏 |
 | U29 | R31/R16/O90检索对比 | 1/2/3条Diff与超千行、正则/Aa/非法regex/文件名行号、同结构计数/聚焦取消 | 部分：已验B2历史原文搜索/合法正则与双选Diff，B1同结构计数5→7→9；B4 UI-009原七条文件非法正则红色反馈、关正则清错并显示无匹配、合法正则恢复2条，原路径复验通过；待1/3条及超千行Diff、Aa/文件名行号、聚焦取消 |
 | U30 | O92/DDL/R3日志还原 | 剪贴板有/空且只点击读取、日期、DDL不伪回填、格式化引号注释保真 | 部分：已验B2真实双行Preparing/Parameters还原id=6及username字符串、错拼一行时未回填告警；待剪贴板有/空与点击读取时机、日期、DDL边界、格式化引号/注释保真 |
-| U31 | R10 ShardingSphere | 真实Logic/Actual双段、交错/含逗号/关开；普通日志三族回归，样例解析不代替真应用 | 部分：已验B3真5.5.2框架及增强/控制台链；B4 UI-008真框架PASS、ShardingSphere来源说明、主SQL保守问号、只读Actual附注含BOOK,100，开启展示脱敏后重开整附注隐藏；B6 UI-013去重开启仍保留by-id两次#3/#4，历史独立o147-id及ds0/100、ds1/101附注逐次保存。待已开面板即时脱敏GUI、长披露可读性、交错/开关全矩阵及普通日志三族回归；同模板无Actual尾条尚未归因，不把逐次保真闭环当全部flush边界通过 |
+| U31 | R10 ShardingSphere | 真实Logic/Actual双段、交错/含逗号/关开；普通日志三族回归，样例解析不代替真应用 | 部分：已验B3真5.5.2框架及增强/控制台链；B4 UI-008真框架PASS、ShardingSphere来源说明、主SQL保守问号、只读Actual附注含BOOK,100，开启展示脱敏后重开整附注隐藏；B6 UI-013去重开启仍保留by-id两次#3/#4，历史独立o147-id及ds0/100、ds1/101附注逐次保存。本轮增证：`displayMaskEnabled=true` 已持久（XML 在案），列表打码现场两态并存——#22 INSERT 展示 email 值 `'***'` 而 password 列 `Secret123X` 明文；「复制 SQL」出口剪贴板全明文（打码面=列表/预览浮层/导出，复制出口豁免属口径内）；**疑似缺陷登记**：INSERT VALUES 场景列名-值对位失准（主仓 DisplayMasker.columnHintBefore 抓 VALUES 内前一字面量值当列名 hint 的规则级缺口 + 列表 `***` 与主仓规则复刻矛盾，疑 agent 采集侧脱敏不同步），交专项判定；待已开面板即时脱敏GUI、交错/开关全矩阵及普通日志三族回归 |
 | U32 | R2/XML编辑辅助 | 六组gutter逐组关开；高亮#/$、闭合、参数/列/resultMap补全、引用导航/查找/折叠；第三方让位 | 部分：已验B6 Ctrl+B五引用真实落点：namespace→UserMapper.java22、property=username→User.java41、include refid→XML20、select resultMap→XML5、selectUserBatchByIds id→Java121；待六组gutter关开、高亮/闭合/补全、查找/折叠及第三方共存，不以导航五点代证整组 |
 | U33 | R24原生MyBatis注入 | 单config成功；无config/多config/非法plugins不注入；Boot回归，专属测试副本 | 待验 |
 | U34 | premain/attach关开 | 先建池再attach；两来源分别两轮关开；PS/batch/clearBatch；裸?边界及启动无异常 | 待验 |
@@ -583,6 +583,14 @@ U22 分享出口本轮真机：预览「更多 → 分享」打开「分享 SQL�
 - **路径记录（复跑指引）**：方言门先于 NO_DATA_SOURCE 选择器——Deactivate mp_demo 后 `boundConsoleDataSource()` 的内存 console `isValid` 仍 true，执行计划仍走方言门阻断而非弹选择器；换绑正解=共享控制台工具栏 Data Sources → All → 选 PG（或等共享控制台真实失效后走 T-UI030 选择器直弹路径，后者本轮未触达保持部分）。
 - **UX 观察两条（登记不判缺陷）**：①预览面板开着时改设置页方言 → 面板重渲染走「内存 PSI」降级并出红字警示「预览以降级模式打开（内存 PSI）……点【重试】或关闭并重新打开预览即可恢复完整支持」，Esc 重开即恢复（frame pg5-22 顶部）；②绑定指示行恒显「关联（上次使用）： mp_demo@localhost」记忆文案，实际 bound 已切 dbx_test——指示行不随会话数据源切换刷新，与结构化头部 `· dbx_test@114.66.55.245` 并存（信息不同源，待与用户口径核对是否算缺陷）。
 - **现场留痕（下批重启前恢复项）**：设置方言=PostgreSQL（手动）需手动回「智能推断」；mp_demo@localhost 处于 Deactivated 需 Reactivate；共享控制台会话数据源=dbx_test；PG 口令 Until restart 重启即失效（下次要 PG 链路再走一次 Change Credentials，或重启后从 dbx 侧确认）。robot-server 0.11.23 已拷入沙盒 `config/plugins/`（端口 8580，重启自动生效，探针进程需重开才会重探）。
+
+## PG 链收尾与 U31 打码疑点（2026-10-18 下午二段）
+
+- **现场已恢复**：方言设置回「智能推断（跟随数据源）」（下拉候选>8 项含 DM (达梦)/KingBase (人大金仓)，键盘 Up×2+Enter 选中；全局 auto=true 后 O-93 修复保证手动残值不劫持推断——设置页披露「当前项目手动指定：PostgreSQL」仅为状态提示，预览决策走推断链）；mp_demo 双击重新激活（图标复色）。**绑定指示行口径修正**：U16 实测执行一次后指示行更新为「已绑定： dbx_test@114.66.55.245」——刷新发生在执行链感知绑定变化时，此前「恒显上次使用记忆」的观察改为「会话切换当时不刷新、执行后刷新」。
+- **U16 PG 侧错误面（新增）**：预览主链执行 `SELECT * FROM user WHERE id = 91`（bound=dbx_test）→ 底部红字完整回显 `[42703] ERROR: column "id" does not exist 位置: 33 (当前库=public，数据源=dbx_test@114.66.55.245，数据源默认库=dbx_test)` +「复制信息查看」出口；内嵌控制台 Output 同步显示错误原文与位置行（frame pg6-3）。语法错 42601 与 42703 同一回显链路，超时仍无手段维持部分。
+- **U18 计划留存增证**：沙盒 `config/options/mp-sql-visualizer.xml` 的 `MpSqlVisualizerHistory.entries` 内 PG EXPLAIN 计划 payload 完整入库（`dialect=PostgreSQL`、`format=JSON`、payload 含 Limit/Seq Scan 全树、`dataSourceUuid=6f2a9c41…`=dbx_test）——重启读回在批 B 验。
+- **U31 打码疑点（疑似缺陷登记）**：三件套证据——①列表 #22 INSERT 展示 email 值 `'***'`、password 列 `Secret123X` 明文（frame u31-1/u31-12）；②「复制 SQL」出口剪贴板全明文 `'ui_mask_probe', 'Secret123X', 'mask@probe.test', …`（提权 tkinter 读数）；③`displayMaskEnabled=true` 已持久（XML），主仓 `DisplayMasker` 规则等价复刻对本语句**一个值都不该打**（HINT_WINDOW=48 的 columnHintBefore 在 VALUES 列表抓到的前值分别为 update_time/ui_mask_probe/Secret123X，均不含关键词、值形态均非手机号/身份证）。矛盾点=列表 `***` 来源与主仓规则不符，疑 agent 采集侧 Desensitizer（独立源集）规则/版本漂移或「复制 SQL」与列表渲染取用不同字段；**不判缺陷结论，交专项**（agent Desensitizer.java 与主仓 DisplayMasker 双侧比对 + 列表渲染链字段源核实）。设置页 GUI 改开关三条路全堵（滚轮 no-op/搜索无索引/对话框不可再放大）已按 XML 兜底记录在案。
+- **U31 顺带**：SQL 日志工具窗右键菜单 11 项在 #22 选中态全部在位（复制 SQL/复制时间戳/删除/屏蔽此 SQL/发送到 SQL→Java/发送到日志转 SQL/跳转到 Java/聚焦调用方方法/按请求聚焦灰/只看同结构灰/导出可见 SQL）——与 U28 记录一致。
 
 ## 剩余批次执行计划（2026-10-18 定稿）
 
