@@ -136,8 +136,8 @@ public class SqlLogPanelSortAndSlowQueryTest extends BasePlatformTestCase {
                             .contains(panel.getSortActionForTest()));
             assertEquals("默认按钮文案应为时间升序", "时间升序", panel.getSortButtonTextForTest());
             assertEquals(
-                "菜单应含五种排序方式且时间升序居首",
-                List.of("时间升序", "时间降序", "耗时升序", "耗时降序", "行号"),
+                "菜单应含七种排序方式且时间升序居首（O-148 补同结构聚类与按库分组）",
+                List.of("时间升序", "时间降序", "耗时升序", "耗时降序", "行号", "同结构聚类", "按目标库分组"),
                 panel.getSortMenuLabelsForTest());
         } finally {
             panel.dispose();
