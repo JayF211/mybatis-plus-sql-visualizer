@@ -470,13 +470,15 @@ class AgentManagerIntakeGateTest : BasePlatformTestCase() {
      * 必须重置**本项目**缓冲的去重索引——同键 agent 事件（窗口内）照常入队。
      * 反向验证锚点：摘掉 [AgentManager.updateOnline] 的 resetDedupeIndexOnChannelHandoff 接线本用例必红。
      */
-    fun test接管沿_项目缓冲去重索引按通道纪元重置() {
+    fun test接管沿_陈旧桥纪元键不吞新纪元首批() {
         val manager = freshManager()
         val logManager = logManager()
         logManager.entries.setPaused(false)
         logManager.entries.setDedupeEnabled(true)
         val sql = "select handoff_epoch_same_key"
-        val bridgeEraTs = System.currentTimeMillis()
+        // 陈旧：接管前 60s 内桥捕过同端点（P3 现场形态）；O-147 W2-补 新语义=陈旧键清掉、
+        // 5s 内新鲜键保留（同一次执行双通道副本按融合升级）
+        val bridgeEraTs = System.currentTimeMillis() - 60_000L
         assertTrue(
             "前置：桥纪元同键条目在队（接管前桥捕过同端点）",
             logManager.entries.addEntry(LogSqlEntry(sql, sql, emptyList(), bridgeEraTs)),
@@ -488,7 +490,7 @@ class AgentManagerIntakeGateTest : BasePlatformTestCase() {
         awaitTrue("确认在采集后桥应让位（接管沿）") { SqlCaptureGate.paused.get() }
 
         assertTrue(
-            "接管沿后同键 agent 事件（60s 窗口内）不得被桥纪元旧索引吞",
+            "接管沿后同键 agent 事件（60s 窗口内）不得被陈旧桥纪元索引吞",
             logManager.entries.addEntry(LogSqlEntry(sql, sql, emptyList(), System.currentTimeMillis())),
         )
     }
