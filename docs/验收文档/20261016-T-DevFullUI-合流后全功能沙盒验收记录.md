@@ -592,6 +592,16 @@ U22 分享出口本轮真机：预览「更多 → 分享」打开「分享 SQL�
 - **U31 打码疑点（疑似缺陷登记）**：三件套证据——①列表 #22 INSERT 展示 email 值 `'***'`、password 列 `Secret123X` 明文（frame u31-1/u31-12）；②「复制 SQL」出口剪贴板全明文 `'ui_mask_probe', 'Secret123X', 'mask@probe.test', …`（提权 tkinter 读数）；③`displayMaskEnabled=true` 已持久（XML），主仓 `DisplayMasker` 规则等价复刻对本语句**一个值都不该打**（HINT_WINDOW=48 的 columnHintBefore 在 VALUES 列表抓到的前值分别为 update_time/ui_mask_probe/Secret123X，均不含关键词、值形态均非手机号/身份证）。矛盾点=列表 `***` 来源与主仓规则不符，疑 agent 采集侧 Desensitizer（独立源集）规则/版本漂移或「复制 SQL」与列表渲染取用不同字段；**不判缺陷结论，交专项**（agent Desensitizer.java 与主仓 DisplayMasker 双侧比对 + 列表渲染链字段源核实）。设置页 GUI 改开关三条路全堵（滚轮 no-op/搜索无索引/对话框不可再放大）已按 XML 兜底记录在案。
 - **U31 专项静态链（追加）**：①agent 侧 Desensitizer 与主仓 DisplayMasker **关键词表/双条件规则逐字一致**（D97 同步无漂移，双侧源码比对在案），排除「agent 规则漂移」假设；②agent 内 Desensitizer 唯一调用点=ParamCapture.snapshot（参数捕获级，hint=第 n 个 `?` 前置标识符），语句级 SQL 不经 agent 打码；③主仓 DisplayMasker 全调用方（列表渲染/导出/回放/MCP/AI 上下文）全走同一 maskSqlText，**无任何采集入库打码点**——restoredSql 恒为原文；④修正复刻文本：还原器产物带 MyBatis 排版空格（复制 SQL 实证双空格），hint 窗口在带空格文本上重算（ui_mask_probe/Secret123X/时间戳）**仍全不打**；⑤剩余唯一分歧=列表渲染输入与 restoredSql 的关系待运行时判别——**判别实验=「导出可见 SQL CSV」（导出链同 maskSqlText）：CSV 明文→列表渲染另有路径；CSV 带 ***→restoredSql 本身含 ***（还原器产物，与复制链字段矛盾）**，GUI 空闲后执行。
 
+## 批 C 探针修复轮（2026-10-18 下午四段）
+
+robot 机制 A 生效后重跑 U17/U19/U30/U43，两轮结果同批失败——**判定为探针脚本缺陷而非插件缺陷**，逐支修复：
+
+- **U17**：①P1 落点 `new Page<>(…)` 行不是链根（Page 构造行按设计不出预览=插件行为正确），改落 `queryWrapper.in(pageQuery.getIds() != null`（pageByWrapper 独有链式行）；②**P2 断言设计错误**——填参不改 SQL（占位形态），联动语义=**勾选动态条件复选框**才把 `<if>` 加入 WHERE；重写为 robot 文本命中三个复选框逐一点击后断言 SQL 区 diff（截图 bc-U17-p2-before-checks 实证：三框全空时 SQL 无 WHERE）；③P5 判定口径错——**「面板无变化」实为数据源选择器弹出**（`选择数据源` 列表：jpa/kotlin/mpj/selfdev + All），即 T-UI030 的 `promptDataSourceThenRetryStructured` 路径**首次真机触达**（此前「选择器直弹场景未触达」的补充证据），断言改为「面板变化 OR 选择器弹层」二者取一；④P4 历史首条仍缺 robot 列表路线（JBList 类名未命中），保留人工补。
+- **U19**：①粘贴落点公式把 rect 当 `(x,y,w,h)` 用（实为 `(l,t,r,b)`）——点在参数区导致「没点进编辑器」，改 `l+(r-l)*2/3, t+(h)/4`；②「更多」是图标 ActionToolbar 按钮（robot 无 accessible name），改几何定位 `(rect.right-72, rect.top+68)`；`click_button` 失败文案把「anchor 缺模板」误写成「robot 未启」——**误导性文案留档**。
+- **U30**：`from bc_common import …` 缺 `ide`（NameError）+ `Reporter.check()` 两处少传 fail_msg（TypeError）——已修。
+- **U43**：转换输入框真实类名=`EditorComponentImpl`（`EditorTextField/JBTextField` 均不存在，robot 实测 4 个），改类名+按屏幕 x≥工具窗左界过滤出工具窗内输入区。
+- **新观察（升级专项）**：**「预览以降级模式打开（内存 PSI）」红字警示反复出现**——首见 pg5-22（改方言设置后重渲染）、本轮 u17 P2/P5 屏（**新 IDE 重启后首次预览即出现**，frame bc-U17-p5-explain-q4-result-none 顶部），「重试」链接可恢复。触发面比原观察宽，登记待专项判定（降级判定条件/是否应自动重试）。
+
 ## 批 B 重启 #1：持久性打包（2026-10-18 下午三段）
 
 重启方式：提权 taskkill 沙盒 IDE（58588）→ 后台 `start-ui243.ps1` 重启（登记 T-DevFullUI-243）。IDE 起窗后提权置顶 TOPMOST+全屏；**编辑器页签五页全部会话恢复**（含 mpsql-exec.sql 与 console[dbx_test] 两个 Database 控制台页签）、定位停在 pageByWrapper。
