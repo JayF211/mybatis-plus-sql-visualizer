@@ -18,7 +18,7 @@ class SqlEntryPresentationTest : BasePlatformTestCase() {
         val entry = LogSqlEntry("SELECT 1", "SELECT 1", emptyList(), 1L,
             null, LogSqlEntry.computeSummary("SELECT 1"), SqlSource.UNKNOWN, 21L,
             "src/main/OrderService.java", 42, emptyList(), emptyList(), null, 17L,
-            null, null, null, 2L, null)
+            null, null, null, 2L, "PostgreSQL")
         val settings = PluginSettings.getInstance()
             val old = settings.getState().getLogTimestampEnabled()
         try {
