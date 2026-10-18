@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.log;
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings;
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
+import com.intellij.openapi.actionSystem.AnAction;
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
 import com.intellij.util.ui.UIUtil;
 import static org.junit.Assert.assertNotNull;
@@ -76,8 +77,10 @@ public class SqlLogPanelLayoutTest extends BasePlatformTestCase {
                     java.util.Arrays.asList(panel.toolbarGroup.getChildActionsOrStubs())
                             .contains(panel.getCaptureToggleAction()));
 
-            // 默认可见性：排序方式选择器恒可见（默认时间升序）；搜索条默认隐藏；慢查询徽章隐藏
-            assertEquals("排序方式选择器应恒可见", true, panel.getSortButtonForTest().isVisible());
+            // 默认可见性：排序动作并入左侧动作组（按钮退役，方案 A）；搜索条默认隐藏；慢查询徽章隐藏
+            assertTrue("排序动作应在工具栏动作组内",
+                    java.util.Arrays.asList(panel.toolbarGroup.getChildActionsOrStubs())
+                            .contains(panel.getSortActionForTest()));
             assertEquals("搜索条默认隐藏", false, panel.getSearchFieldVisibleForTest());
             assertEquals("默认无慢查询，计数徽章应隐藏/为空", false,
                     panel.getSlowQueryLabelForTest() == null ? false : panel.getSlowQueryLabelForTest().isVisible());
@@ -99,7 +102,9 @@ public class SqlLogPanelLayoutTest extends BasePlatformTestCase {
                     0,
                     1500L));
             waitForEdt();
-            assertEquals("有耗时信息时排序方式选择器仍可见", true, panel.getSortButtonForTest().isVisible());
+            assertTrue("有耗时信息时排序动作仍在工具栏组内",
+                    java.util.Arrays.asList(panel.toolbarGroup.getChildActionsOrStubs())
+                            .contains(panel.getSortActionForTest()));
             assertEquals("默认排序方式为时间升序", SortMode.TIME_ASC, panel.getCurrentSortMode());
         } finally {
             panel.dispose();
@@ -260,7 +265,20 @@ public class SqlLogPanelLayoutTest extends BasePlatformTestCase {
                 if (c.isVisible()) children.add(c);
             }
             assertTrue("控制组应含 SQL类型按钮", children.contains(panel.getTypeFilterButtonForTest()));
-            assertTrue("控制组应含 排序按钮", children.contains(panel.getSortButtonForTest()));
+            List<AnAction> mainActions = new ArrayList<>();
+            for (AnAction a : panel.toolbarGroup.getChildActionsOrStubs()) mainActions.add(a);
+            int sortIndex = -1;
+            for (int i = 0; i < mainActions.size(); i++) {
+                if (mainActions.get(i) == panel.getSortActionForTest()) { sortIndex = i; break; }
+            }
+            assertTrue("排序动作应在工具栏动作组内", sortIndex >= 0);
+            assertTrue("排序应排在滚动到底部之后、帮助之前（方案 A 中排序为操作组末位）",
+                    sortIndex > 0 && sortIndex < mainActions.size() - 1);
+            AnAction scrollAction = null;
+            for (AnAction a : mainActions) { if (a == panel.getScrollToEndAction()) { scrollAction = a; break; } }
+            assertNotNull(scrollAction);
+            assertTrue("滚动到底部动作应排在排序之前",
+                    mainActions.indexOf(scrollAction) < sortIndex);
             assertTrue("控制组应含 去重勾选（仍在最右）", children.contains(panel.getDedupeCheckBoxForTest()));
             assertEquals(
                     "去重勾选应在控制组最右",
@@ -373,9 +391,9 @@ public class SqlLogPanelLayoutTest extends BasePlatformTestCase {
                     MpSqlVisualizerBundle.message("log.filter.type.label") + MpSqlVisualizerBundle.message("log.filter.all"),
                     panel.getTypeFilterButtonForTest().getToolTipText());
             assertEquals(
-                    "排序按钮 tooltip 应为「排序：」+ 当前方式",
-                    MpSqlVisualizerBundle.message("log.sort.label") + MpSqlVisualizerBundle.message("log.sort.time.asc"),
-                    panel.getSortButtonForTest().getToolTipText());
+                    "排序文案应为当前方式（按钮退役后由动作 presentation 承载）",
+                    MpSqlVisualizerBundle.message("log.sort.time.asc"),
+                    panel.getSortButtonTextForTest());
             // 排序按钮文案在预算内，不应被省略（省略只对超预算的组合生效）
             assertEquals("时间升序", panel.getSortButtonTextForTest());
         } finally {

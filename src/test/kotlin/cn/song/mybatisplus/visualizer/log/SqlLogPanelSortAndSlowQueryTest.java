@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.log;
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings;
+import com.intellij.openapi.actionSystem.AnAction;
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
 import com.intellij.util.ui.UIUtil;
 import static org.junit.Assert.assertEquals;
@@ -130,7 +131,9 @@ public class SqlLogPanelSortAndSlowQueryTest extends BasePlatformTestCase {
             // 无任何耗时信息时排序方式仍可见（默认时间升序恒可用，不再按耗时显隐）
             manager.getEntries().addEntry(new LogSqlEntry("SELECT 1", "SELECT 1", List.<LogSqlParam>of(), 1L));
             waitForEdt();
-            assertTrue("排序方式按钮应恒可见", panel.getSortButtonForTest().isVisible());
+            assertTrue("排序动作应在工具栏动作组内",
+                    java.util.Arrays.asList(panel.toolbarGroup.getChildActionsOrStubs())
+                            .contains(panel.getSortActionForTest()));
             assertEquals("默认按钮文案应为时间升序", "时间升序", panel.getSortButtonTextForTest());
             assertEquals(
                 "菜单应含五种排序方式且时间升序居首",
