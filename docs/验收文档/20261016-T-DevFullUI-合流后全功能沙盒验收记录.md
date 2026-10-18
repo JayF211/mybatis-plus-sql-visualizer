@@ -649,3 +649,28 @@ U36 屏蔽规则本轮真机：日志面板漏斗打开「管理 SQL 屏蔽规�
 - `20261007-1244-T-SqlToJavaPromote-SQL转Java反向转换全覆盖与Beta转正-验收文档.md`：真实索引/多实体链不以Light夹具替代。
 - 9月历史全量/保留上限、心跳重连、回流九任务、预热恢复等正式规程中的未闭合子项一并列入。
 - 上轮临时树已按用户要求清理；原测试XML/兼容报告/安装包/事件在 `build/m19-cleanup-evidence.zip`，原分支历史在 `build/m19-cleanup-branches.bundle`。本次不得把已经清理的绝对路径写为仍在场。
+
+## 验收终版汇总（2026-10-18 收口时点，批 A/B/C/D 后）
+
+**环境**：243 沙盒 `MPSV-MasterMerge-UI243`（runIde，`-PgifRobotServer=true` 机制 A 装入 robot-server 0.11.23，8580 连通 324 根节点）；demo 工程含 dbx_test@114.66.55.245（PG 16.14，口令入 IDE，Until restart）。
+
+**本轮实锤转增的组**：
+- U25：PG 树（Limit/Parallel Aware/Async Capable/Startup·Total Cost/Plan Width/Seq Scan）+ SEQ_SCAN 体检 + 计划跨重启读回（快照 #0d5b5db5 + 「计划无变化」对比链）
+- U21：跨方言（手动 PG × MySQL 源）红字整体阻断 fail-closed；U16：PG 侧 42703 错误原文+位置+环境三元组+超时引导
+- U27：COUNT 独立开关 ON/OFF 行为闭环 + tooltip 三态披露 + LEARNED_MODULE 跟随共享控制台绑定数据源
+- U17：P2 勾选联动（完整模式 `WHERE status = 1`）/P5 数据源选择器直弹路径首次触达 + 取消路径通知全文
+- U10：Kotlin 降级面 13 断言 11 过+2 探针误检人工排除；U42：JAR 实体认出+前缀列完整+方言 fail-closed 披露；U30：4 步 0 失败；U43：7 步 1 FAIL（4.00s 顶格疑探针测量）；U33：clean 态 fail-closed PASS
+- U18 留存与界限（代码面）：单计划 256KiB/每条 5 份/全局 8MiB+超限弃最旧+手改 XML 同受限+只淘汰计划不删 SQL；两开关默认 false
+- U12/U13（静态面）：projectIdentity=SHA256(规范化 basePath)，ExplainPlanKey 含 dataSourceUuid/dialect/双指纹，条目级不符即拒存/拒复用
+- U35/U36（静态面）：屏蔽规则 PersistentStateComponent，独立存储 `mp-sql-visualizer-suppress.xml`（roaming DISABLED）
+- U08（静态面）：五消费面（列表/导出/回放/MCP/AI 上下文）全为展示/投影层变换不写回条目，采集/展示双开关分属不同键
+
+**本轮登记的真缺陷（待修，按用户流程最后一起修）**：
+- **UI-021**：INSERT VALUES 场景展示脱敏列名-值对位错位（password 值漏打 + 后继值因前值含 secret 被误打），编译产物直调实证，测试盲区在案
+- **UI-022**：降级模式（内存 PSI）下动态条件勾选联动失效，完整模式对照实证，降级横幅未披露交互缺失
+
+**未验面（如实保留部分）**：U19 16KiB 超限/编辑换目标/清历史（GUI 定位债）；U20 CRUD 批量/Version/预设边界（open_file 前置）；U23 上限/另存往返/OGNL 勾选真联动；U29 千行文件（语料不在册）与历史首行；U04 自动分组/首切引导；U11 实际清理与重启不复活；U08 六出口逐一出图；U12/U13 UUID 真机隔离；U05 二维码三态；U03 精确宽度矩阵（230/250/460）；U01/U44 其余主题缩放组合。
+
+**视觉观察（登记非缺陷）**：333px 窄栏下「日志 → SQL」页签左端被裁无省略号（平台 JBTabs）；228px 以下工具窗整体收起（平台最小宽度）；降级横幅触发面（重启初期/重渲染）。
+
+**证据索引**：截图 `build/ui243-shots/`（pg4/pg5/pg6/b1/u27/u31/dd/bc-* 系列）；提交链 `780427d2`→`44c28842`→`998f1f9a`→`3892646c`→`fec2eccd`→`b5c7ce41`→`515e82f0`→`947fe9da`→`4dcf9485`→`6f4c3d10`→`b65c0cfb`→`cae1031d`；工具层正典 `dev-support/acceptance/`（11 探针 + lib/nav + BC_RUNBOOK）。
