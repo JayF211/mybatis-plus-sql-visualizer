@@ -1341,6 +1341,13 @@ internal fun DataSourceSelector.createTempPsiFile(
 
 internal fun DataSourceSelector.projectExecFile(project: Project, sql: String, nonBlocking: Boolean = false): java.io.File? {
     val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
+    // T-UiFixGate9：生命周期守卫——dispose（含 temporarily-disposed）后放弃整个写链。首建形态
+    // （VFS 无条目）的裸写 FileUtil.writeToFile 不经 document、无任何 dispose 检查，死项目上照写
+    // 磁盘即第二冲突源的一部分；返回 null 走既有「writeFile 失败 → 跳过」降级。
+    if (project.isDisposed) {
+        LOG.info("[M36] projectExecFile abandoned (project disposed, T-UiFixGate9): project=${project.name}")
+        return null
+    }
     val base = project.basePath ?: run {
         // T-ExecCopyFix F2a：basePath null 是「无异常的 null」，原来连日志都没有
         LOG.warn("[M36] projectExecFile FAILED: project.basePath null (project=${project.name})")
@@ -1418,6 +1425,13 @@ internal fun DataSourceSelector.prewarmExecTempFileInner(
     renderedDialectName: String? = null,
 ) {
     lastTempFileFailure = null
+    // T-UiFixGate9：入口守卫——prewarmExecTempFile 的 isDisposed 检查在提交池线程之前，与本链
+    // 实际执行之间隔着任意长的排队/执行窗口（victim 测试毫秒级跑完即收尾 dispose）。池线程链
+    // 起跑时项目可能已 dispose（含 temporarily-disposed），整链放弃，不在死项目上写/refresh。
+    if (project.isDisposed) {
+        LOG.info("[M36] exec prewarm abandoned (project disposed, T-UiFixGate9)")
+        return
+    }
     // T-PrewarmWilDeadlock：下方 refresh 段**必须裸调**（BGT 严禁 WIRA×同步 refresh）——T-ExecSlowOps
     // 曾自 EDT 冷路径同款复制 WIRA 包装，2026.2 真机（threadDump-20261015-181620）实证自锁：本线程
     // 持写意向锁阻塞在 RefreshSessionImpl.waitFor，而会话推进需 WIL/EDT，互等成环（EDT 再被预览
@@ -1430,6 +1444,12 @@ internal fun DataSourceSelector.prewarmExecTempFileInner(
         LOG.warn("[M36] exec prewarm writeFile failed: ${e.javaClass.simpleName}: ${e.message}")
         return
     } ?: return
+    // T-UiFixGate9：阶段守卫——写链推进期间（文件 IO 毫秒级，VFS refresh 更长）项目随时可能
+    // 进入收尾 dispose；每段写/收敛动作前复查，死项目即放弃（投机性写入不重跑）。
+    if (project.isDisposed) {
+        LOG.info("[M36] exec prewarm abandoned before pre-refresh converge (project disposed, T-UiFixGate9)")
+        return
+    }
     // T-ExecDocSync2 F4：refresh 前强制收敛——projectExecFile 的 doc 写在 EDT 落盘后、本
     // refresh 之前，用户在控制台（document 即 exec 文件 document）键入可插入 modified-unsaved
     // 态；此时 refresh 命中「doc 已修改 && 磁盘≠文档」即弹 File Cache Conflict（第四轮残余竞态，
@@ -1453,6 +1473,13 @@ internal fun DataSourceSelector.prewarmExecTempFileInner(
         return
     } ?: run {
         LOG.warn("[M36] exec prewarm: VFS not visible after refresh (${ioFile.path}, exists=${ioFile.exists()})")
+        return
+    }
+    // T-UiFixGate9：阶段守卫——refresh 是链中最慢一段，此刻项目可能已开始收尾；后续
+    // syncExecVfContentIfNeeded 派发的 doc 写虽已被 docWriteOnce 咽喉守卫拦截，此处直接放弃
+    // 免得再付一次 refresh 后探测与方言映射（死项目上的 PSI 访问只会刷 AlreadyDisposed 噪音）。
+    if (project.isDisposed) {
+        LOG.info("[M36] exec prewarm abandoned after refresh (project disposed, T-UiFixGate9)")
         return
     }
     // T-EC-04：同冷路径——裸写残留的防御收口（正常恒 no-op）

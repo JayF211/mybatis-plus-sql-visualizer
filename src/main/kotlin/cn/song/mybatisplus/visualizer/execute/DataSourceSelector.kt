@@ -1412,6 +1412,17 @@ object DataSourceSelector {
      * internal 供测试。
      */
     internal fun writeVfTextViaDocument(project: Project, vf: com.intellij.openapi.vfs.VirtualFile, text: String) {
+        // T-UiFixGate9：生命周期守卫——项目已 dispose（含测试框架的 temporarily-disposed 窗口：
+        // 243 平台 ProjectImpl.isDisposed() = 容器态≥DISPOSE_IN_PROGRESS || isTemporarilyDisposed，
+        // javap 实证该标志被 OR 进判定，守卫点在此窗口可达）后一律放弃写。半途写入（setText 成功、
+        // commitDocument/saveDocument 撞上收尾中的项目抛异常）会留下「已修改未保存」脏文档，
+        // 后续任一 VFS refresh 命中 MemoryDiskConflictResolver → EDT 延迟冲突处理杀掉无辜测试
+        // （20261018 门禁 shard5 三轮实录的第二个毒源）。预热是投机性写入，重跑无意义。
+        if (project.isDisposed) {
+            com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
+                .info("[M36] exec doc write abandoned (project disposed, T-UiFixGate9): ${vf.name}")
+            return
+        }
         // T-PreviewFast P4：程序性写入整段开闸——文档变更事件同步派发给自动落盘监听，
         // 闸门开着即跳过（内容由本函数自己落盘，无需 1.5s 后再写一遍）
         ExecDocAutosaveGate.suppressDuring {
@@ -1475,6 +1486,16 @@ object DataSourceSelector {
     internal fun docWriteOnce(project: Project, vf: com.intellij.openapi.vfs.VirtualFile, sql: String): Boolean = runCatching {
         if (execWriteActionFailureInjection) {
             error("injected exec WriteAction failure (T-ExecDocSync test seam)")
+        }
+        // T-UiFixGate9：派发拍执行时刻复查——fire-and-forget 写（waitBudgetMs=0）排队期间项目
+        // 可能已进入 dispose/temporarily-disposed；DocWriteContext.invokeLaterWriteSafe 的
+        // Disposer.isDisposed 守卫对测试框架的临时 dispose 失明（只置 ProjectImpl 标志、不动
+        // ObjectTree），须以 project.isDisposed（已 OR temporarily 标志）复查并放弃写。false =
+        // 有界等待路径照常走「不裸写、内容旧一拍」既有降级，语义不变。
+        if (project.isDisposed) {
+            com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
+                .info("[M36] exec doc write refused at dispatch (project disposed, T-UiFixGate9): ${vf.name}")
+            return@runCatching false
         }
         @Suppress("DEPRECATION") // T-M52：WriteAction.compute(ThrowableComputable) 243 编译目标仅此重载可用
         com.intellij.openapi.application.WriteAction.compute<Unit, Throwable> {
