@@ -166,4 +166,49 @@ class DisplayMaskerTest {
         assertEquals("SELECT 1 FROM t WHERE mobile = ?", p.sql)
         assertEquals(listOf("***"), p.maskedParams)
     }
+
+    // ---------- UI-021：INSERT VALUES 列名-值位置对位 ----------
+
+    @Test
+    fun test_INSERT_VALUES_列名对位_密码列打码且后继值不误打() {
+        val sql = "INSERT INTO user (username, password, email) " +
+            "VALUES ('ui_mask_probe', 'Secret123X', 'mask@probe.test')"
+        assertEquals(
+            "INSERT INTO user (username, password, email) " +
+                "VALUES ('ui_mask_probe', '***', 'mask@probe.test')",
+            DisplayMasker.maskSqlText(sql),
+        )
+    }
+
+    @Test
+    fun test_INSERT_VALUES_多列对位_关键词列与形态值各按其位() {
+        val sql = "INSERT INTO t (a, secret_col, b) VALUES ('x', 'y', '13400000000')"
+        // a/b 非敏感列 → 'x' 原样、手机号形态 '13400000000' 走形态兜底；secret_col → 'y' 打码
+        assertEquals("INSERT INTO t (a, secret_col, b) VALUES ('x', '***', '***')", DisplayMasker.maskSqlText(sql))
+    }
+
+    @Test
+    fun test_INSERT_VALUES_值数超出列数_逐位回退旧规则() {
+        val sql = "INSERT INTO t (a, b) VALUES ('x', 'y') ON DUPLICATE KEY UPDATE password = 'Secret123X'"
+        // 前两位按列清单（a/b 均非敏感）；第三位超列数回退旧 hint（UPDATE 后 password → 打码）
+        assertEquals(
+            "INSERT INTO t (a, b) VALUES ('x', 'y') ON DUPLICATE KEY UPDATE password = '***'",
+            DisplayMasker.maskSqlText(sql),
+        )
+    }
+
+    @Test
+    fun test_parameterize_INSERT_VALUES_对位一致() {
+        val r = DisplayMasker.parameterize("INSERT INTO u (username, pwd) VALUES ('u1', 'p1')")
+        assertEquals("INSERT INTO u (username, pwd) VALUES ('u1', ?)", r.sql)
+        assertEquals(listOf("***"), r.maskedParams)
+    }
+
+    @Test
+    fun test_非INSERT语句_旧规则不变() {
+        assertEquals(
+            "SELECT * FROM t WHERE password = '***'",
+            DisplayMasker.maskSqlText("SELECT * FROM t WHERE password = 'x'"),
+        )
+    }
 }

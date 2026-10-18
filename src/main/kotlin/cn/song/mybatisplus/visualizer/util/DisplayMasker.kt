@@ -84,14 +84,25 @@ object DisplayMasker {
      *
      * 值内子串命中的形态**不**打码（对齐采集侧「参数值整体判形态」语义）——联合正则天然
      * 保证：引号字面量整体命中后其内部数字不再单独扫描。
+     *
+     * UI-021：`INSERT ... VALUES` 形态按**列清单与值序列位置对位**取列名 hint——VALUES 列表里
+     * 字面量之间没有列名，旧的「前置最近标识符」会把**前一个字面量值**当列名（如 password 列值
+     * Secret123X 的 hint 变成上一列的 ui_mask_probe → 漏打；下一列值的 hint 变成 Secret123X →
+     * 因含 secret 误打）。列清单解析失败/值数超出列数时逐位回退旧规则。
      */
-    fun maskSqlText(sql: String): String = transform(sql) { ctx ->
-        when (ctx.kind) {
-            TokenKind.LITERAL -> {
-                val inner = ctx.text.substring(1, ctx.text.length - 1).replace("''", "'")
-                if (mask(ctx.hint, inner) == MASK) "'$MASK'" else ctx.text
+    fun maskSqlText(sql: String): String {
+        val insertCols = insertColumnsForValues(sql)
+        var literalOrdinal = -1
+        return transform(sql) { ctx ->
+            when (ctx.kind) {
+                TokenKind.LITERAL -> {
+                    literalOrdinal++
+                    val inner = ctx.text.substring(1, ctx.text.length - 1).replace("''", "'")
+                    val hint = insertCols?.getOrNull(literalOrdinal) ?: ctx.hint
+                    if (mask(hint, inner) == MASK) "'$MASK'" else ctx.text
+                }
+                TokenKind.BARE_NUMBER -> MASK
             }
-            TokenKind.BARE_NUMBER -> MASK
         }
     }
 
@@ -112,11 +123,15 @@ object DisplayMasker {
      */
     fun parameterize(sql: String): ParameterizedSql {
         val params = mutableListOf<String>()
+        val insertCols = insertColumnsForValues(sql)
+        var literalOrdinal = -1
         val out = transform(sql) { ctx ->
             when (ctx.kind) {
                 TokenKind.LITERAL -> {
+                    literalOrdinal++
                     val inner = ctx.text.substring(1, ctx.text.length - 1).replace("''", "'")
-                    if (mask(ctx.hint, inner) == MASK) {
+                    val hint = insertCols?.getOrNull(literalOrdinal) ?: ctx.hint
+                    if (mask(hint, inner) == MASK) {
                         params += MASK
                         "?"
                     } else {
@@ -166,6 +181,24 @@ object DisplayMasker {
         val window = sql.substring(from, literalStart)
         val identifiers = ID_REGEX.findAll(window).map { it.value }.filter { it.lowercase() !in SQL_KEYWORDS }.toList()
         return identifiers.lastOrNull()
+    }
+
+    /**
+     * UI-021：`INSERT ... VALUES` 的列清单（供按值位置取列名 hint）。
+     *
+     * VALUES 列表里字面量之间没有列名——旧 hint 推导会把前一个字面量值当列名；本函数解析
+     * 「`INSERT INTO <表> (列1, 列2, ...) VALUES (`」段，返回列名序列，由调用方按 LITERAL 出现序
+     * 对位。解析失败（非 INSERT/无列清单）返回 null，调用方逐位回退旧规则。
+     * 列名支持裸标识符与反引号/双引号/方括号包裹；列清单内不含逗号嵌套。
+     */
+    private val INSERT_COLUMNS = Regex(
+        "(?is)\\bINSERT\\s+INTO\\s+[\\w.`\"\\[\\]]+\\s*\\(([^()]*)\\)\\s*VALUES\\s*\\("
+    )
+
+    private fun insertColumnsForValues(sql: String): List<String>? {
+        val m = INSERT_COLUMNS.find(sql) ?: return null
+        val cols = m.groupValues[1].split(',').map { raw -> raw.trim().trim('`', '"', '[', ']') }
+        return cols.takeIf { list -> list.isNotEmpty() && list.all { it.isNotEmpty() } }
     }
 
     /** 标识符（含中文列名/别名形态）。 */
