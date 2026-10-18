@@ -613,7 +613,8 @@ class BannedApiScanRuleTest : BannedApiScanSupport() {
      *  正则只认 catch(Throwable)，但 Exception 捕获链的 invoke 反射同样可能透传 Error，见
      *  BannedApiSourceScanTest 落地集表注），T-M104 后 ConsoleKt 为 8、ResultsKt 为 15。 */
     internal val landedFatalJudgmentCounts = mapOf(
-        "src/main/java/cn/song/mybatisplus/visualizer/execute/DataSourceSelector.java" to 1,
+        // T-SyncK2JMaster90：预热预算 ExecutionException 拆包新增 1 处透传判定，1→2。
+        "src/main/java/cn/song/mybatisplus/visualizer/execute/DataSourceSelector.java" to 2,
         "src/main/java/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorConsoleKt.java" to 8,
         "src/main/java/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResultsKt.java" to 15,
         "src/main/java/cn/song/mybatisplus/visualizer/log/agent/AgentManager.java" to 10,
@@ -816,7 +817,8 @@ class BannedApiScanRuleTest : BannedApiScanSupport() {
             assertTrue("豁免理由不得为空：$path", exemption.reason.isNotBlank())
         }
 
-        // 未判定总量基线（其余未落地/未豁免文件的站点体无判定数）：2026-10-14 实测 428（Java 注释语义掩码）。
+        // 未判定总量基线（其余未落地/未豁免文件的站点体无判定数）：T-SyncK2JMaster90 实测 428→423
+        // （SqlClickPreview 交互浮层整类退役，降级站点随之消失；Java 注释语义掩码）。
         // 全量对账（Kotlin 守卫读数）：全量 777 = 豁免登记 + 落地文件站点与判定 + 其余未判定 + 其余已判定。
         val exemptSites = throwableCatchExemptions.values.sumOf { it.sites }
         val judgedInLanded = landedFatalJudgmentCounts.values.sum()
@@ -829,12 +831,12 @@ class BannedApiScanRuleTest : BannedApiScanSupport() {
         assertEquals(
             "未落地/未豁免文件的无判定 catch (Throwable …) 站点基线漂移（须与 " +
                 "BannedApiSourceScanTest.fatalCatchSiteTotalBaseline 同步重登或补判定）",
-            428,
+            423,
             unjudgedOutside,
         )
         assertEquals(
             "k2j 全量 catch (Throwable …) 站点基线漂移（须与 BannedApiSourceScanTest.fatalCatchSiteTotalBaseline 同步重登）",
-            777,
+            763,
             allSites,
         )
         // 全量对账恒等式（口径说明）：全量 = 豁免登记 + 其余未判定 + 落地判定（regex 口径，含
