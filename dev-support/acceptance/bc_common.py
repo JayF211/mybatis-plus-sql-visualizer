@@ -361,9 +361,13 @@ def open_file(query, wait=2.2, rep=None):
 
     pyautogui.hotkey("ctrl", "shift", "n")
     time.sleep(1.1)
-    if diff_score(base_band, fingerprint(band)) < 2.0:
+    popped = diff_score(base_band, fingerprint(band)) >= 0.5
+    if not popped and robot_available():
+        # 像素护栏在深色主题下对半透明弹窗不敏感——robot 文本命中「Project Files/All」兜底
+        popped = find_contains("Project Files") is not None or find_named("All") is not None
+    if not popped:
         esc()
-        raise RuntimeError("Ctrl+Shift+N 未弹出搜索浮窗（像素护栏未过）——中止，绝不盲敲")
+        raise RuntimeError("Ctrl+Shift+N 未弹出搜索浮窗（像素护栏+robot 双判据未过）——中止，绝不盲敲")
     nav_mod.force_en_us()
     pyautogui.typewrite(query, interval=0.04)
     time.sleep(wait)
