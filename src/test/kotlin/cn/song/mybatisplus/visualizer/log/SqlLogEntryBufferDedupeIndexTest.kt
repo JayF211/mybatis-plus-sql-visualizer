@@ -121,7 +121,7 @@ class SqlLogEntryBufferDedupeIndexTest {
         val b = SqlLogEntryBuffer(10)
         val sql = "SELECT * FROM handoff WHERE id = 1"
         assertTrue("桥纪元：接管前同键条目在队", b.addEntry(entry(sql, 0)))
-        b.resetDedupeIndexOnChannelHandoff() // 接管沿（SqlCaptureGate.paused false→true，生产由 updateOnline 接线）
+        b.rebuildDedupeIndexAfterHandoff(5_000, 8_000) // 接管沿（SqlCaptureGate.paused false→true，生产由 updateOnline 接线）
         assertTrue("接管沿后同键首批事件不得被旧索引吞（5s << 60s 窗口）", b.addEntry(entry(sql, 5_000)))
     }
 
@@ -131,7 +131,7 @@ class SqlLogEntryBufferDedupeIndexTest {
         val b = SqlLogEntryBuffer(10)
         val sql = "SELECT * FROM handoff2 WHERE id = 1"
         assertTrue(b.addEntry(entry(sql, 0))) // 桥纪元
-        b.resetDedupeIndexOnChannelHandoff()
+        b.rebuildDedupeIndexAfterHandoff(5_000, 8_000)
         assertTrue(b.addEntry(entry(sql, 5_000))) // agent 纪元首批（纪元豁免）
         assertFalse("agent 纪元内部短窗重复照常折叠", b.addEntry(entry(sql, 8_000)))
         assertEquals("折叠计数照常累加", 1, b.dedupeCount(sql))

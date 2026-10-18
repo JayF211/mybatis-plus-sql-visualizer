@@ -89,7 +89,7 @@ class CommunityDialogTest : BasePlatformTestCase() {
             dialog.disposeIfNeeded()
             release.countDown()
             assertTrue(finished.await(5, TimeUnit.SECONDS))
-            dialog.applyImageResult(dialog.qrLabelsForTest[0], Result.success(BufferedImage(220, 220, BufferedImage.TYPE_INT_RGB)))
+            dialog.applyImageResult(dialog.qrLabelsForTest[0], BufferedImage(220, 220, BufferedImage.TYPE_INT_RGB), null)
             UIUtil.dispatchAllInvocationEvents()
             assertTrue(dialog.qrLabelsForTest.all { it.icon == null })
         } finally {
