@@ -65,8 +65,13 @@
         <p>Trigger: gutter icon / context menu / <code>Alt+Shift+Q</code> (rebindable).</p>
         <p>Requirements: IntelliJ IDEA 2024.3+ (baseline 2026.x); Execute SQL, EXPLAIN and the native JOIN diagram need Ultimate; MCP tools need the platform MCP Server.</p>
         <h3>作者微信 / 交流群</h3>
-        <p>扫码添加作者微信，或加入 SQL Visualizer 交流群（二维码为限时码；交流群二维码失效时，可添加作者微信）。</p>
-        <p><img src="https://sql-visualizer.jvtools.cn/wechat-qr.png" width="200" alt="作者微信"> <img src="https://sql-visualizer.jvtools.cn/group-qr.png" width="200" alt="交流群"></p>
+        <p>两张二维码用途不同，请对照下方说明选择扫码（二维码为限时码）。</p>
+        <table>
+            <tr>
+                <td align="center"><img src="https://sql-visualizer.jvtools.cn/wechat-qr.png" width="200" alt="作者微信二维码"/><br/><b>作者微信</b><br/>扫码添加作者为朋友，欢迎交流插件使用与开发话题；加好友时请备注「SQL Visualizer」。</td>
+                <td align="center"><img src="https://sql-visualizer.jvtools.cn/group-qr.png" width="200" alt="交流群二维码"/><br/><b>交流群</b><br/>扫码加入 SQL Visualizer 交流群；群码失效时可添加作者微信。</td>
+            </tr>
+        </table>
         ]]></description>
 
     <!-- 插件变更说明由 build.gradle.kts patchPluginXml.changeNotes 注入（M18.2）——
