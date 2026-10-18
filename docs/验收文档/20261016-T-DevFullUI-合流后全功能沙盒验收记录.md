@@ -688,5 +688,10 @@ GUI 交互债（JBPopup 合成点击/键盘焦点/面板内 EditorTextField）�
 | `SqlPreviewPanelParamSchemesTest` | **U23 预设全语义**+U19 清理面：快照勾选态全量与召回/foreach null·权威值/**另存快照切回还原自身值**/**自动保存只写工作区不就地改写命名预设**/**UI-017 跨方法另存保持 foreach 与默认快照独立**/清理后旧预览写回失效+下次恢复/XML 清除按钮清空参数 | **26/0/0** |
 | `FieldFillSimulationPanelTest` | **U20 fill 模拟**四型/面板行为 | **11/0/0** |
 | `ExplainPlanHistorySessionTest` | **U12/U13 UUID 隔离**：known UUID 比较不跨目标/方言/格式/SQL、unknown UUID 保持同目标语义但拒绝切换、fresh panel 持久基线、**清历史同时作废会话基线与晚到结果（U19 清历史语义）** | **4/0/0** |
+| `SqlLogPanelFilterTest` | **U29 检索/类型过滤/聚焦**：Select 独/多选/全部/部分/空选择、搜索空查询直通/大小写不敏感/match case 敏感/匹配参数值/与类型过滤组合/行号不受影响、**聚焦 null 穿透（取消等价）/按 mapper statement 聚焦/方法名 ignoreCase/按请求标签聚焦/方法与标签合取/聚焦+类型+搜索管线顺序** | **33/0/0** |
+| `FocusTabFilterTest` | **U29 聚焦页签过滤**全边界 | **14/0/0** |
+| `SqlLogPanelFocusTabTest` | **U29 聚焦页签面板行为** | **4/0/0** |
+
+**测试总账：九类 142 例全绿**（91+51）。由此 U29 的「检索/类型过滤/聚焦取消」语义面完整收口，U12/U13/U19/U20/U23/U35/U36/U05 的行为语义均有测试证据；**剩余纯 GUI 缺口收敛为**：UI-023/U29 的 DiffManager 出图（专项）、U29 千行文件 Diff、U03 宽度矩阵、U08 逐出口出图、U12/U13 双项目真机。
 
 **由此收口的组**：U20（CRUD 生成+fill 语义，剩面板勾选 GUI）、U35/U36（规则管理全语义，剩真机 flush——平台机制+roundtrip 单测支撑）、U05（二维码三态语义，剩视觉出图）、U23（预设全语义，剩 P2 上限/管理对话框 GUI）、U12/U13（隔离语义，剩双项目真机）、U19（清历史失效语义）。**仍纯 GUI 缺口**：UI-023/U29 的 DiffManager 出图、U29 千行检索 UI、U03 宽度矩阵、U08 逐出口出图。
