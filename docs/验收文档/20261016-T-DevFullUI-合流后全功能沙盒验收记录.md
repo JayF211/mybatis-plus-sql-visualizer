@@ -131,6 +131,8 @@
 | UI-018 | B8/U37 | 有效单列TSV先生成回滚INSERT，改invalid_snapshot后生成报错却仍留旧INSERT、黄色可执行提示与执行/复制按钮（frame-9d584547）；应失效旧模型及操作入口，现场未点击执行 | 独立f283b0c6/79716ad2→dev823cef4f/68500208；监听输入及主键失效、失败撤旧，保留重生成元数据 | 三类最终75/0/0/0（Generator49、Dialog15、Panel11），XML 04:23:33–41Z主控核对；分别摘监听、生成前失效、元数据保留各2例全红，恢复75绿 | 待新包输入失效/生成失败路径复验；有效TSV只证明生成，未执行写SQL，U37该子项未通过 |
 | UI-019 | B8后定向测试/U23 | UI017新面板回归返回foreach方法，缓存/权威map已有81,82但重建输入框为空；首轮57项1失败，不用额外切预设救绿 | 独立2d3dd7cc→dev1bda62be；监听注册前初始化字段，保留原失败断言 | 首轮57项1失败；修复后与UI017最终60绿；只撤初始化3例2红1绿，无值null负对照通过；恢复最终60/0/0/0，主控核XML | 待新包默认/命名/null重新打开及方法往返复验，不冒充已实测UI缺陷 |
 | UI-020 | B8后代码复核/U37 | executeRollback调用返回Unit的executeAdhocSql后无条件标执行；DML确认No直接return，旧对话框仍标成功。属于代码确认，未在GUI点击回滚执行 | 独立b2fa9e02→dev58ad8dce：透传prepared/nonprepared回执，仅SUBMITTED留痕；关闭弹窗不丢真实提交记录但禁止迟到改UI | 五类最终119/0/0/0（04:50:33–46Z）主控核XML；恢复旧假成功3红、断prepared回执1红、撤恰一次保护3红，全部恢复。旧ABI 3例NoSuchMethodError经强制重编译排除；不把Boolean就绪或调用返回当提交 | 待仅取消的安全GUI负例；真实回滚写入未授权，不能用自动测试代称写库实测 |
+| UI-021 | 批C/U31 | **INSERT VALUES 场景展示脱敏列名-值对位错位**：`DisplayMasker.columnHintBefore` 把前一个字面量值当列名 hint——`VALUES ('ui_mask_probe','Secret123X','mask@probe.test',…)` 中 password 列 `Secret123X` **漏打**（其 hint=ui_mask_probe 不含关键词），紧随 email 值被**误打**（其 hint=Secret123X，lowercase 含 `secret` 命中）。JDK21 直调 dev 编译产物判别实证（本机 java 跑 `DisplayMasker.INSTANCE.maskSqlText`）：compact/spaced 两形态均输出 `'ui_mask_probe', 'Secret123X', '***'`；对照 `WHERE password = 'Secret123X'` 正确打码。`DisplayMaskerTest` 17 用例无 INSERT VALUES 场景（测试盲区） | **待修**（先记录最后一起修复）：hint 推导识别 INSERT 列清单与 VALUES 位置对位；落 src/main 后定向+反向验证 | 待修后重验 | 列表/导出/回放/MCP/AI 上下文五消费面同源 |
+| UI-022 | 批C/U17 | **降级模式（内存 PSI）下动态条件勾选联动失效**：降级横幅在场时勾选 XML 动态条件复选框（status/age 已勾选实证），SQL 不追加 WHERE；**同面板完整模式对照**（act-3，无降级）勾选 status 即出现 `WHERE status = 1`——联动本身正常，失效限定于降级态。降级横幅文案仅称「表/列上下文补全受限」，**未披露交互缺失**，用户会误以为勾选已生效（frame bc-U17-p2-xml-q2-sql / act-3-after-check） | **待修**：降级文档的重渲染 write 链排查（内存 PSI 文档未接上联动重渲染）；至少横幅须披露「条件勾选/联动不可用，请点重试恢复」 | 待修后重验 | 降级触发面=预热迟到/失败（重启初期/重渲染路径） |
 
 ## 第二批修复合流与复验
 
@@ -600,7 +602,7 @@ robot 机制 A 生效后重跑 U17/U19/U30/U43，两轮结果同批失败——*
 - **U19**：①粘贴落点公式把 rect 当 `(x,y,w,h)` 用（实为 `(l,t,r,b)`）——点在参数区导致「没点进编辑器」，改 `l+(r-l)*2/3, t+(h)/4`；②「更多」是图标 ActionToolbar 按钮（robot 无 accessible name），改几何定位 `(rect.right-72, rect.top+68)`；`click_button` 失败文案把「anchor 缺模板」误写成「robot 未启」——**误导性文案留档**。
 - **U30**：`from bc_common import …` 缺 `ide`（NameError）+ `Reporter.check()` 两处少传 fail_msg（TypeError）——已修。
 - **U43**：转换输入框真实类名=`EditorComponentImpl`（`EditorTextField/JBTextField` 均不存在，robot 实测 4 个），改类名+按屏幕 x≥工具窗左界过滤出工具窗内输入区。
-- **新观察（升级专项）**：**「预览以降级模式打开（内存 PSI）」红字警示反复出现**——首见 pg5-22（改方言设置后重渲染）、本轮 u17 P2/P5 屏（**新 IDE 重启后首次预览即出现**，frame bc-U17-p5-explain-q4-result-none 顶部），「重试」链接可恢复。触发面比原观察宽，登记待专项判定（降级判定条件/是否应自动重试）。
+- **新观察（升级专项）**：**「预览以降级模式打开（内存 PSI）」红字警示反复出现**——首见 pg5-22（改方言设置后重渲染）、本轮 u17 P2/P5 屏（**新 IDE 重启后首次预览即出现**，frame bc-U17-p5-explain-q4-result-none 顶部），「重试」链接可恢复。**静态归因**：降级链第二级=内存 PSI（`fallbackPreviewDocument`，临时文件不可用时的兜底；第三级=裸文档），触发面=**预热产物迟到/硬失败**（T-PrewarmLateRecover F1/F2 设计——重启初期 VFS 未就绪致预热失败、重渲染路径临时文件失效），横幅+「重试」重臂预热是设计内恢复指引。判定=设计内降级非渲染缺陷，但「重启后首次预览高概率降级」属体验面，登记待产品口径（是否应自动重试一次）。
 
 ## 批 B 重启 #1：持久性打包（2026-10-18 下午三段）
 
