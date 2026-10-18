@@ -45,9 +45,26 @@ class SqlClickPreviewTest : BasePlatformTestCase() {
 
     // ---------- 弹窗构建：SQL 高亮编辑器 + 可编辑 + 复制/关闭按钮 ----------
 
+    /** lambda 抽非 test 前缀私有工厂（JUnit3 前缀扫描规避，历轮踩坑）：空复制回调。 */
+    private fun noopCopy(): java.util.function.Consumer<String> = java.util.function.Consumer { }
+
+    /** lambda 抽非 test 前缀私有工厂：空关闭回调。 */
+    private fun noopClose(): Runnable = Runnable { }
+
+    /** lambda 抽非 test 前缀私有工厂：把复制文本录入 box。 */
+    private fun copyInto(box: MutableList<String>): java.util.function.Consumer<String> =
+        java.util.function.Consumer { box.add(it) }
+
+    /** lambda 抽非 test 前缀私有工厂：关闭时给 box 记一条。 */
+    private fun closeFlagging(box: MutableList<Boolean>): Runnable = Runnable { box.add(true) }
+
+    /** lambda 抽非 test 前缀私有工厂：生产实现 UiTextClipboard.copy 的注入点。 */
+    private fun uiCopy(): java.util.function.Consumer<String> =
+        java.util.function.Consumer { UiTextClipboard.copy(it) }
+
     fun test预览内容为可编辑SQL编辑器_文本等于还原SQL_带复制关闭按钮() {
         val sql = "SELECT * FROM user WHERE id = 1;"
-        val content = SqlClickPreview.buildContent(project, sql, { }, { })
+        val content = SqlClickPreview.buildContent(project, sql, noopCopy(), noopClose())
         try {
             assertEquals("编辑器文档应等于传入 SQL", sql, content.editor.document.text)
             assertFalse("编辑器应可编辑（非 viewer）", content.editor.isViewer)
@@ -65,7 +82,7 @@ class SqlClickPreviewTest : BasePlatformTestCase() {
     /** 四轮①：编辑器高亮与列表条目同源——同一 SqlLexer 的 token 覆盖全文，配色键共用同一映射。 */
     fun test编辑器高亮与列表片段同源同色() {
         val sql = "SELECT * FROM user WHERE id = 1;"
-        val content = SqlClickPreview.buildContent(project, sql, { }, { })
+        val content = SqlClickPreview.buildContent(project, sql, noopCopy(), noopClose())
         try {
             val highlighter = content.editor.highlighter
             assertTrue(
@@ -100,26 +117,26 @@ class SqlClickPreviewTest : BasePlatformTestCase() {
     }
 
     fun test复制按钮回调携带当前文本_关闭按钮回调触发() {
-        var copied: String? = null
-        var closed = false
-        val content = SqlClickPreview.buildContent(project, "SELECT 1;", { copied = it }, { closed = true })
+        val copied = mutableListOf<String>()
+        val closed = mutableListOf<Boolean>()
+        val content = SqlClickPreview.buildContent(project, "SELECT 1;", copyInto(copied), closeFlagging(closed))
         try {
             findButtons(content.component)
                 .first { it.toolTipText == MpSqlVisualizerBundle.message("log.preview.copy") }
                 .doClick()
-            assertEquals("复制按钮应回调当前文本", "SELECT 1;", copied)
+            assertEquals("复制按钮应回调当前文本", "SELECT 1;", copied.firstOrNull())
             findButtons(content.component)
                 .first { it.toolTipText == MpSqlVisualizerBundle.message("log.preview.close") }
                 .doClick()
-            assertTrue("关闭按钮应触发关闭回调", closed)
+            assertTrue("关闭按钮应触发关闭回调", closed.isNotEmpty())
         } finally {
             releaseEditor(content.editor)
         }
     }
 
     fun test复制按钮复制用户编辑后的内容() {
-        var copied: String? = null
-        val content = SqlClickPreview.buildContent(project, "SELECT 1;", { copied = it }, { })
+        val copied = mutableListOf<String>()
+        val content = SqlClickPreview.buildContent(project, "SELECT 1;", copyInto(copied), noopClose())
         try {
             // 模拟用户临时改字段值（文档写入须 write action）
             WriteCommandAction.runWriteCommandAction(project) {
@@ -128,7 +145,7 @@ class SqlClickPreviewTest : BasePlatformTestCase() {
             findButtons(content.component)
                 .first { it.toolTipText == MpSqlVisualizerBundle.message("log.preview.copy") }
                 .doClick()
-            assertEquals("复制应取编辑后的文本", "SELECT edited_price FROM user;", copied)
+            assertEquals("复制应取编辑后的文本", "SELECT edited_price FROM user;", copied.firstOrNull())
         } finally {
             releaseEditor(content.editor)
         }
@@ -136,14 +153,14 @@ class SqlClickPreviewTest : BasePlatformTestCase() {
 
     /** 六轮：复制按钮点击后图标即时换成对号（复制成功反馈），无 NoneIcon 或其他非对号图标。 */
     fun test复制按钮点击后图标换对号反馈() {
-        var copied: String? = null
-        val content = SqlClickPreview.buildContent(project, "SELECT 1;", { copied = it }, { })
+        val copied = mutableListOf<String>()
+        val content = SqlClickPreview.buildContent(project, "SELECT 1;", copyInto(copied), noopClose())
         try {
             val copyButton = findButtons(content.component)
                 .first { it.toolTipText == MpSqlVisualizerBundle.message("log.preview.copy") }
             val originalIcon = copyButton.icon
             copyButton.doClick()
-            assertEquals("复制应回调当前文本", "SELECT 1;", copied)
+            assertEquals("复制应回调当前文本", "SELECT 1;", copied.firstOrNull())
             assertEquals(
                 "复制后按钮图标应立即换成对号（成功反馈）",
                 AllIcons.Actions.Checked,
@@ -182,14 +199,14 @@ class SqlClickPreviewTest : BasePlatformTestCase() {
     }
 
     fun test编辑器CtrlC无选中复制全文() {
-        var copied: String? = null
-        val content = SqlClickPreview.buildContent(project, "SELECT 1;", { copied = it }, { })
+        val copied = mutableListOf<String>()
+        val content = SqlClickPreview.buildContent(project, "SELECT 1;", copyInto(copied), noopClose())
         try {
             // 复制前先抓按钮引用：flashCopied 会把 tooltip 短暂换成「已复制」，复制后按 tooltip 查找必落空
             val copyButton = findButtons(content.component)
                 .first { it.toolTipText == MpSqlVisualizerBundle.message("log.preview.copy") }
             dispatchEditorCopy(content.editor)
-            assertEquals("浮层编辑器 Ctrl+C 无选中应复制全文（与头部按钮同源）", "SELECT 1;", copied)
+            assertEquals("浮层编辑器 Ctrl+C 无选中应复制全文（与头部按钮同源）", "SELECT 1;", copied.firstOrNull())
             assertEquals(
                 "Ctrl+C 复制后按钮图标应换对号（与按钮复制同反馈）",
                 AllIcons.Actions.Checked,
@@ -201,28 +218,28 @@ class SqlClickPreviewTest : BasePlatformTestCase() {
     }
 
     fun test编辑器CtrlC复制用户编辑后的全文() {
-        var copied: String? = null
-        val content = SqlClickPreview.buildContent(project, "SELECT 1;", { copied = it }, { })
+        val copied = mutableListOf<String>()
+        val content = SqlClickPreview.buildContent(project, "SELECT 1;", copyInto(copied), noopClose())
         try {
             WriteCommandAction.runWriteCommandAction(project) {
                 content.editor.document.setText("SELECT edited_price FROM user;")
             }
             dispatchEditorCopy(content.editor)
-            assertEquals("Ctrl+C 应取编辑后文本（与按钮复制同源）", "SELECT edited_price FROM user;", copied)
+            assertEquals("Ctrl+C 应取编辑后文本（与按钮复制同源）", "SELECT edited_price FROM user;", copied.firstOrNull())
         } finally {
             releaseEditor(content.editor)
         }
     }
 
     fun test编辑器CtrlC有选中时交原生复制不全文覆盖() {
-        var copied: String? = null
-        val content = SqlClickPreview.buildContent(project, "SELECT * FROM user WHERE id = 1;", { copied = it }, { })
+        val copied = mutableListOf<String>()
+        val content = SqlClickPreview.buildContent(project, "SELECT * FROM user WHERE id = 1;", copyInto(copied), noopClose())
         try {
             WriteCommandAction.runWriteCommandAction(project) {
                 content.editor.selectionModel.setSelection(0, 6) // 选中 "SELECT"
             }
             dispatchEditorCopy(content.editor)
-            assertNull("有选中时不应走全文复制回调（交编辑器原生复制选中片段）", copied)
+            assertTrue("有选中时不应走全文复制回调（交编辑器原生复制选中片段）", copied.isEmpty())
         } finally {
             releaseEditor(content.editor)
         }
@@ -241,7 +258,7 @@ class SqlClickPreviewTest : BasePlatformTestCase() {
      * ——真实按键行为由 GUI 走查覆盖（计划 §三 S4）。
      */
     fun test编辑器provider直调_无选中_剪贴板得全文() {
-        val content = SqlClickPreview.buildContent(project, "SELECT 1;", UiTextClipboard::copy, { })
+        val content = SqlClickPreview.buildContent(project, "SELECT 1;", uiCopy(), noopClose())
         try {
             CopyPasteManager.getInstance().setContents(StringSelection("__SENTINEL__"))
             val context = DataManager.getInstance().getDataContext(content.editor.component)
@@ -265,7 +282,7 @@ class SqlClickPreviewTest : BasePlatformTestCase() {
         val content = SqlClickPreview.buildContent(
             project,
             "SELECT 1;",
-            UiTextClipboard::copy, { },
+            uiCopy(), noopClose(),
         )
         try {
             val comp = content.editor.component
@@ -288,7 +305,7 @@ class SqlClickPreviewTest : BasePlatformTestCase() {
         val content = SqlClickPreview.buildContent(
             project,
             "SELECT * FROM user WHERE id = 1;",
-            UiTextClipboard::copy, { },
+            uiCopy(), noopClose(),
         )
         try {
             WriteCommandAction.runWriteCommandAction(project) {
@@ -389,7 +406,7 @@ class SqlClickPreviewTest : BasePlatformTestCase() {
             val content = SqlClickPreview.buildContent(
                 project,
                 "SELECT\n    a1,\n    a2,\n    a3,\n    a4\nFROM t",
-                { }, { },
+                noopCopy(), noopClose(),
             )
             try {
                 val regions = ownFoldRegions(content.editor)
@@ -407,7 +424,7 @@ class SqlClickPreviewTest : BasePlatformTestCase() {
             val content = SqlClickPreview.buildContent(
                 project,
                 "SELECT\n    a1,\n    a2,\n    a3,\n    a4\nFROM t",
-                { }, { },
+                noopCopy(), noopClose(),
             )
             try {
                 assertEquals("关闭态零折叠区域（紧凑外观逐字节不变）", 0, ownFoldRegions(content.editor).size)
