@@ -571,6 +571,12 @@ U22 分享出口本轮真机：预览「更多 → 分享」打开「分享 SQL�
 - **U28 导出入口未触发（登记）**：日志列表有真实条目后，「导出可见 SQL（CSV/TSV/TXT/SQL）」入口未在合成输入下浮现（工具栏图标逐一/右键条目/工具窗选项菜单均无）；已知该动作用户口径为「选中日志后右键」，右键仅出「恢复实时捕获」横幅——三格式导出与 U11 存储清理实际执行一并延后下批。
 - **U10 设置页搜索（用户提示登记）**：SQL Visualizer 设置页可用顶部搜索跳转定位（用户口头提示）；本批尝试「清除预览 SQL 历史/存储」全文词均「Nothing to show」（自定义 Configurable 疑未实现内容搜索），下批改用页名/控件名短词验证。
 
+## 全量门禁终局（2026-10-18，第 10 轮全绿）
+
+- 修复分支 `t-uifix-gate9`（dispose 守卫 + smoke 收窄 + 零窗口直写，正向 50/50+65 例组合连续绿、反向 B 未修复树复现 victim 红）并入 dev `674327c6`。
+- **第 10 轮全量（独立沙盒 MPSV-Gate10 + 登记表隔离）：合并读数 7918 例 / 0 失败 / 0 错误 / 10 跳过——全绿**。首轮 shard1 唯一红为新增守卫类未登记元守卫清单（20260923 已知族），补登记 `f8444ba0` 后 shard1 重跑 1582/0/0/2；shard1 来自登记后重跑，shard2~5 为原收集（登记行只影响元守卫内部清单）。**此前 5 轮轮番单红的 exec-doc 冲突族在本轮零复发**。
+- 后续收尾事项：`build.gradle.kts` 的 Gate10 临时沙盒行已按承诺还原（未入库）；`mpsv-uifix-gate9` 工作树保留（其 build.gradle.kts 含同款临时行未提交）。
+
 U25/U12/U13 本轮真机（重建后沙盒）：方法预览头部显示 `方言: MySQL（模块已学数据源）  XML select: annotation`，证明方言由模块数据源学习得出；「执行计划」绑定数据源后执行 `EXPLAIN SELECT * FROM mp_demo.user WHERE id = 91`，Database 控制台返回原生 MySQL 计划表格（列：id/select_type/table/partitions/type/possible_keys/key/key_len/ref/rows/filtered/Extra），同时弹出「结构化执行计划视图不可用，已回退原生控制台：当前无结果集含有可解释数据源（先在控制台里执行一次查询即可）」——结构化开关默认关闭时的回退文案与 B1 原生表格路径均复现。为打通该路径，把 kotlin_demo@localhost 数据源密码补齐为 demo 应用 `application.yml` 中的本地 MySQL 口令（root/root，仅本地测试库）。
 
 U15/U27 本轮真机：方法预览中选中表名 `user` 后右键「SQL 快捷模板」子菜单完整列出 EXPLAIN 选中表 / COUNT 选中表 / 抽样 10 行；点击「COUNT 选中表」后 Database 控制台实际执行 `SELECT COUNT(*) FROM user`（111ms），返回 `[42000][1146] Table 'kotlin_demo.user' doesn't exist` 并提示当前库为 kotlin_demo——模板动作与执行链已真实触达，报错仅因目标库缺少该表；待用 `mp_demo.user` 限定名复验成功路径。
