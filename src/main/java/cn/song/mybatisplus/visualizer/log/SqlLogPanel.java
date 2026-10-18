@@ -646,6 +646,8 @@ public class SqlLogPanel extends JPanel implements Disposable {
         // 避免 IDE 退出时 ObjectTree 报 Memory leak detected
         Disposer.register(this, logToSqlPanel);
         Disposer.register(this, sqlToJavaPanel);
+        // 停靠预览持有独立编辑器实例：随面板级联释放（防测试/真机泄漏「Editor hasn't been released」）
+        Disposer.register(this, dockedPreview);
 
         // T-RecentExecMenu O-119：面板外「送条目到页签」通道注册（弹框右键用；dispose 注销）
         manager.onOpenEntryInTab = openEntryInTabCallback;
