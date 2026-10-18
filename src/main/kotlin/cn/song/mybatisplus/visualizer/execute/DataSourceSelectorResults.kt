@@ -1339,7 +1339,7 @@ internal fun DataSourceSelector.createTempPsiFile(
  * facade 找不到该数据源被 getActiveConsoles 清扫 → "parent has already been disposed"。
  */
 
-internal fun DataSourceSelector.projectExecFile(project: Project, sql: String, nonBlocking: Boolean = false): java.io.File? {
+internal fun DataSourceSelector.projectExecFile(project: Project, sql: String): java.io.File? {
     val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
     // T-UiFixGate9：生命周期守卫——dispose（含 temporarily-disposed）后放弃整个写链。首建形态
     // （VFS 无条目）的裸写 FileUtil.writeToFile 不经 document、无任何 dispose 检查，死项目上照写
@@ -1374,11 +1374,14 @@ internal fun DataSourceSelector.projectExecFile(project: Project, sql: String, n
             // T-EC-01/T-EC-03：document 写统一派 EDT（EDT 直调同步；BGT 派发 + 有界等待）。
             // 262 实证 document setText BGT 硬抛（见 writeVfTextViaDocument KDoc）——旧实现
             // 的 BGT document 分支每次必炸、静默掉进裸写兜底，即真机冲突链本体。
-            // T-PreviewFast P2：预热调用（unblocking=true）走 fire-and-forget，不再等满 2 秒。
-            val updated = dispatchDocWriteOnEdt(
-                project, existing, sql,
-                waitBudgetMs = if (nonBlocking) 0L else EDT_EXEC_DOC_SYNC_WAIT_MS,
-            )
+            // T-UiFixGate9：fire-and-forget 形态退役（原 T-PreviewFast P2 的 nonBlocking=true）——
+            // 排队写与「本链自己的 refresh 会话 / 测试边界迟到的 VFS 会话」赛跑：写任务的
+            // setText→save 窗口（探针实测 ~30ms）被会话的旧内容/建条目事件命中即收集冲突，
+            // EDT 下一拍处理即抛（20261018 门禁三轮实录 + [PROBE-GATE9] 探针实锤）。有界等待让
+            // 写收敛始终在本链执行窗口内完成，调用方（预热链）拿到返回后才发起 refresh；
+            // 真机代价不变（EDT 健康 → 毫秒级返回），2s 预算只在 EDT 病态冻结时烧掉，而那正是
+            // 必须放弃写/refresh 的场景（dispose 守卫接手）。
+            val updated = dispatchDocWriteOnEdt(project, existing, sql)
             if (updated) {
                 LOG.info("[M36] exec file updated via document+save (disk synced in-critical-section): ${f.name}")
                 return f
@@ -1607,6 +1610,8 @@ internal fun DataSourceSelector.dispatchDocWriteOnEdt(
     }
     if (waitBudgetMs <= 0L) {
         // project 即 owner disposable：项目关闭后丢弃该拍（写目标就是项目内临时文件，重跑无意义）
+        // T-UiFixGate9：本分支产品面已无调用方（fire-and-forget 退役，见 projectExecFile 内注释）
+        // ——排队写与 VFS 会话赛跑收集冲突，**勿为预热链重新启用**；分支保留仅为 API 完整。
         DocWriteContext.invokeLaterWriteSafe(project, "exec prewarm doc write (fire-and-forget)") {
             runCatching { docWriteOnce(project, vf, sql) }
         }
@@ -1744,10 +1749,9 @@ internal fun DataSourceSelector.installExecConflictProbe(project: Project) {
  *     「VFS 已有该文件即绝不裸写」，冷启动 EDT 忙场景彻底无冲突面；
  *  ④ **单写方锁**（T-EC-03，[execFileWriteLock]）——串行化 BGT 预热与 EDT 冷路径。
  * VFS 缺条目路径维持裸写 + 调用方 refresh + [syncExecVfContentIfNeeded] 防御收口（T-EC-04）。
- * T-PreviewFast P1/P2：差量快路径（内容已一致即返回）+ 预热非阻塞派发（`nonBlocking=true`）。
+ * T-PreviewFast P1：差量快路径（内容已一致即返回）。P2 非阻塞派发（`nonBlocking=true` 的
+ * fire-and-forget）已由 T-UiFixGate9 退役——排队写与 VFS 会话赛跑收集冲突，见方法内注释。
  * internal 供测试。
- *
- * @param nonBlocking true = 预热等投机性调用：BGT 派发不等 EDT（fire-and-forget，P2）
  */
 
 internal fun DataSourceSelector.realignDividerOnce(sp: javax.swing.JSplitPane, force: Boolean) {
