@@ -592,6 +592,16 @@ U22 分享出口本轮真机：预览「更多 → 分享」打开「分享 SQL�
 - **U31 打码疑点（疑似缺陷登记）**：三件套证据——①列表 #22 INSERT 展示 email 值 `'***'`、password 列 `Secret123X` 明文（frame u31-1/u31-12）；②「复制 SQL」出口剪贴板全明文 `'ui_mask_probe', 'Secret123X', 'mask@probe.test', …`（提权 tkinter 读数）；③`displayMaskEnabled=true` 已持久（XML），主仓 `DisplayMasker` 规则等价复刻对本语句**一个值都不该打**（HINT_WINDOW=48 的 columnHintBefore 在 VALUES 列表抓到的前值分别为 update_time/ui_mask_probe/Secret123X，均不含关键词、值形态均非手机号/身份证）。矛盾点=列表 `***` 来源与主仓规则不符，疑 agent 采集侧 Desensitizer（独立源集）规则/版本漂移或「复制 SQL」与列表渲染取用不同字段；**不判缺陷结论，交专项**（agent Desensitizer.java 与主仓 DisplayMasker 双侧比对 + 列表渲染链字段源核实）。设置页 GUI 改开关三条路全堵（滚轮 no-op/搜索无索引/对话框不可再放大）已按 XML 兜底记录在案。
 - **U31 顺带**：SQL 日志工具窗右键菜单 11 项在 #22 选中态全部在位（复制 SQL/复制时间戳/删除/屏蔽此 SQL/发送到 SQL→Java/发送到日志转 SQL/跳转到 Java/聚焦调用方方法/按请求聚焦灰/只看同结构灰/导出可见 SQL）——与 U28 记录一致。
 
+## 批 B 重启 #1：持久性打包（2026-10-18 下午三段）
+
+重启方式：提权 taskkill 沙盒 IDE（58588）→ 后台 `start-ui243.ps1` 重启（登记 T-DevFullUI-243）。IDE 起窗后提权置顶 TOPMOST+全屏；**编辑器页签五页全部会话恢复**（含 mpsql-exec.sql 与 console[dbx_test] 两个 Database 控制台页签）、定位停在 pageByWrapper。
+
+- **SQL 历史跨重启读回（持久性证据①）**：SQL 历史 tab 五个历史文件全部在列——2026-10-17（1.3MB/875 条）、2026-10-18（77.8KB/27 条）、ui-synthetic-10000（1.7MB/10000 条）、ui-ddl-literals（2 条）、ui-visual-matrix（5 条）；展开 10-18 文件条目正文完整（frame b1-1/b1-3）。顺带新线索：历史条目 `#2 …WHERE password = '***'`——历史文件保存链也有打码痕迹（并入 U31 专项谜面）。
+- **PG EXPLAIN 计划持久+读回（U18 计划留存闭环）**：重启后 UserMapper 预览点执行计划 → 模块学习与绑定**都跨重启保留**（方言行「PostgreSQL（模块已学数据源）」+「已绑定： dbx_test@114.66.55.245」）；结构化计划正确包装 `EXPLAIN (FORMAT JSON, VERBOSE) …`；口令弹窗如预期（Until restart 语义如实）——无口令时右下通知如实披露「结构化计划视图不可用，已回退原生控制台：SQLException: SCRAM…no password」（fail-closed）；填回口令后改 SQL=bench_items 重跑 → **PG 树重现（223ms）且历史基线自动挂上重启前 14:48:19 的快照 #0d5b5db5**，「与上次执行对比：计划无变化」判定链工作（frame b1-5/b1-7）。
+- **U16 增证**：重启后首跑 EXPLAIN 落在 `FROM user`（PG 伪表）→ 控制台 `[42703] column "id" does not exist 位置: 64` 原文回显 + 底部超时引导文案完整（「SQL 已提交执行，但等待结果超时…检查 IDEA 主窗口是否有密码输入框…」，等待凭据场景的用户指引，frame b1-6）。
+- **robot-server 未生效（机制 B 被否决，留档）**：`idea.log` JVM 参数实证 `-Didea.plugins.path=<沙盒>/plugins` 被 runIde 显式钉死——拷进 `config/plugins` 的 robot-server 不在加载路径（idea.log 零 robot 痕迹、8580 拒连）。Explore 方案 B 的「config/plugins 可行」判断在本沙盒不成立。改走机制 A：build.gradle.kts 的 robot gate（`gifRecord && gifRobotServer`）需解耦 gifRecord 独立开关+start-ui243.ps1 传参——**属构建脚本改动，留到批 C 前一次处理**（批 C 仅 U43 硬依赖 robot；U10/U42 及后续组均可无 robot 降级跑，首跑零产物真因=bc_common.open_file 的 typewrite NameError 已修复）。
+- **现场态**：口令已重填（Until restart）；SQL 日志捕获条目如预期清空（内存态）；待验=参数预设读回（预览参数区）、屏蔽规则保留（需先造规则）、U31 判别实验（导出 CSV vs 列表——需从新 IDE Run 应用造新条目）。
+
 ## 剩余批次执行计划（2026-10-18 定稿）
 
 按「共享前置」把剩余 24 部分+9 未验组组织为 4 批：
