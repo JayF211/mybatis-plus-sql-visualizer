@@ -16,6 +16,7 @@ class FullScanCancelGuardTest {
     }
 
     @Test
+    // 自证：真实生产文件逐函数断言取消检查/委派（合法形态对照）
     fun testEveryFullShortNameScanHasCancelCheck() {
         val sources = mainSources()
         val sites = sources.values.sumOf { ALL_NAMES.findAll(mask(it)).count() }
@@ -25,6 +26,7 @@ class FullScanCancelGuardTest {
     }
 
     @Test
+    // 自证：库扫描推断表名回潮必红（真实站点反向验证）
     fun testLibrarySweepDoesNotInferTableName() {
         val source = finderSource()
         val body = method(source, "runLibrarySweepNow").body(mask(source))
@@ -36,6 +38,7 @@ class FullScanCancelGuardTest {
     }
 
     @Test
+    // 自证：整趟外包 ReadAction 必红（真实站点反向验证）
     fun testLibrarySweepIsNotWrappedInOuterReadAction() {
         val sources = mainSources()
         val finder = sources.getValue(FINDER)
@@ -49,6 +52,7 @@ class FullScanCancelGuardTest {
 
     /** 每个真实直扫函数删掉取消点必须报红；不只用一个 synthetic sample 自证规则。 */
     @Test
+    // 自证：删真实取消点必红（真实站点反向验证）
     fun testRemovingRealCancelChecksIsRejected() {
         val sources = mainSources()
         val baseline = cancelOffenders(sources)
@@ -75,6 +79,7 @@ class FullScanCancelGuardTest {
     }
 
     @Test
+    // 自证：真实分片调用点外包 ReadAction 必红（真实站点反向验证）
     fun testWrappingRealSweepCallSitesIsRejected() {
         val sources = mainSources()
         val mutations = listOf(
@@ -91,6 +96,7 @@ class FullScanCancelGuardTest {
     }
 
     @Test
+    // 自证：推断回潮与外包回潮双向必红（真实站点反向验证）
     fun testRealSweepInferenceAndSliceRegressionsAreRejected() {
         val source = finderSource()
         val m = method(source, "runLibrarySweepNow")

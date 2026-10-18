@@ -1093,9 +1093,15 @@ class GuardSelfTestCoverageMetaGuardTest {
             ),
             GuardEntry(
                 "psi/FullScanCancelGuardTest.kt",
-                emptyList(),
+                listOf(
+                    DecisionFn("cancelOffenders", FnKind.VIOLATIONS),
+                    DecisionFn("outerReadOffenders", FnKind.VIOLATIONS),
+                    DecisionFn("annotationOnly", FnKind.HELPER),
+                    DecisionFn("slicedSweep", FnKind.HELPER),
+                ),
                 "Java 全量短名扫描有界与可取消守卫：生产函数体必须包含取消检查或委派有界扫描，" +
-                    "库扫描不做装饰表名推断；自证与真实站点反向验证在同文件。",
+                    "库扫描不做装饰表名推断。k2j 树注：冻结版判定内核内联于用例，Java 移植提为具名函数，" +
+                    "六个用例均带「自证」标注（真实站点反向验证 + 合法形态对照）。",
             ),
             GuardEntry(
                 "convention/SyncRefreshWriteIntentGuardTest.kt",

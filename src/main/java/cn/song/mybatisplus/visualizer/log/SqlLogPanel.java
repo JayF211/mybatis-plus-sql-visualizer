@@ -2172,6 +2172,8 @@ public class SqlLogPanel extends JPanel implements Disposable {
         if (manager.onOpenEntryInTab == openEntryInTabCallback) {
             manager.onOpenEntryInTab = null;
         }
+        if (previewHost != null) previewHost.hideHint();
+        dockedPreview.dispose();
         logToSqlPanel.dispose();
         sqlToJavaPanel.dispose();
     }
