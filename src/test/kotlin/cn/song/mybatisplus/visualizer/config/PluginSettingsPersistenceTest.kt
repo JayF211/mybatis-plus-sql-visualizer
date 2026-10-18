@@ -18,6 +18,33 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
         cn.song.mybatisplus.visualizer.testutil.PluginSettingsTestSupport.resetToFactoryDefaults()
     }
 
+    fun testNewSyncSettingsSurviveCopyAndReload() {
+        val settings = PluginSettings.getInstance()
+        val original = settings.state.copy()
+        try {
+            val defaults = PluginSettings.State()
+            assertTrue(defaults.libraryEntitySweepEnabled)
+            assertFalse(defaults.sqlListPreviewHintSeen)
+            val changed = defaults.copy().apply {
+                libraryEntitySweepEnabled = false
+                sqlListPreviewHintSeen = true
+            }
+            assertFalse(defaults == changed)
+            assertFalse(defaults == defaults.copy().apply { libraryEntitySweepEnabled = false })
+            assertFalse(defaults == defaults.copy().apply { sqlListPreviewHintSeen = true })
+            val copied = changed.copy()
+            assertEquals(changed, copied)
+            assertEquals(changed.hashCode(), copied.hashCode())
+            settings.loadState(copied)
+            assertFalse(settings.state.libraryEntitySweepEnabled)
+            assertTrue(settings.state.sqlListPreviewHintSeen)
+            assertTrue(settings.state.toString().contains("libraryEntitySweepEnabled=false"))
+            assertTrue(settings.state.toString().contains("sqlListPreviewHintSeen=true"))
+        } finally {
+            settings.loadState(original)
+        }
+    }
+
     fun testStateRoundTripKeepsLanguage() {
         // 模拟 IDE 持久化：修改 state → getState（保存快照）→ loadState（重启加载）→ language 保留 en
         val settings = PluginSettings.getInstance()
@@ -210,7 +237,8 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
             // T-CountSimToggle：分页 COUNT 子开关（paginationCountCheck）+1 后为 42；
             // T-DataSourceBadgeMode：数据源角标完整上下文开关（dataSourceBadgeDetailCheck）+1 后为 43；
             // 同步先例 ccd0f74（R2 设置页六组 gutter 复选框曾 31→37 同步）
-            assertEquals("复选框总数应为 43", 43, texts.size)
+            // 后台依赖库实体扫描开关新增一项。
+            assertEquals("复选框总数应为 44", 44, texts.size)
         } finally {
             settings.state.language = old
         }

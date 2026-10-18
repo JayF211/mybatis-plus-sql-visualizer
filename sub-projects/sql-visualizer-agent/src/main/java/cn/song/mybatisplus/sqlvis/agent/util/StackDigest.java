@@ -14,10 +14,14 @@ import java.util.List;
  * {@link #isInfraFrame}——用户真机实测：Tomcat 尾巴会把栈底 8 帧占满、Controller 被挤进省略段），
  * 锚定最深业务帧后：深度 ≤B 全链保留（原行为）；&gt;B 两端采样——栈顶取 B-8 帧
  * （引擎/门面侧），栈底取最深业务帧起向上 8 帧（业务/Controller 侧），中段以标记段
- * {@code <…中间省略 N 帧…>} 连接（IDE 侧解析器对无 {@code #} 的段天然跳过，弹层兼容）。
+ * {@code <…中间省略 N 帧…>} 连接（IDE 新视图展示为省略节点，旧解析器仍可跳过无 {@code #} 的段）。
+ * 非白名单尾帧仅在同应用包根的两条调用帧与 Controller 可关联时穿透；
+ * 这是 Web 调用链的定向增强，不是对所有业务类的通用身份判定；无法确认则保留原采样兜底。
  *
- * <p>总长硬顶 MAX_LEN=max(2000, B×96)：两端形态下超长**先缩栈顶**再出标记（栈底业务帧
- * 永不因长度被截）；全链形态沿用旧尾截语义（超长截断加 … 后缀）。
+ * <p>总长硬顶 MAX_LEN=max(2000, B×96)：两端形态下超长先缩栈顶再出标记；
+ * 单帧异常超过 200 字符时保留首尾并压缩中间，以防底段本身突破硬顶。
+ * 被压缩的极长类名不保证 IDE 侧能解析/跳转；正常长度的栈底业务帧完整保留，
+ * 全链形态沿用旧尾截语义。
  *
  * <p>T-PS4-09 一次捕获两用：产线主路径经 locate 同一快照调 {@link #build(StackTraceElement[])}
  * （读 [AgentState] 配置）；显式帧数出口 {@link #build(StackTraceElement[], int)} 为纯函数
@@ -72,6 +76,12 @@ public final class StackDigest {
             // 全 infra 极端形态兜底：退回字面两端
             lastBusiness = frames.size() - 1;
         }
+        // 只在 Controller 与同根调用帧同时在场时穿透未知尾帧；
+        // 命名空间与来源都无法确认时保留原锚点。
+        final int controller = findBusinessController(frames, frames.size() - 1);
+        if (controller >= 0) {
+            lastBusiness = controller;
+        }
         final int depth = lastBusiness + 1;
         if (depth <= budget) {
             return join(frames, 0, depth, maxLen);
@@ -86,13 +96,66 @@ public final class StackDigest {
         int elided = bStart - topCount;
         String marker = elisionMarker(elided);
         int curTop = topCount;
-        while (curTop > 1 && top.length() + marker.length() + bottom.length() > maxLen) {
+        while (curTop > 1 && top.length() + marker.length() + bottom.length() + 4L > maxLen) {
             curTop--;
             elided++;
             top = join(frames, 0, curTop, Long.MAX_VALUE);
             marker = elisionMarker(elided);
         }
         return top + "<-" + marker + "<-" + bottom;
+    }
+
+    /**
+     * 在未知尾帧存在时，选择栈中最后一组同应用包根的调用帧与 Controller；
+     * 不把 com、org、cn 等顶层命名空间当成应用身份。框架命名空间里的项目类
+     * 仅在目录来源或已登记业务 JAR 包名前缀时采用，无法确认则沿用原采样。
+     */
+    private static int findBusinessController(List<StackTraceElement> frames, int end) {
+        for (int i = end; i >= 0; i--) {
+            final String controller = frames.get(i).getClassName();
+            if (!simpleName(controller).endsWith("Controller") || !isApplicationCandidate(controller)) {
+                continue;
+            }
+            final String root = applicationRoot(controller);
+            if (root == null) {
+                continue;
+            }
+            for (int j = i - 1; j >= Math.max(0, i - 24); j--) {
+                final String caller = frames.get(j).getClassName();
+                if (!caller.equals(controller) && caller.startsWith(root) && isApplicationCandidate(caller)) {
+                    return i;
+                }
+            }
+        }
+        return -1;
+    }
+
+    private static boolean isApplicationCandidate(String className) {
+        if (StackLocator.isRegisteredBusinessFrame(className) || !StackLocator.isFrameworkFrame(className)) {
+            return true;
+        }
+        return Boolean.FALSE.equals(StackLocator.loadedFromJar(
+                className, Thread.currentThread().getContextClassLoader()));
+    }
+
+    private static String simpleName(String name) {
+        return name.substring(name.lastIndexOf('.') + 1);
+    }
+
+    private static String applicationRoot(String className) {
+        int dot = className.indexOf('.');
+        if (dot < 0) return null;
+        int second = className.indexOf('.', dot + 1);
+        if (second < 0) return null;
+        int third = className.indexOf('.', second + 1);
+        if (className.startsWith("cn.song.") && third >= 0) {
+            return className.substring(0, third + 1);
+        }
+        if (className.startsWith("org.springframework.") && third >= 0) {
+            int fourth = className.indexOf('.', third + 1);
+            return fourth >= 0 ? className.substring(0, fourth + 1) : null;
+        }
+        return className.substring(0, second + 1);
     }
 
     /**
@@ -112,10 +175,11 @@ public final class StackDigest {
                 || cn.startsWith("org.apache.coyote.") || cn.startsWith("org.apache.juli.")
                 || cn.startsWith("org.eclipse.jetty.") || cn.startsWith("io.undertow.")
                 || cn.startsWith("org.springframework.web.")
+                || cn.startsWith("org.springframework.security.web.")
                 || cn.startsWith("org.springframework.boot.");
     }
 
-    /** 中段省略标记段（无 {@code #}，IDE 侧解析器按不可解析段跳过）。 */
+    /** 中段省略标记段（无 {@code #}：新 UI 展示省略节点，旧解析器可跳过）。 */
     private static String elisionMarker(int elided) {
         return "<…中间省略 " + elided + " 帧…>";
     }
@@ -142,11 +206,17 @@ public final class StackDigest {
             if (used > 0) {
                 sb.append("<-");
             }
-            sb.append(f.getClassName()).append('#').append(f.getMethodName());
+            String text = f.getClassName() + '#' + f.getMethodName();
             final int line = f.getLineNumber();
             if (line >= 0) {
-                sb.append(':').append(line);
+                text += ":" + line;
             }
+            // 恶意/生成类名或方法名可能单帧超过整串预算。保留两端及方法尾，
+            // 保证底段即使 8 个极长帧也有可控的长度上界。
+            if (text.length() > 200) {
+                text = text.substring(0, 96) + '…' + text.substring(text.length() - 103);
+            }
+            sb.append(text);
             used++;
             if (sb.length() >= maxLen) {
                 sb.append("…");

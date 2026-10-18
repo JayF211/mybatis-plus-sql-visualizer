@@ -1,5 +1,14 @@
 package cn.song.mybatisplus.visualizer.psi
 
+import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.projectRoots.JavaSdk
+import com.intellij.openapi.projectRoots.ProjectJdkTable
+import com.intellij.openapi.projectRoots.Sdk
+import com.intellij.openapi.roots.ModuleRootManager
+import com.intellij.psi.JavaPsiFacade
+import com.intellij.psi.search.GlobalSearchScope
+import com.intellij.psi.util.PsiModificationTracker
+import com.intellij.testFramework.IndexingTestUtil
 import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.util.Computable
 import com.intellij.openapi.vfs.VfsUtil
@@ -302,5 +311,221 @@ class EntityClassFinderIntegrationTest : HeavyPlatformTestCase() {
         assertEquals("VO 排除后应只返回实体类", 1, found.size)
         assertEquals("UserEntity", found[0].name)
         assertEquals("com.example.UserEntity", found[0].qualifiedName)
+    }
+
+    /** 真正挂 SDK，避免 HeavyPlatformTestCase 默认空 classpath 使库兜底空绿。 */
+    private fun attachJdkAsSdk() {
+        val home = System.getProperty("java.home") ?: return
+        val sdk = JavaSdk.getInstance().createJdk("mpv-test-jdk", home, false)
+        ApplicationManager.getApplication().runWriteAction { ProjectJdkTable.getInstance().addJdk(sdk) }
+        attachedJdk = sdk
+        val model = ModuleRootManager.getInstance(myModule).modifiableModel
+        model.sdk = sdk
+        ApplicationManager.getApplication().runWriteAction { model.commit() }
+        IndexingTestUtil.waitUntilIndexesAreReady(project)
+    }
+
+    private var attachedJdk: Sdk? = null
+
+    override fun tearDown() {
+        try {
+            attachedJdk?.let { sdk ->
+                ApplicationManager.getApplication().runWriteAction { ProjectJdkTable.getInstance().removeJdk(sdk) }
+            }
+        } finally {
+            attachedJdk = null
+            super.tearDown()
+        }
+    }
+
+    fun testLibraryEntityFoundByCandidateNameFallback() {
+        attachJdkAsSdk()
+        val all = GlobalSearchScope.allScope(project)
+        val facade = JavaPsiFacade.getInstance(project)
+        val libClass = listOf("java.lang.Object", "java.util.List", "java.util.Map", "java.lang.StringBuilder")
+            .firstNotNullOfOrNull { facade.findClass(it, all) }
+        assertNotNull("挂了 mock JDK 后 allScope 应能找到 java.lang.Object", libClass)
+        val table = EntityResolver.inferDecoratedTableName(libClass!!.name!!, project)
+        val found = EntityClassFinder(project).find(table)
+        assertTrue("依赖库里的类应被库兜底找到（表名 $table）：${found.map { it.qualifiedName }}",
+            found.any { it.qualifiedName == libClass.qualifiedName })
+        assertEquals("库命中后不应触发慢路径全量扫描", 0, EntityClassFinder.scanCountForTest(project))
+    }
+
+    fun testFastPathHitSkipsSlowScan() {
+        addClassFile("Random.java", "package com.example; public class Random { private Long id; }")
+        val found = EntityClassFinder(project).find("random")
+        assertEquals("快路径应命中项目里的实体", 1, found.size)
+        assertEquals("com.example.Random", found[0].qualifiedName)
+        assertEquals("快路径命中不应触发慢路径全量扫描", 0, EntityClassFinder.scanCountForTest(project))
+    }
+
+    private fun annotatedProbe() = addClassFile("ProbeEntity.java", """
+        package com.example;
+        import com.baomidou.mybatisplus.annotation.TableName;
+        @TableName("probe_tbl")
+        public class ProbeEntity { private Long id; }
+    """)
+
+    /** 真扫只认 @TableName，JDK 类不应按名字全部建成表。 */
+    fun testLibrarySweepIndexesAnnotatedClass() {
+        annotatedProbe()
+        val entries = EntityClassFinder(project).runLibrarySweepNow()
+        assertTrue("带 @TableName 的类应被扫进索引", "probe_tbl" in EntityClassFinder.sweepTablesForTest(project))
+        assertEquals("缓存条目数应与扫描返回值一致", entries, EntityClassFinder.sweepTableCountForTest(project))
+        assertEquals("扫描结果应能被 find 命中", "com.example.ProbeEntity",
+            EntityClassFinder(project).find("probe_tbl").single().qualifiedName)
+    }
+
+    /** 必须看缓存内容而非 find：快路径本来就会按类名推断，不能拿它充当扫描判据。 */
+    fun testLibrarySweepSkipsClassesWithoutTableName() {
+        addClassFile("PlainModel.java", "package com.example; public class PlainModel { private Long id; }")
+        EntityClassFinder(project).runLibrarySweepNow()
+        assertTrue("无 @TableName 的类不应进库扫描索引（实际索引：${EntityClassFinder.sweepTablesForTest(project)}）",
+            "plain_model" !in EntityClassFinder.sweepTablesForTest(project))
+    }
+
+    fun testLibrarySweepTruncationDoesNotCache() {
+        annotatedProbe()
+        EntityClassFinder.sweepScanLimitForTest = 0
+        try {
+            val entries = EntityClassFinder(project).runLibrarySweepNow()
+            assertEquals("触顶应返回 -1（未扫完）", -1, entries)
+            assertTrue("触顶不得落缓存", EntityClassFinder.sweepTablesForTest(project).isEmpty())
+            assertTrue("触顶不得把该版本标成已扫完", !EntityClassFinder.sweepDispatchedForTest(project))
+        } finally {
+            EntityClassFinder.sweepScanLimitForTest = null
+        }
+    }
+
+    /** 改正文而非新增文件：新增文件本就属于结构变化。撤掉 root tracker 修复应红。 */
+    fun testLibrarySweepCacheSurvivesSourceEdit() {
+        val entity = annotatedProbe()
+        EntityClassFinder(project).runLibrarySweepNow()
+        assertTrue("扫描后应已登记投递", EntityClassFinder.sweepDispatchedForTest(project))
+        val vf = entity.containingFile.virtualFile
+        val psiBefore = PsiModificationTracker.getInstance(project).modificationCount
+        WriteCommandAction.runWriteCommandAction(project, Computable {
+            VfsUtil.saveText(vf, """
+                package com.example;
+                import com.baomidou.mybatisplus.annotation.TableName;
+                @TableName("probe_tbl")
+                public class ProbeEntity { private Long id; private String name; }
+            """.trimIndent())
+        })
+        PsiDocumentManager.getInstance(project).commitAllDocuments()
+        val psiAfter = PsiModificationTracker.getInstance(project).modificationCount
+        assertTrue("夹具有效性：编辑后 PSI 版本必须递增，否则本用例什么都没验（$psiBefore → $psiAfter）", psiAfter > psiBefore)
+        var dispatched = 0
+        EntityClassFinder.sweepDispatchForTest = { dispatched++ }
+        EntityClassFinder.sweepCooldownMs = 0
+        try {
+            EntityClassFinder(project).find("t_booking")
+            assertEquals("改源码正文后不得重投库扫描", 0, dispatched)
+        } finally {
+            EntityClassFinder.sweepCooldownMs = EntityClassFinder.LIBRARY_SWEEP_COOLDOWN_MS
+            EntityClassFinder.sweepDispatchForTest = null
+        }
+        assertTrue("缓存条目应仍在", "probe_tbl" in EntityClassFinder.sweepTablesForTest(project))
+    }
+
+    /** 确定性时钟：冷却下界必须含上趟耗时，直接按钮扫描同样要进入冷却。 */
+    fun testLibrarySweepCooldownBoundedByLastScanCost() {
+        annotatedProbe()
+        var now = 1_000_000L
+        EntityClassFinder.sweepClockForTest = { now }
+        var dispatched = 0
+        EntityClassFinder.sweepDispatchForTest = { dispatched++ }
+        EntityClassFinder.sweepCooldownMs = 0
+        try {
+            EntityClassFinder(project).runLibrarySweepNow()
+            EntityClassFinder.clearLibrarySweepDispatchedForTest(project)
+            EntityClassFinder(project).find("t_booking")
+            assertEquals("冷却窗口应以上趟耗时为下界，不得立即重投", 0, dispatched)
+            now += 5
+            EntityClassFinder(project).find("t_booking")
+            assertEquals("越过下界后应可重投", 1, dispatched)
+        } finally {
+            EntityClassFinder.sweepClockForTest = null
+            EntityClassFinder.sweepCooldownMs = EntityClassFinder.LIBRARY_SWEEP_COOLDOWN_MS
+            EntityClassFinder.sweepDispatchForTest = null
+        }
+    }
+
+    fun testLibrarySweepCooldownBlocksRedispatch() {
+        var dispatched = 0
+        EntityClassFinder.sweepDispatchForTest = { dispatched++ }
+        EntityClassFinder.sweepCooldownMs = 60_000
+        try {
+            EntityClassFinder(project).find("t_booking")
+            assertEquals("首次未命中应投递", 1, dispatched)
+            EntityClassFinder.clearLibrarySweepDispatchedForTest(project)
+            EntityClassFinder(project).find("t_booking")
+            assertEquals("冷却窗口内不得重复投递", 1, dispatched)
+            EntityClassFinder.sweepCooldownMs = 0
+            EntityClassFinder(project).find("t_booking")
+            assertEquals("冷却关闭后应可重投", 2, dispatched)
+        } finally {
+            EntityClassFinder.sweepCooldownMs = EntityClassFinder.LIBRARY_SWEEP_COOLDOWN_MS
+            EntityClassFinder.sweepDispatchForTest = null
+        }
+    }
+
+    fun testLibrarySweepCacheHitForUnconventionalTableName() {
+        val clazz = addClassFile("LegacyBooking.java", "package com.example; public class LegacyBooking { private Long id; }")
+        EntityClassFinder.seedLibrarySweepForTest(project, "t_booking", clazz)
+        val found = EntityClassFinder(project).find("t_booking")
+        assertEquals("库扫描缓存命中应返回该实体", 1, found.size)
+        assertEquals("com.example.LegacyBooking", found[0].qualifiedName)
+    }
+
+    /** 注入库类而不是项目类，否则 restoreMatched 只查 projectScope 也会空绿。 */
+    fun testLibrarySweepCacheRestoresLibraryClass() {
+        attachJdkAsSdk()
+        val objectClass = JavaPsiFacade.getInstance(project).findClass("java.lang.Object", GlobalSearchScope.allScope(project))
+        assertNotNull("挂了 JDK 后应能解析 java.lang.Object", objectClass)
+        EntityClassFinder.seedLibrarySweepForTest(project, "t_object", objectClass!!)
+        val found = EntityClassFinder(project).find("t_object")
+        assertEquals("库扫描缓存命中应取回库类", 1, found.size)
+        assertEquals("java.lang.Object", found[0].qualifiedName)
+    }
+
+    fun testUnconventionalTableNameMissesWithoutSweepCache() {
+        addClassFile("LegacyBooking.java", "package com.example; public class LegacyBooking { private Long id; }")
+        EntityClassFinder.clearLibrarySweepCache(project)
+        EntityClassFinder.sweepEnabledForTest = false
+        try {
+            assertTrue("无缓存 + 不投递时非常规命名找不到（既有行为，无回归）", EntityClassFinder(project).find("t_booking").isEmpty())
+        } finally {
+            EntityClassFinder.sweepEnabledForTest = null
+        }
+    }
+
+    fun testLibrarySweepNotDispatchedWhenDisabled() {
+        var dispatched = 0
+        EntityClassFinder.sweepDispatchForTest = { dispatched++ }
+        EntityClassFinder.sweepEnabledForTest = false
+        try {
+            EntityClassFinder(project).find("t_booking")
+            assertEquals("开关关闭时不得投递库扫描", 0, dispatched)
+        } finally {
+            EntityClassFinder.sweepEnabledForTest = null
+            EntityClassFinder.sweepDispatchForTest = null
+        }
+    }
+
+    fun testLibrarySweepDispatchedOncePerProjectVersion() {
+        var dispatched = 0
+        EntityClassFinder.sweepDispatchForTest = { dispatched++ }
+        try {
+            val finder = EntityClassFinder(project)
+            finder.find("t_booking")
+            finder.find("t_booking")
+            finder.find("another_missing_table")
+            assertEquals("同一项目版本只投递一次库扫描", 1, dispatched)
+            assertTrue("投递后应已登记", EntityClassFinder.sweepDispatchedForTest(project))
+        } finally {
+            EntityClassFinder.sweepDispatchForTest = null
+        }
     }
 }

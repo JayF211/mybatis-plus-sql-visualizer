@@ -40,6 +40,7 @@ public class StackDigestTwoEndedTest {
     public void restoreBudget() {
         // AgentState 为进程级静态态：恢复缺省，避免污染同 JVM 内其他用例
         AgentState.setStackMaxFrames(24);
+        StackLocator.setExtraBizJarPrefixes(null);
     }
 
     @Test
@@ -63,7 +64,7 @@ public class StackDigestTwoEndedTest {
         assertEquals("省略数 = 40-16-8", "<…中间省略 16 帧…>", segs[16]);
         assertEquals("栈底第 1 帧", "com.test.C32#m32:32", segs[17]);
         assertEquals("栈底末帧（业务侧）", "com.test.C39#m39:39", segs[24]);
-        // 标记段无 #：IDE 侧解析器按不可解析段跳过（弹层兼容判据）
+        // 标记段无 #：新 UI 可展示省略节点，旧解析器按不可解析段跳过
         assertFalse(segs[16].contains("#"));
     }
 
@@ -213,6 +214,109 @@ public class StackDigestTwoEndedTest {
         assertTrue("栈底=最深业务帧", d.endsWith("com.test.C29#m29:29"));
         assertEquals("<…中间省略 6 帧…>", d.split("<-")[16]);
         assertEquals(25, d.split("<-").length);
+    }
+
+    @Test
+    public void 真实长栈形态_业务Service和Controller在中段_未知尾帧不应挤走() {
+        // evidence/p1-stack-evidence.txt:11-110 是同 demo JVM 的 getConnection 时刻 jstack，
+        // 非 SQL execute 本身的 sd；依其 49-60 行业务位置及长 Spring/Tomcat 尾巴改编。
+        // Service/Controller 后缀配对只覆盖这类可识别 Web 链，不能泛化成任意业务帧识别。
+        StackTraceElement[] s = new StackTraceElement[75];
+        for (int i = 0; i < 44; i++) {
+            s[i] = f("org.apache.ibatis.executor.Executor" + i, "query", i);
+        }
+        s[44] = f("cn.song.mpjdemo.service.impl.DeviceInfoServiceImpl", "joinRightAlias", 42);
+        s[45] = f("cn.song.mpjdemo.controller.DeviceInfoController", "rightAlias", 33);
+        for (int i = 46; i < 70; i++) {
+            s[i] = f("org.springframework.web.servlet.DispatcherServlet", "service", i);
+        }
+        for (int i = 70; i < 75; i++) {
+            s[i] = f("com.vendor.runtime.CustomPipeline" + i, "run", i);
+        }
+        String d = StackDigest.build(s, 24);
+        assertTrue("Service 应留在摘要中: " + d, d.contains("DeviceInfoServiceImpl#joinRightAlias:42"));
+        assertTrue("Controller 应留在摘要中: " + d, d.contains("DeviceInfoController#rightAlias:33"));
+        assertTrue(d.length() <= 2304);
+        assertTrue(d.split("<-").length <= 25);
+    }
+
+    @Test
+    public void 业务调用类不是Service后缀_Controller也应留在深栈() {
+        StackTraceElement[] s = new StackTraceElement[75];
+        for (int i = 0; i < 44; i++) s[i] = f("org.apache.ibatis.executor.Executor" + i, "query", i);
+        s[44] = f("cn.song.mpjdemo.service.DeviceInfoManager", "find", 42);
+        s[45] = f("cn.song.mpjdemo.controller.DeviceInfoController", "rightAlias", 33);
+        for (int i = 46; i < 70; i++) s[i] = f("org.springframework.web.servlet.DispatcherServlet", "service", i);
+        for (int i = 70; i < 75; i++) s[i] = f("com.vendor.runtime.CustomPipeline" + i, "run", i);
+        String d = StackDigest.build(s, 24);
+        assertTrue(d.contains("DeviceInfoManager#find:42"));
+        assertTrue(d.contains("DeviceInfoController#rightAlias:33"));
+    }
+
+    @Test
+    public void 框架命名空间中真实项目类_来源为目录时不得当作尾帧丢弃() {
+        StackLocator.jarOriginProbe = (className, loader) ->
+                className.startsWith("org.springframework.web.servlet.myapp.") ? Boolean.FALSE : Boolean.TRUE;
+        try {
+            StackTraceElement[] s = new StackTraceElement[54];
+            for (int i = 0; i < 18; i++) s[i] = f("org.apache.ibatis.executor.Executor" + i, "query", i);
+            s[18] = f("org.springframework.web.servlet.myapp.OrderManager", "find", 18);
+            s[19] = f("org.springframework.web.servlet.myapp.OrderController", "list", 19);
+            for (int i = 20; i < s.length; i++) s[i] = f("org.springframework.web.servlet.DispatcherServlet", "service", i);
+            String d = StackDigest.build(s, 24);
+            assertTrue(d.contains("OrderManager#find:18"));
+            assertTrue(d.contains("OrderController#list:19"));
+        } finally {
+            StackLocator.jarOriginProbe = null;
+        }
+    }
+
+    @Test
+    public void 框架命名空间中业务JAR类_登记反向名单后仍保留Controller() {
+        StackLocator.setExtraBizJarPrefixes(new String[]{"org.springframework.web.servlet.myapp."});
+        StackTraceElement[] s = new StackTraceElement[54];
+        for (int i = 0; i < 18; i++) s[i] = f("org.apache.ibatis.executor.Executor" + i, "query", i);
+        s[18] = f("org.springframework.web.servlet.myapp.OrderManager", "find", 18);
+        s[19] = f("org.springframework.web.servlet.myapp.OrderController", "list", 19);
+        for (int i = 20; i < s.length; i++) s[i] = f("org.springframework.web.servlet.DispatcherServlet", "service", i);
+        String d = StackDigest.build(s, 24);
+        assertTrue(d.contains("OrderManager#find:18"));
+        assertTrue(d.contains("OrderController#list:19"));
+    }
+
+    @Test
+    public void security过滤器非旧名单_不能抢占Controller() {
+        StackTraceElement[] s = new StackTraceElement[45];
+        for (int i = 0; i < 20; i++) s[i] = f("org.apache.ibatis.Executor" + i, "query", i);
+        s[20] = f("com.acme.web.OrderController", "list", 20);
+        for (int i = 21; i < 39; i++) s[i] = f("org.springframework.web.servlet.DispatcherServlet", "service", i);
+        s[39] = f("org.springframework.security.web.FilterChainProxy", "doFilter", 39);
+        for (int i = 40; i < 45; i++) s[i] = f("java.lang.Thread", "run", i);
+        String d = StackDigest.build(s, 24);
+        assertTrue("Controller 应留在摘要中: " + d, d.contains("OrderController#list:20"));
+    }
+
+    @Test
+    public void 业务与库同属com前缀_不可把库包当业务根() {
+        StackTraceElement[] s = new StackTraceElement[56];
+        for (int i = 0; i < 30; i++) s[i] = f("com.vendor.orm.Engine" + i, "execute", i);
+        s[30] = f("com.acme.service.OrderService", "find", 30);
+        s[31] = f("com.acme.web.OrderController", "list", 31);
+        for (int i = 32; i < s.length; i++) s[i] = f("com.vendor.runtime.Pipeline" + i, "run", i);
+        String d = StackDigest.build(s, 24);
+        assertTrue(d.contains("OrderService#find:30"));
+        assertTrue(d.contains("OrderController#list:31"));
+        assertTrue(d.length() <= 2304);
+    }
+
+    @Test
+    public void 极长单个帧_超长度预算仍须有界() {
+        StackTraceElement[] s = chain(40);
+        StringBuilder veryLong = new StringBuilder("com.acme.");
+        while (veryLong.length() < 3000) veryLong.append('x');
+        s[39] = f(veryLong.toString(), "run", 39);
+        // 非真实 Java 类名边界：只证明传输有界，不保证被压缩的类名可被 IDE 解析/跳转。
+        assertTrue(StackDigest.build(s, 24).length() <= 2304);
     }
 
     @Test

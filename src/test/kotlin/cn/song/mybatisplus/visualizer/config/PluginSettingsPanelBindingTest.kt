@@ -410,6 +410,44 @@ class PluginSettingsPanelBindingTest : BasePlatformTestCase() {
         }
     }
 
+    fun testListDisplayModeDefaultsToKeywordWrapAndPreservesSavedMode() {
+        val settings = PluginSettings.getInstance()
+        val saved = settings.state.logListSqlDisplayMode
+        try {
+            assertEquals("KEYWORD_WRAP", PluginSettings.State().logListSqlDisplayMode)
+            settings.state.logListSqlDisplayMode = "FORMATTED"
+            assertEquals(cn.song.mybatisplus.visualizer.log.SqlListDisplayMode.FORMATTED, settings.sqlListDisplayMode())
+            settings.state.logListSqlDisplayMode = "not-a-display-mode"
+            assertEquals(cn.song.mybatisplus.visualizer.log.SqlListDisplayMode.KEYWORD_WRAP, settings.sqlListDisplayMode())
+        } finally {
+            settings.state.logListSqlDisplayMode = saved
+        }
+    }
+
+    fun testLibrarySweepDefaultsAndPanelBinding() {
+        val settings = PluginSettings.getInstance()
+        val saved = settings.state.copy()
+        try {
+            assertTrue("后台扫库默认开启", PluginSettings.State().libraryEntitySweepEnabled)
+            settings.state.libraryEntitySweepEnabled = true
+            val configurable = AllSectionsConfigurable()
+            configurable.createComponent()
+            val panel = configurable.panelForTest()
+            assertTrue("reset 应回填开关", panel.librarySweepCheck.isSelected)
+            assertFalse("初始未修改", configurable.isModified())
+            panel.setLibrarySweepCheck(false)
+            assertTrue("仅改扫库开关也须检测修改", configurable.isModified())
+            configurable.apply()
+            assertFalse("apply 应持久化关闭", settings.state.libraryEntitySweepEnabled)
+            panel.setLibrarySweepCheck(true)
+            configurable.reset()
+            assertFalse("reset 应回到已保存状态", panel.librarySweepCheck.isSelected)
+            assertFalse("reset 后不应修改", configurable.isModified())
+        } finally {
+            settings.loadState(saved)
+        }
+    }
+
     /** T-DisplayModeToSettings：仅改显示模式同样必须置 isModified，且 apply 写回设置值（两列表共享一键）。 */
     fun testListDisplayModeChangeEnablesApplyAndPersists() {
         val settings = PluginSettings.getInstance()

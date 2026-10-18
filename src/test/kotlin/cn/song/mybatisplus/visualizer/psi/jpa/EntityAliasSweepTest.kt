@@ -77,6 +77,57 @@ class EntityAliasSweepTest : BasePlatformTestCase() {
         assertNotNull("别名比较应忽略大小写", result)
     }
 
+    fun testCompleteCandidateScanDoesNotStopAtFirstAlias() {
+        val first = (myFixture.addFileToProject("First.java", "@jakarta.persistence.Entity(name=\"Shared\") class First {}") as PsiJavaFile).classes.single()
+        val second = (myFixture.addFileToProject("Second.java", "@jakarta.persistence.Entity(name=\"Shared\") class Second {}") as PsiJavaFile).classes.single()
+        val scan = EntityAliasSweep.findAliasCandidates("Shared", sequenceOf("First", "Second")) {
+            if (it == "First") arrayOf(first) else arrayOf(second)
+        }
+        assertTrue(scan.complete())
+        assertEquals(listOf(first, second), scan.candidates())
+    }
+
+    fun testTruncatedCandidateScanDiscardsEvenAnEarlyMatch() {
+        val first = (myFixture.addFileToProject("First.java", "@jakarta.persistence.Entity(name=\"Shared\") class First {}") as PsiJavaFile).classes.single()
+        val scan = EntityAliasSweep.findAliasCandidates("Shared", sequenceOf("First", "Unknown"), 1) { arrayOf(first) }
+        assertFalse(scan.complete())
+        assertTrue(scan.candidates().isEmpty())
+    }
+
+    /** 触顶空结果也随 PSI/根版本缓存，第二次不得重复付完整预算。 */
+    fun testTruncatedScanIsCachedAndNotRepeated() {
+        myFixture.addFileToProject("Foo.java", "@jakarta.persistence.Entity(name=\"Shared\") class Foo {}")
+        val context = myFixture.configureByText("Host.java", "class Host {}")
+        EntityAliasSweep.resetScanCountForTest()
+        EntityAliasSweep.scanLimitForTest = 0
+        try {
+            assertNull("触顶应按未解析返回", EntityAliasSweep.resolve(project, "Shared", context).psiClass())
+            assertEquals("应恰好扫描一次", 1, EntityAliasSweep.scanCountForTest())
+            assertNull("第二次仍按未解析返回", EntityAliasSweep.resolve(project, "Shared", context).psiClass())
+            assertEquals("触顶结果已落缓存，第二次不得重扫", 1, EntityAliasSweep.scanCountForTest())
+        } finally {
+            EntityAliasSweep.scanLimitForTest = null
+        }
+    }
+
+    fun testCandidateScanUsesCaseSensitiveJpaEntityNames() {
+        val first = (myFixture.addFileToProject("First.java", "@jakarta.persistence.Entity(name=\"Shared\") class First {}") as PsiJavaFile).classes.single()
+        val scan = EntityAliasSweep.findAliasCandidates("shared", sequenceOf("First")) { arrayOf(first) }
+        assertTrue(scan.complete())
+        assertTrue(scan.candidates().isEmpty())
+    }
+
+    fun testCandidateScanPropagatesCancellation() {
+        try {
+            EntityAliasSweep.findAliasCandidates("Shared", sequenceOf("First")) {
+                throw com.intellij.openapi.progress.ProcessCanceledException()
+            }
+            fail("Cancellation must not be converted into an unresolved entity")
+        } catch (_: com.intellij.openapi.progress.ProcessCanceledException) {
+            // The surrounding read action owns cancellation.
+        }
+    }
+
     /**
      * 在测试夹具里造一个类；[alias] 非空时标注 `@Entity(name = alias)`。
      * 注解写全限定名：`JpaMetadataReader.findFlex` 有短名文本兜底，无需把 JPA 库挂上 classpath

@@ -29,7 +29,7 @@ import static org.junit.Assert.assertTrue;
  *   <li>{@link #同一方法内两个调用行_两次行号不同}——同一入口键（业务帧）内两个调用点；</li>
  *   <li>{@link #判定缓存命中但身份不在场_落回全量路径不复用旧行号}——身份在场校验；</li>
  *   <li>{@link #业务帧行号漂移_跟随当前栈}——行号漂移自愈（不再冻结）；</li>
- *   <li>{@link #入口键非业务帧_打一条一次性摘要_与档位无关}——T-05 现场可取证。</li>
+ *   <li>{@link #入口键非业务帧_产线档位零输出}——宿主控制台零噪音契约（2026-10-14 移除 T-05 无条件摘要后补）。</li>
  * </ol>
  *
  * <p>与 {@link StackLocator} 同包以便使用包内测试缝：{@code jarOriginProbe} 来源注入口
@@ -48,7 +48,7 @@ public class StackLocatorCacheStalenessTest {
     /** 业务类（安全网/身份校验用例用，与 BIZ_IMPL 不同类以便判定互不干扰）。 */
     private static final String BIZ_SVC = "com.example.service.BizService";
 
-    /** 打点标记（{@code StackLocator.reportEntryKeyMismatch} 唯一输出前缀）。 */
+    /** 已移除的无条件摘要前缀（T-05，2026-10-14 删）——仅作「不得复活」的负断言锚点。 */
     private static final String MARK = "[T-AgentSourceLocateStale]";
 
     /**
@@ -201,31 +201,30 @@ public class StackLocatorCacheStalenessTest {
         assertEquals(before.sourceFile, after.sourceFile);
     }
 
-    // ---------- ⑤ T-05：入口键非业务帧的一次性摘要（与 logLevel 无关） ----------
+    // ---------- ⑤ 产线档位（warn）下：定位过程对宿主控制台零输出 ----------
 
     @Test
-    public void 入口键非业务帧_打一条一次性摘要_与档位无关() {
-        // 产线 premain 注入固定 logLevel=warn —— 摘要必须在此档可见（info 档真机不可达）
+    public void 入口键非业务帧_产线档位零输出() {
+        // 产线 premain 注入固定 logLevel=warn。曾有一条「入口键非业务帧」无条件摘要（T-05），
+        // 2026-10-14 因前提失效（T-SrcGenFrame 后，Spring 代理下生成类帧当入口键是<b>常态</b>而非异常）
+        // 整条移除。本用例锁住契约：该形态下宿主 stderr 不得有任何定位打点。
         assertEquals("warn", AgentState.getLogLevel());
 
         StackLocator.locate(libStack(libFrame(), f(BIZ_IMPL, "joinRightAlias", "DeviceInfoServiceImpl.java", 42)), null);
-        final String out = sink.toString();
-        assertTrue("warn 档应输出一次性摘要: " + out, out.contains(MARK));
-        assertTrue("摘要应含入口键: " + out, out.contains("entry=" + LIB_ENTRY_KEY));
-        assertTrue("摘要应含主位置: " + out, out.contains("primary=" + BIZ_FILE + ":42"));
-        assertEquals("同一入口键只打一条", 1, count(out, MARK));
-
-        // 同入口键、业务身份变化（真机 42→63 的第二次请求）——不再重复输出
         StackLocator.locate(libStack(libFrame(), f(BIZ_IMPL, "joinExtAndSubTable", "DeviceInfoServiceImpl.java", 63)), null);
-        assertEquals("一次性摘要不得随每次执行重复输出", 1, count(sink.toString(), MARK));
+        assertEquals("warn 档下定位过程不得输出任何内容: " + sink.toString(), 0, sink.size());
 
-        // 对照：入口键即业务帧（常态）时零输出——摘要不构成常态噪音
+        // 对照：info 档是唯一诊断出口（entry/pool 可见）——提升档位才产出，且仅全量判定路径
+        AgentState.setLogLevel("info");
         StackLocator.clearLocatorCachesForTest();
         sink.reset();
         final StackLocator.Frame normal = StackLocator.locate(
                 mpjStack(f(BIZ_IMPL, "joinExtAndSubTable", "DeviceInfoServiceImpl.java", 63)), null);
         assertNotNull(normal);
-        assertFalse("业务帧入口不得输出摘要: " + sink.toString(), sink.toString().contains(MARK));
+        final String out = sink.toString();
+        assertTrue("info 档应输出判定路径: " + out, out.contains("[T-SourceJumpFunnel]"));
+        assertTrue("info 档摘要应含入口键: " + out, out.contains("entry=" + BIZ_IMPL + "#joinExtAndSubTable"));
+        assertEquals("已移除的无条件摘要不得复活", 0, count(out, MARK));
     }
 
     // ---------- 夹具与断言工具 ----------

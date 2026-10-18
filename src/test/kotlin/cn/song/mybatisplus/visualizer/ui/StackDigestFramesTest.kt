@@ -136,14 +136,87 @@ class StackDigestFramesTest {
     }
 
     @Test
-    fun test两端采样省略标记段_解析跳过() {
-        // T-StackHoverUi A 案：agent 中段省略标记（无 #）按不可解析段跳过，弹层只出帧
-        val frames = StackDigestFrames.parse(
-            "com.a.F1#m1:1<-com.a.F2#m2:2<-<…中间省略 37 帧…><-com.biz.Controller#list:42",
-        )
-        assertEquals(3, frames.size)
-        assertEquals("com.a.F2", frames[1].fqcn)
-        assertEquals("com.biz.Controller", frames[2].fqcn)
-        assertEquals(42, frames[2].line)
+    fun test溢出行号不能让历史快照解析抛异常() {
+        val frame = StackDigestFrames.parse("com.acme.OrderController#list:999999999999999999").single()
+        assertEquals(0, frame.line())
+    }
+
+    @Test
+    fun test两端采样省略标记段_保留不可展开且不计作真实帧() {
+        val digest = "com.a.F1#m1:1<-com.a.F2#m2:2<-<…中间省略 37 帧…><-com.biz.Controller#list:42"
+        val items = StackDigestFrames.parseItems(digest)
+        assertEquals(4, items.size)
+        assertEquals(StackDigestItem.Omitted(37), items[2])
+        assertEquals("com.biz.Controller", (items[3] as StackDigestItem.Frame).entry().fqcn())
+        assertEquals(3, items.filterIsInstance<StackDigestItem.Frame>().size)
+        assertEquals(digest, StackFramesProjection.build(digest).original())
+        assertEquals(3, StackDigestFrames.parse(digest).size)
+    }
+
+    @Test
+    fun test投影反向判别_业务夹在两段内部调用之间默认可见且展开保序() {
+        val digest = "cn.song.mybatisplus.sqlvis.agent.hook.StatementHandler#emit:1" +
+            "<-java.lang.reflect.Method#invoke:2" +
+            "<-com.acme.service.OrderService#query:3" +
+            "<-org.apache.ibatis.executor.SimpleExecutor#doQuery:4" +
+            "<-com.acme.web.OrderEndpoint#list:5" +
+            "<-com.zaxxer.hikari.pool.HikariProxyPreparedStatement#execute:6"
+        val projection = StackFramesProjection.build(digest)
+        assertEquals(digest, projection.original())
+        assertEquals(5, projection.nodes().size)
+        assertEquals(2, (projection.nodes()[0] as StackFramesNode.Internal).frames().size)
+        assertEquals("com.acme.service.OrderService", (projection.nodes()[1] as StackFramesNode.Visible).frame().fqcn())
+        assertEquals("com.acme.web.OrderEndpoint", (projection.nodes()[3] as StackFramesNode.Visible).frame().fqcn())
+        assertEquals(6, projection.nodes().flatMap { it.frames() }.size)
+        assertEquals(StackDigestFrames.parse(digest), projection.nodes().flatMap { it.frames() })
+        assertFalse(projection.noProjectFrames())
+    }
+
+    @Test
+    fun test分类保守_框架命名空间中的项目类和未知包不被误折() {
+        val digest = "org.springframework.web.myapp.CustomController#run:1" +
+            "<-com.company.generated.\$Proxy5#invoke" +
+            "<-org.example.inventory.Inventory#save:9" +
+            "<-org.springframework.web.servlet.myapp.OrderController#list:10" +
+            "<-sun.reflect.NativeMethodAccessorImpl#invoke0"
+        val projection = StackFramesProjection.build(digest)
+        assertEquals(5, projection.nodes().size)
+        assertTrue(projection.nodes().take(4).all { it is StackFramesNode.Visible })
+        assertEquals(0, (projection.nodes()[1] as StackFramesNode.Visible).frame().line())
+        assertTrue(projection.nodes()[4] is StackFramesNode.Internal)
+    }
+
+    @Test
+    fun test截图中的Web过滤链默认折叠但不误折项目同前缀类() {
+        val digest = "org.apache.catalina.core.ApplicationFilterChain#doFilter:138" +
+            "<-cn.dev33.satoken.filter.SaServletFilter#doFilter:52" +
+            "<-org.springframework.web.servlet.DispatcherServlet#doDispatch:12" +
+            "<-org.springframework.web.myapp.CustomController#run:15"
+        val nodes = StackFramesProjection.build(digest).nodes()
+        assertEquals(2, nodes.size)
+        assertEquals(3, (nodes[0] as StackFramesNode.Internal).frames().size)
+        assertEquals("org.springframework.web.myapp.CustomController", (nodes[1] as StackFramesNode.Visible).frame().fqcn())
+    }
+
+    @Test
+    fun test常见Spring过滤器纯内部链不能伪装有业务帧() {
+        val digest = "org.springframework.web.filter.FormContentFilter#doFilter:10" +
+            "<-org.springframework.web.filter.CharacterEncodingFilter#doFilter:11" +
+            "<-org.springframework.web.servlet.DispatcherServlet#doDispatch:12"
+        val projection = StackFramesProjection.build(digest)
+        assertTrue(projection.noProjectFrames())
+        assertEquals(1, projection.nodes().size)
+        assertEquals(3, (projection.nodes().single() as StackFramesNode.Internal).frames().size)
+    }
+
+    @Test
+    fun test中间省略切断内部组_纯内部无业务提示_空快照保真() {
+        val digest = "java.lang.Thread#run:1<-<…中间省略 9 帧…><-jdk.internal.Foo#bar:2"
+        val projection = StackFramesProjection.build(digest)
+        assertEquals(3, projection.nodes().size)
+        assertEquals(StackFramesNode.Omission(9), projection.nodes()[1])
+        assertEquals(2, projection.nodes().flatMap { it.frames() }.size)
+        assertTrue(projection.noProjectFrames())
+        assertTrue(StackFramesProjection.build(null).nodes().isEmpty())
     }
 }

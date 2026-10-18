@@ -1091,6 +1091,18 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "手动模式语义不变对照/saveOrUpdate 批量预览 upsert+反引号不受残值污染）；" +
                     "私有 leakStaleManualDialect 为污染动作夹具非判定函数",
             ),
+            GuardEntry(
+                "psi/FullScanCancelGuardTest.kt",
+                emptyList(),
+                "Java 全量短名扫描有界与可取消守卫：生产函数体必须包含取消检查或委派有界扫描，" +
+                    "库扫描不做装饰表名推断；自证与真实站点反向验证在同文件。",
+            ),
+            GuardEntry(
+                "convention/SyncRefreshWriteIntentGuardTest.kt",
+                listOf(DecisionFn("syncRefreshInsideWiraOffenders", FnKind.VIOLATIONS)),
+                "BGT 同步 VFS 刷新不得持写意向锁；仅豁免 Java EDT 冷路径 createTempPsiFile。" +
+                    "同文件自证覆盖泛型/强转/两种 lambda，真实预热站点还原 WIRA 后必须报错。",
+            ),
             // ---- 本元守卫自身 ----
             GuardEntry(
                 "convention/GuardSelfTestCoverageMetaGuardTest.kt",

@@ -5,7 +5,6 @@ import cn.song.mybatisplus.sqlvis.agent.AgentState;
 import java.security.CodeSource;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -47,8 +46,9 @@ import java.util.concurrent.ConcurrentHashMap;
  *       入口键落在全应用共享的库帧上时，首个查询的行号被钉死并服务此后一切业务语句），禁；</li>
  *   <li><b>上顶收敛</b>：主位置优先取首个「带调试信息」的候选，无调试信息的 null-file 帧不再顶上（M4 修复）；</li>
  *   <li><b>诊断打点</b>：{@code logLevel=info} 时输出判定路径（primaryKey / 来源路径 L1|SAFETY / pool 帧），真机定谳用；
- *       仅全量判定路径（缓存 miss）输出，缓存命中路径静默；入口键非业务帧时另有一条
- *       <b>与档位无关的一次性</b>摘要（{@link #reportEntryKeyMismatch}，产线固定 warn 下 info 档不可达）。</li>
+ *       仅全量判定路径（缓存 miss）输出，缓存命中路径静默。产线固定 {@code logLevel=warn}，故宿主控制台零输出
+ *       ——曾有一条与档位无关的「入口键非业务帧」一次性摘要（T-AgentSourceLocateStale T-05），2026-10-14 移除，
+ *       缘由见 {@link #diagnose}。</li>
  * </ol>
  *
  * <p>T-PS4-09 扫描与判定缓存（热点红线 §4.2 #5）：
@@ -162,16 +162,6 @@ public final class StackLocator {
      */
     static final ConcurrentHashMap<String, String[]> DECISIONS = new ConcurrentHashMap<String, String[]>();
 
-    /**
-     * T-AgentSourceLocateStale T-05：入口键非业务帧的<b>一次性</b>摘要去重集合（键 = entryKey）。
-     * 产线 premain 注入固定 {@code logLevel=warn}，{@code diagnose()} 的 info 档在真机不可达——
-     * 真机排障拿不到 entryKey 时只能靠行为反推，故这条摘要与档位无关、按 entryKey 只打一次。
-     * 包内可见 = 同包测试清场通道。
-     */
-    static final Set<String> ENTRY_MISMATCH_REPORTED = ConcurrentHashMap.newKeySet();
-
-    private static final int ENTRY_MISMATCH_REPORTED_MAX = 128;
-
     public static final class Frame {
         public final String sourceFile;
         public final int line;
@@ -265,9 +255,7 @@ public final class StackLocator {
                 // 零反射直取——健康路径不付来源解析成本。
                 final int deeper = at == 0 ? -1 : firstBusinessFrameBefore(pool, loader, at);
                 if (deeper < 0) {
-                    final Frame hit = buildFrame(pool, at, decision[0]);
-                    reportEntryKeyMismatch(entryKey, hit);
-                    return hit;
+                    return buildFrame(pool, at, decision[0]);
                 }
                 final Frame refreshed = buildFrame(pool, deeper, "L1");
                 if (refreshed == null) {
@@ -276,7 +264,6 @@ public final class StackLocator {
                 }
                 final String[] p = pool.get(deeper);
                 writeCaches(entryKey, p[2] + "#" + p[3], "L1");
-                reportEntryKeyMismatch(entryKey, refreshed);
                 return refreshed;
             }
         }
@@ -323,7 +310,6 @@ public final class StackLocator {
         final String[] primary = pool.get(primaryAt);
         writeCaches(entryKey, primary[2] + "#" + primary[3], via);
         diagnose(entryKey, frame, pool, loader);
-        reportEntryKeyMismatch(entryKey, frame);
         return frame;
     }
 
@@ -365,12 +351,16 @@ public final class StackLocator {
      * 「候选池抽空」劣化。
      */
     private static boolean isBusinessOrigin(String className, ClassLoader loader) {
+        return isRegisteredBusinessFrame(className) || Boolean.FALSE.equals(loadedFromJar(className, loader));
+    }
+
+    static boolean isRegisteredBusinessFrame(String className) {
         for (String p : EXTRA_BIZ_PREFIXES) {
             if (className.startsWith(p)) {
                 return true;
             }
         }
-        return Boolean.FALSE.equals(loadedFromJar(className, loader));
+        return false;
     }
 
     /**
@@ -449,32 +439,16 @@ public final class StackLocator {
     }
 
     /**
-     * T-AgentSourceLocateStale T-05：入口键身份 ≠ 主位置身份时打<b>一条</b>摘要（按 entryKey 去重，
-     * 上限 {@link #ENTRY_MISMATCH_REPORTED_MAX}，溢出整体清空——诊断面粗粒度有界即可）。
-     *
-     * <p>与 {@code logLevel} <b>无关</b>：产线 premain 注入固定 {@code logLevel=warn}，{@link #diagnose}
-     * 的 info 档在真机不可达，本轮排障即因拿不到 entryKey 只能靠行为反推。只在身份不一致（入口键落在
-     * 共享库帧）时输出，正常业务帧入口零输出，故不构成常态噪音。
-     */
-    private static void reportEntryKeyMismatch(String entryKey, Frame frame) {
-        if (frame == null || frame.methodKey.equals(simpleMethodKey(entryKey))) {
-            return;
-        }
-        if (ENTRY_MISMATCH_REPORTED.size() >= ENTRY_MISMATCH_REPORTED_MAX) {
-            ENTRY_MISMATCH_REPORTED.clear();
-        }
-        if (!ENTRY_MISMATCH_REPORTED.add(entryKey)) {
-            return;
-        }
-        System.err.println("[T-AgentSourceLocateStale] 入口键非业务帧（一次性摘要，entry=" + entryKey
-                + " primary=" + frame.sourceFile + ":" + frame.line + " (" + frame.methodKey + ")"
-                + " via=" + frame.via + "）——行号按当前栈现算；本摘要与 logLevel 无关");
-    }
-
-    /**
      * T-SourceJumpFunnel P0-1 诊断打点：logLevel=info 时输出判定路径（真机定谳 M2/M3/M4 用），默认档零输出。
      * 仅全量判定路径调用（缓存命中路径静默，每条 SQL 零噪音）；产线固定 {@code logLevel=warn} 下本打点
-     * 不可达——真机取 entryKey 走 {@link #reportEntryKeyMismatch}（与档位无关的一次性摘要，T-05）。
+     * 不可达——真机需要 entryKey 时把 attach 参数改成 {@code logLevel=info} 即可拿到（含 entry 与 pool）。
+     *
+     * <p><b>2026-10-14 移除「入口键非业务帧」无条件摘要（原 T-AgentSourceLocateStale T-05）</b>：该摘要与
+     * 档位无关、按 entryKey 每次 JVM 只打一条，设计前提是「身份不一致＝异常（入口键落在共享库帧）」。
+     * 但 T-SrcGenFrame 之后，Spring 代理调用（{@code $$SpringCGLIB$$0} 生成类帧）必然构成「入口键是生成类、
+     * 主位置是真实业务帧」——这正是<b>常态健康形态</b>，于是摘要对每个被代理的 Service 方法各打一条，
+     * 退化为宿主控制台噪音（用户报障实例：{@code CarStationInfoServiceImpl$$SpringCGLIB$$0#getById}）。
+     * 诊断前提已不成立且 info 档已含同款信息（entry + pool），故整条路径删除；宿主侧不再有本条输出。
      */
     private static void diagnose(String entryKey, Frame frame, List<String[]> pool, ClassLoader loader) {
         if (!"info".equalsIgnoreCase(AgentState.getLogLevel())) {
@@ -597,10 +571,9 @@ public final class StackLocator {
         return result;
     }
 
-    /** 仅供同包测试清场（判定缓存/一次性摘要去重集合为全局静态，跨用例隔离用）；产线勿调。 */
+    /** 仅供同包测试清场（判定缓存/来源记忆为全局静态，跨用例隔离用）；产线勿调。 */
     static void clearLocatorCachesForTest() {
         DECISIONS.clear();
-        ENTRY_MISMATCH_REPORTED.clear();
         ORIGIN_MEMO.clear();
     }
 

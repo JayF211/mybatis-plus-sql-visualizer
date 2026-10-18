@@ -66,6 +66,49 @@ public class LogSqlModelsTest {
         assertNull("round-trip 后不应残留未闭合条目", parser.closePending());
     }
 
+    @Test
+    public void summaryKeepsSurrogatePairsAndFirstLineBoundary() {
+        String emoji = "\uD83D\uDE00";
+        String atLimit = "x".repeat(159) + emoji + "tail";
+        assertEquals("x".repeat(159) + "…", new LogSqlEntry(atLimit, atLimit, List.of()).summary());
+        String beforeLimit = "x".repeat(158) + emoji + "tail";
+        assertEquals("x".repeat(158) + emoji + "…", new LogSqlEntry(beforeLimit, beforeLimit, List.of()).summary());
+        String firstLine = "x".repeat(10) + emoji + "\nnext";
+        assertEquals("x".repeat(10) + emoji + "…", new LogSqlEntry(firstLine, firstLine, List.of()).summary());
+    }
+
+    @Test
+    public void provenanceDefaultsAndCopiesKeepCompatibility() {
+        LogSqlEntry entry = new LogSqlEntry("SELECT 1", "SELECT 1", List.of());
+        assertEquals(CaptureProvenance.UNKNOWN, entry.captureProvenance());
+        LogSqlEntry agent = entry.withCaptureProvenance(CaptureProvenance.AGENT);
+        assertEquals(CaptureProvenance.AGENT, agent.withSequenceNumber(9).captureProvenance());
+        assertEquals(CaptureProvenance.AGENT, agent.withLogTimestamp(10L).captureProvenance());
+        assertEquals(CaptureProvenance.AGENT, agent.withErrorText("failure").captureProvenance());
+        assertEquals(CaptureProvenance.UNKNOWN, entry.withCaptureProvenance(null).captureProvenance());
+        assertEquals(entry.dedupeKey(), agent.dedupeKey());
+    }
+
+    @Test
+    public void duplicateObservationUpgradesMetadataWithoutReplacingExecutionIdentity() {
+        LogSqlEntry bridge = new LogSqlEntry("SELECT 1", "SELECT 1", List.of(), 100L)
+                .withSequenceNumber(7).withCaptureProvenance(CaptureProvenance.CONSOLE_BRIDGE);
+        LogSqlEntry agent = new LogSqlEntry("SELECT 1", "SELECT 1", List.of(), 102L,
+                90L, null, SqlSource.UNKNOWN, 5L, "src/Service.java", 12,
+                List.of(new kotlin.Pair<>("src/Service.java", 12)), List.of("Service"), "Service#run:12", 99L,
+                "Mapper.select", null, "request", 1L, "database", null, CaptureProvenance.AGENT);
+        LogSqlEntry merged = LogSqlModelsKt.mergeDuplicateEntry(bridge, agent);
+        assertEquals(100L, merged.timestamp());
+        assertEquals(7L, merged.sequenceNumber());
+        assertEquals("src/Service.java", merged.sourceFile());
+        assertEquals(Long.valueOf(5L), merged.executionTimeMs());
+        assertEquals("database", merged.databaseName());
+        assertEquals(CaptureProvenance.MERGED, merged.captureProvenance());
+        assertEquals(merged, LogSqlModelsKt.mergeDuplicateEntry(merged, agent));
+        org.junit.Assert.assertTrue(LogSqlModelsKt.isConsoleFallbackWithoutSource(bridge));
+        org.junit.Assert.assertFalse(LogSqlModelsKt.isConsoleFallbackWithoutSource(merged));
+    }
+
     // ---------- T-LogRowNumber：捕获序号字段 ----------
 
     @Test

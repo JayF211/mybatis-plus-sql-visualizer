@@ -186,4 +186,21 @@ class SqlLogParamCodecTest {
         assertEquals("SELECT 1", decoded.rawSql)
         assertNull(decoded.source)
     }
+
+    @Test
+    fun `O147 捕获路径pv键回环与缺键容错`() {
+        // 融合条目落盘后读回：通道归因可跨重启保留（诊断价值不随历史文件丢失）
+        val base = LogSqlEntry("SELECT 1", "SELECT 1", emptyList())
+        val merged = SqlLogParamCodec.decode(
+            SqlLogParamCodec.encodeEntry(base.withCaptureProvenance(CaptureProvenance.MERGED)),
+        )!!
+        assertEquals(CaptureProvenance.MERGED, merged.captureProvenance)
+        // UNKNOWN 不落键：旧版本 payload 语义完全不变
+        val plain = SqlLogParamCodec.decode(SqlLogParamCodec.encodeEntry(base))!!
+        assertNull(plain.captureProvenance())
+        // 未知枚举名（未来版本）→ null，不丢条目
+        val future = java.util.Base64.getEncoder()
+            .encodeToString("""{"r":"SELECT 1","p":[],"pv":"SOME_FUTURE_PROVENANCE"}""".toByteArray(Charsets.UTF_8))
+        assertNull(SqlLogParamCodec.decode(future)!!.captureProvenance())
+    }
 }

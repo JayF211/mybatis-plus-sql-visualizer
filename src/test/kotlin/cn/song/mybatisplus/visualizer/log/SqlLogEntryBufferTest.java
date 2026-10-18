@@ -726,4 +726,100 @@ public class SqlLogEntryBufferTest {
         assertEquals(List.of("SELECT 2", "SELECT 3"), snap.stream().map(LogSqlEntry::restoredSql).toList());
         assertEquals(List.of(2L, 3L), snap.stream().map(LogSqlEntry::sequenceNumber).toList());
     }
+
+    // ---------- O-147 T-AgentCaptureProvenance：同桶融合（冻结 target 用例的 Java 形态） ----------
+
+    private LogSqlEntry consoleProvEntry(String sql, long ts) {
+        return new LogSqlEntry(sql, sql, List.of(), ts, null,
+            LogSqlEntry.computeSummary(sql), SqlSource.MYBATIS, null, null, 0,
+            List.of(), List.of(), null, 0L, null, null, null, null, null,
+            null, CaptureProvenance.CONSOLE_BRIDGE);
+    }
+
+    private LogSqlEntry agentProvEntry(String sql, long ts) {
+        return agentProvEntry(sql, ts, "src/main/java/com/example/RefundOrderService.java", 20L);
+    }
+
+    private LogSqlEntry agentProvEntry(String sql, long ts, String sourceFile, Long durationMs) {
+        return new LogSqlEntry(sql, sql, List.of(), ts, null,
+            LogSqlEntry.computeSummary(sql), SqlSource.AGENT, durationMs,
+            sourceFile, 67, List.of(new kotlin.Pair<>(sourceFile, 67)),
+            List.of("com.example.RefundOrderService"), null, 0L,
+            null, null, null, null, "PostgreSQL · cyzc@localhost:5432",
+            null, CaptureProvenance.AGENT);
+    }
+
+    @Test
+    public void O147控制台先到agent后到融合升级为可跳转() {
+        SqlLogEntryBuffer buf = new SqlLogEntryBuffer(10);
+        buf.setDedupeWindowMs(60_000L);
+        String sql = "SELECT COUNT(*) AS total FROM t WHERE station_id IN (250,205)";
+        assertTrue(buf.addEntry(consoleProvEntry(sql, 1_000L)));
+        assertFalse(buf.addEntry(agentProvEntry(sql, 2_000L)));
+        List<LogSqlEntry> snap = buf.snapshot();
+        assertEquals(1, snap.size());
+        LogSqlEntry merged = snap.get(0);
+        assertEquals(1L, merged.sequenceNumber());
+        assertEquals(1_000L, merged.timestamp());
+        assertEquals("src/main/java/com/example/RefundOrderService.java", merged.sourceFile());
+        assertEquals(67, merged.sourceLine());
+        assertEquals(20L, merged.executionTimeMs().longValue());
+        assertEquals("PostgreSQL · cyzc@localhost:5432", merged.databaseName());
+        assertEquals(List.of(new kotlin.Pair<>("src/main/java/com/example/RefundOrderService.java", 67)),
+            merged.sourceCandidates());
+        assertEquals(CaptureProvenance.MERGED, merged.captureProvenance());
+        assertEquals(1, buf.dedupeCount(sql));
+    }
+
+    @Test
+    public void O147agent先到控制台后到不降级() {
+        SqlLogEntryBuffer buf = new SqlLogEntryBuffer(10);
+        buf.setDedupeWindowMs(60_000L);
+        String sql = "SELECT * FROM t WHERE id = 7";
+        assertTrue(buf.addEntry(agentProvEntry(sql, 1_000L)));
+        assertFalse(buf.addEntry(consoleProvEntry(sql, 2_000L)));
+        LogSqlEntry merged = buf.snapshot().get(0);
+        assertEquals("src/main/java/com/example/RefundOrderService.java", merged.sourceFile());
+        assertEquals(20L, merged.executionTimeMs().longValue());
+        assertEquals(CaptureProvenance.MERGED, merged.captureProvenance());
+    }
+
+    @Test
+    public void O147融合只补空不覆盖既有值() {
+        SqlLogEntryBuffer buf = new SqlLogEntryBuffer(10);
+        buf.setDedupeWindowMs(60_000L);
+        assertTrue(buf.addEntry(agentProvEntry("SELECT 1", 1_000L)));
+        assertFalse(buf.addEntry(agentProvEntry("SELECT 1", 2_000L)));
+        LogSqlEntry merged = buf.snapshot().get(0);
+        assertEquals(20L, merged.executionTimeMs().longValue());
+        assertEquals(CaptureProvenance.AGENT, merged.captureProvenance());
+    }
+
+    @Test
+    public void O147MP分页伪标记被真实源码升级() {
+        SqlLogEntryBuffer buf = new SqlLogEntryBuffer(10);
+        buf.setDedupeWindowMs(60_000L);
+        String sql = "SELECT COUNT(*) FROM biz";
+        LogSqlEntry paginated = new LogSqlEntry(sql, sql, List.of(), 1_000L, null,
+            LogSqlEntry.computeSummary(sql), SqlSource.MYBATIS, null,
+            SourceMarkers.MP_PAGINATION_COUNT, 0, List.of(), List.of(), null, 0L,
+            null, null, null, null, null, null, CaptureProvenance.CONSOLE_EP);
+        assertTrue(buf.addEntry(paginated));
+        assertFalse(buf.addEntry(agentProvEntry(sql, 2_000L)));
+        assertEquals("分页 COUNT 的伪标记让位于真实调用点",
+            "src/main/java/com/example/RefundOrderService.java", buf.snapshot().get(0).sourceFile());
+    }
+
+    @Test
+    public void O147融合条目随淘汰回收后同键新观测正常入库() {
+        SqlLogEntryBuffer buf = new SqlLogEntryBuffer(2);
+        buf.setDedupeWindowMs(60_000L);
+        buf.addEntry(consoleProvEntry("A", 1_000L));
+        buf.addEntry(agentProvEntry("A", 2_000L));
+        buf.addEntry(consoleProvEntry("B", 3_000L));
+        buf.addEntry(consoleProvEntry("C", 4_000L));
+        assertEquals(List.of("B", "C"), buf.snapshot().stream().map(LogSqlEntry::restoredSql).toList());
+        assertTrue(buf.addEntry(consoleProvEntry("A", 5_000L)));
+        assertEquals(List.of("C", "A"), buf.snapshot().stream().map(LogSqlEntry::restoredSql).toList());
+    }
 }

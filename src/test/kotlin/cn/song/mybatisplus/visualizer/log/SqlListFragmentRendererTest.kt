@@ -1,5 +1,10 @@
 package cn.song.mybatisplus.visualizer.log
 
+import cn.song.mybatisplus.visualizer.ui.highlight.SqlHighlightColors
+import com.intellij.openapi.editor.colors.EditorColorsScheme
+import com.intellij.openapi.editor.colors.TextAttributesKey
+import com.intellij.openapi.editor.markup.TextAttributes
+import java.lang.reflect.Proxy
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlTokenTypes
 import com.intellij.psi.tree.IElementType
 import com.intellij.ui.SimpleTextAttributes
@@ -65,6 +70,58 @@ class SqlListFragmentRendererTest {
     fun test含注释的SQL() {
         val f = fragmentOf("SELECT 1 -- note", "-- note")
         assertEquals("注释应着灰色", Color(0x7F848E), f?.attributes?.fgColor)
+    }
+
+    private fun scheme(overrides: Map<TextAttributesKey, Color>): EditorColorsScheme =
+        Proxy.newProxyInstance(
+            EditorColorsScheme::class.java.classLoader,
+            arrayOf(EditorColorsScheme::class.java),
+        ) { _, method, args ->
+            if (method.name == "getAttributes") {
+                var key = args!![0] as TextAttributesKey?
+                while (key != null && !overrides.containsKey(key)) key = key.fallbackAttributeKey
+                key?.let(overrides::get)?.let { color -> TextAttributes().apply { foregroundColor = color } }
+            } else null
+        } as EditorColorsScheme
+
+    @Test
+    fun testSemanticFragmentsKeepTextAndTokenTypesWithoutThemeState() {
+        val sql = "SELECT 'a<b&c>'\nFROM users WHERE id = 42"
+        val fragments = SqlListFragmentRenderer.semanticFragments(sql)
+        assertEquals(sql, fragments.joinToString("") { it.text })
+        assertEquals(SqlTokenTypes.KEYWORD, fragments.first().tokenType)
+        assertEquals(SqlTokenTypes.STRING, fragments.first { it.text == "'a<b&c>'" }.tokenType)
+        assertEquals(SqlTokenTypes.NUMBER, fragments.first { it.text == "42" }.tokenType)
+        assertEquals(setOf("text", "tokenType"),
+            SqlSemanticFragment::class.java.declaredFields.map { it.name }.toSet())
+        assertTrue(SqlListFragmentRenderer.semanticFragments("").isEmpty())
+    }
+
+    @Test
+    fun testSemanticLineSplitAndCacheDoNotStoreThemeColors() {
+        val sql = "SELECT a\nFROM t\n"
+        val lines = SqlListFragmentRenderer.semanticLineFragments(sql, SqlListDisplayMode.SINGLE_LINE)
+        assertEquals(listOf("SELECT a", "FROM t", ""), lines.map { line -> line.joinToString("") { it.text } })
+        assertEquals(SqlTokenTypes.KEYWORD, lines[1].first().tokenType)
+        val entry = LogSqlEntry(sql, sql, emptyList())
+        entry.cachedListLineFragments = lines
+        assertSame(lines, entry.cachedListLineFragments)
+        assertTrue(lines.flatten().none { it.text.contains('\n') })
+    }
+
+    @Test
+    fun testSemanticFragmentsProjectUsingCurrentSchemeAndCanonicalOverrideFirst() {
+        val semantic = SqlListFragmentRenderer.semanticFragments("SELECT 1")
+        val canonical = SqlHighlightColors.KEYWORD
+        val legacy = requireNotNull(canonical.fallbackAttributeKey)
+        val first = scheme(mapOf(legacy to Color.BLUE))
+        val second = scheme(mapOf(legacy to Color.GREEN, canonical to Color.RED))
+        assertEquals(Color.BLUE, SqlListFragmentRenderer.projectFragments(semantic, first).first().attributes.fgColor)
+        assertEquals(Color.RED, SqlListFragmentRenderer.projectFragments(semantic, second).first().attributes.fgColor)
+        val lines = SqlListFragmentRenderer.semanticLineFragments("SELECT 1", SqlListDisplayMode.SINGLE_LINE)
+        assertEquals(Color.BLUE, SqlListFragmentRenderer.projectLineFragments(lines, first)[0][0].attributes.fgColor)
+        assertEquals(Color.RED, SqlListFragmentRenderer.projectLineFragments(lines, second)[0][0].attributes.fgColor)
+        assertEquals(Color.BLUE, SqlListFragmentRenderer.projectFragments(semantic, first).first().attributes.fgColor)
     }
 
     // ---------- T-ListMode：显示模式变换与多行拆分（承接 SqlListHtmlRendererTest 三模式映射语义） ----------

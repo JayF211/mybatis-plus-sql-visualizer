@@ -408,6 +408,30 @@ class SqlSyntaxHighlighterTest {
     }
 
     @Test
+    fun testEightTokensShareCanonicalKeysAndPlatformFallbacks() {
+        val keys = listOf(
+            SqlTokenTypes.KEYWORD to SqlHighlightColors.KEYWORD,
+            SqlTokenTypes.TABLE to SqlHighlightColors.TABLE,
+            SqlTokenTypes.IDENTIFIER to SqlHighlightColors.IDENTIFIER,
+            SqlTokenTypes.STRING to SqlHighlightColors.STRING,
+            SqlTokenTypes.NUMBER to SqlHighlightColors.NUMBER,
+            SqlTokenTypes.COMMENT to SqlHighlightColors.COMMENT,
+            SqlTokenTypes.OPERATOR to SqlHighlightColors.OPERATOR,
+            SqlTokenTypes.PAREN to SqlHighlightColors.PAREN,
+        )
+        for ((type, canonical) in keys) {
+            org.junit.Assert.assertSame(canonical, highlighter.getTokenHighlights(type).single())
+            org.junit.Assert.assertSame(canonical, SqlListSyntaxHighlighter().getTokenHighlights(type).single())
+            assertTrue(canonical.externalName.startsWith("MP_SQL."))
+            val legacy = requireNotNull(canonical.fallbackAttributeKey)
+            assertEquals(canonical.externalName.replace('.', '_'), legacy.externalName)
+            assertNotNull("legacy key must fall back to platform colors", legacy.fallbackAttributeKey)
+        }
+        assertTrue(highlighter.getTokenHighlights(null).isEmpty())
+        assertTrue(SqlListSyntaxHighlighter().getTokenHighlights(null).isEmpty())
+    }
+
+    @Test
     fun testBadCharacterHasHighlight() {
         val badCharKey = highlighter.getTokenHighlights(TokenType.BAD_CHARACTER)
         assertTrue("BAD_CHARACTER should have highlight", badCharKey.isNotEmpty())
