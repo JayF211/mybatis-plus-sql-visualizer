@@ -281,7 +281,10 @@ def preview_rect(pid=None):
     main = window_rect(pid=pid, pick="largest", min_size=(800, 600))
     pop = window_rect(pid=pid, pick="smallest", min_size=(600, 400))
     if pop and main and pop != main:
-        return pop
+        # 视口上限过滤：IDE 内层 content frame（内缩全屏 1720x880 级）会被误当预览面板；
+        # 预览面板固定模态实测约 1190x702，超过上限即非面板。
+        if (pop[2] - pop[0]) <= 1600 and (pop[3] - pop[1]) <= 950:
+            return pop
     return None
 
 
