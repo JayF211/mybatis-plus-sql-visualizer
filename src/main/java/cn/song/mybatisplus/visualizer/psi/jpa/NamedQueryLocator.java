@@ -93,28 +93,40 @@ public final class NamedQueryLocator {
      */
     @Nullable
     public static NamedQueryInfo findByQueryName(@NotNull Project project, @Nullable String queryName) {
-        if (queryName == null || queryName.isBlank()) return null;
-        int dot = queryName.indexOf('.');
-        String entitySimpleName = (dot >= 0 ? queryName.substring(0, dot) : "").trim();
-        if (entitySimpleName.isBlank()) return null;
-        PsiClass[] classes;
+        return findByQueryName(project, queryName, null);
+    }
+
+    @Nullable
+    public static NamedQueryInfo findByQueryName(@NotNull Project project, @Nullable String queryName,
+                                                 @Nullable com.intellij.psi.PsiElement context) {
+        List<NamedQueryInfo> candidates = findCandidatesByQueryName(project, queryName, context);
+        return candidates.size() == 1 ? candidates.get(0) : null;
+    }
+
+    public static List<NamedQueryInfo> findCandidatesByQueryName(Project project, String queryName) {
+        return findCandidatesByQueryName(project, queryName, null);
+    }
+
+    /** 保留歧义信息，预览不得把 null 误认成 Java 定义不存在而绕到 HBM。 */
+    public static List<NamedQueryInfo> findCandidatesByQueryName(Project project, String queryName,
+                                                                 com.intellij.psi.PsiElement context) {
+        if (queryName == null || queryName.isBlank() || com.intellij.openapi.project.DumbService.isDumb(project)) return List.of();
+        int dot = queryName.lastIndexOf('.');
+        String ownerName = (dot >= 0 ? queryName.substring(0, dot) : "").trim();
+        if (ownerName.isBlank()) return List.of();
         try {
-            classes = JavaPsiFacade.getInstance(project).findClasses(entitySimpleName, GlobalSearchScope.projectScope(project));
-        } catch (Throwable t) {
-            // runCatching 等价：解析失败时调用方优雅降级
-            return null;
-        }
-        for (PsiClass cls : classes) {
-            NamedQueryInfo hit = null;
-            for (NamedQueryInfo info : locate(cls)) {
-                if (info.getName().equals(queryName)) {
-                    hit = info;
-                    break;
-                }
+            GlobalSearchScope scope = cn.song.mybatisplus.visualizer.psi.EntityClassResolver.searchScope(project, context);
+            // 宿主不一定是根实体，也不一定有 @Entity；仅按宿主名查找。
+            PsiClass[] classes = ownerName.contains(".") ? JavaPsiFacade.getInstance(project).findClasses(ownerName, scope)
+                    : com.intellij.psi.search.PsiShortNamesCache.getInstance(project).getClassesByName(ownerName, scope);
+            List<NamedQueryInfo> matches = new ArrayList<>();
+            for (PsiClass cls : new java.util.LinkedHashSet<>(java.util.Arrays.asList(classes))) {
+                for (NamedQueryInfo info : locate(cls)) if (queryName.equals(info.getName())) matches.add(info);
             }
-            if (hit != null) return hit;
+            return matches;
+        } catch (com.intellij.openapi.project.IndexNotReadyException ignored) {
+            return List.of();
         }
-        return null;
     }
 
     /**

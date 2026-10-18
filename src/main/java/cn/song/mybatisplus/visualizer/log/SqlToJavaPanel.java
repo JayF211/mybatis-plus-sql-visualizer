@@ -1516,7 +1516,8 @@ public class SqlToJavaPanel extends JPanel implements Disposable {
                 MpSqlVisualizerBundle.message("dialog.selectEntity.mainTable") + " " + result.tableName(),
                 mainCandidates.stream()
                         .map(SqlToJavaConverter.EntityCandidate::psiClass)
-                        .collect(Collectors.toList())
+                        .collect(Collectors.toList()),
+                result.tableName()
         ));
         for (ReverseJoin join : result.joins()) {
             String alias = join.alias();
@@ -1528,7 +1529,8 @@ public class SqlToJavaPanel extends JPanel implements Disposable {
                 rows.add(new EntitySelectionDialog.TableRow(
                         alias,
                         MpSqlVisualizerBundle.message("dialog.selectEntity.joinTable") + " " + alias + " " + join.tableName(),
-                        subClasses
+                        subClasses,
+                        join.tableName()
                 ));
             }
         }

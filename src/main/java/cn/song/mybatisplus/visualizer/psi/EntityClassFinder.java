@@ -1,6 +1,15 @@
 package cn.song.mybatisplus.visualizer.psi;
 
+import cn.song.mybatisplus.visualizer.config.PluginSettings;
+import cn.song.mybatisplus.visualizer.util.FatalErrors;
+import com.intellij.openapi.application.ApplicationManager;
+import com.intellij.openapi.application.ReadAction;
+import com.intellij.openapi.progress.ProgressManager;
 import com.intellij.openapi.project.Project;
+import com.intellij.openapi.roots.ProjectRootModificationTracker;
+import kotlin.Unit;
+import kotlin.jvm.functions.Function0;
+import kotlin.jvm.functions.Function1;
 import com.intellij.openapi.util.Key;
 import com.intellij.psi.PsiAnnotation;
 import com.intellij.psi.PsiClass;
@@ -51,10 +60,22 @@ public class EntityClassFinder {
     public List<PsiClass> find(String tableName) {
         if (tableName == null || tableName.isBlank()) return List.of();
         EntityResolver resolver = new EntityResolver();
+        // 源码优先；库兜底只做候选名索引查询，不在反查热路径全扫 classpath。
+        List<PsiClass> result = findByCandidateNames(tableName, resolver, GlobalSearchScope.projectScope(project));
+        if (!result.isEmpty()) return result;
+        result = findByCandidateNames(tableName, resolver, libraryScope());
+        if (!result.isEmpty()) return result;
+        result = findByTableNameAnnotationCached(tableName);
+        if (!result.isEmpty()) return result;
+        return findByLibrarySweepCached(tableName);
+    }
+
+    /** 按候选类名在给定 scope 内找表名精确匹配的实体（快路径）。 */
+    private List<PsiClass> findByCandidateNames(String tableName, EntityResolver resolver, GlobalSearchScope scope) {
         List<PsiClass> result = new ArrayList<>();
         for (String candidateName : candidateClassNames(tableName)) {
             PsiClass[] classes = PsiShortNamesCache.getInstance(project)
-                .getClassesByName(candidateName, GlobalSearchScope.projectScope(project));
+                .getClassesByName(candidateName, scope);
             for (PsiClass clazz : classes) {
                 // T-M36.3：VO/DTO 类排除——候选类名以 VO/DTO 结尾的（如 UserVO）不参与转换
                 // （表名校验已覆盖绝大多数；此为命名惯例的显式防御）
@@ -69,8 +90,168 @@ public class EntityClassFinder {
                 }
             }
         }
-        if (!result.isEmpty()) return result;
-        return findByTableNameAnnotationCached(tableName);
+        return result;
+    }
+
+    /**
+     * 库兜底用 allScope：notScope(projectScope) 会把模块库根一并排除。
+     * 项目类此前已查过且 0 命中，重复的几次查询由 EntityResolver 缓存摊销。
+     */
+    private GlobalSearchScope libraryScope() { return GlobalSearchScope.allScope(project); }
+
+    /** 库内非常规命名实体只读缓存；未就绪则投递后台扫描，本次仍返回空，不等待。 */
+    private List<PsiClass> findByLibrarySweepCached(String tableName) {
+        LibrarySweepCache entry = librarySweepCache();
+        List<MatchedClass> cached = entry != null ? entry.tables.get(tableName.toLowerCase(Locale.ROOT)) : null;
+        if (cached != null) {
+            List<PsiClass> restored = new ArrayList<>();
+            for (MatchedClass matched : cached) {
+                PsiClass clazz = restoreMatched(matched);
+                if (clazz != null) restored.add(clazz);
+            }
+            return restored;
+        }
+        requestLibrarySweep();
+        return List.of();
+    }
+
+    private LibrarySweepCache librarySweepCache() {
+        long current = projectStructureVersion();
+        LibrarySweepCache cached = project.getUserData(LIBRARY_SWEEP_CACHE_KEY);
+        return cached != null && cached.count == current ? cached : null;
+    }
+
+    /** 项目结构版本：文件增删/依赖与模块根变化失效，改已有文件正文不使库缓存失效。 */
+    private long projectStructureVersion() {
+        return ProjectRootModificationTracker.getInstance(project).getModificationCount();
+    }
+
+    /** 四道闸：开关、本结构版本一次、冷却窗口、全局在途上限。 */
+    private void requestLibrarySweep() {
+        if (!isLibrarySweepEnabled()) return;
+        if (!markSweepDispatched()) return;
+        if (inFlightSweep.get() >= MAX_IN_FLIGHT_SWEEP) return;
+        if (sweepDispatchForTest != null) {
+            sweepDispatchForTest.invoke(project);
+            return;
+        }
+        var app = ApplicationManager.getApplication();
+        if (app == null) return;
+        inFlightSweep.incrementAndGet();
+        java.util.concurrent.Future<?> future = null;
+        try {
+            future = app.executeOnPooledThread(() -> {
+                try {
+                    // 不包外层 ReadAction：内核自带分片读动作，外层包裹会重新整趟持锁。
+                    int entries = runLibrarySweepNow();
+                    if (entries < 0) clearLibrarySweepDispatched();
+                } catch (Throwable t) {
+                    // 取消、关工程、取数异常均允许下次重投；JVM 致命错误保留原对象透传。
+                    clearLibrarySweepDispatched();
+                    if (FatalErrors.isFatal(t)) throw t;
+                } finally {
+                    inFlightSweep.decrementAndGet();
+                }
+            });
+        } catch (Throwable ignored) {
+            // 对应上游投递层 runCatching().getOrNull()，保持与任务体的 fatal 策略边界。
+        }
+        if (future == null) inFlightSweep.decrementAndGet();
+    }
+
+    /** 每结构版本一次，再叠时间冷却，避免依赖/模块频繁变化引发投递风暴。 */
+    private boolean markSweepDispatched() {
+        if (!cooldownElapsed()) return false;
+        long current = projectStructureVersion();
+        LibrarySweepCache existing = project.getUserData(LIBRARY_SWEEP_CACHE_KEY);
+        if (existing != null && existing.count == current) {
+            if (existing.dispatched) return false;
+            existing.dispatched = true;
+        } else {
+            project.putUserData(LIBRARY_SWEEP_CACHE_KEY, new LibrarySweepCache(current, new LinkedHashMap<>(), true));
+        }
+        project.putUserData(LIBRARY_SWEEP_DISPATCH_AT_KEY, sweepNow());
+        return true;
+    }
+
+    /** 窗口下界为上趟实际耗时，保证两趟之间至少歇一趟，直接扫描也参与冷却。 */
+    private boolean cooldownElapsed() {
+        Long last = project.getUserData(LIBRARY_SWEEP_DISPATCH_AT_KEY);
+        if (last == null) return true;
+        Long lastCost = project.getUserData(LIBRARY_SWEEP_LAST_COST_KEY);
+        return sweepNow() - last >= Math.max(sweepCooldownMs, lastCost != null ? lastCost : 0L);
+    }
+
+    private long sweepNow() { return sweepClockForTest != null ? sweepClockForTest.invoke() : System.currentTimeMillis(); }
+
+    private void clearLibrarySweepDispatched() {
+        LibrarySweepCache cached = project.getUserData(LIBRARY_SWEEP_CACHE_KEY);
+        if (cached != null) cached.dispatched = false;
+    }
+
+    /** 设置不可用默认开，测试缝优先。 */
+    private boolean isLibrarySweepEnabled() {
+        if (sweepEnabledForTest != null) return sweepEnabledForTest;
+        try {
+            return PluginSettings.getInstance().getState().getLibraryEntitySweepEnabled();
+        } catch (Throwable ignored) {
+            return true;
+        }
+    }
+
+    private int sweepScanLimit() { return sweepScanLimitForTest != null ? sweepScanLimitForTest : LIBRARY_SWEEP_SCAN_LIMIT; }
+
+    /**
+     * 全 classpath 的唯一全量扫描，必须在 BGT 调用，不可包外层 ReadAction。
+     * 短名清单用独立短读动作，每 500 个短名一个读动作，片间真正释放读锁并检查取消。
+     * 上限按剩余预算切片，触顶返回 -1 且不落残缺缓存；先取结构版本，结构在扫描期间变化则结果自然过期。
+     * 只认 @TableName：按类名推断会把 JDK 等任意类全建成表，常规命名已由快路径覆盖。
+     * 显式按钮扫描也记录完成时刻和耗时（至少 1ms），避免随后未命中立即再扫。
+     */
+    public int runLibrarySweepNow() {
+        long startedMs = sweepNow();
+        long startedAt = projectStructureVersion();
+        GlobalSearchScope scope = libraryScope();
+        int limit = sweepScanLimit();
+        Map<String, List<MatchedClass>> tables = new LinkedHashMap<>();
+        String[] names = ReadAction.compute(() -> PsiShortNamesCache.getInstance(project).getAllClassNames());
+        int scanned = 0;
+        boolean truncated = false;
+        int from = 0;
+        while (from < names.length) {
+            ProgressManager.checkCanceled();
+            int remaining = limit - scanned;
+            if (remaining <= 0) {
+                truncated = true;
+                break;
+            }
+            int to = Math.min(Math.min(from + LIBRARY_SWEEP_SLICE, from + remaining), names.length);
+            final int sliceFrom = from;
+            ReadAction.compute(() -> {
+                PsiShortNamesCache namesCache = PsiShortNamesCache.getInstance(project);
+                for (int j = sliceFrom; j < to; j++) {
+                    String shortName = names[j];
+                    if (endsWithIgnoreCase(shortName, "VO") || endsWithIgnoreCase(shortName, "DTO")) continue;
+                    for (PsiClass clazz : namesCache.getClassesByName(shortName, scope)) {
+                        if (clazz.isInterface() || clazz.isEnum() || clazz.isAnnotationType()) continue;
+                        if (isVoDto(clazz)) continue;
+                        String table = tableNameAnnotation(clazz);
+                        if (table == null || table.isBlank()) continue;
+                        tables.computeIfAbsent(table.toLowerCase(Locale.ROOT), ignored -> new ArrayList<>())
+                            .add(new MatchedClass(shortName, clazz.getQualifiedName()));
+                    }
+                }
+                return null;
+            });
+            // 等价于上游片内逐短名 scanned++：只在整片成功返回后才使用这个计数。
+            scanned += to - from;
+            from = to;
+        }
+        project.putUserData(LIBRARY_SWEEP_DISPATCH_AT_KEY, sweepNow());
+        project.putUserData(LIBRARY_SWEEP_LAST_COST_KEY, Math.max(1L, sweepNow() - startedMs));
+        if (truncated) return -1;
+        project.putUserData(LIBRARY_SWEEP_CACHE_KEY, new LibrarySweepCache(startedAt, tables, true));
+        return tables.size();
     }
 
     /**
@@ -112,7 +293,8 @@ public class EntityClassFinder {
 
     /** 缓存条目按类名重取 PsiClass（shortName 索引查询 + qualifiedName 精确比对防同名误配）。 */
     private PsiClass restoreMatched(MatchedClass matched) {
-        GlobalSearchScope scope = GlobalSearchScope.projectScope(project);
+        // 两种缓存共用恢复路径，依赖库类必须从 allScope 重取；全限定名防同名误配。
+        GlobalSearchScope scope = GlobalSearchScope.allScope(project);
         PsiClass[] classes = PsiShortNamesCache.getInstance(project)
             .getClassesByName(matched.shortName, scope);
         for (PsiClass clazz : classes) {
@@ -128,7 +310,11 @@ public class EntityClassFinder {
         PsiShortNamesCache cache = PsiShortNamesCache.getInstance(project);
         GlobalSearchScope scope = GlobalSearchScope.projectScope(project);
         List<PsiClass> result = new ArrayList<>();
+        int scanned = 0;
         for (String shortName : cache.getAllClassNames()) {
+            // 项目慢路径同样须可取消，避免全量短名遍历长时间持读锁。
+            if (scanned % LIBRARY_SWEEP_CANCEL_INTERVAL == 0) ProgressManager.checkCanceled();
+            scanned++;
             // 短名快筛：VO/DTO 结尾的直接跳过（避免逐类检查）
             if (endsWithIgnoreCase(shortName, "VO") || endsWithIgnoreCase(shortName, "DTO")) continue;
             for (PsiClass clazz : cache.getClassesByName(shortName, scope)) {
@@ -231,6 +417,78 @@ public class EntityClassFinder {
         }
     }
 
+    /** 库扫描缓存以项目结构版本失效；正文编辑不能退化为每次打字重扫 classpath。 */
+    private static final class LibrarySweepCache {
+        /** 扫描开始时的结构版本。 */
+        final long count;
+        /** 小写表名到类短名/全限定名，不长期持有 PSI。 */
+        final Map<String, List<MatchedClass>> tables;
+        /** 本版本是否投递过；取消/触顶时清除。 */
+        boolean dispatched;
+
+        LibrarySweepCache(long count, Map<String, List<MatchedClass>> tables, boolean dispatched) {
+            this.count = count;
+            this.tables = tables;
+            this.dispatched = dispatched;
+        }
+    }
+
+    private static final Key<LibrarySweepCache> LIBRARY_SWEEP_CACHE_KEY = Key.create("mp-visualizer.librarySweepCache");
+    private static final Key<Long> LIBRARY_SWEEP_DISPATCH_AT_KEY = Key.create("mp-visualizer.librarySweepDispatchAt");
+    private static final Key<Long> LIBRARY_SWEEP_LAST_COST_KEY = Key.create("mp-visualizer.librarySweepLastCostMs");
+    /** 项目慢路径每 64 个短名检查取消。 */
+    public static final int LIBRARY_SWEEP_CANCEL_INTERVAL = 64;
+    /** 每片一个独立读动作，片间释放读锁（不能只靠无进度上下文的 checkCanceled 让锁）。 */
+    public static final int LIBRARY_SWEEP_SLICE = 500;
+    /** 病态兜底而非常规截断线；真实 classpath 含 JDK 常有 2~3 万个短名。 */
+    public static final int LIBRARY_SWEEP_SCAN_LIMIT = 200_000;
+    public static final long LIBRARY_SWEEP_COOLDOWN_MS = 5_000L;
+    public static Integer sweepScanLimitForTest = null;
+    public static long sweepCooldownMs = LIBRARY_SWEEP_COOLDOWN_MS;
+    /** Kotlin function 字段保留 Function0/Function1，而不是改成不可赋 Kotlin lambda 的 Java SAM 字段。 */
+    public static Function0<Long> sweepClockForTest = null;
+    public static Boolean sweepEnabledForTest = null;
+    public static Function1<Project, Unit> sweepDispatchForTest = null;
+    private static final int MAX_IN_FLIGHT_SWEEP = 1;
+    private static final java.util.concurrent.atomic.AtomicInteger inFlightSweep = new java.util.concurrent.atomic.AtomicInteger();
+
+    public static void seedLibrarySweepForTest(Project project, String table, PsiClass clazz) {
+        long current = ProjectRootModificationTracker.getInstance(project).getModificationCount();
+        LibrarySweepCache existing = project.getUserData(LIBRARY_SWEEP_CACHE_KEY);
+        Map<String, List<MatchedClass>> tables = existing != null && existing.count == current
+            ? new LinkedHashMap<>(existing.tables) : new LinkedHashMap<>();
+        String shortName = clazz.getName();
+        if (shortName == null) return;
+        tables.put(table.toLowerCase(Locale.ROOT), List.of(new MatchedClass(shortName, clazz.getQualifiedName())));
+        project.putUserData(LIBRARY_SWEEP_CACHE_KEY, new LibrarySweepCache(current, tables, true));
+    }
+
+    public static boolean sweepDispatchedForTest(Project project) {
+        LibrarySweepCache cached = project.getUserData(LIBRARY_SWEEP_CACHE_KEY);
+        return cached != null && cached.dispatched;
+    }
+
+    public static int sweepTableCountForTest(Project project) {
+        LibrarySweepCache cached = project.getUserData(LIBRARY_SWEEP_CACHE_KEY);
+        return cached != null ? cached.tables.size() : 0;
+    }
+
+    public static Set<String> sweepTablesForTest(Project project) {
+        LibrarySweepCache cached = project.getUserData(LIBRARY_SWEEP_CACHE_KEY);
+        return cached != null ? cached.tables.keySet() : Set.of();
+    }
+
+    public static void clearLibrarySweepDispatchedForTest(Project project) {
+        LibrarySweepCache cached = project.getUserData(LIBRARY_SWEEP_CACHE_KEY);
+        if (cached != null) cached.dispatched = false;
+    }
+
+    public static void clearLibrarySweepCache(Project project) {
+        project.putUserData(LIBRARY_SWEEP_CACHE_KEY, null);
+        project.putUserData(LIBRARY_SWEEP_DISPATCH_AT_KEY, null);
+        project.putUserData(LIBRARY_SWEEP_LAST_COST_KEY, null);
+    }
+
     private ReverseLookupCache reverseLookupCache() {
         // 失效计数：PsiModificationTracker（IPGP 中位于 com.intellij.psi.util 包，编译实证；
         // PSI 任何修改递增，缓存自动失效重扫）
@@ -266,6 +524,7 @@ public class EntityClassFinder {
         /** 清除项目级反查缓存（设置页「清除缓存」；下次 find 重新全量扫描）。 */
         public void clearReverseLookupCache(Project project) {
             project.putUserData(REVERSE_LOOKUP_CACHE_KEY, null);
+            clearLibrarySweepCache(project);
         }
 
         /**

@@ -9,5 +9,7 @@ public enum SortMode {
     TIME_DESC,
     DURATION_ASC,
     DURATION_DESC,
-    SEQUENCE
+    SEQUENCE,
+    STRUCTURE_CLUSTER,
+    DATABASE_GROUP
 }

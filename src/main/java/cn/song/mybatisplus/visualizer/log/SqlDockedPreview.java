@@ -1,0 +1,143 @@
+package cn.song.mybatisplus.visualizer.log;
+
+import cn.song.mybatisplus.visualizer.config.PluginSettings;
+import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
+import cn.song.mybatisplus.visualizer.util.UiTextClipboard;
+import com.intellij.openapi.Disposable;
+import com.intellij.openapi.command.WriteCommandAction;
+import com.intellij.openapi.editor.Editor;
+import com.intellij.openapi.editor.EditorFactory;
+import com.intellij.openapi.editor.event.DocumentEvent;
+import com.intellij.openapi.editor.event.DocumentListener;
+import com.intellij.openapi.project.Project;
+import java.awt.BorderLayout;
+import java.awt.FlowLayout;
+import java.util.Objects;
+import javax.swing.*;
+import javax.swing.event.ListDataEvent;
+import javax.swing.event.ListDataListener;
+
+public final class SqlDockedPreview implements Disposable {
+    private final Project project;
+    private final JList<LogSqlEntry> list;
+    private final Runnable onClose;
+    private final JPanel component = new JPanel(new BorderLayout());
+    private final JLabel status = new JLabel(MpSqlVisualizerBundle.message("log.dockedPreview.empty"));
+    private final JButton restore = new JButton(MpSqlVisualizerBundle.message("log.dockedPreview.restore"));
+    private SqlClickPreviewContent content;
+    private LogSqlEntry displayedEntry;
+    private String originalSql;
+    private boolean updating;
+    private boolean opened;
+
+    public SqlDockedPreview(Project project, JList<LogSqlEntry> list, Runnable onClose) {
+        this.project = project;
+        this.list = list;
+        this.onClose = onClose;
+        restore.setVisible(false);
+        restore.addActionListener(e -> restoreAndFollow());
+        component.setPreferredSize(new java.awt.Dimension(200, 220));
+        JPanel header = new JPanel(new BorderLayout());
+        header.add(status, BorderLayout.CENTER);
+        JPanel actions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
+        actions.add(restore);
+        header.add(actions, BorderLayout.EAST);
+        component.add(header, BorderLayout.NORTH);
+        component.add(new JLabel(status.getText(), SwingConstants.CENTER), BorderLayout.CENTER);
+        list.addListSelectionListener(e -> { if (!e.getValueIsAdjusting()) refreshSelection(); });
+        list.getModel().addListDataListener(new ListDataListener() {
+            @Override public void intervalAdded(ListDataEvent e) { refreshSelection(); }
+            @Override public void intervalRemoved(ListDataEvent e) { refreshSelection(); }
+            @Override public void contentsChanged(ListDataEvent e) { refreshSelection(); }
+        });
+    }
+
+    public JPanel getComponent() { return component; }
+    public boolean isOpen() { return opened; }
+    public String getDisplayedSqlForTest() { return content != null && displayedEntry != null ? content.editor().getDocument().getText() : null; }
+    public Editor getEditorForTest() { return content != null ? content.editor() : null; }
+    public boolean isPinnedForTest() { return isPinned(); }
+    public void restoreAndFollowForTest() { restoreAndFollow(); }
+
+    public void open() { opened = true; refreshSelection(); }
+    public void close() { opened = false; }
+
+    public void resetContext() {
+        displayedEntry = null;
+        originalSql = null;
+        restore.setVisible(false);
+        Editor editor = getEditorForTest();
+        if (editor != null && !editor.getDocument().getText().isEmpty()) {
+            updating = true;
+            try { WriteCommandAction.runWriteCommandAction(project, () -> editor.getDocument().setText("")); }
+            finally { updating = false; }
+        }
+        status.setText(MpSqlVisualizerBundle.message("log.dockedPreview.empty"));
+        showCenter(new JLabel(status.getText(), SwingConstants.CENTER));
+    }
+
+    public void refreshSelection() {
+        if (!opened || isPinned()) return;
+        LogSqlEntry entry = list.getSelectedIndices().length == 1 ? list.getSelectedValue() : null;
+        if (entry == null) {
+            displayedEntry = null;
+            originalSql = null;
+            status.setText(MpSqlVisualizerBundle.message(list.getSelectedIndices().length > 1
+                    ? "log.dockedPreview.multiple" : "log.dockedPreview.empty"));
+            showCenter(new JLabel(status.getText(), SwingConstants.CENTER));
+            return;
+        }
+        if (displayedEntry == entry) return;
+        String sql = SqlClickPreview.clickPreviewSql(entry.restoredSql(), PluginSettings.getInstance().getState().getLogFormatSql());
+        if (content == null) {
+            content = SqlClickPreview.buildContent(project, sql, UiTextClipboard::copy, onClose);
+            content.editor().getDocument().addDocumentListener(new DocumentListener() {
+                @Override public void documentChanged(DocumentEvent event) { updatePinnedStatus(); }
+            });
+        }
+        if (!content.editor().getDocument().getText().equals(sql)) {
+            updating = true;
+            try { WriteCommandAction.runWriteCommandAction(project, () -> content.editor().getDocument().setText(sql)); }
+            finally { updating = false; }
+        }
+        displayedEntry = entry;
+        originalSql = sql;
+        status.setText(MpSqlVisualizerBundle.message("log.dockedPreview.title"));
+        restore.setVisible(false);
+        showCenter(content.component());
+    }
+
+    private boolean isPinned() {
+        return displayedEntry != null && !Objects.equals(content != null ? content.editor().getDocument().getText() : null, originalSql);
+    }
+
+    private void updatePinnedStatus() {
+        if (updating || displayedEntry == null) return;
+        boolean pinned = isPinned();
+        status.setText(MpSqlVisualizerBundle.message(pinned ? "log.dockedPreview.pinned" : "log.dockedPreview.title"));
+        restore.setVisible(pinned);
+    }
+
+    private void restoreAndFollow() {
+        if (originalSql == null || content == null) return;
+        updating = true;
+        try { WriteCommandAction.runWriteCommandAction(project, () -> content.editor().getDocument().setText(originalSql)); }
+        finally { updating = false; }
+        restore.setVisible(false);
+        refreshSelection();
+        updatePinnedStatus();
+    }
+
+    private void showCenter(java.awt.Component next) {
+        java.awt.Component previous = ((BorderLayout) component.getLayout()).getLayoutComponent(BorderLayout.CENTER);
+        if (previous != null) component.remove(previous);
+        component.add(next, BorderLayout.CENTER);
+        component.revalidate();
+        component.repaint();
+    }
+
+    @Override public void dispose() {
+        if (content != null) EditorFactory.getInstance().releaseEditor(content.editor());
+        content = null;
+    }
+}

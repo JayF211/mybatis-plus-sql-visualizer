@@ -237,6 +237,8 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
          */
         private String embeddedColumnNaming = EMBEDDED_NAMING_AUTO;
         private boolean reverseManualEntitySelection = true;
+        /** 自动反查未命中时允许后台扫描依赖库实体。 */
+        private boolean libraryEntitySweepEnabled = true;
         private String logSqlPrefix = DEFAULT_LOG_SQL_PREFIX;
         private String logParamPrefix = DEFAULT_LOG_PARAM_PREFIX;
         private boolean logMixedPrefix = true;
@@ -250,6 +252,8 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         /** 时间戳显示模式：log=日志时间（默认），capture=捕获时间。 */
         private String logTimestampSource = DEFAULT_LOG_TIMESTAMP_SOURCE;
         private boolean logFormatSql = true;
+        /** 日志与历史共用的一次性预览交互迁移提示。 */
+        private boolean sqlListPreviewHintSeen = false;
         /**
          * 字面量参数恢复（T-HistParam F4，默认开）：日志 SQL 无 `?` 占位符（裸 SQL 捕获 /
          * MyBatis `${}` / 上游日志已内联参数值）时，把单引号字符串字面量识别为可编辑参数行。
@@ -620,6 +624,12 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
         public boolean getReverseManualEntitySelection() { return reverseManualEntitySelection; }
         public void setReverseManualEntitySelection(boolean reverseManualEntitySelection) { this.reverseManualEntitySelection = reverseManualEntitySelection; }
 
+        public boolean getLibraryEntitySweepEnabled() { return libraryEntitySweepEnabled; }
+        public void setLibraryEntitySweepEnabled(boolean libraryEntitySweepEnabled) { this.libraryEntitySweepEnabled = libraryEntitySweepEnabled; }
+
+        public boolean getSqlListPreviewHintSeen() { return sqlListPreviewHintSeen; }
+        public void setSqlListPreviewHintSeen(boolean sqlListPreviewHintSeen) { this.sqlListPreviewHintSeen = sqlListPreviewHintSeen; }
+
         public String getLogSqlPrefix() { return logSqlPrefix; }
         public void setLogSqlPrefix(String logSqlPrefix) { this.logSqlPrefix = logSqlPrefix; }
 
@@ -848,6 +858,8 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
             c.reverseWrapperFormat = reverseWrapperFormat;
             c.embeddedColumnNaming = embeddedColumnNaming;
             c.reverseManualEntitySelection = reverseManualEntitySelection;
+            c.libraryEntitySweepEnabled = libraryEntitySweepEnabled;
+            c.sqlListPreviewHintSeen = sqlListPreviewHintSeen;
             c.logSqlPrefix = logSqlPrefix;
             c.logParamPrefix = logParamPrefix;
             c.logMixedPrefix = logMixedPrefix;
@@ -989,6 +1001,8 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
                     && Objects.equals(reverseWrapperFormat, that.reverseWrapperFormat)
                     && Objects.equals(embeddedColumnNaming, that.embeddedColumnNaming)
                     && Objects.equals(reverseManualEntitySelection, that.reverseManualEntitySelection)
+                    && libraryEntitySweepEnabled == that.libraryEntitySweepEnabled
+                    && sqlListPreviewHintSeen == that.sqlListPreviewHintSeen
                     && Objects.equals(logSqlPrefix, that.logSqlPrefix)
                     && Objects.equals(logParamPrefix, that.logParamPrefix)
                     && Objects.equals(logTimestampFormat, that.logTimestampFormat)
@@ -1030,6 +1044,7 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
                     tablePrefix, tableSuffix, tableNameInference, ignoredFields, removeTablePrefix, removeTableSuffix,
                     columnCalibrationEnabled,
                     autoCheckUpdate, ignoredUpdateVersions, reverseWrapperFormat, embeddedColumnNaming, reverseManualEntitySelection,
+                    libraryEntitySweepEnabled, sqlListPreviewHintSeen,
                     logSqlPrefix, logParamPrefix, logMixedPrefix, logAutoCaptureOnStart, logAutoCaptureSuppressed,
                     logStopOnToolWindowClose, logAutoOpenOnCapture, logTimestampEnabled, logTimestampFormat, logTimestampSource,
                     logFormatSql, literalParamRecovery, logFilterKeywords, logDedupeWindowMs, logMaxParseLength, logMaxCount,
@@ -1049,7 +1064,8 @@ public final class PluginSettings implements PersistentStateComponent<PluginSett
 
         @Override
         public String toString() {
-            return "State(dialect=" + dialect + ")";
+            return "State(dialect=" + dialect + ", libraryEntitySweepEnabled=" + libraryEntitySweepEnabled
+                    + ", sqlListPreviewHintSeen=" + sqlListPreviewHintSeen + ")";
         }
     }
 

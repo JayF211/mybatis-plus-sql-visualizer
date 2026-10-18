@@ -120,55 +120,11 @@ public class LogEntryListCellRenderer extends JPanel implements javax.swing.List
         metaLine.clear();
         List<List<SqlTextFragment>> lineFragments = null;
         if (entry != null) {
-            // T-LogRowNumber：行号片段在最前（最高频引用锚点；0 = 无行号——历史文件/round-trip 条目）
-            if (entry.sequenceNumber() > 0) {
-                metaLine.append("#" + entry.sequenceNumber() + " ", SqlLogPanelKt.LIST_META_GRAY);
-            }
-            // T-TwoLine：元信息行（时间戳/耗时/来源/去重徽章）在上，段间距由尾随空格承担
-            kotlin.Pair<String, SimpleTextAttributes> ts = SqlLogPanelKt.formatTimestampFragment(entry);
-            if (ts != null) {
-                metaLine.append(ts.getFirst(), ts.getSecond());
-            }
-            if (PluginSettings.getInstance().getState().getShowDurationInLogList()) {
-                kotlin.Pair<String, SimpleTextAttributes> dur =
-                        SqlLogPanelKt.formatDurationFragment(entry.executionTimeMs(), useSelectionFill);
-                metaLine.append(dur.getFirst(), dur.getSecond());
-            }
-            // T-AgentDialectLoop：目标库角标（耗时后、来源前——与「这条 SQL 跑在哪」的阅读顺序一致）
-            kotlin.Pair<String, SimpleTextAttributes> db =
-                    SqlLogPanelKt.formatDatabaseFragment(entry, useSelectionFill);
-            if (db != null) {
-                metaLine.append(db.getFirst(), db.getSecond());
-            }
-            // T-McpAuditTrail T-MAT-05：MCP 徽标（同落点：目标库后、来源前；非 MCP 返回 null 不显示）
-            kotlin.Pair<String, SimpleTextAttributes> mcp =
-                    SqlLogPanelKt.formatMcpFragment(entry, useSelectionFill);
-            if (mcp != null) {
-                metaLine.append(mcp.getFirst(), mcp.getSecond());
-            }
-            kotlin.Pair<String, SimpleTextAttributes> src = SqlLogPanelKt.formatSourceFragment(entry, useSelectionFill);
-            if (src != null) {
-                metaLine.append(src.getFirst(), src.getSecond());
-            }
-            // 注：原「[⚡增强]」来源角标已按用户要求移除（增强为默认捕获通道，逐行标来源属噪音）
-            kotlin.Pair<String, SimpleTextAttributes> upd =
-                    SqlLogPanelKt.formatUpdateCountFragment(entry, isSelected);
-            if (upd != null) {
-                metaLine.append(upd.getFirst(), upd.getSecond());
-            }
-            kotlin.Pair<String, SimpleTextAttributes> err = SqlLogPanelKt.formatErrorFragment(entry);
-            if (err != null) {
-                metaLine.append(err.getFirst(), err.getSecond());
-            }
-            Integer cnt = dedupeCounts.get(entry.dedupeKey());
-            if (cnt != null && cnt > 0) {
-                metaLine.append("⨉" + cnt + " ", SqlLogPanelKt.LIST_META_GRAY);
-            }
-            // O-90：同模板 ×N 徽章（去重徽章后相邻；≥TEMPLATE_BADGE_MIN_COUNT 才显示）
-            kotlin.Pair<String, SimpleTextAttributes> tmpl =
-                    SqlLogPanelKt.formatTemplateCountFragment(entry, templateCounts, isSelected);
-            if (tmpl != null) {
-                metaLine.append(tmpl.getFirst(), tmpl.getSecond());
+            List<SqlTextFragment> metadata = SqlEntryPresentation.metadata(entry, isSelected,
+                    PluginSettings.getInstance().getState().getShowDurationInLogList(), templateCounts, dedupeCounts, true);
+            for (SqlTextFragment fragment : SqlEntryPresentation.clipForList(metadata, list, this, SqlListTypeColor.BAR_WIDTH)) {
+                metaLine.append(fragment.text(), isSelected
+                        ? SqlEntryPresentation.selectedAttributes(fragment.attributes(), fg) : fragment.attributes());
             }
             lineFragments = sqlLineFragmentsFor(entry);
         }
@@ -184,8 +140,8 @@ public class LogEntryListCellRenderer extends JPanel implements javax.swing.List
             comp.setForeground(fg);
             comp.clear();
             if (lineFragments != null && i < lineFragments.size()) {
-                for (SqlTextFragment f : lineFragments.get(i)) {
-                    comp.append(f.text(), f.attributes());
+                for (SqlTextFragment f : SqlEntryPresentation.clipForList(lineFragments.get(i), list, this, SqlListTypeColor.BAR_WIDTH)) {
+                    comp.append(f.text(), isSelected ? SqlEntryPresentation.selectedAttributes(f.attributes(), fg) : f.attributes());
                 }
             }
             if (list != null) {
@@ -213,20 +169,19 @@ public class LogEntryListCellRenderer extends JPanel implements javax.swing.List
      * 多行模式走条目级缓存（键含模式自动失效）——可变行高布局逐条测量免重复分词。
      */
     private List<List<SqlTextFragment>> sqlLineFragmentsFor(LogSqlEntry entry) {
-        String sql = SqlLogPanelKt.withTerminator(entry.summary());
         SqlListDisplayMode mode = PluginSettings.getInstance().sqlListDisplayMode();
+        String sql = SqlLogPanelKt.withTerminator(mode == SqlListDisplayMode.FORMATTED ? entry.restoredSql() : entry.summary());
         if (mode == SqlListDisplayMode.SINGLE_LINE) {
             List<List<SqlTextFragment>> single = new ArrayList<>();
             single.add(SqlListFragmentRenderer.renderFragments(sql));
             return single;
         }
-        List<List<SqlTextFragment>> cached = entry.cachedListLineFragments();
-        if (cached != null && entry.cachedListLineFragmentsMode() == mode) {
-            return cached;
+        List<List<SqlSemanticFragment>> semantics = entry.cachedListLineFragments();
+        if (semantics == null || entry.cachedListLineFragmentsMode() != mode) {
+            semantics = SqlListFragmentRenderer.semanticLineFragments(sql, mode);
+            entry.setCachedListLineFragments(semantics);
+            entry.setCachedListLineFragmentsMode(mode);
         }
-        List<List<SqlTextFragment>> computed = SqlListFragmentRenderer.renderLineFragments(sql, mode);
-        entry.setCachedListLineFragments(computed);
-        entry.setCachedListLineFragmentsMode(mode);
-        return computed;
+        return SqlEntryPresentation.visibleSqlLines(SqlListFragmentRenderer.projectLineFragments(semantics), mode);
     }
 }

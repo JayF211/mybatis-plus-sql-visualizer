@@ -275,7 +275,9 @@ public final class SqlLogFileReader {
                     decodedExt != null ? decodedExt.requestTag() : null,
                     decodedExt != null ? decodedExt.updateCount() : null,
                     databaseName,
-                    decodedExt != null ? decodedExt.actualSql() : null);
+                    decodedExt != null ? decodedExt.actualSql() : null,
+                    decodedExt != null && decodedExt.captureProvenance() != null
+                            ? decodedExt.captureProvenance() : CaptureProvenance.UNKNOWN);
         }
 
         Matcher m2 = OLD_HEADER_REGEX.matcher(header);
@@ -299,7 +301,10 @@ public final class SqlLogFileReader {
                     decodedExt != null ? decodedExt.errorText() : null,
                     decodedExt != null ? decodedExt.requestTag() : null,
                     decodedExt != null ? decodedExt.updateCount() : null,
-                    null);
+                    null,
+                    null,
+                    decodedExt != null && decodedExt.captureProvenance() != null
+                            ? decodedExt.captureProvenance() : CaptureProvenance.UNKNOWN);
         }
 
         return null;

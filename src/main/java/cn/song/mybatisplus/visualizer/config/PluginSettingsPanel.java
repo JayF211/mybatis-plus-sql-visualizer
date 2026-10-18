@@ -885,6 +885,9 @@ public class PluginSettingsPanel implements Disposable {
     /** 反向转换手动选择实体类开关（自动推断未命中/多表 JOIN 时弹实体选择弹窗）。 */
     public final JBCheckBox manualEntityCheck = new JBCheckBox();
 
+    /** 后台扫描依赖库以反查实体（T-JarEmbedded 方案 1）。 */
+    public final JBCheckBox librarySweepCheck = new JBCheckBox();
+
     /** 插件缓存信息（统一条目总数——所有打开项目汇总；不细分缓存类型）。 */
     public final JBLabel cacheInfoLabel = new JBLabel(" ");
 
@@ -1441,6 +1444,11 @@ public class PluginSettingsPanel implements Disposable {
         manualEntityCheck.setSelected(checked);
     }
 
+    /** 后台扫描依赖库设置入口（测试用），与 UI 的 isModified/apply 同一路径。 */
+    public void setLibrarySweepCheck(boolean checked) {
+        librarySweepCheck.setSelected(checked);
+    }
+
     /** T-TenantLine：多租户注入开关设置入口（测试用）——与用户勾选同一路径（isModified/apply 检测）。 */
     public void setInjectTenantLineCheck(boolean checked) {
         injectTenantLineCheck.setSelected(checked);
@@ -1594,7 +1602,8 @@ public class PluginSettingsPanel implements Disposable {
         Object reverse = reverseFormatCombo.getSelectedItem();
         return !Objects.equals(reverse instanceof ReverseFormatOption ? ((ReverseFormatOption) reverse).value : null,
                                s.getReverseWrapperFormat())
-            || manualEntityCheck.isSelected() != s.getReverseManualEntitySelection();
+            || manualEntityCheck.isSelected() != s.getReverseManualEntitySelection()
+            || librarySweepCheck.isSelected() != s.getLibraryEntitySweepEnabled();
     }
 
     private boolean isModifiedSqlLog(PluginSettings.State s) {
@@ -1744,6 +1753,7 @@ public class PluginSettingsPanel implements Disposable {
                 ? ((ReverseFormatOption) reverse).value
                 : PluginSettings.REVERSE_AUTO);
             s.setReverseManualEntitySelection(manualEntityCheck.isSelected());
+            s.setLibraryEntitySweepEnabled(librarySweepCheck.isSelected());
         }
         if (sections.contains(SECTION_SQL_LOG)) {
             s.setLogSqlPrefix(logSqlPrefixField.getText().trim());
@@ -1938,6 +1948,7 @@ public class PluginSettingsPanel implements Disposable {
             ReverseFormatOption reverse = reverseFormatOptionByValue(s.getReverseWrapperFormat());
             reverseFormatCombo.setSelectedItem(reverse != null ? reverse : reverseFormatOptions()[0]);
             manualEntityCheck.setSelected(s.getReverseManualEntitySelection());
+            librarySweepCheck.setSelected(s.getLibraryEntitySweepEnabled());
         }
         if (sections.contains(SECTION_UI)) {
             gutterIconCheck.setSelected(s.getShowGutterIcon());

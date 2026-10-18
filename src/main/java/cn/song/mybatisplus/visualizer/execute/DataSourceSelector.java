@@ -158,6 +158,9 @@ public final class DataSourceSelector {
     private static final java.util.concurrent.atomic.AtomicBoolean execPrewarmInFlight =
             new java.util.concurrent.atomic.AtomicBoolean(false);
 
+    /** 预热只作投机增强；平台等待超时后放弃，由弹窗冷路径按需重建。 */
+    private static final long EXEC_PREWARM_BUDGET_MS = 30_000L;
+
     /** M36.5.6：结果区换入回调。 */
     public static Consumer<JComponent> pendingOnConsole = null;
 
@@ -1729,8 +1732,25 @@ public final class DataSourceSelector {
             LOG.info("[M36] exec prewarm skipped (another prewarm in flight)");
             return;
         }
+        java.util.concurrent.Future<?> prewarmFuture =
+                com.intellij.util.concurrency.AppExecutorUtil.getAppExecutorService().submit(() ->
+                        DataSourceSelectorResultsKt.prewarmExecTempFileInner(project, sql, LOG));
         try {
-            DataSourceSelectorResultsKt.prewarmExecTempFileInner(project, sql, LOG);
+            prewarmFuture.get(EXEC_PREWARM_BUDGET_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
+        } catch (java.util.concurrent.TimeoutException e) {
+            prewarmFuture.cancel(true);
+            LOG.warn("[M36] exec prewarm exceeded " + EXEC_PREWARM_BUDGET_MS
+                    + "ms — cancelled & abandoned (best-effort; cold path rebuilds on demand)"
+                    + " (T-PrewarmWilDeadlock W2)");
+        } catch (java.util.concurrent.ExecutionException e) {
+            // 内层 fatal 经 Future 包装后仍须原对象上浮；非 fatal 保持预热降级语义。
+            Throwable cause = e.getCause() != null ? e.getCause() : e;
+            if (FatalErrors.isFatal(cause)) throw (Error) cause;
+            LOG.warn("[M36] exec prewarm failed: " + cause.getClass().getSimpleName() + ": " + cause.getMessage());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            prewarmFuture.cancel(true);
+            LOG.warn("[M36] exec prewarm waiter interrupted — abandoned (T-PrewarmWilDeadlock W2)");
         } finally {
             execPrewarmInFlight.set(false);
         }

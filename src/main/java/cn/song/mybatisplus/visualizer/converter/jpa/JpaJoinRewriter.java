@@ -66,11 +66,34 @@ public final class JpaJoinRewriter {
 
     /** 改写 SQL 中的全部 JOIN FETCH 与关联 JOIN；无匹配原样返回。 */
     public static String rewrite(String sql, TableInfo table, Project project) {
-        return rewriteInternal(sql, table, (rootAlias, relationField, joinAlias) ->
-                project != null
-                        ? JpaJoinOnResolver.resolveWithPsi(project, table.getEntityClassName(),
-                                rootAlias, relationField, joinAlias, table)
-                        : null);
+        return rewrite(sql, table, project, null);
+    }
+
+    public static String rewrite(String sql, TableInfo table, Project project, com.intellij.psi.PsiElement context) {
+        return rewriteWithLookup(sql, table, new JpaQueryEntityLookup(project, context));
+    }
+
+    /** 根表、子查询和 JOIN 共用本次查询解析缓存，按 JOIN 左侧别名选所属实体。 */
+    public static String rewriteWithLookup(String sql, TableInfo table, JpaQueryEntityLookup lookup) {
+        String rootName = JpaQueryEntityLookup.rootEntity(sql);
+        var masked = JpaSqlLiteralMasking.mask(sql);
+        java.util.Map<String, String> owners = new java.util.LinkedHashMap<>();
+        Matcher owner = Pattern.compile("(?i)\\b(?:FROM|JOIN)\\s+([a-zA-Z_][a-zA-Z0-9_.$]*)\\s+(?:AS\\s+)?([a-zA-Z_][a-zA-Z0-9_]*)").matcher(masked.text());
+        while (owner.find()) if (!"FETCH".equalsIgnoreCase(owner.group(1))) owners.put(owner.group(2), owner.group(1));
+        java.util.function.Function<java.util.regex.MatchResult, String> replace = match -> {
+            String name = owners.getOrDefault(match.group(3), rootName);
+            TableInfo ownerTable = java.util.Objects.equals(name, rootName) ? table : name == null ? null : lookup.resolveTable(name);
+            if (ownerTable == null) {
+                ownerTable = new TableInfo("", table.getTableName(), java.util.List.of(), table.getLogicDeleteColumn(),
+                        table.getVersionColumn(), table.getComment(), java.util.List.of(), table.getSchema(), table.getCatalog(),
+                        table.getRestrictionClause(), table.getSoftDelete(), table.getCustomSqlScripts(), table.getSequenceGenerators(),
+                        table.getTableGenerators(), table.getCollectionAssociations(), table.getSecondaryTables(), table.getPrimaryKeyJoinColumns(),
+                        table.getInheritanceStrategy(), table.getDiscriminatorColumn(), table.getDiscriminatorValue(), table.getCompositeIdColumns(), table.getIdClassType());
+            }
+            return Matcher.quoteReplacement(rewrite(match.group(), ownerTable, name == null ? null : lookup.resolveClass(name)));
+        };
+        String fetched = JOIN_FETCH.matcher(masked.text()).replaceAll(replace);
+        return JpaSqlLiteralMasking.unmask(ASSOCIATION_JOIN.matcher(fetched).replaceAll(replace), masked.literals());
     }
 
     /**

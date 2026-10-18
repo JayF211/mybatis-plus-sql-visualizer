@@ -164,6 +164,9 @@ public final class PluginSettingsPanelSections {
                 self.manualEntityCheck.setText(MpSqlVisualizerBundle.message("settings.reverseManualEntitySelection"));
                 self.manualEntityCheck.setToolTipText(MpSqlVisualizerBundle.message("settings.reverseManualEntitySelection.tip"));
                 addRow(p, g, "", self.manualEntityCheck);
+                self.librarySweepCheck.setText(MpSqlVisualizerBundle.message("settings.libraryEntitySweep"));
+                self.librarySweepCheck.setToolTipText(MpSqlVisualizerBundle.message("settings.libraryEntitySweep.tip"));
+                addRow(p, g, "", self.librarySweepCheck);
             });
         }
 

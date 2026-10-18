@@ -36,7 +36,16 @@ import com.intellij.ui.ListSpeedSearch;
 import com.intellij.ui.SearchTextField;
 import com.intellij.ui.awt.RelativePoint;
 import com.intellij.ui.components.JBScrollPane;
-import com.intellij.ui.components.JBTabbedPane;
+import com.intellij.ui.tabs.JBTabs;
+import com.intellij.ui.tabs.JBTabsFactory;
+import com.intellij.ui.tabs.TabInfo;
+import com.intellij.ui.tabs.TabsListener;
+import com.intellij.openapi.actionSystem.ToggleAction;
+import com.intellij.openapi.actionSystem.Toggleable;
+import com.intellij.openapi.application.ModalityState;
+import com.intellij.openapi.editor.colors.EditorColorsListener;
+import com.intellij.openapi.editor.colors.EditorColorsManager;
+import com.intellij.openapi.util.IconLoader;
 import com.intellij.ui.jcef.JBCefApp;
 import com.intellij.util.ui.JBUI;
 import org.jetbrains.annotations.NotNull;
@@ -103,21 +112,29 @@ public class SqlLogPanel extends JPanel implements Disposable {
     public final SqlLogManager manager;
 
     private final DefaultListModel<LogSqlEntry> listModel = new DefaultListModel<>();
-    public final SqlEntryList list = new SqlEntryList(listModel);
+    public final SqlEntryList list = new ViewportWidthSqlEntryList(listModel);
     /** 列表条目单元格渲染器（internal 供 UI 测试直接渲染、断言 HTML 输出）。 */
     private LogEntryListCellRenderer entryCellRenderer;
     /** T-ClickPreview：单击出轻量预览弹窗（点击时按行捕获 SQL，锚点在行下缘不遮行），双击走 openPreview 完整弹窗；悬停 tooltip 已移除（卡顿根因）。
      *  T-ListPreviewCopy：预览文本经 clickPreviewSql——设置「预览时格式化还原 SQL」开启（默认）时多行格式化显示。 */
-    private SqlClickPreview clickPreview;
-    private final JBTabbedPane tabs = new JBTabbedPane();
+    private SqlListPreviewHost previewHost;
+    private final SqlDockedPreview dockedPreview;
+    /** 面板级测试缝（master internal val previewHostForTest/dockedPreviewForTest 等价）。 */
+    public SqlListPreviewHost getPreviewHostForTest() { return previewHost; }
+    public SqlDockedPreview getDockedPreviewForTest() { return dockedPreview; }
+    private final JBTabs tabs;
+    private TabInfo logsTab;
+    private TabInfo logToSqlTab;
+    private TabInfo sqlToJavaTab;
+    private TabInfo historyTab;
     /** T-M38：日志转 SQL 转换 tab（粘贴日志 → 批量还原可执行 SQL；原「SQL 预览」被动展示改造）。 */
     private final LogToSqlPanel logToSqlPanel;
     /** T-M36.4：SQL → Java 转换 tab（粘贴 SQL → 格式化/补全 → 转换 → 可编辑 Java 高亮结果区）。 */
     private final SqlToJavaPanel sqlToJavaPanel;
     /** F-44：历史 SQL tab（读取 .idea 目录中的自动保存文件，支持源码定位）。仅 logAutoSaveEnabled 时创建。 */
     private HistorySqlLogPanel historyPanel = null;
-    /** F-44：历史 tab 在 JBTabbedPane 中的索引（-1 表示未添加）。 */
-    private int historyTabIndex = -1;
+    private boolean slowOnly;
+    private JCheckBox slowOnlyCheckBox;
 
     private final JCheckBox dedupeCheckBox;
 
@@ -137,7 +154,27 @@ public class SqlLogPanel extends JPanel implements Disposable {
      *
      * T-UiCoord F2：原「排序：」标签控件同样退役（标签键转 tooltip 前缀），文本同样截尾封顶。
      */
-    private final JButton sortButton;
+    public final AnAction sortModeAction = new AnAction() {
+        { getTemplatePresentation().setIcon(AllIcons.RunConfigurations.SortbyDuration); }
+        @Override public void update(AnActionEvent e) {
+            String label = currentSortLabel();
+            e.getPresentation().setIcon(AllIcons.RunConfigurations.SortbyDuration);
+            e.getPresentation().setText(label);
+            e.getPresentation().setDescription(MpSqlVisualizerBundle.message("log.sort.label") + label);
+        }
+        @Override public void actionPerformed(AnActionEvent e) {
+            showSortPopup(e.getInputEvent() != null ? e.getInputEvent().getComponent() : null);
+        }
+    };
+
+    public final ToggleAction previewToggleAction = new ToggleAction(
+            MpSqlVisualizerBundle.message("log.dockedPreview.toggle"),
+            MpSqlVisualizerBundle.message("log.dockedPreview.toggle.tip"), AllIcons.Actions.Preview) {
+        @Override public boolean isSelected(AnActionEvent e) { return dockedPreview.isOpen(); }
+        @Override public void setSelected(AnActionEvent e, boolean state) {
+            if (dockedPreview.isOpen() != state) previewHost.toggle();
+        }
+    };
 
     // ---------- T-SqlLogPerf：「滚动到底部」动作 + 尾部跟随 ----------
 
@@ -157,26 +194,22 @@ public class SqlLogPanel extends JPanel implements Disposable {
         return scrollToEndAction;
     }
 
-    /** 尾部跟随开关（EDT 读写：滚动监听 / 刷新尾部 / 动作点击）。默认开——日志语义以「最新」为锚点。 */
-    private boolean autoFollowTail = true;
+    private final TailFollowState tailFollow = new TailFollowState();
+    private JBScrollPane listScrollPane;
 
-    /** 跟随判定松量（px）：视口底沿距列表底沿小于该值视为「在底部」。 */
-    private final int tailFollowSlackPx = 48;
-
-    /** 滚动事件归因基线（区分程序性追加与用户滚动；见 buildListPane 的 adjustment 监听）。 */
-    private int lastScrollMax = 0;
-    private int lastScrollValue = 0;
-
-    /** 跳列表底；follow=true 同时恢复跟随态。 */
-    private void scrollToBottom(boolean follow) {
-        if (follow) {
-            autoFollowTail = true;
-        }
-        if (listModel.isEmpty()) {
-            return;
-        }
+    private void scrollToBottom(boolean resume) {
+        if (resume) tailFollow.onScrollToEnd();
+        if (listModel.isEmpty()) return;
         list.ensureIndexIsVisible(listModel.size() - 1);
+        if (listScrollPane != null) {
+            javax.swing.JScrollBar bar = listScrollPane.getVerticalScrollBar();
+            bar.setValue(bar.getMaximum());
+        }
     }
+
+    public TailFollowMode getTailFollowModeForTest() { return tailFollow.getMode(); }
+    public JBScrollPane getListScrollPaneForTest() { return listScrollPane; }
+    public void resumeTailFollowForTest() { scrollToBottom(true); }
 
     // ---------- T-SearchToggleNativeLook（O-137）：搜索条迁平台原生 SearchTextArea ----------
     //
@@ -549,11 +582,11 @@ public class SqlLogPanel extends JPanel implements Disposable {
         typeFilterButton.setHorizontalTextPosition(SwingConstants.LEFT); // 图标在文字右侧（下拉按钮惯例）
         typeFilterButton.addActionListener(e -> showTypeFilterPopup());
 
-        this.sortButton = new JButton();
-        sortButton.setFocusable(false);
-        sortButton.setIcon(AllIcons.General.ArrowDown);
-        sortButton.setHorizontalTextPosition(SwingConstants.LEFT); // 图标在文字右侧（下拉按钮惯例，同 SQL类型）
-        sortButton.addActionListener(e -> showSortPopup());
+        this.dockedPreview = new SqlDockedPreview(project, list, () -> previewHost.toggle());
+        this.tabs = JBTabsFactory.createTabs(project, this);
+        tabs.getPresentation().setSingleRow(true);
+        tabs.getPresentation().setSupportsCompression(true);
+        tabs.getPresentation().setTabDraggingEnabled(false);
 
         this.logToSqlPanel = new LogToSqlPanel(project);
         this.sqlToJavaPanel = new SqlToJavaPanel(project);
@@ -590,10 +623,6 @@ public class SqlLogPanel extends JPanel implements Disposable {
         });
         this.searchDebounceTimer = new javax.swing.Timer(SEARCH_DEBOUNCE_MS, e -> applySearchText());
         this.searchDebounceTimer.setRepeats(false);
-        // T-ListPreviewCopy：预览文本经 clickPreviewSql——设置「预览时格式化还原 SQL」开启（默认）时多行格式化显示
-        this.clickPreview = new SqlClickPreview(project, list, i -> SqlClickPreview.clickPreviewSql(
-                listModel.getElementAt(i).restoredSql(),
-                PluginSettings.getInstance().getState().getLogFormatSql()));
         this.captureToggleAction = new CaptureAction();
         this.toolbarGroup = new DefaultActionGroup(
                 captureToggleAction, // 捕捉开关（回迁面板工具栏首位，T-CaptureBack）
@@ -601,8 +630,11 @@ public class SqlLogPanel extends JPanel implements Disposable {
                 new SettingsAction(),
                 new ManageSuppressAction(), // T-SqlSuppress：屏蔽管理（设置旁，D1 主入口 + D7 漏斗图标）
                 new ShowSearchAction(), // 搜索在帮助左侧（用户指定排序）
-                new HelpAction(),
-                scrollToEndAction // T-SqlLogPerf：滚动到底部（尾部跟随；追加在用户指定排序之后）
+                previewToggleAction,
+                scrollToEndAction,
+                sortModeAction,
+                new CommunityAction(),
+                new HelpAction()
         );
         // T-M55-03/04：聚焦页签栏与隐藏计数提示初始态（无页签隐藏不占高度）
         this.focusTabBar.setOpaque(false);
@@ -621,30 +653,25 @@ public class SqlLogPanel extends JPanel implements Disposable {
         // 标签 1：SQL 日志（工具栏行 + 搜索条 + 条目列表）
         JPanel logPanel = new JPanel(new BorderLayout());
         logPanel.add(buildTopPanel(), BorderLayout.NORTH);
-        logPanel.add(buildListPane(), BorderLayout.CENTER); // 条目列表铺满剩余空间
+        previewHost = new SqlListPreviewHost(list, buildListPane(), dockedPreview, "mpvs.logs.preview.split", true,
+                open -> Toggleable.setSelected(previewToggleAction.getTemplatePresentation(), open));
+        logPanel.add(previewHost.getComponent(), BorderLayout.CENTER);
 
-        // 标签 2：日志转 SQL（粘贴日志 → 批量还原可执行 SQL）
-        tabs.addTab(MpSqlVisualizerBundle.message("log.tab.logs"), logPanel);
-        tabs.addTab(MpSqlVisualizerBundle.message("log.tab.logToSql"), logToSqlPanel);
-        tabs.addTab(MpSqlVisualizerBundle.message("log.tab.sqlToJava"), sqlToJavaPanel);
+        logsTab = tabs.addTab(new TabInfo(logPanel).setText(MpSqlVisualizerBundle.message("log.tab.logs")));
+        logToSqlTab = tabs.addTab(new TabInfo(logToSqlPanel).setText(MpSqlVisualizerBundle.message("log.tab.logToSql")));
+        sqlToJavaTab = tabs.addTab(new TabInfo(sqlToJavaPanel).setText(MpSqlVisualizerBundle.message("log.tab.sqlToJava")));
         // R19（T-PerfSweep 批次 2）+ T-HistoryTabAlways：历史 tab 常驻——原 F-44 条件挂载
         // （「开启自动保存 或 .idea 中已有历史文件」）让未开启自动保存的干净项目没有入口，
         // 关掉设置页开关还会把已挂载的 tab 摘掉；文件列表空态已带「开启自动保存」引导文案，
         // tab 常驻即引导闭环，F-44 的移除分支随之废除、设置变更不再参与显隐。
         addHistoryTab();
-        add(tabs, BorderLayout.CENTER);
-
-        // T-M36.6：tab 重选时刷新形态下拉（设置页修改后切回即同步；不触发重生成）
-        tabs.addChangeListener(e -> {
-            if (tabs.getSelectedComponent() == sqlToJavaPanel) {
-                sqlToJavaPanel.refreshFormatFromSettings();
+        add(tabs.getComponent(), BorderLayout.CENTER);
+        tabs.addListener(new TabsListener() {
+            @Override public void selectionChanged(TabInfo current, TabInfo previous) {
+                if (current == sqlToJavaTab) sqlToJavaPanel.refreshFormatFromSettings();
+                if (current == historyTab) getHistoryPanel().refresh();
             }
-            // F-44：切换到历史 tab 时刷新数据；F87（T-PerfSweep25）起这里同时是**首扫唯一入口**
-            //（历史面板构造不再自带 refresh——开窗即扫回退为首次切换才扫）
-            if (historyTabIndex >= 0 && tabs.getSelectedIndex() == historyTabIndex) {
-                getHistoryPanel().refresh();
-            }
-        });
+        }, this);
 
         // 设置变更后列表重排重绘（T-HistoryTabAlways 起历史 tab 无显隐逻辑，恒在）
         SettingsChangeListener settingsListener = () -> ApplicationManager.getApplication().invokeLater(() -> {
@@ -660,7 +687,7 @@ public class SqlLogPanel extends JPanel implements Disposable {
             refreshList();
             // T-CrudColor：历史二级列表同样直读设置，重绘即生效（不重扫文件、不打断浏览位置）。
             // 仅当历史 tab 已挂载时才取面板——避免仅为重绘而强制实例化（historyPanel 惰性创建）
-            if (tabs.indexOfTab(MpSqlVisualizerBundle.message("log.tab.history")) >= 0) {
+            if (historyTab != null) {
                 getHistoryPanel().repaintSqlList();
             }
         });
@@ -811,7 +838,6 @@ public class SqlLogPanel extends JPanel implements Disposable {
         _toolbarRef = toolbar; // 保存引用供 capturing 监听刷新
 
         updateTypeFilterButton();
-        updateSortButtonText();
         // T-UiCoord F2（2026-09-21 用户定案「不要两行」）：工具栏**恒为单行**——
         // 左侧动作图标组（CENTER，拿剩余宽度；窄了交给平台图标溢出）+ 右侧列表控制组
         // （EAST：慢查询徽章 / SQL类型 / 排序 / 去重勾选，勾选仍在最右）。
@@ -835,7 +861,6 @@ public class SqlLogPanel extends JPanel implements Disposable {
         controls.setOpaque(false);
         controls.add(slowQueryLabel);
         controls.add(typeFilterButton);
-        controls.add(sortButton);
         controls.add(dedupeCheckBox);
         toolbarControls = controls;
         JPanel right = new JPanel();
@@ -964,12 +989,11 @@ public class SqlLogPanel extends JPanel implements Disposable {
             Disposer.register(this, getHistoryPanel());
             historyPanelRegistered = true;
         }
-        historyTabIndex = tabs.getTabCount();
-        tabs.addTab(MpSqlVisualizerBundle.message("log.tab.history"), getHistoryPanel());
+        historyTab = tabs.addTab(new TabInfo(getHistoryPanel()).setText(MpSqlVisualizerBundle.message("log.tab.history")));
     }
 
     /** 测试访问器：主 tab 容器（历史 tab 常驻断言用；T-HistoryTabAlways 起 tab 恒在，无显隐路径）。 */
-    public javax.swing.JTabbedPane tabsForTest() {
+    public com.intellij.ui.tabs.JBTabs tabsForTest() {
         return tabs;
     }
 
@@ -1076,6 +1100,22 @@ public class SqlLogPanel extends JPanel implements Disposable {
         @Override
         public void actionPerformed(AnActionEvent e) {
             new SqlSuppressManagerDialog(project).show();
+        }
+    }
+
+    /** T-Community：交流群弹框入口（工具栏动作组；二维码异步加载，见 CommunityDialog）。 */
+    public class CommunityAction extends AnAction {
+        CommunityAction() {
+            super(MpSqlVisualizerBundle.message("log.community.action"),
+                    MpSqlVisualizerBundle.message("log.community.action.tip"),
+                    com.intellij.openapi.util.IconLoader.getIcon("/icons/communityChat.svg", SqlLogPanel.class));
+        }
+
+        @Override
+        public void actionPerformed(AnActionEvent e) {
+            CommunityDialog dialog = new CommunityDialog(project);
+            dialog.startLoading();
+            dialog.show();
         }
     }
 
@@ -1310,7 +1350,8 @@ public class SqlLogPanel extends JPanel implements Disposable {
                 // T-ClickPreview：先转发（仅左键；单击命中行才排程预览/双击停表并关旧预览），双击再开完整弹窗
                 // T-ClickPreviewCopyRestore：修饰键一并转发——Ctrl/Shift 单击（多选第一击）不排程预览
                 if (javax.swing.SwingUtilities.isLeftMouseButton(e)) {
-                    clickPreview.onClick(e.getClickCount(), e.getPoint(), e.getModifiersEx());
+                    // T-ListPreviewDock：单击转发停靠预览宿主（单击只选中+一次性就地迁移提示）
+                    previewHost.onRowClick(e);
                 }
                 if (e.getClickCount() >= 2) {
                     LogSqlEntry selected = list.getSelectedValue();
@@ -1334,21 +1375,32 @@ public class SqlLogPanel extends JPanel implements Disposable {
                 }
             }
         });
-        // T-SqlLogPerf：尾部跟随的用户意图归因——滚动条事件里「程序性追加」（max 增大且 value 未动，
-        // 新条目进模型所致）不改跟随态；其余变化按「是否在底部」判定：滚离底部=停跟随，滚回底部=恢复。
+        // T-SqlLogPerf + O-148：尾部跟随的用户意图归因——真实输入事件（滚轮/滚动条按下/导航键）
+        // 才暂停跟随；程序性追加（新条目进模型）不抢视口，跟随态下由刷新链贴底。
         JBScrollPane scrollPane = new JBScrollPane(list);
-        scrollPane.getVerticalScrollBar().addAdjustmentListener(e -> {
-            java.awt.Adjustable bar = e.getAdjustable();
-            boolean grew = bar.getMaximum() > lastScrollMax;
-            int value = bar.getValue();
-            boolean valueUnmoved = value == lastScrollValue;
-            lastScrollMax = bar.getMaximum();
-            lastScrollValue = value;
-            if (grew && valueUnmoved) {
-                return; // 新条目进模型的程序性增长，非用户滚动
-            }
-            autoFollowTail = bar.getMaximum() - (value + bar.getVisibleAmount()) <= tailFollowSlackPx;
+        scrollPane.setHorizontalScrollBarPolicy(javax.swing.ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
+        listScrollPane = scrollPane;
+        scrollPane.addMouseWheelListener(event -> {
+            if (event.getWheelRotation() != 0) tailFollow.onUserScroll();
         });
+        scrollPane.getVerticalScrollBar().addMouseListener(new MouseAdapter() {
+            @Override
+            public void mousePressed(MouseEvent e) {
+                tailFollow.onUserScroll();
+            }
+        });
+        java.util.Set<Integer> navigationKeys = java.util.Set.of(
+                java.awt.event.KeyEvent.VK_UP, java.awt.event.KeyEvent.VK_DOWN,
+                java.awt.event.KeyEvent.VK_PAGE_UP, java.awt.event.KeyEvent.VK_PAGE_DOWN,
+                java.awt.event.KeyEvent.VK_HOME, java.awt.event.KeyEvent.VK_END);
+        java.awt.event.KeyAdapter navigationListener = new java.awt.event.KeyAdapter() {
+            @Override
+            public void keyPressed(java.awt.event.KeyEvent e) {
+                if (navigationKeys.contains(e.getKeyCode())) tailFollow.onUserScroll();
+            }
+        };
+        list.addKeyListener(navigationListener);
+        scrollPane.getVerticalScrollBar().addKeyListener(navigationListener);
         return scrollPane;
     }
 
@@ -1433,8 +1485,9 @@ public class SqlLogPanel extends JPanel implements Disposable {
         if (!applyIncremental(newVisible, evicted)) {
             applyFullRebuild(newVisible, gen);
         }
-        // T-SqlLogPerf：尾部跟随——仅当列表真的长高（新条目追加）才贴底；搜索/过滤收窄不打扰浏览位置
-        if (autoFollowTail && listModel.size() > modelSizeBefore) {
+        // T-SqlLogPerf + O-148：尾部跟随——仅当列表真的长高（新条目追加）才贴底；
+        // 搜索/过滤收窄不打扰浏览位置。
+        if (tailFollow.getShouldFollow() && listModel.size() > modelSizeBefore) {
             list.ensureIndexIsVisible(listModel.size() - 1);
         }
 
@@ -1584,15 +1637,32 @@ public class SqlLogPanel extends JPanel implements Disposable {
         list.repaint();
     }
 
-    // ---------- 排序方式（T-LogSortModes） ----------
+    // ---------- 排序方式（T-LogSortModes；T-UiCoord 后按钮改走动作图标组，文案由 presentation 承载） ----------
 
-    /** 弹出排序方式单选菜单（与 SQL类型弹窗同款交互；当前项打勾）。 */
-    private void showSortPopup() {
+    /** 当前排序方式标签（动作 update 进 presentation.text 与 tooltip）。 */
+    private String currentSortLabel() {
+        String label = null;
+        for (SqlLogPanelKt.SortOption option : SqlLogPanelKt.sortOptions()) {
+            if (option.mode() == sortMode) {
+                label = option.label();
+                break;
+            }
+        }
+        return label != null ? label : MpSqlVisualizerBundle.message("log.sort.time.asc");
+    }
+
+    /** 弹出排序方式单选菜单（锚点 = 触发事件的组件，缺省落工具栏本体）。 */
+    private void showSortPopup(java.awt.Component anchor) {
         JPopupMenu popup = new JPopupMenu();
         for (JRadioButtonMenuItem item : buildSortMenuItems()) {
             popup.add(item);
         }
-        popup.show(sortButton, 0, sortButton.getHeight() + 2);
+        java.awt.Component target = anchor != null ? anchor : toolbarComponent;
+        if (target != null) {
+            popup.show(target, 0, target.getHeight() + 2);
+        } else if (toolbarComponent != null) {
+            popup.show(toolbarComponent, 0, 0);
+        }
     }
 
     /**
@@ -1613,33 +1683,21 @@ public class SqlLogPanel extends JPanel implements Disposable {
     /** 应用排序方式：更新模式 → 刷新列表 → 同步按钮文案。 */
     private void applySortMode(SortMode mode) {
         if (sortMode == mode) {
-            updateSortButtonText();
+            refreshSortAction();
             return;
         }
         sortMode = mode;
         refreshList();
-        updateSortButtonText();
+        refreshSortAction();
     }
 
-    /**
-     * 排序按钮文案 = 当前方式标签。
-     *
-     * T-UiCoord F2：与 SQL类型按钮同构——显示文本截尾封顶，tooltip 恒为「排序：」+ 完整方式。
-     */
-    private void updateSortButtonText() {
-        String label = null;
-        for (SqlLogPanelKt.SortOption option : SqlLogPanelKt.sortOptions()) {
-            if (option.mode() == sortMode) {
-                label = option.label();
-                break;
-            }
+    /** 刷新排序动作的 presentation（工具窗工具栏只渲染图标，当前方式由 tooltip 承载）。 */
+    private void refreshSortAction() {
+        if (_toolbarRef != null) {
+            _toolbarRef.updateActionsImmediately();
         }
-        if (label == null) {
-            label = MpSqlVisualizerBundle.message("log.sort.time.asc");
-        }
-        sortButton.setText(clipToDropdownBudget(label, sortButton));
-        sortButton.setToolTipText(MpSqlVisualizerBundle.message("log.sort.label") + label);
     }
+
 
     /** 按当前排序模式排序条目。 */
     private List<LogSqlEntry> applySort(List<LogSqlEntry> entries) {
@@ -2112,7 +2170,6 @@ public class SqlLogPanel extends JPanel implements Disposable {
         if (manager.onOpenEntryInTab == openEntryInTabCallback) {
             manager.onOpenEntryInTab = null;
         }
-        clickPreview.dispose();
         logToSqlPanel.dispose();
         sqlToJavaPanel.dispose();
     }
@@ -2124,10 +2181,10 @@ public class SqlLogPanel extends JPanel implements Disposable {
     public void openEntryInTab(LogSqlEntry entry, LogEntryTab tab) {
         if (tab == LogEntryTab.LOG_TO_SQL) {
             logToSqlPanel.loadFromEntry(entry);
-            tabs.setSelectedComponent(logToSqlPanel);
+            tabs.select(logToSqlTab, false);
         } else if (tab == LogEntryTab.SQL_TO_JAVA) {
             sqlToJavaPanel.setInputSql(entry.restoredSql());
-            tabs.setSelectedComponent(sqlToJavaPanel);
+            tabs.select(sqlToJavaTab, false);
         }
     }
 
@@ -2162,9 +2219,9 @@ public class SqlLogPanel extends JPanel implements Disposable {
         applySortMode(mode);
     }
 
-    /** 排序方式按钮（测试断言文案/可见性）。 */
-    public JButton getSortButtonForTest() {
-        return sortButton;
+    /** 排序动作（T-UiCoord 后按钮退役为动作图标组；测试断言 presentation）。 */
+    public AnAction getSortActionForTest() {
+        return sortModeAction;
     }
 
     /** 排序菜单项文案列表（测试断言选项齐备；构建菜单但不 show）。 */
@@ -2176,9 +2233,9 @@ public class SqlLogPanel extends JPanel implements Disposable {
         return labels;
     }
 
-    /** 当前排序方式按钮文案（测试断言）。 */
+    /** 当前排序方式文案（测试断言；按钮退役后由动作 presentation 承载）。 */
     public String getSortButtonTextForTest() {
-        return sortButton.getText();
+        return currentSortLabel();
     }
 
     /** 去重勾选框（F-44-2 测试驱动：模拟用户勾选「移除重复的sql」验证既有条目立即去重）。 */
@@ -2269,9 +2326,9 @@ public class SqlLogPanel extends JPanel implements Disposable {
         searchBar.setVisible(value);
     }
 
-    /** 单击预览控制器（T-ClickPreview 测试断言：排程/取消/弹窗残留）。 */
-    public SqlClickPreview getClickPreviewForTest() {
-        return clickPreview;
+    /** 停靠预览宿主（T-ClickPreview 退役后测试缝换轨；排程/取消/弹窗残留断言走 previewHost）。 */
+    public SqlListPreviewHost getClickPreviewForTest() {
+        return previewHost;
     }
 
     /** 工具栏慢查询计数标签（测试断言显隐与文案）。 */

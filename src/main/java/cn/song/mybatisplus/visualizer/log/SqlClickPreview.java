@@ -4,7 +4,6 @@ import cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter;
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlListSyntaxHighlighter;
 import cn.song.mybatisplus.visualizer.util.EditorCopyShortcuts;
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
-import cn.song.mybatisplus.visualizer.util.UiTextClipboard;
 import com.intellij.icons.AllIcons;
 import com.intellij.openapi.actionSystem.DataContext;
 import com.intellij.openapi.actionSystem.IdeActions;
@@ -18,22 +17,13 @@ import com.intellij.openapi.editor.ex.EditorEx;
 import com.intellij.openapi.editor.ex.util.LexerEditorHighlighter;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.util.Key;
-import com.intellij.openapi.ui.popup.JBPopup;
-import com.intellij.openapi.ui.popup.JBPopupFactory;
-import com.intellij.openapi.ui.popup.JBPopupListener;
-import com.intellij.openapi.ui.popup.LightweightWindowEvent;
-import com.intellij.ui.awt.RelativePoint;
 import java.awt.BorderLayout;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
-import java.awt.Point;
-import java.awt.Rectangle;
 import java.util.function.Consumer;
-import java.util.function.IntFunction;
 import javax.swing.BorderFactory;
 import javax.swing.JButton;
 import javax.swing.JPanel;
-import javax.swing.Timer;
 
 /**
  * 单击 SQL 预览（T-ClickPreview）：主日志列表 / 历史 tab 二级列表 / F-7 历史窗列表共用。
@@ -90,152 +80,7 @@ public class SqlClickPreview {
                 | java.awt.event.MouseEvent.SHIFT_DOWN_MASK)) != 0;
     }
 
-    private final Project project;
-    private final javax.swing.JList<?> list;
-    /** 指定行号的预览 SQL；null = 该行不可预览。点击时捕获，定时器到点直接用，不依赖当时选中态。 */
-    private final IntFunction<String> sqlAt;
-
-    private JBPopup popup = null;
-
-    /** 本次点击待预览的行号与 SQL（onClick 命中行时捕获）。 */
-    private int pendingIndex = -1;
-    private String pendingSql = null;
-
-    private final Timer timer;
-
-    public SqlClickPreview(Project project, javax.swing.JList<?> list, IntFunction<String> sqlAt) {
-        this.project = project;
-        this.list = list;
-        this.sqlAt = sqlAt;
-        this.timer = new Timer(CLICK_PREVIEW_DELAY_MS, null);
-        this.timer.setRepeats(false);
-        this.timer.addActionListener(e -> show());
-    }
-
-    /** 单击处理（无修饰键形态——Kotlin 默认参数 modifiersEx = 0 的 Java 重载等价）。 */
-    public void onClick(int clickCount, Point clickPoint) {
-        onClick(clickCount, clickPoint, 0);
-    }
-
-    /**
-     * 列表单击处理：命中行才排程预览；空白区立即收表关预览；双击停表关旧预览；
-     * 多选进行中或带 Ctrl/Shift 修饰键（多选第一击，T-ClickPreviewCopyRestore）不排程。
-     */
-    public void onClick(int clickCount, Point clickPoint, int modifiersEx) {
-        if (clickCount >= 2) {
-            timer.stop();
-            hide();
-            return;
-        }
-        // T-ListPreviewCopy：多选（Ctrl/Shift/拖框 ≥2 行）时单击不再排程预览——多选操作被
-        // 逐行弹出的单行预览干扰；与空白区同语义：停表并关旧。
-        // T-ClickPreviewCopyRestore：守卫前移到修饰键本身——≥2 行判定要等第二击才满足，
-        // Ctrl/Shift 的第一击仍会弹预览抢走列表焦点（setRequestFocus(true)），后续多选
-        // 节奏被打断、Ctrl+C 批量复制不可达；修饰键在第一击即可判定，全程零干扰。
-        if (list.getSelectedIndices().length > 1 || isMultiSelectIntent(modifiersEx)) {
-            timer.stop();
-            hide();
-            return;
-        }
-        int index = list.locationToIndex(clickPoint);
-        Rectangle bounds = index >= 0 ? list.getCellBounds(index, index) : null;
-        boolean hitRow = bounds != null && bounds.contains(clickPoint);
-        pendingIndex = index;
-        pendingSql = hitRow ? sqlAt.apply(index) : null;
-        if (pendingSql == null) {
-            timer.stop();
-            hide();
-        } else {
-            timer.restart();
-        }
-    }
-
-    /** 关闭当前预览弹窗（无则空操作）。 */
-    public void hide() {
-        if (popup != null && popup.isVisible()) popup.cancel();
-        popup = null;
-    }
-
-    /** 面板 dispose：停定时器 + 关弹窗（编辑器经 onClosed 一并释放）。 */
-    public void dispose() {
-        timer.stop();
-        hide();
-    }
-
-    /** 定时器是否挂起中（测试断言：单击已排程 / 空白区已取消）。 */
-    public boolean isScheduled() {
-        return timer.isRunning();
-    }
-
-    /** 当前预览弹窗（测试断言：外部关闭后不残留）。 */
-    public JBPopup getCurrentPopup() {
-        return popup;
-    }
-
-    /**
-     * 指定行的预览锚点：该行下缘左侧留 2px 缝（弹窗在行下方展开，不遮被点行）。
-     * 行不可得返回 null（调用方回退 showUnderneathOf）。屏幕下方放不下时由平台自动贴边回调。
-     */
-    public Point anchorPointFor(int index) {
-        Rectangle bounds = list.getCellBounds(index, index);
-        if (bounds == null) return null;
-        return new Point(bounds.x, bounds.y + bounds.height + ANCHOR_GAP_PX);
-    }
-
-    /** Timer 到点：对点击时捕获的行弹出预览（新弹前先关旧的）；已多选则放弃（延迟窗内补选竞态兜底）。 */
-    private void show() {
-        String sql = pendingSql;
-        if (sql == null) return;
-        if (list.getSelectedIndices().length > 1) {
-            hide();
-            return;
-        }
-        if (popup != null && popup.isVisible()) popup.cancel();
-        JBPopup next = buildPopup(sql);
-        popup = next;
-        Point anchor = pendingIndex >= 0 ? anchorPointFor(pendingIndex) : null;
-        if (anchor != null) {
-            next.show(new RelativePoint(list, anchor));
-        } else {
-            next.showUnderneathOf(list);
-        }
-    }
-
-    /** 构建预览弹窗（实例路径）：复制走系统剪贴板（取编辑后当前文本），关闭走 hide；编辑器随弹窗关闭释放。 */
-    private JBPopup buildPopup(String sql) {
-        SqlClickPreviewContent content = buildContent(
-                project,
-                sql,
-                UiTextClipboard::copy,
-                this::hide
-        );
-        final Editor editor = content.editor();
-        return JBPopupFactory.getInstance()
-                .createComponentPopupBuilder(content.component(), null)
-                // 四轮修复：setRequestFocus(false) 导致弹窗内编辑器拿不到键盘焦点，
-                // 键盘输入全落到列表上——看似"只读"。改 true：弹出即聚焦内容，
-                // 焦点自然落进编辑器，可直接打字编辑（复制/关闭按钮 isFocusable=false 不抢焦点）
-                .setRequestFocus(true)
-                .setFocusable(true)
-                .setResizable(true)
-                .setMovable(false)
-                .setCancelOnClickOutside(true)
-                .setCancelOnOtherWindowOpen(true)
-                .addListener(new JBPopupListener() {
-                    @Override
-                    public void onClosed(LightweightWindowEvent event) {
-                        popup = null; // 点外/Esc 等外部关闭后清引用，杜绝复用已关闭弹窗
-                        if (editor != null) EditorFactory.getInstance().releaseEditor(editor);
-                    }
-                })
-                .createPopup();
-    }
-
-    /** 单击 → 预览延迟（ms）：正常双击间隔（150~250ms）内第二击先到 → 不闪预览。 */
-    public static final int CLICK_PREVIEW_DELAY_MS = 300;
-
-    /** 弹窗锚点与被点行下缘的间距（px）。 */
-    private static final int ANCHOR_GAP_PX = 2;
+    private SqlClickPreview() {}
 
     private static final int PREFERRED_WIDTH = 560;
     private static final int PREFERRED_HEIGHT = 320;

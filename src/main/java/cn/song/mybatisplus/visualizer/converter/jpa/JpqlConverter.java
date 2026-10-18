@@ -144,7 +144,22 @@ public final class JpqlConverter {
      * （conditions 为空），因此必须使用转换后的 SQL 字符串而非重新生成。
      */
     private static Result convertInternal(@NotNull String jpql, @Nullable TableInfo tableInfo, @Nullable Project project) {
-        TableInfo table = tableInfo != null ? tableInfo : createFallbackTable();
+        return convert(jpql, tableInfo, project, null);
+    }
+
+    public static Result convert(@NotNull String jpql, @Nullable TableInfo tableInfo, @Nullable Project project,
+                                 @Nullable com.intellij.psi.PsiElement context) {
+        JpaQueryEntityLookup lookup = new JpaQueryEntityLookup(project, context);
+        String rootName = JpaQueryEntityLookup.rootEntity(jpql);
+        TableInfo resolved = tableInfo != null ? tableInfo : rootName != null ? lookup.resolveTable(rootName) : null;
+        TableInfo table = resolved != null ? resolved : createFallbackTable();
+        String mappedRootName = rootName != null && (tableInfo == null
+                || rootName.substring(rootName.lastIndexOf('.') + 1).equals(table.getEntityClassName())
+                || (lookup.resolveClass(rootName) != null && table.getEntityClassName().equals(lookup.resolveClass(rootName).getName()))) ? rootName : null;
+        kotlin.jvm.functions.Function1<String, TableInfo> resolveTable = name -> {
+            if (name.equals(mappedRootName) && !table.getEntityClassName().isBlank()) return table;
+            return lookup.resolveTable(name);
+        };
 
         // 0. 检测 IN 子句参数（在命名参数替换前检测 :paramName）
         Set<String> inClauseParams = findInClauseParams(jpql);
@@ -162,7 +177,7 @@ public final class JpqlConverter {
         sql = NewExpressionStripper.strip(sql);
 
         // 4. 处理 JOIN FETCH / 关联 JOIN → LEFT/INNER JOIN（J7：ON 条件真实化）
-        sql = JpaJoinRewriter.rewrite(sql, table, project);
+        sql = JpaJoinRewriter.rewriteWithLookup(sql, table, lookup);
 
         // 5. 处理 MEMBER OF（降级为注释提示）
         sql = handleMemberOf(sql);
@@ -170,17 +185,17 @@ public final class JpqlConverter {
         // 5.5 别名作用域解析（O-57）：须在实体名→表名替换之前扫描（那时实体名还在 SQL 里），
         // 又须在第 4 步 JOIN 改写之后（改写新增的副表别名只有那时才存在）。
         // 与 HqlConverter 同款编排，两条链行为一致
-        JpaAliasTableResolver.JpaAliasScope scope = JpaAliasTableResolver.resolveAliases(sql, table, project);
+        JpaAliasTableResolver.JpaAliasScope scope = JpaAliasTableResolver.resolveAliases(sql, table, resolveTable);
 
         // 6. 实体名 → 表名映射
-        sql = mapEntityToTable(sql, table);
+        sql = mapEntityToTable(sql, table, mappedRootName);
 
         // 6.5 子查询 FROM/JOIN 中其他实体名 → 表名（J13；需 Project，无则跳过）。
         // 别名作用域已解析出实体→表名，透传给扫描器复用，免二次 PSI 检索
-        sql = JpaFromEntityMapper.mapSubqueryEntities(sql, table, project, scope.getEntityTableNames());
+        sql = JpaFromEntityMapper.mapSubqueryEntities(sql, table, name -> scope.getEntityTableNames().get(name));
 
         // 7. 属性名 → 列名映射（按别名作用域分派，副表别名同样映射）
-        sql = mapPropertyToColumn(sql, table, scope);
+        if (!table.getEntityClassName().isBlank()) sql = mapPropertyToColumn(sql, table, scope);
 
         // 7.5 SELECT 子句展开（T-BareFromSelect）：与 HqlConverter 共用展开器，
         // 补齐隐式查询（`from Entity` 无 SELECT）的列清单与 `SELECT u` 裸别名展开，
@@ -321,14 +336,16 @@ public final class JpqlConverter {
      *  - 优先使用 TableInfo 中的表名替换 JPQL 中的实体类名
      *  - 映射范围：FROM 子句和 SELECT 子句中的实体引用
      */
-    private static String mapEntityToTable(@NotNull String jpql, @NotNull TableInfo table) {
+    private static String mapEntityToTable(@NotNull String jpql, @NotNull TableInfo table, @Nullable String rootName) {
         if (table.getEntityClassName().isBlank()) return jpql;
-        // 普查批：字面量掩码——`like '%UserEntity%'` 等单引号字面量内的实体名不得被替换
-        JpaSqlLiteralMasking.Masked maskResult = JpaSqlLiteralMasking.mask(jpql);
-        // 替换 FROM 子句中的实体类名（简单替换，仅在确认不是更大标识符的一部分时）
-        Pattern entityPattern = Pattern.compile("\\b" + Pattern.quote(table.getEntityClassName()) + "\\b");
-        String replaced = entityPattern.matcher(maskResult.text())
-                .replaceAll(Matcher.quoteReplacement(table.getTableName()));
+        // 字面量掩码；根为 FQN 时不得顺带替换仍可能有歧义的同名简单标识符。
+        var maskResult = JpaSqlLiteralMasking.mask(jpql);
+        Set<String> names = new LinkedHashSet<>();
+        if (rootName != null) names.add(rootName);
+        if (rootName == null || !rootName.contains(".")) names.add(table.getEntityClassName());
+        String replaced = maskResult.text();
+        for (String name : names) replaced = Pattern.compile("(?<![\\w.$])" + Pattern.quote(name) + "\\b")
+                .matcher(replaced).replaceAll(Matcher.quoteReplacement(table.getTableName()));
         return JpaSqlLiteralMasking.unmask(replaced, maskResult.literals());
     }
 

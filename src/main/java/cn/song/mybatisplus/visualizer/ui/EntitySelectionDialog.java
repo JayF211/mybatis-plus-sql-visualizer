@@ -1,5 +1,8 @@
 package cn.song.mybatisplus.visualizer.ui;
 
+import cn.song.mybatisplus.visualizer.psi.EntityClassFinder;
+import cn.song.mybatisplus.visualizer.reverse.SqlToJavaConverter;
+import com.intellij.openapi.application.ApplicationManager;
 import cn.song.mybatisplus.visualizer.util.IconScaler;
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
 import com.intellij.icons.AllIcons;
@@ -49,12 +52,22 @@ public class EntitySelectionDialog extends DialogWrapper {
         public final String key;
         public final String label;
         public final List<PsiClass> candidates;
+        /** SQL 表名；null 表示纯展示行，不参与依赖库扫描后的重解析。 */
+        @Nullable public final String tableName;
 
         public TableRow(String key, String label, List<PsiClass> candidates) {
+            this(key, label, candidates, null);
+        }
+
+        public TableRow(String key, String label, List<PsiClass> candidates, @Nullable String tableName) {
             this.key = key;
             this.label = label;
             this.candidates = candidates;
+            this.tableName = tableName;
         }
+
+        @Nullable public String getTableName() { return tableName; }
+        public TableRow withCandidates(List<PsiClass> value) { return new TableRow(key, label, value, tableName); }
 
         public String getKey() { return key; }
         public String getLabel() { return label; }
@@ -65,22 +78,25 @@ public class EntitySelectionDialog extends DialogWrapper {
             if (this == o) return true;
             if (!(o instanceof TableRow)) return false;
             TableRow that = (TableRow) o;
-            return key.equals(that.key) && label.equals(that.label) && candidates.equals(that.candidates);
+            return key.equals(that.key) && label.equals(that.label) && candidates.equals(that.candidates)
+                && java.util.Objects.equals(tableName, that.tableName);
         }
 
         @Override
         public int hashCode() {
-            return key.hashCode() * 31 + label.hashCode() + candidates.hashCode();
+            return java.util.Objects.hash(key, label, candidates, tableName);
         }
 
         @Override
         public String toString() {
-            return "TableRow{key='" + key + "', label='" + label + "', candidates=" + candidates + '}';
+            return "TableRow{key='" + key + "', label='" + label + "', candidates=" + candidates + ", tableName=" + tableName + '}';
         }
     }
 
     private final ConfirmCallback onConfirm;
-    private final List<TableRow> rows;
+    private final List<TableRow> currentRows;
+    private JPanel rowsPanel;
+    private JButton scanButton;
     private final Map<String, PsiClass> selections = new HashMap<>();
     private final Map<String, JBLabel> selectionLabels = new HashMap<>();
     private final Project project;
@@ -88,7 +104,7 @@ public class EntitySelectionDialog extends DialogWrapper {
     public EntitySelectionDialog(@NotNull Project project, @NotNull List<TableRow> rows, @NotNull ConfirmCallback onConfirm) {
         super(project, true);
         this.project = project;
-        this.rows = rows;
+        this.currentRows = new java.util.ArrayList<>(rows);
         this.onConfirm = onConfirm;
         setTitle(MpSqlVisualizerBundle.message("dialog.selectEntity.title"));
         init();
@@ -98,14 +114,85 @@ public class EntitySelectionDialog extends DialogWrapper {
     protected JComponent createCenterPanel() {
         JPanel panel = new JPanel();
         panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
-        for (TableRow row : rows) {
+        rowsPanel = panel;
+        for (TableRow row : currentRows) {
             panel.add(buildRow(row));
             selections.put(row.key, row.candidates.isEmpty() ? null : row.candidates.get(0));
         }
-        int height = Math.min(rows.size() * ROW_HEIGHT + DIALOG_PADDING, DIALOG_MAX_HEIGHT);
+        int height = Math.min(currentRows.size() * ROW_HEIGHT + DIALOG_PADDING, DIALOG_MAX_HEIGHT);
         JScrollPane scroll = new JScrollPane(panel);
         scroll.setPreferredSize(new Dimension(DIALOG_WIDTH, height));
-        return scroll;
+        JPanel content = new JPanel(new java.awt.BorderLayout());
+        content.add(scroll, java.awt.BorderLayout.CENTER);
+        content.add(buildScanBar(), java.awt.BorderLayout.SOUTH);
+        return content;
+    }
+
+    /** 后台开关关闭或希望立刻获取结果时，可显式触发同一趟依赖库扫描。 */
+    private JComponent buildScanBar() {
+        JPanel panel = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 2));
+        panel.setOpaque(false);
+        JButton button = new JButton(MpSqlVisualizerBundle.message("dialog.selectEntity.scanLibraries"));
+        button.setToolTipText(MpSqlVisualizerBundle.message("dialog.selectEntity.scanLibraries.tip"));
+        button.addActionListener(e -> scanLibrariesAndRefresh());
+        scanButton = button;
+        panel.add(button);
+        return panel;
+    }
+
+    /** BGT 分片扫描 → EDT 重建 UI；扫描期间禁用按钮防重复投递。 */
+    private void scanLibrariesAndRefresh() {
+        if (currentRows.stream().noneMatch(row -> row.tableName != null)) return;
+        if (scanButton != null) scanButton.setEnabled(false);
+        ApplicationManager.getApplication().executeOnPooledThread(() -> {
+            List<TableRow> result;
+            try {
+                result = refreshCandidatesFromLibraries();
+            } catch (Throwable ignored) {
+                result = null;
+            }
+            final List<TableRow> refreshed = result;
+            ApplicationManager.getApplication().invokeLater(() -> {
+                if (scanButton != null) scanButton.setEnabled(true);
+                if (refreshed != null) {
+                    currentRows.clear();
+                    currentRows.addAll(refreshed);
+                    rebuildRows();
+                }
+            }, ModalityState.any());
+        });
+    }
+
+    /** 同步内核不可包外层 ReadAction，只有重解析那一步持读锁。 */
+    public List<TableRow> refreshCandidatesFromLibraries() {
+        new EntityClassFinder(project).runLibrarySweepNow();
+        return ReadAction.compute(() -> resolveCandidatesFromFinder());
+    }
+
+    /** 按当前实体反查结果（含库缓存）重解析；须在 ReadAction 内调用。 */
+    public List<TableRow> resolveCandidatesFromFinder() {
+        List<TableRow> refreshed = new java.util.ArrayList<>();
+        for (TableRow row : currentRows) {
+            if (row.tableName == null) {
+                refreshed.add(row);
+            } else {
+                List<PsiClass> candidates = new java.util.ArrayList<>();
+                for (var candidate : SqlToJavaConverter.findCandidates(project, row.tableName)) {
+                    candidates.add(candidate.psiClass());
+                }
+                refreshed.add(row.withCandidates(candidates));
+            }
+        }
+        return refreshed;
+    }
+
+    /** 保留 selections（含用户清除的 null），只更新候选与行展示。 */
+    private void rebuildRows() {
+        if (rowsPanel == null) return;
+        rowsPanel.removeAll();
+        for (TableRow row : currentRows) rowsPanel.add(buildRow(row));
+        rowsPanel.revalidate();
+        rowsPanel.repaint();
     }
 
     private JPanel buildRow(TableRow row) {
@@ -207,7 +294,7 @@ public class EntitySelectionDialog extends DialogWrapper {
     /** 测试访问器：清除某行选择。 */
     public void clearSelectionForTest(String key) {
         TableRow row = null;
-        for (TableRow r : rows) {
+        for (TableRow r : currentRows) {
             if (r.key.equals(key)) { row = r; break; }
         }
         if (row == null) return;

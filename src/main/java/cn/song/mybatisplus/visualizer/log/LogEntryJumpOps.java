@@ -167,7 +167,14 @@ public final class LogEntryJumpOps {
                     "log.panel.jumpToSource",
                     MpSqlVisualizerBundle.message("log.panel.jumpToSource.notFound", notFound.sourceFile()));
         } else if (target instanceof SourceTarget.MissingSource) {
-            showMissingSourceGuide(project);
+            // 控制台回落条目（含融合后仍无位置）不弹「开启源码捕获」引导——增强捕获已在跑时
+            // 该引导是误导，改走轻提示说明该条未携带源码位置。
+            if (LogSqlModelsKt.isConsoleFallbackWithoutSource(entry)) {
+                showToast(project, "log.panel.jumpToSource",
+                        MpSqlVisualizerBundle.message("log.panel.jumpToSource.consoleFallback"));
+            } else {
+                showMissingSourceGuide(project);
+            }
         }
     }
 }

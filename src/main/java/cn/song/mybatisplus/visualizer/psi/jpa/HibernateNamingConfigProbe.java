@@ -5,6 +5,10 @@ import com.intellij.openapi.project.Project;
 import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.openapi.vfs.VfsUtilCore;
+import com.intellij.psi.PsiJavaFile;
+import com.intellij.psi.search.PsiSearchHelper;
+import com.intellij.psi.search.TextOccurenceProcessor;
+import com.intellij.psi.search.UsageSearchContext;
 import com.intellij.psi.search.FilenameIndex;
 import com.intellij.psi.search.GlobalSearchScope;
 import com.intellij.psi.util.PsiModificationTracker;
@@ -61,6 +65,20 @@ public final class HibernateNamingConfigProbe {
     /** 配置文件扩展名。 */
     private static final Set<String> CONFIG_EXTENSIONS = Set.of("yml", "yaml", "properties");
 
+    /** 源码式配置走词索引按类名精确匹配，不遍历全部 Java 源文件。 */
+    private static final List<String> COMPONENT_PATH_CLASS_NAMES = List.of(
+        "ImplicitNamingStrategyComponentPathImpl", "DefaultComponentSafeNamingStrategy");
+    /** 模块内标准 JPA/Hibernate 配置，工程级还按设置键搜索任意文件。 */
+    public static final List<String> JPA_CONFIG_FILE_NAMES = List.of("persistence.xml", "orm.xml", "hibernate.cfg.xml");
+    private static final String NAMING_STRATEGY_KEY = "implicit_naming_strategy";
+    private static final List<String> NAMING_STRATEGY_TYPES = List.of(
+        "ImplicitNamingStrategy", "ImplicitNamingStrategyJpaCompliantImpl",
+        "ImplicitNamingStrategyLegacyJpaImpl", "ImplicitNamingStrategyLegacyHbmImpl");
+    private static final String ATTRIBUTE_PATH_TYPE = "AttributePath";
+    /** 只拿末端属性 getProperty 的策略不应命中；这三种调用能读取父段/整条路径。 */
+    private static final List<String> ATTRIBUTE_PATH_WALK_MARKERS = List.of("getParent", "getFullPath", "getDepth");
+    private static final String META_INF_DIR = "META-INF";
+
     /** 模块根标记文件（任一命中即视为模块根）。 */
     public static final List<String> MODULE_MARKER_FILES = List.of("pom.xml", "build.gradle", "build.gradle.kts");
 
@@ -92,15 +110,24 @@ public final class HibernateNamingConfigProbe {
      */
     public static boolean projectUsesComponentPath(@NotNull Project project, @Nullable VirtualFile anchor) {
         VirtualFile resourcesDir = moduleResourcesDir(anchor);
-        String key = resourcesDir != null ? resourcesDir.getPath() : PROJECT_WIDE_KEY;
+        if (resourcesDir != null) {
+            // 已识别模块只看自身资源，不能把兄弟模块的工程级信号带进来。
+            return cached(project, resourcesDir.getPath(), () -> ReadAction.compute(() -> scanResourcesDir(resourcesDir)));
+        }
+        // JAR 条目无法上溯本地模块，退到工程配置 + 代码式配置 + 自定义组件路径策略。
+        return cached(project, PROJECT_WIDE_KEY, () -> ReadAction.compute(() ->
+            scanProjectConfigs(project) || projectSourcesReferenceComponentPathStrategy(project)
+                || projectHasCustomComponentPathStrategy(project)));
+    }
+
+    private static boolean cached(Project project, String scopeKey, java.util.function.BooleanSupplier compute) {
         String basePath = project.getBasePath();
-        String cacheKey = (basePath != null ? basePath : project.getName()) + "|" + key;
+        String key = (basePath != null ? basePath : project.getName()) + "|" + scopeKey;
         long stamp = PsiModificationTracker.getInstance(project).getModificationCount();
-        Cached cached = CACHE.get(cacheKey);
+        Cached cached = CACHE.get(key);
         if (cached != null && cached.stamp == stamp) return cached.value;
-        boolean value = ReadAction.compute(() ->
-                resourcesDir != null ? scanDir(resourcesDir) : scanProject(project));
-        CACHE.put(cacheKey, new Cached(stamp, value));
+        boolean value = compute.getAsBoolean();
+        CACHE.put(key, new Cached(stamp, value));
         return value;
     }
 
@@ -129,12 +156,15 @@ public final class HibernateNamingConfigProbe {
         return resources != null && resources.isDirectory() ? resources : null;
     }
 
-    private static boolean scanDir(VirtualFile resourcesDir) {
+    /** 模块资源目录本体 + META-INF，不越出该模块范围。 */
+    private static boolean scanResourcesDir(VirtualFile resourcesDir) {
         try {
-            for (VirtualFile child : resourcesDir.getChildren()) {
-                if (!child.isDirectory() && isApplicationConfig(child.getName())
-                        && indicatesComponentPath(readText(child))) {
-                    return true;
+            VirtualFile metaInf = resourcesDir.findChild(META_INF_DIR);
+            for (VirtualFile dir : new VirtualFile[]{resourcesDir, metaInf}) {
+                if (dir == null) continue;
+                for (VirtualFile child : dir.getChildren()) {
+                    if (!child.isDirectory() && isNamingConfigFile(child.getName())
+                            && indicatesComponentPath(readText(child))) return true;
                 }
             }
             return false;
@@ -143,7 +173,16 @@ public final class HibernateNamingConfigProbe {
         }
     }
 
-    private static boolean scanProject(Project project) {
+    private static boolean scanProjectConfigs(Project project) {
+        try {
+            return applicationConfigMentions(project) || configFileMentionsNamingStrategyKey(project);
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    /** Boot 的连字符键 naming.implicit-strategy 由 application 族扩展名扫描补齐。 */
+    private static boolean applicationConfigMentions(Project project) {
         try {
             GlobalSearchScope scope = GlobalSearchScope.projectScope(project);
             for (String ext : CONFIG_EXTENSIONS) {
@@ -157,6 +196,81 @@ public final class HibernateNamingConfigProbe {
         } catch (Throwable ignored) {
             return false;
         }
+    }
+
+    /** 点分设置键的单个标识符词可命中任意配置文件，不把可识别面限定成几个文件名。 */
+    private static boolean configFileMentionsNamingStrategyKey(Project project) {
+        PsiSearchHelper helper = PsiSearchHelper.getInstance(project);
+        short context = (short) (UsageSearchContext.IN_CODE | UsageSearchContext.IN_STRINGS
+            | UsageSearchContext.IN_COMMENTS | UsageSearchContext.IN_PLAIN_TEXT);
+        boolean[] found = {false};
+        helper.processElementsWithWord((TextOccurenceProcessor) (element, offset) -> {
+            var file = element.getContainingFile();
+            if (file != null && indicatesComponentPath(file.getText())) {
+                found[0] = true;
+                return false;
+            }
+            return true;
+        }, GlobalSearchScope.projectScope(project), NAMING_STRATEGY_KEY, context, true);
+        return found[0];
+    }
+
+    /** 代码式配置：工程源码内引用内置组件路径策略类名，词索引 O(命中) 且命中即停。 */
+    private static boolean projectSourcesReferenceComponentPathStrategy(Project project) {
+        try {
+            PsiSearchHelper helper = PsiSearchHelper.getInstance(project);
+            short context = (short) (UsageSearchContext.IN_CODE | UsageSearchContext.IN_STRINGS);
+            for (String className : COMPONENT_PATH_CLASS_NAMES) {
+                boolean[] found = {false};
+                helper.processElementsWithWord((TextOccurenceProcessor) (element, offset) -> {
+                    if (element.getContainingFile() instanceof PsiJavaFile) {
+                        found[0] = true;
+                        return false;
+                    }
+                    return true;
+                }, GlobalSearchScope.projectScope(project), className, context, true);
+                if (found[0]) return true;
+            }
+            return false;
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    /**
+     * 自定义组件路径策略须同时参与隐式命名并读取 AttributePath 父段/全路径；只改表名的不认。
+     * 纯文本特征不解析控制流；依赖 JAR 内无源码的自定义实现、非下划线连接符仍是已知边界。
+     */
+    private static boolean projectHasCustomComponentPathStrategy(Project project) {
+        try {
+            PsiSearchHelper helper = PsiSearchHelper.getInstance(project);
+            short context = (short) (UsageSearchContext.IN_CODE | UsageSearchContext.IN_STRINGS);
+            for (String type : NAMING_STRATEGY_TYPES) {
+                boolean[] found = {false};
+                helper.processElementsWithWord((TextOccurenceProcessor) (element, offset) -> {
+                    var file = element.getContainingFile();
+                    if (file instanceof PsiJavaFile && looksLikeComponentPathStrategy(file.getText())) {
+                        found[0] = true;
+                        return false;
+                    }
+                    return true;
+                }, GlobalSearchScope.projectScope(project), type, context, true);
+                if (found[0]) return true;
+            }
+            return false;
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    private static boolean looksLikeComponentPathStrategy(String text) {
+        if (!text.contains(ATTRIBUTE_PATH_TYPE)) return false;
+        for (String marker : ATTRIBUTE_PATH_WALK_MARKERS) if (text.contains(marker)) return true;
+        return false;
+    }
+
+    private static boolean isNamingConfigFile(String name) {
+        return isApplicationConfig(name) || JPA_CONFIG_FILE_NAMES.contains(name);
     }
 
     private static boolean isApplicationConfig(String name) {

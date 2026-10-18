@@ -179,7 +179,8 @@ public final class ConvertSqlToJavaAction extends AnAction {
             rows.add(new EntitySelectionDialog.TableRow(
                     EntitySelectionDialog.MAIN_KEY,
                     MpSqlVisualizerBundle.message("dialog.selectEntity.mainTable") + " " + result.tableName(),
-                    candidates.stream().map(SqlToJavaConverter.EntityCandidate::psiClass).collect(Collectors.toList())
+                    candidates.stream().map(SqlToJavaConverter.EntityCandidate::psiClass).collect(Collectors.toList()),
+                    result.tableName()
             ));
             for (ReverseJoin join : result.joins()) {
                 String alias = join.alias();
@@ -191,7 +192,8 @@ public final class ConvertSqlToJavaAction extends AnAction {
                     rows.add(new EntitySelectionDialog.TableRow(
                             alias,
                             MpSqlVisualizerBundle.message("dialog.selectEntity.joinTable") + " " + alias + " " + join.tableName(),
-                            subClasses
+                            subClasses,
+                            join.tableName()
                     ));
                 }
             }

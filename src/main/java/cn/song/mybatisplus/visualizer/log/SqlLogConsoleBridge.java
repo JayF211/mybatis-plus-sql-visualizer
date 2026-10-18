@@ -566,7 +566,8 @@ public class SqlLogConsoleBridge {
     /** 条目入队（桥的两条产出路径共用：逐行与轮询静默冲刷）。 */
     private void emitEntries(List<LogSqlEntry> entries) {
         for (LogSqlEntry entry : entries) {
-            buffer.addEntry(entry);
+            // 桥通道打标（EP 通道同款打标在 SqlConsoleBridgeFilterProvider）——同桶融合与归因诊断依赖。
+            buffer.addEntry(entry.withCaptureProvenance(CaptureProvenance.CONSOLE_BRIDGE));
         }
     }
 

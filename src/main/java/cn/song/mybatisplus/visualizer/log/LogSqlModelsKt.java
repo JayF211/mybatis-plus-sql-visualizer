@@ -200,6 +200,70 @@ public final class LogSqlModelsKt {
         return counts;
     }
 
+    /** 同一次执行的重复观测只补缺失信息，保留原条目的 SQL、时间及序号。 */
+    public static LogSqlEntry mergeDuplicateEntry(LogSqlEntry existing, LogSqlEntry incoming) {
+        boolean existingFileReal = existing.sourceFile() != null
+                && !SourceMarkers.isMpPaginationCount(existing.sourceFile());
+        boolean incomingFileReal = incoming.sourceFile() != null
+                && !SourceMarkers.isMpPaginationCount(incoming.sourceFile());
+        boolean takeIncomingSource = !existingFileReal && incomingFileReal;
+        String sourceFile = takeIncomingSource ? incoming.sourceFile()
+                : existing.sourceFile() != null ? existing.sourceFile() : incoming.sourceFile();
+        int sourceLine = takeIncomingSource ? incoming.sourceLine()
+                : existing.sourceFile() != null ? existing.sourceLine() : incoming.sourceLine();
+        return new LogSqlEntry(existing.rawSql(), existing.restoredSql(), existing.params(), existing.timestamp(),
+                existing.logTimestamp() != null ? existing.logTimestamp() : incoming.logTimestamp(),
+                existing.summary(), existing.source(),
+                existing.executionTimeMs() != null ? existing.executionTimeMs() : incoming.executionTimeMs(),
+                sourceFile, sourceLine,
+                existing.sourceCandidates().isEmpty() ? incoming.sourceCandidates() : existing.sourceCandidates(),
+                existing.candidateClasses().isEmpty() ? incoming.candidateClasses() : existing.candidateClasses(),
+                existing.stackDigest() != null ? existing.stackDigest() : incoming.stackDigest(),
+                existing.sequenceNumber(),
+                existing.mapperStatement() != null ? existing.mapperStatement() : incoming.mapperStatement(),
+                existing.errorText() != null ? existing.errorText() : incoming.errorText(),
+                existing.requestTag() != null ? existing.requestTag() : incoming.requestTag(),
+                existing.updateCount() != null ? existing.updateCount() : incoming.updateCount(),
+                existing.databaseName() != null ? existing.databaseName() : incoming.databaseName(),
+                existing.actualSql(), mergedProvenance(existing.captureProvenance(), incoming.captureProvenance()));
+    }
+
+    public static CaptureProvenance mergedProvenance(CaptureProvenance existing, CaptureProvenance incoming) {
+        if (existing == CaptureProvenance.UNKNOWN) return incoming;
+        if (incoming != CaptureProvenance.UNKNOWN && incoming != existing) return CaptureProvenance.MERGED;
+        return existing;
+    }
+
+    public static java.util.List<String> mergeUpgradedAspects(LogSqlEntry existing, LogSqlEntry merged) {
+        java.util.List<String> aspects = new java.util.ArrayList<>();
+        if (!java.util.Objects.equals(existing.sourceFile(), merged.sourceFile())
+                || existing.sourceLine() != merged.sourceLine()) aspects.add("源码");
+        if (!java.util.Objects.equals(existing.sourceCandidates(), merged.sourceCandidates())) aspects.add("候选帧");
+        if (!java.util.Objects.equals(existing.executionTimeMs(), merged.executionTimeMs())) aspects.add("耗时");
+        if (!java.util.Objects.equals(existing.updateCount(), merged.updateCount())) aspects.add("行数");
+        if (!java.util.Objects.equals(existing.databaseName(), merged.databaseName())) aspects.add("库标");
+        if (!java.util.Objects.equals(existing.logTimestamp(), merged.logTimestamp())) aspects.add("日志时间");
+        if (!java.util.Objects.equals(existing.stackDigest(), merged.stackDigest())) aspects.add("栈快照");
+        return aspects;
+    }
+
+    public static String provenanceDiagText(LogSqlEntry entry, boolean gatePaused) {
+        String fingerprint = entry.dedupeKey();
+        return "捕获归因: 通道=" + entry.captureProvenance() + " 来源=" + entry.source()
+                + " 指纹=" + fingerprint.substring(0, Math.min(8, fingerprint.length()))
+                + " 有源码=" + (entry.sourceFile() != null) + " 有候选=" + !entry.sourceCandidates().isEmpty()
+                + " 有耗时=" + (entry.executionTimeMs() != null) + " 有库标=" + (entry.databaseName() != null)
+                + " 桥封停=" + gatePaused;
+    }
+
+    public static boolean isConsoleFallbackWithoutSource(LogSqlEntry entry) {
+        if (entry.sourceFile() != null || !entry.sourceCandidates().isEmpty()) return false;
+        return switch (entry.captureProvenance()) {
+            case CONSOLE_EP, CONSOLE_BRIDGE, MERGED -> true;
+            default -> false;
+        };
+    }
+
     /** O-90：同模板徽章显示阈值（≥N 显示「×N 同模板」；常量起步不做设置项——缩范围定案）。 */
     public static final int TEMPLATE_BADGE_MIN_COUNT = 3;
 }

@@ -1402,7 +1402,8 @@ public final class DataSourceSelectorResultsKt {
     /** {@link #prewarmExecTempFile} 的真实链（已持有 in-flight 标记；仅后台线程调用）。 */
     public static void prewarmExecTempFileInner(Project project, String sql, Logger LOG) {
         lastTempFileFailure = null;
-        // T-ExecCopyFix F2b：refresh 段 WriteIntentReadAction（BGT 上 WIRA 合法；与 EDT 冷路径同款包装）
+        // BGT 不得持写意向锁同步 refresh：刷新会话推进也需要 WIL/EDT，会互等自锁。
+        // EDT 冷路径 createTempPsiFile 的 WIRA 语境不同，必须保留；这里只移除后台预热包装。
         File ioFile;
         try {
             ioFile = projectExecFile(project, sql);
@@ -1430,9 +1431,7 @@ public final class DataSourceSelectorResultsKt {
         }
         VirtualFile vf;
         try {
-            vf = WriteIntentReadAction.compute(
-                    (com.intellij.openapi.util.Computable<VirtualFile>) () ->
-                            LocalFileSystem.getInstance().refreshAndFindFileByIoFile(ioFile));
+            vf = LocalFileSystem.getInstance().refreshAndFindFileByIoFile(ioFile);
         } catch (Throwable e) {
             if (FatalErrors.isFatal(e)) throw (Error) e; // T-FP-02：fatal 透传（prewarm 跑在 BGT，透传由平台记录现场）
             LOG.warn("[M36] exec prewarm refreshVfs failed: " + e.getClass().getSimpleName() + ": " + e.getMessage());

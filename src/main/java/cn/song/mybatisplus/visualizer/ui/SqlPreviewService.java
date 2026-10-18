@@ -764,27 +764,16 @@ public final class SqlPreviewService {
 
     /** T-J22：@Query.countQuery → count SQL 注释行（Page 返回语义；转换失败降级原文注释）。 */
     public List<String> countQueryNotes(@Nullable PsiMethod method, @Nullable TableInfo table) {
-        try {
-            String countJpql = JpaQueryEnhancer.countQueryAttribute(method);
-            if (countJpql == null) return List.of();
-            // 注释前缀 "-- " 由 applyJpaMethodEnhancements 统一追加，此处只给内容行
-            List<String> out = new ArrayList<>();
-            out.add("@Query.countQuery（Page 返回的 count 伴随查询）：");
-            try {
-                String sqlText = countJpql;
-                if (table != null) {
-                    sqlText = JpqlConverter.INSTANCE.convert(countJpql, table, project).getSql();
-                }
-                out.addAll(sqlText.lines().toList());
-            } catch (Throwable t) {
-                out.clear();
-                out.add("@Query.countQuery（Page 返回的 count 伴随查询）：");
-                out.addAll(countJpql.lines().toList());
-            }
-            return out;
-        } catch (Throwable t) {
-            return List.of();
-        }
+        if (method == null) return List.of();
+        String countJpql = JpaQueryEnhancer.countQueryAttribute(method);
+        if (countJpql == null) return List.of();
+        TableInfo countTable = extractEntityNameFromHql(countJpql) == null ? table
+                : SqlPreviewServiceEnhancementsKt.resolveHqlTable(this, null, null, countJpql, method);
+        String sql = JpqlConverter.convert(countJpql, countTable, project, method).getSql();
+        List<String> notes = new ArrayList<>();
+        notes.add("@Query.countQuery（Page 返回的 count 伴随查询）：");
+        notes.addAll(sql.lines().toList());
+        return notes;
     }
 
     /**
@@ -829,7 +818,8 @@ public final class SqlPreviewService {
         String jpql = info.getJpql();
         List<String> paramNames = extractJpqlParamNames(method);
         PsiClass entityClass = info.getEntityClass();
-        TableInfo table = (entityClass != null) ? new JpaEntityResolver().resolve(entityClass) : null;
+        TableInfo table = info.isNative() ? (entityClass != null ? new JpaEntityResolver().resolve(entityClass) : null)
+                : SqlPreviewServiceEnhancementsKt.resolveHqlTable(this, entityClass, null, jpql, method);
         // T-PS5-03：入口求一次方言（分页分析/方法级增强/结果构建共用）
         Dialect dialect = currentDialect();
         // T-J10：分页/排序参数占位名（无参数时空列表，存量行为零变化）
@@ -864,7 +854,7 @@ public final class SqlPreviewService {
                     hints, List.of(), null, null, Map.of(), null, null, null, null);
         }
         // Wave1 第三参 project：激活 PSI 级 JOIN ON（@JoinColumn 真实化）与子查询实体映射
-        JpqlConverter.Result result = JpqlConverter.INSTANCE.convert(jpql, table, project);
+        JpqlConverter.Result result = JpqlConverter.convert(jpql, table, project, method);
         // T-J10/J15/J22：方法级增强（LIMIT/ORDER BY/FOR UPDATE/EntityGraph JOIN/notes/count SQL）
         String enhancedSql = SqlPreviewServiceEnhancementsKt.applyJpaMethodEnhancements(this, method, result.getSql(), table, false, dialect);
         return SqlPreviewServiceEnhancementsKt.buildJpaPreviewResult(this, result.getStatement(), enhancedSql, table != null ? table.getTableName() : "",
@@ -1067,17 +1057,17 @@ public final class SqlPreviewService {
         // T-PreviewShortcut：createNamedQuery("name") 按名回查实体 @NamedQuery，解析真实 JPQL；
         // 跨文件 / 命名不规范解析不到时优雅降级为把名字当 HQL 处理（不抛、不挂起）。
         if ("createNamedQuery".equals(info.getCreateQueryMethodName())) {
-            NamedQueryInfo named = null;
-            try {
-                named = NamedQueryLocator.INSTANCE.findByQueryName(project, info.getHql());
-            } catch (Throwable t) {
-                named = null;
-            }
+            List<NamedQueryInfo> namedCandidates = NamedQueryLocator.findCandidatesByQueryName(project, info.getHql(),
+                    info.getMethod() != null ? info.getMethod() : anchor);
+            if (namedCandidates.size() > 1) return null;
+            NamedQueryInfo named = namedCandidates.size() == 1 ? namedCandidates.get(0) : null;
             if (named != null && !named.getQuery().isBlank()) {
                 PsiClass entityClass = named.getAnnotation() != null
                         ? PsiTreeUtil.getParentOfType(named.getAnnotation(), PsiClass.class, false) : null;
-                TableInfo namedTable = entityClass != null ? new JpaEntityResolver().resolve(entityClass) : null;
-                JpqlConverter.Result namedResult = JpqlConverter.INSTANCE.convert(named.getQuery(), namedTable, project);
+                TableInfo namedTable = SqlPreviewServiceEnhancementsKt.resolveHqlTable(this, entityClass, null, named.getQuery(),
+                        info.getMethod() != null ? info.getMethod() : anchor);
+                JpqlConverter.Result namedResult = JpqlConverter.convert(named.getQuery(), namedTable, project,
+                        info.getMethod() != null ? info.getMethod() : anchor);
                 List<String> namedParams = extractParamNamesFromHql(named.getQuery());
                 // T-PS5-03：本分支入口求一次方言
                 Dialect dialect = currentDialect();
@@ -1094,28 +1084,15 @@ public final class SqlPreviewService {
                         info.getMethod(), namedResult.getInClauseParams(), dialect);
             }
             // T-H3：Java @NamedQuery 未命中 → hbm 命名查询 fallback（hbm 纯 POJO 项目无注解可查）
-            HbmXmlMapping.NamedQuery hbmNamed = null;
-            try {
-                hbmNamed = HbmXmlEntityResolver.findNamedQuery(info.getHql(), project);
-            } catch (Throwable t) {
-                hbmNamed = null;
-            }
+            HbmXmlMapping.NamedQuery hbmNamed = HbmXmlEntityResolver.findNamedQuery(info.getHql(), project,
+                    info.getMethod() != null ? info.getMethod() : anchor);
             if (hbmNamed != null) {
-                return previewHbmNamedQuery(hbmNamed, info.getMethod());
+                return previewHbmNamedQuery(hbmNamed, info.getMethod(), info.getMethod() != null ? info.getMethod() : anchor);
             }
         }
-        TableInfo table = SqlPreviewServiceEnhancementsKt.resolveHqlTable(this, info.getEntityClass(), info.getEntityClassName(), info.getHql());
-        // Wave1 第三参 project：激活 PSI 级 JOIN ON 与子查询实体映射
-        // T-HqlInhCols：@Entity(name=...) 实体别名透传，别名形态 HQL 实体名才能被表名替换
-        String hqlEntityAlias = null;
-        if (info.getEntityClass() != null) {
-            try {
-                hqlEntityAlias = JpaMetadataReader.entityNameOf(info.getEntityClass());
-            } catch (Throwable t) {
-                hqlEntityAlias = null;
-            }
-        }
-        HqlConverter.Result result = HqlConverter.INSTANCE.convert(info.getHql(), table, project, hqlEntityAlias);
+        PsiElement context = info.getMethod() != null ? info.getMethod() : anchor;
+        TableInfo table = SqlPreviewServiceEnhancementsKt.resolveHqlTable(this, info.getEntityClass(), info.getEntityClassName(), info.getHql(), context);
+        HqlConverter.Result result = HqlConverter.convert(info.getHql(), table, project, extractEntityNameFromHql(info.getHql()), context);
         // 参数名提取：
         // 1. 追踪 setParameter 结果（位置参数用 valueExpr 即变量名，命名参数用 paramName）
         // 2. 若为空（链式调用场景），直接从 HQL 提取
@@ -1210,8 +1187,8 @@ public final class SqlPreviewService {
         }
         if (info == null) info = infos.get(0);
         String jpql = info.getQuery();
-        TableInfo table = new JpaEntityResolver().resolve(cls);
-        JpqlConverter.Result result = JpqlConverter.INSTANCE.convert(jpql, table, project);
+        TableInfo table = SqlPreviewServiceEnhancementsKt.resolveHqlTable(this, cls, null, jpql, annotation);
+        JpqlConverter.Result result = JpqlConverter.convert(jpql, table, project, annotation);
         List<String> paramNames = extractParamNamesFromHql(jpql);
         return SqlPreviewServiceEnhancementsKt.buildJpaPreviewResult(this, result.getStatement(), result.getSql(),
                 table != null ? table.getTableName() : "", paramNames,
@@ -1242,58 +1219,36 @@ public final class SqlPreviewService {
                     "-- QBC/DetachedCriteria 形态暂不支持静态解析（条件树运行时构建）");
         }
         if (info.getKind() == DaoQueryKind.NAMED_QUERY) {
-            NamedQueryInfo named = null;
-            try {
-                named = NamedQueryLocator.INSTANCE.findByQueryName(project, info.getHql());
-            } catch (Throwable t) {
-                named = null;
-            }
+            List<NamedQueryInfo> namedCandidates = NamedQueryLocator.findCandidatesByQueryName(project, info.getHql(),
+                    info.getMethod() != null ? info.getMethod() : anchor);
+            if (namedCandidates.size() > 1) return null;
+            NamedQueryInfo named = namedCandidates.size() == 1 ? namedCandidates.get(0) : null;
             if (named != null && !named.getQuery().isBlank()) {
                 PsiClass entityClass = named.getAnnotation() != null
                         ? PsiTreeUtil.getParentOfType(named.getAnnotation(), PsiClass.class, false) : null;
-                TableInfo namedTable = entityClass != null ? new JpaEntityResolver().resolve(entityClass) : null;
-                JpqlConverter.Result namedResult = JpqlConverter.INSTANCE.convert(named.getQuery(), namedTable, project);
+                TableInfo namedTable = SqlPreviewServiceEnhancementsKt.resolveHqlTable(this, entityClass, null, named.getQuery(),
+                        info.getMethod() != null ? info.getMethod() : anchor);
+                JpqlConverter.Result namedResult = JpqlConverter.convert(named.getQuery(), namedTable, project,
+                        info.getMethod() != null ? info.getMethod() : anchor);
                 List<String> namedParams = extractParamNamesFromHql(named.getQuery());
                 return SqlPreviewServiceEnhancementsKt.buildJpaPreviewResult(this, namedResult.getStatement(), namedResult.getSql(),
                         namedTable != null ? namedTable.getTableName() : "", namedParams,
                         info.getMethod(), namedResult.getInClauseParams());
             }
             // T-H3：Java @NamedQuery 未命中 → hbm 命名查询 fallback（与 previewHql 同款）
-            HbmXmlMapping.NamedQuery hbmNamed = null;
-            try {
-                hbmNamed = HbmXmlEntityResolver.findNamedQuery(info.getHql(), project);
-            } catch (Throwable t) {
-                hbmNamed = null;
-            }
+            HbmXmlMapping.NamedQuery hbmNamed = HbmXmlEntityResolver.findNamedQuery(info.getHql(), project,
+                    info.getMethod() != null ? info.getMethod() : anchor);
             if (hbmNamed != null) {
-                return previewHbmNamedQuery(hbmNamed, info.getMethod());
+                return previewHbmNamedQuery(hbmNamed, info.getMethod(), info.getMethod() != null ? info.getMethod() : anchor);
             }
             // 回查失败：优雅降级占位（跨文件/命名不规范），不出错误 SQL
             return placeholderPreview(
                     "-- 命名查询 \"" + info.getHql() + "\"：未能回查到 @NamedQuery 定义（跨文件/命名不规范），无法静态解析 JPQL");
         }
-        TableInfo table = SqlPreviewServiceEnhancementsKt.resolveHqlTable(this, null, info.getEntityClassName(), info.getHql());
-        // Wave1 第三参 project：激活 PSI 级 JOIN ON 与子查询实体映射
-        // T-HqlInhCols：别名反查命中时从解析出的 PsiClass 读实体别名透传（此链无 entityClass 入参）
-        PsiClass resolvedEntityClass = null;
-        if (table != null && table.getEntityClassName() != null && !table.getEntityClassName().isBlank()) {
-            try {
-                resolvedEntityClass = JavaPsiFacade.getInstance(project).findClass(
-                        info.getEntityClassName() != null ? info.getEntityClassName() : table.getEntityClassName(),
-                        GlobalSearchScope.allScope(project));
-            } catch (Throwable t) {
-                resolvedEntityClass = null;
-            }
-        }
-        String daoEntityAlias = null;
-        if (resolvedEntityClass != null) {
-            try {
-                daoEntityAlias = JpaMetadataReader.entityNameOf(resolvedEntityClass);
-            } catch (Throwable t) {
-                daoEntityAlias = null;
-            }
-        }
-        HqlConverter.Result result = HqlConverter.INSTANCE.convert(info.getHql(), table, project, daoEntityAlias);
+        PsiElement context = info.getMethod() != null ? info.getMethod() : anchor;
+        TableInfo table = SqlPreviewServiceEnhancementsKt.resolveHqlTable(this, null, info.getEntityClassName(), info.getHql(), context);
+        // 使用查询根名替换别名，不再全项目二次找类；JAR 实体保留 DAO 模块上下文。
+        HqlConverter.Result result = HqlConverter.convert(info.getHql(), table, project, extractEntityNameFromHql(info.getHql()), context);
         List<String> paramNames = extractHqlParamNames(info.getParameters());
         if (paramNames.isEmpty()) paramNames = extractParamNamesFromHql(info.getHql());
         return SqlPreviewServiceEnhancementsKt.buildJpaPreviewResult(this, result.getStatement(), result.getSql(), table != null ? table.getTableName() : "",
@@ -1345,6 +1300,12 @@ public final class SqlPreviewService {
 
     @Nullable
     public PreviewResult previewHbmNamedQuery(@NotNull HbmXmlMapping.NamedQuery query, @Nullable PsiMethod hostMethod) {
+        return previewHbmNamedQuery(query, hostMethod, hostMethod);
+    }
+
+    @Nullable
+    public PreviewResult previewHbmNamedQuery(@NotNull HbmXmlMapping.NamedQuery query, @Nullable PsiMethod hostMethod,
+                                               @Nullable PsiElement context) {
         if (query.getQueryText().isBlank()) return null;
         List<String> paramNames = extractParamNamesFromHql(query.getQueryText());
         if (query.getKind() == HbmXmlMapping.QueryKind.NATIVE) {
@@ -1380,15 +1341,9 @@ public final class SqlPreviewService {
                     usableNamedSources != null ? usableNamedSources : List.of(),
                     Set.of());
         }
-        // HQL：查询名前缀（LegacyItem.findLowStockHql → LegacyItem）优先，回落 FROM 子句实体
-        String namePrefix = query.getName();
-        int dot = namePrefix.indexOf('.');
-        String prefix = dot >= 0 ? namePrefix.substring(0, dot) : "";
-        prefix = prefix.trim();
-        String entityName = !prefix.isBlank() ? prefix : extractEntityNameFromHql(query.getQueryText());
-                TableInfo table = SqlPreviewServiceEnhancementsKt.resolveHqlTable(this, null, entityName, query.getQueryText());
-                // T-HqlInhCols：hbm 项目实体别名多由 XML <entity-name> 承载，注解读不到即 null，安全
-                HqlConverter.Result result = HqlConverter.INSTANCE.convert(query.getQueryText(), table, project);
+        String entityName = extractEntityNameFromHql(query.getQueryText());
+        TableInfo table = SqlPreviewServiceEnhancementsKt.resolveHqlTable(this, null, entityName, query.getQueryText(), context);
+        HqlConverter.Result result = HqlConverter.convert(query.getQueryText(), table, project, entityName, context);
         // T-PS5-03：本分支入口求一次方言
         Dialect dialect = currentDialect();
         String enhancedSql = SqlPreviewServiceEnhancementsKt.applyJpaMethodEnhancements(this, hostMethod, result.getSql(), table, false, dialect);
@@ -1415,7 +1370,7 @@ public final class SqlPreviewService {
         // 文本提取复用 resolver 的解析口径（直属 XmlText、CDATA 剥包裹、排除子标签）；
         // tag 与 findNamedQuery 同源
         String text = XmlDirectText.directTextOf(tag);
-        return previewHbmNamedQuery(new HbmXmlMapping.NamedQuery(name, kind, text));
+        return previewHbmNamedQuery(new HbmXmlMapping.NamedQuery(name, kind, text), null, tag);
     }
 
     /**
@@ -2035,72 +1990,16 @@ public final class SqlPreviewService {
      */
     @Nullable
     public PsiClass findClassByEntityName(@NotNull Project project, @NotNull String entityName, @NotNull GlobalSearchScope scope) {
-        if (entityName.isBlank()) return null;
-        long current = com.intellij.psi.util.PsiModificationTracker.getInstance(project).getModificationCount();
-        EntityNameLookupCache existing = project.getUserData(ENTITY_NAME_CACHE_KEY);
-        EntityNameLookupCache cache;
-        if (existing != null && existing.count() == current) {
-            cache = existing;
-        } else {
-            cache = new EntityNameLookupCache(current, new java.util.HashMap<>());
-            project.putUserData(ENTITY_NAME_CACHE_KEY, cache);
-        }
-
-        String key = entityName.toLowerCase();
-        String cached = cache.names().get(key);
-        if (cached != null) {
-            String shortName = substringAfterLast(cached, '.');
-            PsiClass[] classes = PsiShortNamesCache.getInstance(project).getClassesByName(shortName, scope);
-            for (PsiClass clazz : classes) {
-                if (cached.equals(clazz.getQualifiedName())) return clazz;
-            }
-            return null;
-        }
-        if (cached != null || (cached == null && cache.names().containsKey(key) && cache.names().get(key) == null)) return null;
-        // 已知未命中（空串哨兵值）快速返回
-        if (cache.names().containsKey(key)) return null;
-
-        // 慢路径：全量扫项目类短名，匹配 @Entity(name=...) 注解值（jakarta/javax/短名三轨）
-        String matchedQName = null;
-        PsiShortNamesCache namesCache = PsiShortNamesCache.getInstance(project);
-        outer:
-        for (String shortName : namesCache.getAllClassNames()) {
-            for (PsiClass clazz : namesCache.getClassesByName(shortName, scope)) {
-                if (clazz.isInterface() || clazz.isEnum() || clazz.isAnnotationType()) continue;
-                String alias = null;
-                try {
-                    alias = JpaMetadataReader.entityNameOf(clazz);
-                } catch (Throwable t) {
-                    alias = null;
-                }
-                if (alias == null) continue;
-                if (alias.equalsIgnoreCase(entityName)) {
-                    matchedQName = clazz.getQualifiedName();
-                    break outer;
-                }
-            }
-        }
-        cache.names().put(key, matchedQName != null ? matchedQName : "");
-        if (matchedQName == null) return null;
-        String shortName = substringAfterLast(matchedQName, '.');
-        PsiClass[] classes = namesCache.getClassesByName(shortName, scope);
-        for (PsiClass clazz : classes) {
-            if (matchedQName.equals(clazz.getQualifiedName())) return clazz;
-        }
-        return null;
+        return findClassByEntityName(project, entityName, scope, null);
     }
 
-    /** 实体别名反查缓存条目：modificationCount + 实体名→全限定名（空串=已知未命中）。 */
-    private record EntityNameLookupCache(
-            /** 取值时的 PsiModificationTracker.modificationCount。 */
-            long count,
-            /** 实体名（小写）→ 全限定名（空串 = 已知未命中）。 */
-            @NotNull java.util.Map<String, String> names) {
+    @Nullable
+    public PsiClass findClassByEntityName(@NotNull Project project, @NotNull String entityName,
+                                          @NotNull GlobalSearchScope scope, @Nullable PsiElement context) {
+        PsiClass candidate = cn.song.mybatisplus.visualizer.psi.jpa.EntityAliasSweep.resolve(project, entityName, context).psiClass();
+        return candidate != null && candidate.getContainingFile() != null && candidate.getContainingFile().getVirtualFile() != null
+                && scope.contains(candidate.getContainingFile().getVirtualFile()) ? candidate : null;
     }
-
-    /** 实体别名反查缓存 userData 键（Kotlin 为实例属性，Java 提为静态——Key 天然可共享）。 */
-    private static final com.intellij.openapi.util.Key<EntityNameLookupCache> ENTITY_NAME_CACHE_KEY =
-            com.intellij.openapi.util.Key.create("mp-visualizer.entityNameLookupCache");
 
     /**
      * 从 HQL 提取实体类名（T-HqlUpdateEntityMap S1 起委托共享提取器）。
@@ -2132,8 +2031,15 @@ public final class SqlPreviewService {
      * 按短类名查找 PsiClass。
      */
     public PsiClass findClassByShortName(@NotNull Project project, @NotNull String shortName, @NotNull GlobalSearchScope scope) {
-        PsiClass[] classes = PsiShortNamesCache.getInstance(project).getClassesByName(shortName, scope);
-        return (classes.length > 0) ? classes[0] : null;
+        return findClassByShortName(project, shortName, scope, null);
+    }
+
+    @Nullable
+    public PsiClass findClassByShortName(@NotNull Project project, @NotNull String shortName,
+                                         @NotNull GlobalSearchScope scope, @Nullable PsiElement context) {
+        PsiClass candidate = cn.song.mybatisplus.visualizer.psi.EntityClassResolver.resolveClassByName(project, shortName, context);
+        return candidate != null && candidate.getContainingFile() != null && candidate.getContainingFile().getVirtualFile() != null
+                && scope.contains(candidate.getContainingFile().getVirtualFile()) ? candidate : null;
     }
 
     /**

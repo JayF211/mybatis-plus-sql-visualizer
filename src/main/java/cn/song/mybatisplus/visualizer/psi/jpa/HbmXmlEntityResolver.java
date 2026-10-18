@@ -50,20 +50,29 @@ public final class HbmXmlEntityResolver {
     /** T-Perf-18：负命中缓存上限（超过整体清空）。 */
     private static final int NEGATIVE_CACHE_MAX = 4096;
 
-    /** 解析缓存（按 project:className 索引）。 */
-    private static final ConcurrentHashMap<String, HbmXmlMapping.ClassMapping> cache = new ConcurrentHashMap<>();
+    /** @param name exact lookup name @param scope query scope including libraries */
+    private record LookupKey(String name, GlobalSearchScope scope) {}
+    private static final class LookupCache {
+        final long psiStamp, rootStamp, generation;
+        final Map<LookupKey, List<HbmXmlMapping.ClassMapping>> classes = new ConcurrentHashMap<>();
+        final Map<LookupKey, List<HbmXmlMapping.NamedQuery>> queries = new ConcurrentHashMap<>();
+        LookupCache(long psiStamp, long rootStamp, long generation) {
+            this.psiStamp = psiStamp; this.rootStamp = rootStamp; this.generation = generation;
+        }
+    }
+    private static final com.intellij.openapi.util.Key<LookupCache> CACHE_KEY = com.intellij.openapi.util.Key.create("mp-visualizer.scopedHbmMappings");
+    private static final java.util.concurrent.atomic.AtomicLong generation = new java.util.concurrent.atomic.AtomicLong();
 
-    /** T-H1：命名查询索引（键=项目名+查询名）；负命中沿用 negativeCache（前缀区分键）。 */
-    private static final ConcurrentHashMap<String, HbmXmlMapping.NamedQuery> namedQueryCache =
-            new ConcurrentHashMap<>();
-
-    /**
-     * T-Perf-18：负命中缓存（项目名+类名 → true 表示该实体无 hbm 映射）。
-     * 此前每个无 hbm 实体每次预览都重跑索引全量查询（heavy 热路径）；
-     * 负命中仅在 clearCache / 缓存封顶清空时失效（hbm 文件增删属开发期低频事件，
-     * 设置页「清除缓存」可手动刷新）。
-     */
-    private static final Set<String> negativeCache = ConcurrentHashMap.newKeySet();
+    private static LookupCache cacheFor(Project project) {
+        long psi = com.intellij.psi.util.PsiModificationTracker.getInstance(project).getModificationCount();
+        long roots = com.intellij.openapi.roots.ProjectRootModificationTracker.getInstance(project).getModificationCount();
+        long epoch = generation.get();
+        LookupCache previous = project.getUserData(CACHE_KEY);
+        if (previous != null && previous.psiStamp == psi && previous.rootStamp == roots && previous.generation == epoch) return previous;
+        LookupCache cache = new LookupCache(psi, roots, epoch);
+        project.putUserData(CACHE_KEY, cache);
+        return cache;
+    }
 
     private HbmXmlEntityResolver() {
     }
@@ -77,28 +86,30 @@ public final class HbmXmlEntityResolver {
      */
     @Nullable
     public static HbmXmlMapping.ClassMapping resolve(@NotNull String entityClassName, @NotNull Project project) {
-        String cacheKey = project.getName() + ":" + entityClassName;
-        HbmXmlMapping.ClassMapping cached = cache.get(cacheKey);
-        if (cached != null) return cached;
-        if (negativeCache.contains(cacheKey)) return null;
+        return resolve(entityClassName, project, null);
+    }
 
-        // 搜索所有 .hbm.xml 文件（T-DepApi 无需介入：本路径走 FileTypeIndex + projectScope，
-        // 未使用全平台标 deprecated 的 FilenameIndex.getFilesByName）
-        for (XmlFile file : findHbmXmlFiles(project)) {
-            for (HbmXmlMapping.ClassMapping mapping : parseHbmFile(file)) {
-                // 按简单类名和全限定名索引
-                if (mapping.entityClassName().equals(entityClassName)
-                        || mapping.fullClassName().equals(entityClassName)) {
-                    cache.put(cacheKey, mapping);
-                    return mapping;
+    @Nullable
+    public static HbmXmlMapping.ClassMapping resolve(String entityClassName, Project project, com.intellij.psi.PsiElement context) {
+        if (entityClassName.isBlank() || com.intellij.openapi.project.DumbService.isDumb(project)) return null;
+        try {
+            GlobalSearchScope scope = cn.song.mybatisplus.visualizer.psi.EntityClassResolver.searchScope(project, context);
+            var cache = cacheFor(project).classes;
+            LookupKey key = new LookupKey(entityClassName, scope);
+            var cached = cache.get(key);
+            if (cached != null) return cached.size() == 1 ? cached.get(0) : null;
+            List<HbmXmlMapping.ClassMapping> matches = new ArrayList<>();
+            for (XmlFile file : findHbmXmlFiles(project, scope)) {
+                for (var mapping : parseHbmFile(file)) {
+                    if (mapping.entityClassName().equals(entityClassName) || mapping.fullClassName().equals(entityClassName)) matches.add(mapping);
                 }
             }
+            if (cache.size() >= NEGATIVE_CACHE_MAX) cache.clear();
+            cache.put(key, matches);
+            return matches.size() == 1 ? matches.get(0) : null;
+        } catch (com.intellij.openapi.project.IndexNotReadyException ignored) {
+            return null;
         }
-
-        // T-Perf-18：记入负命中缓存（封顶防膨胀）
-        if (negativeCache.size() >= NEGATIVE_CACHE_MAX) negativeCache.clear();
-        negativeCache.add(cacheKey);
-        return null;
     }
 
     /**
@@ -112,37 +123,42 @@ public final class HbmXmlEntityResolver {
      */
     @Nullable
     public static HbmXmlMapping.NamedQuery findNamedQuery(@NotNull String queryName, @NotNull Project project) {
-        if (queryName.isBlank()) return null;
-        String cacheKey = "nq:" + project.getName() + ":" + queryName;
-        HbmXmlMapping.NamedQuery cached = namedQueryCache.get(cacheKey);
-        if (cached != null) return cached;
-        if (negativeCache.contains(cacheKey)) return null;
+        return findNamedQuery(queryName, project, null);
+    }
 
-        for (XmlFile file : findHbmXmlFiles(project)) {
-            XmlTag rootTag = file.getRootTag();
-            if (rootTag == null || !"hibernate-mapping".equals(rootTag.getName())) continue;
-            for (XmlTag tag : rootTag.getSubTags()) {
-                HbmXmlMapping.QueryKind kind;
-                switch (tag.getName()) {
-                    case "query" -> kind = HbmXmlMapping.QueryKind.HQL;
-                    case "sql-query" -> kind = HbmXmlMapping.QueryKind.NATIVE;
-                    default -> {
-                        continue;
+    @Nullable
+    public static HbmXmlMapping.NamedQuery findNamedQuery(String queryName, Project project, com.intellij.psi.PsiElement context) {
+        if (queryName.isBlank() || com.intellij.openapi.project.DumbService.isDumb(project)) return null;
+        try {
+            GlobalSearchScope scope = cn.song.mybatisplus.visualizer.psi.EntityClassResolver.searchScope(project, context);
+            var cache = cacheFor(project).queries;
+            LookupKey key = new LookupKey(queryName, scope);
+            var cached = cache.get(key);
+            if (cached != null) return cached.size() == 1 ? cached.get(0) : null;
+            List<HbmXmlMapping.NamedQuery> matches = new ArrayList<>();
+            for (XmlFile file : findHbmXmlFiles(project, scope)) {
+                com.intellij.openapi.progress.ProgressManager.checkCanceled();
+                XmlTag rootTag = file.getRootTag();
+                if (rootTag == null || !"hibernate-mapping".equals(rootTag.getName())) continue;
+                for (XmlTag tag : rootTag.getSubTags()) {
+                    HbmXmlMapping.QueryKind kind;
+                    switch (tag.getName()) {
+                        case "query" -> kind = HbmXmlMapping.QueryKind.HQL;
+                        case "sql-query" -> kind = HbmXmlMapping.QueryKind.NATIVE;
+                        default -> { continue; }
                     }
+                    String name = tag.getAttributeValue("name");
+                    if (!queryName.equals(name)) continue;
+                    String text = extractNamedQueryText(tag);
+                    if (!text.isBlank()) matches.add(new HbmXmlMapping.NamedQuery(name, kind, text));
                 }
-                String name = tag.getAttributeValue("name");
-                if (name == null || !name.equals(queryName)) continue;
-                String text = extractNamedQueryText(tag);
-                if (text.isBlank()) continue;
-                HbmXmlMapping.NamedQuery query = new HbmXmlMapping.NamedQuery(name, kind, text);
-                namedQueryCache.put(cacheKey, query);
-                return query;
             }
+            if (cache.size() >= NEGATIVE_CACHE_MAX) cache.clear();
+            cache.put(key, matches);
+            return matches.size() == 1 ? matches.get(0) : null;
+        } catch (com.intellij.openapi.project.IndexNotReadyException ignored) {
+            return null;
         }
-
-        if (negativeCache.size() >= NEGATIVE_CACHE_MAX) negativeCache.clear();
-        negativeCache.add(cacheKey);
-        return null;
     }
 
     /**
@@ -164,14 +180,27 @@ public final class HbmXmlEntityResolver {
      */
     @NotNull
     public static Map<String, HbmXmlMapping.ClassMapping> resolveAll(@NotNull Project project) {
-        Map<String, HbmXmlMapping.ClassMapping> index = new LinkedHashMap<>();
-        for (XmlFile file : findHbmXmlFiles(project)) {
-            for (HbmXmlMapping.ClassMapping mapping : parseHbmFile(file)) {
-                index.putIfAbsent(mapping.entityClassName(), mapping);
-                index.putIfAbsent(mapping.fullClassName(), mapping);
+        return resolveAll(project, null);
+    }
+
+    public static Map<String, HbmXmlMapping.ClassMapping> resolveAll(Project project, com.intellij.psi.PsiElement context) {
+        if (com.intellij.openapi.project.DumbService.isDumb(project)) return Map.of();
+        try {
+            GlobalSearchScope scope = cn.song.mybatisplus.visualizer.psi.EntityClassResolver.searchScope(project, context);
+            Map<String, List<HbmXmlMapping.ClassMapping>> groups = new LinkedHashMap<>();
+            for (XmlFile file : findHbmXmlFiles(project, scope)) {
+                for (var mapping : parseHbmFile(file)) {
+                    for (String name : new java.util.LinkedHashSet<>(List.of(mapping.entityClassName(), mapping.fullClassName()))) {
+                        groups.computeIfAbsent(name, key -> new ArrayList<>()).add(mapping);
+                    }
+                }
             }
+            Map<String, HbmXmlMapping.ClassMapping> index = new LinkedHashMap<>();
+            groups.forEach((name, matches) -> { if (matches.size() == 1) index.put(name, matches.get(0)); });
+            return index;
+        } catch (com.intellij.openapi.project.IndexNotReadyException ignored) {
+            return Map.of();
         }
-        return index;
     }
 
     // ------------------------------------------------------------------
@@ -185,22 +214,17 @@ public final class HbmXmlEntityResolver {
      * （.hbm.xml 以 {@code .xml} 结尾归 XML 文件类型），再按文件名后缀精确过滤。
      * 任何索引异常按空列表处理（优雅降级，绝不抛出）。
      */
-    private static List<XmlFile> findHbmXmlFiles(@NotNull Project project) {
-        try {
-            // XmlFileType 在 262 平台不可直接引用（IPGP 裁剪），按项目惯例用 FileTypeManager 取标准 XML 类型
-            com.intellij.openapi.fileTypes.FileType xmlFileType =
-                    FileTypeManager.getInstance().getStdFileType("XML");
-            List<XmlFile> result = new ArrayList<>();
-            for (com.intellij.openapi.vfs.VirtualFile vf
-                    : FileTypeIndex.getFiles(xmlFileType, GlobalSearchScope.projectScope(project))) {
-                if (vf.getName() == null || !vf.getName().toLowerCase().endsWith(".hbm.xml")) continue;
-                PsiFile psiFile = PsiManager.getInstance(project).findFile(vf);
-                if (psiFile instanceof XmlFile xmlFile) result.add(xmlFile);
-            }
-            return result;
-        } catch (Throwable ignored) {
-            return List.of();
+    private static List<XmlFile> findHbmXmlFiles(@NotNull Project project, GlobalSearchScope scope) {
+        // XmlFileType 在 262 平台不可直接引用（IPGP 裁剪），按项目惯例用 FileTypeManager 取标准 XML 类型
+        var xmlFileType = FileTypeManager.getInstance().getStdFileType("XML");
+        List<XmlFile> result = new ArrayList<>();
+        for (var vf : FileTypeIndex.getFiles(xmlFileType, scope)) {
+            if (!vf.getName().toLowerCase(java.util.Locale.ROOT).endsWith(".hbm.xml")) continue;
+            com.intellij.openapi.progress.ProgressManager.checkCanceled();
+            PsiFile psiFile = PsiManager.getInstance(project).findFile(vf);
+            if (psiFile instanceof XmlFile xmlFile) result.add(xmlFile);
         }
+        return result;
     }
 
     // ------------------------------------------------------------------
@@ -292,8 +316,6 @@ public final class HbmXmlEntityResolver {
      * 清除缓存（含负命中缓存与命名查询索引；PluginCacheManager.clearAll 接线，项目关闭时调用）。
      */
     public static void clearCache() {
-        cache.clear();
-        namedQueryCache.clear();
-        negativeCache.clear();
+        generation.incrementAndGet();
     }
 }

@@ -89,7 +89,8 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
 
     /** T-ClickPreview：单击出轻量预览弹窗（点击时按行捕获 SQL，锚点在行下缘不遮行），双击走 openPreview 完整弹窗；悬停 tooltip 已移除（卡顿根因）。
      *  T-ListPreviewCopy：预览文本经 clickPreviewSql——设置「预览时格式化还原 SQL」开启（默认）时多行格式化显示。 */
-    private final SqlClickPreview sqlClickPreview;
+    private SqlListPreviewHost previewHost;
+    private final SqlDockedPreview dockedPreview;
     private HistoryFileEntry currentFile = null;
     private List<LogSqlEntry> currentEntries = List.of();
 
@@ -157,9 +158,9 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
         this.project = project;
         // T-UiNative P0：一级文件列表打字即搜（平台 ListSpeedSearch，按文件名匹配）
         ListSpeedSearch.installOn(fileList, HistoryFileEntry::getDisplayName);
-        this.sqlClickPreview = new SqlClickPreview(project, sqlList, i -> SqlClickPreview.clickPreviewSql(
-                sqlListModel.getElementAt(i).restoredSql(),
-                PluginSettings.getInstance().getState().getLogFormatSql()));
+        this.dockedPreview = new SqlDockedPreview(project, sqlList, () -> {
+            if (previewHost != null) previewHost.toggle();
+        });
         this.templateFilterChip = new javax.swing.JLabel();
         templateFilterChip.setVisible(false);
         templateFilterChip.setFont(templateFilterChip.getFont().deriveFont(java.awt.Font.BOLD));
@@ -296,9 +297,13 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
         return sqlCellRenderer;
     }
 
-    /** 二级 SQL 列表单击预览控制器（T-ClickPreview 测试断言）。 */
-    public SqlClickPreview getSqlClickPreviewForTest() {
-        return sqlClickPreview;
+    /** 二级 SQL 列表停靠预览宿主（T-ClickPreview 退役后测试缝换轨）。 */
+    public SqlListPreviewHost getPreviewHostForTest() {
+        return previewHost;
+    }
+
+    public SqlDockedPreview getDockedPreviewForTest() {
+        return dockedPreview;
     }
 
     /** 显示模式变更处理（topic 监听与测试共用）：行高随模式重设 + 二级可见时全量重建。
@@ -462,7 +467,7 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
                 // T-ClickPreview：先转发（仅左键；单击命中行才排程预览/双击停表并关旧预览），双击再开完整弹窗
                 // T-ClickPreviewCopyRestore：修饰键一并转发——Ctrl/Shift 单击（多选第一击）不排程预览
                 if (javax.swing.SwingUtilities.isLeftMouseButton(e)) {
-                    sqlClickPreview.onClick(e.getClickCount(), e.getPoint(), e.getModifiersEx());
+                    previewHost.onRowClick(e);
                 }
                 if (e.getClickCount() >= 2) {
                     LogSqlEntry selected = sqlList.getSelectedValue();
@@ -489,7 +494,10 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
         // T-SqlLogPerf：二级列表滚动追加——滚动条逼近底部时续写下一批（fillSqlList 只写首屏）
         sqlScrollPane = new JBScrollPane(sqlList);
         sqlScrollPane.getVerticalScrollBar().addAdjustmentListener(e -> maybeAppendOnScroll());
-        cards.add(sqlScrollPane, CARD_SQL);
+        previewHost = new SqlListPreviewHost(sqlList, sqlScrollPane, dockedPreview,
+                "mpvs.logs.preview.split", true,
+                open -> { });
+        cards.add(previewHost.getComponent(), CARD_SQL);
         add(cards, BorderLayout.CENTER);
     }
 
@@ -499,7 +507,7 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
         currentFile = null;
         currentFileStamp = null;
         currentEntries = List.of();
-        sqlClickPreview.hide(); // 返回一级时若二级预览弹窗还开着，一并关掉
+        if (previewHost != null) previewHost.hideHint(); // 返回一级时收起迁移提示（停靠预览随卡片隐藏）
         refreshNavToolbar(); // T-UN-10：Back 可见性随层级即时刷新（原 backButton.isVisible = false）
         searchField.getTextEditor().getEmptyText().setText(MpSqlVisualizerBundle.message("log.history.search.files"));
         cardLayout.show(cards, CARD_FILES);
@@ -1387,7 +1395,8 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
     public void dispose() {
         // T-Perf-05：面板销毁停止防抖 Timer（防晚到 apply 触碰已销毁面板）
         searchDebounceTimer.stop();
-        sqlClickPreview.dispose();
+        if (previewHost != null) previewHost.hideHint();
+        dockedPreview.dispose();
     }
 
     private static final Logger LOG = Logger.getInstance(HistorySqlLogPanel.class);

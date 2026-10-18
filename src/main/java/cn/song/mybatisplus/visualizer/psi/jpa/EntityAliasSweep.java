@@ -6,6 +6,21 @@ import kotlin.jvm.functions.Function1;
 import kotlin.sequences.Sequence;
 
 import java.util.Iterator;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
+import cn.song.mybatisplus.visualizer.psi.EntityClassResolver;
+import com.intellij.openapi.project.Project;
+import com.intellij.openapi.project.DumbService;
+import com.intellij.openapi.project.IndexNotReadyException;
+import com.intellij.openapi.roots.ProjectRootModificationTracker;
+import com.intellij.openapi.util.Key;
+import com.intellij.psi.PsiElement;
+import com.intellij.psi.SmartPointerManager;
+import com.intellij.psi.SmartPsiElementPointer;
+import com.intellij.psi.search.GlobalSearchScope;
+import com.intellij.psi.search.PsiShortNamesCache;
+import com.intellij.psi.util.PsiModificationTracker;
 
 /**
  * 实体别名反查的<b>有界扫描</b>（T-GutterDupFreeze S3，20261008 用户真机冻结事故）。
@@ -41,6 +56,95 @@ public final class EntityAliasSweep {
 
     /** 取消检查间隔（每 N 个短名查一次）：{@code checkCanceled} 自身有开销，不必逐个查。 */
     private static final int CANCEL_CHECK_INTERVAL = 64;
+
+    /** 查询宿主作用域内解析；普通名有候选时短路，仅旧慢路径做有界完整扫描。 */
+    public static EntityClassResolver.Resolution resolve(Project project, String name) {
+        return resolve(project, name, null);
+    }
+
+    public static EntityClassResolver.Resolution resolve(Project project, String name, PsiElement context) {
+        if (name.isBlank() || DumbService.isDumb(project)) return unresolved();
+        try {
+            var direct = EntityClassResolver.resolveByName(project, name, context);
+            if (direct.psiClass() != null || !direct.candidates().isEmpty()) return direct;
+            GlobalSearchScope scope = EntityClassResolver.searchScope(project, context);
+            long stamp = PsiModificationTracker.getInstance(project).getModificationCount();
+            long roots = ProjectRootModificationTracker.getInstance(project).getModificationCount();
+            LookupCache cache = project.getUserData(CACHE_KEY);
+            if (cache == null || cache.psiStamp != stamp || cache.rootStamp != roots) {
+                cache = new LookupCache(stamp, roots);
+                project.putUserData(CACHE_KEY, cache);
+            }
+            LookupKey key = new LookupKey(name, scope);
+            var cached = cache.entries.get(key);
+            if (cached != null) {
+                List<PsiClass> classes = new ArrayList<>();
+                for (var pointer : cached) {
+                    PsiClass clazz = pointer.getElement();
+                    if (clazz != null) classes.add(clazz);
+                }
+                if (classes.size() == cached.size()) return EntityClassResolver.resolveWithAliasCandidates(project, name, context, classes);
+                cache.entries.remove(key);
+            }
+            PsiShortNamesCache namesCache = PsiShortNamesCache.getInstance(project);
+            scanCount.incrementAndGet();
+            AliasCandidates scan = findAliasCandidates(name, () -> Arrays.asList(namesCache.getAllClassNames()).iterator(),
+                    scanLimitForTest != null ? scanLimitForTest : SCAN_LIMIT, shortName -> namesCache.getClassesByName(shortName, scope));
+            // 触顶也缓存空候选，避免同名每次重复占用完整预算；PSI/根变化即失效。
+            // 直接命中在缓存查询之前返回，空缓存不遮蔽真实实体。未完成扫描不得证明唯一性。
+            if (cache.entries.size() >= CACHE_LIMIT) cache.entries.clear();
+            List<SmartPsiElementPointer<PsiClass>> pointers = new ArrayList<>();
+            for (PsiClass clazz : scan.candidates()) pointers.add(SmartPointerManager.getInstance(project).createSmartPsiElementPointer(clazz));
+            cache.entries.put(key, pointers);
+            if (!scan.complete()) return unresolved();
+            return EntityClassResolver.resolveWithAliasCandidates(project, name, context, scan.candidates());
+        } catch (IndexNotReadyException ignored) {
+            return unresolved();
+        }
+    }
+
+    /** @param candidates complete matching owners (empty when truncated)
+     *  @param complete whether the full input was scanned */
+    public record AliasCandidates(List<PsiClass> candidates, boolean complete) {}
+
+    public static AliasCandidates findAliasCandidates(String aliasName, Sequence<String> names,
+                                                       Function1<String, PsiClass[]> lookup) {
+        return findAliasCandidates(aliasName, names, SCAN_LIMIT, lookup);
+    }
+
+    public static AliasCandidates findAliasCandidates(String aliasName, Sequence<String> names, int limit,
+                                                       Function1<String, PsiClass[]> lookup) {
+        Set<PsiClass> candidates = new LinkedHashSet<>();
+        int scanned = 0;
+        Iterator<String> iterator = names.iterator();
+        while (iterator.hasNext()) {
+            String shortName = iterator.next();
+            if (scanned >= limit) return new AliasCandidates(List.of(), false);
+            if (scanned % CANCEL_CHECK_INTERVAL == 0) ProgressManager.checkCanceled();
+            scanned++;
+            for (PsiClass clazz : lookup.invoke(shortName)) {
+                if (clazz.isInterface() || clazz.isEnum() || clazz.isAnnotationType()) continue;
+                if (aliasName.equals(JpaMetadataReader.entityNameOf(clazz))) candidates.add(clazz);
+            }
+        }
+        return new AliasCandidates(new ArrayList<>(candidates), true);
+    }
+
+    private static EntityClassResolver.Resolution unresolved() { return new EntityClassResolver.Resolution(null, List.of()); }
+    /** @param name exact entity name @param scope query scope including libraries */
+    private record LookupKey(String name, GlobalSearchScope scope) {}
+    private static final class LookupCache {
+        final long psiStamp;
+        final long rootStamp;
+        final Map<LookupKey, List<SmartPsiElementPointer<PsiClass>>> entries = new ConcurrentHashMap<>();
+        LookupCache(long psiStamp, long rootStamp) { this.psiStamp = psiStamp; this.rootStamp = rootStamp; }
+    }
+    private static final int CACHE_LIMIT = 4096;
+    private static final Key<LookupCache> CACHE_KEY = Key.create("mp-visualizer.scopedEntityAliases");
+    private static final AtomicInteger scanCount = new AtomicInteger();
+    public static Integer scanLimitForTest;
+    public static int scanCountForTest() { return scanCount.get(); }
+    public static void resetScanCountForTest() { scanCount.set(0); }
 
     /** Kotlin 默认参数等价重载：{@code limit} 缺省 {@link #SCAN_LIMIT}，{@code onTruncated} 缺省空回调。 */
     public static PsiClass findAliasOwner(String aliasName, Sequence<String> names,

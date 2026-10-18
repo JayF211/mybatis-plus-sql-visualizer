@@ -105,7 +105,8 @@ public class SqlConsoleBridgeFilterProvider implements ConsoleFilterProvider {
                 SqlCaptureGate.epActive = true;
             }
             for (LogSqlEntry entry : produced) {
-                manager.getEntries().addEntry(entry);
+                // EP 通道打标（桥轮询路径同款在 SqlLogConsoleBridge.emitEntries）。
+                manager.getEntries().addEntry(entry.withCaptureProvenance(CaptureProvenance.CONSOLE_EP));
             }
             return null; // 不做高亮/链接——纯捕获通道
         }

@@ -55,7 +55,7 @@ public final class JpaFromEntityMapper {
      * 实体名组保持大小写敏感——已映射表名（小写）不得再被命中。
      */
     private static final Pattern ENTITY_REFERENCE =
-            Pattern.compile("(?i:\\b(?:FROM|JOIN)\\s+)([A-Z][a-zA-Z0-9_]*)\\b");
+            Pattern.compile("(?i:\\b(?:FROM|JOIN)\\s+)([a-zA-Z_][a-zA-Z0-9_.$]*)\\b");
 
     /**
      * 扫描并替换子查询内的其他实体名为表名（Project 形态——生产入口）。
@@ -85,28 +85,23 @@ public final class JpaFromEntityMapper {
      */
     public static String mapSubqueryEntities(String sql, TableInfo table, Project project,
                                              java.util.Map<String, String> knownTableNames) {
+        return mapSubqueryEntities(sql, table, project, knownTableNames, null);
+    }
+
+    public static String mapSubqueryEntities(String sql, TableInfo table, Project project,
+                                             java.util.Map<String, String> knownTableNames,
+                                             com.intellij.psi.PsiElement context) {
         if (project == null && knownTableNames.isEmpty()) return sql;
         return mapSubqueryEntities(sql, table, entityName -> {
             String known = knownTableNames.get(entityName);
             if (known != null) return known;
             if (project == null) return null;
-            try {
-                PsiShortNamesCache cache = PsiShortNamesCache.getInstance(project);
-                PsiClass[] projectClasses =
-                        cache.getClassesByName(entityName, GlobalSearchScope.projectScope(project));
-                PsiClass clazz = projectClasses.length > 0 ? projectClasses[0] : null;
-                if (clazz == null) {
-                    PsiClass[] allClasses =
-                            cache.getClassesByName(entityName, GlobalSearchScope.allScope(project));
-                    clazz = allClasses.length > 0 ? allClasses[0] : null;
-                }
+            return JpaAliasTableResolver.recoverJpaPsi(() -> {
+                PsiClass clazz = cn.song.mybatisplus.visualizer.psi.jpa.EntityAliasSweep.resolve(project, entityName, context).psiClass();
                 if (clazz == null) return null;
                 String tableName = new JpaEntityResolver().resolve(clazz).getTableName();
-                return tableName != null && !tableName.isBlank() && !"unknown_table".equals(tableName)
-                        ? tableName : null;
-            } catch (Throwable ignored) {
-                return null;
-            }
+                return tableName != null && !tableName.isBlank() && !"unknown_table".equals(tableName) ? tableName : null;
+            });
         });
     }
 
@@ -128,7 +123,7 @@ public final class JpaFromEntityMapper {
         Matcher matcher = ENTITY_REFERENCE.matcher(masked);
         while (matcher.find()) {
             String entityName = matcher.group(1);
-            if (!entityName.equals(table.getEntityClassName())) {
+            if (!entityName.equals(table.getEntityClassName()) && !entityName.equals(table.getTableName())) {
                 entityNames.add(entityName);
             }
         }
@@ -136,7 +131,7 @@ public final class JpaFromEntityMapper {
 
         String result = masked;
         for (String entityName : entityNames) {
-            Pattern word = Pattern.compile("\\b" + Pattern.quote(entityName) + "\\b");
+            Pattern word = Pattern.compile("(?<![\\w.$])" + Pattern.quote(entityName) + "\\b");
             // 已无该实体名残留（如实体名与表名同形被主映射替换）时跳过，保证幂等
             if (!word.matcher(result).find()) continue;
             String tableName = resolveTableName.apply(entityName);

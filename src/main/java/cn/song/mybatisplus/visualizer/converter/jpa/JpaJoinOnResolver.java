@@ -115,12 +115,13 @@ public final class JpaJoinOnResolver {
     public static OnResolution resolveWithPsi(Project project, String entityClassName,
                                               String rootAlias, String relationField, String joinAlias,
                                               TableInfo table) {
-        PsiClass entityClass;
-        try {
-            entityClass = findEntityClass(project, entityClassName);
-        } catch (Throwable ignored) {
-            entityClass = null;
-        }
+        return resolveWithPsi(project, entityClassName, rootAlias, relationField, joinAlias, table, null);
+    }
+
+    public static OnResolution resolveWithPsi(Project project, String entityClassName,
+                                              String rootAlias, String relationField, String joinAlias,
+                                              TableInfo table, PsiElement context) {
+        PsiClass entityClass = JpaAliasTableResolver.recoverJpaPsi(() -> findEntityClass(project, entityClassName, context));
         if (entityClass == null) return degrade(rootAlias, relationField, joinAlias, table, "实体类不可解析");
         return resolveWithPsi(entityClass, rootAlias, relationField, joinAlias, table);
     }
@@ -216,7 +217,9 @@ public final class JpaJoinOnResolver {
             }
             // 单向 @OneToMany 无 mappedBy（JPA 规范默认 @JoinTable）→ 降级
             return degrade(rootAlias, relationField, joinAlias, table, "无关联注解元数据");
-        } catch (Throwable ignored) {
+        } catch (RuntimeException ignored) {
+            if (ignored instanceof com.intellij.openapi.progress.ProcessCanceledException
+                    || ignored instanceof com.intellij.openapi.diagnostic.ControlFlowException) throw ignored;
             return degrade(rootAlias, relationField, joinAlias, table, "PSI 读取异常");
         }
     }
@@ -249,15 +252,10 @@ public final class JpaJoinOnResolver {
     // PSI 读取辅助（本文件自有封装，只读；不依赖 psi/jpa 内部实现）
     // ------------------------------------------------------------------
 
-    /** 按简单类名查找实体 PsiClass（优先项目范围，找不到再全范围兜底）。 */
-    private static PsiClass findEntityClass(Project project, String className) {
+    /** 按查询宿主模块可见性消歧，禁止以索引顺序作为优先级。 */
+    private static PsiClass findEntityClass(Project project, String className, PsiElement context) {
         if (className == null || className.isBlank()) return null;
-        PsiShortNamesCache cache = PsiShortNamesCache.getInstance(project);
-        PsiClass[] projectClasses = cache.getClassesByName(className, GlobalSearchScope.projectScope(project));
-        if (projectClasses.length > 0) return projectClasses[0];
-        PsiClass[] allClasses = cache.getClassesByName(className, GlobalSearchScope.allScope(project));
-        if (allClasses.length > 0) return allClasses[0];
-        return null;
+        return cn.song.mybatisplus.visualizer.psi.jpa.EntityAliasSweep.resolve(project, className, context).psiClass();
     }
 
     /**
@@ -271,7 +269,9 @@ public final class JpaJoinOnResolver {
         PsiType[] parameters;
         try {
             parameters = classType.getParameters();
-        } catch (Throwable ignored) {
+        } catch (RuntimeException ignored) {
+            if (ignored instanceof com.intellij.openapi.progress.ProcessCanceledException
+                    || ignored instanceof com.intellij.openapi.diagnostic.ControlFlowException) throw ignored;
             parameters = PsiClassType.EMPTY_ARRAY;
         }
         PsiClassType candidate = parameters.length == 0
@@ -316,7 +316,9 @@ public final class JpaJoinOnResolver {
                     }
                 }
             }
-        } catch (Throwable ignored) {
+        } catch (RuntimeException ignored) {
+            if (ignored instanceof com.intellij.openapi.progress.ProcessCanceledException
+                    || ignored instanceof com.intellij.openapi.diagnostic.ControlFlowException) throw ignored;
             // 注解读取失败按缺省推断处理
         }
         String fromAnnotation = explicit != null ? stringAttribute(explicit, "name") : null;
@@ -335,7 +337,9 @@ public final class JpaJoinOnResolver {
         PsiAnnotationMemberValue value;
         try {
             value = container.findAttributeValue("value");
-        } catch (Throwable ignored) {
+        } catch (RuntimeException ignored) {
+            if (ignored instanceof com.intellij.openapi.progress.ProcessCanceledException
+                    || ignored instanceof com.intellij.openapi.diagnostic.ControlFlowException) throw ignored;
             return List.of();
         }
         if (value == null) return List.of();
@@ -377,7 +381,9 @@ public final class JpaJoinOnResolver {
         PsiAnnotationMemberValue memberValue;
         try {
             memberValue = annotation.findAttributeValue(attribute);
-        } catch (Throwable ignored) {
+        } catch (RuntimeException ignored) {
+            if (ignored instanceof com.intellij.openapi.progress.ProcessCanceledException
+                    || ignored instanceof com.intellij.openapi.diagnostic.ControlFlowException) throw ignored;
             return null;
         }
         if (memberValue == null) return null;

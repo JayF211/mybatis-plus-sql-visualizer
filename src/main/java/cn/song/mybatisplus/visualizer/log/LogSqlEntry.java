@@ -99,7 +99,9 @@ public record LogSqlEntry(
      * Logic 主条目 + Actual 折叠的模型承载——面板对照渲染（折叠态样式）等真实语料（V36）。
      * 展示性字段：随 pd 载荷键 {@code a} 落盘（仅非默认落键），不入去重指纹。
      */
-    String actualSql
+    String actualSql,
+    /** 捕获通道；旧条目和未打标的生产者保持 UNKNOWN。 */
+    CaptureProvenance captureProvenance
 ) {
     /** 摘要最大长度。 */
     private static final int MAX_SUMMARY_LENGTH = 160;
@@ -112,6 +114,7 @@ public record LogSqlEntry(
      * 显式传非 null 时原样保留（与 Kotlin「传了实参就用实参」一致）。
      */
     public LogSqlEntry {
+        if (captureProvenance == null) captureProvenance = CaptureProvenance.UNKNOWN;
         if (summary == null) {
             summary = computeSummary(restoredSql);
         }
@@ -127,7 +130,7 @@ public record LogSqlEntry(
             java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
 
     /** 行片段缓存载荷（片段 + 模式一并存取，保证两值一致）。 */
-    private record LineFragmentCacheEntry(List<List<SqlTextFragment>> fragments, SqlListDisplayMode mode) {
+    private record LineFragmentCacheEntry(List<List<SqlSemanticFragment>> fragments, SqlListDisplayMode mode) {
     }
 
     private static final java.util.Map<LogSqlEntry, LineFragmentCacheEntry> LINE_FRAGMENT_CACHE =
@@ -166,17 +169,17 @@ public record LogSqlEntry(
      * 逐条调渲染器取首选尺寸（T-LogListFreeze-04 的 O(N) 因子），缓存词法片段后测量只剩轻量
      * 组件布局。SINGLE_LINE 不走缓存（固定行高 + 渲染直读，主题切换实时生效）。
      */
-    public List<List<SqlTextFragment>> cachedListLineFragments() {
+    public List<List<SqlSemanticFragment>> cachedListLineFragments() {
         LineFragmentCacheEntry e = LINE_FRAGMENT_CACHE.get(this);
         return e != null ? e.fragments() : null;
     }
 
     /** Kotlin {@code var cachedListLineFragments} 的 JVM 读取器等价入口（属性名读取用）。 */
-    public List<List<SqlTextFragment>> getCachedListLineFragments() {
+    public List<List<SqlSemanticFragment>> getCachedListLineFragments() {
         return cachedListLineFragments();
     }
 
-    public void setCachedListLineFragments(List<List<SqlTextFragment>> value) {
+    public void setCachedListLineFragments(List<List<SqlSemanticFragment>> value) {
         synchronized (LINE_FRAGMENT_CACHE) {
             LineFragmentCacheEntry e = LINE_FRAGMENT_CACHE.get(this);
             LINE_FRAGMENT_CACHE.put(this, new LineFragmentCacheEntry(value, e != null ? e.mode() : null));
@@ -264,18 +267,30 @@ public record LogSqlEntry(
             mapperStatement, errorText, requestTag, updateCount, databaseName, null);
     }
 
+    /** 保留新增归因前的完整构造签名（旧 20 参形态，旧生产者默认尚未归因）。 */
+    public LogSqlEntry(String rawSql, String restoredSql, List<LogSqlParam> params, long timestamp,
+                       Long logTimestamp, String summary, SqlSource source, Long executionTimeMs,
+                       String sourceFile, int sourceLine, List<kotlin.Pair<String, Integer>> sourceCandidates,
+                       List<String> candidateClasses, String stackDigest, long sequenceNumber,
+                       String mapperStatement, String errorText, String requestTag, Long updateCount,
+                       String databaseName, String actualSql) {
+        this(rawSql, restoredSql, params, timestamp, logTimestamp, summary, source, executionTimeMs,
+            sourceFile, sourceLine, sourceCandidates, candidateClasses, stackDigest, sequenceNumber,
+            mapperStatement, errorText, requestTag, updateCount, databaseName, actualSql, CaptureProvenance.UNKNOWN);
+    }
+
     /** 仅原始/还原 SQL + 参数（其余取默认）。 */
     public LogSqlEntry(String rawSql, String restoredSql, List<LogSqlParam> params) {
         this(rawSql, restoredSql, params, System.currentTimeMillis(), null,
             computeSummary(restoredSql), SqlSource.UNKNOWN, null, null, 0, List.of(), List.of(), null, 0L,
-            null, null, null, null, null, null);
+            null, null, null, null, null, null, CaptureProvenance.UNKNOWN);
     }
 
     /** 含显式时间戳。 */
     public LogSqlEntry(String rawSql, String restoredSql, List<LogSqlParam> params, long timestamp) {
         this(rawSql, restoredSql, params, timestamp, null,
             computeSummary(restoredSql), SqlSource.UNKNOWN, null, null, 0, List.of(), List.of(), null, 0L,
-            null, null, null, null, null, null);
+            null, null, null, null, null, null, CaptureProvenance.UNKNOWN);
     }
 
     /** 含来源。 */
@@ -297,21 +312,31 @@ public record LogSqlEntry(
     public LogSqlEntry withSequenceNumber(long newSequenceNumber) {
         return new LogSqlEntry(rawSql, restoredSql, params, timestamp, logTimestamp, summary, source,
             executionTimeMs, sourceFile, sourceLine, sourceCandidates, candidateClasses, stackDigest, newSequenceNumber,
-            mapperStatement, errorText, requestTag, updateCount, databaseName, actualSql);
+            mapperStatement, errorText, requestTag, updateCount, databaseName, actualSql, captureProvenance);
     }
 
     /** T-AgentLogTime：以本条为原型返回带日志原始时间的副本（copy(logTimestamp=…) 的 Java 等价）。 */
     public LogSqlEntry withLogTimestamp(Long newLogTimestamp) {
         return new LogSqlEntry(rawSql, restoredSql, params, timestamp, newLogTimestamp, summary, source,
             executionTimeMs, sourceFile, sourceLine, sourceCandidates, candidateClasses, stackDigest, sequenceNumber,
-            mapperStatement, errorText, requestTag, updateCount, databaseName, actualSql);
+            mapperStatement, errorText, requestTag, updateCount, databaseName, actualSql, captureProvenance);
     }
 
     /** T-M55-02：以本条为原型返回带执行报错的副本（copy(errorText=…) 的 Java 等价；缓冲错误反向绑定用）。 */
     public LogSqlEntry withErrorText(String newErrorText) {
         return new LogSqlEntry(rawSql, restoredSql, params, timestamp, logTimestamp, summary, source,
             executionTimeMs, sourceFile, sourceLine, sourceCandidates, candidateClasses, stackDigest, sequenceNumber,
-            mapperStatement, newErrorText, requestTag, updateCount, databaseName, actualSql);
+            mapperStatement, newErrorText, requestTag, updateCount, databaseName, actualSql, captureProvenance);
+    }
+
+    public LogSqlEntry withCaptureProvenance(CaptureProvenance provenance) {
+        return new LogSqlEntry(rawSql, restoredSql, params, timestamp, logTimestamp, summary, source,
+            executionTimeMs, sourceFile, sourceLine, sourceCandidates, candidateClasses, stackDigest, sequenceNumber,
+            mapperStatement, errorText, requestTag, updateCount, databaseName, actualSql, provenance);
+    }
+
+    public CaptureProvenance getCaptureProvenance() {
+        return captureProvenance;
     }
 
     /** 智能截断摘要（包内可见：解析器/桥通道按 Kotlin data class 默认参数语义构造条目时复用同一口径）。 */
@@ -322,6 +347,11 @@ public record LogSqlEntry(
             endIdx = newlineIdx;
         } else {
             endIdx = Math.min(restoredSql.length(), MAX_SUMMARY_LENGTH);
+        }
+        if (endIdx > 0 && endIdx < restoredSql.length()
+                && Character.isHighSurrogate(restoredSql.charAt(endIdx - 1))
+                && Character.isLowSurrogate(restoredSql.charAt(endIdx))) {
+            endIdx--;
         }
         if (endIdx < restoredSql.length()) {
             return restoredSql.substring(0, endIdx) + "\u2026";

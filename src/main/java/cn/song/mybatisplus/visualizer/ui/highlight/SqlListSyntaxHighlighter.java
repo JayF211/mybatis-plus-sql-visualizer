@@ -11,10 +11,8 @@ import java.util.Map;
  *
  * 单击预览编辑器与日志列表条目共用同一条「token 类型 → 配色键」链路——映射唯一权威
  * {@link #ATTR_BY_TYPE}，SqlListFragmentRenderer（列表片段渲染）与本类（编辑器高亮）
- * 共用，保证编辑器内高亮与列表条目着色一致。此前预览编辑器高亮交给平台 SQL FileType
- * 的数据库方言高亮，与列表的 One Dark 风格配色并存两套，同一条 SQL 两处颜色不同
- * （四轮用户反馈）；换成自建高亮器后不再依赖 Database 插件，缺席环境（如测试沙盒）
- * 同样有高亮。
+ * 共用，保证编辑器内高亮与列表条目着色一致。属性由当前 EditorColorsScheme 提供，
+ * 默认继承平台语言颜色；不依赖 Database 插件。
  */
 public class SqlListSyntaxHighlighter implements SyntaxHighlighter {
 
@@ -25,7 +23,7 @@ public class SqlListSyntaxHighlighter implements SyntaxHighlighter {
 
     @Override
     public TextAttributesKey[] getTokenHighlights(IElementType tokenType) {
-        TextAttributesKey key = ATTR_BY_TYPE.get(tokenType);
+        TextAttributesKey key = tokenType != null ? ATTR_BY_TYPE.get(tokenType) : null;
         return key != null ? new TextAttributesKey[]{key} : new TextAttributesKey[0];
     }
 

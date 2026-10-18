@@ -14,9 +14,8 @@ import java.util.List;
  *
  * <p>快照串由 agent 侧 {@code StackDigest.build(StackTraceElement[])} 产出，格式
  * {@code pkg.Class#method:line<-pkg.Class#method:line<-…}（{@code <-} 连接、栈顶在左、行号负数不写、
- * ≤16 帧/总长 ≤2000 字符——帧数或长度触顶时追加 {@code …} 截断标记）。IDE 侧此前把它当
- * 整段纯文本塞 tooltip（T-SourceJumpFunnel P2-2 形态），本对象把它拆回帧列表，
- * 供 {@link StackFrameHover} 悬停弹层逐帧渲染。</p>
+ * 帧数随配置钳位在 12～64；深栈采样时用独立的中段省略标记）。保留已采集帧与省略段
+ * 的原始次序，供 {@link StackFrameHover} 展示与折叠。</p>
  */
 public final class StackDigestFrames {
 
@@ -41,6 +40,15 @@ public final class StackDigestFrames {
      */
     @NotNull
     public static List<StackFrameEntry> parse(@Nullable String digest) {
+        List<StackFrameEntry> frames = new ArrayList<>();
+        for (StackDigestItem item : parseItems(digest)) {
+            if (item instanceof StackDigestItem.Frame frame) frames.add(frame.entry());
+        }
+        return frames;
+    }
+
+    @NotNull
+    public static List<StackDigestItem> parseItems(@Nullable String digest) {
         if (digest == null || digest.isBlank()) return List.of();
         String trimmedDigest = digest.trim();
         if (trimmedDigest.isEmpty()) return List.of();
@@ -60,14 +68,58 @@ public final class StackDigestFrames {
             usable = new ArrayList<>();
             for (String seg : segments) usable.add(seg);
         }
-        List<StackFrameEntry> frames = new ArrayList<>(usable.size());
+        List<StackDigestItem> items = new ArrayList<>(usable.size() + 1);
         for (String seg : usable) {
             String seg1 = seg.trim();
             if (seg1.isEmpty()) continue;
-            StackFrameEntry frame = parseFrame(seg1);
-            if (frame != null) frames.add(frame);
+            java.util.regex.Matcher omitted = OMITTED_SEGMENT.matcher(seg1);
+            if (omitted.matches()) {
+                items.add(new StackDigestItem.Omitted(parseIntegerOrNull(omitted.group(1))));
+            } else {
+                StackFrameEntry frame = parseFrame(seg1);
+                if (frame != null) items.add(new StackDigestItem.Frame(frame));
+            }
         }
-        return frames;
+        if (truncated) items.add(new StackDigestItem.Omitted(null));
+        return items;
+    }
+
+    private static final java.util.regex.Pattern OMITTED_SEGMENT =
+            java.util.regex.Pattern.compile("^<…中间省略 ([0-9]+) 帧…>$");
+
+    public static boolean isKnownInternal(@NotNull StackFrameEntry frame) {
+        String name = frame.fqcn();
+        List<String> knownClasses = List.of(
+                "org.apache.catalina.core.ApplicationFilterChain",
+                "org.springframework.web.servlet.DispatcherServlet",
+                "org.springframework.web.servlet.FrameworkServlet",
+                "org.springframework.web.filter.OncePerRequestFilter",
+                "org.springframework.web.filter.FormContentFilter",
+                "org.springframework.web.filter.CharacterEncodingFilter",
+                "org.springframework.web.filter.RequestContextFilter",
+                "org.springframework.web.filter.DelegatingFilterProxy",
+                "org.springframework.security.web.FilterChainProxy");
+        if (isAgentFrame(frame)) return true;
+        for (String known : knownClasses) {
+            if (name.equals(known) || name.startsWith(known + "$")) return true;
+        }
+        for (String prefix : List.of(
+                "java.", "javax.", "jdk.", "sun.", "com.sun.",
+                "com.zaxxer.hikari.pool.", "org.apache.ibatis.executor.",
+                "org.apache.ibatis.session.", "org.apache.ibatis.plugin.",
+                "org.apache.coyote.", "org.apache.tomcat.", "cn.dev33.satoken.")) {
+            if (name.startsWith(prefix)) return true;
+        }
+        return false;
+    }
+
+    @Nullable
+    private static Integer parseIntegerOrNull(String value) {
+        try {
+            return Integer.valueOf(value);
+        } catch (NumberFormatException ignored) {
+            return null;
+        }
     }
 
     /** agent 自身帧判定（采集埋点链，弹层降权用）。 */
@@ -91,7 +143,8 @@ public final class StackDigestFrames {
         if (colon > 0) {
             String linePart = rest.substring(colon + 1);
             if (!linePart.isEmpty() && isAllDigits(linePart)) {
-                return new StackFrameEntry(fqcn, rest.substring(0, colon), Integer.parseInt(linePart));
+                Integer line = parseIntegerOrNull(linePart);
+                if (line != null) return new StackFrameEntry(fqcn, rest.substring(0, colon), line);
             }
         }
         return new StackFrameEntry(fqcn, rest, 0);

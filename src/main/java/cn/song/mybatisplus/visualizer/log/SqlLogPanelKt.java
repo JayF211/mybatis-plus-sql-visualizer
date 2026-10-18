@@ -114,7 +114,23 @@ public final class SqlLogPanelKt {
         options.add(new SortOption(MpSqlVisualizerBundle.message("log.sort.duration.asc"), SortMode.DURATION_ASC));
         options.add(new SortOption(MpSqlVisualizerBundle.message("log.sort.duration.desc"), SortMode.DURATION_DESC));
         options.add(new SortOption(MpSqlVisualizerBundle.message("log.sort.sequence"), SortMode.SEQUENCE));
+        options.add(new SortOption(MpSqlVisualizerBundle.message("log.sort.structure"), SortMode.STRUCTURE_CLUSTER));
+        options.add(new SortOption(MpSqlVisualizerBundle.message("log.sort.database"), SortMode.DATABASE_GROUP));
         return options;
+    }
+
+    public static final String DATABASE_UNKNOWN_SORT_KEY = "\uFFFF";
+
+    /** 慢查询过滤使用调用方统一的耗时回退口径；关闭时直接透传。 */
+    public static List<LogSqlEntry> filterBySlowOnly(List<LogSqlEntry> entries, boolean enabled,
+            long thresholdMs, Function<LogSqlEntry, Long> durationOf) {
+        if (!enabled) return entries;
+        List<LogSqlEntry> result = new ArrayList<>();
+        for (LogSqlEntry entry : entries) {
+            Long duration = durationOf.apply(entry);
+            if ((duration != null ? duration : Long.MIN_VALUE) >= thresholdMs) result.add(entry);
+        }
+        return result;
     }
 
     /** 类型多选弹窗可勾选的类型（OTHER 不单列；全选时 OTHER 一并透传）。 */

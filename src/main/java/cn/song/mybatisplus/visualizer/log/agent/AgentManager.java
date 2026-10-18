@@ -1627,9 +1627,32 @@ public final class AgentManager implements Disposable {
             SqlLogManager channelHandoffManager =
                 cn.song.mybatisplus.visualizer.log.SqlLogManagerLookupKt.sqlLogManagerIfCreated(project);
             if (channelHandoffManager != null) {
-                channelHandoffManager.getEntries().resetDedupeIndexOnChannelHandoff();
+                channelHandoffManager.getEntries().rebuildDedupeIndexAfterHandoff();
             }
-            LOG.info("增强捕获接管沿（桥让位）：去重索引按通道纪元重置——桥纪元旧索引不再吞 agent 首批事件");
+            LOG.info("增强捕获接管沿（桥让位）：去重索引按通道纪元重建——陈旧桥纪元键清掉（不吞 agent 首批），近 5s 内键保留（同一次执行的双通道副本按融合升级）");
+        }
+        // 回落沿补日志：闸门 true→false 此前完全静默（online 翻转≠闸门翻转），现场无法从日志
+        // 裁决「闸门何时/为何放开」。带闸门判据实况快照：健康会话 + 各会话 ACK 确认态。
+        if (!gateNow && gateWas) {
+            StringBuilder healthy = new StringBuilder();
+            StringBuilder ackStates = new StringBuilder();
+            for (AgentSession session : sessions) {
+                if (isSessionHealthy(session)) {
+                    if (healthy.length() > 0) healthy.append(", ");
+                    healthy.append("pid=").append(session.getPid());
+                }
+                if (ackStates.length() > 0) ackStates.append(", ");
+                ackStates.append("pid=").append(session.getPid()).append(":");
+                if (!session.isAlive()) {
+                    ackStates.append("已断");
+                } else if (session.getConfigAckDisabled() == null) {
+                    ackStates.append("待确认");
+                } else {
+                    ackStates.append("disabled=").append(session.getConfigAckDisabled());
+                }
+            }
+            LOG.info("增强捕获闸门回落（桥恢复解析）：online=" + online
+                    + ", 健康会话=[" + healthy + "], 确认态=[" + ackStates + "]");
         }
         // 回落沿（true→false）**不**重置，三条理由：
         // ① 语义不对称——上升沿吞的是 agent 纪元的「首批证据」（用户开增强跑同端点验证，吞掉即

@@ -32,7 +32,7 @@ import cn.song.mybatisplus.visualizer.sql.Dialect;
 import cn.song.mybatisplus.visualizer.sql.ParamHint;
 import cn.song.mybatisplus.visualizer.sql.ParameterReplacer;
 import cn.song.mybatisplus.visualizer.sql.SqlGenerator;
-import com.intellij.psi.JavaPsiFacade;
+import com.intellij.psi.PsiElement;
 import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiMethodCallExpression;
@@ -661,44 +661,45 @@ public final class SqlPreviewServiceEnhancementsKt {
             @Nullable PsiClass entityClass,
             @Nullable String entityClassName,
             @NotNull String hql) {
-        JpaEntityResolver resolver = new JpaEntityResolver();
-        // T-Fix-SettingsScope：下方 project 一律取本服务绑定的 project，勿用
-        // openProjects.firstOrNull()——多项目同开时后者取谁取决于 IDE 打开顺序，会在 B 项目里
-        // 按 A 项目的项目级表配置修饰表名，并使 GlobalSearchScope/JavaPsiFacade 落到错误的项目范围。
-        String className = (entityClassName != null) ? entityClassName : p.extractEntityNameFromHql(hql);
+        return resolveHqlTable(p, entityClass, entityClassName, hql, null);
+    }
 
-        // 路径 1：有 PsiClass 直接解析（JPA 注解）。列空不短路到「更弱的路径」——
-        // 夹具/局部类场景路径 2/3 反而找不到该类；列空仅在「有更好的候选」时被替换：
-        // 即后续路径找到的表列非空才覆盖，否则保留路径 1 结果（含表名与实体类名，
-        // 展开器照常给「列信息未解析」诊断，不丢 FROM 表名替换）。
-        TableInfo resolved = null;
-        if (entityClass != null) {
-            TableInfo table = resolver.resolve(entityClass);
-            if (table != null && !table.getColumns().isEmpty()) return table;
-            resolved = table;
+    @Nullable
+    public static TableInfo resolveHqlTable(@NotNull SqlPreviewService p, @Nullable PsiClass entityClass,
+            @Nullable String entityClassName, @NotNull String hql, @Nullable PsiElement context) {
+        // 查询根实体才是权威；TypedQuery 结果类型、NamedQuery 宿主和查询名前缀都可能不是根实体。
+        String rootName = p.extractEntityNameFromHql(hql);
+        String className = rootName != null ? rootName : entityClassName;
+        if (className == null) return null;
+        var resolution = cn.song.mybatisplus.visualizer.psi.jpa.EntityAliasSweep.resolve(p.project, className, context);
+        // 歧义是终态，不借显式类、XML 或别名 fallback 偷偷挑选一个。
+        if (resolution.getAmbiguous()) return null;
+        PsiClass target = resolution.psiClass();
+        if (target == null && entityClass != null && classMatchesQueryEntity(entityClass, className)
+                && isVisibleInQueryScope(entityClass, context)) target = entityClass;
+        // 纯 XML 映射工程可以没有 Java 类，保留 HBM 路径。
+        if (target == null) {
+            var hbmOnly = HbmXmlEntityResolver.resolve(className, p.project, context);
+            return hbmOnly == null ? null : p.convertHbmMappingToTableInfo(hbmOnly);
         }
+        TableInfo resolved = new JpaEntityResolver().resolve(target);
+        if (!resolved.getColumns().isEmpty()) return resolved;
+        var hbm = HbmXmlEntityResolver.resolve(className, p.project, context);
+        return hbm == null ? resolved : p.convertHbmMappingToTableInfo(hbm);
+    }
 
-        // 路径 2：按类名查找 @Entity 类（JPA 注解）；列空不短路
-        if (className != null) {
-            GlobalSearchScope scope = GlobalSearchScope.allScope(p.project);
-            PsiClass psiClass = JavaPsiFacade.getInstance(p.project).findClass(className, scope);
-            if (psiClass == null) psiClass = p.findClassByShortName(p.project, className, scope);
-            if (psiClass == null) psiClass = p.findClassByEntityName(p.project, className, scope);
-            if (psiClass != null) {
-                TableInfo table = resolver.resolve(psiClass);
-                if (table != null && !table.getColumns().isEmpty()) return table;
-                if (resolved == null) resolved = table;
-            }
-        }
+    private static boolean classMatchesQueryEntity(PsiClass clazz, String rootName) {
+        String name = cn.song.mybatisplus.visualizer.psi.jpa.JpaMetadataReader.entityNameOf(clazz);
+        if (name == null || name.isBlank()) name = clazz.getName();
+        return rootName.equals(clazz.getQualifiedName()) || rootName.equals(name);
+    }
 
-        // 路径 3：Hibernate XML 映射文件（.hbm.xml）
-        if (className != null) {
-            HbmXmlMapping.ClassMapping hbmMapping = HbmXmlEntityResolver.resolve(className, p.project);
-            if (hbmMapping != null) {
-                return p.convertHbmMappingToTableInfo(hbmMapping);
-            }
-        }
-
-        return resolved;
+    private static boolean isVisibleInQueryScope(PsiClass clazz, PsiElement context) {
+        Boolean visible = cn.song.mybatisplus.visualizer.converter.jpa.JpaAliasTableResolver.recoverJpaPsi(() -> {
+            var scope = cn.song.mybatisplus.visualizer.psi.EntityClassResolver.searchScope(clazz.getProject(), context);
+            return clazz.getContainingFile() != null && clazz.getContainingFile().getVirtualFile() != null
+                    && scope.contains(clazz.getContainingFile().getVirtualFile());
+        });
+        return Boolean.TRUE.equals(visible);
     }
 }

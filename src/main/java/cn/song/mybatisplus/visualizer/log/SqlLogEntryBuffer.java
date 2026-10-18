@@ -44,6 +44,12 @@ public class SqlLogEntryBuffer {
     /** T-PerfSweep F3：去重丢弃计数键上限——超限淘汰最旧（见 dedupeCounts 字段注释）。 */
     private static final int MAX_DEDUPE_COUNT_KEYS = 4096;
 
+    /** 归因诊断限频窗（10s）：缺源码入队与跨通道融合两条诊断共用。 */
+    private static final long ATTRIB_DIAG_INTERVAL_NANOS = 10_000_000_000L;
+
+    /** 接管沿重建索引时保留的新鲜键窗（5s）：同一次执行双通道副本间隔为毫秒级。 */
+    private static final long HANDOFF_MERGE_GRACE_MS = 5_000L;
+
     /** 最大条目数（可变——运行时动态调整上限，超出自动淘汰最早）。 */
     private volatile int maxEntries;
 
@@ -78,14 +84,14 @@ public class SqlLogEntryBuffer {
      * 与 dedupeEnabled 翻 true 全量重建 / clear 清空 / removeEntry 单键重算。dedupeEnabled=false
      * 期间不维护（不触 dedupeKey lazy——T-PerfSweep9 同款口径），重开时补账。
      */
-    private final HashMap<String, Long> dedupeIndex = new HashMap<>();
+    private final HashMap<String, LogSqlEntry> dedupeIndex = new HashMap<>();
 
     private void rebuildDedupeIndexLocked() {
         dedupeIndex.clear();
         for (LogSqlEntry e : entries) {
-            Long latest = dedupeIndex.get(e.dedupeKey());
-            if (latest == null || e.timestamp() > latest) {
-                dedupeIndex.put(e.dedupeKey(), e.timestamp());
+            LogSqlEntry latest = dedupeIndex.get(e.dedupeKey());
+            if (latest == null || e.timestamp() > latest.timestamp()) {
+                dedupeIndex.put(e.dedupeKey(), e);
             }
         }
     }
@@ -114,10 +120,48 @@ public class SqlLogEntryBuffer {
      * （索引由新纪元条目在入队 upsert 面重建）。O(1)（清 map），entries 锁内执行。
      * 回落沿（true→false）<b>不</b>调用本方法——理由见 {@code AgentManager.updateOnline} 尾注。
      */
-    public void resetDedupeIndexOnChannelHandoff() {
+    public void rebuildDedupeIndexAfterHandoff() {
+        rebuildDedupeIndexAfterHandoff(HANDOFF_MERGE_GRACE_MS, System.currentTimeMillis());
+    }
+
+    public void rebuildDedupeIndexAfterHandoff(long graceMs) {
+        rebuildDedupeIndexAfterHandoff(graceMs, System.currentTimeMillis());
+    }
+
+    public void rebuildDedupeIndexAfterHandoff(long graceMs, long nowMs) {
         synchronized (entries) {
             dedupeIndex.clear();
+            if (!dedupeEnabled) return;
+            long cutoff = nowMs - graceMs;
+            for (LogSqlEntry entry : entries) {
+                if (entry.timestamp() < cutoff) continue;
+                LogSqlEntry latest = dedupeIndex.get(entry.dedupeKey());
+                if (latest == null || entry.timestamp() > latest.timestamp()) {
+                    dedupeIndex.put(entry.dedupeKey(), entry);
+                }
+            }
         }
+    }
+
+    /** 归因诊断限频：窗内首条即时输出，其余累计抑制数随下次输出带上；message 惰性构造。 */
+    private final AtomicLong attributionLogNanos = new AtomicLong(Long.MIN_VALUE / 2);
+    private final AtomicLong attributionSuppressed = new AtomicLong();
+
+    private void logAttributionThrottled(java.util.function.Supplier<String> message) {
+        long now = System.nanoTime();
+        long last = attributionLogNanos.get();
+        if (now - last >= ATTRIB_DIAG_INTERVAL_NANOS && attributionLogNanos.compareAndSet(last, now)) {
+            long suppressed = attributionSuppressed.getAndSet(0);
+            String text = message.get();
+            LOG().info(suppressed > 0 ? text + "（期间另有 " + suppressed + " 条同形态未逐条记）" : text);
+        } else {
+            attributionSuppressed.incrementAndGet();
+        }
+    }
+
+    /** 诊断用平台 Logger 懒加载：纯 JUnit 用例不触诊断时零平台依赖。 */
+    private com.intellij.openapi.diagnostic.Logger LOG() {
+        return com.intellij.openapi.diagnostic.Logger.getInstance(SqlLogEntryBuffer.class);
     }
 
     /**
@@ -386,11 +430,28 @@ public class SqlLogEntryBuffer {
             }
         }
         boolean duplicate = false;
+        boolean mergeChanged = false;
+        LogSqlEntry mergeDiagExisting = null;
+        LogSqlEntry mergeDiagMerged = null;
         List<LogSqlEntry> evictedEntries = new ArrayList<>();
         LogSqlEntry[] storedEntry = {null};
         synchronized (entries) {
             if (dedupeEnabled && isDuplicate(entry)) {
                 duplicate = true;
+                LogSqlEntry existing = dedupeIndex.get(entry.dedupeKey());
+                if (existing != null) {
+                    LogSqlEntry merged = LogSqlModelsKt.mergeDuplicateEntry(existing, entry);
+                    if (!merged.equals(existing)) {
+                        ArrayDeque<LogSqlEntry> rebuilt = new ArrayDeque<>(entries.size());
+                        for (LogSqlEntry current : entries) rebuilt.add(current == existing ? merged : current);
+                        entries.clear();
+                        entries.addAll(rebuilt);
+                        dedupeIndex.put(entry.dedupeKey(), merged);
+                        mergeChanged = true;
+                        mergeDiagExisting = existing;
+                        mergeDiagMerged = merged;
+                    }
+                }
             } else {
                 // T-LogRowNumber：入队时分配捕获序号（去重丢弃/暂停/过滤不占号，列表不跳号）
                 LogSqlEntry added = addNumbered(entry);
@@ -399,11 +460,7 @@ public class SqlLogEntryBuffer {
                 if (dedupeEnabled) {
                     // T-SqlLogPerf P6：索引 upsert（dedupeKey lazy 首触与旧版 isDuplicate 同价，
                     // 仅去重开启时支付）
-                    String k = added.dedupeKey();
-                    Long latest = dedupeIndex.get(k);
-                    if (latest == null || added.timestamp() > latest) {
-                        dedupeIndex.put(k, added.timestamp());
-                    }
+                    dedupeIndex.put(added.dedupeKey(), added);
                 }
                 while (entries.size() > maxEntries) {
                     LogSqlEntry evicted = entries.removeFirst();
@@ -411,11 +468,10 @@ public class SqlLogEntryBuffer {
                         // T-SqlLogPerf P6：淘汰回扫——索引存的是「最近」时间戳，仅当被淘汰者恰为
                         // 该键最新时才需要重算（队内同键余条 = 超窗重复入队形态，低频）
                         String k = evicted.dedupeKey();
-                        Long idxLatest = dedupeIndex.get(k);
-                        if (idxLatest != null && idxLatest.longValue() == evicted.timestamp()) {
+                        if (dedupeIndex.get(k) == evicted) {
                             LogSqlEntry stillThere = lastEntryWithKey(k);
                             if (stillThere != null) {
-                                dedupeIndex.put(k, stillThere.timestamp());
+                                dedupeIndex.put(k, stillThere);
                             } else {
                                 dedupeIndex.remove(k);
                             }
@@ -432,7 +488,23 @@ public class SqlLogEntryBuffer {
             if (badge != null) {
                 badge.run(); // 徽章计数变了 → 即时刷新（不走内容节流）
             }
+            // 跨通道融合改变了保留条目的可见元数据 → 走内容通道重绘；仍非「新 SQL」。
+            if (mergeChanged) {
+                notifyContentChangedThrottled();
+                if (mergeDiagExisting != null && mergeDiagMerged != null) {
+                    final LogSqlEntry diagExisting = mergeDiagExisting;
+                    final LogSqlEntry diagMerged = mergeDiagMerged;
+                    logAttributionThrottled(() -> "重复观测跨通道融合: 指纹=" + entry.dedupeKey().substring(0, Math.min(8, entry.dedupeKey().length()))
+                            + " 通道=" + diagExisting.captureProvenance() + "+" + entry.captureProvenance()
+                            + "→" + diagMerged.captureProvenance()
+                            + " 升级=" + LogSqlModelsKt.mergeUpgradedAspects(diagExisting, diagMerged));
+                }
+            }
             return false;
+        }
+        // 缺源码条目的通道归因诊断（限频）——「增强已开启却无法跳转」现场的直接证据行。
+        if (entry.sourceFile() == null && entry.sourceCandidates().isEmpty()) {
+            logAttributionThrottled(() -> LogSqlModelsKt.provenanceDiagText(entry, SqlCaptureGate.paused.get()));
         }
         // T-Perf-12（自 dev 移植）：onEvicted 回调移出 synchronized(entries)——回调链（自动保存磁盘写）
         // 在锁内同步执行会阻塞 EDT snapshot() 抢同一把锁（控制台输出热路径互相卡）
@@ -621,11 +693,11 @@ public class SqlLogEntryBuffer {
      * ⟺ 该键最近时间戳落窗口内（最大时间戳是窗口判定的唯一有效候选，逐字等价）。
      */
     private boolean isDuplicate(LogSqlEntry entry) {
-        Long latest = dedupeIndex.get(entry.dedupeKey());
+        LogSqlEntry latest = dedupeIndex.get(entry.dedupeKey());
         if (latest == null) {
             return false;
         }
-        return entry.timestamp() - latest < dedupeWindowMs;
+        return entry.timestamp() - latest.timestamp() < dedupeWindowMs;
     }
 
     /** 最早在前的快照（正序）。 */
@@ -724,7 +796,7 @@ public class SqlLogEntryBuffer {
                 String k = entry.dedupeKey();
                 LogSqlEntry stillThere = lastEntryWithKey(k);
                 if (stillThere != null) {
-                    dedupeIndex.put(k, stillThere.timestamp());
+                    dedupeIndex.put(k, stillThere);
                 } else {
                     dedupeIndex.remove(k);
                 }

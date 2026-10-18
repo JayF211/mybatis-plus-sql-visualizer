@@ -15,19 +15,24 @@ import com.intellij.openapi.util.Computable;
 import com.intellij.psi.JavaPsiFacade;
 import com.intellij.psi.PsiClass;
 import com.intellij.psi.search.GlobalSearchScope;
-import com.intellij.ui.ColoredListCellRenderer;
+import com.intellij.ui.ColoredTreeCellRenderer;
 import com.intellij.ui.SimpleTextAttributes;
 import com.intellij.ui.awt.RelativePoint;
 import com.intellij.ui.components.ActionLink;
-import com.intellij.ui.components.JBList;
+import com.intellij.ui.components.JBLabel;
 import com.intellij.ui.components.JBPanel;
 import com.intellij.ui.components.JBScrollPane;
 import com.intellij.util.ui.JBUI;
 import org.jetbrains.annotations.Nullable;
 
 import javax.swing.JComponent;
-import javax.swing.JList;
-import javax.swing.ListSelectionModel;
+import javax.swing.AbstractAction;
+import javax.swing.JTree;
+import javax.swing.KeyStroke;
+import javax.swing.tree.DefaultMutableTreeNode;
+import javax.swing.tree.DefaultTreeModel;
+import javax.swing.tree.TreePath;
+import java.awt.event.KeyEvent;
 import javax.swing.SwingUtilities;
 import javax.swing.Timer;
 import java.awt.BorderLayout;
@@ -39,8 +44,6 @@ import java.awt.Rectangle;
 import java.awt.event.ActionEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
-import java.util.List;
-import java.util.function.ToIntFunction;
 
 /**
  * T-StackHoverUi：SQL 预览面板 meta 行的调用栈悬停弹层（D84 拍板 A 案）。
@@ -65,6 +68,7 @@ import java.util.function.ToIntFunction;
 public final class StackFrameHover implements Disposable {
 
     private final Project project;
+    private final Runnable popupOpener;
     private JComponent target = null;
     private String digest = null;
     private JBPopup popup = null;
@@ -72,7 +76,7 @@ public final class StackFrameHover implements Disposable {
     private Point pendingAnchor = null;
 
     /** 悬停延迟（ms）：防误触——meta 行是高频掠过区域，立即弹层会干扰正常阅读。 */
-    private final Timer hoverTimer = new Timer(HOVER_DELAY_MS, e -> showPopup());
+    private final Timer hoverTimer = new Timer(HOVER_DELAY_MS, e -> openPopup());
 
     /** 移出宽限（ms）：跨「meta 行 ↔ 弹层」边界的空档不立即关，宽限后按实时指针位置判定。 */
     private final Timer hideTimer = new Timer(HIDE_GRACE_MS, e -> hideIfPointerOutside());
@@ -91,7 +95,12 @@ public final class StackFrameHover implements Disposable {
     };
 
     public StackFrameHover(@Nullable Project project) {
+        this(project, null);
+    }
+
+    public StackFrameHover(@Nullable Project project, @Nullable Runnable popupOpener) {
         this.project = project;
+        this.popupOpener = popupOpener;
         hoverTimer.setRepeats(false);
         hideTimer.setRepeats(false);
     }
@@ -99,7 +108,7 @@ public final class StackFrameHover implements Disposable {
     /** 挂到 meta 行（悬停触发点）；面板 init 里调用一次。 */
     public void attach(JComponent target) {
         this.target = target;
-        target.addMouseListener(new MouseAdapter() {
+        MouseAdapter listener = new MouseAdapter() {
             @Override
             public void mouseEntered(MouseEvent e) {
                 if (digest == null) return;
@@ -122,7 +131,19 @@ public final class StackFrameHover implements Disposable {
                 hoverTimer.stop();
                 if (popup != null && !popup.isDisposed()) hideTimer.restart();
             }
-        });
+
+            @Override
+            public void mouseClicked(MouseEvent e) {
+                if (!SwingUtilities.isLeftMouseButton(e) || e.getClickCount() != 1
+                        || digest == null || digest.isBlank()) return;
+                hoverTimer.stop();
+                hideTimer.stop();
+                pendingAnchor = e.getPoint();
+                openPopup();
+            }
+        };
+        target.addMouseListener(listener);
+        target.addMouseMotionListener(listener);
     }
 
     /** 每次预览更新栈数据；栈变化即关旧弹层（下次悬停按新数据重弹）。 */
@@ -148,6 +169,12 @@ public final class StackFrameHover implements Disposable {
     // 弹层构建与展示
     // ------------------------------------------------------------------
 
+    private void openPopup() {
+        if (popup != null && !popup.isDisposed()) return;
+        if (popupOpener != null) popupOpener.run();
+        else showPopup();
+    }
+
     private void showPopup() {
         Point anchor = pendingAnchor;
         if (anchor == null) return;
@@ -156,15 +183,15 @@ public final class StackFrameHover implements Disposable {
         JComponent t = target;
         if (t == null) return;
         if (popup != null && !popup.isDisposed()) return;
-        List<StackFrameEntry> frames = StackDigestFrames.parse(d);
-        if (frames.isEmpty()) return;
+        StackFramesProjection projection = StackFramesProjection.build(d);
+        if (projection.nodes().isEmpty()) return;
 
-        JComponent root = buildContent(frames, d);
+        JComponent root = buildContent(projection, d);
         com.intellij.openapi.ui.popup.ComponentPopupBuilder builder =
                 JBPopupFactory.getInstance().createComponentPopupBuilder(root, null)
                         .setTitle(MpSqlVisualizerBundle.message("panel.stackPopup.title"))
                         .setRequestFocus(false)
-                        .setFocusable(false)
+                        .setFocusable(true)
                         .setCancelOnClickOutside(true);
         builder.addListener(new JBPopupListener() {
             @Override
@@ -179,48 +206,83 @@ public final class StackFrameHover implements Disposable {
         p.show(new RelativePoint(t, anchor));
     }
 
-    private JComponent buildContent(List<StackFrameEntry> frames, String fullDigest) {
-        JBList<StackFrameEntry> list = new JBList<>(frames);
-        list.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
-        list.setSelectedIndex(0);
-        // 视口按全量帧数放开：JList 默认 visibleRowCount=8 会把链尾业务帧折叠进滚动区，
-        // 「弹层默认锚定最深的业务帧、一眼看到 Controller → Service 的调用路径」落空；
-        // 上限对齐栈帧预算钳位（64），超出才回退滚动
-        list.setVisibleRowCount(Math.min(frames.size(), MAX_VISIBLE_ROWS));
-        FontMetrics fm = list.getFontMetrics(list.getFont());
-        int maxRow = 0;
-        for (StackFrameEntry f : frames) {
-            int w = fm.stringWidth(f.method()) + fm.stringWidth(ROW_GAP) + fm.stringWidth(f.fqcn())
-                    + (f.line() > 0 ? fm.stringWidth(":" + f.line()) : 0);
-            if (w > maxRow) maxRow = w;
+    private JComponent buildContent(StackFramesProjection projection, String fullDigest) {
+        DefaultMutableTreeNode rootNode = new DefaultMutableTreeNode("stack");
+        for (StackFramesNode node : projection.nodes()) {
+            DefaultMutableTreeNode branch = new DefaultMutableTreeNode(node);
+            if (node instanceof StackFramesNode.Internal internal) {
+                for (StackFrameEntry frame : internal.frames()) {
+                    branch.add(new DefaultMutableTreeNode(frame, false));
+                }
+            }
+            rootNode.add(branch);
         }
-        int contentW = Math.max(MIN_POPUP_WIDTH, Math.min(MAX_POPUP_WIDTH, maxRow + POPUP_WIDTH_PADDING));
-        list.setCellRenderer(new FrameRenderer(fm, contentW));
-        list.addMouseListener(new MouseAdapter() {
+        JTree tree = new JTree(new DefaultTreeModel(rootNode));
+        tree.setRootVisible(false);
+        tree.setShowsRootHandles(true);
+        tree.setRowHeight(0);
+        tree.setCellRenderer(new FrameRenderer());
+        tree.addMouseListener(new MouseAdapter() {
             @Override
             public void mouseClicked(MouseEvent e) {
                 if (!SwingUtilities.isLeftMouseButton(e)) return;
-                int idx = list.locationToIndex(e.getPoint());
-                if (idx < 0) return;
-                navigateTo(frames.get(idx));
+                tree.requestFocusInWindow();
+                TreePath path = tree.getPathForLocation(e.getX(), e.getY());
+                if (path == null) return;
+                Object data = ((DefaultMutableTreeNode) path.getLastPathComponent()).getUserObject();
+                if (data instanceof StackFramesNode.Visible visible) navigateTo(visible.frame());
+                else if (data instanceof StackFrameEntry frame) navigateTo(frame);
             }
         });
-
+        tree.getInputMap().put(KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, 0), "stack.activate");
+        tree.getActionMap().put("stack.activate", new AbstractAction() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                TreePath path = tree.getSelectionPath();
+                if (path == null) return;
+                Object data = ((DefaultMutableTreeNode) path.getLastPathComponent()).getUserObject();
+                if (data instanceof StackFramesNode.Internal) {
+                    if (tree.isExpanded(path)) tree.collapsePath(path);
+                    else tree.expandPath(path);
+                } else if (data instanceof StackFramesNode.Visible visible) navigateTo(visible.frame());
+                else if (data instanceof StackFrameEntry frame) navigateTo(frame);
+            }
+        });
+        if (tree.getRowCount() > 0) tree.setSelectionRow(0);
         ActionLink copyLink = new ActionLink(MpSqlVisualizerBundle.message("panel.stackPopup.copy"), (ActionEvent e) -> {
             UiTextClipboard.copy(fullDigest);
             cancelPopup();
         });
-        JBPanel<JBPanel<?>> south = new JBPanel<JBPanel<?>>(new BorderLayout());
+        ActionLink expandLink = new ActionLink(MpSqlVisualizerBundle.message("panel.stackPopup.expandAll"), (ActionEvent e) -> {
+            for (int i = 0; i < rootNode.getChildCount(); i++) {
+                DefaultMutableTreeNode child = (DefaultMutableTreeNode) rootNode.getChildAt(i);
+                if (child.getUserObject() instanceof StackFramesNode.Internal) tree.expandPath(new TreePath(child.getPath()));
+            }
+        });
+        ActionLink collapseLink = new ActionLink(MpSqlVisualizerBundle.message("panel.stackPopup.collapseAll"), (ActionEvent e) -> {
+            for (int i = 0; i < rootNode.getChildCount(); i++) {
+                tree.collapsePath(new TreePath(((DefaultMutableTreeNode) rootNode.getChildAt(i)).getPath()));
+            }
+        });
+        JBPanel<JBPanel<?>> controls = new JBPanel<>();
+        controls.setOpaque(false);
+        controls.add(expandLink);
+        controls.add(collapseLink);
+        JBPanel<JBPanel<?>> south = new JBPanel<>(new BorderLayout());
         south.setOpaque(false);
         south.setBorder(JBUI.Borders.empty(4, 10, 6, 10));
+        south.add(controls, BorderLayout.WEST);
         south.add(copyLink, BorderLayout.EAST);
-
-        JBPanel<JBPanel<?>> root = new JBPanel<JBPanel<?>>(new BorderLayout());
-        root.add(new JBScrollPane(list), BorderLayout.CENTER);
+        JBPanel<JBPanel<?>> root = new JBPanel<>(new BorderLayout());
+        if (projection.noProjectFrames()) {
+            root.add(new JBLabel(MpSqlVisualizerBundle.message("panel.stackPopup.noProjectFrames")), BorderLayout.NORTH);
+        }
+        root.add(new JBScrollPane(tree), BorderLayout.CENTER);
         root.add(south, BorderLayout.SOUTH);
         root.addMouseListener(hideManager);
-        int w = Math.max(contentW + ROOT_WIDTH_PADDING, south.getPreferredSize().width + 20);
-        root.setPreferredSize(new Dimension(w, root.getPreferredSize().height));
+        root.setPreferredSize(new Dimension(MAX_POPUP_WIDTH,
+                Math.max(120, Math.min(520, tree.getRowCount() * tree.getFont().getSize() * 2 + 56))));
+        tree.addMouseListener(hideManager);
         return root;
     }
 
@@ -288,33 +350,37 @@ public final class StackFrameHover implements Disposable {
     /**
      * 行渲染：`method  fqcn:line` 三段着色——方法名前景（agent 自身帧淡灰降权）、类名灰、
      * 行号灰；类名超宽按 {@code ellipsizeMiddle} 中段省略（保留头部包名与尾部类名），行号恒可见。
-     * 预算以弹层定宽 {@code contentW} 为准（与构建期测宽同字体同度量，保证逐行对齐不横向滚动）。
+     * 预算取树组件字体度量，展开内部帧后仍保持行号可见。
      */
-    private final class FrameRenderer extends ColoredListCellRenderer<StackFrameEntry> {
-
-        private final FontMetrics fm;
-        private final int contentW;
-
-        FrameRenderer(FontMetrics fm, int contentW) {
-            this.fm = fm;
-            this.contentW = contentW;
+    private final class FrameRenderer extends ColoredTreeCellRenderer {
+        @Override
+        public void customizeCellRenderer(JTree tree, Object value, boolean selected, boolean expanded,
+                                          boolean leaf, int row, boolean hasFocus) {
+            Object data = ((DefaultMutableTreeNode) value).getUserObject();
+            setToolTipText(null);
+            if (data instanceof StackFramesNode.Internal internal) {
+                append(MpSqlVisualizerBundle.message("panel.stackPopup.internal", internal.frames().size()),
+                        SimpleTextAttributes.GRAYED_ATTRIBUTES);
+            } else if (data instanceof StackFramesNode.Omission omission) {
+                append(omission.count() == null
+                                ? MpSqlVisualizerBundle.message("panel.stackPopup.omittedUnknown")
+                                : MpSqlVisualizerBundle.message("panel.stackPopup.omitted", omission.count()),
+                        SimpleTextAttributes.GRAYED_ATTRIBUTES);
+            } else if (data instanceof StackFramesNode.Visible visible) renderFrame(visible.frame(), tree);
+            else if (data instanceof StackFrameEntry frame) renderFrame(frame, tree);
         }
 
-        @Override
-        protected void customizeCellRenderer(JList<? extends StackFrameEntry> list, StackFrameEntry value,
-                                             int index, boolean selected, boolean hasFocus) {
-            boolean agent = StackDigestFrames.isAgentFrame(value);
-            append(value.method(), agent ? SimpleTextAttributes.GRAYED_ATTRIBUTES : SimpleTextAttributes.REGULAR_ATTRIBUTES);
-            append(ROW_GAP, SimpleTextAttributes.GRAYED_ATTRIBUTES);
-            String lineSuffix = value.line() > 0 ? ":" + value.line() : "";
-            int classBudget = contentW - fm.stringWidth(value.method()) - fm.stringWidth(ROW_GAP)
-                    - fm.stringWidth(lineSuffix) - POPUP_WIDTH_PADDING;
-            ToIntFunction<String> widthOf = s -> fm.stringWidth(s);
-            String classText = classBudget > 0
-                    ? SqlPreviewPanelTextKt.ellipsizeMiddle(value.fqcn(), widthOf, classBudget)
-                    : value.fqcn();
-            append(classText, SimpleTextAttributes.GRAY_ATTRIBUTES);
-            if (!lineSuffix.isEmpty()) append(lineSuffix, SimpleTextAttributes.GRAY_ATTRIBUTES);
+        private void renderFrame(StackFrameEntry frame, JTree tree) {
+            String line = frame.line() > 0 ? ":" + frame.line() : "";
+            FontMetrics metrics = tree.getFontMetrics(tree.getFont());
+            int classBudget = MAX_POPUP_WIDTH - 72 - metrics.stringWidth(frame.method() + ROW_GAP + line);
+            String clazz = SqlPreviewPanelTextKt.ellipsizeMiddle(frame.fqcn(), metrics::stringWidth,
+                    Math.max(24, classBudget));
+            append(frame.method(), StackDigestFrames.isAgentFrame(frame)
+                    ? SimpleTextAttributes.GRAYED_ATTRIBUTES : SimpleTextAttributes.REGULAR_ATTRIBUTES);
+            append(ROW_GAP + clazz, SimpleTextAttributes.GRAY_ATTRIBUTES);
+            if (!line.isEmpty()) append(line, SimpleTextAttributes.GRAY_ATTRIBUTES);
+            setToolTipText(frame.method() + "  " + frame.fqcn() + line);
         }
     }
 

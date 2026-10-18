@@ -89,23 +89,28 @@ public final class JpaAliasTableResolver {
      */
     public static JpaAliasScope resolveAliases(@NotNull String sql, @NotNull TableInfo table,
                                                @Nullable Project project) {
-        if (project == null) return resolveAliases(sql, table, entityName -> null);
-        return resolveAliases(sql, table, entityName -> {
-            try {
-                PsiShortNamesCache cache = PsiShortNamesCache.getInstance(project);
-                PsiClass[] projectClasses =
-                        cache.getClassesByName(entityName, GlobalSearchScope.projectScope(project));
-                PsiClass clazz = projectClasses.length > 0 ? projectClasses[0] : null;
-                if (clazz == null) {
-                    PsiClass[] allClasses =
-                            cache.getClassesByName(entityName, GlobalSearchScope.allScope(project));
-                    clazz = allClasses.length > 0 ? allClasses[0] : null;
-                }
-                return clazz != null ? new JpaEntityResolver().resolve(clazz) : null;
-            } catch (Throwable ignored) {
-                return null;
-            }
-        });
+        return resolveAliases(sql, table, project, null);
+    }
+
+    public static JpaAliasScope resolveAliases(String sql, TableInfo table, Project project,
+                                                com.intellij.psi.PsiElement context) {
+        return resolveAliases(sql, table, entityName -> recoverJpaPsi(() -> {
+            PsiClass clazz = project == null ? null
+                    : cn.song.mybatisplus.visualizer.psi.jpa.EntityAliasSweep.resolve(project, entityName, context).psiClass();
+            return clazz == null ? null : new JpaEntityResolver().resolve(clazz);
+        }));
+    }
+
+    /** 只恢复普通 PSI 失败；取消、控制流及 VM/链接错误必须原对象透传。 */
+    public static <T> T recoverJpaPsi(java.util.function.Supplier<T> block) {
+        try {
+            return block.get();
+        } catch (com.intellij.openapi.progress.ProcessCanceledException cancelled) {
+            throw cancelled;
+        } catch (RuntimeException failure) {
+            if (failure instanceof com.intellij.openapi.diagnostic.ControlFlowException) throw failure;
+            return null;
+        }
     }
 
     /**
@@ -123,7 +128,7 @@ public final class JpaAliasTableResolver {
         // 同一实体名只解析一次（PSI 检索 + 注解遍历都不便宜）
         Map<String, TableInfo> memo = new HashMap<>();
 
-        if (!table.getEntityClassName().isBlank()) {
+        if (!table.getEntityClassName().isBlank() && table.getEntityClassName().equals(JpaQueryEntityLookup.rootEntity(sql))) {
             memo.put(table.getEntityClassName(), table);
             registerTableName(entityTableNames, table.getEntityClassName(), table.getTableName());
         }
@@ -139,17 +144,10 @@ public final class JpaAliasTableResolver {
             String alias = !captured.isEmpty() && !CLAUSE_KEYWORDS.contains(captured.toUpperCase(Locale.ROOT))
                     ? captured : null;
 
-            if (!memo.containsKey(entity)) {
-                TableInfo resolved;
-                try {
-                    resolved = resolveEntity.invoke(entity);
-                } catch (Throwable ignored) {
-                    resolved = null;
-                }
-                memo.put(entity, resolved);
-            }
-            TableInfo info = memo.get(entity);
-            if (info != null) registerTableName(entityTableNames, entity, info.getTableName());
+            // FQN 不可截成简单名后命中根表缓存：不同模块可声明同名实体。
+            if (!memo.containsKey(rawEntity)) memo.put(rawEntity, recoverJpaPsi(() -> resolveEntity.invoke(rawEntity)));
+            TableInfo info = memo.get(rawEntity);
+            if (info != null) registerTableName(entityTableNames, rawEntity, info.getTableName());
 
             // 登记限定符（含解析失败者）：ON 诊断据此区分「没出现过」与「出现过但解析不出」
             if (alias != null) knownQualifiers.add(alias);
@@ -305,7 +303,8 @@ public final class JpaAliasTableResolver {
          * 函数调用（{@code count(1)} / {@code count (1)} 均覆盖）。
          */
         private static final Pattern BARE_WORD_OR_LITERAL = Pattern.compile(
-                STRING_LITERAL.pattern() + "|\\b([a-zA-Z_][a-zA-Z0-9_]*)\\b(?!\\s*\\()");
+                STRING_LITERAL.pattern() + "|\\b[a-zA-Z_][a-zA-Z0-9_]*(?:\\s*\\.\\s*[a-zA-Z_][a-zA-Z0-9_]*)+\\b|"
+                        + "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\b(?!\\s*\\()");
 
         /**
          * T-01 裸词替换的补充排除表：布尔/常量字面量与 HQL 特有操作词（子句关键字见外层
@@ -349,7 +348,9 @@ public final class JpaAliasTableResolver {
                     String middle = matcher.group(3);
                     String field = matcher.group(4);
                     TableInfo owner = scope.getByAlias().get(qualifier);
-                    ColumnInfo column = (owner != null ? owner : rootTable).columnByField(field);
+                    // 已声明但未解析（含歧义）的副表不得借根表列；未知限定符保持历史回退。
+                    ColumnInfo column = owner == null && scope.getKnownQualifiers().contains(qualifier)
+                            ? null : (owner != null ? owner : rootTable).columnByField(field);
                     if (column == null || column.getFieldName().equals(column.getColumnName())) {
                         replacement = matcher.group(0);
                     } else if (owner == null && qualifier.equals(column.getEmbeddedParent())) {

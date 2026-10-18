@@ -115,53 +115,11 @@ public class HistoryCellRenderer extends JPanel implements javax.swing.ListCellR
         metaLine.clear();
         List<List<SqlTextFragment>> lineFragments = null;
         if (entry != null) {
-            String source;
-            if (SourceMarkers.isMpPaginationCount(entry.sourceFile())) {
-                source = "MP 分页计数";
-            } else if (entry.sourceFile() != null) {
-                // F-44-7：标记路径始终使用正斜杠（与 CallerSourceLocator 一致），不能用 File.separatorChar
-                String file = entry.sourceFile();
-                int sep = file.lastIndexOf('/');
-                String name = sep >= 0 ? file.substring(sep + 1) : file;
-                source = entry.sourceLine() > 0 ? name + ":" + entry.sourceLine() : name;
-            } else {
-                source = "unknown";
+            List<SqlTextFragment> metadata = SqlEntryPresentation.metadata(entry, isSelected, true, templateCounts);
+            for (SqlTextFragment fragment : SqlEntryPresentation.clipForList(metadata, list, this, SqlListTypeColor.BAR_WIDTH)) {
+                metaLine.append(fragment.text(), isSelected
+                        ? SqlEntryPresentation.selectedAttributes(fragment.attributes(), fg) : fragment.attributes());
             }
-            // T-TwoLine：元信息行在上、SQL 高亮行在下。**片段与顺序与日志页完全一致**
-            // （行号 → 时间 → 耗时 → 目标库 → 来源；耗时复用日志页 formatDurationFragment，
-            // 按慢查询阈值着色、缺失占位「—」——勿再自拼 [xms]，两页同条目须逐字一致）
-            // T-LogHistoryRowNo：行号片段在最前（0 = 无行号——旧文件/未注入条目；与日志页守卫一致）
-            if (entry.sequenceNumber() > 0) {
-                metaLine.append("#" + entry.sequenceNumber() + " ", HISTORY_META_GRAY);
-            }
-            // T-JdbcThreadBucket F3 + 日志时间：跟随设置（对齐日志页 formatTimestampFragment），
-            // 含非法 pattern 回退默认、显示开关与时间来源（日志时间/捕获时间）语义
-            kotlin.Pair<String, SimpleTextAttributes> ts = SqlLogPanelKt.formatTimestampFragment(entry);
-            if (ts != null) {
-                metaLine.append(ts.getFirst(), ts.getSecond());
-            }
-            kotlin.Pair<String, SimpleTextAttributes> dur =
-                    SqlLogPanelKt.formatDurationFragment(entry.executionTimeMs(), useSelectionFill);
-            metaLine.append(dur.getFirst(), dur.getSecond());
-            // T-AgentDialectLoop：目标库角标（与日志页同款落点：时间/耗时后、来源前）
-            kotlin.Pair<String, SimpleTextAttributes> db =
-                    SqlLogPanelKt.formatDatabaseFragment(entry, useSelectionFill);
-            if (db != null) {
-                metaLine.append(db.getFirst(), db.getSecond());
-            }
-            // T-McpAuditTrail T-MAT-05：MCP 徽标（与日志页同款落点与协议；非 MCP 返回 null 不显示）
-            kotlin.Pair<String, SimpleTextAttributes> mcp =
-                    SqlLogPanelKt.formatMcpFragment(entry, useSelectionFill);
-            if (mcp != null) {
-                metaLine.append(mcp.getFirst(), mcp.getSecond());
-            }
-            // O-90：同模板 ×N 徽章（与日志页同款同落点；计数=当前文件全量条目聚合）
-            kotlin.Pair<String, SimpleTextAttributes> tpl =
-                    SqlLogPanelKt.formatTemplateCountFragment(entry, templateCounts, useSelectionFill);
-            if (tpl != null) {
-                metaLine.append(tpl.getFirst(), tpl.getSecond());
-            }
-            metaLine.append("[" + source + "] ", HISTORY_META_GRAY);
             lineFragments = sqlLineFragmentsFor(entry);
         }
         // T-ListMode：SQL 行数随显示模式伸缩；T-ClickPreview 不设 toolTipText（预览改单击触发）
@@ -175,8 +133,8 @@ public class HistoryCellRenderer extends JPanel implements javax.swing.ListCellR
             comp.setForeground(fg);
             comp.clear();
             if (lineFragments != null && i < lineFragments.size()) {
-                for (SqlTextFragment f : lineFragments.get(i)) {
-                    comp.append(f.text(), f.attributes());
+                for (SqlTextFragment f : SqlEntryPresentation.clipForList(lineFragments.get(i), list, this, SqlListTypeColor.BAR_WIDTH)) {
+                    comp.append(f.text(), isSelected ? SqlEntryPresentation.selectedAttributes(f.attributes(), fg) : f.attributes());
                 }
             }
             if (list != null) {
@@ -205,20 +163,19 @@ public class HistoryCellRenderer extends JPanel implements javax.swing.ListCellR
      * 历史条目为每次加载新建的实例，缓存随条目生命周期天然失效。
      */
     private List<List<SqlTextFragment>> sqlLineFragmentsFor(LogSqlEntry entry) {
-        String sql = SqlLogPanelKt.withTerminator(entry.summary());
         SqlListDisplayMode mode = PluginSettings.getInstance().sqlListDisplayMode();
+        String sql = SqlLogPanelKt.withTerminator(mode == SqlListDisplayMode.FORMATTED ? entry.restoredSql() : entry.summary());
         if (mode == SqlListDisplayMode.SINGLE_LINE) {
             List<List<SqlTextFragment>> single = new ArrayList<>();
             single.add(SqlListFragmentRenderer.renderFragments(sql));
             return single;
         }
-        List<List<SqlTextFragment>> cached = entry.cachedListLineFragments();
-        if (cached != null && entry.cachedListLineFragmentsMode() == mode) {
-            return cached;
+        List<List<SqlSemanticFragment>> semantics = entry.cachedListLineFragments();
+        if (semantics == null || entry.cachedListLineFragmentsMode() != mode) {
+            semantics = SqlListFragmentRenderer.semanticLineFragments(sql, mode);
+            entry.setCachedListLineFragments(semantics);
+            entry.setCachedListLineFragmentsMode(mode);
         }
-        List<List<SqlTextFragment>> computed = SqlListFragmentRenderer.renderLineFragments(sql, mode);
-        entry.setCachedListLineFragments(computed);
-        entry.setCachedListLineFragmentsMode(mode);
-        return computed;
+        return SqlEntryPresentation.visibleSqlLines(SqlListFragmentRenderer.projectLineFragments(semantics), mode);
     }
 }

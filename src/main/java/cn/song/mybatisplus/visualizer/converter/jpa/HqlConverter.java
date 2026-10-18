@@ -176,7 +176,12 @@ public final class HqlConverter {
      */
     public static Result convert(@NotNull String hql, @Nullable TableInfo tableInfo, @Nullable Project project,
                                  @Nullable String entityAlias) {
-        return convertInternal(hql, tableInfo, project, entityAlias, null);
+        return convert(hql, tableInfo, project, entityAlias, null);
+    }
+
+    public static Result convert(@NotNull String hql, @Nullable TableInfo tableInfo, @Nullable Project project,
+                                 @Nullable String entityAlias, @Nullable com.intellij.psi.PsiElement context) {
+        return convertInternal(hql, tableInfo, project, entityAlias, null, context);
     }
 
     /**
@@ -190,7 +195,7 @@ public final class HqlConverter {
     public static Result convertWithEntityResolver(@NotNull String hql, @Nullable TableInfo tableInfo,
                                                    @Nullable String entityAlias,
                                                    @NotNull kotlin.jvm.functions.Function1<String, TableInfo> resolveEntity) {
-        return convertInternal(hql, tableInfo, null, entityAlias, resolveEntity);
+        return convertInternal(hql, tableInfo, null, entityAlias, resolveEntity, null);
     }
 
     /** Kotlin 默认参数等价重载：{@code entityAlias = null}。 */
@@ -207,8 +212,20 @@ public final class HqlConverter {
      */
     private static Result convertInternal(@NotNull String hql, @Nullable TableInfo tableInfo,
                                           @Nullable Project project, @Nullable String entityAlias,
-                                          @Nullable kotlin.jvm.functions.Function1<String, TableInfo> resolveEntity) {
-        TableInfo table = tableInfo != null ? tableInfo : createFallbackTable();
+                                          @Nullable kotlin.jvm.functions.Function1<String, TableInfo> resolveEntity,
+                                          @Nullable com.intellij.psi.PsiElement context) {
+        JpaQueryEntityLookup lookup = new JpaQueryEntityLookup(project, context);
+        String rootName = JpaQueryEntityLookup.rootEntity(hql);
+        TableInfo resolved = tableInfo != null ? tableInfo : rootName != null ? lookup.resolveTable(rootName) : null;
+        TableInfo table = resolved != null ? resolved : createFallbackTable();
+        String mappedRootName = rootName != null && (tableInfo == null
+                || rootName.substring(rootName.lastIndexOf('.') + 1).equals(table.getEntityClassName()) || rootName.equals(entityAlias)
+                || (lookup.resolveClass(rootName) != null && table.getEntityClassName().equals(lookup.resolveClass(rootName).getName()))) ? rootName : null;
+        kotlin.jvm.functions.Function1<String, TableInfo> resolveTable = name -> {
+            if (name.equals(mappedRootName) && !table.getEntityClassName().isBlank()) return table;
+            TableInfo supplied = resolveEntity != null ? resolveEntity.invoke(name) : null;
+            return supplied != null ? supplied : lookup.resolveTable(name);
+        };
 
         // 0. 检测 IN 子句参数（在命名参数替换前检测）
         Set<String> inClauseParams = findInClauseParams(hql);
@@ -233,7 +250,7 @@ public final class HqlConverter {
         sql = NewExpressionStripper.strip(sql);
 
         // 5. 处理 JOIN FETCH / 关联 JOIN → LEFT/INNER JOIN（J7：ON 条件真实化）
-        sql = JpaJoinRewriter.rewrite(sql, table, project);
+        sql = JpaJoinRewriter.rewriteWithLookup(sql, table, lookup);
 
         // 6. 处理 MEMBER OF（降级为注释提示）
         sql = handleMemberOf(sql);
@@ -241,13 +258,11 @@ public final class HqlConverter {
         // 6.5 别名作用域解析（O-57）：须在实体名→表名替换之前扫描——那时 FROM/JOIN 后的
         // 实体标识符还在 SQL 里，替换成表名后 PSI 短名检索不再命中；
         // 又须在第 5 步 JOIN 改写之后——改写新增的副表别名只有那时才存在
-        JpaAliasTableResolver.JpaAliasScope scope = resolveEntity != null
-                ? JpaAliasTableResolver.resolveAliases(sql, table, resolveEntity)
-                : JpaAliasTableResolver.resolveAliases(sql, table, project);
+        JpaAliasTableResolver.JpaAliasScope scope = JpaAliasTableResolver.resolveAliases(sql, table, resolveTable);
 
         // 7. 实体名 → 表名映射
         if (!table.getEntityClassName().isBlank()) {
-            sql = mapEntityToTable(sql, table, entityAlias);
+            sql = mapEntityToTable(sql, table, entityAlias != null ? entityAlias : mappedRootName);
             // 8. 关联字段路径映射：alias.field.id → 外键列名（须在属性映射之前）
             sql = mapAssociationPath(sql, table);
             // 9. 属性名 → 列名映射（按别名作用域分派，副表别名同样映射）
@@ -259,7 +274,7 @@ public final class HqlConverter {
 
         // 8.5 子查询 FROM/JOIN 中其他实体名 → 表名（J13；需 Project，无则跳过）。
         // 别名作用域已解析出实体→表名，透传给扫描器复用，免二次 PSI 检索
-        sql = JpaFromEntityMapper.mapSubqueryEntities(sql, table, project, scope.getEntityTableNames());
+        sql = JpaFromEntityMapper.mapSubqueryEntities(sql, table, name -> scope.getEntityTableNames().get(name));
 
         // 9. SELECT 子句展开（T-HQL-SELECT-01 / T-BareFromSelect）
         // 必须排在步骤 5（JOIN 改写）之后——JOIN 别名只有改写后才存在，
@@ -438,7 +453,7 @@ public final class HqlConverter {
         JpaSqlLiteralMasking.Masked maskResult = JpaSqlLiteralMasking.mask(hql);
         String result = maskResult.text();
         Pattern classNamePattern = entityPattern(table.getEntityClassName());
-        if (classNamePattern != null) {
+        if (classNamePattern != null && (entityAlias == null || !entityAlias.contains("."))) {
             result = classNamePattern.matcher(result).replaceAll(Matcher.quoteReplacement(table.getTableName()));
         }
         if (entityAlias != null && !entityAlias.isBlank() && !entityAlias.equals(table.getEntityClassName())) {
@@ -453,11 +468,7 @@ public final class HqlConverter {
     /** 实体标识符全词匹配 Pattern（词边界防子串误伤；构造失败容错返回 null）。 */
     @Nullable
     private static Pattern entityPattern(@NotNull String identifier) {
-        try {
-            return Pattern.compile("\\b" + Pattern.quote(identifier) + "\\b");
-        } catch (Throwable t) {
-            return null;
-        }
+        return Pattern.compile("(?<![\\w.$])" + Pattern.quote(identifier) + "\\b");
     }
 
     // ------------------------------------------------------------------
