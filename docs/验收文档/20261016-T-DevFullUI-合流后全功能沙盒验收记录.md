@@ -555,6 +555,16 @@ U22 分享出口本轮真机：预览「更多 → 分享」打开「分享 SQL�
 - 安全依据：`DataSourceJdbcSmokeTest` 逐源跳过测试 classpath 没有的驱动（源码注释明示「demo 可含 DM/PG」）；在场已达梦远程源且历轮门禁全绿为现成反证。工程级数据源本就持久（`.idea` 被 gitignore），PG 建好后以后重启沙盒零操作。
 - 披露：demo `.idea` 与用户日常 IDE 共享，PG 源会同时出现在日常 IDE；内省模型仍由 IDE 首连时自建（未伪造），沙盒起来后需验证源在场+可连。
 
+## 新包真机第二批（2026-10-18 上午，含 UI030 的 243 沙盒，DFF 退出后完成）
+
+环境：runIde 全屏+置顶；开局即 Distraction Free Mode（行号/gutter/页签全无，重启后状态保留），`Ctrl+Shift+A → Exit Distraction Free Mode` 恢复；编辑器合成输入被 UIPI 挡（提权沙盒），全程走 `record/_run_elev.bat` 提权 pyautogui 探针 + `Set-Clipboard` 粘贴（IME 吞空格，键入路线作废）。
+
+- **UI030 主路径闭环（用户现场 UX 修复的真机验证）**：UserMapper.selectByAnnotationId（`SELECT * FROM user WHERE id = #{id}`，#id=91）gutter 预览 → 点「执行计划」→ 无已绑控制台状态下 **last-used mp_demo@localhost 静默绑定**（Database 工具窗自动出现 mp_demo 控制台 + mpsql-exec.sql）→ **自动重试后结构化 EXPLAIN 表格直接渲染在预览面板内**：`EXPLAIN · MySQL · mp_demo@localhost · 2241 ms`，含 11 列计划表格、右上「原生控制台」出口、「计划已保存到 SQL 历史（需条目≥5 份）」横幅与格式化 SQL 注释（frame ui030-11-explain-c-settled.png）。旧 UX「只弹告知通知没有下一步」已消除。选择器直弹场景（无 last-used）与取消→通知→不重弹路径本轮未触达（last-used 在场走静默复用属实现定义形态），保持部分。
+- **UI025 红色波浪新包回归**：预览 SQL 编辑为 `SELECT usernme FROM user WHERE id = 91`（剪贴板粘贴），`usernme` 下方红色波浪线 + 行首灯泡在位（frame ui025-4-zoom.png），错列标注链在含 UI030 的新包完好。
+- **U16 缺表错误面（新增）**：预览 SQL 编辑为 `SELECT * FROM bench_items LIMIT 3` 执行，静默绑定 mp_demo 后真实执行并完整展示 `[42S02][1146] Table 'mp_demo.bench_items' doesn't exist (当前库=mp_demo，数据源=mp_demo@localhost，数据源默认库=mp_demo)`，带「复制错误信息」出口；Database 控制台同步显示 Connected/use mp_demo/错误原文（frame pg-7-exec-b.png）。
+- **执行计划 fail-closed 闸（新增）**：UPDATE 预览点「执行计划」→ 通知「未执行 EXPLAIN：语句以 {update} 开头，不是可解释查询（允许 SELECT / VALUES / TABLE / WITH）」（frame ui030-8-explain-clicked-early.png）。
+- **PG 预写条目被 IDE 正常采纳（注册表路线证实可行）**：项目打开日志 `DataSourceModelStorageImpl - No model loaded for: …, dbx_test@114.66.55.245 (6f2a9c41-83de-4b57-a219-c8d4e5f6a7b8)`——手写 `dataSources.xml` 注册表条目未被隔离、正常入模型（与 20260923 手写**模型文件**被隔离的结论并行不悖：隔离的是 `.idea/dataSources/<uuid>.xml` 模型，注册表工程组件可安全预写）。**但控制台数据源下拉与 Services 视图均未列出该源**（仅列 4 个曾连接过的 MySQL 源；达梦同样缺席，此前有「failed to guess driver」告警）——驱动定案/首连前的源不进选择器，U18/U25 的 PG EXPLAIN 与 U21 跨方言负例延后到「经 IDE 数据源对话框触碰/首连该源」之后（下批先做）。
+
 U25/U12/U13 本轮真机（重建后沙盒）：方法预览头部显示 `方言: MySQL（模块已学数据源）  XML select: annotation`，证明方言由模块数据源学习得出；「执行计划」绑定数据源后执行 `EXPLAIN SELECT * FROM mp_demo.user WHERE id = 91`，Database 控制台返回原生 MySQL 计划表格（列：id/select_type/table/partitions/type/possible_keys/key/key_len/ref/rows/filtered/Extra），同时弹出「结构化执行计划视图不可用，已回退原生控制台：当前无结果集含有可解释数据源（先在控制台里执行一次查询即可）」——结构化开关默认关闭时的回退文案与 B1 原生表格路径均复现。为打通该路径，把 kotlin_demo@localhost 数据源密码补齐为 demo 应用 `application.yml` 中的本地 MySQL 口令（root/root，仅本地测试库）。
 
 U15/U27 本轮真机：方法预览中选中表名 `user` 后右键「SQL 快捷模板」子菜单完整列出 EXPLAIN 选中表 / COUNT 选中表 / 抽样 10 行；点击「COUNT 选中表」后 Database 控制台实际执行 `SELECT COUNT(*) FROM user`（111ms），返回 `[42000][1146] Table 'kotlin_demo.user' doesn't exist` 并提示当前库为 kotlin_demo——模板动作与执行链已真实触达，报错仅因目标库缺少该表；待用 `mp_demo.user` 限定名复验成功路径。
