@@ -1035,6 +1035,15 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "WIL/EDT）自锁，2026.2 真机 threadDump 全 IDE 冻结实证；白名单仅 EDT 冷路径 " +
                     "createTempPsiFile。判定内核配同文件合成样本自证（BGT 站点必抓/白名单不报/裸调不报）。",
             ),
+            // ---- T-UiFixGate9：exec 预暖链/文档写项目 dispose 生命周期守卫（2026-10-18 门禁补登记） ----
+            GuardEntry(
+                "execute/ExecDocPrewarmDisposeGuardTest.kt",
+                emptyList(),
+                "断言直接内联在 @Test（四用例：prewarmChainAbandonedOnDisposedProject/" +
+                    "prewarmRawCreateRefusedOnDisposedProject/docWriteOnceRefusedOnDisposedProject/" +
+                    "writeVfTextViaDocumentNoopOnDisposedProject——项目 dispose 后预热链与文档写全链拒绝写）；" +
+                    "disposedProjectProxy/refreshVf 为夹具非判定函数",
+            ),
             // ---- 本元守卫自身 ----
             GuardEntry(
                 "convention/GuardSelfTestCoverageMetaGuardTest.kt",
