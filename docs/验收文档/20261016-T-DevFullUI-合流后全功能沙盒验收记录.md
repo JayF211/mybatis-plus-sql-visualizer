@@ -43,11 +43,11 @@
 | U18 | R90计划历史 | 默认关闭/Apply/Reset、事前和回调授权；两次计划/重启/只读基线；项目UUID参数隔离；清理迟到；数量/字节界限 | 部分：已验B1启用独立留存、两次结构化计划与只读历史基线，B2跨IDE重启读回，UI-001披露可读及UI-002中文标签复验；待默认关闭/Apply/Reset完整流程、事前/回调授权负例、项目UUID参数隔离、清理迟到与数量/字节界限 |
 | U19 | R91上下文v2 | 有无计划、编辑/换目标/清历史；匿名值标识符注释、白名单计划、16KiB；复制零新查询/网络 | 部分：已验B1有/无计划复制、值掩码/标识符隐藏及已获计划exact match摘要；待编辑/换目标/清历史失效、注释与计划白名单负例、16KiB及本轮零新查询/网络活探针 |
 | U20 | R92/48填充模拟 | CRUD和批量、四fill型、AUTO/Version、WHERE/UPSERT排除、显式优先、恶意输入、两预设/清理/换目标 | 部分：已验AUTO主键默认不勾、模拟默认关闭，B3布局/普通值优先/分号拒绝、INSERT与UPDATE字段差异、引号转义/数值拒绝、WHERE id/revision与UPSERT不填、取消列/关闭模拟；待CRUD与批量全形态、四fill型逐项/Version完整边界、两预设/清理/换目标，未执行写SQL或Handler |
-| U21 | R93/52能力单源 | meta悬停、报告、执行确认跨方言；不支持能力明确、字面量关键字不误报 | 部分：B8本地HTML报告build/sql-diagnostic-report.html实物1650字节、11:09:48，MySQL披露EXPLAIN/DELETE LIMIT/UPSERT支持、IDENTITY无需包装，未外发；仅证该方言导出内容，待meta悬停、报告/执行确认跨方言一致性、不支持能力及字面量关键字负例 |
+| U21 | R93/52能力单源 | meta悬停、报告、执行确认跨方言；不支持能力明确、字面量关键字不误报 | 部分：B8本地HTML报告build/sql-diagnostic-report.html实物1650字节、11:09:48，MySQL披露EXPLAIN/DELETE LIMIT/UPSERT支持、IDENTITY无需包装，未外发；本轮 PG 解阻断：手动方言 PostgreSQL × MySQL 数据源（bound mp_demo）点执行计划被红字整体阻断「插件不会覆盖手动选择，也不会为冲突会话暴露原生控制台」——跨方言执行确认 fail-closed 实锤；待 meta 悬停、报告跨方言一致性、字面量关键字负例 |
 | U22 | R94诊断审阅 | 第七出口与旧六出口、删段编辑撤同意、超限、取消、最终正文；实际公网发送不擅执行 | 部分：已验B1七出口可见、第七审阅公开目的地/无附件、取消SQL段、编辑撤同意、22520/16384超限显示及取消未发送；待旧六出口实际行为、超限提交拦截与最终正文核对，实际公网发送须另获授权 |
 | U23 | R22参数预设全边界 | A/B语句同名隔离、默认/P1/P2快照、重命名/删除/20上限、折叠与IDE重启、foreach/OGNL | 部分（跨语句同名失败）：B1默认项保护、UI-P1参数/条件快照及清除不删方案，B2普通参数重启召回/预设栏收起；B7 id71命名快照与重命名已验。B8删除UI-Renamed后只余受保护默认项且id71保留（frame-99f1b56b/1634e28a）；foreach UI-Shared三值71/72/73在改值及为null后均可恢复未勾与原IN三值（frame-04ac7425/0af9bfe0），未执行非法SQL。另一语句id91另存同名却报已存在（UI-017，frame-25d8a81d）；修复8b10f9bd未验证、定向验证刚派。待A/B同名隔离修复复验、P2/20上限、命名快照重启及其余foreach/OGNL边界，不升级整组 |
 | U24 | R51/54历史参数耗时 | 缓存优先、历史快照兜底、不串条目；精确耗时优先/同结构中位数；模拟键不回落 | 部分：本轮历史页真实条目行显示方言 MySQL、耗时 3ms/0ms 与源码链接，右键六项可用；待缓存优先/历史兜底优先级与不串条目的组合边界 |
-| U25 | R33/23/45/61执行计划 | 原生/结构化切换、MySQL表格/PG树、无源/未填参/未知格式回退、两次diff、体检、文本不可比 | 部分：已验B1 MySQL原生表格、启用结构化后无绑定回原生/绑定后结构化、两次无变化比较与只读历史，B2中文基线标签；待主动原生/结构化切换、PG树、无源/未填参/未知格式回退、有变化diff、体检与文本不可比 |
+| U25 | R33/23/45/61执行计划 | 原生/结构化切换、MySQL表格/PG树、无源/未填参/未知格式回退、两次diff、体检、文本不可比 | 部分：已验B1 MySQL原生表格、启用结构化后无绑定回原生/绑定后结构化、两次无变化比较与只读历史，B2中文基线标签；本轮 PG 树+体检实锤：手动方言 PostgreSQL + 共享控制台会话切 dbx_test 后结构化计划渲染 `EXPLAIN · PostgreSQL · dbx_test@114.66.55.245 · 1316 ms`，树形 Limit(rows=3){Parallel Aware/Async Capable/Startup·Total Cost/Plan Width/Output/Seq Scan on bench_items (rows=10000)}（PG 专有属性在列）+ SEQ_SCAN 体检黄条「Sequential scan over ~10000 rows — consider adding an index」；待主动原生/结构化切换、无源/未填参/未知格式回退、有变化 diff、文本不可比 |
 | U26 | R46 Schema预检 | 已预热错列建议；未预热/复杂语句跳过；DML取消不写、只读提示 | 待验 |
 | U27 | R49/30/12条件分页 | Wrapper/EasyQuery布尔三态、XML未知警示；COUNT/LIMIT改参保留、COUNT独立开关、手写LIMIT不重复 | 部分：已验B1 Wrapper动态条件缺省标记及填参，B2 XML真/假标记、取消status移除条件、全不选后清空WHERE/参数；待Wrapper/EasyQuery三态全覆盖、XML未知警示、COUNT/LIMIT改参保留及两类开关/去重边界 |
 | U28 | R36/O91/R4导出 | 回放事务/分号/块、可移植CRUD/回滚、日志历史四格式、过滤/选择集及脱敏 | 部分：已验B1 MySQL单SELECT回放文件含START TRANSACTION/实值/末尾分号/COMMIT，未执行；待多语句/块及不支持事务方言、可移植CRUD/回滚、日志历史四格式、过滤/选择集与脱敏 |
@@ -571,6 +571,18 @@ U22 分享出口本轮真机：预览「更多 → 分享」打开「分享 SQL�
 - **U28 导出入口未触发（登记）→ 已闭环（用户指点路径）**：正确路径=**左键选中日志条目后右键条目正文**（先左键选中再右键，右键空白头部只出「恢复实时捕获」横幅）。右键菜单完整在位：复制 SQL/复制时间戳/删除/屏蔽此 SQL/发送到 SQL→Java 转换/发送到日志转 SQL/跳转到 Java/聚焦调用方方法/按请求聚焦/只看同结构/**导出可见 SQL（CSV/TSV/TXT/SQL）**。四格式真实落盘并核对内容：`sql-log.csv`（652B，time/source/duration_ms/sql 表头+行）、`sql-log.tsv`（648B，制表符分隔）、`sql-log.txt`（749B，`-- === SQL #N ===` 块+time/source/ms 注释）、`sql-export-20261018-122842.sql`（839B，「Exported 3 SQL statements」头+分号结尾语句）（frame u28-16-combo-list.png）。加上此前已验回放脚本/可移植 SQL——U28 全格式闭环，转「通过」。
 - **U22 复制类四出口逐一（新增）**
 - **U10 设置页搜索（用户提示登记）**：SQL Visualizer 设置页可用顶部搜索跳转定位（用户口头提示）；本批尝试「清除预览 SQL 历史/存储」全文词均「Nothing to show」（自定义 Configurable 疑未实现内容搜索），下批改用页名/控件名短词验证。
+
+## PG 方言组真机闭环（2026-10-18 下午，U18/U25/U21 解阻断）
+
+环境接续：口令取自用户提供的 DBX 共享连接表（PG 16.14@114.66.55.245:20033/dbx_test），dbx MCP 直连 `SELECT version()` 先验证口令有效（33ms），再走 IDE 侧凭据弹窗。
+
+- **口令入 IDE 的真机路径（pg4 探针系列）**：Database 树选中源 → 工具栏 ⚙ 打开 Data Sources and Drivers → Test Connection → SCRAM 弹窗 **Change Credentials** → 密码框粘贴口令 → OK。首跑探针在 paste 后崩溃（PIL crop 元组错），恢复时误粘进对话框树搜索框（列表被过滤成 No matches found，Ctrl+A+Delete 清除）；但**崩溃前的 OK 已把口令提交**——恢复列表后 Password=`<hidden>`、Test Connection 绿 ✓ `PostgreSQL 16.14`，Apply Changes 确认（关旧连接）后树行出现 **"1 of 3" 活动连接**（frame pg4-14/pg4-16/pg4-19）。口令 Save=Until restart（IDE 重启后需重填；dbx 侧连接持久）。
+- **PG 首连解锁会话选择器**：此前「控制台数据源下拉不列该源」的阻断消除——共享控制台工具栏 Data Sources → **All 子菜单列出 dbx_test@114.66.55.245**，点选即把共享控制台（mpsql-exec.sql）会话切到 PG（工具栏数据源下拉变 dbx_test、schema 下拉变 `<schemas>`；Database 树里 mpsql-exec 节点随之迁挂 dbx_test 下，frame pg5-33）。Query Console 亦可用（New → Query Console，`SELECT 1;` 1 row/584ms）。
+- **U25 PG 树 + 体检（实锤转增）**：设置 SQL Preview「数据库方言」手动选 **PostgreSQL**（面板 meta 行变「方言: PostgreSQL（手动指定）」）→ 共享控制台会话数据源切 dbx_test → 预览 SQL 编辑为 `SELECT * FROM bench_items LIMIT 3` → 执行计划 → 结构化面板 `EXPLAIN · PostgreSQL · dbx_test@114.66.55.245 · 1316 ms`，树形渲染 **Limit (rows=3)**，展开含 **Parallel Aware: false / Async Capable: false / Startup Cost: 0.00 / Total Cost: 0.08 / Plan Width: 87**（PG JSON 计划专有字段）+ 可展开 Output、**Seq Scan on bench_items (rows=10000)** 子树；头部黄色体检条 `[SEQ_SCAN] bench_items: Sequential scan over ~10000 rows — consider adding an index on the filter columns`（frame pg5-41/pg5-45）。
+- **U21 跨方言执行确认 fail-closed（实锤转增）**：手动方言 PostgreSQL + 绑定数据源仍 mp_demo(MySQL) 时点执行计划 → 结果区红字整体阻断：「执行失败：已阻止执行：当前 SQL 由手动方言 PostgreSQL 强设，但所选数据源的实际方言是 MySQL。插件不会覆盖手动选择，也不会为冲突会话暴露原生控制台。」+「复制信息查看」出口（frame pg5-22）。无 SQL 下发、无原生控制台暴露。
+- **路径记录（复跑指引）**：方言门先于 NO_DATA_SOURCE 选择器——Deactivate mp_demo 后 `boundConsoleDataSource()` 的内存 console `isValid` 仍 true，执行计划仍走方言门阻断而非弹选择器；换绑正解=共享控制台工具栏 Data Sources → All → 选 PG（或等共享控制台真实失效后走 T-UI030 选择器直弹路径，后者本轮未触达保持部分）。
+- **UX 观察两条（登记不判缺陷）**：①预览面板开着时改设置页方言 → 面板重渲染走「内存 PSI」降级并出红字警示「预览以降级模式打开（内存 PSI）……点【重试】或关闭并重新打开预览即可恢复完整支持」，Esc 重开即恢复（frame pg5-22 顶部）；②绑定指示行恒显「关联（上次使用）： mp_demo@localhost」记忆文案，实际 bound 已切 dbx_test——指示行不随会话数据源切换刷新，与结构化头部 `· dbx_test@114.66.55.245` 并存（信息不同源，待与用户口径核对是否算缺陷）。
+- **现场留痕（下批重启前恢复项）**：设置方言=PostgreSQL（手动）需手动回「智能推断」；mp_demo@localhost 处于 Deactivated 需 Reactivate；共享控制台会话数据源=dbx_test；PG 口令 Until restart 重启即失效（下次要 PG 链路再走一次 Change Credentials，或重启后从 dbx 侧确认）。robot-server 0.11.23 已拷入沙盒 `config/plugins/`（端口 8580，重启自动生效，探针进程需重开才会重探）。
 
 ## 剩余批次执行计划（2026-10-18 定稿）
 
