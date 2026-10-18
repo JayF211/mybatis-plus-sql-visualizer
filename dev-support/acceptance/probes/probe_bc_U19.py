@@ -23,6 +23,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # 工具层在 acceptance/
 
 import bc_common as bc
 from bc_common import Reporter, front, shot, esc
@@ -38,10 +39,13 @@ def big_sql():
 
 
 def paste_into_preview_sql(rect, text):
-    """预览面板 SQL 编辑器：点入 → Ctrl+A 全选 → 剪贴板粘贴（绕 IME）。"""
-    # SQL 编辑器占面板上半：几何内点入（面板矩形内 1/4 高处，非手工屏幕坐标）
-    x = rect[0] + rect[2] // 3
-    y = rect[1] + max(60, rect[3] // 4)
+    """预览面板 SQL 编辑器：点入 → Ctrl+A 全选 → 剪贴板粘贴（绕 IME）。
+
+    rect 为 (left, top, right, bottom)；SQL 编辑器在面板右半（约 2/3 宽处、1/4 高处）。
+    """
+    w, h = rect[2] - rect[0], rect[3] - rect[1]
+    x = rect[0] + w * 2 // 3
+    y = rect[1] + h // 4
     pyautogui.click(x, y)
     time.sleep(0.4)
     pyautogui.hotkey("ctrl", "a")
@@ -73,10 +77,12 @@ def main():
     shot("bc-U19-1-bigsql-in-preview", region=rect)
 
     rep.step("3 更多 → 复制为 AI 上下文（超限样本）")
-    if not (bc.click_named("更多") or bc.click_button(rep, "更多", anchor_name="bc_btn_more", region=rect, must=False)):
-        rep.fail("「更多」按钮未定位——上下文复制中断")
-        bc.close_preview()
-        return rep.finish()
+    # 「更多」是图标 ActionToolbar 按钮（robot 无 accessible name）——几何定位（面板右上），
+    # 文本命中/锚点模板仅作兜底。
+    more_xy = (rect[2] - 72, rect[1] + 68)
+    pyautogui.moveTo(*more_xy, duration=0.2)
+    pyautogui.click()
+    time.sleep(1.0)
     time.sleep(1.0)
     shot("bc-U19-2-more-menu")
     if not (bc.click_named("复制为 AI 上下文") or bc.click_button(

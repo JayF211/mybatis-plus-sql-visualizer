@@ -21,6 +21,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # 工具层在 acceptance/
 
 import bc_common as bc
 from bc_common import Reporter, front, shot, esc, ide
@@ -39,22 +40,27 @@ def open_reverse_tab(rep):
 
 
 def input_sql(rep):
-    """粘 SQL 进转换输入区：robot 找大输入框（EditorTextField/JBEditorTextField）点入后全选粘贴。"""
+    """粘 SQL 进转换输入区：robot 找工具窗内宽输入框（EditorComponentImpl 实测类名）点入后全选粘贴。"""
     _pid, _hwnd, irect = ide()
     fields = []
+    # 工具窗在右半（x>1000）；主编辑器与结果区也会命中同类名，按屏幕 x 区间过滤到工具窗
+    tw_left = irect[0] + (irect[2] - irect[0]) // 2 if irect else 960
     if bc.robot_available():
-        for cls in ("EditorTextField", "JBTextField"):
+        for cls in ("EditorComponentImpl", "JBTextField"):
             xp = "//div[@class='%s']" % cls
             try:
-                comps = [c for c in bc.robot_mod.find_components(xp) if int(c.get("width", 0)) > 200]
+                comps = bc.robot_mod.find_components(xp)
             except Exception:
                 continue
             for i, c in enumerate(comps):
+                if int(c.get("width", 0)) <= 200:
+                    continue
                 try:
                     xy = bc.robot_mod.component_screen_center("(%s)[%d]" % (xp, i + 1), comp=c)
                 except Exception:
                     continue
-                fields.append(xy)
+                if xy[0] >= tw_left:
+                    fields.append(xy)
     if not fields:
         rep.fail("转换输入框未定位（robot 未启/类名不匹配）——粘 SQL 交人工后从 T2 起重跑")
         return False
@@ -104,7 +110,8 @@ def part_reverse_lookup(rep):
         rep.fail("「选择实体类」对话框未出现（快路径直接命中了实体？JAR 表不该快路径命中——判读截图）")
         shot("bc-U43-t1-no-dialog")
         return False
-    rep.check(True, "实体选择对话框已开（快路径未命中 JAR 实体，行内空置=预期）")
+    rep.check(True, "实体选择对话框已开（快路径未命中 JAR 实体，行内空置=预期）",
+              "实体选择对话框未开")
     shot("bc-U43-t2-dialog-before", region=dlg)
 
     rep.step("T3 显式「在依赖库中查找」：点击 → 扫描期禁用 → 候选刷新出现 LegacyBooking")

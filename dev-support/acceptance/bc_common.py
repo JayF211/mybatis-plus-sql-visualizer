@@ -20,7 +20,11 @@ import ctypes
 
 RECORD_DIR = os.path.dirname(os.path.abspath(__file__))
 MAIN_REPO = os.path.dirname(RECORD_DIR)                     # .../mybatis-plus-sql-visualizer
-DEV_TREE = os.path.join(os.path.dirname(MAIN_REPO), "mybatis-plus-sql-visualizer-dev")
+# acceptance 布局（dev-support/acceptance）下 MAIN_REPO=dev-support，需按「含 build/ 的祖先」定位工作树
+_dev_cand = os.path.dirname(os.path.dirname(RECORD_DIR))
+DEV_TREE = (os.environ.get("BC_DEV_TREE")
+            or (_dev_cand if os.path.isdir(os.path.join(_dev_cand, "build"))
+                else os.path.join(os.path.dirname(MAIN_REPO), "mybatis-plus-sql-visualizer-dev")))
 SHOTS_DIR = os.path.join(DEV_TREE, "build", "ui243-shots")
 DEMO_ROOT = os.path.join(os.path.dirname(MAIN_REPO), "mybatis-plus-sql-visualizer-demo")
 
@@ -361,7 +365,7 @@ def open_file(query, wait=2.2, rep=None):
         esc()
         raise RuntimeError("Ctrl+Shift+N 未弹出搜索浮窗（像素护栏未过）——中止，绝不盲敲")
     nav_mod.force_en_us()
-    typewrite(query, interval=0.04)
+    pyautogui.typewrite(query, interval=0.04)
     time.sleep(wait)
 
     before_band = fingerprint(band)
@@ -380,6 +384,10 @@ def open_file(query, wait=2.2, rep=None):
     pyautogui.doubleClick(*row)
     time.sleep(2.0)
     ok = diff_score(base_ed, fingerprint(ed)) > 4.0
+    if not ok and find_named(query) is not None:
+        # 目标文件本就打开着：Go to File 打开同一文件不改变编辑区指纹——页签在位即视为可达
+        rep.ok("open_file(%s)：文件已打开（页签在位，指纹不变量属同文件激活）" % query)
+        return True
     (rep.ok if ok else rep.fail)("open_file(%s)：%s" % (query, "双击首行兜底成功" if ok else "两种路线都没开成"))
     return ok
 
@@ -396,7 +404,11 @@ def caret(line=None, col=None, text=None, rep=None):
 
 
 def trigger_preview(rep, wait=3.5):
-    """Alt+Shift+Q 触发预览并等浮窗出现；返回浮窗矩形，不出则 FAIL 并返回 None。"""
+    """Alt+Shift+Q 触发预览并等浮窗出现；返回浮窗矩形，不出则 FAIL 并返回 None。
+
+    不点编辑器（点击会移动 caret 破坏落点）；文件刚打开时给一次短暂等待让编辑器就绪。
+    """
+    time.sleep(0.6)
     nav_mod.trigger_preview(wait=wait)
     rect = preview_rect()
     if rect:

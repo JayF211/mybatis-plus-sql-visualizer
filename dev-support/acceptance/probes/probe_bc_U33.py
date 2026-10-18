@@ -29,6 +29,7 @@ import glob
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # 工具层在 acceptance/
 
 import bc_common as bc
 from bc_common import Reporter, front, shot, esc

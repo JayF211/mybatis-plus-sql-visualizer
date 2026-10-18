@@ -20,9 +20,10 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # 工具层在 acceptance/
 
 import bc_common as bc
-from bc_common import Reporter, front, shot, esc
+from bc_common import Reporter, front, shot, esc, ide
 import pyautogui
 
 
@@ -49,7 +50,8 @@ def assert_empty_toast(rep, tag):
     """断言「剪贴板中没有文本」轻提示：robot 文本命中优先，退化到状态行指纹+截图。"""
     hit = bc.find_contains("剪贴板中没有文本")
     if hit:
-        rep.check(True, "轻提示「剪贴板中没有文本」在场（robot 文本命中）")
+        rep.check(True, "轻提示「剪贴板中没有文本」在场（robot 文本命中）",
+                  "轻提示不在场（未命中文本）")
         shot("bc-U30-%s-toast" % tag)
         return
     rep.fail("robot 未命中提示文本（未启 robot-server？）——从 bc-U30-%s-after 截图人工核对状态行" % tag)
@@ -71,7 +73,8 @@ def main():
         return rep.finish()
     time.sleep(2.0)
     shot("bc-U30-1-positive")
-    rep.check(True, "正对照已执行（输入区应有双行日志且状态行=已转换 1 条；截图人工核对）")
+    rep.check(True, "正对照已执行（输入区应有双行日志且状态行=已转换 1 条；截图人工核对）",
+              "正对照未取到截图证据")
 
     rep.step("2 造真空剪贴板：EmptyClipboard + EnumClipboardFormats==0 双证")
     truly_empty = bc.clipboard_clear_strict()

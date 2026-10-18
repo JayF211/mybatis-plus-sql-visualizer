@@ -22,6 +22,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # 工具层在 acceptance/
 
 import bc_common as bc
 from bc_common import Reporter, front, shot, esc
@@ -47,18 +48,27 @@ def p1_wrapper_page(rep):
     """金路径 1：Wrapper 分页（UserServiceImpl.pageByWrapper）。"""
     rep.step("P1 Wrapper 分页：UserServiceImpl.pageByWrapper（~L168）")
     bc.open_file(bc.P_USER_SERVICE, rep=rep)
-    bc.caret(text="new Page<>(pageQuery.getCurrent(), pageQuery.getSize())", rep=rep)
+    bc.caret(text="queryWrapper.in(pageQuery.getIds() != null", rep=rep)   # pageByWrapper 独有的链式行
     rect = bc.trigger_preview(rep)
-    if rect:
-        bc.fill_text_fields(rect, [1, 5, "ui_alpha"], rep=rep)   # current/size/username（能定位几个填几个）
-        time.sleep(1.0)   # 等 SQL 区随参数回填
-        quad_shots(rep, "p1-wrapper-page", rect)
-        rep.step("P1 结果：本路径只做预览对照，不执行（执行统一走 P5 EXPLAIN 面）")
-        bc.close_preview()
+    if not rect:
+        # 诊断：降级模式（内存 PSI）会出红字警示；截全屏留证据再退出
+        degraded = bc.find_contains("降级模式") is not None or bc.find_contains("内存 PSI") is not None
+        shot("bc-U17-p1-trigger-miss")
+        rep.fail("P1：Alt+Shift+Q 未出预览（降级模式警示在场=%s，见 bc-U17-p1-trigger-miss）" % degraded)
+        return
+    bc.fill_text_fields(rect, [1, 5, "ui_alpha"], rep=rep)   # current/size/username（能定位几个填几个）
+    time.sleep(1.0)   # 等 SQL 区随参数回填
+    quad_shots(rep, "p1-wrapper-page", rect)
+    rep.step("P1 结果：本路径只做预览对照，不执行（执行统一走 P5 EXPLAIN 面）")
+    bc.close_preview()
 
 
 def p2_xml_dynamic(rep):
-    """金路径 2：XML 动态（UserMapper.xml selectUserListByXml，条件勾选联动）。"""
+    """金路径 2：XML 动态（UserMapper.xml selectUserListByXml，条件勾选联动）。
+
+    联动语义（B2 口径）：填参不改 SQL（占位形态）；**勾选动态条件复选框**才把 <if> 条件
+    加进 WHERE、取消勾选则移除。断言=勾选后 SQL 区出现 WHERE 变化。
+    """
     rep.step("P2 XML 动态：selectUserListByXml 预览 + 条件勾选联动")
     bc.open_file(bc.P_USER_MAPPER_XML, rep=rep)
     bc.caret(text="selectUserListByXml", rep=rep)
@@ -66,15 +76,32 @@ def p2_xml_dynamic(rep):
     if not rect:
         return
     time.sleep(1.0)
+    bc.fill_text_fields(rect, ["ui_xml", 1], rep=rep)
+    time.sleep(1.0)
+    shot("bc-U17-p2-before-checks")
     g = bc.Guard(region=rect)
     g.mark("sql-area")
-    fields = bc.text_fields_in(rect)
-    if fields:
-        bc.fill_text_fields(rect, ["ui_xml", 1], rep=rep)
-        time.sleep(1.0)
+
+    def click_cond(subtext):
+        comp = bc.find_contains(subtext)
+        if not comp:
+            return False
+        xp = ("(//div[contains(@text,'%s')]|//div[contains(@accessiblename,'%s')])[last()]"
+              % (subtext, subtext))
+        try:
+            x, y = bc.robot_mod.component_screen_center(xp, comp=comp)
+        except Exception:
+            return False
+        pyautogui.moveTo(x, y, duration=0.2)
+        pyautogui.click()
+        return True
+
+    hits = [click_cond(s) for s in ("username != null and username != ''", "status != null", "age != null")]
+    time.sleep(1.2)
     changed, score = g.changed("sql-area", wait=0.8)
-    rep.check(changed, "XML 动态：参数/条件输入引发 SQL 区变化（diff=%.1f）——同次联动成立" % score,
-              "XML 动态：SQL 区无变化——条件联动未发生（截图判读）")
+    rep.check(changed, "XML 动态：勾选动态条件引发 SQL 区变化（diff=%.1f，勾选命中=%s）——同次联动成立"
+              % (score, hits),
+              "XML 动态：勾选后 SQL 区无变化——联动未发生（勾选命中=%s，截图判读）" % hits)
     quad_shots(rep, "p2-xml", rect)
     bc.close_preview()
 
@@ -140,8 +167,13 @@ def p5_explain(rep):
     bc.click_button(rep, "执行计划", anchor_name="bc_btn_explain", region=rect)
     time.sleep(6.0)      # 静默绑定 + EXPLAIN 往返（UI030 实测 2.2s+）
     changed, score = g.changed("pre-explain", wait=0.5)
-    rep.check(changed, "EXPLAIN：点「执行计划」后面板出现变化（diff=%.1f，结果表格见截图）" % score,
-              "EXPLAIN：面板无变化——按钮没点中或执行未发生（数据源/绑定判读看截图）")
+    # 无绑定态（boundConsole=null）时 T-UI030 路径=直弹数据源选择器——弹选择器本身即有效行为，
+    # 与「结果表格出现」同属通过面；只有两者皆无才判失败。
+    prompt_shown = bc.find_contains("选择数据源") is not None or bc.find_contains("Choose Data Source") is not None
+    rep.check(changed or prompt_shown,
+              "EXPLAIN：点「执行计划」后有响应（面板变化=%s diff=%.1f / 选择数据源弹层=%s；结果表格见截图）"
+              % (changed, score, prompt_shown),
+              "EXPLAIN：面板无变化且无选择器弹层——按钮没点中或执行未发生（数据源/绑定判读看截图）")
     quad_shots(rep, "p5-explain", rect)
     shot("bc-U17-p5-q4-result-wide", region=(rect[0], rect[1], rect[2], rect[3]))
     bc.close_preview()
