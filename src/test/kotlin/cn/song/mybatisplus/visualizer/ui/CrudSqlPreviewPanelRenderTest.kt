@@ -37,6 +37,34 @@ class CrudSqlPreviewPanelRenderTest : BasePlatformTestCase() {
         panel.dispose()
     }
 
+    /**
+     * T-UiFixGate9：等 rerender 派发的 exec 预暖链静止（在途标记先见置位、再候复位）后收尾。
+     * 机理：链的 doc 写是 EDT 派发拍（setText→save 有 ~30ms「已改未存」窗口），若链跨出用例
+     * 生命周期，测试边界迟到的 VFS 会话（fixture 重建/相邻 ExecDoc* 类 vf 删除重建的
+     * root-model 刷新）命中该窗口即被 MemoryDiskConflictResolver 收集冲突，收尾 EDT 泵处理时
+     * 抛 CompoundRuntimeException 杀无辜 victim（20261018 门禁三轮实录 + [PROBE-GATE9] 探针实锤）。
+     * 泵 EDT 供派发拍执行；写收敛落在用例内，边界会话只见干净文档。
+     */
+    private fun awaitExecPrewarmQuiescence() {
+        // 阶段一（≤2s）：等链起跑。链未起跑（池线程未调度/已被在途链吸收）则不空等。
+        val phase1Start = System.currentTimeMillis()
+        while (System.currentTimeMillis() - phase1Start < 2_000 &&
+            !cn.song.mybatisplus.visualizer.execute.DataSourceSelector.execPrewarmInFlightForTest()
+        ) {
+            com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+            Thread.sleep(10)
+        }
+        // 阶段二（≤10s）：等链收敛（写+refresh+findPsi 全部落定，refresh 会话已应用）。
+        val deadline = System.currentTimeMillis() + 10_000
+        while (System.currentTimeMillis() < deadline &&
+            cn.song.mybatisplus.visualizer.execute.DataSourceSelector.execPrewarmInFlightForTest()
+        ) {
+            com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+            Thread.sleep(10)
+        }
+        com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+    }
+
     fun testPanelRendersAllCrudKindsWithoutException() {
         val present = CrudSqlGenerator.generate(spec()).map { it.kind }.toSet()
         for (kind in present) {
@@ -98,6 +126,8 @@ class CrudSqlPreviewPanelRenderTest : BasePlatformTestCase() {
             )
             assertTrue(request.canLosslesslyRerender)
             assertTrue(request.userTextUntouched)
+            // T-UiFixGate9：rerender 派发的预暖链收敛在本用例内，不跨边界（防冲突收集，见方法 KDoc）
+            awaitExecPrewarmQuiescence()
         } finally {
             disposeQuietly(panel)
         }
