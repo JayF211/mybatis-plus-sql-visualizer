@@ -1246,7 +1246,9 @@ class BannedApiSourceScanTest {
         // T-SyncK2JMaster104（2026-10-14）：ConsoleKt 随 ★A49 executeOnConsole 提交排障块
         // 新增 1 处外层 fatal 透传判定，实测 ConsoleKt 7→8；ResultsKt 随 ★A49 afterSubmitted
         // 取证块新增 1 处外层 fatal 透传判定，实测 ResultsKt 14→15。
-        "src/main/java/cn/song/mybatisplus/visualizer/execute/DataSourceSelector.java" to 1,
+        // T-SyncK2JMaster90（2026-10-18）：Selector 主体随 T-PrewarmWilDeadlock W2 预热预算化
+        // （prewarmFuture.get 超时放弃链）新增 1 处 ExecutionException 拆包 fatal 透传判定，实测 1→2。
+        "src/main/java/cn/song/mybatisplus/visualizer/execute/DataSourceSelector.java" to 2,
         "src/main/java/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorConsoleKt.java" to 8,
         "src/main/java/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResultsKt.java" to 15,
         // 9→10 处（T-SyncK2JMaster482 C9a-1 本轮重登记）：agent 采集/attach 链随 482 轮
@@ -1320,8 +1322,13 @@ class BannedApiSourceScanTest {
      * try/catch(Throwable)（700 个 .java 文件实测口径 777 站点）。新增站点集中在 XML 补全/引用导航、
      * 方言与嵌入列探测、执行结果宿主取证、MCP 方言解析与预览降级链，均为降级/探测/兜底语义；
      * 外层 fatal 透传判定新增两处已登记到 [fatalPassthroughGuardedFiles]（ConsoleKt 7→8、ResultsKt 14→15）。
+     *
+     * **777 → 763（T-SyncK2JMaster90，2026-10-18，本轮重登记净减 −14）**：90 轮同步 retired
+     * SqlClickPreview 交互浮层（随停靠预览宿主上线的整类退役，原 try/catch 降级站点随之消失）；
+     * DataSourceSelector 预热预算化的 ExecutionException 拆包为 fatal 透传（非 Throwable 站点，
+     * 不入本口径，已登记 [fatalPassthroughGuardedFiles] Selector 1→2）。715 个 .java 文件实测 763。
      */
-    private val fatalCatchSiteTotalBaseline = 777
+    private val fatalCatchSiteTotalBaseline = 763
 
     /**
      * 原生执行链里「解包了 `InvocationTargetException` 但未对解包结果判 fatal」的站点数基线
