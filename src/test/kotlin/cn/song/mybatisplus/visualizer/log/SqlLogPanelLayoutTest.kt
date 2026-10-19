@@ -714,21 +714,36 @@ class SqlLogPanelLayoutTest : BasePlatformTestCase() {
     @Test
     fun test增强暂停动作在方案B下始终不可见() {
         val panel = SqlLogPanel(project, manager)
-        val oldEnabled = PluginSettings.getInstance().state.enhancedCaptureEnabled
+        val state = PluginSettings.getInstance().state
+        val oldEnabled = state.enhancedCaptureEnabled
+        val am = cn.song.mybatisplus.visualizer.log.agent.AgentManager.getInstance(project)
+        val oldPaused = am.userPaused
         try {
-            PluginSettings.getInstance().state.enhancedCaptureEnabled = true
-            val event = AnActionEvent.createFromAnAction(
-                panel.agentPauseAction, null, ActionPlaces.TOOLBAR, DataContext.EMPTY_CONTEXT,
-            )
-            panel.agentPauseAction.update(event)
-            assertFalse("方案 B：增强开启时也不得显示暂停按钮", event.presentation.isVisible)
-            assertFalse("不可见时同时应不可用", event.presentation.isEnabled)
+            for (enabled in listOf(true, false)) {
+                for (paused in listOf(true, false)) {
+                    state.enhancedCaptureEnabled = enabled
+                    am.setUserPaused(paused)
+                    val event = AnActionEvent.createFromAnAction(
+                        panel.agentPauseAction, null, ActionPlaces.TOOLBAR, DataContext.EMPTY_CONTEXT,
+                    )
+                    panel.agentPauseAction.update(event)
+                    assertFalse(
+                        "方案 B：enabled=$enabled paused=$paused 时都不得显示暂停按钮",
+                        event.presentation.isVisible,
+                    )
+                    assertFalse(
+                        "方案 B：enabled=$enabled paused=$paused 时都不得可用",
+                        event.presentation.isEnabled,
+                    )
+                }
+            }
             assertTrue(
                 "动作对象仍应留在工具栏组内（能力代码保留，恢复方案 A 时复用）",
                 panel.toolbarGroup.childActionsOrStubs.contains(panel.agentPauseAction),
             )
         } finally {
-            PluginSettings.getInstance().state.enhancedCaptureEnabled = oldEnabled
+            state.enhancedCaptureEnabled = oldEnabled
+            am.setUserPaused(oldPaused)
             panel.dispose()
         }
     }

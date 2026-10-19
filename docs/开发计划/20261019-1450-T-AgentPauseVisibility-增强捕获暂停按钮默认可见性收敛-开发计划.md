@@ -2,7 +2,7 @@
 
 - 立项时间：2026-10-19 14:50
 - 基线：`dev` `9ec129b3`（T-ToolbarIconSemantics 已合入；本计划建立在其与 T-EnhancedCaptureDefaultOn `5b4fb4e0` 之上）
-- 状态：已实施（2026-10-19，用户拍板方案 B——临时全隐藏）。`AgentPauseAction.update` 恒置不可见/不可用，动作对象保留在工具栏组内；定向 4 类 **29/0/0/0**。真机验收由用户执行；未跑全量门禁、未提交。
+- 状态：已实施（2026-10-19，用户拍板方案 B——临时全隐藏；提交 `8b797098`）。`AgentPauseAction.update` 恒置不可见/不可用，动作对象保留在工具栏组内；定向 4 类 **29/0/0/0**。补测后 `testFast` **4100/0/0/6**、`SqlLogPanelLayoutTest` **19/0/0**。复盘见 `docs/经验总结/20261019-2004-守卫类测试分桶遗漏与暂停按钮可见性补测-经验总结.md`。真机验收由用户执行；未跑全量门禁、未推送。
 - 编号：不预占 O/R/D/V，实施前按台账登记。
 - 关联：T-EnhancedCaptureDefaultOn（`5b4fb4e0`）、T-ToolbarIconSemantics（`9ec129b3`）、R53 双通道状态栏、`docs/设计规范-弹窗克制红线.md`。
 
@@ -113,7 +113,7 @@ e.presentation.isEnabled = false
 3. 总开关开/关、暂停态：暂停按钮均不显示；暂停能力暂不可达（`userPaused` 只存内存，重启 IDE 复位）。
 4. 窄宽工具栏：动作组仍含隐藏的暂停动作，平台按可见集合折叠，不出现自建「更多」。
 
-测试读数记录：`SqlLogPanelLayoutTest` / `HelpDialogTest` / `HelpUiTest` / `ToolbarIconSemanticsTest` 定向 4 类 **29/0/0/0**；真机结论由用户给出。
+测试读数记录：`SqlLogPanelLayoutTest` / `HelpDialogTest` / `HelpUiTest` / `ToolbarIconSemanticsTest` 定向 4 类 **29/0/0/0**；补测后 `testFast` **4100/0/0/6**（含两处守卫自检）、`SqlLogPanelLayoutTest` **19/0/0**（暂停按钮四状态矩阵）；真机结论由用户给出。
 
 ## 八、决策点
 
