@@ -134,6 +134,12 @@ internal fun SqlPreviewPanel.showRollbackSql() {
     /** T-PreviewSideQuery P1 测试缝：headless 无原生控制台绑定；生产为 null 走真链。 */
     internal var dmlImpactTargetForTest: (() -> Any?)? = null
 
+    /** T-PreviewSideQuery P1 测试缝：数据源选择器绑定调用（只绑定不执行）。 */
+    internal var dmlImpactPromptForTest: ((Project, String, (String) -> Unit) -> Unit)? = null
+
+    /** T-PreviewSideQuery P1 测试缝：绑定等待（生产走 awaitDataSourceBoundThen）。 */
+    internal var dmlImpactAwaitBindForTest: ((Project, Int, () -> Unit, () -> Unit) -> Unit)? = null
+
     /** T-PreviewSideQuery P2 测试缝：headless 无原生控制台绑定；生产为 null 走真链。 */
     internal var explainTargetForTest: (() -> Any?)? = null
 
@@ -151,7 +157,7 @@ internal fun SqlPreviewPanel.showRollbackSql() {
      * 查询**（[PreviewSideQuery]）对当前绑定数据源执行——不进入共享控制台、不替换预览编辑器。
      * 不适用形态（JOIN/多表/无 WHERE/多语句）走轻通知如实说明原因，不执行。
      */
-    internal fun SqlPreviewPanel.estimateDmlImpact() {
+    internal fun SqlPreviewPanel.estimateDmlImpact(allowDataSourcePrompt: Boolean = true) {
         val proj = project ?: return
         val sql = currentEditorSql() ?: return
         val dialect = current?.effectiveDialect ?: MySqlDialect
@@ -192,11 +198,15 @@ internal fun SqlPreviewPanel.showRollbackSql() {
                     MpSqlVisualizerBundle.message("dml.impact.probe.title"),
                     probeBody,
                 )
-                val target = dmlImpactTargetForTest?.invoke() ?: runCatching {
+                val target = if (dmlImpactTargetForTest != null) dmlImpactTargetForTest!!.invoke() else runCatching {
                     cn.song.mybatisplus.visualizer.execute.DataSourceSelector.boundConsoleDataSource()
                 }.getOrNull()
                 if (target == null) {
-                    showDmlImpactResult(MpSqlVisualizerBundle.message("dml.impact.noDataSource"), true)
+                    if (allowDataSourcePrompt) {
+                        promptDataSourceThenRetryImpact(proj, sql)
+                    } else {
+                        showDmlImpactResult(MpSqlVisualizerBundle.message("dml.impact.noDataSource"), true)
+                    }
                     return
                 }
                 showDmlImpactResult(MpSqlVisualizerBundle.message("dml.impact.running"), false)
@@ -229,6 +239,44 @@ internal fun SqlPreviewPanel.showRollbackSql() {
                 }
             }
         }
+    }
+
+    /**
+     * T-PreviewSideQuery P1：无绑定数据源时复用既有数据源选择器（只绑定不执行），
+     * 绑定落地后重试一次预估；取消/超时只就地提示，不再二次弹选择器。
+     */
+    internal fun SqlPreviewPanel.promptDataSourceThenRetryImpact(proj: Project, previewSql: String) {
+        showDmlImpactResult(MpSqlVisualizerBundle.message("dml.impact.binding"), false)
+        val generation = explainStructuredGeneration
+        val errorShown = java.util.concurrent.atomic.AtomicBoolean(false)
+        if (cn.song.mybatisplus.visualizer.execute.ExplainFallbackGuidance.shouldPromptForDataSource(
+                cn.song.mybatisplus.visualizer.execute.DataSourceSelector.isPrepareInFlight(),
+            )
+        ) {
+            // executeAfterPrepare=false：只准备/绑定，不提交任何语句（DML/DDL 零自动执行）。
+            val prompt = dmlImpactPromptForTest ?: { project: Project, sql: String, onError: (String) -> Unit ->
+                cn.song.mybatisplus.visualizer.execute.DataSourceSelector.prepareConsole(
+                    project, sql, onError = onError,
+                )
+            }
+            prompt(proj, previewSql) { message ->
+                errorShown.set(true)
+                showDmlImpactResult(message, true)
+            }
+        }
+        val await = dmlImpactAwaitBindForTest ?: { project: Project, gen: Int, onBound: () -> Unit, onGiveUp: () -> Unit ->
+            awaitDataSourceBoundThen(project, gen, onBound, onGiveUp)
+        }
+        await(
+            proj,
+            generation,
+            { estimateDmlImpact(allowDataSourcePrompt = false) },
+            {
+                if (!errorShown.get()) {
+                    showDmlImpactResult(MpSqlVisualizerBundle.message("dml.impact.noDataSource"), true)
+                }
+            },
+        )
     }
 
     /** R42：影响面预演的轻通知（非模态；单测模式不弹）。 */
@@ -1397,6 +1445,32 @@ internal fun SqlPreviewPanel.awaitDataSourceBoundThenRetry(
     errorShown: java.util.concurrent.atomic.AtomicBoolean,
     generation: Int,
 ) {
+    awaitDataSourceBoundThen(
+        proj,
+        generation,
+        onBound = {
+            submitExplainOrStructured(
+                proj, dialect, explainSql, dialectGateRequest, allowDataSourcePrompt = false,
+            )
+        },
+        onGiveUp = {
+            // 选择失败（无数据源/驱动错误）已在面板行内显示既有错误文案；只有「用户取消」
+            // 这类没有错误文案的收口才补一条说明——两条提示不重复。
+            if (!errorShown.get()) notifyExplainDataSourceNotBound(proj)
+        },
+    )
+}
+
+/**
+ * 通用数据源绑定等待（T-UI030 同款）：RETRY → [onBound]；GIVE_UP → [onGiveUp]；
+ * 预览代际变化/面板销毁 → 静默停表。调用方负责在 [onBound] 里禁止再次弹选择器。
+ */
+internal fun SqlPreviewPanel.awaitDataSourceBoundThen(
+    proj: Project,
+    generation: Int,
+    onBound: () -> Unit,
+    onGiveUp: () -> Unit,
+) {
     var ticks = 0
     val timer = javax.swing.Timer(EXPLAIN_DS_BIND_POLL_MS) { event ->
         ticks++
@@ -1404,7 +1478,7 @@ internal fun SqlPreviewPanel.awaitDataSourceBoundThenRetry(
             (event.source as javax.swing.Timer).stop()
             return@Timer
         }
-        // 预览已切换/又点了一次执行计划：这次等待与重试都已过期，静默停表即可。
+        // 预览已切换/又点了一次相关动作：这次等待与重试都已过期，静默停表即可。
         if (generation != explainStructuredGeneration) {
             (event.source as javax.swing.Timer).stop()
             return@Timer
@@ -1420,15 +1494,11 @@ internal fun SqlPreviewPanel.awaitDataSourceBoundThenRetry(
         )) {
             cn.song.mybatisplus.visualizer.execute.ExplainFallbackGuidance.DataSourceBindTick.RETRY -> {
                 (event.source as javax.swing.Timer).stop()
-                submitExplainOrStructured(
-                    proj, dialect, explainSql, dialectGateRequest, allowDataSourcePrompt = false,
-                )
+                onBound()
             }
             cn.song.mybatisplus.visualizer.execute.ExplainFallbackGuidance.DataSourceBindTick.GIVE_UP -> {
                 (event.source as javax.swing.Timer).stop()
-                // 选择失败（无数据源/驱动错误）已在面板行内显示既有错误文案；只有「用户取消」
-                // 这类没有错误文案的收口才补一条说明——两条提示不重复。
-                if (!errorShown.get()) notifyExplainDataSourceNotBound(proj)
+                onGiveUp()
             }
             cn.song.mybatisplus.visualizer.execute.ExplainFallbackGuidance.DataSourceBindTick.WAIT -> Unit
         }

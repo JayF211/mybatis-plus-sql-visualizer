@@ -275,7 +275,7 @@ class ExecutionDialectGateTest {
         assertEquals(1, logBody.countOccurrences("dialectGateRequest = dialectGateRequest"))
         val impactBody = sourceSlice(
             preview,
-            "internal fun SqlPreviewPanel.estimateDmlImpact()",
+            "internal fun SqlPreviewPanel.estimateDmlImpact(",
             "/** R42：影响面预演的轻通知",
         )
         assertEquals(0, impactBody.countOccurrences("SqlExecutor.execute("))

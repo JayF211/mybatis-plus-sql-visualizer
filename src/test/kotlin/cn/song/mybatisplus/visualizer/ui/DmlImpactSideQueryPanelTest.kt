@@ -73,6 +73,56 @@ class DmlImpactSideQueryPanelTest : BasePlatformTestCase() {
         }
     }
 
+    fun testNoBoundDataSourcePromptsSelectorAndRetries() {
+        val sql = "UPDATE t_order SET status = 1 WHERE id = 1111"
+        val p = panel(sql)
+        var target: Any? = null
+        var promptedSql: String? = null
+        dmlImpactTargetForTest = { target }
+        dmlImpactPromptForTest = { _, s, _ -> promptedSql = s }
+        dmlImpactAwaitBindForTest = { _, _, onBound, _ ->
+            target = ImpactTarget()
+            onBound()
+        }
+        PreviewSideQuery.runnerForTest = { _, _, _, scalar, cb ->
+            assertTrue(scalar)
+            cb(PreviewSideQuery.Result.Scalar(3, McpExplainFormatter.RawResult(listOf("COUNT(*)"), listOf(listOf("3")))))
+        }
+        try {
+            p.estimateDmlImpact()
+            assertEquals("绑定应使用当前预览 SQL", sql, promptedSql)
+            assertEquals(sql, p.currentEditorSql())
+            assertTrue("绑定后应重试并显示行数：${p.impactResultLabel!!.text}", p.impactResultLabel!!.text.contains("3"))
+        } finally {
+            dmlImpactTargetForTest = null
+            dmlImpactPromptForTest = null
+            dmlImpactAwaitBindForTest = null
+            PreviewSideQuery.runnerForTest = null
+            p.clear()
+        }
+    }
+
+    fun testNoBoundDataSourceGiveUpShowsInlineReason() {
+        val sql = "UPDATE t_order SET status = 1 WHERE id = 1111"
+        val p = panel(sql)
+        var target: Any? = null
+        dmlImpactTargetForTest = { target }
+        dmlImpactPromptForTest = { _, _, _ -> }
+        dmlImpactAwaitBindForTest = { _, _, _, onGiveUp -> onGiveUp() }
+        try {
+            p.estimateDmlImpact()
+            val label = p.impactResultLabel!!
+            assertTrue("取消绑定后应就地提示：${label.text}", label.text.contains("数据源"))
+            assertEquals(com.intellij.ui.JBColor.RED, label.foreground)
+            assertEquals(sql, p.currentEditorSql())
+        } finally {
+            dmlImpactTargetForTest = null
+            dmlImpactPromptForTest = null
+            dmlImpactAwaitBindForTest = null
+            p.clear()
+        }
+    }
+
     fun testEstimateFailureShowsInlineErrorWithoutTouchingEditor() {
         val sql = "UPDATE t_order SET status = 1 WHERE id = 1111"
         val p = panel(sql)
