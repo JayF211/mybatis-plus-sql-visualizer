@@ -580,6 +580,12 @@ class AgentManager(private val project: Project) : Disposable {
             return
         }
         val candidatePid = resolvePid(processHandler)
+        // T-PremainReattach S2/P4：暂停通道与 attach 端口命中必须先于目标探测——通道/端口本身
+        // 已证明该 pid 曾是本插件目标，不能因本轮 target inspector 判为 NON_JAVA/HELPER 或
+        // 启动文件读失败而丢掉「重开增强即恢复」的入口。
+        if (candidatePid != null && (resumePausedPremainChannelIfHit(candidatePid) || resumeAttachPortIfHit(candidatePid))) {
+            return
+        }
         if (candidatePid != null && !permitsAttachTarget(candidatePid, processHandler, readFiles = false)) return
         if (!isEnhancedConfirmed()) {
             if (!isMainConfigLaunch) {
@@ -845,6 +851,11 @@ class AgentManager(private val project: Project) : Disposable {
             LOG.warn("onProcessAppeared: resolvePid 失败（handler=${processHandler?.javaClass?.name}）——跳过挂载")
             return
         }
+        // T-PremainReattach S2/P4：暂停通道与 attach 端口命中必须先于目标探测——通道/端口本身
+        // 已证明该 pid 曾是本插件目标，不能因本轮 target inspector 判为 NON_JAVA/HELPER 或需读
+        // 启动文件而丢掉恢复入口（T-AttachTarget 接入后曾把 resume 挡在探测之后，重开增强失效）。
+        if (resumePausedPremainChannelIfHit(pid)) return
+        if (resumeAttachPortIfHit(pid)) return
         val target = attachTargetInspector(pid, processHandler, false)
         if (target == AgentAttachTarget.Decision.HELPER || target == AgentAttachTarget.Decision.NON_JAVA) return
         if (target == AgentAttachTarget.Decision.NEEDS_FILES) {

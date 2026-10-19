@@ -343,6 +343,191 @@ class SqlPreviewPanelParamSchemesTest : BasePlatformTestCase() {
         )
     }
 
+    /** 走面板接线的管理对话框另存，而不是直接调缓存 API 绕过 UI 查重。 */
+    fun testUI017_dialogSaveAsAcrossMethodsKeepsForeachAndDefaultSnapshotsIndependent() {
+        val p = openPanel()
+        val cache = p.paramHistoryCacheForTest()
+        val foreachKey = p.historyCacheKeyForTest()!!
+        p.setForEachValuesForTest("statusList", listOf("71", "72", "73"))
+        p.applyXmlForEachValuesForTest("statusList", "71,72,73")
+        p.flushHistoryForTest()
+        val foreachSnapshot = p.buildHistorySnapshotForTest()
+        p.createSchemeManagerDialog(project).let { d ->
+            try {
+                assertTrue(d.saveAsForTest("UI-Shared"))
+            } finally {
+                d.dispose()
+            }
+        }
+        assertEquals("UI-Shared", p.schemeComboForTest()!!.selectedItem)
+
+        // 编辑命名预设时，foreach 新值只能写入默认工作区，命名快照必须保持原值。
+        p.setForEachValuesForTest("statusList", listOf("81", "82"))
+        p.applyXmlForEachValuesForTest("statusList", "81,82")
+        p.flushHistoryForTest()
+        assertEquals(foreachSnapshot, cache.recallFromScheme("UI-Shared", foreachKey))
+        p.switchSchemeForTest(ParamHistoryCache.DEFAULT_SCHEME)
+        assertEquals("81,82", p.forEachValueFieldTextForTest("statusList"))
+        val foreachDefault = cache.recall(foreachKey)!!
+
+        p.showResult(buildPlainParamsResult(listOf("id"), "SELECT * FROM t_order WHERE id = ?"))
+        com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+        val idKey = p.historyCacheKeyForTest()!!
+        assertFalse(foreachKey == idKey)
+        assertEquals("新方法只能看到默认方案", 1, p.schemeComboForTest()!!.itemCount)
+        p.paramFieldForSourceForTest("id")!!.text = "91"
+        p.flushHistoryForTest()
+        val idSnapshot = p.buildHistorySnapshotForTest()
+        p.createSchemeManagerDialog(project).let { d ->
+            try {
+                assertEquals(1, d.schemeCountForTest())
+                assertTrue("其他方法已有同名时，真实保存入口仍应成功", d.saveAsForTest("UI-Shared"))
+                assertEquals("UI-Shared", p.schemeComboForTest()!!.selectedItem)
+                assertEquals("91", p.paramFieldForSourceForTest("id")?.text)
+                p.paramFieldForSourceForTest("id")!!.text = "92"
+                p.flushHistoryForTest()
+                assertFalse("同一方法重复另存不能覆盖命名快照", d.saveAsForTest("UI-Shared"))
+            } finally {
+                d.dispose()
+            }
+        }
+        assertEquals(idSnapshot, cache.recallFromScheme("UI-Shared", idKey))
+        assertEquals(foreachSnapshot, cache.recallFromScheme("UI-Shared", foreachKey))
+        p.switchSchemeForTest(ParamHistoryCache.DEFAULT_SCHEME)
+        assertEquals("92", p.paramFieldForSourceForTest("id")?.text)
+        p.switchSchemeForTest("UI-Shared")
+        assertEquals("91", p.paramFieldForSourceForTest("id")?.text)
+
+        // 返回 foreach 方法：激活态、工作区及命名快照都必须仍属于该方法。
+        p.showResult(buildProbePreviewResult())
+        com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+        assertEquals(foreachKey, p.historyCacheKeyForTest())
+        assertEquals(ParamHistoryCache.DEFAULT_SCHEME, p.schemeComboForTest()!!.selectedItem)
+        assertEquals(foreachDefault, cache.recall(foreachKey))
+        assertEquals("81,82", p.forEachValueFieldTextForTest("statusList"))
+        p.switchSchemeForTest("UI-Shared")
+        assertEquals(listOf("71", "72", "73"), p.forEachValuesForTest()["statusList"])
+        assertEquals("71,72,73", p.forEachValueFieldTextForTest("statusList"))
+        assertEquals(foreachSnapshot, cache.recallFromScheme("UI-Shared", foreachKey))
+        assertEquals(idSnapshot, cache.recallFromScheme("UI-Shared", idKey))
+    }
+
+    fun testUI019_reopenedForeachInitializesDefaultNamedAndNullSnapshots() {
+        val p = openPanel()
+        val cache = p.paramHistoryCacheForTest()
+        val key = p.historyCacheKeyForTest()!!
+        for (scheme in listOf(ParamHistoryCache.DEFAULT_SCHEME, "Saved-Values")) {
+            for (isNull in listOf(false, true)) {
+                val snapshot = mapOf(
+                    "__fev__:statusList" to "71,72,73",
+                    "__fnull__:statusList" to if (isNull) "1" else "0",
+                )
+                assertTrue(cache.saveForScheme(scheme, key, snapshot))
+                cache.switchScheme(scheme, key)
+                // 真正重开预览，不通过额外切换方案修补字段显示。
+                p.showResult(buildProbePreviewResult())
+                com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+                assertEquals(scheme, p.schemeComboForTest()!!.selectedItem)
+                assertEquals("71,72,73", p.forEachValueFieldTextForTest("statusList"))
+                assertEquals(listOf("71", "72", "73"), p.forEachValuesForTest()["statusList"])
+                assertEquals(isNull, "statusList" in p.forEachNullsForTest())
+                assertEquals(isNull, p.forEachNullSelectedForTest("statusList"))
+                assertEquals("初始化不得覆盖快照或反向污染权威值", snapshot, cache.recall(key))
+            }
+        }
+    }
+
+    fun testUI019_reopenedForeachWithoutValuesDoesNotInheritPreviousText() {
+        val p = openPanel()
+        val cache = p.paramHistoryCacheForTest()
+        val key = p.historyCacheKeyForTest()!!
+        p.setForEachValuesForTest("statusList", listOf("71", "72", "73"))
+        p.applyXmlForEachValuesForTest("statusList", "71,72,73")
+        p.flushHistoryForTest()
+        assertEquals("71,72,73", p.forEachValueFieldTextForTest("statusList"))
+        val nullOnly = mapOf("__fnull__:statusList" to "1")
+        assertTrue(cache.saveForScheme(ParamHistoryCache.DEFAULT_SCHEME, key, nullOnly))
+        p.showResult(buildProbePreviewResult())
+        com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+        assertEquals("", p.forEachValueFieldTextForTest("statusList"))
+        assertTrue(p.forEachValuesForTest()["statusList"].isNullOrEmpty())
+        assertEquals(true, p.forEachNullSelectedForTest("statusList"))
+        assertEquals(nullOnly, cache.recall(key))
+    }
+
+    private fun assertFirstForeachRecallSql(scheme: String, values: List<String>, isNull: Boolean = false) {
+        val parsed = XmlMapperParser().parse("""
+            <mapper namespace="com.example.UserMapper">
+              <select id="selectByAnnotationForeach">
+                SELECT * FROM t_user
+                <where>
+                  <if test="ids != null and ids.size() > 0">
+                    id IN <foreach collection="ids" item="id" open="(" separator="," close=")" nullable="true">#{id}</foreach>
+                  </if>
+                </where>
+              </select>
+            </mapper>
+        """.trimIndent())
+        val model = XmlPreviewModel.from(
+            parsed.statements.single(), parsed.errors,
+            paramTypes = mapOf("ids" to ParamTypeInfo(ParamKind.COLLECTION, elementKind = ParamKind.NUMBER)),
+        )
+        val rendered = model.renderSql()
+        val result = PreviewResult(
+            sql = rendered.sql,
+            compactSql = rendered.sql.replace(Regex("\\s+"), " ").trim(),
+            unresolvedParams = rendered.mappings.map { it.property },
+            paramTable = ParameterReplacer.buildParamTable(rendered.mappings.map { it.property }),
+            wrapperType = null, tableName = null, xmlModel = model,
+        )
+        val p = SqlPreviewPanel(project)
+        panel = p
+        Disposer.register(testRootDisposable, p)
+        val cache = p.paramHistoryCacheForTest()
+        val key = cache.computeKey(null, result.sql)!!
+        val snapshot = mapOf(
+            "__fev__:ids" to values.joinToString(","),
+            "__fnull__:ids" to if (isNull) "1" else "0",
+        )
+        assertTrue(cache.saveForScheme(scheme, key, snapshot))
+        cache.switchScheme(scheme, key)
+
+        // 首次打开：没有旧字段监听，不输入文本、不切换预设、不手动追加渲染。
+        p.showResult(result)
+        com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+        assertEquals(scheme, p.schemeComboForTest()!!.selectedItem)
+        assertEquals(values.joinToString(","), p.forEachValueFieldTextForTest("ids"))
+        assertEquals(isNull, p.forEachNullSelectedForTest("ids"))
+        val sql = p.lastRenderedSqlForTest()!!
+        val inClause = Regex("(?i)\\bIN\\s*\\(([^)]*)\\)").find(sql)
+        if (isNull) {
+            assertNull("null 集合不能残留 IN 展开项：$sql", inClause)
+            assertFalse("null 集合不能残留参数占位符：$sql", sql.contains("?"))
+        } else {
+            assertNotNull("应生成 IN 集合：$sql", inClause)
+            val actualItems = inClause!!.groupValues[1].split(",").map { it.trim() }
+            val expected = values.ifEmpty { List(XmlPreviewModel.DEFAULT_FOREACH_SIZE) { "?" } }
+            assertEquals("首次召回必须按权威集合长度生成 SQL：$sql", expected.size, actualItems.size)
+            assertEquals("SQL 每项须与快照一致，不能仅检查输入框", expected, actualItems)
+        }
+        assertEquals("首次渲染不得反写命名或默认快照", snapshot, cache.recall(key))
+    }
+
+    fun testUI021_firstNamedRecallRendersAllThreeIds() =
+        assertFirstForeachRecallSql("UI-Shared", listOf("71", "72", "73"))
+
+    fun testUI021_firstDefaultRecallRendersSingleId() =
+        assertFirstForeachRecallSql(ParamHistoryCache.DEFAULT_SCHEME, listOf("91"))
+
+    fun testUI021_firstDefaultRecallRendersFourIds() =
+        assertFirstForeachRecallSql(ParamHistoryCache.DEFAULT_SCHEME, listOf("71", "72", "73", "74"))
+
+    fun testUI021_firstNamedNullRecallSuppressesAllItems() =
+        assertFirstForeachRecallSql("UI-Shared", listOf("71", "72", "73"), isNull = true)
+
+    fun testUI021_firstRecallWithoutValuesKeepsDefaultExpansion() =
+        assertFirstForeachRecallSql(ParamHistoryCache.DEFAULT_SCHEME, emptyList())
+
     // ==== O-88：预设行折叠件（平台标准 HideableTitledPanel） ====
 
     /** O-88 ①：缺省折叠——折叠件在场、isExpanded=false、锚点方案行在内容区但不可见。

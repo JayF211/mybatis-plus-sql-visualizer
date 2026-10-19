@@ -226,7 +226,10 @@ internal fun SqlPreviewPanel.showResult(result: PreviewResult) {
     // F-45：更新列信息标签页（仅 <pages> 预览时显示）
     updateColumnInfoTab(result)
     // O-4：缓存当前 SQL 供下次 Compare
-    previousSql = editor?.document?.text
+    // UI-023：首渲染链上 editor 可能尚未创建（控制台/预热抢占），只读 editor 会恒 null——
+    // 「差异对比」于是永远报「无上次预览可对比」。editor 缺失时用本次预览原文兜底（同一语义：
+    // 缓存本次 SQL 供下次对比）。
+    previousSql = editor?.document?.text ?: result.sql.takeIf { it.isNotBlank() }
     // M36.5：默认发起原生控制台准备（Ultimate 即刻展示原生控制台；Community 静默回退）
     prepareDefaultConsole()
 }

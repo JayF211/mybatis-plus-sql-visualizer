@@ -256,12 +256,14 @@ class ParamSchemeManagerDialog(
             statusLabel.text = MpSqlVisualizerBundle.message("panel.scheme.dialog.blank")
             return false
         }
-        if (name == ParamHistoryCache.DEFAULT_SCHEME || cache.hasScheme(name)) {
-            statusLabel.text = MpSqlVisualizerBundle.message("panel.scheme.dialog.duplicate")
-            return false
-        }
         val snapshot = snapshotProvider() ?: run {
             statusLabel.text = MpSqlVisualizerBundle.message("panel.scheme.dialog.noSnapshot")
+            return false
+        }
+        // 名单按方法/SQL 键隔离，另存查重也必须用同一键；其他方法可复用已有名称。
+        // 仍保护当前方法已保存的命名快照，不能通过重复另存覆盖。
+        if (cache.recallFromScheme(name, snapshot.first) != null) {
+            statusLabel.text = MpSqlVisualizerBundle.message("panel.scheme.dialog.duplicate")
             return false
         }
         val result = cache.saveAsScheme(name, snapshot.first, snapshot.second)

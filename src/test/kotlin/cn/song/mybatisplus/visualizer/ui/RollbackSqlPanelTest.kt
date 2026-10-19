@@ -1,5 +1,12 @@
 package cn.song.mybatisplus.visualizer.ui
 
+import cn.song.mybatisplus.visualizer.execute.DataSourceSelector
+import cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate
+import cn.song.mybatisplus.visualizer.execute.ExecutionSubmission
+import cn.song.mybatisplus.visualizer.execute.SqlExecutor
+import com.intellij.openapi.ui.Messages
+import com.intellij.openapi.ui.TestDialog
+import com.intellij.openapi.ui.TestDialogManager
 import cn.song.mybatisplus.visualizer.sql.SqlServerDialect
 import cn.song.mybatisplus.visualizer.sql.rollback.RollbackSnapshotStore
 import cn.song.mybatisplus.visualizer.sql.rollback.RollbackSqlGenerator
@@ -132,6 +139,66 @@ class RollbackSqlPanelTest : BasePlatformTestCase() {
         panel.executeAdhocSql("   ")
         assertEquals(0, store().size())
         panel.dispose()
+    }
+
+    fun testUI020AdhocNoReturnsCancelledWithoutRegisteringOrLoading() {
+        val panel = newPanel()
+        val outcomes = mutableListOf<ExecutionSubmission>()
+        try {
+            TestDialogManager.setTestDialog(TestDialog { Messages.NO }, testRootDisposable)
+            panel.executeAdhocSql("DELETE FROM user WHERE id = 71", onSubmission = { outcomes += it })
+            assertEquals(listOf(ExecutionSubmission.CANCELLED), outcomes)
+            assertEquals(0, store().size())
+            assertEquals("EMPTY", panel.resultPanelForTest().stateForTest())
+        } finally { panel.dispose() }
+    }
+
+    fun testUI020NonPreparedFailureAndBlankEachReportBlockedOnce() {
+        assertFalse(cn.song.mybatisplus.visualizer.execute.ExecuteSqlSupport.isAvailable())
+        val panel = newPanel()
+        val outcomes = mutableListOf<ExecutionSubmission>()
+        try {
+            panel.executeAdhocSql("   ", onSubmission = { outcomes += it })
+            assertEquals(listOf(ExecutionSubmission.BLOCKED), outcomes)
+            outcomes.clear()
+            panel.executeAdhocSql("DELETE FROM user WHERE id = 71", dmlConfirmed = true, onSubmission = { outcomes += it })
+            assertEquals(listOf(ExecutionSubmission.BLOCKED), outcomes)
+        } finally { panel.dispose() }
+    }
+
+    fun testUI020UnpreparedFalseDoesNotSettleReceiptBeforeFullChainFallback() {
+        DataSourceSelector.clearPrepared()
+        val outcomes = mutableListOf<ExecutionSubmission>()
+        assertFalse(DataSourceSelector.executePrepared(project, onSubmission = { outcomes += it }))
+        assertTrue(outcomes.isEmpty())
+        assertFalse(SqlExecutor.executePrepared(project, onSubmission = { outcomes += it }))
+        assertTrue(outcomes.isEmpty())
+    }
+
+    fun testUI020PreparedTrueCanMeanBlockedOrCancelledNotSubmitted() {
+        val editor = myFixture.configureByText("rollback.sql", "SELECT 1").let { myFixture.editor }
+        for (query in listOf(false, true)) {
+            val outcomes = mutableListOf<ExecutionSubmission>()
+            DataSourceSelector.preparedConsole = Any()
+            DataSourceSelector.preparedEditor = editor
+            DataSourceSelector.preparedScriptModel = Any()
+            DataSourceSelector.preparedExecOption = Any()
+            DataSourceSelector.unknownTargetQueryConfirmationForTest = { false }
+            try {
+                val handled = DataSourceSelector.executePrepared(
+                    project,
+                    dialectGateRequest = ExecutionDialectGate.rawSqlRequest(
+                        if (query) "SELECT 1" else "DELETE FROM user WHERE id = 71",
+                    ),
+                    onSubmission = { outcomes += it },
+                )
+                assertTrue("保留Boolean旧语义：就绪链已处理，不意味着提交", handled)
+                assertEquals(listOf(if (query) ExecutionSubmission.CANCELLED else ExecutionSubmission.BLOCKED), outcomes)
+            } finally {
+                DataSourceSelector.unknownTargetQueryConfirmationForTest = null
+                DataSourceSelector.clearPrepared()
+            }
+        }
     }
 
     // ======================== O-52：identity 包装链（条目 → 弹窗 → 生成器） ========================

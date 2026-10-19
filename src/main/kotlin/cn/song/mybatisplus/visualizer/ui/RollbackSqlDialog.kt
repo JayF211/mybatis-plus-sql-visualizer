@@ -1,5 +1,9 @@
 package cn.song.mybatisplus.visualizer.ui
 
+import cn.song.mybatisplus.visualizer.execute.ExecutionSubmission
+import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ModalityState
+import java.util.concurrent.atomic.AtomicBoolean
 import cn.song.mybatisplus.visualizer.sql.rollback.RollbackSqlGenerator
 import cn.song.mybatisplus.visualizer.sql.rollback.RollbackSnapshotStore
 import cn.song.mybatisplus.visualizer.ui.highlight.DatabaseSchemaResolver
@@ -26,6 +30,8 @@ import java.awt.datatransfer.StringSelection
 import javax.swing.Action
 import javax.swing.JButton
 import javax.swing.JComponent
+import javax.swing.event.DocumentEvent
+import javax.swing.event.DocumentListener
 
 /**
  * 回滚 SQL 视图（T-RollbackSql P1-F3 / P2-F5，dbx 精华融合）。
@@ -88,12 +94,22 @@ class RollbackSqlDialog(
     internal var currentResult: RollbackSqlGenerator.RollbackResult = result
         private set
 
+    /** 仅快照派生产物受输入编辑影响；原始 INSERT 等非快照回滚保持原有执行路径。 */
+    private var snapshotGenerationStarted = false
+
     init {
         title = MpSqlVisualizerBundle.message("rollback.dialog.title")
         setCancelButtonText(MpSqlVisualizerBundle.message("rollback.action.close"))
         init()
         assembleBanner()
         assembleSnapshotSection()
+        val inputListener = object : DocumentListener {
+            override fun insertUpdate(e: DocumentEvent) = snapshotInputChanged()
+            override fun removeUpdate(e: DocumentEvent) = snapshotInputChanged()
+            override fun changedUpdate(e: DocumentEvent) = snapshotInputChanged()
+        }
+        pasteArea.document.addDocumentListener(inputListener)
+        pkField.document.addDocumentListener(inputListener)
     }
 
     override fun createCenterPanel(): JComponent {
@@ -145,7 +161,7 @@ class RollbackSqlDialog(
         }
     }
 
-    private fun hasSnapshotWorkflow(): Boolean = currentResult.snapshotSelectSql != null && panel != null
+    private fun hasSnapshotWorkflow(): Boolean = result.snapshotSelectSql != null && panel != null
 
     private fun buildSnapshotBlock(): JComponent = JBPanel<JBPanel<*>>(BorderLayout()).apply {
         isOpaque = false
@@ -224,13 +240,28 @@ class RollbackSqlDialog(
     internal fun executeRollback() {
         val sql = currentResult.statements.joinToString("\n")
         if (sql.isBlank()) return
-        panel?.executeAdhocSql(sql, rollbackOfEntry = snapshotEntry)
-        // F6 留痕：回滚已提交执行——快照条目置终态 + 横幅更新（执行结果反馈走面板 resultPanel）
-        snapshotEntry?.let { entry ->
-            project?.getService(RollbackSnapshotStore::class.java)?.markRollbackExecuted(entry)
+        panel?.executeAdhocSql(sql, rollbackOfEntry = snapshotEntry, onSubmission = rollbackSubmissionReceipt())
+    }
+
+    /** 每次请求仅结算一次；真实提交后保留业务留痕，关闭弹窗仅抑制迟到的 UI 更新。 */
+    internal fun rollbackSubmissionReceipt(): (ExecutionSubmission) -> Unit {
+        val completed = AtomicBoolean(false)
+        val submittedResult = currentResult
+        val store = project?.getService(RollbackSnapshotStore::class.java)
+        return receipt@{ outcome ->
+            if (!completed.compareAndSet(false, true) || outcome != ExecutionSubmission.SUBMITTED) return@receipt
+            // SUBMITTED 来自底层 afterSubmitted，不代表数据库执行成功或事务已提交。
+            snapshotEntry?.let { store?.markRollbackExecuted(it) }
+            val updateBanner = {
+                if (!isDisposed && currentResult === submittedResult) {
+                    bannerLabel.text = MpSqlVisualizerBundle.message("rollback.banner.executed")
+                    bannerLabel.foreground = SUCCESS_COLOR
+                }
+            }
+            val app = ApplicationManager.getApplication()
+            if (app.isDispatchThread) updateBanner()
+            else app.invokeLater({ updateBanner() }, ModalityState.any())
         }
-        bannerLabel.text = MpSqlVisualizerBundle.message("rollback.banner.executed")
-        bannerLabel.foreground = SUCCESS_COLOR
     }
 
     /** 「复制」：回滚 SQL 入剪贴板。 */
@@ -247,9 +278,27 @@ class RollbackSqlDialog(
         panel?.executeAdhocSql(sql)
     }
 
+    private fun snapshotInputChanged() {
+        if (snapshotGenerationStarted) invalidateSnapshotResult()
+    }
+
+    /** 清空执行/复制共用的模型和编辑器，不能仅禁用按钮或退回可能可执行的原始结果。 */
+    private fun invalidateSnapshotResult() {
+        currentResult = result.copy(
+            rating = RollbackSqlGenerator.Rating.UNABLE,
+            statements = emptyList(),
+            countCheckSql = null,
+        )
+        refreshAfterPaste()
+    }
+
     /** 「生成回滚」：粘贴 TSV → 快照回填（按原语句类型分派）→ 刷新编辑器与横幅。 */
     internal fun generateFromPaste() {
-        val table = currentResult.targetTable ?: return
+        if (!hasSnapshotWorkflow()) return
+        snapshotGenerationStarted = true
+        // 每次尝试先撤销上次产物；解析失败、生成失败乃至异常都不得保留旧 SQL。
+        invalidateSnapshotResult()
+        val table = result.targetTable ?: return
         val parsed = RollbackSqlGenerator.parseSnapshotTsv(pasteArea.text ?: "")
         if (parsed == null) {
             warningLabel.text = "<html>${escapeHtml(MpSqlVisualizerBundle.message("rollback.snapshot.parseFailed"))}</html>"
@@ -268,8 +317,8 @@ class RollbackSqlDialog(
             rows = rows,
             mode = mode,
             primaryKeyColumns = pk,
-            changedColumns = currentResult.setColumns,
-            newValuesByColumn = currentResult.setValues,
+            changedColumns = result.setColumns,
+            newValuesByColumn = result.setValues,
             // O-52（D1=A）：identity 知识随快照条目留存，此处取回传给生成器——条目未持有
             // （旧条目/未传参的登记点）时保持 null/空 → 不包装，与改前逐字节相同
             dialect = snapshotEntry?.dialect,
@@ -284,7 +333,13 @@ class RollbackSqlDialog(
             warningLabel.text = warningsHtml(generated)
             return
         }
-        currentResult = generated
+        // 生成结果不携带原语句的快照模板/SET 元信息；保留它们以支持再次生成与快照查询。
+        currentResult = generated.copy(
+            whereText = result.whereText,
+            setColumns = result.setColumns,
+            setValues = result.setValues,
+            snapshotSelectSql = result.snapshotSelectSql,
+        )
         refreshAfterPaste()
     }
 

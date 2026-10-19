@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.ui
 
+import cn.song.mybatisplus.visualizer.execute.afterSubmitted
 import cn.song.mybatisplus.visualizer.sql.SqlServerDialect
 import cn.song.mybatisplus.visualizer.sql.rollback.RollbackSqlGenerator
 import cn.song.mybatisplus.visualizer.sql.rollback.RollbackSnapshotStore
@@ -9,6 +10,10 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import com.intellij.openapi.ide.CopyPasteManager
+import com.intellij.openapi.ui.Messages
+import com.intellij.openapi.ui.TestDialog
+import com.intellij.openapi.ui.TestDialogManager
+import javax.swing.text.AbstractDocument
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import java.awt.datatransfer.DataFlavor
@@ -127,6 +132,314 @@ class RollbackSqlDialogTest : BasePlatformTestCase() {
             assertTrue("快照回填执行动作应启用", dialog.executeActionForTest().isEnabled)
         } finally {
             dialog.doDispose()
+        }
+    }
+
+    // ======================== UI018：快照派生产物失效 ========================
+
+    private fun assertSnapshotUnavailable(dialog: RollbackSqlDialog) {
+        assertEquals(RollbackSqlGenerator.Rating.UNABLE, dialog.currentResult.rating)
+        assertTrue("执行入口共用的内存模型必须清空，不是只灰按钮", dialog.currentResult.statements.isEmpty())
+        assertEquals("编辑器及键盘复制源不得保留旧 SQL", "", dialog.sqlTextForTest())
+        assertEquals(MpSqlVisualizerBundle.message("rollback.banner.unable"), dialog.bannerTextForTest())
+        assertFalse(dialog.executeActionForTest().isEnabled)
+        assertFalse(dialog.copyActionForTest().isEnabled)
+        var confirmations = 0
+        TestDialogManager.setTestDialog(TestDialog {
+            confirmations++
+            Messages.NO // 即使摘修也绝不放行数据库执行。
+        }, testRootDisposable)
+        dialog.executeRollback() // 绕过禁用按钮，直接验证生产执行入口。
+        assertEquals("失效模型不得进入 DML 确认链", 0, confirmations)
+        assertFalse("直接调用复制入口也必须拒绝", dialog.copyRollback())
+    }
+
+    fun testUI018DeleteSnapshotEditInvalidatesBeforeGenerateAndRequiresFreshSuccess() {
+        val dialog = newDialog(RollbackSqlGenerator.generate("DELETE FROM user WHERE id = 71"), "DELETE")
+        try {
+            dialog.pasteAreaForTest().text = "id\n71"
+            dialog.pkFieldForTest().text = "id"
+            dialog.generateFromPaste()
+            assertEquals("INSERT INTO user (id) VALUES (71);", dialog.sqlTextForTest())
+            assertTrue(dialog.executeActionForTest().isEnabled)
+
+            dialog.pasteAreaForTest().text = "invalid_snapshot"
+            assertSnapshotUnavailable(dialog)
+            dialog.generateFromPaste()
+            assertSnapshotUnavailable(dialog)
+            assertTrue(dialog.warningsTextForTest().contains(MpSqlVisualizerBundle.message("rollback.snapshot.parseFailed")))
+
+            // 改回原输入也不复活缓存，必须再次成功生成。
+            dialog.pasteAreaForTest().text = "id\n71"
+            assertSnapshotUnavailable(dialog)
+            dialog.generateFromPaste()
+            assertEquals("INSERT INTO user (id) VALUES (71);", dialog.sqlTextForTest())
+            assertTrue(dialog.executeActionForTest().isEnabled)
+            assertTrue(dialog.copyActionForTest().isEnabled)
+            assertEquals("SELECT * FROM user WHERE id = 71;", dialog.currentResult.snapshotSelectSql)
+        } finally {
+            dialog.doDispose()
+        }
+    }
+
+    fun testUI018PrimaryKeyEditInvalidatesAndUpdateCanRegenerateWithOriginalMetadata() {
+        val original = unableUpdateResult()
+        val dialog = newDialog(original, "UPDATE")
+        try {
+            dialog.pasteAreaForTest().text = "id\tage\n1\t20"
+            dialog.pkFieldForTest().text = "id"
+            dialog.generateFromPaste()
+            assertEquals("UPDATE user SET age = 20 WHERE id = 1 AND age = 3;", dialog.sqlTextForTest())
+            dialog.pkFieldForTest().text = ""
+            assertSnapshotUnavailable(dialog)
+            dialog.pkFieldForTest().text = "id"
+            assertSnapshotUnavailable(dialog)
+            dialog.generateFromPaste()
+            assertEquals("UPDATE user SET age = 20 WHERE id = 1 AND age = 3;", dialog.sqlTextForTest())
+            dialog.pasteAreaForTest().text = "id\tage\n1\t19"
+            assertSnapshotUnavailable(dialog)
+            dialog.generateFromPaste()
+            assertEquals("UPDATE user SET age = 19 WHERE id = 1 AND age = 3;", dialog.sqlTextForTest())
+            assertEquals(original.setColumns, dialog.currentResult.setColumns)
+            assertEquals(original.setValues, dialog.currentResult.setValues)
+            assertEquals(original.snapshotSelectSql, dialog.currentResult.snapshotSelectSql)
+            assertTrue(dialog.executeActionForTest().isEnabled)
+        } finally {
+            dialog.doDispose()
+        }
+    }
+
+    /** 隔离输入监听，单独钉住“生成失败先撤旧模型”的防线，避免监听让失败分支测试空绿。 */
+    fun testUI018FailedGenerationInvalidatesEvenWithoutInputNotification() {
+        assertFailedGenerationInvalidates("DELETE", "invalid_snapshot")
+    }
+
+    fun testUI018MissingColumnGenerationInvalidatesEvenWithoutInputNotification() {
+        assertFailedGenerationInvalidates("UPDATE", "id\n71")
+    }
+
+    private fun assertFailedGenerationInvalidates(kind: String, pasted: String) {
+        run {
+            val original = RollbackSqlGenerator.generate(
+                if (kind == "DELETE") "DELETE FROM user WHERE id = 71" else "UPDATE user SET age = 3 WHERE id = 71",
+            )
+            val dialog = newDialog(original, kind)
+            try {
+                dialog.pasteAreaForTest().text = "id\tage\n71\t20"
+                dialog.pkFieldForTest().text = "id"
+                dialog.generateFromPaste()
+                assertTrue(dialog.currentResult.statements.isNotEmpty())
+                val document = dialog.pasteAreaForTest().document as AbstractDocument
+                val listeners = document.documentListeners
+                listeners.forEach { document.removeDocumentListener(it) }
+                try {
+                    dialog.pasteAreaForTest().text = pasted
+                } finally {
+                    listeners.forEach { document.addDocumentListener(it) }
+                }
+                assertTrue("故意绕开监听，旧模型必须仍在，才有失败分支判别力", dialog.currentResult.statements.isNotEmpty())
+                dialog.generateFromPaste()
+                assertSnapshotUnavailable(dialog)
+                val expectedWarning = if (kind == "DELETE") {
+                    MpSqlVisualizerBundle.message("rollback.snapshot.parseFailed")
+                } else {
+                    MpSqlVisualizerBundle.message("rollback.snapshot.columnMismatch", "age")
+                }
+                assertTrue(dialog.warningsTextForTest().contains(expectedWarning))
+            } finally {
+                dialog.doDispose()
+            }
+        }
+    }
+
+    fun testUI018KeyboardCopyCannotExposeInvalidatedSql() {
+        val dialog = newDialog(RollbackSqlGenerator.generate("DELETE FROM user WHERE id = 71"), "DELETE")
+        try {
+            dialog.pasteAreaForTest().text = "id\n71"
+            dialog.generateFromPaste()
+            val editor = dialog.editorForTest()!!
+            editor.selectionModel.setSelection(0, editor.document.textLength)
+            dialog.pasteAreaForTest().text = "invalid_snapshot"
+            CopyPasteManager.getInstance().setContents(StringSelection("__SENTINEL__"))
+            val component = editor.component
+            val key = component.inputMap.get(KeyStroke.getKeyStroke("control C"))
+            component.actionMap.get(key).actionPerformed(ActionEvent(component, ActionEvent.ACTION_PERFORMED, key.toString()))
+            assertEquals("键盘复制源已清空，不能复制上一次选区", "", CopyPasteManager.getInstance().getContents(DataFlavor.stringFlavor))
+        } finally {
+            dialog.doDispose()
+        }
+    }
+
+    fun testUI018NonSnapshotCompleteAndPartialRollbackStillReachConfirmation() {
+        for (result in listOf(completeInsertResult(), RollbackSqlGenerator.generate("INSERT INTO user (id) VALUES (71)"))) {
+            val dialog = newDialog(result, "INSERT")
+            try {
+                // 无快照工作流的原始回滚不应因隐藏输入或误调生成入口失效。
+                dialog.pasteAreaForTest().text = "invalid_snapshot"
+                dialog.pkFieldForTest().text = "id"
+                dialog.generateFromPaste()
+                assertEquals(result, dialog.currentResult)
+                assertEquals(result.statements.joinToString("\n"), dialog.sqlTextForTest())
+                assertTrue(dialog.executeActionForTest().isEnabled)
+                assertTrue(dialog.copyActionForTest().isEnabled)
+                val confirmations = mutableListOf<String>()
+                TestDialogManager.setTestDialog(TestDialog {
+                    confirmations += it
+                    Messages.NO // 正对照只走到确认入口，不写库。
+                }, testRootDisposable)
+                dialog.executeRollback()
+                assertEquals("确认拦截器正对照，证明失效用例的零次并非环境不可达", 1, confirmations.size)
+            } finally {
+                dialog.doDispose()
+            }
+        }
+    }
+
+    // ======================== UI020：真实提交回执，不以调用返回冒充成功 ========================
+
+    private fun registeredDelete(): RollbackSnapshotStore.SnapshotEntry =
+        project.getService(RollbackSnapshotStore::class.java).register(
+            "DELETE FROM user WHERE id = 71", "user", "SELECT * FROM user WHERE id = 71;",
+        )
+
+    private fun snapshotDialog(entry: RollbackSnapshotStore.SnapshotEntry) =
+        newDialog(RollbackSqlGenerator.generate(entry.sql), "DELETE", entry).also {
+            it.pasteAreaForTest().text = "id\n71"
+            it.generateFromPaste()
+        }
+
+    fun testUI020DmlNoLeavesRegisteredEntryAndBannerUnchanged() {
+        val store = project.getService(RollbackSnapshotStore::class.java)
+        val entry = registeredDelete()
+        val dialog = snapshotDialog(entry)
+        try {
+            val before = dialog.bannerTextForTest()
+            var confirmations = 0
+            TestDialogManager.setTestDialog(TestDialog { confirmations++; Messages.NO }, testRootDisposable)
+            dialog.executeRollback()
+            assertEquals(1, confirmations)
+            assertEquals(before, dialog.bannerTextForTest())
+            assertSame("No 不得复制或修改原快照条目", entry, store.findBySql(entry.sql))
+            assertEquals(RollbackSnapshotStore.Status.REGISTERED, store.findBySql(entry.sql)!!.status)
+        } finally {
+            dialog.doDispose()
+            store.clearForTest()
+        }
+    }
+
+    fun testUI020DmlNoWithoutSnapshotEntryDoesNotClaimSubmitted() {
+        val dialog = newDialog(completeInsertResult(), "INSERT")
+        try {
+            val before = dialog.bannerTextForTest()
+            TestDialogManager.setTestDialog(TestDialog { Messages.NO }, testRootDisposable)
+            dialog.executeRollback()
+            assertEquals(before, dialog.bannerTextForTest())
+        } finally { dialog.doDispose() }
+    }
+
+    fun testUI020NonPreparedUnavailableBackendDoesNotMarkSubmitted() {
+        assertFalse("本例验证无Database插件的真实阻断，不伪称验证数据库提交", cn.song.mybatisplus.visualizer.execute.ExecuteSqlSupport.isAvailable())
+        val store = project.getService(RollbackSnapshotStore::class.java)
+        val entry = registeredDelete()
+        val dialog = snapshotDialog(entry)
+        try {
+            val before = dialog.bannerTextForTest()
+            TestDialogManager.setTestDialog(TestDialog { Messages.YES }, testRootDisposable)
+            dialog.executeRollback()
+            assertEquals(before, dialog.bannerTextForTest())
+            assertSame(entry, store.findBySql(entry.sql))
+        } finally {
+            dialog.doDispose()
+            store.clearForTest()
+        }
+    }
+
+    fun testUI020CancelledOrBlockedReceiptCannotBeOverwrittenByLateSubmitted() {
+        val store = project.getService(RollbackSnapshotStore::class.java)
+        for (outcome in listOf(
+            cn.song.mybatisplus.visualizer.execute.ExecutionSubmission.CANCELLED,
+            cn.song.mybatisplus.visualizer.execute.ExecutionSubmission.BLOCKED,
+        )) {
+            val entry = registeredDelete()
+            val dialog = snapshotDialog(entry)
+            try {
+                val before = dialog.bannerTextForTest()
+                val receipt = dialog.rollbackSubmissionReceipt()
+                receipt(outcome)
+                receipt(cn.song.mybatisplus.visualizer.execute.ExecutionSubmission.SUBMITTED)
+                assertEquals(before, dialog.bannerTextForTest())
+                assertSame(entry, store.findBySql(entry.sql))
+            } finally {
+                dialog.doDispose()
+                store.clearForTest()
+            }
+        }
+    }
+
+    private fun submitThroughProductionReceipt(receipt: (cn.song.mybatisplus.visualizer.execute.ExecutionSubmission) -> Unit) {
+        val selector = cn.song.mybatisplus.visualizer.execute.DataSourceSelector
+        val before = selector.swapGeneration
+        try {
+            // 调真实提交收口；不直接调用成功状态。无原生console/ui，不执行SQL、不启轮询。
+            selector.afterSubmitted(project, null, Any(), null, null,
+                com.intellij.openapi.diagnostic.Logger.getInstance(javaClass), onSubmission = receipt)
+            com.intellij.testFramework.PlatformTestUtil.dispatchAllEventsInIdeEventQueue()
+        } finally { selector.swapGeneration = before }
+    }
+
+    fun testUI020OnlyActualSubmissionMarksOnceAndLateErrorsDoNotUndoSubmission() {
+        val store = project.getService(RollbackSnapshotStore::class.java)
+        val entry = registeredDelete()
+        val dialog = snapshotDialog(entry)
+        try {
+            val before = dialog.bannerTextForTest()
+            val receipt = dialog.rollbackSubmissionReceipt()
+            assertSame("创建请求/等待无超时，也不是已提交", entry, store.findBySql(entry.sql))
+            assertEquals(before, dialog.bannerTextForTest())
+            submitThroughProductionReceipt(receipt)
+            val submitted = store.findBySql(entry.sql)!!
+            assertEquals(RollbackSnapshotStore.Status.ROLLBACK_EXECUTED, submitted.status)
+            assertEquals(MpSqlVisualizerBundle.message("rollback.banner.executed"), dialog.bannerTextForTest())
+            submitThroughProductionReceipt(receipt)
+            receipt(cn.song.mybatisplus.visualizer.execute.ExecutionSubmission.BLOCKED)
+            assertSame("重复回执不得再次调用mark生成副本；提交后错误不抹掉真实提交事实", submitted, store.findBySql(entry.sql))
+        } finally {
+            dialog.doDispose()
+            store.clearForTest()
+        }
+    }
+
+    fun testUI020DisposedDialogStillRecordsLateSubmissionExactlyOnceWithoutUpdatingUi() {
+        val store = project.getService(RollbackSnapshotStore::class.java)
+        val entry = registeredDelete()
+        val dialog = snapshotDialog(entry)
+        val before = dialog.bannerTextForTest()
+        val receipt = dialog.rollbackSubmissionReceipt()
+        dialog.doDispose()
+        try {
+            submitThroughProductionReceipt(receipt)
+            val submitted = store.findBySql(entry.sql)!!
+            assertEquals(RollbackSnapshotStore.Status.ROLLBACK_EXECUTED, submitted.status)
+            assertEquals("关闭后只留业务事实，不更新UI", before, dialog.bannerTextForTest())
+            submitThroughProductionReceipt(receipt)
+            assertSame(submitted, store.findBySql(entry.sql))
+        } finally { store.clearForTest() }
+    }
+
+    fun testUI020EditedSnapshotDoesNotShowOldRequestSubmissionBanner() {
+        val store = project.getService(RollbackSnapshotStore::class.java)
+        val entry = registeredDelete()
+        val dialog = snapshotDialog(entry)
+        try {
+            val receipt = dialog.rollbackSubmissionReceipt()
+            dialog.pasteAreaForTest().text = "invalid_snapshot"
+            submitThroughProductionReceipt(receipt)
+            assertEquals("提交是旧请求的事实，仍应留痕", RollbackSnapshotStore.Status.ROLLBACK_EXECUTED, store.findBySql(entry.sql)!!.status)
+            assertEquals(MpSqlVisualizerBundle.message("rollback.banner.unable"), dialog.bannerTextForTest())
+            assertFalse(dialog.executeActionForTest().isEnabled)
+        } finally {
+            dialog.doDispose()
+            store.clearForTest()
         }
     }
 

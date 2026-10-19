@@ -74,6 +74,20 @@ class PlatformSignatureCrossVersionTest {
         assertEquals(1, PlatformSignatureChecker.checkPreviewEditorPopupApis(object : ClassLoader(null) {}))
     }
 
+    /**
+     * UI025：ExternalAnnotator 四段调度签名 + AnnotationBuilder 落点 API。
+     * 空 ClassLoader 必须整体拒绝（证明本项真的在核平台类，而不是空绿）。
+     */
+    @Test
+    fun externalAnnotatorSignatureIsExact() {
+        assertEquals(0, PlatformSignatureChecker.checkExternalAnnotatorApis(javaClass.classLoader))
+        assertEquals(
+            "平台类缺失必须拒绝",
+            1,
+            PlatformSignatureChecker.checkExternalAnnotatorApis(object : ClassLoader(null) {}),
+        )
+    }
+
     open class PopupPublic {
         fun setContextMenuGroupId(id: String) {}
         fun getContextMenuGroupId(): String = "unused"
@@ -92,6 +106,50 @@ class PlatformSignatureCrossVersionTest {
         fun getContextMenuGroupId(): String = "unused"
     }
     class PopupMissing
+
+    @Test
+    fun nativeConsoleLifetimeSignatureIsExact() {
+        fun check(type: Class<*>) = PlatformSignatureChecker.checkNativeConsoleViewLifetimeSignatures(
+            type, LifetimeClient::class.java, LifetimeView::class.java)
+        assertEquals(0, check(LifetimeService::class.java))
+        assertEquals(1, check(LifetimeWrongReturn::class.java))
+        assertEquals(1, check(LifetimeStaticLookup::class.java))
+        assertEquals(2, check(LifetimeMissing::class.java))
+        assertEquals(1, PlatformSignatureChecker.checkNativeConsoleViewLifetimeApis(object : ClassLoader(null) {}, true))
+    }
+
+    class LifetimeClient
+    class LifetimeView
+    class LifetimeService {
+        companion object { @JvmStatic fun getInstance(): LifetimeService = LifetimeService() }
+        fun getClientViewIfAny(client: LifetimeClient): LifetimeView? = null
+    }
+    class LifetimeWrongReturn {
+        companion object { @JvmStatic fun getInstance(): LifetimeWrongReturn = LifetimeWrongReturn() }
+        fun getClientViewIfAny(client: LifetimeClient): Any? = null
+    }
+    class LifetimeStaticLookup {
+        companion object {
+            @JvmStatic fun getInstance(): LifetimeStaticLookup = LifetimeStaticLookup()
+            @JvmStatic fun getClientViewIfAny(client: LifetimeClient): LifetimeView? = null
+        }
+    }
+    class LifetimeMissing
+
+    @Test
+    fun sessionOutputSignatureIsExact() {
+        fun check(service: Class<*>, client: Class<*>) = PlatformSignatureChecker.checkSessionOutputSignatures(
+            service, client, SessionType::class.java, SessionType::class.java, LifetimeView::class.java)
+        assertEquals(0, check(SessionLookup::class.java, SessionClient::class.java))
+        assertEquals(1, check(SessionLookupWrong::class.java, SessionClient::class.java))
+        assertEquals(1, check(SessionLookup::class.java, SessionClientWrong::class.java))
+        assertEquals(2, check(LifetimeMissing::class.java, LifetimeMissing::class.java))
+    }
+    class SessionType
+    class SessionClient { fun getSession(): SessionType = SessionType() }
+    class SessionClientWrong { fun getSession(): Any = SessionType() }
+    class SessionLookup { fun getViewIfAny(session: SessionType): LifetimeView? = null }
+    class SessionLookupWrong { fun getViewIfAny(session: SessionType): Any? = null }
 
     @Test
     fun dynamicInstallApisResolveOnAllLocalTargetPlatforms() {
@@ -125,6 +183,11 @@ class PlatformSignatureCrossVersionTest {
             for (signature in listOf(
                 "EditorEx.setContextMenuGroupId[class java.lang.String]",
                 "EditorEx.getContextMenuGroupId[]",
+                "DatabaseSessionViewService.getInstance[]",
+                "DatabaseSessionViewService.getClientViewIfAny[DatabaseSessionClientWithFile]",
+                "DatabaseSessionClientWithFile.getSession[]",
+                "DatabaseSessionViewService.getViewIfAny[DatabaseSession]",
+                "BaseLogView.getConsoleView[]",
             )) {
                 assertTrue("IU-$family 必须实际执行UI015签名登记：$signature\n${result.output}",
                     result.output.lineSequence().any { it.startsWith("OK   $signature -> ") })

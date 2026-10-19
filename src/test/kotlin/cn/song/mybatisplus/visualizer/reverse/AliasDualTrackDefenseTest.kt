@@ -43,12 +43,15 @@ class AliasDualTrackDefenseTest {
             e
         }
 
-    // ---------- 路径 1：lambda 生成（实名 ref + 别名第二参，双轨同现不互染） ----------
+    // ---------- 路径 1：别名投影整链回落（MP core 无 selectAs，双轨在字符串形态下仍不互染） ----------
 
     @Test
     fun `路径1_MP核心别名整链回落保留全部投影_MPJ仍有selectAs`() {
         val result = SqlReverseParser.parse("SELECT psn_no AS psn, psn_name FROM personnel")
         assertEquals(listOf(SelectColumn("psn_no", "psn"), SelectColumn("psn_name")), result.selectColumns)
+        val lambda = JavaCodeGenerator.generate(result, personnel, GeneratedWrapper.LAMBDA)
+        // javap 实证：MP core 3.5.14/3.5.17 均无 selectAs 重载，带别名投影整链回落字符串 select。
+        assertTrue(lambda, lambda.contains(".select(\"psn_no AS psn\", \"psn_name\")"))
         for (kind in listOf(GeneratedWrapper.LAMBDA, GeneratedWrapper.WRAPPERS_LAMBDA)) {
             val code = JavaCodeGenerator.generate(result, personnel, kind)
             assertFalse("MP核心不存在selectAs", code.contains(".selectAs("))
@@ -96,6 +99,8 @@ class AliasDualTrackDefenseTest {
     fun `路径3c_未映射列MP核心整链回落_保留表限定名与展示别名`() {
         val result = SqlReverseParser.parse("SELECT t.unknown_col AS total FROM personnel t")
         assertEquals(listOf(SelectColumn("t.unknown_col", "total")), result.selectColumns)
+        val lambda = JavaCodeGenerator.generate(result, personnel, GeneratedWrapper.LAMBDA)
+        assertTrue(lambda, lambda.contains(".select(\"t.unknown_col AS total\")"))
         for (kind in listOf(GeneratedWrapper.LAMBDA, GeneratedWrapper.WRAPPERS_LAMBDA)) {
             val code = JavaCodeGenerator.generate(result, personnel, kind)
             assertFalse(code, code.contains(".selectAs("))
@@ -108,6 +113,12 @@ class AliasDualTrackDefenseTest {
     @Test
     fun `路径4_MP核心整链回落_WHERE与ORDER仍取实名`() {
         val result = SqlReverseParser.parse("SELECT psn_no AS psn FROM personnel WHERE psn_no = '1' ORDER BY psn_no")
+        val lambda = JavaCodeGenerator.generate(result, personnel, GeneratedWrapper.LAMBDA)
+        // 别名投影整链回落字符串 Wrapper：列归属仍取 WHERE/ORDER BY 实名原文，不被别名改写
+        assertTrue(lambda, lambda.contains(".select(\"psn_no AS psn\")"))
+        assertTrue("WHERE 条件列取实名", lambda.contains(".eq(\"psn_no\", \"1\")"))
+        assertTrue("ORDER BY 列取实名", lambda.contains("orderByAsc(\"psn_no\")"))
+        assertFalse("别名不得污染条件轨", lambda.contains(".eq(\"psn\""))
         for (kind in listOf(GeneratedWrapper.LAMBDA, GeneratedWrapper.WRAPPERS_LAMBDA)) {
             val code = JavaCodeGenerator.generate(result, personnel, kind)
             assertFalse(code, code.contains(".selectAs("))

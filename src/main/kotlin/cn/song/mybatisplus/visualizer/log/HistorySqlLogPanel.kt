@@ -232,6 +232,37 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         }
     }
 
+    /** 与日志页同款直接动作；历史只跳转，不引入实时尾部跟随。 */
+    internal val scrollToEndAction: AnAction = object : AnAction() {
+        override fun update(e: AnActionEvent) {
+            e.presentation.icon = AllIcons.General.ArrowDown
+            e.presentation.text = MpSqlVisualizerBundle.message("log.panel.scrollBottom")
+            // 日志页的 tip 描述实时跟随，历史使用同一中性动作文案，避免误导。
+            e.presentation.description = MpSqlVisualizerBundle.message("log.panel.scrollBottom")
+            e.presentation.isVisible = !isShowingFiles
+            e.presentation.isEnabled = !isShowingFiles && !sqlListModel.isEmpty && !project.isDisposed
+        }
+
+        override fun actionPerformed(e: AnActionEvent) {
+            if (isShowingFiles || project.isDisposed || sqlListModel.isEmpty) return
+            val generation = bgGeneration
+            if (pendingAppendGen == generation && pendingAppendIndex < pendingEntries.size) {
+                val remaining = pendingEntries.subList(pendingAppendIndex, pendingEntries.size)
+                // 一次批量模型事件；先清待写状态，防滚动/布局监听重入重复追加。
+                pendingEntries = emptyList()
+                pendingAppendIndex = 0
+                sqlListModel.addAll(remaining)
+            }
+            // 同步完成，不留下会滚动到新文件/新过滤结果的 invokeLater 请求。
+            if (generation != bgGeneration || isShowingFiles || sqlListModel.isEmpty) return
+            sqlList.ensureIndexIsVisible(sqlListModel.size() - 1)
+            sqlScrollPane.verticalScrollBar.let { it.value = it.maximum }
+        }
+    }
+
+    internal val navigationActionsForTest: List<AnAction>
+        get() = _navToolbarRef?.actionGroup?.getChildren(null)?.toList().orEmpty()
+
     /** 层级切换后即时刷新导航工具栏（Back 可见性走 update；组件不可见时平台跳过，无副作用）。 */
     private fun refreshNavToolbar() {
         _navToolbarRef?.updateActionsImmediately()
@@ -356,7 +387,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         // 顶部工具栏：返回（仅二级可见）+ 刷新 + 搜索
         // T-UiNative T-UN-10：手摆按钮 → 平台 ActionToolbar（Back 可见性由 BackAction.update 按当前层级输出）
         val navToolbar = ActionManager.getInstance()
-            .createActionToolbar("mpvs.history.nav", DefaultActionGroup(BackAction(), RefreshAction(), previewToggleAction), true)
+            .createActionToolbar("mpvs.history.nav", DefaultActionGroup(BackAction(), RefreshAction(), scrollToEndAction, previewToggleAction), true)
             .apply { targetComponent = this@HistorySqlLogPanel }
         _navToolbarRef = navToolbar
         val toolbar = JPanel(FlowLayout(FlowLayout.LEFT, 4, 0))

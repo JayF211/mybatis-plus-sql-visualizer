@@ -967,6 +967,8 @@ internal fun SqlPreviewPanel.buildXmlForEachRow(view: XmlForEachView, labelWidth
         border = JBUI.Borders.empty(0, 8, 0, 0)
     })
     val valuesField = JBTextField(8).apply {
+        // 召回先于参数区重建；注册监听前回填权威值，避免初始文本写入触发保存或改写集合。
+        text = xmlForEachValues[view.collectionExpr]?.joinToString(",").orEmpty()
         toolTipText = "集合值（逗号分隔，如 2,3；留空 = 默认展开 ${XmlPreviewModel.DEFAULT_FOREACH_SIZE} 项）"
         document.addDocumentListener(object : DocumentListener {
             override fun insertUpdate(e: DocumentEvent?) = onXmlForEachValuesChanged(view, this@apply.text)
@@ -1080,7 +1082,8 @@ internal fun SqlPreviewPanel.buildParamRow(source: String, labelWidth: Int): JBP
 /** 参数 source 的类型类别（无类型信息 → UNKNOWN，行为=升级前）。 */
 
 internal fun SqlPreviewPanel.paramKindOf(source: String): ParamKind =
-    current?.xmlModel?.kindFor(source) ?: ParamKind.UNKNOWN
+    if (source in current?.paginationParamSources.orEmpty()) ParamKind.NUMBER
+    else current?.xmlModel?.kindFor(source) ?: ParamKind.UNKNOWN
 
 /** 占位提示（emptyText）：有类型信息按类别；UNKNOWN 走参数命名启发式（zMyBatis 同款，仅提示）。 */
 
@@ -1485,6 +1488,8 @@ internal fun SqlPreviewPanel.recallFromHistory() {
                 val values = value.split(",").map { it.trim() }.filter { it.isNotEmpty() }
                 if (values.isNotEmpty()) {
                     xmlForEachValues[expr] = values
+                    // 首次召回尚无字段监听，必须在渲染映射前同步展开长度，不能依赖文本变更补齐。
+                    xmlForEachCounts[expr] = values.size
                     xmlForEachValueFields.firstOrNull { it.first == expr }?.second?.text = value
                     stateRestored = true
                 }

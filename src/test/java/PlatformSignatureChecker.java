@@ -29,6 +29,12 @@ public class PlatformSignatureChecker {
         File dbnLib = new File(distroRoot, "plugins/DatabaseTools/lib");
         collectJars(dbnLib, urls);
         collectJars(new File(dbnLib, "modules"), urls);
+        // 原生控制台client/view超接口引用独立grid模块，必须与Database Tools一起加载。
+        for (String plugin : new String[]{"grid-core-impl", "grid-impl", "grid-core-plugin", "grid-plugin"}) {
+            File gridLib = new File(distroRoot, "plugins/" + plugin + "/lib");
+            collectJars(gridLib, urls);
+            collectJars(new File(gridLib, "modules"), urls);
+        }
         File miscLib = new File(distroRoot, "plugins/libraries-misc-plugin/lib");
         collectJars(miscLib, urls);
         collectJars(new File(miscLib, "modules"), urls);
@@ -126,15 +132,85 @@ public class PlatformSignatureChecker {
         missing += checkPreviewSourceContextApis(loader, dbnLib.isDirectory());
         missing += checkSqlLogTabsApis(loader);
         missing += checkPreviewEditorPopupApis(loader);
+        missing += checkNativeConsoleViewLifetimeApis(loader, dbnLib.isDirectory());
         missing += checkAttachTargetApis(loader);
         missing += checkRunnerFinalStepApi(loader);
         missing += checkMcpToolsetCapability(loader);
+        // UI025：预览错列 ExternalAnnotator 的编译期 API 面（243 app-client / 253 app 实测同形）——
+        // 生产不反射，但跨版本核验保证「注册后 annotator 真能被平台调度」的四段签名不漂移。
+        missing += checkExternalAnnotatorApis(loader);
 
         if (missing > 0) {
             System.out.println("RESULT MISSING " + missing);
             System.exit(1);
         }
         System.out.println("RESULT OK");
+    }
+
+    /** 精确核验生产查既有view入口；不初始化或创建数据库会话。 */
+    public static int checkNativeConsoleViewLifetimeApis(ClassLoader loader, boolean databaseBundled) {
+        if (!databaseBundled) {
+            System.out.println("SKIP native console lifetime: Database Tools not bundled");
+            return 0;
+        }
+        try {
+            Class<?> service = Class.forName("com.intellij.database.console.session.DatabaseSessionViewService", false, loader);
+            Class<?> client = Class.forName("com.intellij.database.console.client.DatabaseSessionClientWithFile", false, loader);
+            Class<?> view = Class.forName("com.intellij.database.run.session.LogView", false, loader);
+            Class<?> disposable = Class.forName("com.intellij.openapi.Disposable", false, loader);
+            if (!disposable.isAssignableFrom(view)) {
+                System.out.println("MISS native console LogView must implement Disposable");
+                return 1;
+            }
+            Class<?> session = Class.forName("com.intellij.database.console.session.DatabaseSession", false, loader);
+            Class<?> baseSession = Class.forName("com.intellij.database.run.session.Session", false, loader);
+            Class<?> baseView = Class.forName("com.intellij.database.run.session.BaseLogView", false, loader);
+            Class<?> languageConsole = Class.forName("com.intellij.execution.console.LanguageConsoleView", false, loader);
+            Method getConsole = baseView.getMethod("getConsoleView");
+            int consoleMissing = getConsole.getReturnType() == languageConsole &&
+                    !java.lang.reflect.Modifier.isStatic(getConsole.getModifiers()) && disposable.isAssignableFrom(languageConsole)
+                    ? check(getConsole, "BaseLogView.getConsoleView[]") : 1;
+            return consoleMissing + checkNativeConsoleViewLifetimeSignatures(service, client, view)
+                    + checkSessionOutputSignatures(service, client, session, baseSession, view);
+        } catch (Throwable t) {
+            System.out.println("MISS native console lifetime: " + t);
+            return 1;
+        }
+    }
+
+    public static int checkNativeConsoleViewLifetimeSignatures(Class<?> service, Class<?> client, Class<?> view) {
+        int missing = 0;
+        try {
+            Method method = service.getMethod("getInstance");
+            if (method.getReturnType() != service || !java.lang.reflect.Modifier.isStatic(method.getModifiers())) {
+                System.out.println("MISS DatabaseSessionViewService.getInstance[] shape");
+                missing++;
+            } else missing += check(method, "DatabaseSessionViewService.getInstance[]");
+        } catch (NoSuchMethodException e) { missing++; }
+        try {
+            Method method = service.getMethod("getClientViewIfAny", client);
+            if (method.getReturnType() != view || java.lang.reflect.Modifier.isStatic(method.getModifiers())) {
+                System.out.println("MISS DatabaseSessionViewService.getClientViewIfAny shape");
+                missing++;
+            } else missing += check(method, "DatabaseSessionViewService.getClientViewIfAny[DatabaseSessionClientWithFile]");
+        } catch (NoSuchMethodException e) { missing++; }
+        return missing;
+    }
+
+    public static int checkSessionOutputSignatures(Class<?> service, Class<?> client, Class<?> session,
+                                                   Class<?> baseSession, Class<?> view) {
+        int missing = 0;
+        try {
+            Method m = client.getMethod("getSession");
+            if (m.getReturnType() != baseSession || java.lang.reflect.Modifier.isStatic(m.getModifiers())) missing++;
+            else missing += check(m, "DatabaseSessionClientWithFile.getSession[]");
+        } catch (NoSuchMethodException e) { missing++; }
+        try {
+            Method m = service.getMethod("getViewIfAny", session);
+            if (m.getReturnType() != view || java.lang.reflect.Modifier.isStatic(m.getModifiers())) missing++;
+            else missing += check(m, "DatabaseSessionViewService.getViewIfAny[DatabaseSession]");
+        } catch (NoSuchMethodException e) { missing++; }
+        return missing;
     }
 
     /** UI014：数据源选择完成后再弹确认，精确登记生产调用签名。 */
@@ -550,6 +626,57 @@ public class PlatformSignatureChecker {
     /** 与真实发行版登记共用的精确签名核验，供形态漂移负例调用。 */
     public static int checkAttachTargetCommandLine(Class<?> handler) {
         return checkExact(handler, "getCommandLine", String.class, false);
+    }
+
+    /**
+     * UI025：ExternalAnnotator 调度面 + 标注落点 API 的跨版本签名核验。
+     *
+     * 核验四段（243 app-client.jar / 253 app.jar 双版 javap 实测同形）：
+     *  - `collectInformation(PsiFile)` / `collectInformation(PsiFile, Editor, boolean)`；
+     *  - `doAnnotate(Object)`（泛型擦除）；
+     *  - `apply(PsiFile, Object, AnnotationHolder)`；
+     *  - `AnnotationHolder.newAnnotation(HighlightSeverity, String)` → `AnnotationBuilder.range(TextRange)`
+     *    → `create()`，以及 `HighlightSeverity.ERROR` 静态字段。
+     * 任一漂移 → 注册后的 annotator 不会被平台正确调度或标不到红，本项即红。
+     */
+    public static int checkExternalAnnotatorApis(ClassLoader loader) {
+        int missing = 0;
+        try {
+            Class<?> annotator = Class.forName("com.intellij.lang.annotation.ExternalAnnotator", false, loader);
+            if (!java.lang.reflect.Modifier.isAbstract(annotator.getModifiers())) {
+                System.out.println("MISS ExternalAnnotator is no longer abstract");
+                missing++;
+            }
+            Class<?> psiFile = Class.forName("com.intellij.psi.PsiFile", false, loader);
+            Class<?> editor = Class.forName("com.intellij.openapi.editor.Editor", false, loader);
+            Class<?> holder = Class.forName("com.intellij.lang.annotation.AnnotationHolder", false, loader);
+            Class<?> builder = Class.forName("com.intellij.lang.annotation.AnnotationBuilder", false, loader);
+            Class<?> severity = Class.forName("com.intellij.lang.annotation.HighlightSeverity", false, loader);
+            Class<?> textRange = Class.forName("com.intellij.openapi.util.TextRange", false, loader);
+            missing += checkExact(annotator, "collectInformation", Object.class, false, psiFile);
+            missing += checkExact(annotator, "collectInformation", Object.class, false, psiFile, editor, boolean.class);
+            missing += checkExact(annotator, "doAnnotate", Object.class, false, Object.class);
+            missing += checkExact(annotator, "apply", void.class, false, psiFile, Object.class, holder);
+            missing += checkExact(holder, "newAnnotation", builder, false, severity, String.class);
+            missing += checkExact(builder, "range", builder, false, textRange);
+            missing += checkExact(builder, "create", void.class, false);
+            try {
+                java.lang.reflect.Field error = severity.getField("ERROR");
+                if (!java.lang.reflect.Modifier.isStatic(error.getModifiers()) || error.getType() != severity) {
+                    System.out.println("MISS HighlightSeverity.ERROR static field mismatch: " + error);
+                    missing++;
+                } else {
+                    System.out.println("OK   HighlightSeverity.ERROR static field");
+                }
+            } catch (Throwable t) {
+                System.out.println("MISS HighlightSeverity.ERROR: " + t);
+                missing++;
+            }
+        } catch (Throwable t) {
+            System.out.println("MISS ExternalAnnotator API: " + t);
+            missing++;
+        }
+        return missing;
     }
 
     private static int checkExact(Class<?> owner, String name, Class<?> returns, boolean isStatic, Class<?>... args) {

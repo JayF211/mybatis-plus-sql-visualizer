@@ -180,6 +180,7 @@ object XmlPreviewService {
             paramHints = result.paramHints + extraSources.map { ParamHint(quote = false) },
             countSql = countSql,
             paginationLimitLine = limitLine,
+            paginationParamSources = extraSources,
         )
     }.getOrDefault(result)
 

@@ -117,6 +117,78 @@ class ExplainPanelWiringGuardTest {
         assertTrue(service.contains("ExplainPlanKey.projectIdentity(project.basePath)"))
     }
 
+    /**
+     * T-UI030：无已绑数据源时**直接弹既有数据源选择器**（prepareConsole，只绑定不执行），
+     * 不再只发一条「已回退原生控制台」通知。摘掉这行接线，用户又回到「告知失败、没有下一步」。
+     */
+    @Test
+    fun `T_UI030_无数据源直接走既有选择器且只绑定不执行`() {
+        val source = sqlPreviewPanelSource()
+        assertTrue(
+            "NO_DATA_SOURCE 必须真的调用 promptDataSourceThenRetryStructured（只定义函数不算接线）",
+            source.contains("promptDataSourceThenRetryStructured(proj, dialect, explainSql, dialectGateRequest)"),
+        )
+        assertTrue(
+            "绑定必须复用 DataSourceSelector.prepareConsole（executeAfterPrepare=false：只绑定不执行任何 SQL）",
+            source.contains("DataSourceSelector.prepareConsole("),
+        )
+        assertTrue(
+            "重试路径必须显式禁止再弹选择器（防取消→再弹→再取消循环）",
+            source.contains("allowDataSourcePrompt = false"),
+        )
+    }
+
+    /**
+     * T-UI030：取消选择的收口走纯判定 GIVE_UP（只给说明、不再弹第二次）。
+     * 摘掉这个分支，取消后会被当成「继续等待」或重新拉起选择器。
+     */
+    @Test
+    fun `T_UI030_取消选择由GIVE_UP收口不再弹第二次`() {
+        val source = sqlPreviewPanelSource()
+        assertTrue(
+            "轮询必须消费 dataSourceBindTick 的 GIVE_UP 分支",
+            source.contains("DataSourceBindTick.GIVE_UP"),
+        )
+        assertTrue(
+            "GIVE_UP 必须调用取消说明（未执行 + 下一步），而不是再次 prepareConsole",
+            source.contains("notifyExplainDataSourceNotBound("),
+        )
+        val guidance = File(
+            repoRoot(),
+            "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/ExplainFallbackGuidance.kt",
+        ).readText()
+        assertTrue(
+            "准备链终结仍未绑定必须判 GIVE_UP（取消即收口）",
+            guidance.contains("!prepareInFlight -> DataSourceBindTick.GIVE_UP"),
+        )
+    }
+
+    /**
+     * T-UI030：开关关闭时通知必须带「启用结构化并重试」动作，且只在方言确有结构化面时出现。
+     */
+    @Test
+    fun `T_UI030_开关关闭通知带启用并重试动作`() {
+        val source = sqlPreviewPanelSource()
+        assertTrue(
+            "开关关闭时必须经纯判定决定是否提示（TEXT/XML/Community 不噪音）",
+            source.contains("shouldOfferStructuredEnable("),
+        )
+        assertTrue(
+            "通知必须真的 addAction（不是只有一段说明文字）",
+            source.contains("notification.addAction(") &&
+                source.contains("panel.explain.structured.enableAndRetry"),
+        )
+        assertTrue(
+            "动作清单必须由 structuredExplainDisabledActions 生成（空表/死循环不算挂上动作）",
+            source.contains("structuredExplainDisabledActions(onEnableAndRetry)"),
+        )
+        assertTrue(
+            "动作回调必须写开关并重试（enableStructuredExplainAndRetry）",
+            source.contains("enableStructuredExplainAndRetry(") &&
+                source.contains("state.explainStructuredRender = true"),
+        )
+    }
+
     private fun sqlPreviewPanelSource(): String =
         panelSourceFiles().joinToString("\n") { File(repoRoot(), it).readText() }
 

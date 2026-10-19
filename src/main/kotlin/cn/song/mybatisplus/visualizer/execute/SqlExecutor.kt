@@ -22,6 +22,9 @@ enum class ExecutionSubmission { SUBMITTED, CANCELLED, BLOCKED }
  */
 object SqlExecutor {
 
+    /** UI023：headless 下截获真实执行入口边界，避免靠 Community 不可执行制造「零提交」假绿。 */
+    internal var executionAttemptForTest: ((String?) -> Unit)? = null
+
     /** T-UiNative T-UN-02：轻提示通知组（plugin.xml 已注册）。 */
     private const val NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview"
 
@@ -46,6 +49,7 @@ object SqlExecutor {
         onDialectGate: ((ExecutionDialectGate.Verdict) -> Unit)? = null,
         onSubmission: ((ExecutionSubmission) -> Unit)? = null,
     ) {
+        executionAttemptForTest?.let { it(sql); return }
         val completed = java.util.concurrent.atomic.AtomicBoolean(false)
         val receipt: (ExecutionSubmission) -> Unit = { outcome ->
             if (completed.compareAndSet(false, true)) onSubmission?.invoke(outcome)
@@ -126,11 +130,29 @@ object SqlExecutor {
         wholeScriptExec: Boolean = false,
         dialectGateRequest: ExecutionDialectGate.Request? = null,
         onDialectGate: ((ExecutionDialectGate.Verdict) -> Unit)? = null,
+        onSubmission: ((ExecutionSubmission) -> Unit)? = null,
     ): Boolean {
+        executionAttemptForTest?.let { it(null); return true }
         if (!ExecuteSqlSupport.isAvailable()) return false
+        val completed = java.util.concurrent.atomic.AtomicBoolean(false)
+        val receipt: (ExecutionSubmission) -> Unit = { outcome ->
+            if (completed.compareAndSet(false, true)) onSubmission?.invoke(outcome)
+        }
         return DataSourceSelector.executePrepared(
-            project, onResultsReady, onError, onErrorRich, wholeScriptExec,
-            dialectGateRequest, onDialectGate,
+            project, onResultsReady,
+            onError = if (onSubmission == null) onError else { message ->
+                receipt(ExecutionSubmission.BLOCKED)
+                onError?.invoke(message)
+                Unit
+            },
+            onErrorRich = if (onSubmission == null) onErrorRich else onErrorRich?.let { sink -> { info: ExecutionErrorInfo ->
+                receipt(ExecutionSubmission.BLOCKED)
+                sink(info)
+            } },
+            wholeScriptExec = wholeScriptExec,
+            dialectGateRequest = dialectGateRequest,
+            onDialectGate = onDialectGate,
+            onSubmission = if (onSubmission == null) null else receipt,
         )
     }
 

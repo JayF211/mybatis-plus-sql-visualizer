@@ -130,6 +130,14 @@ object DataSourceSelector {
     private val execPrewarmInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
 
     /**
+     * T-UiFixGate9 测试缝：exec 预暖链在途标记读数。victim 面板测试（rerender 触发预暖链）
+     * 收尾前等「链静止」（先见置位、再候复位），让写收敛落在用例生命周期内——链跨出用例后，
+     * 测试边界迟到的 VFS 会话会命中写窗口的「已改未存」态，MemoryDiskConflictResolver
+     * 收集冲突并在收尾 EDT 泵处理时抛 CompoundRuntimeException 杀无辜测试。
+     */
+    internal fun execPrewarmInFlightForTest(): Boolean = execPrewarmInFlight.get()
+
+    /**
      * T-PrewarmWilDeadlock W2：exec 预热整链预算——预热是投机性增强，链内任何平台等待
      * （VFS refresh / readAction / EDT 派发）挂死都必须有界放弃（曾因 BGT WIRA×同步 refresh
      * 自锁而永久驻留），超时放弃后弹窗冷路径按需重建兜底。
@@ -283,6 +291,14 @@ object DataSourceSelector {
     fun isPrepared(): Boolean = preparedConsole != null
 
     /**
+     * T-UI030：是否有准备链正在飞。结构化 EXPLAIN 在无已绑数据源时要弹既有选择器，
+     * 但已有准备链在飞时**只能等待**——预览准备对并发是 PASS_THROUGH，再走一次
+     * chooseAndPrepare 会建第二条会话/控制台（T-FirstExecResultInvisible F1 已实证的坑）。
+     */
+    @JvmStatic
+    fun isPrepareInFlight(): Boolean = prepareGate.prepareInFlight.get()
+
+    /**
      * R33 EXPLAIN 结构化通道：当前预览会话已绑控制台的 DBN 数据源（共享/已备控制台二者取一，
      * 循 T-ConsoleDbContext 既有选择形态——预览会话用哪条数据源，EXPLAIN 就在同一条上跑）。
      *
@@ -301,6 +317,24 @@ object DataSourceSelector {
         return ReadAction.compute<Any?, RuntimeException> {
             ExecConsoleContext.boundDataSource(console)
         }
+    }
+
+    /** UI023：仅替代 DBN 状态读取；测试仍走执行文档身份检查和真实缓存读取。 */
+    internal var schemaTargetReaderForTest: ((Any) -> SchemaValidationGate.Target?)? = null
+
+    internal fun schemaValidationTarget(document: com.intellij.openapi.editor.Document?): SchemaValidationGate.Target? {
+        // 首次 onEditor→embedConsole 会清 nativeConsoleEditor 辅助引用，但保留实际执行文档。
+        // 只认本面板执行文档与 preparedEditor.document 同一对象；不得借共享或其他预览文档。
+        if (document == null || document !== preparedEditor?.document) return null
+        val console = preparedConsole ?: return null
+        schemaTargetReaderForTest?.let { return it(console) }
+        if (!ExecuteSqlSupport.isAvailable()) return null
+        return runCatching {
+            if (console.javaClass.getMethod("isValid").invoke(console) != true) return@runCatching null
+            ReadAction.compute<SchemaValidationGate.Target?, RuntimeException> {
+                ExecConsoleContext.schemaValidationTarget(console)
+            }
+        }.getOrNull()
     }
 
     /**
@@ -457,6 +491,7 @@ object DataSourceSelector {
         wholeScriptExec: Boolean = false,
         dialectGateRequest: ExecutionDialectGate.Request? = null,
         onDialectGate: ((ExecutionDialectGate.Verdict) -> Unit)? = null,
+        onSubmission: ((ExecutionSubmission) -> Unit)? = null,
     ): Boolean {
         val console = preparedConsole ?: return false
         val editor = preparedEditor ?: return false
@@ -467,7 +502,9 @@ object DataSourceSelector {
             wholeScriptExec = wholeScriptExec,
             dialectGateRequest = dialectGateRequest ?: preparedDialectGateRequest,
             onDialectGate = onDialectGate ?: preparedDialectGateCallback,
+            onSubmission = onSubmission,
         )
+        // true 仍仅表示已进入准备好的控制台路径；提交结果只由 onSubmission 回报。
         return true
     }
 
@@ -1383,25 +1420,56 @@ object DataSourceSelector {
      * internal 供测试。
      */
     internal fun writeVfTextViaDocument(project: Project, vf: com.intellij.openapi.vfs.VirtualFile, text: String) {
+        // T-UiFixGate9：生命周期守卫——项目已 dispose（含测试框架的 temporarily-disposed 窗口：
+        // 243 平台 ProjectImpl.isDisposed() = 容器态≥DISPOSE_IN_PROGRESS || isTemporarilyDisposed，
+        // javap 实证该标志被 OR 进判定，守卫点在此窗口可达）后一律放弃写。半途写入（setText 成功、
+        // commitDocument/saveDocument 撞上收尾中的项目抛异常）会留下「已修改未保存」脏文档，
+        // 后续任一 VFS refresh 命中 MemoryDiskConflictResolver → EDT 延迟冲突处理杀掉无辜测试
+        // （20261018 门禁 shard5 三轮实录的第二个毒源）。预热是投机性写入，重跑无意义。
+        if (project.isDisposed) {
+            com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
+                .info("[M36] exec doc write abandoned (project disposed, T-UiFixGate9): ${vf.name}")
+            return
+        }
         // T-PreviewFast P4：程序性写入整段开闸——文档变更事件同步派发给自动落盘监听，
-        // 闸门开着即跳过（内容由本函数自己落盘，无需 1.5s 后再写一遍）
-        ExecDocAutosaveGate.suppressDuring {
-            val fileDoc = com.intellij.openapi.fileEditor.FileDocumentManager.getInstance().getDocument(vf)
-            if (fileDoc == null) {
-                vf.setBinaryContent(text.toByteArray())
-            } else {
-                if (fileDoc.text != text) {
-                    fileDoc.setText(text)
-                }
-                // setText 的 write command 结束时自动 commit；显式 commitDocument 双保险
-                // （同步后同 tick 内 findFile 的 PSI 立即对齐，M36.5.20 语义保留）
-                com.intellij.psi.PsiDocumentManager.getInstance(project).commitDocument(fileDoc)
-                // T-EC-01 核心：同临界区落盘——磁盘即时与内存一致，document 不滞留 modified 态
-                // T-PreviewFast P5：落盘前先判「已修改未保存」——内容本就一致时（连续预览同一
-                // SQL 的常见路径）跳过磁盘写，消除每次预览的无效落盘与随之而来的 VFS/索引噪音
+        // 闸门开着即跳过（内容由本函数自己落盘，无需 1.5s 后再写一遍）。
+        // T-UiFixGate9：写体内自包 WriteAction（平台可重入，已持写动作的调用方形态不变）——
+        // 零窗口直写分支需要 VFS 写权限，原「等内容路径不需要写权限」的裸调约定随之失效。
+        @Suppress("DEPRECATION") // T-M52：WriteAction.compute(ThrowableComputable) 243 编译目标仅此重载可用
+        com.intellij.openapi.application.WriteAction.compute<Unit, Throwable> {
+            ExecDocAutosaveGate.suppressDuring {
                 val fdm = com.intellij.openapi.fileEditor.FileDocumentManager.getInstance()
-                if (fdm.isDocumentUnsaved(fileDoc)) {
-                    fdm.saveDocument(fileDoc)
+                // T-UiFixGate9：改 getCachedDocument（**不主动建 document**）+ 双路写。
+                // 旧实现 getDocument 会主动建 document，随后 setText→saveDocument 之间存在
+                // ~30ms「已修改未保存」窗口——该窗口对**异步 refresh 线程**可见（EDT 原子性管不到
+                // 会话应用线程），边界迟到的 VFS 会话（fixture 重建/相邻测试 vf 删除重建的
+                // root-model 刷新）恰在此窗口命中，MemoryDiskConflictResolver 即收集冲突并在
+                // EDT 下一拍处理时抛出、杀掉正在收尾的无辜测试（20261018 门禁三轮实录 +
+                // [PROBE-GATE9] 探针实锤：victim 写窗口被建条目会话正中）。零窗口直写不建
+                // document，写后任一时刻 resolver 看到的都是干净态，冲突无从收集。
+                // 编辑器打开（真机控制台正看着这份内容，需视图同步）或文档已脏（用户键入未存，
+                // 外部覆盖须走既有冲突语义）仍走 document 路径，T-EC-01 同临界区落盘语义不变。
+                val fileDoc = fdm.getCachedDocument(vf)
+                if (fileDoc == null || (!isExecDocOpenInEditor(vf) && !fdm.isDocumentUnsaved(fileDoc))) {
+                    vf.setBinaryContent(text.toByteArray())
+                    if (fileDoc != null) {
+                        // 缓存 doc 是干净态：同步从盘重载对齐新内容（平台对「外部改盘+干净 doc」
+                        // 的既有语义），不产生 modified 位
+                        fdm.reloadFromDisk(fileDoc)
+                    }
+                } else {
+                    if (fileDoc.text != text) {
+                        fileDoc.setText(text)
+                    }
+                    // setText 的 write command 结束时自动 commit；显式 commitDocument 双保险
+                    // （同步后同 tick 内 findFile 的 PSI 立即对齐，M36.5.20 语义保留）
+                    com.intellij.psi.PsiDocumentManager.getInstance(project).commitDocument(fileDoc)
+                    // T-EC-01 核心：同临界区落盘——磁盘即时与内存一致，document 不滞留 modified 态
+                    // T-PreviewFast P5：落盘前先判「已修改未保存」——内容本就一致时（连续预览同一
+                    // SQL 的常见路径）跳过磁盘写，消除每次预览的无效落盘与随之而来的 VFS/索引噪音
+                    if (fdm.isDocumentUnsaved(fileDoc)) {
+                        fdm.saveDocument(fileDoc)
+                    }
                 }
             }
         }
@@ -1446,6 +1514,16 @@ object DataSourceSelector {
     internal fun docWriteOnce(project: Project, vf: com.intellij.openapi.vfs.VirtualFile, sql: String): Boolean = runCatching {
         if (execWriteActionFailureInjection) {
             error("injected exec WriteAction failure (T-ExecDocSync test seam)")
+        }
+        // T-UiFixGate9：派发拍执行时刻复查——fire-and-forget 写（waitBudgetMs=0）排队期间项目
+        // 可能已进入 dispose/temporarily-disposed；DocWriteContext.invokeLaterWriteSafe 的
+        // Disposer.isDisposed 守卫对测试框架的临时 dispose 失明（只置 ProjectImpl 标志、不动
+        // ObjectTree），须以 project.isDisposed（已 OR temporarily 标志）复查并放弃写。false =
+        // 有界等待路径照常走「不裸写、内容旧一拍」既有降级，语义不变。
+        if (project.isDisposed) {
+            com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
+                .info("[M36] exec doc write refused at dispatch (project disposed, T-UiFixGate9): ${vf.name}")
+            return@runCatching false
         }
         @Suppress("DEPRECATION") // T-M52：WriteAction.compute(ThrowableComputable) 243 编译目标仅此重载可用
         com.intellij.openapi.application.WriteAction.compute<Unit, Throwable> {
@@ -1697,8 +1775,10 @@ object DataSourceSelector {
                 LOG.info("[M36] exec prewarm: cache hit, exec doc open in editor — content refresh SKIPPED (T-PreviewFast P3)")
                 return
             }
-            // T-PreviewFast P2：非阻塞派发——预热是投机性写入，没必要让 BGT 等满 2 秒
-            runCatching { projectExecFile(project, sql, nonBlocking = true) }.onFailure { e ->
+            // T-UiFixGate9：有界派发（原 T-PreviewFast P2 的 nonBlocking=true fire-and-forget 已退役，
+            // 见 projectExecFile 内注释）——缓存命中刷新同样不得留下跨边界的排队写：排队拍落在
+            // 测试/交互边界时，迟到的 VFS 会话会命中 setText→save 窗口的「已改未存」态收集冲突。
+            runCatching { projectExecFile(project, sql) }.onFailure { e ->
                 // T-FatalPassthrough T-FP-02b（独立复核阻断 2）：写盘链的 fatal 不得被本 runCatching
                 // 吞成一条 warn（否则 prewarm 链 4 处既有透传全部作废）。非 fatal 仍原样 warn 降级。
                 if (FatalErrors.isFatal(e)) throw e

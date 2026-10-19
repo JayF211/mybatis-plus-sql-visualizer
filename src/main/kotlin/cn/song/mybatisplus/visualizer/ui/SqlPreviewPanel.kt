@@ -866,6 +866,8 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
         // T-AutoFold F5：面板废弃——控制台编辑器引用一并清空（防 EditorFactory 泄漏告警）
         // T-PreviewLineCommentDash O-134：面板销毁减计数（detachConsole 已覆盖常规路径，此处兜底直清分支）
         nativeConsoleEditor?.let(EditorCommentShortcuts::uninstall)
+        // UI025：摘除编辑器级错列标注通道（监听 + RangeHighlighter）
+        nativeConsoleEditor?.let(cn.song.mybatisplus.visualizer.ui.annotate.PreviewSchemaHighlighter::uninstall)
         nativeConsoleEditor = null
         // T-M36.6-03：面板销毁——晚到的预热线程产物作废（预热线程自查后删除临时文件）
         previewDisposed = true

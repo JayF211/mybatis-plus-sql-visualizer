@@ -173,6 +173,8 @@ internal fun DataSourceSelector.prepareAfterEditorResolved(
 
         // 4.1 触发内容构建（独立 try-catch）
         if (logView != null) {
+            // 单测/惰性平台在attach时尚未建view；这里getView后补登记同一资源。
+            NativeConsoleViewLifetime.remember(project, console)
             runCatching {
                 logView.javaClass.getMethod("ensureContentInitialized").invoke(logView)
             }.onFailure { e ->
@@ -462,6 +464,7 @@ internal fun DataSourceSelector.prepareAfterEditorResolved(
             if (queuedIntent != null) queuedExecuted = true
         }
     }.onFailure { e ->
+        NativeConsoleViewLifetime.unwrapAndRethrowCritical(e)
         LOG.warn("[M36] prepareInConsole FAILED: ${e.javaClass.simpleName}: ${e.message}", e)
         // M36.3：通知调用方错误，确保 UI 从「执行中」状态恢复
         val cause = (e as? java.lang.reflect.InvocationTargetException)?.targetException ?: e
@@ -1141,6 +1144,8 @@ internal fun DataSourceSelector.prepareInConsole(
             return
         }
 
+        // 在回调/后续准备可能失败之前登记已创建的原生view；不依赖prepared/shared缓存。
+        NativeConsoleViewLifetime.remember(project, console)
         val consoleClass = Class.forName(CONSOLE_CLASS)
 
         // 2. 执行用编辑器：按 console 文档反查（先于内嵌——编辑器随 console 创建即初始化）。
@@ -1218,6 +1223,7 @@ internal fun DataSourceSelector.prepareInConsole(
                                 dialectGateRequest, onDialectGate, onSubmission, isPrepareActive,
                             )
                         }.onFailure { e ->
+                            NativeConsoleViewLifetime.unwrapAndRethrowCritical(e)
                             LOG.warn("[M36] prepareInConsole(editor async wait) FAILED: ${e.javaClass.simpleName}: ${e.message}", e)
                             val cause = (e as? java.lang.reflect.InvocationTargetException)?.targetException ?: e
                             onError?.invoke(cause.message ?: cause.toString())
@@ -1239,6 +1245,7 @@ internal fun DataSourceSelector.prepareInConsole(
             }
         }
     }.onFailure { e ->
+        NativeConsoleViewLifetime.unwrapAndRethrowCritical(e)
         LOG.warn("[M36] prepareInConsole FAILED: ${e.javaClass.simpleName}: ${e.message}", e)
         // M36.3：通知调用方错误，确保 UI 从「执行中」状态恢复
         val cause = (e as? java.lang.reflect.InvocationTargetException)?.targetException ?: e

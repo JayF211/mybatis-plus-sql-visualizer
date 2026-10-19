@@ -31,7 +31,7 @@ class RollbackSnapshotStore(private val project: Project) {
     enum class Status {
         /** 已登记（执行按钮已触发 UPDATE/DELETE，快照工作流可用）。 */
         REGISTERED,
-        /** 回滚已执行（F6 留痕终态）。 */
+        /** 回滚已提交执行（F6 留痕终态）；不代表数据库执行成功或事务已提交。 */
         ROLLBACK_EXECUTED,
     }
 
@@ -153,7 +153,8 @@ class RollbackSnapshotStore(private val project: Project) {
     }
 
     /**
-     * F6 留痕：回滚执行完成——原执行条目置「已执行」终态（回滚弹窗横幅与审计链依据）。
+     * F6 留痕：收到真实 SUBMITTED 回执后置提交终态（兼容保留 ROLLBACK_EXECUTED 枚举名）。
+     * 只记录回滚已交给执行器，不证明数据库执行成功；禁止在选择、排队或取消时调用。
      * 返回 false = 条目已不在（LRU 淘汰/未登记），调用方忽略即可。
      */
     @Synchronized

@@ -91,6 +91,8 @@ data class PreviewResult(
      * 仅供面板重渲染路径复用。null = 无分页 LIMIT（未分页 / count·exists 消费 / 已含手写 LIMIT / 开关关闭）。
      */
     val paginationLimitLine: String? = null,
+    /** 分页后处理新增占位的来源序列；与原 SQL 的位置映射分开保存，重渲染不得按名称去重。 */
+    val paginationParamSources: List<String> = emptyList(),
     /**
      * T-JpaParamOrder F3：JPA 命名参数占位符名序（HQL `:name` 首现序，与转换后 SQL 中 `?` 一一对应）。
      * 非空时渲染/复制按名回填（同名占位复用同值，JPA 命名参数语义），与 setParameter 书写顺序解耦；

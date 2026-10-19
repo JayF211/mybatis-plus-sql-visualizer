@@ -490,6 +490,8 @@ class JavaCodeGeneratorJoinTest {
         )
         val entity = JavaCodeGenerator.EntityTarget("User", mapOf("id" to "id", "name" to "name"))
         val code = JavaCodeGenerator.generate(result, entity, GeneratedWrapper.LAMBDA)
+        // MP core 无 selectAs 重载（javap 3.5.14/3.5.17 实证），带别名投影整链回落字符串 select
+        assertTrue(code, code.contains(".select(\"t.name AS productName\", \"id\")"))
         assertTrue(code, code.contains("new QueryWrapper<User>()"))
         assertFalse("MP core LambdaQueryWrapper has no selectAs API", code.contains(".selectAs("))
         GeneratedProjectionCompiler.assertProjection(code, "t.name AS productName,id")
