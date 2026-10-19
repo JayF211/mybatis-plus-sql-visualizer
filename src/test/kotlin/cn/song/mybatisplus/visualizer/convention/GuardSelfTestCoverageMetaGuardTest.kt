@@ -1018,7 +1018,13 @@ class GuardSelfTestCoverageMetaGuardTest {
                 "ui/ExplainPanelWiringGuardTest.kt",
                 emptyList(),
                 "断言直接内联在 @Test（R33 接线四断言：ExplainPanelChannel.decide 可达/submitExplainDirect 直送链单函数收敛/" +
-                    "embedExplainView 结构化视图嵌入/ExplainIndexAdvisor.advise 面板侧建议接入）",
+                    "ExplainPlanDialog/showExplainDialog 非模态展示不替换编辑器/ExplainIndexAdvisor.advise 面板侧建议接入）",
+            ),
+            GuardEntry(
+                "ui/DialectStatusRefreshWiringGuardTest.kt",
+                emptyList(),
+                "断言直接内联在 @Test（T-DialectStatusLiveRefresh 两断言：embedConsole 钩子与绑定行刷新同拍调用 " +
+                    "refreshDialectStatusRow / rerenderForExecutionTarget 在 renderSql 前升级 currentDialectDecision）",
             ),
             // ---- O-93 全局手动方言残值泄漏守卫（2026-10-02 T-BatchTestLeak 补登记——漏登记由 R33 修复轮元守卫红抓出） ----
             GuardEntry(

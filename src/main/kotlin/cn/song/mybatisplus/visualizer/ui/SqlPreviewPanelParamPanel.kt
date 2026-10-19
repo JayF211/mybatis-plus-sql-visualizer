@@ -134,6 +134,7 @@ internal fun SqlPreviewPanel.rebuildLeftPanel(result: PreviewResult) {
     fieldFillSimulationComponents.clear()
     fieldFillCheckBox = null
     fieldFillStatus = null
+    impactResultLabel = null
     paramPanel.removeAll()
     paramFields.clear()
     paramWarnLabels.clear()
@@ -617,6 +618,22 @@ internal fun SqlPreviewPanel.buildBatchColumnRow(col: BatchColumn, isToggle: Boo
     syncFieldFillNormalEnabled()
     row.border = JBUI.Borders.empty(0, 8, 2, 8)
     return row
+}
+
+/** T-PreviewSideQuery P1：预估影响行数内联结果；不触碰编辑器/控制台。 */
+internal fun SqlPreviewPanel.showDmlImpactResult(text: String, error: Boolean) {
+    val label = impactResultLabel ?: JBLabel().also {
+        it.name = "dmlImpactResult"
+        it.alignmentX = java.awt.Component.LEFT_ALIGNMENT
+        it.border = JBUI.Borders.empty(4, 16, 4, 8)
+        paramPanel.add(it)
+        impactResultLabel = it
+    }
+    label.text = fieldFillText(text, label.font, JBUI.scale(260))
+    label.toolTipText = text
+    label.foreground = if (error) JBColor.RED else UIUtil.getContextHelpForeground()
+    paramPanel.revalidate()
+    paramPanel.repaint()
 }
 
 /** 模拟值在场时置灰对应的普通参数输入框；清空模拟值后恢复。 */

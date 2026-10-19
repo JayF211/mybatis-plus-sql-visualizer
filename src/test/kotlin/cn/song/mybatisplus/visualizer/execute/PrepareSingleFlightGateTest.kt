@@ -454,11 +454,11 @@ class PrepareSingleFlightGateTest {
     @Test
     fun `接线_全链执行embed调用点全部显式EXECUTE`() {
         val panel = panelUnion()
-        // 六条全链执行链（executeSql 两处 / executeAdhocSql 两处 / EXPLAIN 直送一处 /
-        // R42 DML 影响面预演 probe 一处——631b12a 的 embedMode 归口漏迁该点，T-MergeMasterToDev2
-        // 合并时按同一映射补齐为 EXECUTE；T-M53-II D2-5 拆分后经 panelUnion() 扫面板全体源文件）
+        // 五条全链执行链（executeSql 两处 / executeAdhocSql 两处 / EXPLAIN 显式「在控制台打开」一处）。
+        // T-PreviewSideQuery P2：EXPLAIN 默认直送改走只读旁路查询，不再经 embedConsole；
+        // R42 DML 影响面预演同样改旁路查询——两者都不应再计入全链控制台嵌入点。
         assertEquals(
-            6,
+            5,
             "embedConsole(consoleComponent, embedMode = ConsoleEmbedMode.EXECUTE)".let { needle -> panel.split(needle).size - 1 },
         )
         // executePrepared 的 onResultsReady 两处（executeSql + executeAdhocSql）

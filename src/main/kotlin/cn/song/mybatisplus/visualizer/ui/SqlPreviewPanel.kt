@@ -339,6 +339,10 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
     internal val fieldFillSimulationComponents = mutableListOf<JComponent>()
     internal var fieldFillCheckBox: JCheckBox? = null
     internal var fieldFillStatus: JBLabel? = null
+    /** T-PreviewSideQuery P1：预估影响行数的内联结果行（不进入控制台/结果区）。 */
+    internal var impactResultLabel: JBLabel? = null
+    /** T-PreviewSideQuery P2：EXPLAIN 非模态结果对话框（不替换预览编辑器）。 */
+    internal var explainResultDialog: ExplainPlanDialog? = null
 
     /**
      * T-PrewarmLateRecover F1：预热相关回调的 EDT 派发通道（写安全模态）。

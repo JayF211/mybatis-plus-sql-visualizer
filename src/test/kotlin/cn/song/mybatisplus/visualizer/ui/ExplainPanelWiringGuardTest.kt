@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.ui
 
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -12,7 +13,7 @@ import java.io.File
  *  1. explainSql 真的经 `ExplainPanelChannel.decide` 分派；
  *  2. 直送通道收敛为 `submitExplainDirect` 单函数且**至少两处复用**（初始回退 + 回到原生
  *     控制台入口——双通道并存的守恒判据：结构化通道绝不成为唯一路径）；
- *  3. 结构化视图经 `embedExplainView` 换入；
+ *  3. 结构化视图经非模态对话框展示（ExplainPlanDialog/showExplainDialog），不替换编辑器；
  *  4. 索引建议真的接入面板侧消费（ExplainIndexAdvisor.advise 在 SqlPreviewPanel 有调用点）。
  */
 class ExplainPanelWiringGuardTest {
@@ -41,10 +42,14 @@ class ExplainPanelWiringGuardTest {
     }
 
     @Test
-    fun `结构化视图经embedExplainView换入`() {
+    fun `结构化视图经非模态对话框展示不替换编辑器`() {
         val source = sqlPreviewPanelSource()
         assertTrue(
-            "结构化渲染结果必须经 embedExplainView 换入结果区",
+            "结构化渲染结果必须经 ExplainPlanDialog/showExplainDialog 展示",
+            source.contains("ExplainPlanDialog(") && source.contains("showExplainDialog("),
+        )
+        assertFalse(
+            "结构化路径不得再调用 embedExplainView 替换预览编辑器",
             source.contains("embedExplainView"),
         )
     }
