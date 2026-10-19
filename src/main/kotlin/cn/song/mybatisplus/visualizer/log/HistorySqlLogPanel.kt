@@ -1140,7 +1140,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
      * T-M55-01：跳转到 mapper XML 语句节点。mapperStatement 非空且定位成功才显示
      * （update 内解析一次并存引用）；定位失败不显示，「跳转到 Java」承担回退，不劣化。
      */
-    private inner class JumpToMapperXmlAction(private val entry: LogSqlEntry) : AnAction() {
+    internal inner class JumpToMapperXmlAction(private val entry: LogSqlEntry) : AnAction() {
         private var resolved: HistoryJumpTarget.MapperXml? = null
 
         override fun update(e: AnActionEvent) {

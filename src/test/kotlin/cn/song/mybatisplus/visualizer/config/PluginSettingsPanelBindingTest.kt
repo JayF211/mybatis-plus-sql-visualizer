@@ -470,4 +470,47 @@ class PluginSettingsPanelBindingTest : BasePlatformTestCase() {
             before !== settings.state,
         )
     }
+
+    /**
+     * T-EnhancedCaptureDefaultOn 复盘补测（G-C）：增强捕获开关的运行期绑定。
+     * SettingsRealityGuardTest 只保证「符号出现在 apply/reset 体里」（源码扫描），
+     * 绑错字段不红——本用例用真实 apply/reset/isModified 驱动三向断言钉住行为。
+     */
+    fun test增强捕获开关_apply_reset_isModified三向绑定() {
+        val settings = PluginSettings.getInstance()
+        val snapshot = settings.getState().copy()
+        try {
+            val configurable = AllSectionsConfigurable()
+            configurable.createComponent()
+            val panel = configurable.panelForTest()
+
+            // ① isModified：勾选态与 state 一致时不得报脏
+            panel.enhancedCaptureCheck.isSelected = settings.state.enhancedCaptureEnabled
+            assertFalse("勾选态与 state 一致时 isModified 必须为 false", configurable.isModified())
+
+            // ② apply：勾选翻转 → state 翻转写回。先把同排的脱敏复选框拉成相反值——
+            // 否则「绑错字段」探针（写成 desensitize 值）与期望值同态，判别力归零（反向验证实证）。
+            panel.enhancedDesensitizeCheck.isSelected = settings.state.enhancedCaptureEnabled
+            panel.enhancedCaptureCheck.isSelected = !settings.state.enhancedCaptureEnabled
+            assertTrue("勾选态翻转后 isModified 应为 true", configurable.isModified())
+            configurable.apply()
+            assertEquals(
+                "apply 应把复选框值写回 enhancedCaptureEnabled（绑错字段此处即红）",
+                panel.enhancedCaptureCheck.isSelected,
+                settings.state.enhancedCaptureEnabled,
+            )
+
+            // ③ reset：state 变化 → 复选框回读
+            settings.state.enhancedCaptureEnabled = !settings.state.enhancedCaptureEnabled
+            configurable.reset()
+            assertEquals(
+                "reset 应把 state 值回读到复选框（回读错字段此处即红）",
+                settings.state.enhancedCaptureEnabled,
+                panel.enhancedCaptureCheck.isSelected,
+            )
+            assertFalse("reset 后 isModified 应回到 false", configurable.isModified())
+        } finally {
+            settings.loadState(snapshot)
+        }
+    }
 }

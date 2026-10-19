@@ -111,4 +111,58 @@ class HistorySqlDiffTest : BasePlatformTestCase() {
         assertTrue("差异标题应含差异行数：$t2", t2.contains("3"))
         assertFalse("两种标题不应相同", t1 == t2)
     }
+
+    // ------------------------------------------------------------------
+    // T-EnhancedCaptureDefaultOn 复盘补测（G-B）：历史页二级右键「跳转到 Mapper XML」显隐规则。
+    // 该动作 update 内 isEnabledAndVisible = resolved != null；无 mapperStatement 必须隐藏。
+    // 近亲 RecentExecutionsDialogTest 有同规则用例，历史页此前缺对应用例——resolve 纯函数
+    // 测试（SqlLogPanelXmlJumpTest）绿盖不住动作 update 的接线（与暂停按钮同族形态）。
+    // ------------------------------------------------------------------
+
+    private fun presentationOf(action: com.intellij.openapi.actionSystem.AnAction): com.intellij.openapi.actionSystem.Presentation {
+        val event = AnActionEvent.createFromAnAction(action, null, "test", DataContext.EMPTY_CONTEXT)
+        action.update(event)
+        return event.presentation
+    }
+
+    private fun xmlJumpAction(panel: HistorySqlLogPanel, hit: LogSqlEntry, selected: List<LogSqlEntry>): HistorySqlLogPanel.JumpToMapperXmlAction =
+        panel.buildSqlContextMenu(hit, selected)
+            .getChildren(null)
+            .filterIsInstance<HistorySqlLogPanel.JumpToMapperXmlAction>()
+            .firstOrNull()
+            ?: throw AssertionError("历史右键菜单缺少「跳转到 Mapper XML」动作（T-M55-01 接线断言失败）")
+
+    fun test跳转XML动作_无mapperStatement时隐藏() {
+        val panel = HistorySqlLogPanel(project)
+        val e = entry("SELECT * FROM user WHERE id = 1", 1000L)
+        try {
+            val action = xmlJumpAction(panel, e, listOf(e))
+            val p = presentationOf(action)
+            assertFalse(
+                "无 mapperStatement 时历史页「跳转到 Mapper XML」应隐藏（与日志页/最近执行弹框同规则）",
+                p.isVisible,
+            )
+            assertFalse(p.isEnabled)
+        } finally {
+            panel.dispose()
+        }
+    }
+
+    fun test跳转XML动作_有mapperStatement但XML不存在_同样隐藏() {
+        val panel = HistorySqlLogPanel(project)
+        // mapperStatement 在（MP 内置语句 ms.getId() 恒有值）但工程里没有对应 XML → resolve 失败 → 隐藏
+        val e = entry("SELECT * FROM user WHERE id = 1", 1000L).copy(
+            mapperStatement = "com.demo.mapper.NotExistMapper.selectById",
+        )
+        try {
+            val action = xmlJumpAction(panel, e, listOf(e))
+            val p = presentationOf(action)
+            assertFalse(
+                "XML 文件不存在时「跳转到 Mapper XML」应隐藏（回退「跳转到 Java」，不劣化）",
+                p.isVisible,
+            )
+        } finally {
+            panel.dispose()
+        }
+    }
 }
