@@ -5,7 +5,7 @@ metadata:
   node_type: memory
   type: pitfall
   originSession: M36.5 方案 A（2026-08-30 ~ 08-31）
-  commits: c54eefc, daf75d1
+  commits: 7294d38, bc9963b
 ---
 
 # DBN Output 控制台 44px 塌缩（M36.5.60→M36.5.76）

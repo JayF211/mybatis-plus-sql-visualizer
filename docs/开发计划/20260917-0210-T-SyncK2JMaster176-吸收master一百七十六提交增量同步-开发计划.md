@@ -1,31 +1,31 @@
-# T-SyncK2JMaster176 开发计划——master 50d3fb9..9def321 增量同步
+# T-SyncK2JMaster176 开发计划——master c4c5f02..ed84f5b 增量同步
 
 > 立项日期：2026-09-17　分支：feature/kotlin-to-java（worktree `mybatis-plus-sql-visualizer-kotlin-to-java`）
-> 同步源：**本地 master 9def321**（增量范围 `git diff 50d3fb9..9def321`，176 提交，358 文件，生产 +6870/-2632、测试 +6268/-843；master 侧活跃会话 t-mergedev17 在册，若合流推进 master 则本轮锚点仍钉 9def321，增量留下一轮）
-> 上轮收官：T-SyncK2JMaster171（b9221b4，全量 3975/0/0/6 绿 319 套件 + buildPlugin + verifyPlugin 三目标 Compatible，锚点 50d3fb9）
+> 同步源：**本地 master ed84f5b**（增量范围 `git diff c4c5f02..ed84f5b`，176 提交，358 文件，生产 +6870/-2632、测试 +6268/-843；master 侧活跃会话 t-mergedev17 在册，若合流推进 master 则本轮锚点仍钉 ed84f5b，增量留下一轮）
+> 上轮收官：T-SyncK2JMaster171（159997c，全量 3975/0/0/6 绿 319 套件 + buildPlugin + verifyPlugin 三目标 Compatible，锚点 c4c5f02）
 > 用户指示：同步功能、**不合并分支**（方案A手工移植不变）。
 
 ## 1. 背景与目标
 
-锚点之后 master 经历了仅次于上轮的大增量：**M56 agent 字节码增强全链合入**（feature/t-m56-01-agent-base 整分支经 126ee65 落主，agent 子项目 36 文件 + IDE 侧 log/agent 五件 + 确认流 + 设置归位，整包对 k2j 全新）、T-UiNative 四批次原生化、增强捕获修复链五连（LogTime/SourceJump/ListenSync/DialectLoop/CudSource）、控制台并发分桶两轮（T-LogParseConc/T-HibConc）、feedback 三任务多轮（Dlg 系/Err 三轮/Batch2）、日志列表增强链（LogSortModes/原始时间/行号/搜索时间戳/ListPreviewCopy/DisplayModeToSettings/VStack·InAll/ListParamCollect）、execute/ui 修复链（ExecSlowOps/ExecDocSync/PreviewExecDs/ExplainDbl/ExplainFirstNative/MergeFollowup 四轮/JumpCapture/JumpPath/IntrUpg/ModPick/MpjColAlias）、T-TestPerf2 全量提速与 T-ReleasePerf 发版提速、以及 v2026.9.14 与 v2026.9.18-beta.1/.2/.3 四个发行。
+锚点之后 master 经历了仅次于上轮的大增量：**M56 agent 字节码增强全链合入**（feature/t-m56-01-agent-base 整分支经 68469dd 落主，agent 子项目 36 文件 + IDE 侧 log/agent 五件 + 确认流 + 设置归位，整包对 k2j 全新）、T-UiNative 四批次原生化、增强捕获修复链五连（LogTime/SourceJump/ListenSync/DialectLoop/CudSource）、控制台并发分桶两轮（T-LogParseConc/T-HibConc）、feedback 三任务多轮（Dlg 系/Err 三轮/Batch2）、日志列表增强链（LogSortModes/原始时间/行号/搜索时间戳/ListPreviewCopy/DisplayModeToSettings/VStack·InAll/ListParamCollect）、execute/ui 修复链（ExecSlowOps/ExecDocSync/PreviewExecDs/ExplainDbl/ExplainFirstNative/MergeFollowup 四轮/JumpCapture/JumpPath/IntrUpg/ModPick/MpjColAlias）、T-TestPerf2 全量提速与 T-ReleasePerf 发版提速、以及 v2026.9.14 与 v2026.9.18-beta.1/.2/.3 四个发行。
 
-本轮目标：把上述增量全部移植进 100% Java 的 k2j 生产树，全量测试绿 + buildPlugin/verifyPlugin 三目标通过，锚点推进 9def321。绝无 git merge；共享文件（plugin.xml/bundle/build.gradle.kts/settings.gradle.kts/CHANGELOG/MEMORY/变更记录）走手工 union，k2j 自有行零丢失。
+本轮目标：把上述增量全部移植进 100% Java 的 k2j 生产树，全量测试绿 + buildPlugin/verifyPlugin 三目标通过，锚点推进 ed84f5b。绝无 git merge；共享文件（plugin.xml/bundle/build.gradle.kts/settings.gradle.kts/CHANGELOG/MEMORY/变更记录）走手工 union，k2j 自有行零丢失。
 
 ## 2. master 增量功能线（176 提交归组）
 
 | 功能线 | 主要提交 | 内容概要 |
 |---|---|---|
-| L1 M56 agent 全链合入 | 126ee65 合入 + a16122c/4623a12/ffdd1fe 等 09-12 系列 + 03d7d6e/3903b49/ee4c1c6/8901892/84ef746/cbde54e/795c136 | agent 子项目整包 36 文件（Java 直取）+ settings.gradle.kts 组合构建 include + build.gradle.kts embedAgentJar 内嵌链 + 构建工具源纳管；IDE 侧 log/agent 五件（AgentEvent/AgentEventAdapter/AgentManager/AgentProtocol/JdbcUrlDialects）Kotlin→Java；EnhancedCaptureConfirmDialog 确认流（首挂征求注入确认、标题补插件名前缀、Cancel 走插件 bundle）；增强捕获默认开启/脱敏默认关闭；设置三行归位 sqlLog 区组（读写判定随迁） |
-| L2 增强捕获修复链 | 26b7f57/564356b/edb053e/a496abb/a5e27de/2590271/368bbca | T-AgentLogTime（LogTimeCorrelator/LogTimestampParser/LogThreadRouter 三新件：采集时刻前移+指纹相关器+线程分桶路由）；T-AgentDialectLoop（JdbcUrlDialects 九方言+目标库角标+SqlLogFileReader logTime 读回修复）；T-AgentSourceJump（插件帧误选根治+行数语义+耗时排序结构化优先+角标移除）；T-AgentListenSync（attach 后按状态下发）；agent 事件 JSON 首成员前导逗号根治（Jsons 守卫测试）；T-AgentCudSource（增删改语句源码位置捕获修复） |
-| L3 控制台并发分桶 | 3874845/3c744d7 | T-LogParseConc 控制台解析并发配对（线程分桶下沉/空参判别/多行时间取首行/MyBatis 续行）；T-HibConc Hibernate 分桶（MRU 无 token 归属+状态按桶隔离+影子槽按桶） |
-| L4 T-JumpCapture/JumpPath/IntrUpg/ModPick | b899ee3/f987fdf/9d09e56/964f89f | 跳转仅依赖拦截器捕获位置（WrapperSearchService/Result 退役+SourceCaptureGuide 三按钮引导新件）；多模块路径解析与自位污染；旧拦截器解析防线+自动升级（SqlSourceMarker.isInterceptorSelfPath/needsInterceptorUpgrade）；InjectionModulePickerDialog 多模块勾选 |
-| L5 T-UiNative 四批次 | eb2f289/9ae7071/2abba45/720ca21/7ebf217/d6dc7f3/27c72cc/b799afb/5b0e2c3/f65d9ae | 剪贴板收口 UiTextClipboard 新件+OnePixelSplitter+SearchTextField+SpeedSearch；19 处模态轻提示换通知；右键菜单 ActionGroup 化+SqlListSelectionOutline 退役；JOIN 图/历史导航迁 ActionToolbar；死代码删除（SqlHistoryPanel/SqlHistoryToolWindowFactory/SqlHistorySearchBar/Timeout.html）+33 项颜色 namedColor 化集中 MpvsUiColors 新件；加载态原生件+Kotlin UI DSL v2 试点；历史二级列表 SpeedSearch 按需安装修复+渲染器高亮；守卫规则反转（钦定 updateActionsImmediately 禁反射 hack） |
-| L6 日志列表增强链 | aaecc79/b153e0f/a14087e/51eb01a/7d23c1d/5eeb884/dee44ae/b93b36c/e4bbd39/dc8e8e3→651cbf2/a7bb545/454ea08/ce495f7/478d3fa | T-LogSortModes 排序方式选择器（数据类 toString 泄露修复/元信息顺序统一）；日志原始时间记录与显示切换；搜索行号/时间+右键复制时间戳；SQL 历史列表行号；T-ListPreviewCopy 默认格式化+多选批量复制；T-DisplayModeToSettings 显示模式迁设置页（ComboBoxButton 原生化四轮）；T-VStack·InAll IN 列表全量竖排；T-ListParamCollect 集合参数方括号修复（ListParamRenderer 新件） |
-| L7 feedback 多轮 | 8ccb0ac/af01346/0b8c293/0f305b4/ed2f92e/4fd5ce4/faeccd6/be59e2c/8aafd92/6d7cb05 | 报告对话框三轮（宽度/灰提示/可拖拽/堆栈勾选/手动形态自主输入/默认高收敛）；T-FeedbackErr 三轮（失败可见性/状态机落对话框/gzip 解压根治/nonJsonHint/附件降级+UTF-8 BOM/复制失败信息按钮）；T-FeedbackBatch2 批量合并一帖（BatchSubmitter 新件）；PendingReportScheduler 错峰补发新件（0f305b4）；T-PerfSweep2 三项（响应体有界读取/附件截断/调度器单拍链式化） |
-| L8 execute/预览/ui 修复链 | 1198fee/a7ca191/48825b4/94c3128/b641d25/806b887/6889635/98d3500 | T-ExecSlowOps（DialectPreMapping 新件两段式映射）；T-ExecDocSync（document 写统一派 EDT）；T-PreviewExecDs（跨项目数据源错乱三级降级）；T-ExplainDbl 幂等包装；T-ExplainFirstNative（空名占位 Tab+EXPLAIN 裸形态）；MergeFollowup 四轮（EXPLAIN 按钮回补/gutter 右键正解/模式切换 updateUI/显示模式按钮同构） |
-| L9 converter/杂项 | afcc09b/53ebe9e/33b9a80/6177b17 | T-MpjColAlias 联表 lambda 列归属 join 别名（MpjLambdaConverter）；plugin.xml 根 url 挂官网；T-Intranet 换源诊断日志；T-SettingsOrder 子页 groupWeight 钉序 |
-| L10 发行与提速 | 008e0ba/970e2da/dec6a2f/cbec1ee/c44dbfd/e1ac26b/9e4a314 | v2026.9.14 + v2026.9.18-beta.1/.2/.3 四发行（版本号/CHANGELOG/变更记录/发行说明/preview/update.json/changeNotes）；T-ReleasePerf verifyGate 离线化+releaseGate 一命令；T-TestPerf2 testShards 并行提速+buildCache 落 settings 层 |
-| L11 文档/归档/杂物 | 93fe604/071b892/0fcbdcf/8e4f485/9def321/4f7aca8/13e11d3/3c3a815/ea4d983 等 | 第五/六轮竞品调研报告+数十份计划立项入库；memory 两次精简归档搬移（bug-fixes 37 件+pitfalls 7 件）；全景审计报告；架构三册同步（WrapperSearchService 移除改 SourceCaptureGuide）；demo-09 GIF+group-qr.png；record 两脚本；.gitignore/sub-projects README |
+| L1 M56 agent 全链合入 | 68469dd 合入 + bc6351c/ae0c549/d13241d 等 09-12 系列 + cf664bc/816de03/388a56b/711370a/25f0a77/33f96fb/92bcf6f | agent 子项目整包 36 文件（Java 直取）+ settings.gradle.kts 组合构建 include + build.gradle.kts embedAgentJar 内嵌链 + 构建工具源纳管；IDE 侧 log/agent 五件（AgentEvent/AgentEventAdapter/AgentManager/AgentProtocol/JdbcUrlDialects）Kotlin→Java；EnhancedCaptureConfirmDialog 确认流（首挂征求注入确认、标题补插件名前缀、Cancel 走插件 bundle）；增强捕获默认开启/脱敏默认关闭；设置三行归位 sqlLog 区组（读写判定随迁） |
+| L2 增强捕获修复链 | 17eb380/d317d78/a474447/e0acf1d/fb408b9/4f69780/d89c334 | T-AgentLogTime（LogTimeCorrelator/LogTimestampParser/LogThreadRouter 三新件：采集时刻前移+指纹相关器+线程分桶路由）；T-AgentDialectLoop（JdbcUrlDialects 九方言+目标库角标+SqlLogFileReader logTime 读回修复）；T-AgentSourceJump（插件帧误选根治+行数语义+耗时排序结构化优先+角标移除）；T-AgentListenSync（attach 后按状态下发）；agent 事件 JSON 首成员前导逗号根治（Jsons 守卫测试）；T-AgentCudSource（增删改语句源码位置捕获修复） |
+| L3 控制台并发分桶 | 6626365/e7787ca | T-LogParseConc 控制台解析并发配对（线程分桶下沉/空参判别/多行时间取首行/MyBatis 续行）；T-HibConc Hibernate 分桶（MRU 无 token 归属+状态按桶隔离+影子槽按桶） |
+| L4 T-JumpCapture/JumpPath/IntrUpg/ModPick | 2c7426c/18d29bb/fa79944/f40cde7 | 跳转仅依赖拦截器捕获位置（WrapperSearchService/Result 退役+SourceCaptureGuide 三按钮引导新件）；多模块路径解析与自位污染；旧拦截器解析防线+自动升级（SqlSourceMarker.isInterceptorSelfPath/needsInterceptorUpgrade）；InjectionModulePickerDialog 多模块勾选 |
+| L5 T-UiNative 四批次 | 0e857ec/d2d5978/e83d0ac/45a9b16/11189c3/bb0b705/7a19c9f/5ca0b76/cce2aa3/6159828 | 剪贴板收口 UiTextClipboard 新件+OnePixelSplitter+SearchTextField+SpeedSearch；19 处模态轻提示换通知；右键菜单 ActionGroup 化+SqlListSelectionOutline 退役；JOIN 图/历史导航迁 ActionToolbar；死代码删除（SqlHistoryPanel/SqlHistoryToolWindowFactory/SqlHistorySearchBar/Timeout.html）+33 项颜色 namedColor 化集中 MpvsUiColors 新件；加载态原生件+Kotlin UI DSL v2 试点；历史二级列表 SpeedSearch 按需安装修复+渲染器高亮；守卫规则反转（钦定 updateActionsImmediately 禁反射 hack） |
+| L6 日志列表增强链 | 80762b4/229bd7a/ba9a8e9/3e2d2be/88f20ed/89a04de/9e01e26/d89aad4/463941b/9ece8bc→d6bdbfd/fec7d33/afec534/01531b0/2ba2b37 | T-LogSortModes 排序方式选择器（数据类 toString 泄露修复/元信息顺序统一）；日志原始时间记录与显示切换；搜索行号/时间+右键复制时间戳；SQL 历史列表行号；T-ListPreviewCopy 默认格式化+多选批量复制；T-DisplayModeToSettings 显示模式迁设置页（ComboBoxButton 原生化四轮）；T-VStack·InAll IN 列表全量竖排；T-ListParamCollect 集合参数方括号修复（ListParamRenderer 新件） |
+| L7 feedback 多轮 | 96bcb62/943494c/23a8581/c406063/d192216/9a5091f/fa1cde9/55b2e0e/09a2b18/0978eac | 报告对话框三轮（宽度/灰提示/可拖拽/堆栈勾选/手动形态自主输入/默认高收敛）；T-FeedbackErr 三轮（失败可见性/状态机落对话框/gzip 解压根治/nonJsonHint/附件降级+UTF-8 BOM/复制失败信息按钮）；T-FeedbackBatch2 批量合并一帖（BatchSubmitter 新件）；PendingReportScheduler 错峰补发新件（c406063）；T-PerfSweep2 三项（响应体有界读取/附件截断/调度器单拍链式化） |
+| L8 execute/预览/ui 修复链 | c27ff31/d784356/4b12453/5cae17c/29edfff/04eb8f9/dbf0632/c145c99 | T-ExecSlowOps（DialectPreMapping 新件两段式映射）；T-ExecDocSync（document 写统一派 EDT）；T-PreviewExecDs（跨项目数据源错乱三级降级）；T-ExplainDbl 幂等包装；T-ExplainFirstNative（空名占位 Tab+EXPLAIN 裸形态）；MergeFollowup 四轮（EXPLAIN 按钮回补/gutter 右键正解/模式切换 updateUI/显示模式按钮同构） |
+| L9 converter/杂项 | 524c050/556f0a2/01fb8ba/d186d5c | T-MpjColAlias 联表 lambda 列归属 join 别名（MpjLambdaConverter）；plugin.xml 根 url 挂官网；T-Intranet 换源诊断日志；T-SettingsOrder 子页 groupWeight 钉序 |
+| L10 发行与提速 | e575eae/643fb56/f9307cc/74cfabf/d0c0a16/b4ef08b/26eeb09 | v2026.9.14 + v2026.9.18-beta.1/.2/.3 四发行（版本号/CHANGELOG/变更记录/发行说明/preview/update.json/changeNotes）；T-ReleasePerf verifyGate 离线化+releaseGate 一命令；T-TestPerf2 testShards 并行提速+buildCache 落 settings 层 |
+| L11 文档/归档/杂物 | 6306cf8/3213a21/94c73f7/b6c0e1b/ed84f5b/df01a0c/f503ab5/42eb7f8/2567812 等 | 第五/六轮竞品调研报告+数十份计划立项入库；memory 两次精简归档搬移（bug-fixes 37 件+pitfalls 7 件）；全景审计报告；架构三册同步（WrapperSearchService 移除改 SourceCaptureGuide）；demo-09 GIF+group-qr.png；record 两脚本；.gitignore/sub-projects README |
 
 ## 3. 文件级移植矩阵
 
@@ -42,7 +42,7 @@
 | feedback | BatchSubmitter / PendingReportScheduler | 批量合并一帖+错峰补发调度器 |
 | util | MpvsUiColors / UiTextClipboard | namedColor 集中 33 项/剪贴板统一收口 |
 
-**增量翻译 57 文件：** 全清单以 `git diff --name-status 50d3fb9..9def321 -- src/main/kotlin` 为准（M 57 件），按 Wave 分组实施。两个特殊映射：master `LogEntryPreviewRecognizer.kt`→k2j `LogEntryPreviewRecognizerKt.java`、master `LogSqlModels.kt`→k2j `LogSqlModelsKt.java`+`LogSqlEntry.java`/`LogSqlParam.java`（上轮拆分形态，增量按成员归属落对应文件，勿新建同名 Kt 文件）。
+**增量翻译 57 文件：** 全清单以 `git diff --name-status c4c5f02..ed84f5b -- src/main/kotlin` 为准（M 57 件），按 Wave 分组实施。两个特殊映射：master `LogEntryPreviewRecognizer.kt`→k2j `LogEntryPreviewRecognizerKt.java`、master `LogSqlModels.kt`→k2j `LogSqlModelsKt.java`+`LogSqlEntry.java`/`LogSqlParam.java`（上轮拆分形态，增量按成员归属落对应文件，勿新建同名 Kt 文件）。
 
 **master 侧 .java 直改 2 件：** `log/SqlLogToolWindowFactory.java`（M，k2j 同路径直 diff）；`history/SqlHistoryToolWindowFactory.java`（D，k2j 同删）。
 
@@ -64,9 +64,9 @@ k2j 侧形态普查结论（逐文件核实）：36 件 agent 子项目测试为
 - **build.gradle.kts：union**——master 新增 embedAgentJar 任务链/agent 子项目构建接线/changeNotes 9.14~9.18-beta.3 各段/T-ReleasePerf verifyGate 离线化/releaseGate/testShards（k2j 已有上轮 T-TestPerf 形态需对齐 T-TestPerf2 终态）/k2j 自有 hotswap 块零丢失，diff 复核；临时沙盒行 `sandboxContainer.set(layout.buildDirectory.dir('test-sandbox-k2jsync176'))` 实施期加入、收官提交还原；
 - gradle.properties：版本 2026.9.14-beta.2→2026.9.18-beta.3，其余逐行 diff；
 - plugin.xml：M +17/-6 逐条对齐（SqlConsoleBridgeFilterProvider EP/agent 相关注册/根元素 url 属性/groupWeight 钉序/feedback 增量），落地后活引用审计；
-- bundle en/zh：各 +71/72 -12/13 union，BundleParityGuardTest 守卫兜底；⚠️ 895166a 教训：勿用带 BOM 写入工具碰 .properties；
+- bundle en/zh：各 +71/72 -12/13 union，BundleParityGuardTest 守卫兜底；⚠️ c8fe771 教训：勿用带 BOM 写入工具碰 .properties；
 - update/preview.update.json+update.json：直取（版本 2026.9.18-beta.3）；
-- marketplace-custom-page.html：直取（3e45a39 三入口表述）；Timeout.html 随删；
+- marketplace-custom-page.html：直取（5efd5cc 三入口表述）；Timeout.html 随删；
 - 根杂物：README.md（demo-09 GIF+内网节）/.gitignore/record 两脚本/sub-projects/README.md/docs/images 二进制——直取。
 
 ### 3.4 文档（约 170 件直取 + 三册 union）
@@ -85,7 +85,7 @@ docs/开发计划 71 件、memory-archive 44 件（bug-fixes 37+pitfalls 7）、
 | C6 | chore: 资源/构建 | plugin.xml 对齐+活引用审计、bundle union、update JSON、marketplace 页、README/.gitignore/record | buildPlugin 出包 |
 | C7 | test: 测试移植 | 31 新建+44 增量+5 删除 | 全量 testShards 绿 |
 | C8 | docs: 文档同步 | ~170 件直取+三册 union | 两侧行集合校验 |
-| C9 | chore: 收官 | .port-sync 锚点推进 9def321+note 重写+还原沙盒临时行 | verifyPlugin 三目标 Compatible |
+| C9 | chore: 收官 | .port-sync 锚点推进 ed84f5b+note 重写+还原沙盒临时行 | verifyPlugin 三目标 Compatible |
 
 ## 5. 移植规则（既定清单全量生效）
 
@@ -101,13 +101,13 @@ docs/开发计划 71 件、memory-archive 44 件（bug-fixes 37+pitfalls 7）、
 
 | 风险 | 缓解 |
 |---|---|
-| t-mergedev17 并行会话推进 master | 锚点钉 9def321 快照，后续增量留下一轮；不碰主工作区与 dev worktree |
+| t-mergedev17 并行会话推进 master | 锚点钉 ed84f5b 快照，后续增量留下一轮；不碰主工作区与 dev worktree |
 | agent 子项目组合构建首跑冷启动慢/网络 | 阿里镜像置前已就绪；代理失效走 nonProxyHosts 直连绕过存档 |
 | Jsons/AgentProtocol 双端序列化两端各自绿合流即断 | 借 master 既有 JsonsEventFormatTest/AgentProtocolSyncTest 守卫整取，k2j 侧跑通为准 |
 | plugin.xml 新注册类不可达（静态链不报） | C6 逐条活引用审计（类文件存在+构造器/EP 语义） |
 | master 发行重构吞 k2j 三册自有行 | union 后两侧行集合校验 |
 | LogSqlModels.kt 增量对应拆分文件错位 | 先 diff master 该文件增量再按成员归属映射 LogSqlModelsKt/LogSqlEntry/LogSqlParam |
-| BannedApiSourceScanTest 守卫规则反转（b799afb）语义漂移 | 按 master 终态直取后核 k2j 扫描根适配仍在 |
+| BannedApiSourceScanTest 守卫规则反转（5ca0b76）语义漂移 | 按 master 终态直取后核 k2j 扫描根适配仍在 |
 | bundle .properties 被写 BOM | 只用 git checkout/git apply，不用 PowerShell 写回 |
 | verifyPlugin 报告目录脏状态硬崩 | 重跑前清 build/reports/pluginVerifier |
 | 262 EDT/SlowOps 断言类测试在翻译后触雷 | 照 master 测试形态+既有两段式惯例（BGT 读探测+EDT 收口）|
@@ -117,18 +117,18 @@ docs/开发计划 71 件、memory-archive 44 件（bug-fixes 37+pitfalls 7）、
 1. 全量测试 0 失败（基线 3975 → 预期 ≈4299±，套件数与 master 同源核对；agent 子项目独立口径 24+ 用例绿）；
 2. buildPlugin 成功出包（2026.9.18-beta.3，含内嵌 mps-sql-agent.jar）；verifyPlugin 243/253/262 三目标 Compatible；
 3. k2j 自有行零丢失：CHANGELOG/MEMORY/变更记录/build.gradle.kts/settings.gradle.kts 两侧集合校验通过；
-4. .port-sync 锚点 = 9def321（note 字段同步重写为本轮记录）；
+4. .port-sync 锚点 = ed84f5b（note 字段同步重写为本轮记录）；
 5. plugin.xml 活引用全部可达；bundle parity 守卫绿；删除件（history 包/Outline/WrapperSearchService/Timeout.html）主树+测试+plugin.xml 三处零残留引用。
 
 ## 8. 实施记录
 
 提交链（滚动回填）：
-- 8fb1eef C1 立项计划
-- f671228 C2 agent 子项目落位（sub-projects 36 文件直取 + settings/gradle.properties/build.gradle.kts union + agent 42 用例绿 + fat jar 出包）
-- cd04ddc C3~C5 生产移植（25 新建翻译 + 57 增量 + 9 退役删除，compileJava 绿）
-- 21e5a81 C6+C8 资源构建与文档同步（plugin.xml/bundle union 648 键/update 双 JSON/文档 146 件直取/三册 union）
-- cc16623 C7 测试移植（31 新建 210 用例 + 44 增量 + 5 删除 + 测试缝收口）
-- （本次收尾提交）C9 收官（.port-sync 锚点推进 9def321 + 沙盒临时行还原 + 台账行）
+- a0a7fef C1 立项计划
+- 52696ce C2 agent 子项目落位（sub-projects 36 文件直取 + settings/gradle.properties/build.gradle.kts union + agent 42 用例绿 + fat jar 出包）
+- d85473c C3~C5 生产移植（25 新建翻译 + 57 增量 + 9 退役删除，compileJava 绿）
+- 5e36b8f C6+C8 资源构建与文档同步（plugin.xml/bundle union 648 键/update 双 JSON/文档 146 件直取/三册 union）
+- 2ad5c15 C7 测试移植（31 新建 210 用例 + 44 增量 + 5 删除 + 测试缝收口）
+- （本次收尾提交）C9 收官（.port-sync 锚点推进 ed84f5b + 沙盒临时行还原 + 台账行）
 
 门禁终值：全量 testShards **4286/0/0/6 绿**（3 分片：1477/1532/1277，基线 3975→4286；master 同源口径 testShards 4299）+ buildPlugin 出包 2026.9.18-beta.3（含内嵌 mps-sql-agent.jar）+ verifyGate 三目标 Compatible（243: 7dep/10exp；253: 1 for-removal/10dep/10exp；262: 2 for-removal/56dep/10exp）。
 

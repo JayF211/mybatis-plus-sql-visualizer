@@ -1,7 +1,7 @@
 # T-AutoShowMaster：发现 SQL 自动打开日志窗口 master 失效 根因分析与开发计划
 
 > **创建日期**：2026-09-09
-> **分支**：master（当前 HEAD `29fbf55`）
+> **分支**：master（当前 HEAD `bef7c15`）
 > **优先级**：P1（设置页可见开关、用户显式勾选后零效果——纯假开关，功能可信度问题）
 > **预估工时**：1.5h（移植与单测 1h + 全量回归 0.5h；runIde 真机复验留人工）
 > **来源**：用户反馈原话——「新问题，发现SQL时自动打开日志窗口 功能没生效」
@@ -30,13 +30,13 @@
 
 git 考古还原完整时间线：
 
-1. **T-M31.14**（`83429c2`，master）：设置页新增「SQL 日志」组 11 项，含本开关。当时配套实现在 `SqlLogManager`，自动打开的是独立日志窗口。
-2. **T-M36.5 D2**（`f23cfd5`，master）：审计发现「logAutoOpenOnCapture 监听与面板创建耦合（窗口未打开永不触发）」，监听接线移入 `SqlLogManager` 修复。
-3. **F-44**（`1c8bfe6`，master）：SQL 日志合并进主侧边栏 tab，独立窗口退役——**自动打开实现随独立窗口一并被删**，设置项与勾选框保留，KDoc 孤儿注释（SqlLogManager.kt:356「发现 SQL 且设置开启时自动打开日志工具窗口」）残留至今，功能自此形同虚设。
-4. **M37.3**（`f7f17261`，**仅 dev**，2026-09-02）：发现 F-44 断链后复活行为——目标从独立窗口改为主工具窗 `show()`（不抢焦点），60s 防抖，默认值 false→true，新增 `SqlLogManagerAutoShowTest`（7 用例）。
-5. **T-AutoShowSuppress**（`19bf2571`，**仅 dev**，2026-09-05）：补手动关闭抑制——用户关掉日志窗后本会话不再自动展开（否则防抖一过窗口弹回，往复成差评源）；设置开关 false→true 重启用沿解除抑制。
+1. **T-M31.14**（`66d59f6`，master）：设置页新增「SQL 日志」组 11 项，含本开关。当时配套实现在 `SqlLogManager`，自动打开的是独立日志窗口。
+2. **T-M36.5 D2**（`6ca6799`，master）：审计发现「logAutoOpenOnCapture 监听与面板创建耦合（窗口未打开永不触发）」，监听接线移入 `SqlLogManager` 修复。
+3. **F-44**（`a37acbc`，master）：SQL 日志合并进主侧边栏 tab，独立窗口退役——**自动打开实现随独立窗口一并被删**，设置项与勾选框保留，KDoc 孤儿注释（SqlLogManager.kt:356「发现 SQL 且设置开启时自动打开日志工具窗口」）残留至今，功能自此形同虚设。
+4. **M37.3**（`c64028c2`，**仅 dev**，2026-09-02）：发现 F-44 断链后复活行为——目标从独立窗口改为主工具窗 `show()`（不抢焦点），60s 防抖，默认值 false→true，新增 `SqlLogManagerAutoShowTest`（7 用例）。
+5. **T-AutoShowSuppress**（`6b194da3`，**仅 dev**，2026-09-05）：补手动关闭抑制——用户关掉日志窗后本会话不再自动展开（否则防抖一过窗口弹回，往复成差评源）；设置开关 false→true 重启用沿解除抑制。
 
-分支拓扑验证：`git branch --contains f7f17261` 仅 `dev`、`dev-backup-pre-master-merge-20260908`、`feature/r2-competition-response`——**master 不在列**。M37 系列走的是「master ▶ feature/m37-competitive-fusion」方向的合并（`91d0f48b` 立项记录），M37.3/T-AutoShowSuppress 两个增量从未回流 master。
+分支拓扑验证：`git branch --contains c64028c2` 仅 `dev`、`dev-backup-pre-master-merge-20260908`、`feature/r2-competition-response`——**master 不在列**。M37 系列走的是「master ▶ feature/m37-competitive-fusion」方向的合并（`ab266261` 立项记录），M37.3/T-AutoShowSuppress 两个增量从未回流 master。
 
 ### 2.3 结论
 
@@ -44,13 +44,13 @@ git 考古还原完整时间线：
 
 ### 2.4 移植期新发现：监听器必须用 `wm.ex` 包
 
-实施首轮编译失败定位出一个平台事实：本机 IPGP 裁剪发行版（IU-2024.3.7.1，599 个 jar 全量 python zipfile 扫描）**不含 `com.intellij.openapi.wm.ToolWindowManagerListener`**，但 `com.intellij.openapi.wm.ex.ToolWindowManagerListener` 在 `lib/app-client.jar` 中存在——dev 版源码用的正是 ex 包（`19bf2571` 原始 diff 实证），移植时误写非 ex 包 import 触发。两包监听器均提供两参 `stateChanged` 公开回调，行为无差；后续任何分支间移植涉及 `ToolWindowManagerListener` 一律以 **ex 包**为准（与 execution API 裁剪同族陷阱，javap/zipfile 实证为唯一权威）。
+实施首轮编译失败定位出一个平台事实：本机 IPGP 裁剪发行版（IU-2024.3.7.1，599 个 jar 全量 python zipfile 扫描）**不含 `com.intellij.openapi.wm.ToolWindowManagerListener`**，但 `com.intellij.openapi.wm.ex.ToolWindowManagerListener` 在 `lib/app-client.jar` 中存在——dev 版源码用的正是 ex 包（`6b194da3` 原始 diff 实证），移植时误写非 ex 包 import 触发。两包监听器均提供两参 `stateChanged` 公开回调，行为无差；后续任何分支间移植涉及 `ToolWindowManagerListener` 一律以 **ex 包**为准（与 execution API 裁剪同族陷阱，javap/zipfile 实证为唯一权威）。
 
 ## 三、修复方案
 
 **移植 dev 已验证实现**（非重新设计），一次带上两层增量：
 
-### 3.1 M37.3 基础复活（`f7f17261` 全量）
+### 3.1 M37.3 基础复活（`c64028c2` 全量）
 
 - `SqlLogManager` 新增字段：`lastAutoShowAt`（防抖基准）、`onAutoShowRequest`（internal 测试缝，默认查 `ToolWindowManager.getToolWindow(TOOL_WINDOW_ID)` 后 `show()` 不 `activate()`——不抢编辑器焦点）；
 - init 挂**无条件** `buffer.addListener(autoShowBufferListener)`——面板未创建/未订阅 UI 时首条捕获也触发（D2 老问题语义）；
@@ -58,7 +58,7 @@ git 考古还原完整时间线：
 - companion：`AUTO_SHOW_DEBOUNCE_MS = 60_000L` + 决策纯函数 `shouldAutoShow`（测试缝）；
 - dispose 补 `buffer.removeListener(autoShowBufferListener)`（监听泄漏防线，对齐 T-Perf-15 惯例）。
 
-### 3.2 T-AutoShowSuppress 手动关闭抑制（`19bf2571` 全量）
+### 3.2 T-AutoShowSuppress 手动关闭抑制（`6b194da3` 全量）
 
 - 字段：`autoShowSuppressedByUserClose`、`logWindowWasVisible`（可见性沿基准，初值 false 防启动布局恢复误判）、`lastSeenAutoOpenOnCapture`（重启用沿基准）；
 - init 订阅 `ToolWindowManagerListener.TOPIC`（两参 `stateChanged` 公开 API；三参重载 @Experimental 违反 Marketplace 约束；新 UI contentRemoved 不触发是既有 pitfall），只在「可见→不可见」转换沿置抑制；

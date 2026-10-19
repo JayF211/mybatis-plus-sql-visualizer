@@ -8,7 +8,7 @@ plugins {
     id("org.jetbrains.changelog")
     id("org.jetbrains.intellij.platform")
     // T-BuildScriptSplit：构建逻辑分治——convention 插件见 buildSrc/src/main/kotlin/，
-    // 块级逐字搬运自本文件（锚点 dc047bd，注释随迁），来源与去向见计划 §2.1。
+    // 块级逐字搬运自本文件（锚点 4c3e268，注释随迁），来源与去向见计划 §2.1。
     // T-SyncK2JMaster309：buildSrc 约定插件整包自 master 直取（k2j 原单体根构建退役），
     // k2j 自有块（Lombok 注释块/test kotlin srcDir/-parameters/临时沙盒行）逐块并回本文件。
     id("mpv-verification")
@@ -236,7 +236,7 @@ tasks.named<Test>("test") {
 // k2j 专属：测试树 .java 与 .kt 同目录混放（src/test/kotlin 下 92 件 .java），显式并入 Java
 // 测试源集（SourceDirectorySet 默认只收 *.java，与 Kotlin 编译互不干扰）。master 无此块
 //（其 src/test/java 只放非 Test 的检查器类，不参与源集编译语义差异）。
-// 前史（2026-09-04 移植同步修复）：c100f1f 把 92 个 .kt 测试转成 .java 后仍放在 src/test/kotlin，
+// 前史（2026-09-04 移植同步修复）：87f07bc 把 92 个 .kt 测试转成 .java 后仍放在 src/test/kotlin，
 // 该目录默认只属于 Kotlin 测试源集，compileTestJava 恒为 NO-SOURCE——这批 Java 测试从此从未被
 // 编译执行（历史 1421/1426 全绿仅统计 .kt 测试类）。
 sourceSets {

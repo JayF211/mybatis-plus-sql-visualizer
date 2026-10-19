@@ -22,7 +22,7 @@
 
 ### 2. 自带 asm jar 为什么没用：平台已知包接管 + 平台 asm 对插件不可见（双落空）
 
-真机平台 lib 有 `intellij.libraries.asm*.jar` → `org.objectweb.asm.*` 是**平台已知包** → 插件 classloader 对该包前缀 parent-first 接管，**插件自带 `lib/asm-9.7.1.jar` 的同包类被跳过**；而平台的 asm 位于 `intellij.libraries.*` 内部库 jar（对插件 classloader 的 parent 链不可见/过滤）→ 两处都拿不到 → CNFE。4bf3b6b 提交注释「ASM 9.7.1 自带进插件 lib（免平台 ASM 可达性差异）」与 build.gradle.kts:120-122 注释「插件 classloader 自成一体」是同一处**待验证前提证伪**——自带 jar 不能免平台包接管，`implementation("org.ow2.asm:asm:9.7.1")` 只保证了「编译期 + 无 asm 平台下的运行期」，救不了「有 asm 平台下的运行期」。
+真机平台 lib 有 `intellij.libraries.asm*.jar` → `org.objectweb.asm.*` 是**平台已知包** → 插件 classloader 对该包前缀 parent-first 接管，**插件自带 `lib/asm-9.7.1.jar` 的同包类被跳过**；而平台的 asm 位于 `intellij.libraries.*` 内部库 jar（对插件 classloader 的 parent 链不可见/过滤）→ 两处都拿不到 → CNFE。c493410 提交注释「ASM 9.7.1 自带进插件 lib（免平台 ASM 可达性差异）」与 build.gradle.kts:120-122 注释「插件 classloader 自成一体」是同一处**待验证前提证伪**——自带 jar 不能免平台包接管，`implementation("org.ow2.asm:asm:9.7.1")` 只保证了「编译期 + 无 asm 平台下的运行期」，救不了「有 asm 平台下的运行期」。
 
 ### 3. 为什么沙盒假绿：IPGP 沙盒平台与真机平台的产品裁剪差异
 
@@ -33,7 +33,7 @@
 | 形态 | 时间 | 真机状态 |
 |---|---|---|
 | XML 声明 10 toolset（基类静态 implements McpToolset） | ~20260923 | 在册（tools/list 62 工具 sqlv_* 恰 10 个，T-MarketCompatProxy 双验记录） |
-| 20260926 审核被拒（243×2+251×1 verifier compatibility problems）→ T-McpDynamicToolset ASM 动态壳（4bf3b6b） | 20260926 | **仅沙盒验证，真机从未验** → 本次真机 CNFE 全失 |
+| 20260926 审核被拒（243×2+251×1 verifier compatibility problems）→ T-McpDynamicToolset ASM 动态壳（c493410） | 20260926 | **仅沙盒验证，真机从未验** → 本次真机 CNFE 全失 |
 | 20261005 用户打包 2026.10.6 安装日常 IDE | 20261005 | 十工具全失（本计划） |
 
 ## 三、方案设计
@@ -88,7 +88,7 @@
 | 13:36~13:40 | S1：新增 `TinyClassFileWriter`（手写 class 文件生成器，V17/常量池四条目/构造器字节码），`McpToolsetDynamicRegistrar.shellBytes` 委托之、删 asm import、KDoc 更新 | 守卫先红后绿：ASM import 在场 `testNoOrgObjectwebAsmReferenceInMcpPackage FAILED`（4 测 1 败）→ 摘除后绿；`McpToolsetShellFactoryTest` 手写生成器行为等价绿（major 61/superclass/interfaces/实例化/三钩子继承全过） |
 | 13:41 | S2：删 build.gradle.kts `org.ow2.asm:asm:9.7.1` 与错误结论注释 | buildPlugin zip lib **无 asm jar**（8253292→8135271，−118KB 吻合）；主 jar 内 TinyClassFileWriter 在场、objectweb/asm 条目零 |
 | 13:42~13:44 | S3：McpScopeSourceScanTest 新增 asm 引用守卫；mcp 包定向全量 | 守卫 4/0；mcp 包定向 BUILD SUCCESSFUL |
-| 13:46 | testFast 回归 | mcp 相关全绿；**既有红与本项目无关**：`DialogWrapperInitOrderGuardTest` 报 `AgentManager.kt` consentAskGuardMs/lastConsentAskAtMs 初始化顺序陷阱——git stash 对净 HEAD（769a1b0）复跑同红坐实归属 T-FirstUseFreshInstallConsent R3 遗留，留原车道处置 |
+| 13:46 | testFast 回归 | mcp 相关全绿；**既有红与本项目无关**：`DialogWrapperInitOrderGuardTest` 报 `AgentManager.kt` consentAskGuardMs/lastConsentAskAtMs 初始化顺序陷阱——git stash 对净 HEAD（854d645）复跑同红坐实归属 T-FirstUseFreshInstallConsent R3 遗留，留原车道处置 |
 | 13:55 | 遗留红随本轮修复（用户点名）：`consentAskGuardMs`/`lastConsentAskAtMs` 两属性声明上移到测试缝区块（init 块之前，原 666/670 行），零语义变化 | DialogWrapperInitOrderGuardTest 绿；AgentPremainConsentTest/AgentConsentFlowTest/AgentManagerPremainTest 绿；agent 包全量 BUILD SUCCESSFUL；testFast 复跑读数见下 |
 | 13:44~ | S4：真机复验 | 待用户重装日常 IDE 262.10968 后：idea.log `T-McpDynamicToolset: 10 toolsets registered` + tools/list 十工具在册 + sqlv_check_sql 端到端 + [MCP-AUDIT] OK |
 

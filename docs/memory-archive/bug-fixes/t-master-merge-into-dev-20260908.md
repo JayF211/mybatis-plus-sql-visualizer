@@ -1,6 +1,6 @@
 ---
 name: t-master-merge-into-dev-20260908
-description: master 合入 dev 完成（a6570ce）——T-ListMode
+description: master 合入 dev 完成（399eb3b）——T-ListMode
   三显示模式嫁接片段管线（行高按模式分流）、runRunner silent×onError 双参融合、3618 绿 + verifyPlugin
   243/253/262 全 Compatible
 metadata:
@@ -9,7 +9,7 @@ metadata:
   originSessionId: sess_8399868f-ef6c-4280-9a87-15b4780ebcfe
 ---
 
-**2026-09-08 master 合入 dev 交付（merge commit a6570ce，dev worktree）**：master +34 提交（T-LogListFreeze04 片段管线/T-ClickPreview 五轮/T-JdbcMultiline/T-LogDedupeMpMark/T-DsCover/T-PreviewWiLock/T-Wia262/自动监听四轮 cherry-pick/v2026.9.8 发行）合入 dev；dev 独有 T-ListMode/T-TwoLine/T-ErrReport/hbm/设置导入导出全保全。全量 3618/0/0/6 绿（基线 3592+26）、verifyPlugin 三目标 Compatible（243/253/262）、buildPlugin 2026.9.8。备份锚点 `dev-backup-pre-master-merge-20260908`（=c8b6cad）；未 push。
+**2026-09-08 master 合入 dev 交付（merge commit 399eb3b，dev worktree）**：master +34 提交（T-LogListFreeze04 片段管线/T-ClickPreview 五轮/T-JdbcMultiline/T-LogDedupeMpMark/T-DsCover/T-PreviewWiLock/T-Wia262/自动监听四轮 cherry-pick/v2026.9.8 发行）合入 dev；dev 独有 T-ListMode/T-TwoLine/T-ErrReport/hbm/设置导入导出全保全。全量 3618/0/0/6 绿（基线 3592+26）、verifyPlugin 三目标 Compatible（243/253/262）、buildPlugin 2026.9.8。备份锚点 `dev-backup-pre-master-merge-20260908`（=b76af9f）；未 push。
 
 **核心设计决策——三显示模式 × 固定行高分流**（T-LogListFreeze04「多行不保留」与 T-ListMode「默认关键字换行」两刻意决策相撞的定案）：
 - SINGLE_LINE：固定行高（`applyListCellHeight`/`applySqlListCellHeight`），WideSelectionListUI O(1) 快路径，渲染直读不缓存。

@@ -1,6 +1,6 @@
 # Kotlin → Java 全量改写 · 进度总结（2026-09-01）
 
-> 分支：`feature/kotlin-to-java`（基于 `master` @ `2521d33` / F-44）
+> 分支：`feature/kotlin-to-java`（基于 `master` @ `da4c663` / F-44）
 > 工作树：`mybatis-plus-sql-visualizer-kotlin-to-java`（非 IDE 主工作区 `mybatis-plus-sql-visualizer`）
 > 包根：`cn.song.mybatisplus.visualizer` · JVM 17 · Gradle Kotlin DSL · SDK IntellijIdeaUltimate 2024.3.7.1
 > 配套计划：[`20260831-2350-Kotlin转Java全量改写-开发计划v2.md`](./20260831-2350-Kotlin转Java全量改写-开发计划v2.md)

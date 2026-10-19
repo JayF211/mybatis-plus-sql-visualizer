@@ -44,7 +44,7 @@ private val disableCaptureAction = object : DialogWrapperExitAction(…, DISABLE
 | 设置页勾选（`PluginSettingsPanel.kt:811-818`） | `confirm()` 返回 false → 走 else 分支 `isSelected = false` → **复选框自己弹回**（症状 1）；`enhancedCaptureConfirmed` 未写、Apply 无内容可存（症状 2） |
 | 应用启动弹窗（`AgentManager.kt:284` → `requestConsentThenAttach`） | `confirmOutcome()` 返回 `REJECTED` → 写 `enhancedCaptureRejectedAtMs` → **进 24h 冷却**，日志打「用户拒绝注入」 |
 
-**回归来源（git 实证）**：T-PS4-01（`0fbd147`，2026-09-18 08:33）之前是
+**回归来源（git 实证）**：T-PS4-01（`1219d6a`，2026-09-18 08:33）之前是
 
 ```kotlin
 fun confirm(parent: Project?): Boolean = EnhancedCaptureConfirmDialog(parent).showAndGet()
@@ -114,7 +114,7 @@ public override fun doOKAction() {
 
 ## 六、实施记录
 
-实施方式：主工作树直接实施（用户指定不新建工作树），基线 master 8e04f60。
+实施方式：主工作树直接实施（用户指定不新建工作树），基线 master c81e0e3。
 
 | 任务 | 提交 | 说明 / 偏离 |
 |------|------|------|

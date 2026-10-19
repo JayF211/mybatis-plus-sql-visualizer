@@ -1,29 +1,29 @@
-# T-SyncK2JMaster309 开发计划——master 9def321..550b72e 增量同步
+# T-SyncK2JMaster309 开发计划——master ed84f5b..8553f06 增量同步
 
 > 立项日期：2026-09-19　分支：feature/kotlin-to-java（worktree `mybatis-plus-sql-visualizer-kotlin-to-java`）
-> 同步源：**本地 master ec584e2**（原计划锚点 550b72e/309 提交，实施中途 master 又前进 39 提交且测试树已按其直取，故锚点改钉 ec584e2——总范围 `git diff 9def321..ec584e2`，**348 提交**；§3 量化矩阵保留原 550b72e 口径，实际落盘见 §8）
-> 上轮收官：T-SyncK2JMaster176（0d75687，全量 testShards 4286/0/0/6 绿 + buildPlugin 出包 2026.9.18-beta.3 + verifyGate 三目标 Compatible，锚点 9def321）
+> 同步源：**本地 master 6f78eda**（原计划锚点 8553f06/309 提交，实施中途 master 又前进 39 提交且测试树已按其直取，故锚点改钉 6f78eda——总范围 `git diff ed84f5b..6f78eda`，**348 提交**；§3 量化矩阵保留原 8553f06 口径，实际落盘见 §8）
+> 上轮收官：T-SyncK2JMaster176（0e34385，全量 testShards 4286/0/0/6 绿 + buildPlugin 出包 2026.9.18-beta.3 + verifyGate 三目标 Compatible，锚点 ed84f5b）
 > 用户指示：同步功能、**不合并分支**（方案A手工移植不变）；**先落本计划文件再实施**。
 
 ## 1. 背景与目标
 
 锚点之后 master 完成了仅次于双轮合流的最大增量：**T-MergeDev2Master dev 全量合流落 master**（双树归一，唯一例外就是本 k2j 树——本轮即为补上这最后一棵）：MCP 工具集全链（mcp/ 19 生产新件 + McpConfigurable + mcp-optional.xml + mcpStub 编译桩 4 件 + 设置子页扩容）、执行链安全护栏（UnboundedWriteDetector/MetadataInvalidator/RollbackSnapshotStore/RollbackSqlGenerator/RollbackSqlDialog/ExecutionTimeoutGuard）、CRUD generator 与 SQL 切分命名族（SqlStatementSplitter/SqlStatementNamer/BatchPredicateMerge/ExplainIndexAdvisor）、T-SettingsTruth、T-PerfSweep4 十三项、O 系六连（IncludeCrossNs/ExprAstPrecheck/MysqlGStrip/SessionIdentityGuard/InjectionGate/ParamTypeContract）；**T-M56Phase2-Premain** 启动即捕获（premain 注入两新件 + agent 子项目 StackDigest/SourceJump funnel 增量）；**T-ReachAudit 七项**（心跳窗口/JOIN 图错误态/诊断计数/只写不读清理/审计工具 audit_reachability.py 入库）；**T-DialectAutoInfer** 方言智能推断（DialectInference/DataSourceUrlProbe/JdbcUrlDatabase + 设置双页改造）；**T-TailSweep Wave1/Wave2**（T-TS-01~13 收尾债清偿）；**T-TestDbDriver** testDatabase 驱动管线（buildSrc 约定插件重构 + database-lab）；dev 合流后修复三连（T-FixWriteSafe/T-Fix-SettingsScope/T-F8）；以及 v2026.9.18 正式版发行。
 
-本轮目标：把上述增量全部移植进 100% Java 的 k2j 生产树，全量测试绿 + buildPlugin/verifyGate 三目标通过，锚点推进 550b72e。绝无 git merge；共享文件（build.gradle.kts/buildSrc/plugin.xml/bundle/CHANGELOG/MEMORY/变更记录）走手工 union，k2j 自有行零丢失。
+本轮目标：把上述增量全部移植进 100% Java 的 k2j 生产树，全量测试绿 + buildPlugin/verifyGate 三目标通过，锚点推进 8553f06。绝无 git merge；共享文件（build.gradle.kts/buildSrc/plugin.xml/bundle/CHANGELOG/MEMORY/变更记录）走手工 union，k2j 自有行零丢失。
 
 ## 2. master 增量功能线（309 提交归组）
 
 | 功能线 | 主要提交 | 内容概要 |
 |---|---|---|
-| L1 dev→master 全量合流 | 147cb85 前半程 + 7c3d5ce/f44cf0a/f3e890e 回合 + 6b3e31e/271983a/92a6f50 等 | MCP 工具集全链 19 新件（CheckSql/CrudSql/Explain/MapperCheck/PerfAdvice/RenderLogs/RenderSql/ReverseSql/RollbackPlan/SchemaContext 十工具 + McpDbExecutor/McpDialectDetector/McpExplainFormatter/McpRenderInput/McpSchemaContextService/McpSchemaFormatter/McpSelectGuard/McpSourceLocator/McpToolErrors/McpToolGate/McpToolsetSupport/McpAuditLog 底座）+ McpConfigurable 设置子页 + mcp-optional.xml + mcpStub 桩 4 件；护栏链 UnboundedWriteDetector/MetadataInvalidator/ExecutionTimeoutGuard/ConnectionErrorClassifier/ExecutionErrorInfo + 回滚链 RollbackSnapshotStore/RollbackSqlGenerator/RollbackSqlDialog；切分命名族 SqlStatementSplitter/SqlStatementNamer/BatchPredicateMerge/ExplainIndexAdvisor；O 系 XmlCrossNsFragmentResolver/CrossNamespaceFragments/ParamKind/MysqlClientGSuffix/ExecConsoleContext/ExecuteConfirmMessages/DocWriteContext/ExecDocAutosaveGate；T-SettingsTruth + T-PerfSweep4 十三项（StatementHandler/SqlEvent/SenderLoop/Jsons agent 增量随之） |
-| L2 T-M56Phase2-Premain | b503c42/c5dcb70/a11bd75 等 | PremainInjection/PremainRunConfigurationExtension 两新件（-javaagent 注入 + 端口前置协商 + premain 专用 jar 落盘 + 幂等/attach 跳过）+ SqlLogToolWindowFactory.java（master 侧 .java）直改 + agent 侧 StackDigest 新件/StackLocator 增量/三新测试 |
-| L3 T-ReachAudit 七项 | a628a3b/f6112af/b5b588a/e6eda8c/dc4305c/858205e/3a92b5e | 心跳窗口（半死会话不再永久封口控制台桥）/JOIN 图错误态接线/重放丢弃与 EP 短路计数（CaptureDiagnostics）/只写不读残留删除/DiffType.CHANGE 退役/两守卫+四轴审计工具入库（dev-support/audit_reachability.py） |
-| L4 T-TestDbDriver + T-Fix-TestDb | 6017fe4/3457f77 + buildSrc 五件 + database-lab 四件 | testDatabase 驱动管线打通：构建逻辑搬 buildSrc 约定插件（mpv-testing/mpv-release/mpv-runide/mpv-verification）+ database-lab（docker compose 国产方言库样例/DM8 与 Kingbase 载入脚本）+ McpDbSignatureChecker.java/PlatformSignatureChecker.java 增量 + docker-compose-dialects.yml |
-| L5 dev 合流后修复三连 | 04c46b6/d200a66/7780339/563b3f9/94af8c3/e95a42a | T-FixWriteSafe（dispatchDocWriteOnEdt 写体过 write-safe 闸门）/设置导入按现值为底合并 + 项目级表设置按实体所属项目取值/T-F8 JOIN 图加载态抬到标签页宿主层 |
-| L6 T-DialectAutoInfer | 29dd055/4f2de15/c9b93dc/be23010 等 | 方言智能推断：DialectInference 优先级合并 + DataSourceUrlProbe 反射探测（262.3 javap 实锤，社区版静默降级）+ JdbcUrlDatabase + PluginSettings.dialectAuto/ProjectPluginSettings.dialectAuto(null=跟随全局)/effectiveDialectAuto/DialectRegistry.effective + SettingsIO 白名单 + 设置双页 UI 改造 + bundle 4 新键 |
-| L7 T-TailSweep Wave1/Wave2 | cbb7b2b/8d1d9c3/542b2d6/5999cbd/518d2a9/a062587/a7c3742 | T-TS-01 premain 回连建会话点补 clockMs；T-TS-03/04 write-unsafe 族收口+守卫扩形态；T-TS-05 F8 加载态宿主面结构断言+showJoinDiagram 异常兜底；T-TS-08/09 testDatabase 尾款；T-TS-06/07 守卫断言与 PSI 兜底补 project；T-TS-13 项目级设置语义与呈现收口 |
-| L8 捕获真值链随合流入 | 92a6f50/c5dcb70/b503c42 + dev 系 | T-CaptureTruth 七项（log 新件族：CaptureDiagnostics/FirstCaptureGuide/EntryJumpResolver/CallerMethodRangeResolver/MapperXmlLocator/SqlErrorLineRecognizer/FocusTab）/T-ConsentTruth 注入确认三态/T-ClipboardIso（FakeClipboardInstaller.java 测试缝） |
-| L9 v2026.9.18 发行与杂物 | 3bb5f7b/fb2609f/dc02ad7/24aafed 等 | 正式版 2026.9.18（版本号/CHANGELOG/发行说明/update 双 JSON/plugin-change-notes.html 外置/marketplace 页）；libs.versions.toml、.run、.gitignore、README、ci-verify.ps1/check_competitor_watch.ps1、verifier 豁免清单；docs 140 件（全景盘点 9~12 版/竞品第七轮调研/TailSweep 各计划/验收文档/memory-archive 搬移） |
+| L1 dev→master 全量合流 | 495abee 前半程 + 74b86ca/319fae9/6cce631 回合 + ecdb09f/069bcfb/1e9d424 等 | MCP 工具集全链 19 新件（CheckSql/CrudSql/Explain/MapperCheck/PerfAdvice/RenderLogs/RenderSql/ReverseSql/RollbackPlan/SchemaContext 十工具 + McpDbExecutor/McpDialectDetector/McpExplainFormatter/McpRenderInput/McpSchemaContextService/McpSchemaFormatter/McpSelectGuard/McpSourceLocator/McpToolErrors/McpToolGate/McpToolsetSupport/McpAuditLog 底座）+ McpConfigurable 设置子页 + mcp-optional.xml + mcpStub 桩 4 件；护栏链 UnboundedWriteDetector/MetadataInvalidator/ExecutionTimeoutGuard/ConnectionErrorClassifier/ExecutionErrorInfo + 回滚链 RollbackSnapshotStore/RollbackSqlGenerator/RollbackSqlDialog；切分命名族 SqlStatementSplitter/SqlStatementNamer/BatchPredicateMerge/ExplainIndexAdvisor；O 系 XmlCrossNsFragmentResolver/CrossNamespaceFragments/ParamKind/MysqlClientGSuffix/ExecConsoleContext/ExecuteConfirmMessages/DocWriteContext/ExecDocAutosaveGate；T-SettingsTruth + T-PerfSweep4 十三项（StatementHandler/SqlEvent/SenderLoop/Jsons agent 增量随之） |
+| L2 T-M56Phase2-Premain | b88c063/77643c4/de2dab7 等 | PremainInjection/PremainRunConfigurationExtension 两新件（-javaagent 注入 + 端口前置协商 + premain 专用 jar 落盘 + 幂等/attach 跳过）+ SqlLogToolWindowFactory.java（master 侧 .java）直改 + agent 侧 StackDigest 新件/StackLocator 增量/三新测试 |
+| L3 T-ReachAudit 七项 | 82feb08/3d03b1b/f32999b/aaa63dc/1e06ec9/c7ee279/087494e | 心跳窗口（半死会话不再永久封口控制台桥）/JOIN 图错误态接线/重放丢弃与 EP 短路计数（CaptureDiagnostics）/只写不读残留删除/DiffType.CHANGE 退役/两守卫+四轴审计工具入库（dev-support/audit_reachability.py） |
+| L4 T-TestDbDriver + T-Fix-TestDb | c1bc3f1/627fd13 + buildSrc 五件 + database-lab 四件 | testDatabase 驱动管线打通：构建逻辑搬 buildSrc 约定插件（mpv-testing/mpv-release/mpv-runide/mpv-verification）+ database-lab（docker compose 国产方言库样例/DM8 与 Kingbase 载入脚本）+ McpDbSignatureChecker.java/PlatformSignatureChecker.java 增量 + docker-compose-dialects.yml |
+| L5 dev 合流后修复三连 | d1afde1/2c3eb6a/b5a2414/c976ac7/ce709b8/a6c1abb | T-FixWriteSafe（dispatchDocWriteOnEdt 写体过 write-safe 闸门）/设置导入按现值为底合并 + 项目级表设置按实体所属项目取值/T-F8 JOIN 图加载态抬到标签页宿主层 |
+| L6 T-DialectAutoInfer | 9c5bdc6/5c924fd/0d9fa01/0952893 等 | 方言智能推断：DialectInference 优先级合并 + DataSourceUrlProbe 反射探测（262.3 javap 实锤，社区版静默降级）+ JdbcUrlDatabase + PluginSettings.dialectAuto/ProjectPluginSettings.dialectAuto(null=跟随全局)/effectiveDialectAuto/DialectRegistry.effective + SettingsIO 白名单 + 设置双页 UI 改造 + bundle 4 新键 |
+| L7 T-TailSweep Wave1/Wave2 | 08331d1/a5f05e2/df2124a/3a1c140/58cfabd/6db5421/4eec7ec | T-TS-01 premain 回连建会话点补 clockMs；T-TS-03/04 write-unsafe 族收口+守卫扩形态；T-TS-05 F8 加载态宿主面结构断言+showJoinDiagram 异常兜底；T-TS-08/09 testDatabase 尾款；T-TS-06/07 守卫断言与 PSI 兜底补 project；T-TS-13 项目级设置语义与呈现收口 |
+| L8 捕获真值链随合流入 | 1e9d424/77643c4/b88c063 + dev 系 | T-CaptureTruth 七项（log 新件族：CaptureDiagnostics/FirstCaptureGuide/EntryJumpResolver/CallerMethodRangeResolver/MapperXmlLocator/SqlErrorLineRecognizer/FocusTab）/T-ConsentTruth 注入确认三态/T-ClipboardIso（FakeClipboardInstaller.java 测试缝） |
+| L9 v2026.9.18 发行与杂物 | 5794ad9/a4f0973/3d916db/2ad4a67 等 | 正式版 2026.9.18（版本号/CHANGELOG/发行说明/update 双 JSON/plugin-change-notes.html 外置/marketplace 页）；libs.versions.toml、.run、.gitignore、README、ci-verify.ps1/check_competitor_watch.ps1、verifier 豁免清单；docs 140 件（全景盘点 9~12 版/竞品第七轮调研/TailSweep 各计划/验收文档/memory-archive 搬移） |
 
 ## 3. 文件级移植矩阵
 
@@ -46,7 +46,7 @@
 | C5 高层 | actions | SelectedTableSqlTemplateActions / SqlTemplateShortcutConflictCheck |
 | C5 高层 | 其他 | onboarding/OnboardingAnchorTip / update/UpdateZipGuard |
 
-**增量翻译 90 文件：** 全清单以 `git diff --name-status 9def321..550b72e -- src/main/kotlin` 为准（M 90 件：log 16、xml 11、ui 8、config 8、ui/highlight 5、psi 5+jpa 2、log/agent 4、util 3、ui/diagram 3+nativefw 2+db 1、sql 3、execute 3、converter 2+jpa 3、feedback 2、update 2、model 2、ui/diff 1、ui/components 1、reverse 1、generator 1、actions 1）。⚠️ 上轮两处特殊映射本轮复查：master `LogEntryPreviewRecognizer.kt`→k2j `LogEntryPreviewRecognizerKt.java`、`LogSqlModels.kt`→`LogSqlModelsKt.java`+`LogSqlEntry.java`/`LogSqlParam.java`（增量按成员归属落对应文件，勿新建同名 Kt 文件）。
+**增量翻译 90 文件：** 全清单以 `git diff --name-status ed84f5b..8553f06 -- src/main/kotlin` 为准（M 90 件：log 16、xml 11、ui 8、config 8、ui/highlight 5、psi 5+jpa 2、log/agent 4、util 3、ui/diagram 3+nativefw 2+db 1、sql 3、execute 3、converter 2+jpa 3、feedback 2、update 2、model 2、ui/diff 1、ui/components 1、reverse 1、generator 1、actions 1）。⚠️ 上轮两处特殊映射本轮复查：master `LogEntryPreviewRecognizer.kt`→k2j `LogEntryPreviewRecognizerKt.java`、`LogSqlModels.kt`→`LogSqlModelsKt.java`+`LogSqlEntry.java`/`LogSqlParam.java`（增量按成员归属落对应文件，勿新建同名 Kt 文件）。
 
 **master 侧 .java 直改 1 件：** `log/SqlLogToolWindowFactory.java`（M，k2j 同路径直 diff）。
 
@@ -56,7 +56,7 @@
 
 ### 3.2 测试（165 文件：161 Kotlin + 3 Java + 1 资源）
 
-- 161 Kotlin（107 新建 + 54 增量，以 `git diff --name-status 9def321..550b72e -- src/test/kotlin` 为准）：新建件落 .kt（引用 Java 生产类做机械适配：具名实参→位置实参、record 访问器方法调用化、`project`→`getProject()`、INSTANCE 单例）；54 增量件按 k2j 侧实际形态落同名 .kt 或 src/test/kotlin 下 .java；
+- 161 Kotlin（107 新建 + 54 增量，以 `git diff --name-status ed84f5b..8553f06 -- src/test/kotlin` 为准）：新建件落 .kt（引用 Java 生产类做机械适配：具名实参→位置实参、record 访问器方法调用化、`project`→`getProject()`、INSTANCE 单例）；54 增量件按 k2j 侧实际形态落同名 .kt 或 src/test/kotlin 下 .java；
 - 3 Java：`McpDbSignatureChecker.java`（A）/`PlatformSignatureChecker.java`（M，⚠️ 新增反射入口登记 DataSourceUrlProbe）/`testutil/FakeClipboardInstaller.java`（A）直取；
 - 测试资源 1 件：`docker-compose-dialects.yml`（M）直取；
 - 纪律：JUnit3 test* 前缀、lambda 合成方法坑、剪贴板/定时器 flake 定例、三族守卫（BundleParity/PluginXmlStructure/BannedApi）按 k2j 扫描根 src/main/java 适配。
@@ -89,7 +89,7 @@ docs 下 140 件（开发计划 88、memory-archive 22、验收文档 9、调研
 | C5 | feat: 生产 Wave3 高层+资源 | ui/actions/onboarding/update 7 新 + ui/feedback/converter/update 增量 + plugin.xml/mcp-optional.xml/bundle/update JSON/marketplace union | compileJava 零错 + 活引用审计 |
 | C6 | test: 测试移植 | 161 Kotlin + 3 Java + 1 资源 | 全量 testShards + testDatabase |
 | C7 | docs: 文档同步 | 140 件直取 + 三册 union + README | 两侧行集合校验 |
-| C8 | chore: 收官 | 全量门禁修复收口 + .port-sync 锚点推进 550b72e + note 重写 + 计划 §8 回填 + 变更记录台账行 + 还原沙盒临时行 | buildPlugin 出包 2026.9.18 + verifyGate 三目标 Compatible |
+| C8 | chore: 收官 | 全量门禁修复收口 + .port-sync 锚点推进 8553f06 + note 重写 + 计划 §8 回填 + 变更记录台账行 + 还原沙盒临时行 | buildPlugin 出包 2026.9.18 + verifyGate 三目标 Compatible |
 
 ## 5. 移植规则（既定清单全量生效）
 
@@ -106,7 +106,7 @@ docs 下 140 件（开发计划 88、memory-archive 22、验收文档 9、调研
 
 | 风险 | 缓解 |
 |---|---|
-| 并行会话推进 master | 锚点钉 550b72e 快照，后续增量留下一轮；不碰主工作区与其他 worktree |
+| 并行会话推进 master | 锚点钉 8553f06 快照，后续增量留下一轮；不碰主工作区与其他 worktree |
 | buildSrc 约定插件重构后任务名/行为漂移 | C2 先 `help --task` 点查 testShards/testDatabase/verifyGate/releaseGate 四任务在位再动生产 |
 | k2j 自有构建块在重构中被吞 | 根 build.gradle.kts 两侧 diff 逐块核对（test kotlin srcDir/-parameters/Lombok/hotswap/沙盒行）；三册行集合校验 |
 | mcp/ 全新链 22 件 + EP 注册不可达（静态链不报） | C5 逐条活引用审计（类文件存在+构造器/EP 语义+mcp-optional.xml 挂载点） |
@@ -124,34 +124,34 @@ docs 下 140 件（开发计划 88、memory-archive 22、验收文档 9、调研
 1. 全量测试 0 失败（**实测 5183/0/0/6 绿**，基线 4286；另 testDatabase 10/0/0/0 绿）；
 2. buildPlugin 成功出包（**2026.9.18**，含内嵌 agent jar 含 premain 入口）；verifyPlugin 243/253/262 三目标 Compatible；
 3. k2j 自有行零丢失：CHANGELOG/MEMORY/变更记录/build.gradle.kts/buildSrc 两侧集合校验通过；
-4. .port-sync 锚点 = **ec584e2**（note 字段同步重写为本轮记录）；
+4. .port-sync 锚点 = **6f78eda**（note 字段同步重写为本轮记录）；
 5. plugin.xml 活引用全部可达（mcp/premain/方言推断注册）；bundle parity 守卫绿；反射入口（DataSourceUrlProbe）已登记 PlatformSignatureCrossVersionTest。
 
 ## 8. 实施记录
 
-**锚点变更说明**：原计划锚点钉 master 550b72e（309 提交）。实施中途发现 master 又前进 39 提交至
-**ec584e2**（T-TailSweep2 真引擎语义对照集 G1 + T-FS-04~09 + T-TS-FixA/FixC），而测试树直取已含这
+**锚点变更说明**：原计划锚点钉 master 8553f06（309 提交）。实施中途发现 master 又前进 39 提交至
+**6f78eda**（T-TailSweep2 真引擎语义对照集 G1 + T-FS-04~09 + T-TS-FixA/FixC），而测试树直取已含这
 39 提交的测试内容——为保持测试与生产语义一致，本轮把 post-anchor 生产增量一并补移，**锚点改钉
-ec584e2**（同步范围 348 提交）。§3 矩阵中 550b72e 的量化口径保留（那是原计划基线），实际落盘以本节为准。
+6f78eda**（同步范围 348 提交）。§3 矩阵中 8553f06 的量化口径保留（那是原计划基线），实际落盘以本节为准。
 
 提交链：
-- `ac68640` C1 立项计划
-- `f3eab71` C2 构建链：buildSrc 约定插件整包引入（k2j 此前无 buildSrc）+ 根构建重写为 master 薄根形态
+- `64da08f` C1 立项计划
+- `029eb1e` C2 构建链：buildSrc 约定插件整包引入（k2j 此前无 buildSrc）+ 根构建重写为 master 薄根形态
   （1090→229 行）并回填 k2j 自有三块（test kotlin srcDir / -parameters / Lombok 注释）+ mcpStub 主语言
   适配（桩产物挂 compileJava.classpath）+ gradle.properties 2026.9.18 + libs.versions.toml union（补
   snakeyaml 保 lombok）+ sub-projects 12 件/database-lab 4 件/dev-support 5 件/.run/.gitignore 直取
-- `f54de33` C3 生产 Wave1 低层：21 新建翻译 + 21 增量（util/xml/psi/sql/execute/model/generator/reverse）
-- `9b925f6` C4 生产 Wave2：log 链 7 新 + premain 2 新 + mcp 22 新（含 McpConfigurable）+ mcpStub 4 直取
+- `5953ccc` C3 生产 Wave1 低层：21 新建翻译 + 21 增量（util/xml/psi/sql/execute/model/generator/reverse）
+- `476292b` C4 生产 Wave2：log 链 7 新 + premain 2 新 + mcp 22 新（含 McpConfigurable）+ mcpStub 4 直取
   + log/agent 4 增量 + config 8 增量 + SqlLogToolWindowFactory.java 直改
-- `90d2edb` C5 生产 Wave3：ui/actions/onboarding/update 12 新 + ui/highlight/diagram/converter/feedback
+- `0cd9f30` C5 生产 Wave3：ui/actions/onboarding/update 12 新 + ui/highlight/diagram/converter/feedback
   30 增量 + plugin.xml/mcp-optional.xml/bundle/update 双 JSON/marketplace 资源 union
-- `c2c465b` C6 测试移植（前半）：152 件直取 + 11 件 .java 增量合并 + 3 Java 直取 + 1 资源 +
+- `f5408bb` C6 测试移植（前半）：152 件直取 + 11 件 .java 增量合并 + 3 Java 直取 + 1 资源 +
   互操作机械适配（具名实参→位置实参、object→INSTANCE、顶层函数→XxxKt 门面等 2102 个编译错误收口）
-- `ae87309` C6 测试移植（收口）：181 运行期失败清账——NativeDatabaseDiagramSupport 分层（Community
+- `16732ff` C6 测试移植（收口）：181 运行期失败清账——NativeDatabaseDiagramSupport 分层（Community
   可加载性，139 例同源）+ 9 件守卫类扫描根适配（16 例）+ 12 项生产移植偏差修正（方言控件漏赋值/
   空安全分支丢失/两处模态弹窗改轻通知/MockObject toString/JUnit3 合成方法坑等）
-- `e360c1c` C7 文档同步：155 件直取 + 四册 union（k2j 台账行 15/15 byte-exact 回补）
-- （本提交）C8 收官：.port-sync 锚点推进 ec584e2 + note 重写 + 还原沙盒临时行 + 本节回填
+- `8b14d71` C7 文档同步：155 件直取 + 四册 union（k2j 台账行 15/15 byte-exact 回补）
+- （本提交）C8 收官：.port-sync 锚点推进 6f78eda + note 重写 + 还原沙盒临时行 + 本节回填
 
 门禁读数（收官实测）：
 - 全量 **testShards 5183/0/0/6 绿**（3 分片 135.5s / 161.5s / 141.9s；基线 4286 → 5183）
@@ -164,7 +164,7 @@ ec584e2**（同步范围 348 提交）。§3 矩阵中 550b72e 的量化口径�
   （1/2/1/3/3 文件），无翻译引入的 API 漂移。
 
 实施偏离与发现（供下轮参考）：
-1. **锚点中途改钉**（见上）——master 前进 39 提交，测试树已含其内容；若只做 550b72e 会留测试-生产错位。
+1. **锚点中途改钉**（见上）——master 前进 39 提交，测试树已含其内容；若只做 8553f06 会留测试-生产错位。
 2. **NativeDatabaseDiagramSupport 分层**：Java 字节码在 Community（无 database 插件）下类链接期即需解析
    DB 类型，整类加载失败且异常抛在调用方帧（master 的 Kotlin 字节码在该点不需解析——`-Xlog:class+load`
    对照实证 master 加载成功且零 DasObject 解析）。故把 DB 耦合实现下沉嵌套类 `DbCoupled`，外层类常量池零

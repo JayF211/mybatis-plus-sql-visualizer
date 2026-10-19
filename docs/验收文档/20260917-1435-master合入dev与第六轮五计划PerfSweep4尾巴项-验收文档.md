@@ -2,7 +2,7 @@
 
 > **2026-09-20 防过期复核**：类名/工具名/入口路径已按当前 master 代码校正；全量 `testShards` 复跑 **5383/0/0/6 绿**。
 
-> **验收对象**：2026-09-17 dev 批次——master 合入 dev（merge `3552d4b`，冲突 5 文件全解决 + dev 独有 mcpStub/snakeyaml 四块回植）+ 基于合并后 dev 交付的 2.2 第六轮竞品应答五计划（T-TxnReadOnlyProof/T-ExecTimeoutGuard/T-DmlAliasGuard/T-TsqlBatchSplit/T-UpdateZipBounds）+ T-PerfSweep4 性能七项收敛 + 2.4 尾巴项收口，提交 `9399fee`…`bd863f0`（8 提交，图谱：9399fee flake 修复 → f3c0007 前两件 → afb3a8a → 69a6095 → e24f536 → 5fa6187 → 99370a9 文档 → bd863f0 基线）。
+> **验收对象**：2026-09-17 dev 批次——master 合入 dev（merge `ee376e3`，冲突 5 文件全解决 + dev 独有 mcpStub/snakeyaml 四块回植）+ 基于合并后 dev 交付的 2.2 第六轮竞品应答五计划（T-TxnReadOnlyProof/T-ExecTimeoutGuard/T-DmlAliasGuard/T-TsqlBatchSplit/T-UpdateZipBounds）+ T-PerfSweep4 性能七项收敛 + 2.4 尾巴项收口，提交 `83d4744`…`37eaf12`（8 提交，图谱：83d4744 flake 修复 → 8db852c 前两件 → 2d6dc96 → eea2a1a → 56beade → 021e8a4 → 2f2ccc2 文档 → 37eaf12 基线）。
 > **面向读者**：功能验收人（含用户本人真机走查）。各任务实现细节与定向测试记录见对应开发计划 §实施记录（均已回填）；本文档只列验收步骤与预期，不重复实现细节。
 > **回归基线**：全量 **4817/0/0/6 绿**（412 测试类，`./gradlew testShards`，2026-09-17 批次末实测；跳过 6=Docker 环境门控）。
 > **真机走查总清单**：见 §四（汇总各计划 §五，共 13 条留人工）。
@@ -144,7 +144,7 @@
 | 既有定向复跑 | Splitter/Classifier/LogToSqlPanelExecute/UpdateRunner/DynamicInstall/AgentFallback/Correlator/EP provider/AgentLogTimeParity/AgentEventAdapter/Sniff 三类全绿 |
 | 签名护栏 | McpDbSignatureChecker 新增 RemoteStatement.setQueryTimeout(int)/cancel() 两条登记（243 jdbc-console.jar + 262 intellij.database.jdbcConsole.jar javap 同形实证；testShards 内跨版本核验通过） |
 | 合并冲突 | 5 文件全解决（build.gradle.kts 取 master 拆分侧 + dev 四块回植；CHANGELOG/变更记录并集；SqlFormatterTest 双语义合一；架构总览融合）；dev 侧 4817 基线 = 合并前 4754 + 本批 +63 |
-| 附带修复 | 负缓存 TTL 边界 `<=`→`<`（9399fee，分片负载 flake 实测复现后修复） |
+| 附带修复 | 负缓存 TTL 边界 `<=`→`<`（83d4744，分片负载 flake 实测复现后修复） |
 
 ## 六、已知边界与登记项
 

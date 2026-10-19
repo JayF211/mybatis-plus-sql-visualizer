@@ -7,7 +7,7 @@ metadata:
   originSessionId: sess_cf206a34-afa0-49b1-9d37-2d62fa9fee75
 ---
 
-> **归档注记（2026-09-24 第十六次精简）**：ACP 验证清单第⑯项全四项已闭合（`24d6e33`），唯一残留＝agent 发起环需模型凭据（只有用户能提供）；本文作为「日后拿到凭据再验」的入口保留。
+> **归档注记（2026-09-24 第十六次精简）**：ACP 验证清单第⑯项全四项已闭合（`01c6a99`），唯一残留＝agent 发起环需模型凭据（只有用户能提供）；本文作为「日后拿到凭据再验」的入口保留。
 
 **20260923 晚第二轮（262/243 双沙盒 MCP 实测，全部通过，零修复）**：262 沙盒（`-PgifRecord=true`，2026.2.1，build/MPSV-GifFresh）GUI 流程——Settings 内鼠标点击**仍无效但 Tab+Space 可达**（Tab 把焦点移到右侧复选框后空格勾选「Enable MCP Server」→ 弹同意框 → 该 balloon 弹窗**鼠标可点** Enable）。**端点/token 澄清（推翻第十一轮的 401 结论）**：内置 MCP Server 的**免 token 端点是 `http://127.0.0.1:64342/stream`**（initialize 握手直连成功，serverInfo=IntelliJ IDEA MCP Server 2026.2.1）；401 的是 **64442**（router 端点，token 在内存 holder）。读数：`tools/list` 共 62 工具、**sqlv_* 恰好 10 个全在册**（O-68 门控过滤生效）；`tools/call sqlv_check_sql`（无 WHERE UPDATE）正确报 MISSING_WHERE 全表发现；`tools/call sqlv_render_sql`（xmlSnippet+sourceType=xml_mapper）正确渲染 `#{id}`→`?` 并附参数对照；idea.log 两条 `[MCP-AUDIT] status=OK` + `McpGateFilterEpRegistrar - O-68: sqlv gate filter registered` + `Running private IJ MCP session for agent acp.registry.claude-acp over Sse`（ACP 链路活着）。243 沙盒（默认 runIde，现成 IU-2024.3.7.1 沙盒带信任记忆）——插件 `PluginDescriptor` 正常加载、本轮零 ERROR；`mcp-optional.xml` 片段**整段不加载**（mcpServer 缺席 optional depends 不满足，McpGateFilter/mcpServer 日志 0 命中）＝「243 不支持 MCP」的设计口径实证；「SQL Visualizer → MCP Tools」设置页如实呈现（十工具勾选 UI + 顶部「IDEA MCP Server 设置」跳转按钮）。工具脚本：`mpsv-walk/mcp_full.py`（initialize→tools/list→tools/call 全流程，无 token）。
 

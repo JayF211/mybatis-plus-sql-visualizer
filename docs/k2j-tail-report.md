@@ -1,6 +1,6 @@
 # K2J 尾款收口报告：fatalUnwrapUnjudgedBaseline=5 清偿（T-K2JTail5）
 
-> 日期：2026-10-01。分支 feature/kotlin-to-java，起始 HEAD 25fcd97。
+> 日期：2026-10-01。分支 feature/kotlin-to-java，起始 HEAD 7c6792d。
 > 主仓 §十 由主控合并时补（本文件只落 k2j 树，同步功能不合并分支）。
 
 ## 守卫机制
@@ -39,13 +39,13 @@
 
 | SHA | 内容 |
 |---|---|
-| 3d01c7b | fix: DataSourceSelector 反射解包 6 处补 isFatal(cause)（+19 行） |
-| d283666 | test: 守卫基线 5→0 + 落地集表 16→22 + runRunner 判别两用例（+83/−9） |
+| 5f1487f | fix: DataSourceSelector 反射解包 6 处补 isFatal(cause)（+19 行） |
+| dab3fa8 | test: 守卫基线 5→0 + 落地集表 16→22 + runRunner 判别两用例（+83/−9） |
 
-（另有并行会话 T-SyncK2JMaster70 立项纯 docs 提交 c5417df 落于两笔之间，0 个 src 文件，与本收口无交集。）
+（另有并行会话 T-SyncK2JMaster70 立项纯 docs 提交 e5c5929 落于两笔之间，0 个 src 文件，与本收口无交集。）
 
 ## 遗留登记
 
-1. **收口不回流 master**：本分支按用户明令不合并；master 后续同步吸收 3d01c7b/d283666 即对齐（master 侧 Kotlin 树无此 5 处形态，属 k2j 移植轨自身尾款）。
+1. **收口不回流 master**：本分支按用户明令不合并；master 后续同步吸收 5f1487f/dab3fa8 即对齐（master 侧 Kotlin 树无此 5 处形态，属 k2j 移植轨自身尾款）。
 2. **catch(Exception)+ITE 形态对守卫结构性不可见**：全仓 grep 实测（`instanceof InvocationTargetException`）除 DataSourceSelector（本轮收口）外仅 McpDbExecutor 一处——其主 catch 已判 fatal（@194 sneakyThrow 透传）、errorTextOf 仅作判定后文本提取，现行无实例；形态性风险在此登记，后续若新增此类站点建议守卫扩口径或在落地集表登记。
-3. **同步计划预登记冲突提示**：T-SyncK2JMaster70 计划含「fatal 基线 660→661 预登记」，其执行落在 3d01c7b 之后时，落地集表数字与基线变迁 KDoc 需按本轮实际（22 处表 + 0 锚点基线）叠加，勿按旧 16 处口径回写。
+3. **同步计划预登记冲突提示**：T-SyncK2JMaster70 计划含「fatal 基线 660→661 预登记」，其执行落在 5f1487f 之后时，落地集表数字与基线变迁 KDoc 需按本轮实际（22 处表 + 0 锚点基线）叠加，勿按旧 16 处口径回写。

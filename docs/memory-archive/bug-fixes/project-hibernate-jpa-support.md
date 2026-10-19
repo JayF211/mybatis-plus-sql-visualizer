@@ -7,7 +7,7 @@ metadata:
   originSessionId: sess_a4fb5d93-5d10-469d-a2f7-b9844892efec
 ---
 
-插件从 MP/MPJ 扩展到 Hibernate/JPA 的全面支持已交付（2026-08-20），已合并到 master 分支（commit `769b1ba` + `33fccd7` + `44d1495`）。
+插件从 MP/MPJ 扩展到 Hibernate/JPA 的全面支持已交付（2026-08-20），已合并到 master 分支（commit `3754e48` + `1e62f09` + `5bec5b6`）。
 
 **三种 JPA 查询风格全部实现**：
 1. Spring Data JPA 推导查询（`findByLastNameAndFirstName`）——PartTree 解析器拆方法名，27 种条件类型

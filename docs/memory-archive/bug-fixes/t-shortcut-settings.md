@@ -1,6 +1,6 @@
 ---
 name: t-shortcut-settings
-description: T-ShortcutSettings 快捷键统一设置与 MCP 独立子页已交付（69fac4b + fb64c51 + 105a9e4）——5
+description: T-ShortcutSettings 快捷键统一设置与 MCP 独立子页已交付（aed3b07 + 38566f4 + fe6f859）——5
   个插件快捷键收归独立设置节 + MCP 工具独立子设置页位列关于上方且主目录页可见
 metadata:
   node_type: memory
@@ -8,7 +8,7 @@ metadata:
   originSessionId: sess_4b4e37d2-b3af-49ad-952c-fcb8b5ed69e2
 ---
 
-T-ShortcutSettings（2026-09-15，69fac4b 主体 + fb64c51 修正 + 105a9e4 完善，基于第四轮七任务交付后的 dev）。用户反馈驱动：①快捷键冲突提示中找不到修改入口；②MCP 已交付但插件设置页无入口；③MCP 应在关于上方且主目录页可见；④文案「IDEA MCP Server 设置【点击前往】」。
+T-ShortcutSettings（2026-09-15，aed3b07 主体 + 38566f4 修正 + fe6f859 完善，基于第四轮七任务交付后的 dev）。用户反馈驱动：①快捷键冲突提示中找不到修改入口；②MCP 已交付但插件设置页无入口；③MCP 应在关于上方且主目录页可见；④文案「IDEA MCP Server 设置【点击前往】」。
 
 **已交付**：
 - 独立「快捷键」设置节（`SECTION_SHORTCUTS` + `ShortcutsConfigurable` + plugin.xml `groupWeight=45` 位于 ui 与 about 之间）

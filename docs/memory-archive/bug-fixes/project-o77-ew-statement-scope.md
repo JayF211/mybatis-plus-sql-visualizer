@@ -1,6 +1,6 @@
 ---
 name: project-o77-ew-statement-scope
-description: O-77 T-EwStatementScope 已立项待实施（20260924，计划 `969b06f`）——XML 预览 ew
+description: O-77 T-EwStatementScope 已立项待实施（20260924，计划 `c3cb052`）——XML 预览 ew
   占位全文扫描误报「无 Wrapper 参数」的根因锚点与修法
 metadata:
   node_type: memory
@@ -12,7 +12,7 @@ metadata:
 
 用户反馈：demo 仓 `OrderMapper.selectOrdersByCondition`（无 ew 参数的普通 XML select）预览误报「方法 … 无 Wrapper 参数（ew），无法展开 MP 占位」红横幅。
 
-**根因（读码实锤）**：MP 占位识别域与解析域不一致——`XmlPreviewService.kt:79` 用 `XmlEwExpander.placeholders(fileText)` 扫**整个 mapper 文件**，同文件他语句（demo OrderMapper.xml 第 8/16 行 `${ew.customSqlSegment}`）去重后剩 `ew` 占位 → `XmlEwResolver.kt:65` 按当前语句 id 关联方法无 Wrapper 参数即误报（警示文本=当前语句 id＋他语句变量名）。引入 `3959a8e4`（M26-B），`git tag --contains` 实测 2026.8.15 起全 tag 含＝**发布版 2026.9.14 受影响，非新回归**。
+**根因（读码实锤）**：MP 占位识别域与解析域不一致——`XmlPreviewService.kt:79` 用 `XmlEwExpander.placeholders(fileText)` 扫**整个 mapper 文件**，同文件他语句（demo OrderMapper.xml 第 8/16 行 `${ew.customSqlSegment}`）去重后剩 `ew` 占位 → `XmlEwResolver.kt:65` 按当前语句 id 关联方法无 Wrapper 参数即误报（警示文本=当前语句 id＋他语句变量名）。引入 `0f42a80b`（M26-B），`git tag --contains` 实测 2026.8.15 起全 tag 含＝**发布版 2026.9.14 受影响，非新回归**。
 
 **同族缺陷两形态**（随本任务一并收敛）：①预览带 ew 语句时他语句不同变量占位（ew2）错配/误报；②跨命名空间 include 注入的占位全文扫描漏检（语句域扫描反而覆盖）。
 

@@ -1,13 +1,13 @@
 ---
 name: project-sqltogjava-classpicker-edt-psi-read
-description: SQL→Java 类选择器（ClassPickerField）EDT 无 ReadAction 直读 PSI 硬抛——已修复（2026-09-03，提交 34c56ee，dev 分支）
+description: SQL→Java 类选择器（ClassPickerField）EDT 无 ReadAction 直读 PSI 硬抛——已修复（2026-09-03，提交 7264828，dev 分支）
 metadata:
   node_type: memory
   type: project
   originSessionId: sess_90bb8d08-18f7-42d6-9553-2da553ad78f4
 ---
 
-SQL→Java 面板类选择器（SqlToJavaPanel.kt 的 `ClassPickerField`）点击即抛 `RuntimeExceptionWithAttachments: Read access is allowed from inside read-action only`——**已修复**（2026-09-03，提交 `34c56ee`，dev 分支，dev worktree `../mybatis-plus-sql-visualizer-dev`）。**已合入 master**（合并提交 `ecc7361`，2026-09-03）。
+SQL→Java 面板类选择器（SqlToJavaPanel.kt 的 `ClassPickerField`）点击即抛 `RuntimeExceptionWithAttachments: Read access is allowed from inside read-action only`——**已修复**（2026-09-03，提交 `7264828`，dev 分支，dev worktree `../mybatis-plus-sql-visualizer-dev`）。**已合入 master**（合并提交 `0413d6a`，2026-09-03）。
 
 ## 堆栈与根因（EDT 事件链直读 PSI）
 

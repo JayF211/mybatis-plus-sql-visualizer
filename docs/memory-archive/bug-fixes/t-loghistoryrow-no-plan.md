@@ -1,13 +1,13 @@
 ---
 name: t-loghistoryrow-no-plan
-description: SQL历史列表行号已交付（master dee44ae，4020 绿）——文件内条目顺序号、parseContent 读取层注入 sequenceNumber、HistoryCellRenderer 复用 #N 片段
+description: SQL历史列表行号已交付（master 9e01e26，4020 绿）——文件内条目顺序号、parseContent 读取层注入 sequenceNumber、HistoryCellRenderer 复用 #N 片段
 metadata:
   node_type: memory
   type: project
   originSessionId: sess_144fcf04-5442-4147-8a7d-9707c2e9de7f
 ---
 
-**T-LogHistoryRowNo（2026-09-14 立项并交付，master dee44ae+e78b151+773d227，4020/0/0/6 绿）**：用户需求「sql历史中的sql列表也需要显示行号」。计划文件 `docs/开发计划/20260914-1455-T-LogHistoryRowNo-SQL历史列表行号-开发计划.md`（含 §实施记录）。
+**T-LogHistoryRowNo（2026-09-14 立项并交付，master 9e01e26+4e477f6+62324f6，4020/0/0/6 绿）**：用户需求「sql历史中的sql列表也需要显示行号」。计划文件 `docs/开发计划/20260914-1455-T-LogHistoryRowNo-SQL历史列表行号-开发计划.md`（含 §实施记录）。
 
 **核心决策**：
 - 历史行号语义 = **文件内条目顺序号**（1 起），非会话内捕获序号——历史条目读回 `sequenceNumber` 恒 0、跨项目多次运行累积无「本次启动第几条」概念、历史面板无排序仅搜索过滤。
@@ -16,7 +16,7 @@ metadata:
 - 不持久化序号（文件格式 `-- source|time|timestamp --` 不动）；一级文件列表不加行号；不加设置开关。
 
 **实施新学（防复踩）**：
-- 并行会话 T-IntrUpg 同改 `HistorySqlLogPanel.kt`（显示模式行高逻辑 updateUI），与本次渲染片段改动不同段无冲突——提交前确认对方已落（a7bb545）再干净提交。
+- 并行会话 T-IntrUpg 同改 `HistorySqlLogPanel.kt`（显示模式行高逻辑 updateUI），与本次渲染片段改动不同段无冲突——提交前确认对方已落（fec7d33）再干净提交。
 - `readAll` 仅测试使用（生产只用 readFromFile），多文件序号各自独立 1..N 不跨文件连续——历史面板按单文件展示。
 
 **关键区别（防踩）**：历史列表不能复刻「项目启动清零」语义——序号是静态文件内顺序，与主列表捕获序号是两个概念。

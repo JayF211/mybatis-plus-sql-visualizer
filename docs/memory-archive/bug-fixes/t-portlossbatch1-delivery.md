@@ -1,19 +1,19 @@
 ---
 name: t-portlossbatch1-delivery
 description: T-PortLossBatch1 交付：dev 已修语义缺陷(A)/定位误报守卫(B)/导入导出反馈(C)/假开关处置(D)
-  两笔提交（5507b86/066051e，3151/0/6 绿）+ K2J 陈旧输出目录编译劫持根因
+  两笔提交（0c613d0/07b7d32，3151/0/6 绿）+ K2J 陈旧输出目录编译劫持根因
 metadata:
   node_type: memory
   type: project
   originSessionId: sess_5361d041-6f37-4c2c-9d97-515b95c961df
 ---
 
-# T-PortLossBatch1 交付（2026-09-09，master 5507b86 + 066051e）
+# T-PortLossBatch1 交付（2026-09-09，master 0c613d0 + 07b7d32）
 
 审计二、三类（[[branch-port-loss-audit]]）批量修复，多子智能体并行实施：
 
-- **提交 1（5507b86）A~C 组**：ne `<>` 三转换器、or(Consumer) 外层 OR 组内 AND、condition=false 跳过（isFalseFlag）、having 字符串透传 Raw、last OFFSET 回填、负数字面量 PsiPrefixExpression 静态求值、new Expression 锚点守卫、PartTree 仅 Repository 接口守卫、设置导入导出 statusLabel 行内反馈（executeOnPooledThread + ModalityState.any()，dev ddaea74+565b4a1）
-- **提交 2（066051e）D 组**：删 logStopOnToolWindowClose（master 无读者；dev 的真读者 ToolWindowVisibilityListener.java 是 Java 监听器未随移植，所以 master 上是假开关——注意 plugin.xml 工厂是 Java 的 SqlLogToolWindowFactory.java，别只盯 Kotlin）、删 collapsedGroups 残留字段、接线 injectTenantOnInsert（injectTenantLine AND 子开关）、autoInject 保字段改 tooltip（点击时刻触发型）
+- **提交 1（0c613d0）A~C 组**：ne `<>` 三转换器、or(Consumer) 外层 OR 组内 AND、condition=false 跳过（isFalseFlag）、having 字符串透传 Raw、last OFFSET 回填、负数字面量 PsiPrefixExpression 静态求值、new Expression 锚点守卫、PartTree 仅 Repository 接口守卫、设置导入导出 statusLabel 行内反馈（executeOnPooledThread + ModalityState.any()，dev 363591b+6443089）
+- **提交 2（07b7d32）D 组**：删 logStopOnToolWindowClose（master 无读者；dev 的真读者 ToolWindowVisibilityListener.java 是 Java 监听器未随移植，所以 master 上是假开关——注意 plugin.xml 工厂是 Java 的 SqlLogToolWindowFactory.java，别只盯 Kotlin）、删 collapsedGroups 残留字段、接线 injectTenantOnInsert（injectTenantLine AND 子开关）、autoInject 保字段改 tooltip（点击时刻触发型）
 - 全量 3151/0/6（基线 3138 + 新增 4+1+2+4=11 用例）；设置页复选框计数 22→21（PluginSettingsPersistenceTest 随 D1 校正）
 
 ## 踩坑沉淀

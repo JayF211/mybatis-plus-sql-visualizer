@@ -1,11 +1,11 @@
 # O-78 T-ForeachItemRender foreach 元素值渲染双缺陷修复 — 开发计划
 
-- **编号**：O-78（占号前实测：`git log master --oneline` 顶=`324b29f`，`docs/开发计划/` 当日无 0926 后新建文件，台账快照「下一号 O-78」）
+- **编号**：O-78（占号前实测：`git log master --oneline` 顶=`563450e`，`docs/开发计划/` 当日无 0926 后新建文件，台账快照「下一号 O-78」）
 - **任务名**：T-ForeachItemRender
 - **日期**：2026-09-24
 - **状态**：待实施（用户同批点名「分析→计划→实施」，本计划随实施回填 §九）
 - **来源**：用户问题反馈——demo `selectOrdersByCondition` 的 `statusList`（`List<Integer>`）在 foreach 集合框输入 `1,2,4,5`，预览渲染出 `IN ('1', '2', '4', ?)`：数值被加引号成字符串 + 输入 4 值只渲染 3 个、尾巴留裸 `?`
-- **基线**：master=`324b29f`（20260924 实测）
+- **基线**：master=`563450e`（20260924 实测）
 
 ## 一、问题与复现
 
@@ -82,7 +82,7 @@ demo 仓 `OrderMapper.xml` 的 `selectOrdersByCondition`（foreach `collection="
 
 ## 九、实施记录
 
-（20260924 本会话实施完毕，分支 `t-foreach-item-render`，基线 master=`324b29f`。）
+（20260924 本会话实施完毕，分支 `t-foreach-item-render`，基线 master=`563450e`。）
 
 **生产改动**（与 §四一致，共四文件）：
 

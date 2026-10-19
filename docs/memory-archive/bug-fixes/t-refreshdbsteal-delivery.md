@@ -1,14 +1,14 @@
 ---
 name: t-refreshdbsteal-delivery
 description: T-RefreshDbSteal 已交付——多弹窗僵尸 rehost 监听抢共享控制台三症状根治（master
-  707e76a，3188/0/6 绿，真机复验留人工）
+  9cb2985，3188/0/6 绿，真机复验留人工）
 metadata:
   node_type: memory
   type: project
   originSessionId: sess_33967f87-fcc9-48d6-aedd-706706443e28
 ---
 
-T-RefreshDbSteal 于 2026-09-09 交付（master 707e76a）。三症状（预览点刷新后 DBN 工具栏消失 / 左参数不再同步右侧 SQL / 执行 SQL 跑到 IDEA 控制台）同根：`SqlPreviewService.showResult` 每次 new 一个 MODELESS `SqlPreviewDialog` 从不关闭，旧弹窗面板的 rehost HierarchyListener 残活，把插件级单例共享控制台抢回废弃面板（真机日志 6 连抢、`since=116324ms` 匹配旧面板 lastRehostAt 实锤）。
+T-RefreshDbSteal 于 2026-09-09 交付（master 9cb2985）。三症状（预览点刷新后 DBN 工具栏消失 / 左参数不再同步右侧 SQL / 执行 SQL 跑到 IDEA 控制台）同根：`SqlPreviewService.showResult` 每次 new 一个 MODELESS `SqlPreviewDialog` 从不关闭，旧弹窗面板的 rehost HierarchyListener 残活，把插件级单例共享控制台抢回废弃面板（真机日志 6 连抢、`since=116324ms` 匹配旧面板 lastRehostAt 实锤）。
 
 四组修复：F2 弹窗单例化（showResult 关旧开新，`doDispose()` 包装平台 protected 的 dispose，项目级 ConcurrentHashMap+WeakReference 登记表）；F3 监听生命周期（监听引用入字段，detachConsole/dispose 显式移除，去抖 skip 后单发 800ms Swing Timer 延迟复查幂等重挂）；F4 所有权卫队（`consoleAttachedToMe`，showSql/executeSql/createEditor 三处失联先 recoverConsole，执行侧恢复未落地落全链兜底）；F1 埋点（createEditor/releaseEditor 带栈 + showSql 三分支标签 + refreshView 4 态快照）。
 

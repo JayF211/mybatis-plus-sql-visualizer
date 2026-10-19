@@ -5,7 +5,7 @@
 - 来源：第十一轮报告 §8 DBX 增量清单 **#69**——DBX `4975b72b`：只读边界豁免标量函数 REPLACE()/INSERT()（`crates/dbx-sql/src/query_execution_sql.rs:263-313` `WRITE_VERBS_WITH_SCALAR_FUNCTION_FORMS=["replace","insert"]`，带括号形态豁免、含方言空格；update 仍判写；测试 `:1786-1831`）
 - 性质：**正确性**（MCP 面误拒）——`SELECT` 里的 MySQL `INSERT()` 串函数被白名单误杀
 - 实施分支：自 master 拉任务分支（或按派单在在途回合分支上实施，以派单为准）
-- 验证基线：master 快照 `c07b8e3`
+- 验证基线：master 快照 `51a62a7`
 
 ---
 
@@ -100,7 +100,7 @@ T-SGE-02 红用例先跑改前代码（取先红读数）→ T-SGE-01 豁免实�
 
 **风险对齐**：本增量的安全论证范式沿用 §六 前两行（结构闸在先、粗扫在后，解析面扩大不改变结构判定集）；`SqlAstParser` 现只暴露多语句版，闸门语义（`statements.size != 1` 判定）不变。
 
-## 九、实施记录（2026-09-23 实施后回填，车道 t-guard-parse，基线 cb7e764）
+## 九、实施记录（2026-09-23 实施后回填，车道 t-guard-parse，基线 a631464）
 
 ### 9.1 逐项落地
 

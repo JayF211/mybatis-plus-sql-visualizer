@@ -1,7 +1,7 @@
 # T-LogDedupeMpMark：SQL 日志去重失效与 MP 分页计数误标 开发计划
 
 > **创建日期**：2026-09-08
-> **分支**：master（当前 HEAD `dccc0b2`）
+> **分支**：master（当前 HEAD `0219f91`）
 > **优先级**：P1（日志列表核心正确性：去重形同虚设 + 来源标签误命中，用户日常高频可见）
 > **预估工时**：2~3h（含全量回归；runIde 真机验证人工跟进）
 > **来源**：用户反馈——达梦方言项目（Spring JdbcTemplate + NamedParameterJdbcTemplate），开启「移除重复的sql」后列表仍大量重复；同时 [MP 分页计数] 标记出现异常命中，数据 SELECT 被标成计数查询（红框截图）。用户猜测与之前的自动拼接分隔符有关，已核实排除（§2.4）。
@@ -148,7 +148,7 @@ buffer / bridge / parser 均无平台依赖，纯 JUnit 覆盖：
 
 （2026-09-08 实施）
 
-**并行任务影响核查**（用户提醒前置核查）：实施前 T-ClickPreview（75f2a89）与 T-LogListFreeze04（53ecd9d）已提交，工作区干净、无活跃并行任务。T-LogListFreeze04 移植的 T-Perf-19 已把**去重计数键**指纹化（`LogSqlEntry.dedupeKey` = `sqlFingerprint(restoredSql)`，徽章查找 SqlLogPanel.kt 已接 `entry.dedupeKey`），但**去重匹配仍是原文精确相等**（isDuplicate / dedupeExisting）——根因一依然存在；对方在变更记录里显式标注「isDuplicate 仍原文精确相等，T-LogDedupeMpMark 修复空间不受占用」，无冲突。bridge 批级 `any` 误标原样未动。
+**并行任务影响核查**（用户提醒前置核查）：实施前 T-ClickPreview（c9d7fe2）与 T-LogListFreeze04（9223f44）已提交，工作区干净、无活跃并行任务。T-LogListFreeze04 移植的 T-Perf-19 已把**去重计数键**指纹化（`LogSqlEntry.dedupeKey` = `sqlFingerprint(restoredSql)`，徽章查找 SqlLogPanel.kt 已接 `entry.dedupeKey`），但**去重匹配仍是原文精确相等**（isDuplicate / dedupeExisting）——根因一依然存在；对方在变更记录里显式标注「isDuplicate 仍原文精确相等，T-LogDedupeMpMark 修复空间不受占用」，无冲突。bridge 批级 `any` 误标原样未动。
 
 **方案调整**（相对 §3.1）：不新建 `dedupeKey(sql)` 顶层函数，改为把空白规范化并入既有 `sqlFingerprint` 链——新增 `normalizeSqlWhitespace`（LogSqlModels.kt，trim + 连续空白折叠），`LogSqlEntry.dedupeKey` 改 `sqlFingerprint(normalizeSqlWhitespace(restoredSql))`，计数键/徽章键自动对齐零额外接线；SqlLogPanel.kt **零改动**（避开对方刚重构的渲染管线）。isDuplicate / dedupeExisting 改按预计算 `dedupeKey` 比较（16 字符指纹串比较，兼得 T-Perf-06 临界区结构与性能）。SqlLogConsoleBridge.kt 批级 `any` 拆逐条判定，pendingSource 优先级不变。
 

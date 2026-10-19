@@ -5,7 +5,7 @@
 - 来源：**用户真机报告**（2026-09-22 08:48，原文「sql预览面板 运行sql有错误 但是面板没有直接显示 只在Output页面显示了，之前的话在sql预览窗口下方位置应该会显示错误原因并可以一键复制的」）
 - 性质：**可用性 + 覆盖面缺陷**——面板错误反馈通道对一类服务端错误完全不可见，且漏检后给出的归因方向是错的
 - 实施分支：自 master 拉任务分支 t-console-error-coverage
-- 验证基线：master `1f3be72`（最近可核读数 491 类/5604 用例 0 失败，属 T-AgentHeartbeat 批次树；实施时以当次实测为准）
+- 验证基线：master `0338da3`（最近可核读数 491 类/5604 用例 0 失败，属 T-AgentHeartbeat 批次树；实施时以当次实测为准）
 
 ---
 
@@ -158,14 +158,14 @@ T-CEC-01（取证日志）→ 真机复现取文本 → T-CEC-02（判据，先�
 
 ## 九、实施记录（实施后回填）
 
-**实施方式**：独立工作树 `mybatis-plus-sql-visualizer-cec` + 分支 `t-console-error-coverage`（基 `origin/master` `d3ef121`），并行隔离沙盒 `MPSV-ConsoleErr`（临时行跑完已还原、未入库）。
+**实施方式**：独立工作树 `mybatis-plus-sql-visualizer-cec` + 分支 `t-console-error-coverage`（基 `origin/master` `b4cf2ec`），并行隔离沙盒 `MPSV-ConsoleErr`（临时行跑完已还原、未入库）。
 
 | 任务 | 提交 | 说明 / 偏离 |
 |------|------|------|
-| T-CEC-01 | `45e3f49` | `logUnrecognizedConsoleTail`：未命中判据时记新增文本尾部（6 行 / 600 字符双上限，每次执行至多一条——`lastUnrecognizedTail` 去重 + 执行起点复位）。**真机原文未取到**：本环境无法驱动真机执行失败 SQL（见下「未做」），故日志形态按用户贴出的 Output 报文设计（容忍 `[时间戳]` 前缀），不依赖它 |
-| T-CEC-02 | `45e3f49` | 判据 = `SQLSTATE_PREFIX`（`[5位][数字]`）+ `ORACLE_CODE`（`ORA-\d{5}`）+ 短语族（原 14 条 **逐字不动** + MySQL 语法错原文 1 条 + 厂商固定报文 5 条）；`isSqlLine` 的防误报改走同一判据；新增自写回显排除（`EXEC_FAILURE_ECHO_PREFIX` 常量与 `writeConsoleOutput` 共用，不再两处字面量）；摘录 4→8 行、逐行剥 `[时间戳]` 与（DBN 实读的）提示符。**偏离**：计划里写的「达梦/金仓中文报错形态」**未加**——按计划自身的纪律（先取真机文本再定，禁止臆造），本环境取不到真机文本，故不加；`ORA-` 走正则而非短语（`ORA-00933` 之类的 5 位码更精确） |
-| T-CEC-03 | `45e3f49` | `extractConsoleResidue`：新增文本去掉「本次 SQL 回显」（剥时间戳/提示符后是 SQL 子串，长度 ≥4）+ DBN 状态行（connected / completed in / executing / fetching / cancelled）后，取尾部 6 行 / 600 字符；40 拍到期分支改为「真错误 → 原文；无判据命中但有残余 → 残余（前缀 `execute.error.unknownShape`）；两者皆无 → 既有 timeout/credential/indexing 提示」。`executionHintReported` 去重语义保持不变（残余路径同样置位） |
-| T-CEC-04 | `45e3f49` | `ConsoleErrorExtractTest` 6 → **14 例**（真机样例回归 / 跨方言结构性判据 5 样例 / 三条反例：带方括号的正常 SQL 回显、插件自写 `执行失败:` 回显、历史误报样例 `WHERE t.id = 1` / 四条残余用例含「提示符读不到」退化路径与**成功 DML 摘要反例**——最后一条是收口前自查补的：DML 与工具语句成功同样走满 40 拍窗口，`1 row affected` 不得当残余）。**反向验证两读数**（在补第 14 例之前做的，故读数为 13 例）：临时摘除结构性判据 + 新增短语族（`RED PROBE`）→ **13 例 2 失败**，失败点名恰为 `testUserRealMachineMysqlSyntaxErrorDetected` 与 `testStructuralJudgementCoversDialects`，其余 11 例（含全部反例）仍绿；逐字还原（sha256 复核 `291fd712…` 一致）→ **13 例 0 失败**；补第 14 例后复跑 **14 例 0 失败**，并在收口门禁的分片里再绿一次（shard2 内 14/0） |
+| T-CEC-01 | `1b54350` | `logUnrecognizedConsoleTail`：未命中判据时记新增文本尾部（6 行 / 600 字符双上限，每次执行至多一条——`lastUnrecognizedTail` 去重 + 执行起点复位）。**真机原文未取到**：本环境无法驱动真机执行失败 SQL（见下「未做」），故日志形态按用户贴出的 Output 报文设计（容忍 `[时间戳]` 前缀），不依赖它 |
+| T-CEC-02 | `1b54350` | 判据 = `SQLSTATE_PREFIX`（`[5位][数字]`）+ `ORACLE_CODE`（`ORA-\d{5}`）+ 短语族（原 14 条 **逐字不动** + MySQL 语法错原文 1 条 + 厂商固定报文 5 条）；`isSqlLine` 的防误报改走同一判据；新增自写回显排除（`EXEC_FAILURE_ECHO_PREFIX` 常量与 `writeConsoleOutput` 共用，不再两处字面量）；摘录 4→8 行、逐行剥 `[时间戳]` 与（DBN 实读的）提示符。**偏离**：计划里写的「达梦/金仓中文报错形态」**未加**——按计划自身的纪律（先取真机文本再定，禁止臆造），本环境取不到真机文本，故不加；`ORA-` 走正则而非短语（`ORA-00933` 之类的 5 位码更精确） |
+| T-CEC-03 | `1b54350` | `extractConsoleResidue`：新增文本去掉「本次 SQL 回显」（剥时间戳/提示符后是 SQL 子串，长度 ≥4）+ DBN 状态行（connected / completed in / executing / fetching / cancelled）后，取尾部 6 行 / 600 字符；40 拍到期分支改为「真错误 → 原文；无判据命中但有残余 → 残余（前缀 `execute.error.unknownShape`）；两者皆无 → 既有 timeout/credential/indexing 提示」。`executionHintReported` 去重语义保持不变（残余路径同样置位） |
+| T-CEC-04 | `1b54350` | `ConsoleErrorExtractTest` 6 → **14 例**（真机样例回归 / 跨方言结构性判据 5 样例 / 三条反例：带方括号的正常 SQL 回显、插件自写 `执行失败:` 回显、历史误报样例 `WHERE t.id = 1` / 四条残余用例含「提示符读不到」退化路径与**成功 DML 摘要反例**——最后一条是收口前自查补的：DML 与工具语句成功同样走满 40 拍窗口，`1 row affected` 不得当残余）。**反向验证两读数**（在补第 14 例之前做的，故读数为 13 例）：临时摘除结构性判据 + 新增短语族（`RED PROBE`）→ **13 例 2 失败**，失败点名恰为 `testUserRealMachineMysqlSyntaxErrorDetected` 与 `testStructuralJudgementCoversDialects`，其余 11 例（含全部反例）仍绿；逐字还原（sha256 复核 `291fd712…` 一致）→ **13 例 0 失败**；补第 14 例后复跑 **14 例 0 失败**，并在收口门禁的分片里再绿一次（shard2 内 14/0） |
 | T-CEC-05 | （文档提交） | CHANGELOG `[Unreleased]` §Fixed 首条 + `docs/变更记录.md` 新行 + 待分析问题清单 P15 落结论 + 本计划 §九/§十 |
 
 **验证读数**：定向三类 `ConsoleErrorExtractTest` **14/0**（6 原有 + 8 新增）+ `ExecuteSqlErrorHandlingTest` 16/0 + `ResultTabSelectionTest` 16/0。

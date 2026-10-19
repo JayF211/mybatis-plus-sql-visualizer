@@ -7,7 +7,7 @@ metadata:
   originSessionId: sess_bef52d81-b9f2-456b-95bc-3e62d26f3e58
 ---
 
-2026-09-22 用户报障「我没有开启捕获 SQL 日志，但是被捕获了」（面板开关为 ▶ 未捕获，列表里却有 agent 条目）。**根因＝IDE→应用侧的控制通道（CONFIG 帧）从未被正确解析过**，属自 2026-09-12 M56-01 基座起就存在的形态，2026-09-18 `T-AgentListenSync`（`a5e27de`）把「监听开关 → 应用侧采集」接上后才以用户可见症状暴露。
+2026-09-22 用户报障「我没有开启捕获 SQL 日志，但是被捕获了」（面板开关为 ▶ 未捕获，列表里却有 agent 条目）。**根因＝IDE→应用侧的控制通道（CONFIG 帧）从未被正确解析过**，属自 2026-09-12 M56-01 基座起就存在的形态，2026-09-18 `T-AgentListenSync`（`fb408b9`）把「监听开关 → 应用侧采集」接上后才以用户可见症状暴露。
 
 **帧格式错位（字节级实测，可复算）**：两侧线上格式都是 `[4 字节长度][1 字节命令][body]`——
 `AgentManager.kt` 的 `AgentSession.sendConfig` 写 `writeInt(body.size); write(CMD_CONFIG); write(body)`，
@@ -43,16 +43,16 @@ metadata:
   agent 整条能力线从未随任何发行 tag 交付 → 本项是「首个含增强捕获版本」的上传前置，不需热修。
   **⚠️ 但内测 tag 里有（20260922 实测）**：`2026.9.18-beta.4` 的 `SenderLoop.java` 第 60–61 行仍是旧读序
   （`readUnsignedByte` 在前、`readPayload` 内才 `readInt`），即**本缺陷就装在那个已在 Gitee 上的 beta.4 包里**（该包头条功能正是「增强捕获升级为默认通道」），
-  同轮 T-08（`ec2a3b9`）与 O-55 定位缓存也都不在 beta.4 里；已备好的发行提交 `ed43cc0`（09-18）同样早于这三个修复四天。
+  同轮 T-08（`e4e13f4`）与 O-55 定位缓存也都不在 beta.4 里；已备好的发行提交 `1420673`（09-18）同样早于这三个修复四天。
   → **「把 beta.4 转成正式版」之前必须先叠上这些修复**，否则等于把「关不掉的捕获开关」连同默认开启的通道发给正式版用户；
-  内容口径三选一（纯 beta.4 ／ beta.4 + 捕获修复 ／ 直接用 ed43cc0）见 [[project-release-workflow]]。
+  内容口径三选一（纯 beta.4 ／ beta.4 + 捕获修复 ／ 直接用 1420673）见 [[project-release-workflow]]。
 
 **✅ 已实施（2026-09-22，集成分支 `t-agent-config-locate`，三车道并行）**
-- 应用侧 `t-agent-cfg-agent`：`9c1a18d`（读帧对齐 + 停采清队列 + `CMD_CONFIG_ACK=5` + 看门狗）+ `4f22765`（复核整改）。
+- 应用侧 `t-agent-cfg-agent`：`51f94a6`（读帧对齐 + 停采清队列 + `CMD_CONFIG_ACK=5` + 看门狗）+ `4a1c22d`（复核整改）。
   入站统一 `readInt → 校验 0<len≤1MB → readUnsignedByte → readFully`；**帧头逐字节读**以区分「完全无数据」（空闲，上抛读超时）
   与「帧读到一半」（流已错位 → 非超时 IOException 走重连 + WARN）——后者闭合了复核提的「半截帧超时被当无数据」残余。
   看门狗默认 `sqlvis.agent.configWatchdogMs=15000`（超时未见 CONFIG 即应用侧自停 + 一次性 WARN）。
-- IDE 侧 `t-agent-cfg-ide`：`deafea2`（入队闸门 + ACK 接收/超时 WARN + 关闭路径对齐 + 桥让位条件 + 守卫换有效断言）。
+- IDE 侧 `t-agent-cfg-ide`：`f7f0be9`（入队闸门 + ACK 接收/超时 WARN + 关闭路径对齐 + 桥让位条件 + 守卫换有效断言）。
 - **桥让位条件改 `online && 应用侧已确认在采`**（原只看 socket 在线）——否则「在线但已停采」时桥被封 + agent 静默 = 两条通道零产出且无信号。
 - 反向验证读数：应用侧 16 例全绿，外科式回退读序 6 例转红（含 `SocketTimeoutException: Accept timed out`＝「静默吞、不重连」签名）、摘尽出短路 1 例转红；
   定位器侧 agent util 20/20 + IDE 守卫 3/3。
@@ -66,7 +66,7 @@ metadata:
 - **MCP 工具本身**：`McpToolGate.isEnabled` 只读 `mcpToolsEnabled` + 工具级禁用清单（`mcpDisabledTools`），**从不看捕获开关** → 无需改。
 - **MCP 审计（落 SQL 历史）**：原先走 `SqlLogEntryBuffer.addEntry`，而该口第一行就是 `if (paused) return false`
   → 用户点过「停止捕捉」或项目停止（T-04 让 `onConsoleRemoved` 自动分支置 `paused=true`）时 MCP 条目被**静默吞掉** ✗。
-  **已落地（`e8ee771`）**：新增 `SqlLogEntryBuffer.addAuditEntry`（**跳过 `paused` 门**；关键字过滤/去重窗口/上限淘汰保留——它们是列表展示偏好不是开关），
+  **已落地（`a295408`）**：新增 `SqlLogEntryBuffer.addAuditEntry`（**跳过 `paused` 门**；关键字过滤/去重窗口/上限淘汰保留——它们是列表展示偏好不是开关），
   `recordMcpExecution` 改走它。**反向验证**：改回 `addEntry` → 新增对照用例 `test记录MCP执行_不受捕获开关约束_paused期间照样落条目` 必红
   （`expected:<1> but was:<0>`），还原后 `McpHistoryIngestTest` 5 例 0 失败。对照用例写成**两臂**（paused 期间普通条目被拦下 + 审计条目照样落库），防空真。
 
@@ -76,11 +76,11 @@ metadata:
 真机读数与走查配方见验收文档 `docs/验收文档/20260922-0941-…-验收文档.md` §3 与 [[runide-demo-verify-workflow]]。
 
 **✅ 合并、推送与门禁（2026-09-22）**：三车道 + T-08 + T-ST-02b2 经集成分支 `t-agent-config-locate` 合入 master
-（合并提交 `0eafa67`，收口登记 `adc2547`，MCP 审计 `e8ee771`）；集成分支已删（0 笔未合并）。
-**已推送 origin/master**（`8118a7b..c54f4f2`，推送债 0）。最终态门禁：`testShards` 三片全绿（163+173+159 套件 /
+（合并提交 `a2b973a`，收口登记 `1158e75`，MCP 审计 `a295408`）；集成分支已删（0 笔未合并）。
+**已推送 origin/master**（`5824ea0..bb5dca5`，推送债 0）。最终态门禁：`testShards` 三片全绿（163+173+159 套件 /
 **5645 用例** / 0 失败，含 MCP 审计修复）、`verifyGate` 三目标（IU-243/253/262）全 Compatible、agent 子项目 83 例 0 失败；
 `testDatabase` 2 例在册环境失败。
-**同轮真机级探针另发现并修复一处 P0（T-08，`ec2a3b9`）**：`SqlHookCallbacks.onConnection` 在**连接出口**即判
+**同轮真机级探针另发现并修复一处 P0（T-08，`e4e13f4`）**：`SqlHookCallbacks.onConnection` 在**连接出口**即判
 `disabled` 返回原连接 → 停采期间建立的连接**永不包装**（连接池复用、无补偿点）→「先跑应用、再点开始捕获」与
 「停采→恢复」两条主路径永久捕不到。**修法＝连接级一律包装，`disabled` 只做逐调用短路**——这正是设计红线
 「禁用 = volatile 短路、**不卸载**」的本意，原先的连接级跳过是与红线不一致的额外优化；原 loader 兜底

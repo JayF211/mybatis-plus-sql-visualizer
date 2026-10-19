@@ -5,14 +5,14 @@
 - 日期：2026-09-19
 - 任务编号：T-StabilityTail（T-ST-01 / T-ST-02 / T-ST-02d / T-ST-03）
 - 计划文档：`docs/开发计划/20260919-1817-T-StabilityTail-测试脆弱前置与分片顺序依赖及PS5-02显式传参-开发计划.md`
-- 实施基线：master `c24aab3`（testShards **5362/0/0/6** + testDatabase 10/0/0/0 + agent 58/0/0/0）——即竞品第八轮九任务并轨后的读数
-- 实施形态：sam 四路并行工作树，19:33 四路并入 master（`a4ffb70` t-st-fragile-precond / `bb86065` t-st-shard-order / `acd821c` t-st-orphan-guard / `978e996` t-st-ps5-02-wire）
+- 实施基线：master `bb85099`（testShards **5362/0/0/6** + testDatabase 10/0/0/0 + agent 58/0/0/0）——即竞品第八轮九任务并轨后的读数
+- 实施形态：sam 四路并行工作树，19:33 四路并入 master（`789dd6f` t-st-fragile-precond / `78e2362` t-st-shard-order / `63d95c0` t-st-orphan-guard / `30feb4b` t-st-ps5-02-wire）
 
 **结论前置**：四项全部落地——T-ST-01 脆弱前置收口；T-ST-02 复现成功、根因定位到**生产代码**并落地两步修法与观测手段；T-ST-02d 源码扫描守卫入库；T-ST-03 按计划判定**不实施**，改为前提留档 + 形状守卫。**T-ST-02 不宣称根治**：独立复核（字节码级）先证伪「根治」口径，随后的真窗口反向断言复验进一步表明该判据对 light 测试的 temporarily-disposed 窗口**不可达**，不改变门禁那 3 例的结局。门禁 `testShards` **5372/0/0/6**（并轨时 5369，T-ST-02b2 补 3 例后为 5372）+ `testDatabase` 10/0/0/0 + agent 58/0/0/0，全绿。本批**无真机面**（见 §六）。
 
 ## 一、改动总览
 
-### 1. T-ST-01 脆弱前置收口（`2370844`，1 文件 +19/-4）
+### 1. T-ST-01 脆弱前置收口（`c8edba8`，1 文件 +19/-4）
 
 `util/PluginCacheManagerCoverageTest.kt` 两处「断言环境」改为「用例自建前置」，断言强度与文本逐字不变：
 
@@ -23,7 +23,7 @@
 
 ### 2. T-ST-02 分片顺序依赖的 `AlreadyDisposedException`（本批重点，口径经两轮更正）
 
-涉及四个提交：`1ecd706`（观测手段）→ `45afdf7`（第一步修）→ `f11371a`（第二步修，即 T-ST-02b2）；文档口径更正见 `9794ca5` / `517695f` / `a40c018` / `2f098c7` / `6a5ee0e` / `904f28a`。
+涉及四个提交：`2f047f1`（观测手段）→ `648ddb1`（第一步修）→ `bd54b9c`（第二步修，即 T-ST-02b2）；文档口径更正见 `c673e4b` / `23bd32d` / `2f20318` / `c333f90` / `eb487cc` / `3090d31`。
 
 **复现结论（T-ST-02a）：受控条件下复现成功，两条路径。** A＝用 `ProjectManagerEx.forceCloseProject` 造 temporarily-disposed 窗口后首次取服务，复现出与门禁**逐字同形**的链路（外层 `ComponentManagerImpl.kt:1670` 的 "Container is already disposed" + 最内 `MessageBusImpl.kt:224` 的 `MessageBus(owner=…, containerState=disposed temporarily, …)`）。B＝把门禁那轮的 `testShard1..3` XML 快照拷回当权重表、**同一份分片组成**重跑 → 1896 例 / 7 失败（`SectionConfigurableAutoCaptureLinkageTest`×5 + `PluginSettingsPanelBindingTest`×1 + `WrapperConverterProjectScopeTest`×1，末者为另一族既有假失败）。自然触发路径未复现（同批类名/顺序隔离复跑恒绿）。
 
@@ -44,12 +44,12 @@
 
 **修法两步**：
 
-- ①（`45afdf7`）把取服务与消费合并进**同一个** `runCatching`——异常不再穿出 `apply()`；happy path 逐字节不变，异常路径从「穿出」变为「记一条既有 warn 并跳过该项目」。
-- ②（`f11371a`）在取服务**之前**先判 `Project.isDisposed` 并跳过——**不发起**那次注定失败的创建。为可测性把循环体抽成 `internal fun linkageAutoStartForProjects(projects: List<Project>)` 测试缝（`ProjectManager.getInstance().openProjects` 是全局单例，测试无法注入），`apply()` 改传 `openProjects.toList()`。跳过沿用既有 warn 文案，未新造。KDoc 写明毒化机制与「勿优化回去」的理由。
+- ①（`648ddb1`）把取服务与消费合并进**同一个** `runCatching`——异常不再穿出 `apply()`；happy path 逐字节不变，异常路径从「穿出」变为「记一条既有 warn 并跳过该项目」。
+- ②（`bd54b9c`）在取服务**之前**先判 `Project.isDisposed` 并跳过——**不发起**那次注定失败的创建。为可测性把循环体抽成 `internal fun linkageAutoStartForProjects(projects: List<Project>)` 测试缝（`ProjectManager.getInstance().openProjects` 是全局单例，测试无法注入），`apply()` 改传 `openProjects.toList()`。跳过沿用既有 warn 文案，未新造。KDoc 写明毒化机制与「勿优化回去」的理由。
 
 **独立复核（字节码级）证伪「根治」**：平台 `LazyInstanceHolder$initialize$1$1` 的异常表为 `catch java.lang.Throwable`（**无 `CancellationException` 过滤**），catch 后无条件 `new CannotInitialize(instanceClass, throwable)` + `access$complete`；`tryGetInstance()` 见 `_state instanceof CannotInitialize` 即 `throw getInitializationError()`。⇒ **一次创建失败就把该服务在该项目实例上永久毒化**，此后每次 `getService` 都重抛同一缓存异常。故第 ① 步只吞掉结果、**仍发起了那次失败的创建**，阻止不了中毒；第 ② 步才是「不发起」的那一步。旁证：实施方自己采到的 8 条 `[T-ST-02]` WARN **全部**打印 `project.isDisposed=false` 而消息是 "Container is already disposed"——抛时 `owner.isDisposed` 必真、catch 时同一对象为假，只有「缓存重抛」能自洽。复核者另在测试所用平台 jar（`ideaIU-2024.3.7.1-win` / `lib/app-client.jar`）上用 `javap` 独立复核了异常表与 `ProjectImpl.isDisposed()` 两条事实（后者 = `super.isDisposed() || isTemporarilyDisposed`，窗口内确为 true，故判据在真机语义下成立、不止测试桩）。
 
-**反向断言真窗口端到端复验（`2f098c7` / `904f28a`，三组探针各独立 JVM，探针跑完即删未入库）**——结论分两层，**判据口径成立、派生活动断言不成立**：
+**反向断言真窗口端到端复验（`c333f90` / `3090d31`，三组探针各独立 JVM，探针跑完即删未入库）**——结论分两层，**判据口径成立、派生活动断言不成立**：
 
 - **判据口径（「窗口内不再发起那次创建 → 不再出现缓存重抛」）：验证成立。** 基线（无判据）窗口内 `getService` 抛 "Container is already disposed"、关窗后受害调用点（`AlreadyDisposedDiagnostics.projectService`，即那 3 例 `setUp:29` 同款调用）**仍抛**且消息里 `project.isDisposed=false`；判据在位时同窗口同受害调用点计数代理测得 **`getService` 调用数 = 0**、关窗后受害调用点**成功**建出 `SqlLogManager`。毒化机制**首次在真实窗口上被直接证实**（此前仅字节码推演）。
 - **派生断言（「同窗口再现时那 3 例变绿」）：验证不成立。** 两条独立理由：(a) **受害点不在守卫面内**——红在 `SectionConfigurableAutoCaptureLinkageTest#setUp:29`，守卫只覆盖 `SectionConfigurable.apply()`；第三组探针（判据在位 + 另一未受守卫的调用点先创建）读数显示关窗后受害调用点**仍抛**同一异常。(b) **判据分支对该窗口不可达**——`ProjectManagerImpl.closeProject` 的 light 分支在置 `setTemporarilyDisposed(true)` 的**同一写动作**里 `removeFromOpened(project)`（`ProjectManagerImpl.kt:347-350`），而 `apply()` 传的是 `openProjects` 快照（`getOpenProjects()` 即该数组，`ProjectManagerImpl.kt:245`）——**窗口内该项目根本不在列表里**，`if (project.isDisposed)` 收不到它；heavy 项目 dispose 路径同理。
@@ -57,9 +57,9 @@
 
 **本批交付口径（不宣称）**：已消除 `apply()` 穿出这一表现 + 新增取服务前判 `isDisposed` 以不发起失败创建；平台侧 `LazyInstanceHolder` 服务毒化与 temporarily-disposed 窗口本身**未触及**，**不宣称根治**，也**不作为门禁那 3 例的收口手段**。修法本身无副作用、happy path 不变，对「生产态经 dispose 回调 / 设置面板触发的 `apply()`」仍有防御价值（并发关闭与迭代快照错位时判据会生效）。
 
-**观测手段（`1ecd706`，T-ST-02c）**：新增 `testutil/AlreadyDisposedDiagnostics.kt`——仅在抛 `AlreadyDisposedException` 时把**片号**（从 `test-sandbox/shardN` 反推）/ **触发点**（栈里第一个本仓测试源码帧 `类#方法:行`）/ 服务名 / 线程 / `project.isDisposed` / 项目名补进消息并记一条 WARN，**以同类型异常重抛**、原链路挂 cause（控制流与失败归属不变）。落地时 5 个守卫类的 **11 处** `project.getService(SqlLogManager)` 调用点改走它（`f11371a` 新增用例后现为 12 处）。
+**观测手段（`2f047f1`，T-ST-02c）**：新增 `testutil/AlreadyDisposedDiagnostics.kt`——仅在抛 `AlreadyDisposedException` 时把**片号**（从 `test-sandbox/shardN` 反推）/ **触发点**（栈里第一个本仓测试源码帧 `类#方法:行`）/ 服务名 / 线程 / `project.isDisposed` / 项目名补进消息并记一条 WARN，**以同类型异常重抛**、原链路挂 cause（控制流与失败归属不变）。落地时 5 个守卫类的 **11 处** `project.getService(SqlLogManager)` 调用点改走它（`bd54b9c` 新增用例后现为 12 处）。
 
-### 3. T-ST-02d 防回潮守卫（`7aba2e2`，1 文件 **+436/-0 仅新增**）
+### 3. T-ST-02d 防回潮守卫（`c1af0a8`，1 文件 **+436/-0 仅新增**）
 
 `convention/BannedApiSourceScanTest.kt` 新增规则「初始化入口改项目服务级状态须复位」。判据：某测试类的 `setUp` / `@Before` 函数体内对 `project.getService(…)` 返回对象有写操作（成员赋值或变更类方法调用），而**类内**没有任何复位令牌（`SqlLogManagerProjectState.restore(` / `.restoreCaptureStateForTest(` / `.loadState(` / `.clearForTest(` / `.clearAll(` / `.resetForTest(`）→ 红。豁免用写入行上方连续注释块里的 `// project-state: <理由>`。
 
@@ -67,7 +67,7 @@
 - 既有规则与豁免计数一行未动：该文件 `@Test` 由 22 例（提交前，另有 1 处 `@Test` 字样在 KDoc 里）增至 **24 例**，即「既有 22 + 新增 2」。
 - **已知漏报（有意不收编，KDoc 与自证用例双向钉住）**：方法体内写、helper 返回服务、多行赋值、复位在某分支而泄漏在另一分支。收编到「类内任意写」会误判 `finally { setCapturingForTest(before) }` 那种合法复位形态（仓内已有此形态）。
 
-### 4. T-ST-03 PS5-02 面板侧显式传参：判定不实施（`fe0d7fc`）
+### 4. T-ST-03 PS5-02 面板侧显式传参：判定不实施（`721a5cc`）
 
 T-PS5-02 的收益（一次大 DML 点击的最坏 4 次解析降到 1 次）已由 `execute/UnboundedWriteDetector.kt` 的 **AST 单槽**（`parseStatementsShared`）全数拿到，T-ST-03 只是把「隐式经缓存槽复用」改成「显式沿调用流传递」的形式统一，**无额外性能收益**。三条硬依据：
 
@@ -108,16 +108,16 @@ T-PS5-02 的收益（一次大 DML 点击的最坏 4 次解析降到 1 次）已
 
 本批的独立复核集中在 T-ST-02，方式是**只读的字节码级验证**与**真窗口反向断言复验**，两者都产生了对交付口径的实质更正（非背书）。
 
-### 1. 字节码级复核（`9794ca5` / `a40c018`，已作为既成事实采纳）
+### 1. 字节码级复核（`c673e4b` / `2f20318`，已作为既成事实采纳）
 
 复核者在实施方所用平台 jar（`ideaIU-2024.3.7.1-win` / `lib/app-client.jar`）上独立 `javap` 复核两条事实，未仅采信结论：
 
 - `LazyInstanceHolder$initialize$1$1.invokeSuspend` 异常表实测 = `from 36 to 73 -> 104 Class java/lang/Throwable` 与 `from 90 to 101 -> 104 Class java/lang/Throwable`（**无 `CancellationException` 过滤**），handler 104–121 无条件 `new CannotInitialize` + `access$complete`；`tryGetInstance()` 偏移 43–56 = `instanceof CannotInitialize` → `getInitializationError()` → `athrow`（缓存重抛）。
 - `ProjectImpl.isDisposed()` 偏移 0–19 = `super.isDisposed() ifne → 1`，否则读 `isTemporarilyDisposed` 字段（`ifeq → 0`）→ temporarily-disposed 窗口内确为 true，故 `isDisposed` 判据在真机语义下成立（不止测试桩）。
 
-**处置**：`45afdf7` 的「根治」口径不成立，交付口径改为「已消除 `apply()` 穿出这一表现」，并补 `f11371a` 那一步真正阻止发起失败创建的判据。
+**处置**：`648ddb1` 的「根治」口径不成立，交付口径改为「已消除 `apply()` 穿出这一表现」，并补 `bd54b9c` 那一步真正阻止发起失败创建的判据。
 
-### 2. 真窗口反向断言复验（`2f098c7` / `904f28a`）
+### 2. 真窗口反向断言复验（`c333f90` / `3090d31`）
 
 三组探针在真实 temporarily-disposed 窗口（按平台 `ProjectManagerImpl.closeProject` 对 light 项目的原样三步打开＝`disposeEarlyDisposable()` + `setTemporarilyDisposed(true)`，实测 `isDisposed(inWindow)=true`）上端到端复验。**推翻性结论**：判据口径成立，但派生活动断言（那 3 例变绿）不成立，理由见 §一-2。附带更正「窗口非瞬时态」与「02b/02b2 两轮先红后绿的因果性存疑」。
 
@@ -151,7 +151,7 @@ T-PS5-02 的收益（一次大 DML 点击的最坏 4 次解析降到 1 次）已
    「另一个对象的复位」样本（`PluginSettings.loadState` / `JoinFkRegistry.clearForTest` /
    `PluginCacheManager.clearAll` / `FirstCaptureGuide.resetForTest`）把真泄漏**全部洗成绿**。
 
-**修复（`adbbc02`，1 文件 +315/−41）**：①名字绑定令牌扩为 `["getService(", "projectService("]`，
+**修复（`df50fb5`，1 文件 +315/−41）**：①名字绑定令牌扩为 `["getService(", "projectService("]`，
 wrapper 形态同样登记；②复位判定改「绑定承接名」（`hasBoundServiceReset`：`<承接名>.<复位口>(…)` 或
 `SqlLogManagerProjectState.restore(<承接名>, …)`），文件级 `contains` 整块移除。
 **验收用「能红」实证**：删 `restore` 行 → `命中 1 处：[…SqlConsoleBridgeFilterProviderTest.kt:31 → manager.entries.dedupeEnabled =]`；

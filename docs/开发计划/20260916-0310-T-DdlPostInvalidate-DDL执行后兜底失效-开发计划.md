@@ -53,7 +53,7 @@ T-DP-01（收尾两点接线）→ T-DP-02（测试+文档）
 
 ## 八、实施记录（实施后回填）
 
-**2026-09-17 实施完毕（提交 4167a69，dev 分支直接交付）**
+**2026-09-17 实施完毕（提交 9d7a251，dev 分支直接交付）**
 
 - **T-DP-01**：startResultTabRetry 三收尾点（早检错误上报/结果 Tab 成功呈现/40 拍超时收口）调 runPostExecutionInvalidate——复用 MetadataInvalidator.invalidateAfterExecution（内部预判命中才动作+动作幂等），入口+收尾双调全程失效次数有界（1+1）；成功与失败/超时都失效（DBX：失败的 DDL 可能已隐式提交），把「过程内 DDL/预判漏判/中途结构变化」三类窗口关死；sqlText 自 executeOnConsole 入口捕获（与入口失效钩子同取值口径）穿参 afterSubmitted。
 - **T-DP-02**：幂等断言测试 1 例（入口+收尾双调动作计数精确、非 DDL 零动作）；CHANGELOG Fixed（缓存一致性口径）与变更记录行随本轮文档批次同步；第五轮报告 O-17 状态回填（含口径修正说明）留主会话。

@@ -6,7 +6,7 @@ plugins {
     id("org.jetbrains.intellij.platform")
 }
 
-// T-BuildScriptSplit：开发沙盒分治——块级逐字搬运自根 build.gradle.kts（锚点 dc047bd），
+// T-BuildScriptSplit：开发沙盒分治——块级逐字搬运自根 build.gradle.kts（锚点 4c3e268），
 // 注释随迁；验收=任务注册点查 + 真机走查（runIde 噪音修复/runIdeHotSwap 热替换链路）。
 
 tasks {

@@ -5,7 +5,7 @@
 - 来源：第十轮报告 §8 DBX 增量清单 **#55**——DBX `7e5bcade`：引号策略按**方言分组**（`sqlCompletion.ts:1442-1452`：`ORACLE_COMPAT={oracle,oceanbase-oracle,yashandb,oscar,xugu}`、`UPPER_FOLDING={dameng,db2}`；`:3810-3823` 分支）
 - 性质：**正确性（窄面）**——承接刚落地的 O-42（Oracle 目录来源引号），把「单方言特判」升级为「按折叠方向分组」
 - 实施分支：自 master 拉任务分支 t-identifier-folding-family
-- 验证基线：master `03f6d25`（最近可核读数 491 类/5604 用例 0 失败 与 5577 例 0 失败，属不同批次树；实施时以当次实测为准）
+- 验证基线：master `28a1efa`（最近可核读数 491 类/5604 用例 0 失败 与 5577 例 0 失败，属不同批次树；实施时以当次实测为准）
 
 ---
 

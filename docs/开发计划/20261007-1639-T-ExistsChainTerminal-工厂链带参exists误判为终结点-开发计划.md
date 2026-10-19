@@ -2,7 +2,7 @@
 
 - 编号占用：O-120 / R66 / D93~D94 / V120（落库前先 git 实测是否被并行会话占用；D88 有意留空，避开 O-118/R64 撞号区）
 - 日期：2026-10-07
-- 状态：✅ **已实施**（2026-10-07，提交 `7c1b079`，分支 `t-exists-chain-terminal`；读数与偏差见 §九）
+- 状态：✅ **已实施**（2026-10-07，提交 `71e54b4`，分支 `t-exists-chain-terminal`；读数与偏差见 §九）
 - 实施方式：master 切分支 + 独立工作树（用户令）；未动 master 上并行会话在途文件
 - 来源：反馈池 **FR-0012**「Wrapper 预览希望支持 exists / notExists 子查询的 SQL 还原」＋ 2026-08-14 旧计划 `20260814-2234-exists条件误判为链式终结点-开发计划.md`（T-M25.2）
 - 任务性质：**补历史欠账 + 修正确性缺陷**，非新功能开发
@@ -34,7 +34,7 @@
 - 解析器有专门实现：`QueryWrapperParser.parseExists`（`converter/QueryWrapperParser.kt:839`），分派在同类 `:164`/`:165`，输出 `EXISTS (...)` / `NOT EXISTS (...)`，支持布尔前缀 toggle 与 `{i}`/`{0}` 参数替换。
 - 引入版本 = CHANGELOG「exists 三形态（T-M15-03，Q14）」落在 **2026.8.13**——即版本下拉里**最旧**的一档。**当前所有可安装版本都带这个能力。**
 - 金样矩阵已有该形态契约：S18（`exists`）/ S22（`notExists`），期望 `WHERE EXISTS (SELECT 1 FROM station WHERE station.id = device.id)`。
-- **实测**：`./gradlew test --tests SqlPreviewSpecMatrixTest` → **91 例 0 失败**（S18/S22 在内，2026-10-07 实测，HEAD `2f29d3f`）。
+- **实测**：`./gradlew test --tests SqlPreviewSpecMatrixTest` → **91 例 0 失败**（S18/S22 在内，2026-10-07 实测，HEAD `3a85467`）。
 
 → 本节结论：**不能把 FR-0012 当新需求做**。真正的活是下面 §二 那个历史欠账。
 
@@ -210,7 +210,7 @@ if (expr.methodExpression.referenceName in chainTerminalMethodNames && !isExists
 
 ## 九、实施记录
 
-**提交**：`7c1b079`（分支 `t-exists-chain-terminal`，自 master `03b9242` 切出）——修复笔含生产码、
+**提交**：`71e54b4`（分支 `t-exists-chain-terminal`，自 master `99f4af2` 切出）——修复笔含生产码、
 金样矩阵新例、CHANGELOG、变更记录总册、旧计划状态勘正、归档档状态勘正。
 
 ### 9.1 待验证前提的结论（两项已关掉，一项确认保留）
@@ -230,7 +230,7 @@ if (expr.methodExpression.referenceName in chainTerminalMethodNames && !isExists
 | 反向验证（`isExistsConditionCall` 改恒 false，带 `RED PROBE` 注记） | 矩阵 96 例 | **4 失败**，红点精确落 S91/S93/S94/S95；S92（notExists）保绿 → 判别力定向，非整片炸 |
 | 还原后定向回归 | 七类 | **261/0**：矩阵 96、`WrapperAnchorDetectorTest` 41、`WrapperAnchorDetectorNegativeTest` 5、`WrapperLocatorTest` 31、`ConsumerMethodsCoverageTest` 33、`SqlPreviewServiceTest` 49、`XbatisConverterTest` 6 |
 | testFast 冒烟 | 266 类 | **3406/0/6 跳过**（2m05s） |
-| **归并 master 后权威全量**（`testShards`，树 = master `716acf2` 同树 `3fe3aef`） | 5 片 + testExternal | **SHARD TOTAL 6257 / 0 失败 / 0 错误 / 9 跳过**（1295/1274/1272/1106/1270 + 40；parity 544 计划类全集均有结果 XML；3m44s。跑时 Docker 未运行，与既有 9 跳过基线一致） |
+| **归并 master 后权威全量**（`testShards`，树 = master `9043743` 同树 `3fe3aef`） | 5 片 + testExternal | **SHARD TOTAL 6257 / 0 失败 / 0 错误 / 9 跳过**（1295/1274/1272/1106/1270 + 40；parity 544 计划类全集均有结果 XML；3m44s。跑时 Docker 未运行，与既有 9 跳过基线一致） |
 
 `RED PROBE` 注记已还原，`grep -rn "RED PROBE" src/` 零命中；两个临时探针文件（`TmpExistsProbeTest` /
 `TmpVarProbeTest`）已删，`git status` 无未跟踪残留。
@@ -258,7 +258,7 @@ if (expr.methodExpression.referenceName in chainTerminalMethodNames && !isExists
   `WrapperFactoryCoverageServiceImpl#listByBareFactoryChainExists`（端点
   `GET /config/factory/bareChainExists?username=admin`，demo 仓 `38e6361`）——四种写法应产出同一份 SQL，
   逐形态比对预览；变量 / 分步 / `new` 三种写法无回归。
-- ~~分支归并~~ **已办**：`t-exists-chain-terminal` 以 `--no-ff` 并入 master（`716acf2`，用户令），
+- ~~分支归并~~ **已办**：`t-exists-chain-terminal` 以 `--no-ff` 并入 master（`9043743`，用户令），
   改动面与 master 侧 T-MapResultVo v5 三笔零重叠；分支、远端分支、工作树（`-existsct`）均已清除，
   合并后权威全量读数见 §9.2 末行。
 - **本任务唯一未验证面**：真机（沙盒/用户 IDE）走查未做——headless 金样矩阵已覆盖四形态与反向验证，

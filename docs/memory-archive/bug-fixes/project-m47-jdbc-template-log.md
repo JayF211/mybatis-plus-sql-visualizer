@@ -9,7 +9,7 @@ metadata:
 
 ## M47：Spring JdbcTemplate SQL 日志支持
 
-**状态**：✅ 已完成并实施至 master（commit `2d8b0d1` + 修复 `7f4741e` + NamedParameter `c611ebb`）
+**状态**：✅ 已完成并实施至 master（commit `71f9cc8` + 修复 `358bfc5` + NamedParameter `7758301`）
 **优先级**：P1
 **工作量**：~720 行（含修复），10+2 文件，2480 测试全绿
 
@@ -27,7 +27,7 @@ metadata:
 
 - SQL 行：`(?:Executing\s+(?:prepared\s+SQL\s+(?:statement|update|query)|SQL\s+(?:statement|query|update)|SQL\s+batch\s+update)|Calling\s+stored\s+procedure)\s*\[(.*)\]` — 注意 `Calling stored procedure` 无 `Executing` 前缀
 - 参数行：`Setting\s+SQL\s+statement\s+parameter\s+value:\s+column\s+index\s+(\d+),\s+parameter\s+\[(.*)],\s+value\s+class\s+\[(.*?)],\s+SQL\s+type\s+(.*)` — 值用贪婪匹配支持含 `]` 的值
-- **NamedParameter 单行格式**（commit c611ebb）：`sql\s*=\s*(.*?)\s*,\s*parameters\s*=\s*\{([^}]*)\}` — 匹配 `sql = SELECT ... :param1 ... , parameters = {param1=0, param2=uuid}`
+- **NamedParameter 单行格式**（commit 7758301）：`sql\s*=\s*(.*?)\s*,\s*parameters\s*=\s*\{([^}]*)\}` — 匹配 `sql = SELECT ... :param1 ... , parameters = {param1=0, param2=uuid}`
 
 ### 类型映射规则
 
@@ -35,13 +35,13 @@ metadata:
 `java.sql.Timestamp` → `Timestamp` → 不在 PLAIN_TYPES → 引号包裹
 `null` 字面量 → value class 均为 `null` → `NULL`
 
-### 修复：LogToSqlPanel 遗漏（commit 7f4741e）
+### 修复：LogToSqlPanel 遗漏（commit 358bfc5）
 
 **问题**：M47 在 `SqlLogConsoleBridge`（自动捕获）加了三解析器，但 `LogToSqlPanel.convert()`（日志转 SQL 面板）遗漏——只创建 MyBatis + Hibernate 两个解析器，粘贴 JdbcTemplate 格式日志显示「未解析到 Preparing/Parameters 行」。
 **修复**：`convert()` 新增 `jdbcParser` 实例 + 喂行 + `closePending()`；错误提示更新为三种格式说明。
 **教训**：新增解析器时需同时检查两个入口——自动捕获（SqlLogConsoleBridge）和手动转换（LogToSqlPanel）。
 
-### NamedParameterJdbcTemplate 格式（commit c611ebb）
+### NamedParameterJdbcTemplate 格式（commit 7758301）
 
 **用户真实日志**：`Line:243 - sql = SELECT ... WHERE col = :param1 , parameters = {param1=0, param2=uuid}`
 - 单行格式（非多行），命名参数 `:paramN`，参数以 Map 形式输出

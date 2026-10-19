@@ -29,7 +29,7 @@ metadata:
 ## 我们这边：谁把卸载窗口弄成了写不安全
 
 - 模态串 `[Unloading of SQL Visualizer]` 来自 `DynamicPluginsLegacyImpl.kt:509` 的 `inModalContext(ObjectUtils.sentinel("Unloading of ${pluginDescriptor.name}"))`。走 legacy 实现是因为新实现默认关闭：`DynamicPluginsSupport.kt:51-62` `Registry.is("dynamic.plugins.support.new.impl", false)` 为 false 即返回 null。
-- **主判（分支 A，我们的缺陷）**：`DynamicInstallSupport.unloadAndInstallOnEdt` 的 `invokeAndWait({ 卸载旧版 → 装载新版 }, ModalityState.any())`（改前在 `:226`，改后实现见 §已实施）——`UpdateSection.runInstall()` 在 `Task.Backgroundable.run()`（后台线程）里调 `installRunner` → `DynamicInstallSupport.install`，于是从 BGT 用 ANY 派发平台卸载：快照 false → `enterModal("Unloading of …")` 记 false → 整个卸载过程写不安全。设置对话框全程开着，故模态是 `[设置对话框, Unloading of …]` 这个嵌套形态，与用户贴的完全吻合。该行自 2026-09-11 `23cf667`（T-DynUpdate）起就在，T-WriteSafeCtx 那轮逐站点收口（09-17）晚于它、漏了这处。
+- **主判（分支 A，我们的缺陷）**：`DynamicInstallSupport.unloadAndInstallOnEdt` 的 `invokeAndWait({ 卸载旧版 → 装载新版 }, ModalityState.any())`（改前在 `:226`，改后实现见 §已实施）——`UpdateSection.runInstall()` 在 `Task.Backgroundable.run()`（后台线程）里调 `installRunner` → `DynamicInstallSupport.install`，于是从 BGT 用 ANY 派发平台卸载：快照 false → `enterModal("Unloading of …")` 记 false → 整个卸载过程写不安全。设置对话框全程开着，故模态是 `[设置对话框, Unloading of …]` 这个嵌套形态，与用户贴的完全吻合。该行自 2026-09-11 `34055dd`（T-DynUpdate）起就在，T-WriteSafeCtx 那轮逐站点收口（09-17）晚于它、漏了这处。
 - 旁证：平台自己的卸载入口都在 EDT 用户活动里（`DynamicPluginEnabler.disable:114` 设置→插件停用、`PluginDownloader.unloadDescriptorById:399-409` 插件更新），进入卸载时 `myWritingAllowed=true` → 窗口写安全 → 平台自身不刷这条日志。
 - **分支 B（平台发起卸载）**：设置→插件 停用/更新本插件时，若某个排队的 `ModalityState.any()` 回调被 `flushQueue()`（`DynamicPluginsLegacyImpl.kt:605`，以及 `PotemkinProgress` 泵事件）卷进窗口执行、且它做了文档写/落盘/VFS 同步 refresh，同样得到这条消息与同一模态串。
 
@@ -54,7 +54,7 @@ metadata:
 
 **同时发现一处既有债（登记未修）**：`invokeLaterSites` 提取器只认 `invokeLater(`，**`invokeAndWait` 站点对两条既有写安全规则从未生效**——而本次事故点正是 `invokeAndWait` 形态。修它属 T-WriteSafeCtx 规则族的面。
 
-## 已实施（T-DynUpdateWriteSafe，2026-09-22，合入 master `6e2a34d`）
+## 已实施（T-DynUpdateWriteSafe，2026-09-22，合入 master `cd54905`）
 
 - 新增 `dispatchModalityForUnload()`：EDT 只读跳板取当前模态实例（`ModalityState.current()`）→ `chooseDispatchModality(captured)` 纯函数决策（**写安全则原样用**——`ModalityStateEx.accepts` 的 trivial 分支 `requested == this` 保证立即执行、不被模态推迟；取不到或非写安全则退 `nonModal`，即「延迟到弹窗关闭」的平台契约语义）。判定谓词 `isWriteSafeDispatch(m)` = `TransactionGuard.getInstance().isWriteSafeModality(m)` 直读，异常即 false。
 - 派发改走可注入的 `edtDispatcher` 测试缝；新增派发日志行 `dynamic update: dispatch modality=… writeSafe=…` 作为真机取证锚点（模态串假设无法 headless 复现，只能靠这行）。

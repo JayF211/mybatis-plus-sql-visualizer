@@ -64,7 +64,7 @@ T-EP-01（分类器+表驱动测试）→ T-EP-02（if test 静默点收口）�
 
 ## 八、实施记录（实施后回填）
 
-分支 `t-expr-ast-precheck`（工作树 mpsv-eap，基线 8a3a6ff = dev 合流后）。实施提交：**6f3eb2f**（T-EP-01~04 一次交付，含测试与 bundle）。
+分支 `t-expr-ast-precheck`（工作树 mpsv-eap，基线 a842b47 = dev 合流后）。实施提交：**b65f7ec**（T-EP-01~04 一次交付，含测试与 bundle）。
 
 | 任务 | 落点 | 说明 |
 |---|---|---|

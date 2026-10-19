@@ -1,9 +1,9 @@
-# T-SyncK2JMaster92 开发计划——master ec584e2..2d40564 增量同步
+# T-SyncK2JMaster92 开发计划——master 6f78eda..6c6fcaf 增量同步
 
 > 立项日期：2026-09-19　分支：feature/kotlin-to-java（worktree `mybatis-plus-sql-visualizer-kotlin-to-java`）
-> 同步源：**本地 master `b9aeeba`**（原计划钉 `2d40564`，作业期间 master 两度前进共 31 提交，按上轮惯例一并吸收并把锚点改钉 `b9aeeba`——见 §8「锚点变更说明」）
-> 同步范围：`git diff ec584e2..b9aeeba` —— **123 提交**；§2/§3 的量化矩阵保留原 92 提交口径（那是立项基线），实际落盘见 §8
-> 上轮收官：T-SyncK2JMaster309（4f1076b，全量 testShards 5183/0/0/6 绿 + testDatabase 10/0/0/0 + buildPlugin 出包 2026.9.18 + verifyGate 三目标 Compatible，锚点 ec584e2）
+> 同步源：**本地 master `be1d4e5`**（原计划钉 `6c6fcaf`，作业期间 master 两度前进共 31 提交，按上轮惯例一并吸收并把锚点改钉 `be1d4e5`——见 §8「锚点变更说明」）
+> 同步范围：`git diff 6f78eda..be1d4e5` —— **123 提交**；§2/§3 的量化矩阵保留原 92 提交口径（那是立项基线），实际落盘见 §8
+> 上轮收官：T-SyncK2JMaster309（5ec76ba，全量 testShards 5183/0/0/6 绿 + testDatabase 10/0/0/0 + buildPlugin 出包 2026.9.18 + verifyGate 三目标 Compatible，锚点 6f78eda）
 > 用户指示：**同步功能、不合并分支**（方案 A 手工移植不变）；**先落本计划文件再实施**；全量测试 + 插件构建校验必须通过。
 
 ## 1. 背景与目标
@@ -16,25 +16,25 @@ T-PsiCaptureProtocol（新增 psiCapture 跨线程读守卫）、T-StabilityTail
 只搬生产代码而不同步守卫，等于把 master 的防回潮机制留在门外；只搬守卫而不补生产，守卫立刻红。
 
 本轮目标：把 92 提交增量全部移植进 100% Java 的 k2j 生产树，同步 56 个测试文件与 16 份文档，
-全量测试绿 + buildPlugin/verifyGate 三目标通过，锚点推进 2d40564。绝无 `git merge`；共享文件
+全量测试绿 + buildPlugin/verifyGate 三目标通过，锚点推进 6c6fcaf。绝无 `git merge`；共享文件
 （bundle/CHANGELOG/变更记录）走手工并集，k2j 自有行零丢失。
 
 ## 2. master 增量功能线（92 提交归组）
 
 | 功能线 | 主要提交 | 内容概要 |
 |---|---|---|
-| L1 T-FatalPassthrough | 5cc0710 / e2517bf / 4147432 / b124a33 / d88d63a | **新件 `util/FatalErrors.kt`（53 行）**：JVM 级致命错误判据（`VirtualMachineError` / `LinkageError` / `ThreadDeath` 三类白名单，`AssertionError` 刻意不算）。落地子集 **30 处 `catch(Throwable)` 加 fatal 透传**（execute/DataSourceSelector 原生执行链含 `InvocationTargetException` cause 解包、log/agent/AgentManager、log/RunConfigurationProcessListener、mcp/McpDbExecutor、ui/SqlPreviewService 等）；守卫新增「捕获块首行必须 `isFatal` 或登记豁免表（文件+站点数+理由）」规则；T-FP-02b 独立复核整改（外层 runCatching 抵消点收口） |
-| L2 T-XmlDtdHardening | 48c41a8 / 102c89f / 7e7a3e3 / 1d615d4 / 4e2b5da / 0c47108 / 3cbab4c / 2d5345f / addc590 | **新件 `xml/SecureXml.kt`（492 行，本轮最大件）**：XML 解析安全配置的**唯一实现**——关键防护 feature 收敛（T-XDH-01/02）、降级可观测告警出口、内联 DTD 子集膨胀防护（T-XDH-03，含上限常量与预扫）、子集切分状态机 + 参数实体可见化（T-XDH-07，处理指令文本不算声明）；`XmlMapperParser` / `PagesXmlParser` 两解析入口接线；两路径 DOCTYPE/XXE 回归用例 |
-| L3 T-PsiCaptureProtocol | c4af37f / b74c99e / 2d659b4 / 494e835 / 99d0b00 / db03b39 | **新件 `psi/PsiSnapshot.kt`（127 行）**：PSI 跨线程两段式捕获快照（EDT 侧记 VirtualFile+Document+textRange+modificationStamp；后台侧三项校验 file→stamp→区间），纯函数内核 `validateCaptured` 与平台解耦供表驱动用例；两 gutter provider 接入（T-PCP-02 甲类）；跳转族读权限约定改硬断言 + 协议援引（T-PCP-03 乙类）；跨线程 PSI 读守卫（T-PCP-04）+ 架构文档《PSI 跨线程读取协议》（T-PCP-05）。**只读侧不做文本交叉验证**（PSI 未 commit 会被误判失效） |
-| L4 T-McpRowBudget | a495d23 / 65f33a8 / 38812b8 / 9ecab4a / fafdea1 | MCP 执行工具行数预算可配：分层常量 + 钳制（T-MRB-01/02）、`mpsv_explain` 增可选 `maxRows`（T-MRB-03）、通道级 fallback + 注册与守卫（T-MRB-04/05）；接线守卫按独立复核意见消除假绿断言 |
-| L5 T-McpAuditTrail | cecba97 / 7119619 / 7e7a3e3 / 065f788 / ba077e2 / f0d163e / 39a0cf9 / 1c5f20f / cf7cbf5 | MCP 执行链落历史与审计补全：`SqlSource.MCP` 新枚举值（T-MAT-03，**条目文本恒为原始 selectSql，绝不落 EXPLAIN 包装句**）+ 来源标记走 pd 载荷持久化；执行链落历史（回调注入，T-MAT-01/02/04）+ 审计行补真实入参；MCP 徽标两页渲染器同落点同协议（T-MAT-05）；T-MAT-04 回退修复（错误路径审计入参段改两段分预算）；合流收口修读端回填来源标记 + 合并引入的两处门禁红 |
-| L6 T-ErrorReportRedact | 5ae7b90 / 28dc531 / bcf06b2 | 错误上报分级脱敏（D1=B）：默认只带类名 + 指纹 + 栈帧，异常消息全文与完整堆栈改**勾选附带**；`ErrorReportComposer` / `ErrorReportDialog` 预填分级切换与描述/标题双形态；指纹区分度抽样用例 |
-| L7 T-DelimiterAware | 26487b8 / 3a3fa04 / af08fd0 / 1aba7a0 | `SqlStatementSplitter` 增 `DELIMITER` 指令感知（T-DA-02，界符状态机 + 行首判定）；四消费面（execute/log/mcp）脚本用例（T-DA-03）；T-DA-01 定位行为核实与两次探针实录 |
-| L8 T-ParamContract2 | 95e7445 / b99381c / f5c43b1 / acbcbcc / f14e064 / 1ffcaeb / cc01c41 / bc1a2bd | 参数契约补缺：`BigInteger` 补入数值族（T-PC2-01）、`UUID` 归文本档（T-PC2-02）、XML 路径 paramN 全或无门槛（T-PC2-03）、模型侧 UNKNOWN 信号（T-PC2-04 模型侧）、**面板侧 UNKNOWN 参数执行/EXPLAIN 前提示一次**（T-PC2-04 D1=B 定案，预览链保持放行）、T-PC2-05 金样用例；新增 bundle 键 `execute.confirm.unknownParams.message` |
-| L9 T-PerfSweep5 | 7ef0b0f / 61ce6ab / d7cb87f / 3508878 / 72969df / 63bf223 / 995d363 / c257c4c | 性能第八轮 16 项发现收敛：PS5-01 执行链 DDL 判定解析复用、PS5-02 确认流/回滚链 AST 共享槽、PS5-03 方言 URL 探测缓存 + 调用点收敛、PS5-04 **AgentManager 常驻面解耦**（新件 `log/agent/AgentUrlRegistry.kt` 轻量持有者，读 agentUrl 不再实例化项目级服务）、PS5-05 XML 定位/跨 ns 片段解析单槽缓存（TTL + isValid，**禁 PSI 监听红线**）、PS5-06 schema_context 单调用全扫限额（按数据源记账）、PS5-07 epActive 复位、PS5-08 弱引用、PS5-09 死分配、PS5-10 索引有界、PS5-11 冷路径、PS5-12 容量上界、PS5-13 有界、PS5-15 引导监听弹后注销 |
-| L10 T-TestIsolation | 4d99e82 | 项目服务级测试状态复位——收口 SqlLogManager 共享实例泄漏族（生产侧 `SqlLogManager` 增量 + 测试夹具 `testutil/SqlLogManagerProjectState.kt`） |
-| L11 T-StabilityTail | d2df2d9 / fe0d7fc / 7aba2e2 / 2370844 / 1ecd706 / 45afdf7 / f11371a / 9794ca5 / 517695f / a40c018 / 6a5ee0e / 2f098c7 / 904f28a | 竞品第八轮批次三项尾款：T-ST-01 测试脆弱前置修复（断言「环境此刻为空」绑死分片顺序 → 改 assertSame 同实例）、T-ST-02 分片顺序依赖复现与根治 + T-ST-02b apply() 取服务纳入降级面 + T-ST-02b2 取服务前判 `isDisposed`、T-ST-02c 落 `AlreadyDisposedException` 观测手段（片号/触发点/服务/项目态）、T-ST-02d 项目服务级状态复位守卫、T-ST-03 面板回滚注册链解析复用前提留档（**显式传参判定不实施**）；含两次口径更正（「根治」→ 不宣称根治）与反向断言真窗口复验 |
-| L12 文档与盘点 | 1aa2010 / f7a9ac6 / a693640 / fbe310e / c24aab3 / d259051 / d33cb81 / 21dd774 / 2d40564 | 第八轮性能分析报告 + T-PerfSweep5 计划入库、竞品第八轮八份 + T-PerfSweep5 全量交付变更记录行、T-StabilityTail 计划与验收文档、两份验收文档指针登记 + 「批次收口清单」七项、盘点第 17~20 版 |
+| L1 T-FatalPassthrough | 61ebce0 / 349717b / c1a5b90 / c453ca6 / 1a5271d | **新件 `util/FatalErrors.kt`（53 行）**：JVM 级致命错误判据（`VirtualMachineError` / `LinkageError` / `ThreadDeath` 三类白名单，`AssertionError` 刻意不算）。落地子集 **30 处 `catch(Throwable)` 加 fatal 透传**（execute/DataSourceSelector 原生执行链含 `InvocationTargetException` cause 解包、log/agent/AgentManager、log/RunConfigurationProcessListener、mcp/McpDbExecutor、ui/SqlPreviewService 等）；守卫新增「捕获块首行必须 `isFatal` 或登记豁免表（文件+站点数+理由）」规则；T-FP-02b 独立复核整改（外层 runCatching 抵消点收口） |
+| L2 T-XmlDtdHardening | d94b58a / 2d02e7e / c51b505 / 6deaa70 / 2e707ee / 2df1c24 / d63a9ff / 24ed68c / cde6740 | **新件 `xml/SecureXml.kt`（492 行，本轮最大件）**：XML 解析安全配置的**唯一实现**——关键防护 feature 收敛（T-XDH-01/02）、降级可观测告警出口、内联 DTD 子集膨胀防护（T-XDH-03，含上限常量与预扫）、子集切分状态机 + 参数实体可见化（T-XDH-07，处理指令文本不算声明）；`XmlMapperParser` / `PagesXmlParser` 两解析入口接线；两路径 DOCTYPE/XXE 回归用例 |
+| L3 T-PsiCaptureProtocol | 8714e88 / 68202e7 / 3599055 / 28c13e7 / fc4470d / 7fe420e | **新件 `psi/PsiSnapshot.kt`（127 行）**：PSI 跨线程两段式捕获快照（EDT 侧记 VirtualFile+Document+textRange+modificationStamp；后台侧三项校验 file→stamp→区间），纯函数内核 `validateCaptured` 与平台解耦供表驱动用例；两 gutter provider 接入（T-PCP-02 甲类）；跳转族读权限约定改硬断言 + 协议援引（T-PCP-03 乙类）；跨线程 PSI 读守卫（T-PCP-04）+ 架构文档《PSI 跨线程读取协议》（T-PCP-05）。**只读侧不做文本交叉验证**（PSI 未 commit 会被误判失效） |
+| L4 T-McpRowBudget | aeba65e / bbb0409 / 6a69168 / 712923a / f1b00a5 | MCP 执行工具行数预算可配：分层常量 + 钳制（T-MRB-01/02）、`mpsv_explain` 增可选 `maxRows`（T-MRB-03）、通道级 fallback + 注册与守卫（T-MRB-04/05）；接线守卫按独立复核意见消除假绿断言 |
+| L5 T-McpAuditTrail | e8ce911 / 2a1bf53 / c51b505 / 1a81609 / ffb4b58 / 8d5386f / 8501730 / c1099de / cc6b152 | MCP 执行链落历史与审计补全：`SqlSource.MCP` 新枚举值（T-MAT-03，**条目文本恒为原始 selectSql，绝不落 EXPLAIN 包装句**）+ 来源标记走 pd 载荷持久化；执行链落历史（回调注入，T-MAT-01/02/04）+ 审计行补真实入参；MCP 徽标两页渲染器同落点同协议（T-MAT-05）；T-MAT-04 回退修复（错误路径审计入参段改两段分预算）；合流收口修读端回填来源标记 + 合并引入的两处门禁红 |
+| L6 T-ErrorReportRedact | 6600605 / 9db5323 / 66c94ed | 错误上报分级脱敏（D1=B）：默认只带类名 + 指纹 + 栈帧，异常消息全文与完整堆栈改**勾选附带**；`ErrorReportComposer` / `ErrorReportDialog` 预填分级切换与描述/标题双形态；指纹区分度抽样用例 |
+| L7 T-DelimiterAware | b1b63ef / a981e13 / 62c1b9f / 9a3173a | `SqlStatementSplitter` 增 `DELIMITER` 指令感知（T-DA-02，界符状态机 + 行首判定）；四消费面（execute/log/mcp）脚本用例（T-DA-03）；T-DA-01 定位行为核实与两次探针实录 |
+| L8 T-ParamContract2 | 020a0b6 / f0dddd8 / 08c3000 / da0d58e / 428563a / 84c97a9 / 88e20ca / 10cf6a7 | 参数契约补缺：`BigInteger` 补入数值族（T-PC2-01）、`UUID` 归文本档（T-PC2-02）、XML 路径 paramN 全或无门槛（T-PC2-03）、模型侧 UNKNOWN 信号（T-PC2-04 模型侧）、**面板侧 UNKNOWN 参数执行/EXPLAIN 前提示一次**（T-PC2-04 D1=B 定案，预览链保持放行）、T-PC2-05 金样用例；新增 bundle 键 `execute.confirm.unknownParams.message` |
+| L9 T-PerfSweep5 | bec6e1a / 1d2c99d / 77a3721 / 9030ef9 / 61e5870 / b462b06 / 829ac36 / c50c651 | 性能第八轮 16 项发现收敛：PS5-01 执行链 DDL 判定解析复用、PS5-02 确认流/回滚链 AST 共享槽、PS5-03 方言 URL 探测缓存 + 调用点收敛、PS5-04 **AgentManager 常驻面解耦**（新件 `log/agent/AgentUrlRegistry.kt` 轻量持有者，读 agentUrl 不再实例化项目级服务）、PS5-05 XML 定位/跨 ns 片段解析单槽缓存（TTL + isValid，**禁 PSI 监听红线**）、PS5-06 schema_context 单调用全扫限额（按数据源记账）、PS5-07 epActive 复位、PS5-08 弱引用、PS5-09 死分配、PS5-10 索引有界、PS5-11 冷路径、PS5-12 容量上界、PS5-13 有界、PS5-15 引导监听弹后注销 |
+| L10 T-TestIsolation | b96c696 | 项目服务级测试状态复位——收口 SqlLogManager 共享实例泄漏族（生产侧 `SqlLogManager` 增量 + 测试夹具 `testutil/SqlLogManagerProjectState.kt`） |
+| L11 T-StabilityTail | 8125ef4 / 721a5cc / c1af0a8 / c8edba8 / 2f047f1 / 648ddb1 / bd54b9c / c673e4b / 23bd32d / 2f20318 / eb487cc / c333f90 / 3090d31 | 竞品第八轮批次三项尾款：T-ST-01 测试脆弱前置修复（断言「环境此刻为空」绑死分片顺序 → 改 assertSame 同实例）、T-ST-02 分片顺序依赖复现与根治 + T-ST-02b apply() 取服务纳入降级面 + T-ST-02b2 取服务前判 `isDisposed`、T-ST-02c 落 `AlreadyDisposedException` 观测手段（片号/触发点/服务/项目态）、T-ST-02d 项目服务级状态复位守卫、T-ST-03 面板回滚注册链解析复用前提留档（**显式传参判定不实施**）；含两次口径更正（「根治」→ 不宣称根治）与反向断言真窗口复验 |
+| L12 文档与盘点 | fdc88c7 / 93b4ffd / 3d704e6 / f8f128f / bb85099 / 502b5e7 / 2aeb25e / c5330f7 / 6c6fcaf | 第八轮性能分析报告 + T-PerfSweep5 计划入库、竞品第八轮八份 + T-PerfSweep5 全量交付变更记录行、T-StabilityTail 计划与验收文档、两份验收文档指针登记 + 「批次收口清单」七项、盘点第 17~20 版 |
 
 ## 3. 文件级移植矩阵
 
@@ -74,7 +74,7 @@ T-PsiCaptureProtocol（新增 psiCapture 跨线程读守卫）、T-StabilityTail
 
 execute 2（`ConfirmRollbackParseShareTest` / `ConflictProbeProjectRetentionTest`）、log/agent 5（`AgentManagerLazyMonitorTest` / `AgentUrlDecoupleGuardTest` / `AgentUrlRegistryTest` / `EpActiveResetTest` / `FatalPassthroughTest`）、mcp 3（`McpAuditLogTest` / `McpHistoryIngestTest` / `McpRowBudgetTest`）、psi 1（`PsiSnapshotTest`）、sql 1（`DialectProbeCacheTest`）、ui 2（`SqlPreviewPanelRollbackParseShapeTest` / `UnknownParamGateTest`）、util 1（`FatalErrorsTest`）、xml 1（`SecureXmlTest`，652 行）、onboarding 1（`OnboardingAnchorTipListenerTest`）、**testutil 2（`AlreadyDisposedDiagnostics` / `SqlLogManagerProjectState`——T-StabilityTail/T-TestIsolation 的共享夹具，被多类引用，须先落位）**
 
-**增量 31 件（k2j 侧为 .kt，直取 + 适配）：** config 1、convention 1、execute 2、feedback 5、log 6、log/agent 1、mcp 2、psi 1、sql/rollback 1、ui/gutter 2、ui/highlight 1、util 3、xml 2 等，以 `git diff --name-status ec584e2..2d40564 -- src/test/kotlin` 为准。
+**增量 31 件（k2j 侧为 .kt，直取 + 适配）：** config 1、convention 1、execute 2、feedback 5、log 6、log/agent 1、mcp 2、psi 1、sql/rollback 1、ui/gutter 2、ui/highlight 1、util 3、xml 2 等，以 `git diff --name-status 6f78eda..6c6fcaf -- src/test/kotlin` 为准。
 
 **增量 6 件（k2j 侧为 .java，须逐行增量合并、禁整取）：** `heavy/HeavyXmlParamTypeResolverTest`、`log/HistoryCellRendererTest`、`log/SqlLogAutoSaverTest`、`log/SqlLogHistoryRoundTripTest`、`log/SqlLogPanelRendererUiTest`、`xml/AnnotationSqlParserTest`。
 
@@ -93,7 +93,7 @@ execute 2（`ConfirmRollbackParseShareTest` / `ConflictProbeProjectRetentionTest
 - **增量 10 件**：`docs/变更记录.md`（+3）、`docs/开发计划/20260916-1730-待完成开发计划全景盘点.md` 与本轮八份竞品任务计划（T-McpAuditTrail / T-McpRowBudget / T-FatalPassthrough / T-ErrorReportRedact / T-DelimiterAware / T-ParamContract2 / T-PsiCaptureProtocol / T-XmlDtdHardening）的 §八/§九 回填
 - **三册 union**：`CHANGELOG.md` / `docs/变更记录.md`（`docs/MEMORY.md` 本轮零 diff）。**必须做两侧行集合校验**（不只看行数）——master 侧「一侧删除一侧未动」会静默吞 k2j 台账行（v2026.9.10 教训）。
 
-**⚠️ 明确排除**：主工作区 `mybatis-plus-sql-visualizer` 当前有**未提交**改动（`docs/变更记录.md`、`src/test/kotlin/.../BannedApiSourceScanTest.kt`）——那是并行会话的在途工作，**不属于本轮同步范围**（同步源一律取已提交的 `2d40564`，禁用工作树内容）。根目录 `bash.exe.stackdump` 为环境残留，不取。
+**⚠️ 明确排除**：主工作区 `mybatis-plus-sql-visualizer` 当前有**未提交**改动（`docs/变更记录.md`、`src/test/kotlin/.../BannedApiSourceScanTest.kt`）——那是并行会话的在途工作，**不属于本轮同步范围**（同步源一律取已提交的 `6c6fcaf`，禁用工作树内容）。根目录 `bash.exe.stackdump` 为环境残留，不取。
 
 ## 4. 波次与提交链
 
@@ -106,7 +106,7 @@ execute 2（`ConfirmRollbackParseShareTest` / `ConflictProbeProjectRetentionTest
 | C4 | test: 测试移植 | 19 新建 .kt + 31 增量 .kt + 6 增量 .java（含 `BannedApiSourceScanTest` 五族守卫 Java 化适配） | `compileTestKotlin --rerun-tasks` 零错 |
 | C5 | test: 测试收口 | 全量 testShards 红项清账（移植偏差修正 + 守卫判据 Java 语义对齐 + 共享状态泄漏复核） | testShards 0 失败 |
 | C6 | docs: 文档同步 | 6 新建直取 + 10 增量 + 三册 union + 两侧行集合校验 | 行集合校验通过 |
-| C7 | chore: 收官 | 全量门禁复跑 + buildPlugin 出包 + verifyGate 三目标 + `.port-sync` 锚点推进 2d40564 + note 重写 + 还原沙盒临时行 + 计划 §8 回填 + 变更记录台账行 | 见 §7 |
+| C7 | chore: 收官 | 全量门禁复跑 + buildPlugin 出包 + verifyGate 三目标 + `.port-sync` 锚点推进 6c6fcaf + note 重写 + 还原沙盒临时行 + 计划 §8 回填 + 变更记录台账行 | 见 §7 |
 
 ## 5. 移植规则（既定清单全量生效）
 
@@ -132,7 +132,7 @@ execute 2（`ConfirmRollbackParseShareTest` / `ConflictProbeProjectRetentionTest
 | 6 件 .java 测试被整取覆盖掉 k2j 适配行 | 一律逐行增量合并，禁 `git checkout` 整取；合并后 diff 复核 |
 | `SqlSource.MCP` 误新建同名 Kt 文件（上轮同型） | 只改 `SqlSource.java`；落地后核对该枚举值单一来源 |
 | T-ST-02b2 `isDisposed` 判据涉及平台 API 语义，Java 侧行为差异 | 与 `SectionConfigurable` 增量同批，落位后跑 `SectionConfigurableAutoCaptureLinkageTest` |
-| 并行会话推进 master | 锚点钉 2d40564 快照，后续增量留下一轮；不碰主工作区与其他 worktree |
+| 并行会话推进 master | 锚点钉 6c6fcaf 快照，后续增量留下一轮；不碰主工作区与其他 worktree |
 | 三册 union 吞 k2j 台账行 | `git merge-file --union` 后两侧行集合校验（不只看行数） |
 | bundle `.properties` 被写 BOM | 只用 `git checkout`/`Edit` 逐行插，不用带 BOM 的写入工具 |
 | verifyPlugin 报告目录脏状态硬崩 | 重跑前清 `build/reports/pluginVerifier` |
@@ -144,25 +144,25 @@ execute 2（`ConfirmRollbackParseShareTest` / `ConflictProbeProjectRetentionTest
 2. `buildPlugin` 成功出包；`verifyGate` 243/253/262 三目标 Compatible，被标记的弃用/移除 API 用量与 master 逐项一致（无翻译漂移）；
 3. `compileJava` / `compileTestKotlin --rerun-tasks` 零错；`BannedApiSourceScanTest` 五族新规则实测命中文件数非 0 且反向验证成立；
 4. k2j 自有行零丢失：CHANGELOG/变更记录/build.gradle.kts 两侧集合校验通过；bundle en/zh 键集对齐（parity 守卫绿）；
-5. `.port-sync` 锚点 = `2d40564`（full SHA 以 `git rev-parse` 取真值），note 重写为本轮记录；
+5. `.port-sync` 锚点 = `6c6fcaf`（full SHA 以 `git rev-parse` 取真值），note 重写为本轮记录；
 6. 生产树仍 100% Java（`src/main/java` 无 .kt）；无 `git merge` 痕迹（提交历史为普通提交链）；
 7. 沙盒临时行已还原；并行任务已注销。
 
 ## 8. 实施记录
 
-**锚点变更说明（两次）**：原计划锚点钉 master `2d40564`（92 提交）。实施期间 master 两度前进：
-①20 提交至 `b029a78`（含 `9f4bbb9` 预热链池线程绑项目生命周期、`adbbc02` 守卫 T-ST-02d 两项阻断修复）；
-②再 11 提交至 `b9aeeba`（`T-McpToolNaming` MCP 工具改名 + `T-AcpMcpTransport` ACP 传输绕行）。
+**锚点变更说明（两次）**：原计划锚点钉 master `6c6fcaf`（92 提交）。实施期间 master 两度前进：
+①20 提交至 `cc01843`（含 `ec38d54` 预热链池线程绑项目生命周期、`df50fb5` 守卫 T-ST-02d 两项阻断修复）；
+②再 11 提交至 `be1d4e5`（`T-McpToolNaming` MCP 工具改名 + `T-AcpMcpTransport` ACP 传输绕行）。
 按上轮 T-SyncK2JMaster309 的惯例（post-anchor 增量一并吸收、锚点改钉），两批增量全部吸收，**锚点改钉
-`b9aeeba`**，同步范围 `ec584e2..b9aeeba` 共 123 提交。§2/§3 的量化矩阵保留 92 提交口径（立项基线），
+`be1d4e5`**，同步范围 `6f78eda..be1d4e5` 共 123 提交。§2/§3 的量化矩阵保留 92 提交口径（立项基线），
 实际落盘以本节为准。
 
 提交链：
-- `f7c9313` C1 立项计划
-- `d9f4d91` 生产移植（四新建翻译 + 49 增量 + bundle 5 新键）
-- `263d689` 测试移植（19 新建 + 30 增量 + 守卫五族 Java 化适配）
-- `3814236` 收口修复（预热链池线程绑项目生命周期 + 读端来源空值合并）
-- `b304599` 文档同步（18 件直取 + 三册 union）
+- `9d160b4` C1 立项计划
+- `10dd23b` 生产移植（四新建翻译 + 49 增量 + bundle 5 新键）
+- `13988be` 测试移植（19 新建 + 30 增量 + 守卫五族 Java 化适配）
+- `68cc1e8` 收口修复（预热链池线程绑项目生命周期 + 读端来源空值合并）
+- `4f39022` 文档同步（18 件直取 + 三册 union）
 - 后续提交：第二批次增量（MCP 工具改名 + ACP 传输）+ 本节回填 + 锚点推进 + 沙盒还原
 
 门禁读数（收官实测）：

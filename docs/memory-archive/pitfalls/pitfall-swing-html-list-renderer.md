@@ -18,6 +18,6 @@ Swing/IntelliJ 平台事实（243 基准 distro javap + 字节码实证，2026-0
 - 代价与产品权衡：SimpleColoredComponent 单行不折行——列表条目恒定高，全文由预览弹窗/单击预览承接；多行换行诉求只有 JTextArea（无着色）或 HTML（昂贵）两条路。
 - 测试坑：多 fragment HTML `contains` 断言会「蹭色」——如断言耗时 `#9E9E9E` 实际匹配到时间戳 span；改片段直读属性后才暴露真实分档语义（50ms 正常=绿非灰）。
 - **BasicHTML 折叠连续空白**：HTML 视图按 HTML 规则把连续空格/行首缩进塌成单空格——多行文本（`\n`→`<br>`）里的格式化缩进（AND 缩进 4/子查询 +4/AND 前双空格）渲染即丢，须在 HTML 转义时把空格替换为 `&nbsp;`（列表无 word-wrap，无副作用）。T-ListMode（2026-09-08 计划）要点。
-- **产品方向分歧（2026-09-08）**：本记忆的根治形态（SimpleColoredComponent+固定行高=恒单行）仅落 master 04；dev 侧用户明确要求列表多行展示（T-TwoLine 两行已交付 e77b696 + T-ListMode 三模式计划），仍走 HTML+cachedListHtml 路线——master→dev 合并此处会语义冲突，以用户多行诉求为准，O(N) 布局成本为已知接受项。
+- **产品方向分歧（2026-09-08）**：本记忆的根治形态（SimpleColoredComponent+固定行高=恒单行）仅落 master 04；dev 侧用户明确要求列表多行展示（T-TwoLine 两行已交付 aae6768 + T-ListMode 三模式计划），仍走 HTML+cachedListHtml 路线——master→dev 合并此处会语义冲突，以用户多行诉求为准，O(N) 布局成本为已知接受项。
 
 交付实战与 dev 合并预判见 [[t-loglistfreeze04-delivery]]、[[t-twoline-list-meta-line-delivery]]。

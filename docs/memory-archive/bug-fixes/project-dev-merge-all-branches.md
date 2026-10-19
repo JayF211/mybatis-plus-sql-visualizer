@@ -1,7 +1,7 @@
 ---
 name: project-dev-merge-all-branches
 description: dev 全量分支合并完成（2026-09-05）——除 kotlin-to-java 外六分支全入 dev，19
-  冲突块就地解决，3509/0/0/6 绿 + buildPlugin + verifyPlugin 三目标 Compatible；dev e0212d4
+  冲突块就地解决，3509/0/0/6 绿 + buildPlugin + verifyPlugin 三目标 Compatible；dev f4a5045
   领先 origin 未 push
 metadata:
   node_type: memory
@@ -9,7 +9,7 @@ metadata:
   originSessionId: sess_152c5d75-4b85-4eca-8fdb-1f6db540b666
 ---
 
-2026-09-05 应用户要求把除 `feature/kotlin-to-java`（用户明确排除）外的全部分支合入 dev（worktree `F:/code/Java/Gitee/SongRenShuo/mybatis-plus-sql-visualizer-dev`）。合并顺序 master→perf→m39→m44→m37：master 合并提交 453e8c7、perf/redline-hardening 1e42472、m39 487d8ee、m44 0c4f44d、m37 84eb34f；**jdbc-template-sql-preview 无需合并**——其 13 提交已经由 master 历史全包含（`dev..jdbc`=0，merge 是 no-op）。dev 终点 e0212d4（含计划+交付记录两 docs 提交），备份分支 `backup/dev-pre-merge` 指向合并前 34c56ee，六个来源分支均保留未删，dev 领先 origin **未 push**，回合 master 由用户决定。
+2026-09-05 应用户要求把除 `feature/kotlin-to-java`（用户明确排除）外的全部分支合入 dev（worktree `F:/code/Java/Gitee/SongRenShuo/mybatis-plus-sql-visualizer-dev`）。合并顺序 master→perf→m39→m44→m37：master 合并提交 bbe56a1、perf/redline-hardening 5a93435、m39 1849005、m44 6848a4d、m37 23ca4dc；**jdbc-template-sql-preview 无需合并**——其 13 提交已经由 master 历史全包含（`dev..jdbc`=0，merge 是 no-op）。dev 终点 f4a5045（含计划+交付记录两 docs 提交），备份分支 `backup/dev-pre-merge` 指向合并前 7264828，六个来源分支均保留未删，dev 领先 origin **未 push**，回合 master 由用户决定。
 
 **Why:** 全量 test 274 类 **3509/0 失败/0 错误/6 跳过**（高于任一来源分支单独总数：m44 线 3353、m39 线 3321、m37 线 3203，测试类并集预期）；buildPlugin 产出 2026.9.4 zip；verifyPlugin IU-243/253/262 三目标全 Compatible（仅既有弃用/实验 API 提示，无新引入问题）。合并前先落开发计划文档（用户要求：先出计划再动代码）。
 

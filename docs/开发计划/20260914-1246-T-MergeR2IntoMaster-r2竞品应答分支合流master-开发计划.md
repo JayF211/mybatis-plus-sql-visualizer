@@ -9,7 +9,7 @@
 
 | 分支 | 领先/落后 master | 内容 | 本轮动作 |
 |------|-----------------|------|---------|
-| feature/r2-competition-response | +63 / −63（merge-base 23c0df8） | 上轮九条建议（N-6~N-10 / O-5~O-8）+ T-RollbackSql | **本轮合入 master** |
+| feature/r2-competition-response | +63 / −63（merge-base ffe3ff7） | 上轮九条建议（N-6~N-10 / O-5~O-8）+ T-RollbackSql | **本轮合入 master** |
 | feature/t-m56-00-consumer | +3 / −177 | M56 agent 字节码增强（消费端） | 不合，另立任务（性能报告 §2：合入前需独立性能评估） |
 | feature/t-m56-01-agent-base | +9 / −177 | M56 agent 基座 | 同上 |
 | dev | 0 / −61 | 已于 2026-09-13 全部并入 master（T-MergeDevCrudcolorIntoMaster） | 无动作 |
@@ -24,11 +24,11 @@ master 侧 merge-base 后的对面演进（合流冲突来源，按时间序）�
 |------|----------|------------|---------|
 | T-RollbackSql 回滚 SQL | `sql/rollback/` 全目录 + `ui/RollbackSqlDialog.kt` + 4 测试 | `git ls-tree` 无该目录 | 自动带入 |
 | N-8 X1~X7 竞品翻车防御 | `xml/XmlMapParamSpecMatrixTest.kt` | 无此文件 | 自动带入 |
-| X8 HeavyXml 增强 | `heavy/HeavyXmlParamTypeResolverTest.kt` | merge-base 后 master 未改（T-M29.5 早于分叉点 23c0df8） | 自动带入 |
+| X8 HeavyXml 增强 | `heavy/HeavyXmlParamTypeResolverTest.kt` | merge-base 后 master 未改（T-M29.5 早于分叉点 ffe3ff7） | 自动带入 |
 | O-5 CI 自动 verify | `dev-support/ci-verify.ps1` | 无 | 带入；**Windows 计划任务需本机重注册**（不在 git 内） |
 | O-7 弹窗克制红线 | `docs/设计规范-弹窗克制红线.md` | 无 | 带入 |
 | N-10 Ultra 对标报告 | r2 侧 `docs/调研报告/`（7 文件） | 无 | 带入 |
-| N-6/N-7 首屏 hero + 迁移 FAQ | `marketplace-custom-page.html`（r2 版完整，实测含 JPA New 标签等文案） | `dc2d04c` 单源化时回退丢失 | **按 r2 版回补**（§3.5） |
+| N-6/N-7 首屏 hero + 迁移 FAQ | `marketplace-custom-page.html`（r2 版完整，实测含 JPA New 标签等文案） | `e1a9807` 单源化时回退丢失 | **按 r2 版回补**（§3.5） |
 | O-6 WrapperSearchService 服务链补全 | `log/WrapperSearchService.kt` 增强 | **master 已整族删除（T-JumpCapture，2026-09-14 上午合入）** | **废弃，保持 master 删除决断**（§3.1） |
 | N-9 测试资产真实断言增强 | 测试文件增强 | master 已下线「生成测试」按钮（M37.4，v2026.9.10） | 代码废弃；schema 推导思路留档（§四） |
 
@@ -36,7 +36,7 @@ master 侧 merge-base 后的对面演进（合流冲突来源，按时间序）�
 
 ### 3.1 WrapperSearchService.kt / WrapperSearchServiceTest.kt —— 最高优先级决断
 
-master 侧 T-JumpCapture（609a90d）已把 `WrapperSearchService` 整族删除，依据是用户定性「按表名搜 Wrapper 定位」不可用（同表名 ≠ 同调用点，命中即误导），日志跳转改为仅依赖拦截器捕获位置 + 缺失时三按钮引导。
+master 侧 T-JumpCapture（ffc518c）已把 `WrapperSearchService` 整族删除，依据是用户定性「按表名搜 Wrapper 定位」不可用（同表名 ≠ 同调用点，命中即误导），日志跳转改为仅依赖拦截器捕获位置 + 缺失时三按钮引导。
 
 r2 侧 O-6 是对该服务的能力增强（IService 四无参链起点 + 简名→FQN 五类对照）。
 
@@ -44,7 +44,7 @@ r2 侧 O-6 是对该服务的能力增强（IService 四无参链起点 + 简名
 
 ### 3.2 SqlPreviewPanel.kt —— 按钮行融合
 
-master 侧四波演进：T-MergeFollowup-01 补回「执行计划」按钮（806b887）+ T-PreviewExecDs 预热三级降级链 + T-AutoFold 六点位接入 + T-CrudSql showResult 入口；r2 侧为 T-RollbackSql 回滚按钮。
+master 侧四波演进：T-MergeFollowup-01 补回「执行计划」按钮（04eb8f9）+ T-PreviewExecDs 预热三级降级链 + T-AutoFold 六点位接入 + T-CrudSql showResult 入口；r2 侧为 T-RollbackSql 回滚按钮。
 
 **定案：语义共存。** 按钮行以 master 当前序列为基（复制错误/压缩/格式化/关键字换行/竖向排列/执行计划/刷新/更多），回滚按钮按 T-RollbackSql 原设计插入（执行计划之后、刷新之前），`moreActions()` 不动；预热链以 master T-PreviewExecDs 版本为准（r2 分叉时无此链）。
 
@@ -60,7 +60,7 @@ master 侧含 9.14-beta.2 描述与 M37M38 系列注册；r2 侧为 N-6/N-7 兼�
 
 ### 3.5 marketplace-custom-page.html —— 文案回退事故修复
 
-master 侧 `dc2d04c`（9-11「双副本合并单源」）以不含 N-6/N-7 改动的 src 副本为基，hero 首屏与 Log Free 迁移 FAQ 被回退丢失。
+master 侧 `e1a9807`（9-11「双副本合并单源」）以不含 N-6/N-7 改动的 src 副本为基，hero 首屏与 Log Free 迁移 FAQ 被回退丢失。
 
 **定案：以 master 单源结构为基，从 r2 版回补 hero 段（「别的插件给你文本」三理由）与「从 MyBatis Log Free 迁移？」FAQ 段**；回补后人工核对两段在单源内只出现一次。
 
@@ -104,7 +104,7 @@ master 已在 v2026.9.10 下线「生成测试」按钮（M37.4：静态骨架�
 
 ## 八、实施记录（2026-09-15 交付回填）
 
-**合流提交**：`4b5b964`（分支 `t-fourplans-20260914`，独立工作树 mpsv-fourplans；本轮四计划共采一集成链——T-MergeR2IntoMaster 先行，T-McpToolset / T-PreviewUx-Pack / T-PerfTail 三分支子工作树并行开发后逐个合入）。
+**合流提交**：`3fdccd8`（分支 `t-fourplans-20260914`，独立工作树 mpsv-fourplans；本轮四计划共采一集成链——T-MergeR2IntoMaster 先行，T-McpToolset / T-PreviewUx-Pack / T-PerfTail 三分支子工作树并行开发后逐个合入）。
 
 **冲突 9 文件**（merge-tree 预演与实际一致，计划预估 8 文件中 SqlPreviewPanel.kt 与双语 bundle 实际自动合并）：
 

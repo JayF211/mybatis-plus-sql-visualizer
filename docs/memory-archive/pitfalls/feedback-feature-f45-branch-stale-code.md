@@ -15,7 +15,7 @@ metadata:
 ### 问题
 
 feature/f45 分支的 SqlPreviewPanel.kt 引用了已删除的类：
-- `cn.song.mybatisplus.visualizer.ui.diff.DiffHighlighter` — 删除于 commit 21405ee
+- `cn.song.mybatisplus.visualizer.ui.diff.DiffHighlighter` — 删除于 commit 8c49b59
 - `cn.song.mybatisplus.visualizer.ui.highlight.SqlPreviewLanguage` — M34 重构后移除
 - `cn.song.mybatisplus.visualizer.ui.highlight.SqlSyntaxHighlighter` — M34 重构后移除
 - `cn.song.mybatisplus.visualizer.ui.diff.SqlDiffDialog` — 不存在

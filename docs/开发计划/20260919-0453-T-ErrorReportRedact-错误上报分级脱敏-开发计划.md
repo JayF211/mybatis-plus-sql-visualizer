@@ -71,11 +71,11 @@ D1 已定案（B）→ T-ERR-01 → T-ERR-02 → T-ERR-03 → 真机走查 §五
 | 任务 | 提交 | 说明 / 偏离 |
 |------|------|------|
 | D1 | —（决策已定，无代码提交） | **已定案 2026-09-19（用户认可本会话推荐）：选 B**——默认预填只给类名+指纹+栈帧，message 全文改为用户可勾选附加；A/C 保留并标记弃用 |
-| T-ERR-01 | `5ae7b90` | 预填分级落地（§8.1）；**偏离**：完整堆栈附件的默认勾选同步改为不勾（§8.4-1） |
-| T-ERR-02 | `5ae7b90` + `28dc531` | 指纹补强 + 真实形态抽样结论（§8.2） |
-| T-ERR-03 | `28dc531` | 用例与门禁读数（§8.3）；云侧端到端**未验证**（§8.5） |
+| T-ERR-01 | `6600605` | 预填分级落地（§8.1）；**偏离**：完整堆栈附件的默认勾选同步改为不勾（§8.4-1） |
+| T-ERR-02 | `6600605` + `9db5323` | 指纹补强 + 真实形态抽样结论（§8.2） |
+| T-ERR-03 | `9db5323` | 用例与门禁读数（§8.3）；云侧端到端**未验证**（§8.5） |
 
-### 8.1 T-ERR-01 落地形态（`5ae7b90`）
+### 8.1 T-ERR-01 落地形态（`6600605`）
 
 - `ErrorReportComposer`：新增 `buildRedactedTitle`（异常类简单名）与 `buildRedactedDescription`
   （`异常: <全名>` + `原因链: <cause 链类名>` + `栈帧: <前 10 个业务帧含行号>` + 「消息全文默认不附带」说明行）；
@@ -92,7 +92,7 @@ D1 已定案（B）→ T-ERR-01 → T-ERR-02 → T-ERR-03 → 真机走查 §五
   逐处改动风险高于脱敏收益；本任务未改 `DataSourceSelector.kt`/`ExecuteSqlSupport.kt`/`DatabaseConsoleLauncher.kt`
   （三者在 §一 里只作现场取证，方案 §三 无日志侧条目）。
 
-### 8.2 T-ERR-02 抽样结论（`28dc531`）
+### 8.2 T-ERR-02 抽样结论（`9db5323`）
 
 - 帧解析收口：`businessFrames`（指纹用，去位置）与 `businessFrameLines`（描述摘要用，带行号）
   共用同一正则与平台前缀过滤，杜绝两处口径漂移。
@@ -108,7 +108,7 @@ D1 已定案（B）→ T-ERR-01 → T-ERR-02 → T-ERR-03 → 真机走查 §五
   按已知限制登记（24h 去重是内存态、重启即清；同站点首报已在需求池）。
   用例 `残留塌缩_同站点同cause链而消息不同仍同指纹_已知限制` 钉住该语义，避免将来被当成 bug 反复「修」。
 
-### 8.3 T-ERR-03 门禁读数（`28dc531`）
+### 8.3 T-ERR-03 门禁读数（`9db5323`）
 
 - 定向：`./gradlew test --tests "cn.song.mybatisplus.visualizer.feedback.*"` →
   **122 例 / 0 失败 / 0 错误 / 0 跳过**（8 个测试类）。
@@ -116,7 +116,7 @@ D1 已定案（B）→ T-ERR-01 → T-ERR-02 → T-ERR-03 → 真机走查 §五
   `EntityClassFinderHeavyTest.testTableNameMismatchExcluded` 为**无关 flake**（平台 Git 插件
   `DefaultDispatcher-worker … @Git update present check` 线程泄漏；隔离复跑该单类 BUILD SUCCESSFUL）；
   6 跳过全是 `DialectDockerVerificationTest`（本机无 docker 实例，存量环境跳过）。
-- `testDatabase` **未跑**：本任务零改动触达 Database 链（`git diff f0d163e..HEAD` 仅 feedback 包 +
+- `testDatabase` **未跑**：本任务零改动触达 Database 链（`git diff 8d5386f..HEAD` 仅 feedback 包 +
   两个 properties），按项目门禁口径（触达 Database 链才双跑）不触发。
 - 用例覆盖验收口径：①默认预填与默认提交载荷不含 message 文本（含批量清单、补发帖子）；
   ②勾选附加后标题/描述与改前逐字节一致（含批量描述逐字节钉死）。

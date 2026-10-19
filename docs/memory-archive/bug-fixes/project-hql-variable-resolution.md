@@ -1,7 +1,7 @@
 ---
 name: project-hql-variable-resolution
 description: HQL 变量引用拼接初始化式解析的两次缺口：HqlQueryLocator
-  已修复（0e9f0aa）；CustomDaoHqlLocator.extractArgumentText 内容启发被 T-HqlVarResolve-03
+  已修复（d3c4106）；CustomDaoHqlLocator.extractArgumentText 内容启发被 T-HqlVarResolve-03
   复核遗漏 → 2026-09-03 用户反馈"拼接变量无预览图标"
 metadata:
   node_type: memory
@@ -21,7 +21,7 @@ commonDao.findByQueryUniqueResult(hql, names, values);  // 自定义 DAO 路径 
 
 ## 现状（2026-09-03 核实）
 
-- `HqlQueryLocator.extractHqlString()`（HqlQueryLocator.kt:292-313）PsiReferenceExpression 分支已递归处理字面量/拼接/Polyadic，提交 0e9f0aa（2026-09-02 T-HqlVarResolve-01）✓。
+- `HqlQueryLocator.extractHqlString()`（HqlQueryLocator.kt:292-313）PsiReferenceExpression 分支已递归处理字面量/拼接/Polyadic，提交 d3c4106（2026-09-02 T-HqlVarResolve-01）✓。
 - **`CustomDaoHqlLocator.extractArgumentText()`（CustomDaoHqlLocator.kt:320-342）仍有缺口**：内容启发用，PsiReferenceExpression 分支只认 `initializer is PsiLiteralExpression`，拼接初始化式回退变量名 "hql" → `matchesHqlContent` 不匹配 → `isCustomDaoHqlCall=false` → `locate()=null` → **gutter 图标不出 + 手动触发弹"未找到 Wrapper/IService/BaseMapper"**。
 - 同文件 `extractHqlString`（278-310 行）已递归——T-HqlVarResolve-03 只复核了它，**漏了并行的 extractArgumentText**。
 

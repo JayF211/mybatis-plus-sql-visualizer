@@ -2,7 +2,7 @@
 
 > **2026-09-20 防过期复核**：类名/工具名/入口路径已按当前 master 代码校正；全量 `testShards` 复跑 **5383/0/0/6 绿**。
 
-> **验收对象**：分支 `t-settings-truth` 交付（6 提交 `fd29e59`/`19de6f3`/`6fa282f`/`3eb05c3`/`d586487`/`89a4651`），merge 进 master 为合并提交 **`6b3e31e`**（基 master `2ce49ca`，未推送远端）。
+> **验收对象**：分支 `t-settings-truth` 交付（6 提交 `cb55e54`/`7f41182`/`f576d4d`/`d4f96a3`/`f3a746f`/`20e1229`），merge 进 master 为合并提交 **`ecdb09f`**（基 master `a9d5525`，未推送远端）。
 > **面向读者**：功能验收人（含用户本人真机走查）。背景与设计见 [T-SettingsTruth 开发计划](../开发计划/20260918-0809-T-SettingsTruth-设置真实性收敛-开发计划.md)。
 > **回归基线**：合并 master 后的全量 test **4406/0/0/6 绿**（0 失败 0 错误，6 跳过为 DB 集成三类）+ `:sql-visualizer-agent:test` 绿（§四）。
 
@@ -22,14 +22,14 @@
 
 | # | 改动 | 入口 / 位置 | 级别 | 提交 |
 |---|------|------------|------|------|
-| 1 | **假开关改纯动作**：删 `State.autoInjectSqlSourceInterceptor` 字段与面板三处绑定；「自动注入源码捕获拦截器」勾选即执行、**无论成败终态复位未勾选**、不持久化；tooltip 补「本开关不保存状态：勾选立即执行，完成后自动复位，不持久化」 | 设置 → SQL 日志 → 源码位置捕获 → 「自动注入源码捕获拦截器」 | 用户可见 | 19de6f3 |
-| 2 | **增强捕获状态行接线**：`AgentManager.statusSummary()` 三态（无会话=空/「已挂载 pid=x[,y]」/「连接中断，已回落控制台捕获」）+ app 级 Topic 在 attach 成功、掉线摘除、shutdownAll 三迁移点广播；面板订阅聚合多项目写状态行，`reset()` 即拉现值 | 设置 → SQL 日志 → 源码位置捕获 → 状态行（原永久空白行） | 用户可见 | 19de6f3 |
-| 3 | **搜索索引清幽灵 + 补缺口**：删「显示筛选栏」幽灵项（bundle 键 + 索引条目，全仓库零消费）；补录 13 项真实未索引设置 | 设置主页面搜索框 | 用户可见 | fd29e59 |
-| 4 | **项目级设置页接线补完**（O-5 Phase B 收尾）：`plugin.xml` 注册 `projectConfigurable`（tools 顶层，防套娃挂应用级之下）；面板由 2 控件扩为 **10 控件**；7 个零调用 `effective*` 全部转正，预览/实体解析读取点改走项目级覆盖 | 设置 → Tools → **「SQL Visualizer (Project)」**（新入口） | 用户可见 | 6fa282f |
-| 5 | **设置守卫测试**：`SettingsRealityGuardTest` 四断言（写而不读 / 摆而不绑 / 声明而不消费 / 幽灵键），先红后绿自验证 | 仅测试面 | 内部 | 3eb05c3 |
-| 6 | **存量幽灵 bundle 键清理**：`settings.update.envNotSupported`（全历史零消费）、`settings.search.placeholder`（消费点已随重构删除）双语四行删除 | 无用户可见面（死文案） | 内部 | d586487 |
-| 7 | **全量门禁收口**：P4 三缺陷修复（ComboBox 同值 set 派发事件致 modified 误置 / logicDeleteValue 灌值被清空 / 用例锚点字面量语义） | 设置页「项目（当前项目）」页交互正确性 | 用户可见 | 89a4651 |
-| 8 | **项目页文案与全局页对齐**（20260918 用户真机反馈）：推断策略下拉由枚举原值 `SNAKE`/`CAMEL` 改为**本地化文案**（复用全局面板 bundle 键）；8 个项目级重复标签键收编为全局键（消除「表名推断 vs 表名推断策略」「添加表名前缀 vs 添加表前缀」等措辞漂移）；节点名改语言中性 `SQL Visualizer (Project)` | 设置 → Tools → 「SQL Visualizer (Project)」全页 | 用户可见 | cc2263e 后续 |
+| 1 | **假开关改纯动作**：删 `State.autoInjectSqlSourceInterceptor` 字段与面板三处绑定；「自动注入源码捕获拦截器」勾选即执行、**无论成败终态复位未勾选**、不持久化；tooltip 补「本开关不保存状态：勾选立即执行，完成后自动复位，不持久化」 | 设置 → SQL 日志 → 源码位置捕获 → 「自动注入源码捕获拦截器」 | 用户可见 | 7f41182 |
+| 2 | **增强捕获状态行接线**：`AgentManager.statusSummary()` 三态（无会话=空/「已挂载 pid=x[,y]」/「连接中断，已回落控制台捕获」）+ app 级 Topic 在 attach 成功、掉线摘除、shutdownAll 三迁移点广播；面板订阅聚合多项目写状态行，`reset()` 即拉现值 | 设置 → SQL 日志 → 源码位置捕获 → 状态行（原永久空白行） | 用户可见 | 7f41182 |
+| 3 | **搜索索引清幽灵 + 补缺口**：删「显示筛选栏」幽灵项（bundle 键 + 索引条目，全仓库零消费）；补录 13 项真实未索引设置 | 设置主页面搜索框 | 用户可见 | cb55e54 |
+| 4 | **项目级设置页接线补完**（O-5 Phase B 收尾）：`plugin.xml` 注册 `projectConfigurable`（tools 顶层，防套娃挂应用级之下）；面板由 2 控件扩为 **10 控件**；7 个零调用 `effective*` 全部转正，预览/实体解析读取点改走项目级覆盖 | 设置 → Tools → **「SQL Visualizer (Project)」**（新入口） | 用户可见 | f576d4d |
+| 5 | **设置守卫测试**：`SettingsRealityGuardTest` 四断言（写而不读 / 摆而不绑 / 声明而不消费 / 幽灵键），先红后绿自验证 | 仅测试面 | 内部 | d4f96a3 |
+| 6 | **存量幽灵 bundle 键清理**：`settings.update.envNotSupported`（全历史零消费）、`settings.search.placeholder`（消费点已随重构删除）双语四行删除 | 无用户可见面（死文案） | 内部 | f3a746f |
+| 7 | **全量门禁收口**：P4 三缺陷修复（ComboBox 同值 set 派发事件致 modified 误置 / logicDeleteValue 灌值被清空 / 用例锚点字面量语义） | 设置页「项目（当前项目）」页交互正确性 | 用户可见 | 20e1229 |
+| 8 | **项目页文案与全局页对齐**（20260918 用户真机反馈）：推断策略下拉由枚举原值 `SNAKE`/`CAMEL` 改为**本地化文案**（复用全局面板 bundle 键）；8 个项目级重复标签键收编为全局键（消除「表名推断 vs 表名推断策略」「添加表名前缀 vs 添加表前缀」等措辞漂移）；节点名改语言中性 `SQL Visualizer (Project)` | 设置 → Tools → 「SQL Visualizer (Project)」全页 | 用户可见 | 4ddd493 后续 |
 
 ## 三、分项验收步骤（真机走查，留人工）
 

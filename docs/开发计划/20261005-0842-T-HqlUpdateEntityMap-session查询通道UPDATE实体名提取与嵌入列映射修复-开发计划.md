@@ -137,7 +137,7 @@ runIde 沙盒打开 jpa-hibernate-demo：
 
 ## 六、实施记录（20261005，master）
 
-**实施提交**：`8e9ca7e`（9 files，+296/−67；src/main 6 文件 + src/test 3 文件，新件 `HqlEntityNameExtractor.kt` / `HqlEntityNameExtractorTest.kt`）。
+**实施提交**：`7f26113`（9 files，+296/−67；src/main 6 文件 + src/test 3 文件，新件 `HqlEntityNameExtractor.kt` / `HqlEntityNameExtractorTest.kt`）。
 
 **S1 落地**：共享提取器 `psi/jpa/HqlEntityNameExtractor`（语句头优先：UPDATE/DELETE/INSERT 头 > FROM；DELETE 分带 FROM 版先试防 `from` 被当实体名、畸形头回落 FROM 宽容降级）；四处接入＝计划 S1 三处 + CustomDaoHqlLocator 收敛（可选项做了，消掉第五份拷贝，`CustomDaoHqlLocatorTest` 回归护航）。提取器单测 10 条全绿。
 

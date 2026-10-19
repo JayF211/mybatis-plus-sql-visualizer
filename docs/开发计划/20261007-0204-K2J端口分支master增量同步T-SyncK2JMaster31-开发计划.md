@@ -1,12 +1,12 @@
 # K2J 端口分支 master 增量同步（T-SyncK2JMaster31）开发计划
 
 - 日期：2026-10-07 02:04
-- 分支：`feature/kotlin-to-java`（工作树 `mybatis-plus-sql-visualizer-kotlin-to-java`，tip `73a6bf3`，与远端零债、工作树净）
+- 分支：`feature/kotlin-to-java`（工作树 `mybatis-plus-sql-visualizer-kotlin-to-java`，tip `a959898`，与远端零债、工作树净）
 - 模式：**同步功能，不合并分支**（用户定案）——master 的 .kt 绝不进生产树；共享文件走手工 union/直取
-- 锚点：`.port-sync` synced_master = `94c71e8` → 目标 master tip `7ffc642`，**31 笔增量**
+- 锚点：`.port-sync` synced_master = `0148a5f` → 目标 master tip `8d9a718`，**31 笔增量**
 - 用户指令：先计划后实施 + 解决冲突 + 全量测试并修复 + 插件构建校验通过
 
-## 1. 增量清单与内容族（git diff --name-status 94c71e8..master 全清单亲证）
+## 1. 增量清单与内容族（git diff --name-status 0148a5f..master 全清单亲证）
 
 ### A. SQL 日志性能族（T-SqlLogPerf，含 master 单独回流 cherry-pick 四笔）
 
@@ -37,7 +37,7 @@
 
 测试 3 件：`integration/JpaChainParamBackfillTest.kt` **新建** 412 行 / `psi/jpa/HqlQueryLocatorChainOrderTest.kt` **新建** 128 行 / `ui/SqlPreviewPanelParamKindTest.kt` +13。
 
-### C. 资源与发行面（v2026.10.7 发行同步 `8ce8e08` 的仓库内部分）
+### C. 资源与发行面（v2026.10.7 发行同步 `7305b51` 的仓库内部分）
 
 - `gradle.properties`：version 2026.10.6→**2026.10.7**
 - bundle 双语 +4（log.panel.scrollBottom + tip 等，以实际 diff 为准）
@@ -58,7 +58,7 @@
 
 ## 3. 提交链八段（惯例）
 
-C1 计划（本笔）→ C2 构建链（版本号）→ C3 波 A → C4 波 B → C5 资源 → C6 测试（波 T）→ C7 文档 → C8 收官（锚点推进 7ffc642 + note 重写 + 计划 §8 回填 + 变更记录台账行 + push）
+C1 计划（本笔）→ C2 构建链（版本号）→ C3 波 A → C4 波 B → C5 资源 → C6 测试（波 T）→ C7 文档 → C8 收官（锚点推进 8d9a718 + note 重写 + 计划 §8 回填 + 变更记录台账行 + push）
 
 ## 4. 门禁方案
 
@@ -79,9 +79,9 @@ C1 计划（本笔）→ C2 构建链（版本号）→ C3 波 A → C4 波 B �
 5. 直取测试件互操作三查（坑 23 固定自查）：具名实参→位置实参 / record 解构→访问器 / 函数类型**变量**赋值→显式 `java.util.function.Xxx` 构造；另查 `.isXxx` 布尔属性形态（坑 20）
 6. `HistorySqlLogPanelNavigationTest` 滚动追加语义依赖 `appendPendingForTest` 测试缝——k2j 侧 `HistorySqlLogPanel.java` 须同步提供该缝（master .kt 里是 internal？可见性翻译口径）
 7. fatal 守卫基线 674 预计前进（本轮 SqlLogPanel/SqlPreviewService 等新增 try/catch 站点）——**以守卫实测为准走完三层登记**（坑 24），grep 行计数不预判
-8. `HelpDialogTest` k2j 侧当前断言=6 项（回流适配笔 `1efbfb8` 在锚点后），直取 master 版即 7 项——对账基线读数先取证
-9. 四册三方合并 base=`git show 94c71e8:<file>`（不是工作树 CRLF 副本，坑 18）；回写前与 push 前各再查一次 k2j 分支是否被他會话前进；CHANGELOG/发行说明类先验证 k2j 侧相对 base 零 diff 则整册直取（Master29 先例）
-10. bundle/html/update.json 等资源件同样先 `git diff 94c71e8..feature/kotlin-to-java -- <file>` 验零专属后直取
+8. `HelpDialogTest` k2j 侧当前断言=6 项（回流适配笔 `4b6426a` 在锚点后），直取 master 版即 7 项——对账基线读数先取证
+9. 四册三方合并 base=`git show 0148a5f:<file>`（不是工作树 CRLF 副本，坑 18）；回写前与 push 前各再查一次 k2j 分支是否被他會话前进；CHANGELOG/发行说明类先验证 k2j 侧相对 base 零 diff 则整册直取（Master29 先例）
+10. bundle/html/update.json 等资源件同样先 `git diff 0148a5f..feature/kotlin-to-java -- <file>` 验零专属后直取
 
 ## 6. 风险预置（系统性坑摘引，全文见项目记忆 project-kotlin-to-java-port-sync）
 
@@ -93,13 +93,13 @@ C1 计划（本笔）→ C2 构建链（版本号）→ C3 波 A → C4 波 B �
 - verifyGate 三目标 Compatible（对上轮逐项 243=4+15+46、253=6+18+44、262=7+73+44 零漂移）
 - buildPlugin 2026.10.7 zip 产出
 - 四册 union 后 k2j 专属行 byte-exact 校验全存活
-- 锚点推进 `7ffc642` + note 重写为本轮记录；push 与远端零债
+- 锚点推进 `8d9a718` + note 重写为本轮记录；push 与远端零债
 
 ## 8. 实施记录回填（2026-10-07 收官）
 
 ### 8.1 提交链七段
 
-C1 `3a4d89b` 计划 → C2 `cad6f9f` 版本 2026.10.7 → C3 `213c2f2` 波A log 族 5 件 → C4 `b588f61` 波B jpa/ui 族 6 件+跨文件适配 3 处 → C5 `8b025ce` 资源 → C6 `756a291` 测试 6 件 → C7 `ebade40` 文档 → C8 本笔（锚点推进+台账+本节回填+沙盒行还原验证）。
+C1 `dcd6d29` 计划 → C2 `c9dc29e` 版本 2026.10.7 → C3 `a3fe62b` 波A log 族 5 件 → C4 `178477c` 波B jpa/ui 族 6 件+跨文件适配 3 处 → C5 `22eada9` 资源 → C6 `0794be9` 测试 6 件 → C7 `28e5148` 文档 → C8 本笔（锚点推进+台账+本节回填+沙盒行还原验证）。
 
 ### 8.2 待验证前提逐条回执
 

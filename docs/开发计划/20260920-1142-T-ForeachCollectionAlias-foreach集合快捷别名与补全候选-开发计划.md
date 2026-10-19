@@ -5,7 +5,7 @@
 - 来源：第九轮报告 §7.2 **Z-26**——zMyBatis 逐字复刻 MyBatis 3.5.19 `ParamNameResolver.wrapToMapIfCollection`：仅「单参数且无 `@Param`」时 `T[]`→`array`、`List`→`collection`+`list`、`Collection`→`collection`，且 `GeneratedAlias` 携带 `ruleId = "mybatis-3.5.19-param-name-resolver-wrap-to-map-if-collection"`（`XmlMapperMethodParameterContractFactory.kt:24-25`、`:253-300`）
 - 性质：**渲染语义补缺 + 补全体验**——不改既有优先级、不改 `ForeachSqlNode` 求值顺序
 - 实施分支：自 master 拉任务分支 t-foreach-collection-alias
-- 验证基线：master `22d7c49`（testShards 5383/0/0/6 + testDatabase 10/0/0/0 + agent 58/0/0/0）
+- 验证基线：master `f8c115d`（testShards 5383/0/0/6 + testDatabase 10/0/0/0 + agent 58/0/0/0）
 
 ---
 
@@ -95,15 +95,15 @@ T-FCA-04（先建真引擎对照场景，用它定键集——先红后绿）→
 
 ## 八、实施记录（实施后回填）
 
-分支 `t-round9`（基线 master `56c96d6`）。
+分支 `t-round9`（基线 master `3397829`）。
 
 | 任务 | 提交 | 说明 / 偏离 |
 |------|------|------|
-| T-FCA-04 | `81ddc08` | 一致面 25 → 28 条（P31 单 List 别名 `list`、P32 别名 `collection`、P33 单 `T[]` 别名 `array`）+ 新用例「别名键集钉」。**键集实测与计划转述一致**（见下）。**关键偏离**：驱动直连 `MappedStatement.getBoundSql`（绕过 `MapperMethod`），`ParamNameResolver` 的包装**不会自动发生**——真引擎侧必须由测试侧反射调引擎自身的 `wrapToMapIfCollection`（类位置按 3.5.19 `javap` 实测定为 `org.apache.ibatis.reflection.ParamNameResolver`，非旧版 `session` 包）。裸 List 参数下 `collection="list"` 实测抛 `java.lang.UnsupportedOperationException`（集合参数被 MetaObject 包成 `CollectionWrapper`，非 Map 参数无 `_parameter` fallback），该读数作为「别名键只由 ParamNameResolver 产生」的反向证据留在用例里。 |
-| T-FCA-01 | `ee8f508` | 落 `ui/XmlParamTypeResolver.collectionAliasTypes`，由 `resolveTypes` 末尾追加。**计划前提 2 证伪**：既有 `paramN` 门槛是「全部参数都有显式 `@Param`」（`:104`），与别名门槛「单参数 ∧ 无显式 `@Param`」**互补而非同址复用**，故独立成函数、不共用判定。额外收窄：`Iterable` 在既有 `COLLECTION_SIMPLE_NAMES` 里但**不是** `java.util.Collection`，真引擎不包装 → 显式排除（`NON_COLLECTION_SIMPLE_NAMES`）。 |
-| T-FCA-02 | `ee8f508` | 落 `ui/AnnotationSqlPreviewService.previewParamTypes`（`paramTypes` + 别名），两处预览调用点（`:102`/`:132`）改用。**偏离**：别名**刻意不并入 `paramTypes`** —— 该函数键序是补全候选来源（`XmlSqlCompletionContextResolver:122` 取 `keys` 作 `paramNames`，被 `test` 与 `collection` 共用），并入即污染 `test` 候选；别名改走「预览绑定」渠道，补全侧由 T-FCA-03 按属性收窄。规则标注（`mybatis-3.5.19-param-name-resolver-wrap-to-map-if-collection`）落两处 KDoc。 |
-| T-FCA-03 | `ee8f508` | `ui/highlight/XmlSqlCompletionContributor`：`addOgnlCompletions` 增 `collectionAliases` 形参，`collection` 属性为真、`test` 为假（**计划前提 3 成立且比担心更紧**：`:87` 的分派 `test`/`collection` 共用 `addOgnlCompletions`，故按属性名收窄）。快捷名**排在参数名与字段名之后**（用例逐项断言 `[entity, id, name, list, collection, array]`，既有顺序与内容不变）。三个名字无条件列出（本贡献器不做 PSI 签名解析，拿不到「单参数/集合形态」），确切键集由 `collectionAliasTypes` + 真引擎对照钉住。 |
-| T-FCA-05 | `ee8f508` | 用例：`HeavyXmlParamTypeResolverTest` +3（逐形态正向、门槛负向四类、预览联动）、`XmlSqlCompletionContributorTest` +2（候选与顺序、`test` 不污染）、`AnnotationPreviewServiceTest` +2（`previewParamTypes` 与 `paramTypes` 的边界判别、注解 `<script>` foreach 闭环）。定向读数见 §九。 |
+| T-FCA-04 | `57eeb1d` | 一致面 25 → 28 条（P31 单 List 别名 `list`、P32 别名 `collection`、P33 单 `T[]` 别名 `array`）+ 新用例「别名键集钉」。**键集实测与计划转述一致**（见下）。**关键偏离**：驱动直连 `MappedStatement.getBoundSql`（绕过 `MapperMethod`），`ParamNameResolver` 的包装**不会自动发生**——真引擎侧必须由测试侧反射调引擎自身的 `wrapToMapIfCollection`（类位置按 3.5.19 `javap` 实测定为 `org.apache.ibatis.reflection.ParamNameResolver`，非旧版 `session` 包）。裸 List 参数下 `collection="list"` 实测抛 `java.lang.UnsupportedOperationException`（集合参数被 MetaObject 包成 `CollectionWrapper`，非 Map 参数无 `_parameter` fallback），该读数作为「别名键只由 ParamNameResolver 产生」的反向证据留在用例里。 |
+| T-FCA-01 | `6f04e9a` | 落 `ui/XmlParamTypeResolver.collectionAliasTypes`，由 `resolveTypes` 末尾追加。**计划前提 2 证伪**：既有 `paramN` 门槛是「全部参数都有显式 `@Param`」（`:104`），与别名门槛「单参数 ∧ 无显式 `@Param`」**互补而非同址复用**，故独立成函数、不共用判定。额外收窄：`Iterable` 在既有 `COLLECTION_SIMPLE_NAMES` 里但**不是** `java.util.Collection`，真引擎不包装 → 显式排除（`NON_COLLECTION_SIMPLE_NAMES`）。 |
+| T-FCA-02 | `6f04e9a` | 落 `ui/AnnotationSqlPreviewService.previewParamTypes`（`paramTypes` + 别名），两处预览调用点（`:102`/`:132`）改用。**偏离**：别名**刻意不并入 `paramTypes`** —— 该函数键序是补全候选来源（`XmlSqlCompletionContextResolver:122` 取 `keys` 作 `paramNames`，被 `test` 与 `collection` 共用），并入即污染 `test` 候选；别名改走「预览绑定」渠道，补全侧由 T-FCA-03 按属性收窄。规则标注（`mybatis-3.5.19-param-name-resolver-wrap-to-map-if-collection`）落两处 KDoc。 |
+| T-FCA-03 | `6f04e9a` | `ui/highlight/XmlSqlCompletionContributor`：`addOgnlCompletions` 增 `collectionAliases` 形参，`collection` 属性为真、`test` 为假（**计划前提 3 成立且比担心更紧**：`:87` 的分派 `test`/`collection` 共用 `addOgnlCompletions`，故按属性名收窄）。快捷名**排在参数名与字段名之后**（用例逐项断言 `[entity, id, name, list, collection, array]`，既有顺序与内容不变）。三个名字无条件列出（本贡献器不做 PSI 签名解析，拿不到「单参数/集合形态」），确切键集由 `collectionAliasTypes` + 真引擎对照钉住。 |
+| T-FCA-05 | `6f04e9a` | 用例：`HeavyXmlParamTypeResolverTest` +3（逐形态正向、门槛负向四类、预览联动）、`XmlSqlCompletionContributorTest` +2（候选与顺序、`test` 不污染）、`AnnotationPreviewServiceTest` +2（`previewParamTypes` 与 `paramTypes` 的边界判别、注解 `<script>` foreach 闭环）。定向读数见 §九。 |
 
 **真引擎实测键集（T-FCA-04 判据，`mybatis-3.5.19.jar` 隔离 loader 实调）**：`List` → `collection` + `list` + 实参名；`Collection` 非 `List`（Set/Queue 族）→ `collection` + 实参名（**无 `list`**）；`T[]` → `array` + 实参名（**无 `collection`**）；Map / POJO / 标量 → 原对象返回不包装；实参名缺席（`useActualParamName=false`）→ 仅 `collection` + `list`。**计划的键集假设全部成立**，未被推翻。
 

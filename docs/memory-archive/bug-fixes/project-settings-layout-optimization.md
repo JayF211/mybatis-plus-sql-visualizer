@@ -19,7 +19,7 @@ metadata:
 **Phase 2 视觉对齐**：
 - 标签列等宽（`GridBagLayout.columnWidths` 按内容计算 maxLabelWidth + 8px padding）
 - SQL 日志 Tab 内标签列统一等宽
-- 折叠面板标题使用粗体字体（最初加了 `customLine` 灰色边框，后因割裂感强移除，commit 15d118d）
+- 折叠面板标题使用粗体字体（最初加了 `customLine` 灰色边框，后因割裂感强移除，commit a159ac4）
 
 **Phase 3 搜索过滤**：
 - 顶部搜索框（`JBTextField` + 🔍 图标），`DocumentListener` 实时触发 `filterRows`

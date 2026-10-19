@@ -1,6 +1,6 @@
 ---
 name: project-dynupdate-hotswap
-description: T-DynUpdate 自更新免重启热替换已交付实测（master 0fbd13b
+description: T-DynUpdate 自更新免重启热替换已交付实测（master 28b884b
   阶段，2026-09-11~12）——五入口反射范式/262 签名漂移护栏/「未完全卸载」hprof 定性，经验已沉淀 docs/经验总结
 metadata:
   node_type: memory
@@ -8,7 +8,7 @@ metadata:
   originSessionId: sess_5ce73ad8-8285-4465-86de-bef0cd909427
 ---
 
-T-DynUpdate 免重启热替换已交付并实测通过。**权威经验文档：`docs/经验总结/20260912-0855-插件免重启更新与跨版本签名核验-经验总结.md`（master 0fbd13b，随仓库发布）**——平台机制/五入口反射范式/回退链/踩坑 11 条/四层验证体系/本地热替换测试三步均在其中，优先读文档而非本记忆。
+T-DynUpdate 免重启热替换已交付并实测通过。**权威经验文档：`docs/经验总结/20260912-0855-插件免重启更新与跨版本签名核验-经验总结.md`（master 28b884b，随仓库发布）**——平台机制/五入口反射范式/回退链/踩坑 11 条/四层验证体系/本地热替换测试三步均在其中，优先读文档而非本记忆。
 
 要点速记：
 

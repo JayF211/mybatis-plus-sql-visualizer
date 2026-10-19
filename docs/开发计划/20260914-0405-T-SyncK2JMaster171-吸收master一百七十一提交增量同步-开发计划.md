@@ -1,15 +1,15 @@
-# T-SyncK2JMaster171 开发计划——master a0702f6..50d3fb9 增量同步
+# T-SyncK2JMaster171 开发计划——master aa49c76..c4c5f02 增量同步
 
 > 立项日期：2026-09-14　分支：feature/kotlin-to-java（worktree `mybatis-plus-sql-visualizer-kotlin-to-java`）
-> 同步源：**本地 master 50d3fb9**（增量范围 `git diff a0702f6..50d3fb9`，171 提交；其中 origin/master 停在 cd172f5，本地另有 T-TestGuard/T-TestPerf 两笔未推提交一并吸收）
-> 上轮收官：T-SyncK2JMaster23（22eb659，全量 3315/0/0/6 绿 + verifyPlugin 三目标 Compatible，锚点 a0702f6）
+> 同步源：**本地 master c4c5f02**（增量范围 `git diff aa49c76..c4c5f02`，171 提交；其中 origin/master 停在 9d14971，本地另有 T-TestGuard/T-TestPerf 两笔未推提交一并吸收）
+> 上轮收官：T-SyncK2JMaster23（29e0989，全量 3315/0/0/6 绿 + verifyPlugin 三目标 Compatible，锚点 aa49c76）
 > 用户指示：同步功能、**不合并分支**（方案A手工移植不变）。
 
 ## 1. 背景与目标
 
-master 在锚点之后经历了史上最大增量：2026-09-13 dev 全量合入 master（8d2c919，M37/M38 竞品融合与 M39 JPA 三波、M44 四 ORM 等长期分支内容一次落主），叠加 master 自研的 T-CrudSql 四轮、T-CrudColor 三轮、T-AutoFold、T-PickMpjErr、T-SelToggle、runIde/hotswap 职责分离、T-TestGuard/T-TestPerf 测试守卫与提速，以及 v2026.9.14-beta.1/.2 两个内测发行。文件级总量：生产源码 118 文件（36 新增 + 82 修改，约 +15.8K 行）、测试 89 文件（约 +14.4K 行）、资源/构建 8 文件、文档约 150 件。master 全量基线从 k2j 锚点期约 3315 用例增至约 3900 用例。
+master 在锚点之后经历了史上最大增量：2026-09-13 dev 全量合入 master（37e0728，M37/M38 竞品融合与 M39 JPA 三波、M44 四 ORM 等长期分支内容一次落主），叠加 master 自研的 T-CrudSql 四轮、T-CrudColor 三轮、T-AutoFold、T-PickMpjErr、T-SelToggle、runIde/hotswap 职责分离、T-TestGuard/T-TestPerf 测试守卫与提速，以及 v2026.9.14-beta.1/.2 两个内测发行。文件级总量：生产源码 118 文件（36 新增 + 82 修改，约 +15.8K 行）、测试 89 文件（约 +14.4K 行）、资源/构建 8 文件、文档约 150 件。master 全量基线从 k2j 锚点期约 3315 用例增至约 3900 用例。
 
-本轮目标：把上述增量全部移植进 100% Java 的 k2j 生产树，全量测试绿 + buildPlugin/verifyPlugin 三目标通过，锚点推进 50d3fb9。绝无 git merge；共享文件（plugin.xml/bundle/build.gradle.kts/CHANGELOG/MEMORY/变更记录）走手工 union，k2j 自有行零丢失。
+本轮目标：把上述增量全部移植进 100% Java 的 k2j 生产树，全量测试绿 + buildPlugin/verifyPlugin 三目标通过，锚点推进 c4c5f02。绝无 git merge；共享文件（plugin.xml/bundle/build.gradle.kts/CHANGELOG/MEMORY/变更记录）走手工 union，k2j 自有行零丢失。
 
 ## 2. master 增量功能线（171 提交归组）
 
@@ -17,14 +17,14 @@ master 在锚点之后经历了史上最大增量：2026-09-13 dev 全量合入 
 |---|---|---|
 | L1 四 ORM 转换器（M44，dev 带入） | dev 合并批次 | EasyQueryConverter / MdsConverter / QuerydslConverter / XbatisConverter 新建 + UpdateWrapperConverter 测试 + ConverterRegistry/WrapperConverter 前置派发接线 |
 | L2 JPA 增强三波（M39，dev 带入） | dev 合并批次 | CRUD 操作转换（JpaCrudOperationConverter/JpaFromEntityMapper/JpaUpdateParser）、JOIN 改写（JpaJoinRewriter/JpaJoinOnResolver）、JpaQueryEnhancer、QueryByExampleConverter、SpecificationQueryConverter、JpaMetadata/JpaMetadataReader/RepositoryBaseTypes、psi/jpa 各 locator 增量、HbmNamedQueryGutterLineMarkerProvider、HbmXmlEntityResolver 增量 |
-| L3 T-CrudSql 四轮 | 86ec27a/7c57609/33e490c/a072870/f66eba7 | 实体类与数据库表右键生成 CRUD SQL（CrudSqlGenerator/CrudTableSpec/DbTypeQuoteHint 三件 + GenerateCrudSqlFromEntityAction/FromDbTableAction/CrudSqlPreviewFlow + DbTableSpecAdapter）；真机反馈（弹窗回调出模态+候选分层+双击直开）；选择弹窗原生化（JBList 主题色双行渲染器+速度搜索）；JBPopup 浮层化（打字过滤/Enter/ESC） |
-| L4 T-CrudColor 三轮 + T-SelToggle | 641c815/dbc45bf/e57a34e/afef857 | SQL 列表 CRUD 类型颜色标记（SqlListTypeColor/SqlListSelectionOutline 新建 + 渲染器色条融合 + PluginSettings 颜色配置）；类型过滤弹窗色块图例；渲染热路径逐格 repaint 消除；全选/全不选双按钮合一状态切换（buildTypeFilterContent 纯提取） |
+| L3 T-CrudSql 四轮 | bd73757/7303458/0576369/abfa20f/15ad395 | 实体类与数据库表右键生成 CRUD SQL（CrudSqlGenerator/CrudTableSpec/DbTypeQuoteHint 三件 + GenerateCrudSqlFromEntityAction/FromDbTableAction/CrudSqlPreviewFlow + DbTableSpecAdapter）；真机反馈（弹窗回调出模态+候选分层+双击直开）；选择弹窗原生化（JBList 主题色双行渲染器+速度搜索）；JBPopup 浮层化（打字过滤/Enter/ESC） |
+| L4 T-CrudColor 三轮 + T-SelToggle | ad857af/c2bb5df/26c4952/a0f2d87 | SQL 列表 CRUD 类型颜色标记（SqlListTypeColor/SqlListSelectionOutline 新建 + 渲染器色条融合 + PluginSettings 颜色配置）；类型过滤弹窗色块图例；渲染热路径逐格 repaint 消除；全选/全不选双按钮合一状态切换（buildTypeFilterContent 纯提取） |
 | L5 错误一键上报（feedback 包） | dev 合并批次（T-ErrReport） | feedback 七文件：ErrorFingerprint/ErrorReportComposer/ErrorReportDialog/FeedbackAction/FeedbackApi/FeedbackReporting/IdeErrorReportSubmitter + plugin.xml 注册 |
 | L6 log 域增量 | dev 合并批次 + master | EntrySourceMatcher（AGENT 来源判定）、SourceInterceptorTemplates、ExecutionTimeParser、ConsoleReplayGuard、LogStartupCapture、SqlClickPreview、SqlLogEntryBuffer/Manager/ConsoleBridge/AutoSaver/FileReader、HistorySqlLogPanel、SqlLogPanel、SqlToJavaPanel、LogToSqlPanel、SqlListFragmentRenderer、JdbcTemplateLogParser、LogSqlModels、SqlSourceInterceptorAutoInjector、SqlHistorySearchBar/SqlHistoryManager/SqlHistoryPanel 增量 |
-| L7 预览/高亮/UI | 4a754ba + dev | T-AutoFold 字段列表自动折叠（SqlAutoFolding/SqlAutoFoldPlanner 新建 + SqlPreviewPanel/SqlPreviewService 接线）；SqlInputEditor/JavaCodeFormatter/JavaCodePreviewDialog/SqlSelectionDialog/DatabaseSchemaResolver/SqlCompletionContributor/diagram 三件/SqlDiffer/Dialect/PerfRulesBatch3 增量 |
-| L8 平台/杂项 | a274e30/7218078 等 | runIde 与 runIdeHotSwap 职责分离（hotswap 起停收归 runIdeHotSwap）；T-PickMpjErr SQL转Java 选类 MPJ 异常逃逸 EDT 根治；SafeBrowser 新建；Ognl 增量（k2j 侧映射 OgnlEvaluator/OgnlExpr）；StartupUpdateCheck/UpdateSection/SettingsIO/PluginSettings(Panel)/PluginCacheManager；execute 三件与 DatabaseConsoleLauncher；psi（EntityResolver/WrapperCache/WrapperLocator/WrapperAnchorDetector/PreviewReceiverResolver/BatchOperationConverter）与 model（TableInfo/WrapperChain） |
-| L9 测试守卫与提速（T-TestGuard/T-TestPerf） | a05b127 | BundleParityGuardTest/PluginXmlStructureGuardTest/BannedApiSourceScanTest 三族守卫 + test 任务全量提速配置（build.gradle.kts）。注意 BannedApiSourceScanTest 扫描路径写的是 src/main/kotlin，k2j 须适配为 src/main/java |
-| L10 发行与文档 | c507833/cd172f5/aa27418/6f9bd5e/b1f5a87 等 | v2026.9.14-beta.1/.2 版本四件 + changeNotes；README 换 8 张 GIF 动图 + 验收文档新目录 + 架构文档同步 + memory 精简归档搬移 + 调研报告目录迁移；bundle en/zh 各 ±89 行；marketplace 帮助页/Timeout.html |
+| L7 预览/高亮/UI | a120bfa + dev | T-AutoFold 字段列表自动折叠（SqlAutoFolding/SqlAutoFoldPlanner 新建 + SqlPreviewPanel/SqlPreviewService 接线）；SqlInputEditor/JavaCodeFormatter/JavaCodePreviewDialog/SqlSelectionDialog/DatabaseSchemaResolver/SqlCompletionContributor/diagram 三件/SqlDiffer/Dialect/PerfRulesBatch3 增量 |
+| L8 平台/杂项 | d0afda0/ce62959 等 | runIde 与 runIdeHotSwap 职责分离（hotswap 起停收归 runIdeHotSwap）；T-PickMpjErr SQL转Java 选类 MPJ 异常逃逸 EDT 根治；SafeBrowser 新建；Ognl 增量（k2j 侧映射 OgnlEvaluator/OgnlExpr）；StartupUpdateCheck/UpdateSection/SettingsIO/PluginSettings(Panel)/PluginCacheManager；execute 三件与 DatabaseConsoleLauncher；psi（EntityResolver/WrapperCache/WrapperLocator/WrapperAnchorDetector/PreviewReceiverResolver/BatchOperationConverter）与 model（TableInfo/WrapperChain） |
+| L9 测试守卫与提速（T-TestGuard/T-TestPerf） | 4febe24 | BundleParityGuardTest/PluginXmlStructureGuardTest/BannedApiSourceScanTest 三族守卫 + test 任务全量提速配置（build.gradle.kts）。注意 BannedApiSourceScanTest 扫描路径写的是 src/main/kotlin，k2j 须适配为 src/main/java |
+| L10 发行与文档 | 34bd652/9d14971/363339b/2eaf8dc/acd233c 等 | v2026.9.14-beta.1/.2 版本四件 + changeNotes；README 换 8 张 GIF 动图 + 验收文档新目录 + 架构文档同步 + memory 精简归档搬移 + 调研报告目录迁移；bundle en/zh 各 ±89 行；marketplace 帮助页/Timeout.html |
 
 ## 3. 文件级移植矩阵
 
@@ -47,7 +47,7 @@ master 在锚点之后经历了史上最大增量：2026-09-13 dev 全量合入 
 | ui/gutter | HbmNamedQueryGutterLineMarkerProvider | hbm 命名查询锚点 |
 | database | DbTableSpecAdapter | 表右键适配 |
 
-**修改 82 文件（增量翻译进既有 Java）：** 全清单以 `git diff --name-status a0702f6..50d3fb9 -- src/main` 为准，按 Wave 分组实施；其中 xml/Ognl.kt 的增量映射到 k2j 拆分后的 OgnlEvaluator/OgnlExpr 两文件（上轮拆分形态，勿新建 OgnlKt）。
+**修改 82 文件（增量翻译进既有 Java）：** 全清单以 `git diff --name-status aa49c76..c4c5f02 -- src/main` 为准，按 Wave 分组实施；其中 xml/Ognl.kt 的增量映射到 k2j 拆分后的 OgnlEvaluator/OgnlExpr 两文件（上轮拆分形态，勿新建 OgnlKt）。
 
 ### 3.2 测试（89 文件：23 KT 增量 + 15 JinK 增量翻译 + 51 新建适配）
 
@@ -65,7 +65,7 @@ k2j 侧形态普查结论：23 个 master 变更测试在 k2j 有同名 .kt（�
 - plugin.xml：新增 action（feedback/CRUD 双入口）、gutter provider、errorReportSubmitter EP 等注册逐条对齐；落地后跑 plugin.xml 活引用类审计（上轮教训：静态链不校验 factoryClass 存在性）；
 - database-optional.xml：同上对齐；
 - bundle en/zh：各 ±89 行 union，BundleParityGuardTest 守卫兜底；
-- build.gradle.kts：T-TestPerf 提速配置 + a274e30 runIde/hotswap 职责分离 + changeNotes 9.14 段；k2j 自有块（hotswap 等）零丢失，diff 复核；
+- build.gradle.kts：T-TestPerf 提速配置 + d0afda0 runIde/hotswap 职责分离 + changeNotes 9.14 段；k2j 自有块（hotswap 等）零丢失，diff 复核；
 - gradle.properties：版本对齐 2026.9.14-beta.2；
 - marketplace-custom-page.html / Timeout.html：直取；
 - 文档约 150 件：直取为主（含 8 GIF + 2 PNG 二进制走 git checkout）；memory-archive 搬移按 master 归档形态收编后再回补 k2j 专属行；CHANGELOG/MEMORY/变更记录三册 union（**两侧行集合校验，防 master 发行重构吞 k2j 行重演**）；docs/调研报告 5 个未提交文件不在 git 历史内，不属同步范围。
@@ -82,7 +82,7 @@ k2j 侧形态普查结论：23 个 master 变更测试在 k2j 有同名 .kt（�
 | C6 | chore: 资源/构建 | plugin.xml/database-optional/bundle/版本/gradle 两件/html + 活引用审计 | buildPlugin 出包 |
 | C7 | test: 测试移植 | 89 文件分三批（新建适配/增量翻译/守卫） | 全量测试绿 |
 | C8 | docs: 文档同步 | 直取 + 三册 union + README/GIF | 两侧行集合校验 |
-| C9 | chore: 收官 | .port-sync 锚点推进 50d3fb9 + 台账 | verifyPlugin 三目标 |
+| C9 | chore: 收官 | .port-sync 锚点推进 c4c5f02 + 台账 | verifyPlugin 三目标 |
 
 ## 5. 移植规则（既定清单全量生效）
 
@@ -110,16 +110,16 @@ k2j 侧形态普查结论：23 个 master 变更测试在 k2j 有同名 .kt（�
 1. 全量测试 0 失败（基线 3315 → 预期 3900±，套件数与 master 同源核对）；
 2. buildPlugin 成功出包（2026.9.14-beta.2）；verifyPlugin 243/253/262 三目标 Compatible；
 3. k2j 自有行零丢失：CHANGELOG/MEMORY/变更记录/build.gradle.kts 两侧集合校验通过；
-4. .port-sync 锚点 = 50d3fb9（50d3fb98052bdb066b8e1548c992ceb4d337a3ad）；
+4. .port-sync 锚点 = c4c5f02（c4c5f02ad1341926943ff4d2af9e6255b4e24d54）；
 5. plugin.xml 活引用全部可达；bundle parity 守卫绿。
 
 ## 8. 实施记录
 
 提交链（滚动回填）：
-- 1116da8 C1 立项计划
-- 6965236 C2-1 生产移植(1/3)：model 层 10 新件（JoinColumnRef/JoinTableInfo/SecondaryTableInfo/GeneratorInfo/SequenceGeneratorInfo/TableGeneratorInfo/SoftDeleteInfo/CustomSqlScripts/CollectionKind/CollectionAssociationInfo）+ TableInfo/AssociationInfo/ColumnInfo/WrapperType 扩展 + psi/jpa 新件（JpaMetadataReader/RepositoryBaseTypes/CriteriaOperation/CriteriaSetClause/CaseWhen/SubqueryModel/ExpressionModel + PredicateModel 六新子类 + SelectColumn/AggregateInfo/JoinModel/CriteriaQueryModel 扩展）+ 小件（Dialect EXPLAIN 七方言/DatabaseConsoleLauncher/ExecuteSqlSupport T-Perf-01/SqlExecutor releaseForPanel/PluginCacheManager T-Perf-18/PerfRulesBatch3 T-Perf-23/OgnlEvaluator T-Perf-04 解析缓存/WrapperLocator xbatis 全套/WrapperAnchorDetector 场景E F+xBatis 锚点+hasDotCallPattern/EntityResolver KeySequence+缓存键 T-Perf-18/WrapperCache 缓存键/DerivedMethodLocator SD6 SD7 T-J3/HqlQueryLocator T-J12/JpqlQueryLocator SD7/NamedQueryLocator T-J12）+ SafeBrowser 新建
-- cc4b7b1 C2-2 生产移植(2/3)：BatchOperationConverter T-M2（ResolvedTarget+buildInsertBatch 序列提示）+ PreviewReceiverResolver T-Perf-02（classify 缓存+惰性 type）+ DataSourceSelector（releaseForPanel T-Perf-16/runRunner onError T-Perf-01/prepareInConsole T-Perf-13 拆分 prepareAfterEditorResolved+异步编辑器等待+日志降 debug）+ JpaEntityResolver M39 全量（classMeta 接入/resolveColumns 复合守卫/嵌入展平/resolveAssociation T-J7/JPA_MAPPING 注解名扩集/tableAnnotationValue SD8/isIdentifierField M44 统一轨/JpaCacheKey T-Perf-18）+ log 新建 EntrySourceMatcher/SourcePathResolver/LogEntryPreviewOpener 三件
-- 6c36098 C2-3 生产移植(3b)：子代理并行翻译 29 新件——CriteriaQueryLocator.java 全量重写 1764 行（T-J4/J6/J7/J13/J17）；四 ORM 转换器 XbatisConverter(211)/MdsConverter(761)/QuerydslConverter(983)/EasyQueryConverter(1206)（ENTRY_METHODS/isEasyQueryCall/XbatisConverter 实现 WrapperConverter 接口 supportedTypes=XBATIS 已就位）；converter/jpa 八新件 4906 行（JpaCrudOperationConverter 1121 含 crudAnchorMethodNames/hasJpaCrudReceiver、SpecificationQueryConverter 980、JpaQueryEnhancer 876 含 PageRequestEval/LockClause/GraphJoinResult 嵌套类、QueryByExampleConverter 840、JpaJoinOnResolver 422 含 OnResolution、JpaUpdateParser 359、JpaJoinRewriter 192、JpaFromEntityMapper 116）；generator 五件（CrudColumn/CrudTableSpec/CrudKind/CrudStatement/CrudSqlGenerator/DbTypeQuoteHint）；database\DbTableSpecAdapter；actions 三件（GenerateCrudSqlFromEntityAction/GenerateCrudSqlFromDbTableAction/CrudSqlPreviewFlow）；feedback 九件（ErrorFingerprint/ErrorReportComposer/ErrorReportDialog/ReportSubmitterStore/FeedbackAction/FeedbackApi/HttpRequestsSender/FeedbackReporting/IdeErrorReportSubmitter）；编译缺口修复（PredicateModel @Nullable import、JpaEntityResolver model imports、JpaMetadataReader PsiType import、EntityResolver PsiModifierList+NotNull、JpaCacheKey toString、LogEntryPreviewOpener compactSql withTerminator）
+- c283dff C1 立项计划
+- 7fdf0f9 C2-1 生产移植(1/3)：model 层 10 新件（JoinColumnRef/JoinTableInfo/SecondaryTableInfo/GeneratorInfo/SequenceGeneratorInfo/TableGeneratorInfo/SoftDeleteInfo/CustomSqlScripts/CollectionKind/CollectionAssociationInfo）+ TableInfo/AssociationInfo/ColumnInfo/WrapperType 扩展 + psi/jpa 新件（JpaMetadataReader/RepositoryBaseTypes/CriteriaOperation/CriteriaSetClause/CaseWhen/SubqueryModel/ExpressionModel + PredicateModel 六新子类 + SelectColumn/AggregateInfo/JoinModel/CriteriaQueryModel 扩展）+ 小件（Dialect EXPLAIN 七方言/DatabaseConsoleLauncher/ExecuteSqlSupport T-Perf-01/SqlExecutor releaseForPanel/PluginCacheManager T-Perf-18/PerfRulesBatch3 T-Perf-23/OgnlEvaluator T-Perf-04 解析缓存/WrapperLocator xbatis 全套/WrapperAnchorDetector 场景E F+xBatis 锚点+hasDotCallPattern/EntityResolver KeySequence+缓存键 T-Perf-18/WrapperCache 缓存键/DerivedMethodLocator SD6 SD7 T-J3/HqlQueryLocator T-J12/JpqlQueryLocator SD7/NamedQueryLocator T-J12）+ SafeBrowser 新建
+- e11b9b3 C2-2 生产移植(2/3)：BatchOperationConverter T-M2（ResolvedTarget+buildInsertBatch 序列提示）+ PreviewReceiverResolver T-Perf-02（classify 缓存+惰性 type）+ DataSourceSelector（releaseForPanel T-Perf-16/runRunner onError T-Perf-01/prepareInConsole T-Perf-13 拆分 prepareAfterEditorResolved+异步编辑器等待+日志降 debug）+ JpaEntityResolver M39 全量（classMeta 接入/resolveColumns 复合守卫/嵌入展平/resolveAssociation T-J7/JPA_MAPPING 注解名扩集/tableAnnotationValue SD8/isIdentifierField M44 统一轨/JpaCacheKey T-Perf-18）+ log 新建 EntrySourceMatcher/SourcePathResolver/LogEntryPreviewOpener 三件
+- fb7a029 C2-3 生产移植(3b)：子代理并行翻译 29 新件——CriteriaQueryLocator.java 全量重写 1764 行（T-J4/J6/J7/J13/J17）；四 ORM 转换器 XbatisConverter(211)/MdsConverter(761)/QuerydslConverter(983)/EasyQueryConverter(1206)（ENTRY_METHODS/isEasyQueryCall/XbatisConverter 实现 WrapperConverter 接口 supportedTypes=XBATIS 已就位）；converter/jpa 八新件 4906 行（JpaCrudOperationConverter 1121 含 crudAnchorMethodNames/hasJpaCrudReceiver、SpecificationQueryConverter 980、JpaQueryEnhancer 876 含 PageRequestEval/LockClause/GraphJoinResult 嵌套类、QueryByExampleConverter 840、JpaJoinOnResolver 422 含 OnResolution、JpaUpdateParser 359、JpaJoinRewriter 192、JpaFromEntityMapper 116）；generator 五件（CrudColumn/CrudTableSpec/CrudKind/CrudStatement/CrudSqlGenerator/DbTypeQuoteHint）；database\DbTableSpecAdapter；actions 三件（GenerateCrudSqlFromEntityAction/GenerateCrudSqlFromDbTableAction/CrudSqlPreviewFlow）；feedback 九件（ErrorFingerprint/ErrorReportComposer/ErrorReportDialog/ReportSubmitterStore/FeedbackAction/FeedbackApi/HttpRequestsSender/FeedbackReporting/IdeErrorReportSubmitter）；编译缺口修复（PredicateModel @Nullable import、JpaEntityResolver model imports、JpaMetadataReader PsiType import、EntityResolver PsiModifierList+NotNull、JpaCacheKey toString、LogEntryPreviewOpener compactSql withTerminator）
 
 ## 8.1 剩余 M 增量文件（子代理第二批并行中，完成后按 C6 继续）
 
@@ -128,15 +128,15 @@ k2j 侧形态普查结论：23 个 master 变更测试在 k2j 有同名 .kt（�
 - Agent G（ui 增量）：ui\{SqlPreviewPanel,SqlPreviewService,SqlInputEditor,SqlSelectionDialog,JavaCodeFormatter,JavaCodePreviewDialog,diff\SqlDiffer,diagram\DiagramPanel,DiagramRenderer,diagram\nativefw\db\{JoinVirtualFkProvider,NativeDatabaseDiagramSupport},highlight\DatabaseSchemaResolver,SqlCompletionContributor} + 新建 ui\highlight\{SqlAutoFolding,SqlAutoFoldPlanner} + gutter 7 文件增量 + 新建 HbmNamedQueryGutterLineMarkerProvider
 - Agent H（config/history/update/actions 增量）：config\{PluginSettings,PluginSettingsPanel,SettingsIO,UpdateSection}（State 加 reportSubmitterName/Email 等——ReportSubmitterStore 已引用等待中）+ history\{SqlHistoryManager,SqlHistoryPanel,SqlHistorySearchBar}+新建 SqlHistorySearchBar? + update\StartupUpdateCheck + actions\{ConvertSqlToJavaAction,ConvertToSqlAction}（T-PickMpjErr）
 
-方法约定：每个文件 `git -C k2j diff a0702f6..50d3fb9 -- src/main/kotlin/<F>.kt` 看增量 → 增量翻译进 k2j 对应 .java（新建件全量翻译）；翻译规则同前批简报。
+方法约定：每个文件 `git -C k2j diff aa49c76..c4c5f02 -- src/main/kotlin/<F>.kt` 看增量 → 增量翻译进 k2j 对应 .java（新建件全量翻译）；翻译规则同前批简报。
 
 ## 8.2 执行状态（2026-09-14 实际）
 
-- 6965236 生产(1/3) → cc4b7b1 生产(2/3) → 6c36098 生产(3b 子代理 29 新件) → 3597673 生产完成（第二批发包 E/F/G/H 84 文件增量）+ compileJava 全绿
-- 1f8a67a C6 资源/构建：plugin.xml/database-optional/bundle×2/html×2/gradle.properties 直取；build.gradle.kts union（gifRecord 开关+T-TestPerf 串行注释+changeNotes beta.2 段+a274e30 职责分离；k2j 自有 sourceSets.test.srcDir/Lombok 注释/-parameters 三块零丢失）；活引用审计 9+2 引用 0 缺失（补回丢失的 SqlHistoryToolWindowFactory.java——90e8d09 教训重演防范）
-- d665555 测试移植 89 文件（子代理 T1~T4 并行：51 新建 .kt 互操作适配 + 23 .kt/.java 增量 + 15 JinK 增量）+ b8b9179 测试编译修复（Kotlin 访问 Java is-前缀访问器须显式调用 isResolved()/isValue() 等 39 处 + FeedbackApi.setSender/ErrorFingerprint.seenEntriesForTest 测试缝）→ compileTestJava/compileTestKotlin 全绿
-- 894fe19 C8 文档：直取 137 件 + 三册 git merge-file --union（CHANGELOG 丢 1 行=master 发行时已更新的同条目按新版收编；MEMORY 丢 11 行=master 已更新的陈旧快照；k2j 台账行 T-SyncK2JMaster32/14/23 全留存；变更记录零丢失）
-- 进行中：全量测试（后台 gradlew test）→ 失败修复 → buildPlugin/verifyPlugin 三目标 → .port-sync 锚点推进 50d3fb9 → 收官提交（还原 sandboxContainer k2jsync171 行 + 注销 parallel_tasks 登记）
+- 7fdf0f9 生产(1/3) → e11b9b3 生产(2/3) → fb7a029 生产(3b 子代理 29 新件) → ed9d5af 生产完成（第二批发包 E/F/G/H 84 文件增量）+ compileJava 全绿
+- c35ef0e C6 资源/构建：plugin.xml/database-optional/bundle×2/html×2/gradle.properties 直取；build.gradle.kts union（gifRecord 开关+T-TestPerf 串行注释+changeNotes beta.2 段+d0afda0 职责分离；k2j 自有 sourceSets.test.srcDir/Lombok 注释/-parameters 三块零丢失）；活引用审计 9+2 引用 0 缺失（补回丢失的 SqlHistoryToolWindowFactory.java——3749116 教训重演防范）
+- f018a9d 测试移植 89 文件（子代理 T1~T4 并行：51 新建 .kt 互操作适配 + 23 .kt/.java 增量 + 15 JinK 增量）+ ca0d798 测试编译修复（Kotlin 访问 Java is-前缀访问器须显式调用 isResolved()/isValue() 等 39 处 + FeedbackApi.setSender/ErrorFingerprint.seenEntriesForTest 测试缝）→ compileTestJava/compileTestKotlin 全绿
+- f34ee4f C8 文档：直取 137 件 + 三册 git merge-file --union（CHANGELOG 丢 1 行=master 发行时已更新的同条目按新版收编；MEMORY 丢 11 行=master 已更新的陈旧快照；k2j 台账行 T-SyncK2JMaster32/14/23 全留存；变更记录零丢失）
+- 进行中：全量测试（后台 gradlew test）→ 失败修复 → buildPlugin/verifyPlugin 三目标 → .port-sync 锚点推进 c4c5f02 → 收官提交（还原 sandboxContainer k2jsync171 行 + 注销 parallel_tasks 登记）
 
 ## 8.3 终验结论（收官）
 

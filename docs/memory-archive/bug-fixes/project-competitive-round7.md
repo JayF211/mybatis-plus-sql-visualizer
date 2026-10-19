@@ -1,6 +1,6 @@
 ---
 name: project-competitive-round7
-description: 竞品横向对比第七轮（20260918，入库 master 4d63a1b 未推送）——zMyBatis
+description: 竞品横向对比第七轮（20260918，入库 master ca57460 未推送）——zMyBatis
   全仓库深度解剖结论（真引擎求值/Leap 重写未接线/精华 Z-1~Z-13）、Marketplace 快照、DBX v6 清单、新编号
   N-24~N-27/O-30~O-33
 metadata:
@@ -11,7 +11,7 @@ metadata:
 
 # 竞品横向对比第七轮（2026-09-18）
 
-报告：`docs/调研报告/20260918-0200-竞品横向对比与功能建议-第七轮调研报告.md`（master 提交 **4d63a1b，未推送**）。三子智能体并行（zMyBatis 源码解剖 / Marketplace 刷新 / DBX 增量），主智能体抽查复核；Marketplace 原始 JSON 留档 `%TEMP%\jbmkt_r7\`；zMyBatis 本地克隆 `%TEMP%\zmybatis_deep_r7`（临时目录，下轮复测需重新克隆）。
+报告：`docs/调研报告/20260918-0200-竞品横向对比与功能建议-第七轮调研报告.md`（master 提交 **ca57460，未推送**）。三子智能体并行（zMyBatis 源码解剖 / Marketplace 刷新 / DBX 增量），主智能体抽查复核；Marketplace 原始 JSON 留档 `%TEMP%\jbmkt_r7\`；zMyBatis 本地克隆 `%TEMP%\zmybatis_deep_r7`（临时目录，下轮复测需重新克隆）。
 
 ## zMyBatis（Marketplace 30447）深度解剖核心结论
 

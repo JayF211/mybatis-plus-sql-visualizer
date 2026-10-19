@@ -1,6 +1,6 @@
 # T-XmlInlineSql 通用 XML 内嵌 SQL 识别（不依赖根元素）— 开发计划
 
-> 任务编号：**O-72**（立案时暂定 O-71；同日并行会话 T-HqlNoAliasProp 已将 O-71 落在 master `69a4028`，合并 dev 前订正为本号，实现与文档中编号已同步替换）
+> 任务编号：**O-72**（立案时暂定 O-71；同日并行会话 T-HqlNoAliasProp 已将 O-71 落在 master `787551a`，合并 dev 前订正为本号，实现与文档中编号已同步替换）
 > 立案日期：2026-09-23
 > 状态：**待确认**（写完停下等用户拍板，未动任何 src/main）
 
@@ -106,13 +106,13 @@
 
 ### 交付方式
 
-用户确认「按推荐方案」后，主会话在独立工作树 `mpsv-xml-inline-sql`（分支 `t-xml-inline-sql`，基于 master `1f0b9fd`）单车道实施；parallel_tasks 登记 `T-XmlInlineSql / sandbox=MPSV-XmlInlineSql`。
+用户确认「按推荐方案」后，主会话在独立工作树 `mpsv-xml-inline-sql`（分支 `t-xml-inline-sql`，基于 master `8bdef95`）单车道实施；parallel_tasks 登记 `T-XmlInlineSql / sandbox=MPSV-XmlInlineSql`。
 
 ### 任务落地（对照 §三）
 
-- **T-01/T-02/T-03/T-04**：提交 `395b933`（13 文件 +704）——`XmlInlineSqlDetector`（认领/排除/type 探测/总开关）、`XmlInlineSqlGutterLineMarkerProvider`（plugin.xml 注册，`gutter.xmlInlineSql.*` 文案）、`XmlInlineSqlPreviewService`（原生直显 + HQL 复用 `previewHbmNamedQuery` + 异常回退原文）、`ConvertToSqlAction`（光标上爬/全文件收集/选择区候选三处兜底 + `previewXmlTag` 统一分发）、`PluginSettings.xmlInlineSqlEnabled`（默认开）+ 设置面板 5 处接线 + FolderConfigurable 搜索索引 + 中英 bundle 6 键。
+- **T-01/T-02/T-03/T-04**：提交 `47db0d5`（13 文件 +704）——`XmlInlineSqlDetector`（认领/排除/type 探测/总开关）、`XmlInlineSqlGutterLineMarkerProvider`（plugin.xml 注册，`gutter.xmlInlineSql.*` 文案）、`XmlInlineSqlPreviewService`（原生直显 + HQL 复用 `previewHbmNamedQuery` + 异常回退原文）、`ConvertToSqlAction`（光标上爬/全文件收集/选择区候选三处兜底 + `previewXmlTag` 统一分发）、`PluginSettings.xmlInlineSqlEnabled`（默认开）+ 设置面板 5 处接线 + FolderConfigurable 搜索索引 + 中英 bundle 6 键。
 - **T-05**：**决策不实施**——`OnboardingAnchorTip` 的 XML 锚点词若加 `<statement`/`<DataSource` 这类通用词，任意含同名标签的 XML 都会触发首用引导，与该类「误报面最小」原则冲突；通用检测本身已让引导通知自然覆盖新场景。
-- **CDATA 修复**：提交 `f943b41`（见下「关键实测发现」）。
+- **CDATA 修复**：提交 `5076164`（见下「关键实测发现」）。
 
 ### 关键实测发现（推翻计划前提 1）
 

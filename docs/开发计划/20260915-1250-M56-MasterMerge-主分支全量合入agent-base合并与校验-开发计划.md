@@ -5,11 +5,11 @@
 | 计划编号 | 20260915-1250-M56-MasterMerge |
 | 任务 | master → feature/t-m56-01-agent-base 合并、冲突解决、全量测试、插件构建校验 |
 | 工作树 | `F:\code\Java\Gitee\SongRenShuo\mpsv-m56`（分支 feature/t-m56-01-agent-base） |
-| merge-base | `a274e30` |
-| master HEAD | `155e0cf`（docs: T-ListParamCollect 合入 master） |
-| feature HEAD | `59e8510`（fix: 恢复变更记录总册） |
+| merge-base | `d0afda0` |
+| master HEAD | `3eece0b`（docs: T-ListParamCollect 合入 master） |
+| feature HEAD | `a970888`（fix: 恢复变更记录总册） |
 | 差异规模 | master 领先 248 提交；feature 自身 9 提交（M56 agent 字节码通道一期） |
-| 状态 | **已交付**——首环（§五 1~6）与增量收口（§六：da37ad5 二次 + d0ae910 三次）全落地，最终门禁 testShards 4200/0/0/6 + agent 21/0 + buildPlugin 2026.9.18-beta.1.zip + verifyGate 三目标 Compatible，详见交接文档 §八 |
+| 状态 | **已交付**——首环（§五 1~6）与增量收口（§六：ad9fb60 二次 + ea758e2 三次）全落地，最终门禁 testShards 4200/0/0/6 + agent 21/0 + buildPlugin 2026.9.18-beta.1.zip + verifyGate 三目标 Compatible，详见交接文档 §八 |
 
 ---
 
@@ -82,20 +82,20 @@
 
 master 在本任务执行期间被并行会话两次推进，「master 功能全部合入」目标要求随之做增量合并。本节在动代码前登记增量计划。
 
-### 二次合并（已完成，提交 `da37ad5`）
+### 二次合并（已完成，提交 `ad9fb60`）
 
 | 项 | 值 |
 |----|----|
-| master 合入点 | `d366731`（T-Intranet 内网离线可用性 + v2026.9.18-beta.1 发行链 + T-TestPerf2 沉淀） |
+| master 合入点 | `d58ddc9`（T-Intranet 内网离线可用性 + v2026.9.18-beta.1 发行链 + T-TestPerf2 沉淀） |
 | 冲突 | 1 文件（`docs/变更记录.md` 表格行追加型）→ union（master T-Intranet 两行 + M56 台账行归位表首） |
 | 测试 | testShards **4162/0/0/6**（1570+1344+1248，跳过=6 Docker）+ agent 21 用例绿 |
 | 中断点 | 最终 buildPlugin + verifyPlugin 未跑完（会话中断），由三次合并后统一收口 |
 
-### 三次合并（本节计划，master 合入点 `5eeb884`）
+### 三次合并（本节计划，master 合入点 `89a04de`）
 
-增量内容 8 提交、28 文件：T-ReleasePerf 收尾（`c44dbfd`/`e8f0224`：build.gradle.kts verifyGate 离线化、`dev-support/verifier-ignored-problems.txt` 豁免清单、发行说明/开发测试指南文档）、日志原始时间记录与显示切换（`51eb01a`/`a2436f1`：LogTimestampParser + 各 parser + 设置项）、JdbcTemplate 并发修复（`7d23c1d`）、日志列表搜索行号/时间 + 右键复制时间戳（`5eeb884`/`71bffa1`：SqlLogPanel/SqlHistoryPanel）。
+增量内容 8 提交、28 文件：T-ReleasePerf 收尾（`d0c0a16`/`99d89af`：build.gradle.kts verifyGate 离线化、`dev-support/verifier-ignored-problems.txt` 豁免清单、发行说明/开发测试指南文档）、日志原始时间记录与显示切换（`3e2d2be`/`47cee49`：LogTimestampParser + 各 parser + 设置项）、JdbcTemplate 并发修复（`88f20ed`）、日志列表搜索行号/时间 + 右键复制时间戳（`89a04de`/`6853659`：SqlLogPanel/SqlHistoryPanel）。
 
-- **预演**：`git merge-tree --write-tree HEAD master` → exit=0 **零文本冲突**（28 文件全部自动合并）；`docs/MEMORY.md`、`docs/变更记录.md`、M56 实施计划文档 master 侧在 `da37ad5..5eeb884` 区间未改动（差异纯来自 feature 侧），合并保留 feature 版。
+- **预演**：`git merge-tree --write-tree HEAD master` → exit=0 **零文本冲突**（28 文件全部自动合并）；`docs/MEMORY.md`、`docs/变更记录.md`、M56 实施计划文档 master 侧在 `ad9fb60..89a04de` 区间未改动（差异纯来自 feature 侧），合并保留 feature 版。
 - **自动合并语义复核点**（零冲突 ≠ 语义正确，逐项过守卫）：
   1. `build.gradle.kts`：T-ReleasePerf verifyGate/releaseGate 改动与 feature embedAgentJar 尾块共存性；
   2. 两个 bundle：master 新增 timestamp/search 键自动并入后，en/zh 键集合仍须全等（BundleParityGuardTest 守卫）；

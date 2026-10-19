@@ -5,7 +5,7 @@
 - 来源：第十轮报告 §8 DBX 增量清单 **#54**——DBX `0668bdc4`：`apps/desktop/src/lib/sql/errorPosition.ts:111-118` `sqlErrorHasMessagePosition`、`:145-148` `sqlErrorDisplayPosition`（显示与跳转**共用同一解析器**）、`:150-175` `resultSourceRange` 失败即拒绝、`ContentArea.vue:352-360`
 - 性质：**可用性 + 诚实性**——修的是「按钮可见但点了没反应」这一静默形态
 - 实施分支：自 master 拉任务分支 t-error-locate-usability
-- 验证基线：master `03f6d25`（最近可核读数 491 类/5604 用例 0 失败 与 5577 例 0 失败，属不同批次树；实施时以当次实测为准）
+- 验证基线：master `28a1efa`（最近可核读数 491 类/5604 用例 0 失败 与 5577 例 0 失败，属不同批次树；实施时以当次实测为准）
 
 ---
 

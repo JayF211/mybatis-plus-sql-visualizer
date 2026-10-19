@@ -1,15 +1,15 @@
 ---
 name: t-perfsweep2
-description: T-PerfSweep2 六发现点已全部交付并合入 master（merge 7edb2fb，2026-09-15，4103 绿）——第四轮 IDEA 性能影响深度分析报告 + 六任务实施要点与三处实施修订
+description: T-PerfSweep2 六发现点已全部交付并合入 master（merge 1b67f57，2026-09-15，4103 绿）——第四轮 IDEA 性能影响深度分析报告 + 六任务实施要点与三处实施修订
 metadata:
   node_type: memory
   type: project
   originSessionId: sess_dcad83ad-2ffd-42a5-b331-e7c5af46263d
 ---
 
-2026-09-15 第四轮插件 IDEA 性能影响深度分析（`docs/调研报告/20260915-0342-插件IDEA性能影响深度分析-调研报告.md`；系列四轮：0902/0910 在 docs/性能分析，0914/0915 在 docs/调研报告，增量复查体例）。结论维持「默认零开销、高负载有界」：锚点 50d3fb9 后 61 提交零新增扩展点、无新增常驻开销（唯一常驻体 PendingReportScheduler=懒加载 APP 服务+一次性 720s 延时+daemon 闲时零唤醒）、T-ExecSlowOps 两段式线程纪律收紧、WrapperSearchService 整文件清退。
+2026-09-15 第四轮插件 IDEA 性能影响深度分析（`docs/调研报告/20260915-0342-插件IDEA性能影响深度分析-调研报告.md`；系列四轮：0902/0910 在 docs/性能分析，0914/0915 在 docs/调研报告，增量复查体例）。结论维持「默认零开销、高负载有界」：锚点 c4c5f02 后 61 提交零新增扩展点、无新增常驻开销（唯一常驻体 PendingReportScheduler=懒加载 APP 服务+一次性 720s 延时+daemon 闲时零唤醒）、T-ExecSlowOps 两段式线程纪律收紧、WrapperSearchService 整文件清退。
 
-**六任务已全部交付并合入 master**（merge 7edb2fb，落地前分支 t-perfsweep2，六提交每任务一个；全量 4103/0/0/6 绿=基线 4081+22；计划 `docs/开发计划/20260915-0820-T-PerfSweep2-…`，工作树与分支用后即删）。实施要点与三处与计划的差异：
+**六任务已全部交付并合入 master**（merge 1b67f57，落地前分支 t-perfsweep2，六提交每任务一个；全量 4103/0/0/6 绿=基线 4081+22；计划 `docs/开发计划/20260915-0820-T-PerfSweep2-…`，工作树与分支用后即删）。实施要点与三处与计划的差异：
 
 - **01 中低（已修）**：extractConsoleError 改 `getCharsSequence().subSequence(baseline,len)` 片段物化 + debug 列表加 `isDebugEnabled` 守卫；`consoleErrorBaseline`/`extractConsoleError` 提 internal 供测试。新建 ConsoleErrorExtractTest 6 例。
 - **02（已修）**：`readBounded(input, maxBytes=2MB)` 对响应体与 gzip 解压输出统一封顶；截断产物走既有 nonJsonHint。FeedbackApiTest +5。

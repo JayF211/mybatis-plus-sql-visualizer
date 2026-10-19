@@ -1,12 +1,12 @@
-# T-SyncK2JMaster32 开发计划——master 299607e..2543203 三十二提交增量同步
+# T-SyncK2JMaster32 开发计划——master 8afe07a..06d742a 三十二提交增量同步
 
 > 立项日期：2026-09-11　分支：feature/kotlin-to-java（worktree `mybatis-plus-sql-visualizer-kotlin-to-java`）
-> 同步源：**本地 master 2543203**（注意：origin/master 停在 c13b508，本地领先——master 仓库最近提交尚未 push，本轮以本地 master HEAD 为准，收官后锚点记 2543203）
-> 增量范围：`git diff 299607e..2543203`，32 提交，55 文件 +4963/−187
+> 同步源：**本地 master 06d742a**（注意：origin/master 停在 648409a，本地领先——master 仓库最近提交尚未 push，本轮以本地 master HEAD 为准，收官后锚点记 06d742a）
+> 增量范围：`git diff 8afe07a..06d742a`，32 提交，55 文件 +4963/−187
 
 ## 1. 背景与目标
 
-上一轮 T-SyncK2JMaster14 收官于 299607e（2026-09-10 全量 3195/0/0/6 绿 + verifyPlugin 三目标 Compatible）。此后 master 又落了三十二个提交（一整个 v2026.9.10 发行日的工作量）。此前远程已有一份 T-SyncK2JDev 计划（440467a/38f8a5c，拟以 dev aebb0ce 为基线一轮吃下 dev+master 增量）；本轮按用户明确指示**只同步主分支（master）**，dev 基线方案保留为后续轮次（届时其净增量清单需按本轮收官后的新锚点重算）。
+上一轮 T-SyncK2JMaster14 收官于 8afe07a（2026-09-10 全量 3195/0/0/6 绿 + verifyPlugin 三目标 Compatible）。此后 master 又落了三十二个提交（一整个 v2026.9.10 发行日的工作量）。此前远程已有一份 T-SyncK2JDev 计划（407006c/c7f593e，拟以 dev ed7723f 为基线一轮吃下 dev+master 增量）；本轮按用户明确指示**只同步主分支（master）**，dev 基线方案保留为后续轮次（届时其净增量清单需按本轮收官后的新锚点重算）。
 
 惯例不变：手工移植、绝不 git merge（merge 会带回 .kt 污染与历史失真）；生产代码保持 100% Java；测试源集 Kotlin/Java 混合按既有形态增量翻译。
 
@@ -14,18 +14,18 @@
 
 | 功能线 | 提交 | 内容概要 |
 |---|---|---|
-| T-VStack（三笔） | a86c615/b14173f/dc308fc | 预览面板「竖向排列」按钮：INSERT 列/值逐行竖排 + 行尾 `-- 列名` 配对标注；扩面 IN 列表/ORDER BY/GROUP BY/FROM 纵向化；IN 阈值 <5 同行 ≥5 逐行 |
-| T-VPairAnno | 770313a | 竖排 VALUES 行尾列名标注配置项 `verticalPairAnnotation`（默认开），四处接线 |
-| T-PreviewDisplayMode | 7bf110e | 预览显示模式状态化：编辑器=模型派生视图，按钮直改文档必被重建抹掉；applyDisplayMode 接入 showSql 唯一收敛点，压缩短路最前，刷新复位 |
-| T-HibDualCapture | 90f082a/7f31fc0/3368f0f | Hibernate 双份 SQL 参数分裂根治（零参影子隔离槽 + string-aware 占位符口径）+ 参数框 16 列/光标钉首/tooltip 带值 |
-| T-PreviewTopOverlap | 739588c | 预览顶部元信息压按钮行：WEST→CENTER + 低频按钮折叠「更多」JBPopup + 宽度预算截断 |
-| T-ExecSilentNoop | 0254169 | 首次执行静默不执行：freshModel 回落 demote 强制走 executeQueries 兜底 + 提示三分流（notSubmitted/timeout/indexing）去重 |
-| T-PreviewDocLock（1/2） | e8b9d1d/7bf5860/b934323 | EDT 读权限断言排雷：PsiDocumentManager.getDocument 包 ReadAction；ProjectTypeDetector 检测体包 ReadAction；预览临时文件失败降级纯内存编辑器 |
-| T-PreviewSlow | dd938ce | 预热等待 2000→60ms + attachConsole 去 ReadAction（WIRA 锁嵌套根因） |
-| T-VersionUtil | ea66ea7 | 版本比较委托 IDEA 内置 VersionComparatorUtil（识别 `-beta` 预发布段） |
-| T-LogRowNumber 续修 | 4c1940f/874f257 | 行号清零仅主配置启动（ModuleBasedConfiguration 反射判定）；dedupeExisting 去时间窗口 |
-| v2026.9.10 发行 | 0283717/c13b508/2543203 | 版本号 2026.9.10 + CHANGELOG + 变更记录 + 发行说明 + preview 清单 |
-| 文档/分析 | 73303d6/211311b/其余 docs | IDEA 性能分析复查、临时截图移出 docs/images、各任务计划与变更记录 |
+| T-VStack（三笔） | 6dfdf72/db140aa/9ef6b20 | 预览面板「竖向排列」按钮：INSERT 列/值逐行竖排 + 行尾 `-- 列名` 配对标注；扩面 IN 列表/ORDER BY/GROUP BY/FROM 纵向化；IN 阈值 <5 同行 ≥5 逐行 |
+| T-VPairAnno | ca1a376 | 竖排 VALUES 行尾列名标注配置项 `verticalPairAnnotation`（默认开），四处接线 |
+| T-PreviewDisplayMode | 1305a5a | 预览显示模式状态化：编辑器=模型派生视图，按钮直改文档必被重建抹掉；applyDisplayMode 接入 showSql 唯一收敛点，压缩短路最前，刷新复位 |
+| T-HibDualCapture | 95a83ef/74b9633/b2d7039 | Hibernate 双份 SQL 参数分裂根治（零参影子隔离槽 + string-aware 占位符口径）+ 参数框 16 列/光标钉首/tooltip 带值 |
+| T-PreviewTopOverlap | f2b0fe3 | 预览顶部元信息压按钮行：WEST→CENTER + 低频按钮折叠「更多」JBPopup + 宽度预算截断 |
+| T-ExecSilentNoop | e87a113 | 首次执行静默不执行：freshModel 回落 demote 强制走 executeQueries 兜底 + 提示三分流（notSubmitted/timeout/indexing）去重 |
+| T-PreviewDocLock（1/2） | 1ef8bf6/3cba9f6/df1db12 | EDT 读权限断言排雷：PsiDocumentManager.getDocument 包 ReadAction；ProjectTypeDetector 检测体包 ReadAction；预览临时文件失败降级纯内存编辑器 |
+| T-PreviewSlow | f8a7e7c | 预热等待 2000→60ms + attachConsole 去 ReadAction（WIRA 锁嵌套根因） |
+| T-VersionUtil | 4ca1aa4 | 版本比较委托 IDEA 内置 VersionComparatorUtil（识别 `-beta` 预发布段） |
+| T-LogRowNumber 续修 | dab41e3/6876689 | 行号清零仅主配置启动（ModuleBasedConfiguration 反射判定）；dedupeExisting 去时间窗口 |
+| v2026.9.10 发行 | c1b0a90/648409a/06d742a | 版本号 2026.9.10 + CHANGELOG + 变更记录 + 发行说明 + preview 清单 |
+| 文档/分析 | 567e01a/0dc0b22/其余 docs | IDEA 性能分析复查、临时截图移出 docs/images、各任务计划与变更记录 |
 
 ## 3. 文件级移植矩阵
 
@@ -70,7 +70,7 @@
 | ui/highlight/SqlFormatterTest.kt | .kt（有） | 增量追加 +484 行（竖排/扩面/阈值/标注开关全用例；禁命名实参机械转换） |
 | update/VersionComparatorTest.kt | .java（有） | 增量翻译（beta 预发布比较） |
 
-### 3.3 资源与版本（直取对齐 2543203）
+### 3.3 资源与版本（直取对齐 06d742a）
 
 - `src/main/resources/messages/MpSqlVisualizerBundle*.properties`（en/zh 各 +11）：panel.vertical(+tooltip)/panel.more/execute.notSubmitted.hint/execute.timeout.hint/settings.verticalPairAnnotation/log.preview.unresolvedNoBinding
 - `gradle.properties`：version=2026.9.10
@@ -89,7 +89,7 @@
 2. **W2 生产**：§3.1 十五文件 Java 翻译，一次提交（随编译通过验证）。
 3. **W3 测试**：§3.2 十六文件，一次提交。
 4. **W4 资源/文档**：bundle + 版本四件 + 文档直取/union，一次提交。
-5. **W5 收官**：全量测试 + verifyPlugin 三目标通过后——.port-sync 锚点→2543203、计划文档回填实施记录、MEMORY/变更记录交付行。
+5. **W5 收官**：全量测试 + verifyPlugin 三目标通过后——.port-sync 锚点→06d742a、计划文档回填实施记录、MEMORY/变更记录交付行。
 
 ## 5. 转换专项（本批特有风险）
 
@@ -114,13 +114,13 @@
 
 ## 7. 验收标准
 
-- 生产代码 100% Java，无 .kt 混入；`git diff 299607e..2543203` 的生产/测试/资源/文档四类全部落地（或明确记录豁免）。
+- 生产代码 100% Java，无 .kt 混入；`git diff 8afe07a..06d742a` 的生产/测试/资源/文档四类全部落地（或明确记录豁免）。
 - 全量测试 0 失败 0 错误（预期总数 ≥3230，新增用例数以实际为准）；verifyPlugin 三目标 Compatible。
-- .port-sync 锚点 = 2543203 全 SHA；三册 union 后 k2j 专属行无损。
+- .port-sync 锚点 = 06d742a 全 SHA；三册 union 后 k2j 专属行无损。
 
 ## 8. 实施记录（2026-09-11 收官回填）
 
-按计划 W1~W5 全部落地，提交链：33d97d8 计划 → 29a1110 生产 → 225f2b0 测试 → 5a7d5bb 资源/文档 → 本收官提交。
+按计划 W1~W5 全部落地，提交链：75e6822 计划 → c75ddeb 生产 → 3561de8 测试 → ed256f3 资源/文档 → 本收官提交。
 
 - **生产（W2，16 文件）**：§3.1 矩阵 15 文件全落地（LogSqlRestorer 拆 `LogSqlRestorer.java`（restore 按位替换）+ `LogSqlRestorerKt.java`（placeholderPositions）；SqlFormatter 局部类/局部函数按 §5 收敛为 `VerticalState`/`VerticalLine` 静态嵌套状态机；SqlPreviewPanel 嵌套 enum + MetaPerfSegment record + 更多菜单 BaseListPopupStep）。compileJava 绿后提交。
 - **测试（W3，16 文件）**：§3.2 矩阵全落地——9 修改（6 .kt 增量编辑 + DualParser/HibParser/LogEntryPreviewRecognizer/SqlLogEntryBuffer/SqlLogManagerBehavior/VersionComparator 六 .java 增量翻译）+ SqlPreviewPanelTest.java 追加 9 方法（显示模式保持性/压缩优先级/竖排按钮等）+ SqlFormatterTest.kt 追加 31 用例（`annotatePairs = false` 命名实参机械化转位置实参）+ 4 新建 .kt（ExecSilentNoopHint 纯逻辑直取 / HibDualCopy record 访问器方法调用化 / ParamField + TopRowLayout PreviewResult 20 参位置实参适配）。
@@ -129,4 +129,4 @@
 - **编译期三修**：LogSqlRestorerKt 缺 java.util 导入；SqlLogManagerBehaviorTest/SqlPreviewPanelTest 新增方法里 `project` 是 Kotlin 属性名，Java 侧须 `getProject()`；MpSqlVisualizerBundle 在 SqlPreviewPanelTest 无 import 改全限定名。
 - **全量（W5 门禁）**：`./gradlew test`（独立沙盒 k2jsync32）**3261/0/0/6 绿，263 套件**（较 T-SyncK2JMaster14 基线 3195 +66，套件数与 master 同为 263）。
 - **verifyPlugin 三目标**：buildPlugin + verifyPlugin（243/253/262）BUILD SUCCESSFUL，三报告均 **Compatible**，Dynamic Plugin Eligibility 通过。弃用计数 **243:4 / 253:7 / 262:41**（262 较上轮基线 39 **+2**，归因本轮新增两处 `ReadAction.compute(ThrowableComputable)` 站点：ProjectTypeDetector.detect / SqlPreviewPanel.createEditor——与 master 本轮完全同源，报告逐条核实；243/253 不变、experimental 6 不变），无 compatibility problem。
-- **锚点**：.port-sync synced_master → 254320340ecfd38443e589b6c35daba0dc859c0f（2543203）。push 留用户 GUI。
+- **锚点**：.port-sync synced_master → 06d742a39ad043423643d0eee3312341985000e7（06d742a）。push 留用户 GUI。

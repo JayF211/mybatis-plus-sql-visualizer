@@ -2,7 +2,7 @@
 
 > 立项时间：2026-09-16 15:08（会话内定案）
 > 分支：`master`（worktree `mybatis-plus-sql-visualizer`）
-> 前置：T-LogParseConc（20260916-1445，已交付 3874845）把线程分桶下沉为三解析器共享的 `LogThreadRouter` 并修掉 MyBatis/JdbcTemplate 两条链路的并发配对；**Hibernate 链路当时刻意没做**，本轮独立立项补齐
+> 前置：T-LogParseConc（20260916-1445，已交付 6626365）把线程分桶下沉为三解析器共享的 `LogThreadRouter` 并修掉 MyBatis/JdbcTemplate 两条链路的并发配对；**Hibernate 链路当时刻意没做**，本轮独立立项补齐
 > 需求来源（用户原话）：「Hibernate 也有这个问题 独立立项」
 
 ## 一、问题

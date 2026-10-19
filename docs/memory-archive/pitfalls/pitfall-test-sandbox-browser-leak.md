@@ -10,7 +10,7 @@ metadata:
 
 2026-09-11 归因：用户真机默认浏览器 Edge「每隔一段时间自动打开 https://sql-visualizer.jvtools.cn/features/wrapper-preview.html」。完整因果链 = ZCode 定时自动化任务每天跑全量测试（runIde/测试沙盒）→ 测试触发 `HelpAction.actionPerformed`（HelpUiTest 等，沙盒 idea.log 有 `SqlLogPanel$HelpAction.openLocalHtml/actionPerformed` 堆栈帧）→ 沙盒内 JCEF/HTMLEditorProvider 不可用走降级分支 → `BrowserUtil.browse(HELP_DOCUMENTATION_URL)` **不隔离，直接 ShellExecute 弹真机默认浏览器**。k2j 测试沙盒日志此类 fallback 38 次，时间点与定时任务运行窗口吻合。
 
-**坑本质**：`BrowserUtil.browse` 在测试/沙盒进程里是 OS 级操作，任何「降级打开在线文档」路径都必须在入口加 `ApplicationManager.getApplication().isUnitTestMode` 守卫。**已实施（master 56df6d6，2026-09-11，全量 3308/0/0/6 绿）**：`SqlLogPanel.HelpAction` 三处降级出口（JCEF 不支持 / 帮助 HTML 为空 / openEditor 抛异常）收敛为私有 `browseOnlineDoc()`，单测模式短路只记日志；真机行为零改动；CHANGELOG Unreleased 已记。K2J（feature/kotlin-to-java）镜像类 `SqlLogPanel.java` 同款三处出口，待下轮同步带上。
+**坑本质**：`BrowserUtil.browse` 在测试/沙盒进程里是 OS 级操作，任何「降级打开在线文档」路径都必须在入口加 `ApplicationManager.getApplication().isUnitTestMode` 守卫。**已实施（master f955d85，2026-09-11，全量 3308/0/0/6 绿）**：`SqlLogPanel.HelpAction` 三处降级出口（JCEF 不支持 / 帮助 HTML 为空 / openEditor 抛异常）收敛为私有 `browseOnlineDoc()`，单测模式短路只记日志；真机行为零改动；CHANGELOG Unreleased 已记。K2J（feature/kotlin-to-java）镜像类 `SqlLogPanel.java` 同款三处出口，待下轮同步带上。
 
 ## 归因方法论（浏览器自动打开类问题通用）
 

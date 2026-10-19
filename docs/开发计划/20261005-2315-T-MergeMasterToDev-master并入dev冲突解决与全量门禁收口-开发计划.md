@@ -6,11 +6,11 @@
 
 ## 一、背景与分叉实测（2026-10-05 23:04~23:12 只读侦查）
 
-1. **远端同步**：`git fetch origin` 后 origin/master=`2be5a50`＝本地 master、origin/dev=`a69c79e`＝本地 dev，两侧与远端零漂移，无 fetch 债。
-2. **分叉计数**：`dev..master`＝**33 笔**（master 领先），`master..dev`＝**220 笔**（dev 领先，多为 docs 轮次报告与 O-93~O-96、T13/T14/T15 支链），merge-base=`073964e`。
+1. **远端同步**：`git fetch origin` 后 origin/master=`23be09e`＝本地 master、origin/dev=`6370415`＝本地 dev，两侧与远端零漂移，无 fetch 债。
+2. **分叉计数**：`dev..master`＝**33 笔**（master 领先），`master..dev`＝**220 笔**（dev 领先，多为 docs 轮次报告与 O-93~O-96、T13/T14/T15 支链），merge-base=`cfaad72`。
 3. **master 33 笔构成**（对 dev 是净新增）：
-   - src 修复批：T-HqlUpdateEntityMap（`8e9ca7e`）+ T-JpaDeleteWhereGuard（`fa416e0`/`b557f51`/`7320723`/`0261b44`/`72c1ce1`/`a4af61d`）+ T-FramePrefixResize（`a34c84e`）+ 增强捕获 R1~R3（`5c1a28a`/`d3d3c8f`/`769a1b0`）+ T-McpDynamicToolset 真机 ASM 不可达修复（`c7a75a3`，含 build.gradle.kts 删 asm 依赖）+ T-McpWalkFindings 三项收口（`d03d616`）；
-   - 发行批：v2026.10.6 八处同步 + 增强捕获确认流测试隔离修复（`ea0ed3f`）+ 实录 docs（`2be5a50`）；
+   - src 修复批：T-HqlUpdateEntityMap（`7f26113`）+ T-JpaDeleteWhereGuard（`359df45`/`57de51a`/`aa1ed44`/`6062c26`/`968120c`/`cbb21ec`）+ T-FramePrefixResize（`dd140b5`）+ 增强捕获 R1~R3（`3b1f035`/`1240383`/`854d645`）+ T-McpDynamicToolset 真机 ASM 不可达修复（`818af1b`，含 build.gradle.kts 删 asm 依赖）+ T-McpWalkFindings 三项收口（`70ac7b9`）；
+   - 发行批：v2026.10.6 八处同步 + 增强捕获确认流测试隔离修复（`e009e96`）+ 实录 docs（`23be09e`）；
    - docs 批：竞品二十二三轮、性能二十一轮、审计十四十五轮、T15/T-StatementWeave/R3 等计划、记忆精简二十六二十七次。
 4. **冲突预演**（`git merge-tree --write-tree`，与真实 merge 同算法）：冲突**仅 5 文件**——`CHANGELOG.md`、`docs/变更记录.md`、`docs/开发计划/20261005-0238-T-TestPerf15-…-开发计划.md`（add/add）、`MpSqlVisualizerBundle.properties`、`MpSqlVisualizerBundle_zh.properties`。
 5. **自动合并交集 11 文件**（两侧都改、文本合并成功但存在语义互踩风险，须门禁兜底）：`PluginSettingsPanel.kt`、`UnboundedWriteDetector.kt`、`McpToolsetDynamicRegistrar.kt`、`SqlPreviewService.kt`、`plugin.xml`、两 bundle、`FrameSkipPrefixesFieldVisibilityTest.kt`、`EasyQueryConverterTest.kt`、`MdsConverterTest.kt`、`QuerydslConverterTest.kt`。
@@ -22,7 +22,7 @@
 |---|---|---|
 | `CHANGELOG.md` | 两处 hunk 均「两侧各自新增 Fixed 条目」（hunk1：dev 的 R3 日期字面量 vs master 的 ASM 修复；hunk2：dev 的性能五件+R24 vs master 的走查收口+去重窗顺序+首轮零捕获+测试隔离） | **union 全保留**：dev 条目在前、master 条目紧随，2026.10.6 发行段已自动并入不动 |
 | `docs/变更记录.md` | 两侧各自追加日期段 | **union 按日期序合并**，两侧段落全文保留 |
-| T15 计划 add/add | master 84 行立项版（`6eb8d0f`）vs dev 133 行实施完成版（t15 链并入） | **取 dev 版**（含实施记录的终态）；合并时 diff 全文核对 master 版无独有实质内容，若有独有段落择要并入 |
+| T15 计划 add/add | master 84 行立项版（`040d127`）vs dev 133 行实施完成版（t15 链并入） | **取 dev 版**（含实施记录的终态）；合并时 diff 全文核对 master 版无独有实质内容，若有独有段落择要并入 |
 | `MpSqlVisualizerBundle.properties` | dev 新增 `settings.sourceFrameSkipPrefixes.hint` 键+注释，master 改 `settings.log.autoInjectInterceptor` 值（加 enhanced capture recommended） | **键 union + 同键值取 master 新值**（两侧改动不同行，合并后两改动都在） |
 | `MpSqlVisualizerBundle_zh.properties` | 同上中文侧 | 同上 |
 
@@ -32,7 +32,7 @@
 
 - **S1 计划落库**：本文件提交到 dev（先于一切代码调整，用户令）。
 - **S2 执行合并**：dev 工作树 `git merge master`；出现预演外冲突时以实际为准并回填本文件；五个冲突文件按 §二裁决；合并提交信息走 `-F` 文件（反引号陷阱）。
-- **S3 合并语义核查**：11 个交集文件对 dev 侧净变化过目（`git diff a69c79e --merge或合并后 diff`）；重点 `SqlPreviewService.kt`（master 的 HQL 实体名共享提取器接入 vs dev 的 O-95 慢操作下沉/O-96 绑定关联/T15 formatSql 泄漏修）与 `UnboundedWriteDetector.kt`（master 的 JPA 字面量掩码 vs dev 的 O-93 effective 劫持修复）；仓内无残留冲突标记 grep。
+- **S3 合并语义核查**：11 个交集文件对 dev 侧净变化过目（`git diff 6370415 --merge或合并后 diff`）；重点 `SqlPreviewService.kt`（master 的 HQL 实体名共享提取器接入 vs dev 的 O-95 慢操作下沉/O-96 绑定关联/T15 formatSql 泄漏修）与 `UnboundedWriteDetector.kt`（master 的 JPA 字面量掩码 vs dev 的 O-93 effective 劫持修复）；仓内无残留冲突标记 grep。
 - **S4 定向冒烟**：`parallel_tasks check`/register → `testFast`（快桶全量冒烟）+ 冲突面定向（Preview 端到端、JPA pipeline、AgentConsent 族、mcp 守卫族，按 --tests 点跑）。
 - **S5 全量门禁**：`timeout 10 docker info` 验 daemon → `testShards` 单路收口（默认 5 片）→ `:sql-visualizer-agent:test` → 读数入册。
 - **S6 构建校验**：`verifyGate` 三目标（243/253/262）Compatible 判定——本合并属大改动（plugin.xml/build.gradle.kts 在变更面），必跑。
@@ -66,8 +66,8 @@
 
 **结论：合并完成，四道门禁全绿，零修复循环。**
 
-1. **计划落库**：本文件提交 `43a3769`（先于一切代码调整）。
-2. **合并执行**：`git merge master` → 合并提交 **`6002808`**。实际冲突面与 merge-tree 预演完全一致（5 文件，待验证前提 1 证实），无预演外冲突：
+1. **计划落库**：本文件提交 `015904b`（先于一切代码调整）。
+2. **合并执行**：`git merge master` → 合并提交 **`fb60c3d`**。实际冲突面与 merge-tree 预演完全一致（5 文件，待验证前提 1 证实），无预演外冲突：
    - `CHANGELOG.md`：两 hunk union，dev 三条（R3 日期字面量/性能五件 F47~F51/R24）+ master 五条（ASM 修复/走查收口/去重窗顺序陷阱/首轮零捕获/确认流测试隔离）全保留，八锚点 grep 在场；
    - `docs/变更记录.md`：master 10-05 四行按「最新在上」插入 dev 10-02 行之上，插入行与 master 原文 `diff` **逐字一致**（机械校验 TRANScription-EXACT-MATCH），dev 侧四行原位在场；
    - T15 计划 add/add：取 dev 实施完成版（待验证前提 2 证实——master 版唯一独有行为「（实施开始后回填）」占位，已被 dev 版实施记录取代）；
@@ -79,4 +79,4 @@
    - `:sql-visualizer-agent:test`：**94/0/0 全绿**（与基线持平；首轮被 UP-TO-DATE 静默跳过〔T8 在册陷阱再现，且本树无历史结果目录〕，按定例 `:sql-visualizer-agent:clean` 后复跑取权威读数）；
    - `verifyGate` 三目标构建校验：**IU-243.28141.41 / IU-253.33514.17 / IU-262.10968.63 全 Compatible**（2m13s；弃用计数 25/31/87 较在售版 14/17/72 上行=dev 侧未发行增量面，观察项非问题块；产物为本轮合并后新构建）。
 5. **待验证前提核销**：前提 1/2/4/5 全部证实（冲突面一致/T15 取舍成立/门禁全绿且总数上行/verifyGate Compatible）；前提 3（交集文件语义兼容）由 testFast+testShards+agent 三层全绿证实；前提 6 成立（登记后单会话收口，全量单路无并行抢占）。
-6. **收尾**：dev push（本批 `43a3769`+`6002808`+本回填笔）；并行任务注销。dev→master 回流未做（用户在案禁令，且用户未令）。
+6. **收尾**：dev push（本批 `015904b`+`fb60c3d`+本回填笔）；并行任务注销。dev→master 回流未做（用户在案禁令，且用户未令）。

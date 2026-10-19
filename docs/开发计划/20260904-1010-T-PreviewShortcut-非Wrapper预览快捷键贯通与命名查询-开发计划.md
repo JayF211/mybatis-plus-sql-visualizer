@@ -1,7 +1,7 @@
 # T-PreviewShortcut：非 Wrapper 预览快捷键贯通与命名查询 开发计划
 
 > **创建日期**：2026-09-04
-> **分支**：`feature/jdbc-template-sql-preview` 已合入 master（151d56e）；本计划在 master 上直接实施
+> **分支**：`feature/jdbc-template-sql-preview` 已合入 master（03629d8）；本计划在 master 上直接实施
 > **优先级**：P2（快捷入口缺失：HQL/JPQL、自定义 DAO HQL、JDBC 模板已有 gutter 图标，仅快捷键链路未贯通；`@NamedQuery` 实体级连入口都没有）
 > **预估工时**：5~8h
 > **来源**：用户反馈"HQL 很多地方只有 SQL 预览图标，无法通过快捷键快速预览 SQL"+ 逐类核对 JPA/JDBC 模板后确认同源缺口 + `@NamedQuery` 实体级无任何预览入口
@@ -133,7 +133,7 @@ private fun tryJdbcTemplateFallback(project: Project, element: PsiElement, sourc
 
 | # | 任务 | 说明 |
 |---|------|------|
-| 1 | （已完成）合并 jdbc-template 分支 | `151d56e`，零冲突；本计划在其之上实施 |
+| 1 | （已完成）合并 jdbc-template 分支 | `03629d8`，零冲突；本计划在其之上实施 |
 | 2 | 改 `NamedQueryLocator.kt` | `NamedQueryInfo.annotation` + 回填 + `findByQueryName(project, name)`（JavaPsiFacade + projectScope） |
 | 3 | 改 `SqlPreviewService.kt` | 增 `previewNamedQuery(anchor)`；`previewHql` 加 `createNamedQuery` 按名解析分支 |
 | 4 | 改 `ConvertToSqlAction.kt` | 新增 `tryHqlFallback` / `tryNamedQueryFallback` / `tryJdbcTemplateFallback` 并链入；补 import |

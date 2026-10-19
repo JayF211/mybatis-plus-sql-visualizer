@@ -1,6 +1,6 @@
 # Gitee 自动发行工作流说明文档
 
-> 沉淀自 v2026.9.14-beta.1 内测版全自动发行实录（2026-09-12，提交 c507833，Gitee 发行版 id 1139592）。
+> 沉淀自 v2026.9.14-beta.1 内测版全自动发行实录（2026-09-12，提交 34bd652，Gitee 发行版 id 1139592）。
 > 覆盖从跑门禁到 Gitee 发行版上线的完整链路，可照单执行；正式通道上架流程见
 > [Marketplace发布流程-说明文档.md](./Marketplace发布流程-说明文档.md)，版本号规则见
 > [版本号规范-说明文档.md](./版本号规范-说明文档.md)。
@@ -31,7 +31,7 @@ parallel_tasks check/register
 ### 范围核算
 
 - 区间 = 上一个发行标签到 HEAD：`git log --format="%h %ad %s" --date=format:"%m-%d %H:%M" <上版tag>..HEAD`。
-- **打标签之后才落盘的提交不在上版发行包里**——本次实证：T-ReverseParenWira（dab3d3b）晚于
+- **打标签之后才落盘的提交不在上版发行包里**——本次实证：T-ReverseParenWira（a24a30e）晚于
   `2026.9.11` 标签，其条目原挂在 CHANGELOG `[2026.9.11]`，须移入本版块并加注说明。
 - 纯 docs 提交（记忆精简、计划定稿）不计入发行内容。
 
@@ -101,13 +101,13 @@ description / 市场页定位是纯能力陈列，不承担「最近更新」播
 节的镜像——那边管「tag 之前的提交是否都算本版」，本节管「已发布段的文字是否都算本版」。
 
 - **合并 dev 的 `[Unreleased]` 块进已发布段时，逐条核对产物**。dev/master 双向合并会把 dev 上
-  累积的未发行块折进已发布段：2026-09-18 事故即此形态——`f44cf0a` 把 dev 的 `[Unreleased]` 折入
+  累积的未发行块折进已发布段：2026-09-18 事故即此形态——`319fae9` 把 dev 的 `[Unreleased]` 折入
   `[2026.9.18]`，12 行 MCP 条目写进了一个产物里根本没有 MCP 的版本块（而该版本其实从未发布过，
   三处都没有）。核对手段按条目的路径特征选，如 MCP 能力线：
   `git ls-tree -r --name-only <tag> | grep -c "^src/main/kotlin/.*/mcp/"`（`mcp-optional.xml` 同理）；
   条目没有路径特征时，用能力入口类名或 EP 名在 tag 树里 grep 一次，取不到就不许留在已发布段。
 - **发行前确认 tag 真的建了**。发行提交（版本号 + CHANGELOG + 八处同步）只是「准备发行」，
-  没有 `git tag` 就没有产物，Gitee 发行版与 Marketplace 也无从建起。历轮把发行提交 `ed43cc0`
+  没有 `git tag` 就没有产物，Gitee 发行版与 Marketplace 也无从建起。历轮把发行提交 `1420673`
   读成「Gitee 已发 v2026.9.18」，断供两周无人发现。`git tag -l {版本号}` 与
   `git ls-remote --tags origin` 两处都查得到，才算这个版本存在（总流程第 ⑤ 步不可跳）。
 - **已发布段的失实无法靠改文档消掉**：版本真发出去之后，段内文字会随 changeNotes 与 Gitee

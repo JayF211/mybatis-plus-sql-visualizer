@@ -1,8 +1,8 @@
-# T-SyncK2JMaster23 开发计划——master 2543203..a0702f6 二十三提交增量同步
+# T-SyncK2JMaster23 开发计划——master 06d742a..aa49c76 二十三提交增量同步
 
 > 立项日期：2026-09-12　分支：feature/kotlin-to-java（worktree `mybatis-plus-sql-visualizer-kotlin-to-java`）
-> 同步源：**本地 master a0702f6**（增量范围 `git diff 2543203..a0702f6`，23 提交，58 文件 +3538/−685）
-> 上轮收官：T-SyncK2JMaster32（3228ca1，全量 3261/0/0/6 绿 + verifyPlugin 三目标 Compatible，锚点 2543203）
+> 同步源：**本地 master aa49c76**（增量范围 `git diff 06d742a..aa49c76`，23 提交，58 文件 +3538/−685）
+> 上轮收官：T-SyncK2JMaster32（0eca647，全量 3261/0/0/6 绿 + verifyPlugin 三目标 Compatible，锚点 06d742a）
 
 ## 1. 背景与目标
 
@@ -12,17 +12,17 @@ master 于 2026-09-11 完成 v2026.9.11 发行日全部工作：T-DynUpdate 自�
 
 | 功能线 | 提交 | 内容概要 |
 |---|---|---|
-| T-DynUpdate 主体 | 3a89976 / 23cf667 / f60e419 / 9bbe395 | 自更新免重启动态安装：DynamicInstallSupport 五入口反射编排（unloadPlugin 弹性首参匹配 + installRestartScript 兜底）、InstallResult 密封层级拆分 InstalledDynamic / InstalledRestartRequired、UpdateSection 状态机加 InstalledLive |
-| 热替换验证套件 | ca0db67 / 86b4004 / c4043d5 / 1046b1a / e3d3dab | runIdeHotSwap 专用沙盒任务 + dev-support/hotswap-local-server.py 本地清单服务 + .run 配置 + runIde 同款自动起停 + manifest URL 执行期读（配置缓存陷阱） |
-| 262 首参漂移修复 | 6bb98dd | unloadPlugin 首参 IdeaPluginDescriptorImpl→PluginMainDescriptor 漂移，弹性首参匹配 |
-| 跨版本签名护栏 | 4df60a2 | PlatformSignatureChecker.java（纯 Java 检查器）+ PlatformSignatureCrossVersionTest.kt（本机全部已解压发行版 × 自带 JBR 跑检查器，Assume 跳过机制） |
-| 更新通知治理 | cf3138b | Gitee 入口去重 + 立即安装先过期源通知（缓解「未完全卸载」警告） |
-| T-HistParam 两轮 | cef6081 / f5983b8 | 历史文件 v2 `-- pd: ` 参数行 + toPreviewResult 统一识别通道 + LiteralParamRecovery 字面量参数恢复（口径：字符串全量/数值限谓词语境，LIMIT 投影不识别；反斜杠歧义片段跳过）+ 设置项 literalParamRecovery（复选框台账 23→24） |
-| T-ReverseParenWira | dab3d3b | ① SqlReverseParser.parseGroup 单条件非取反括号组解包（NOT (a=1) 保留组承载 negated）；② attachConsole 包 WriteIntentReadAction + getDocument 单独 ReadAction（262 读权限硬抛） |
-| HelpAction 短路 | 56df6d6 | SqlLogPanel 三处降级出口收敛 browseOnlineDoc()，isUnitTestMode 短路只记日志（定时回归弹真机浏览器根治） |
-| v2026.9.11 发行 | 4a62cbb | gradle.properties 版本号 + CHANGELOG + 变更记录 + 发行说明 + preview.update.json + changeNotes 9.11 段 |
-| 帮助页单源 | dc2d04c | 删除 docs/发行说明/marketplace-custom-page.html 副本，src/main/resources/html 为唯一 classpath 读取源 |
-| 杂项/文档 | 412c544 / 2a5a88a / 5059dfb / 7327042 / 821c859 / a0702f6 | .gitignore *.hprof；README「参考与致谢」；hprof 归因收口；热替换两步流程文档；交付索引；M56 计划+竞品调研 |
+| T-DynUpdate 主体 | 7b4b906 / 34055dd / 771b5f2 / e8c5f1b | 自更新免重启动态安装：DynamicInstallSupport 五入口反射编排（unloadPlugin 弹性首参匹配 + installRestartScript 兜底）、InstallResult 密封层级拆分 InstalledDynamic / InstalledRestartRequired、UpdateSection 状态机加 InstalledLive |
+| 热替换验证套件 | 50748d1 / 11407b7 / 7e1d3e0 / 1a1faac / 5083859 | runIdeHotSwap 专用沙盒任务 + dev-support/hotswap-local-server.py 本地清单服务 + .run 配置 + runIde 同款自动起停 + manifest URL 执行期读（配置缓存陷阱） |
+| 262 首参漂移修复 | 9c2788f | unloadPlugin 首参 IdeaPluginDescriptorImpl→PluginMainDescriptor 漂移，弹性首参匹配 |
+| 跨版本签名护栏 | 9f8821d | PlatformSignatureChecker.java（纯 Java 检查器）+ PlatformSignatureCrossVersionTest.kt（本机全部已解压发行版 × 自带 JBR 跑检查器，Assume 跳过机制） |
+| 更新通知治理 | 171b7a3 | Gitee 入口去重 + 立即安装先过期源通知（缓解「未完全卸载」警告） |
+| T-HistParam 两轮 | bceeee9 / 3d72025 | 历史文件 v2 `-- pd: ` 参数行 + toPreviewResult 统一识别通道 + LiteralParamRecovery 字面量参数恢复（口径：字符串全量/数值限谓词语境，LIMIT 投影不识别；反斜杠歧义片段跳过）+ 设置项 literalParamRecovery（复选框台账 23→24） |
+| T-ReverseParenWira | a24a30e | ① SqlReverseParser.parseGroup 单条件非取反括号组解包（NOT (a=1) 保留组承载 negated）；② attachConsole 包 WriteIntentReadAction + getDocument 单独 ReadAction（262 读权限硬抛） |
+| HelpAction 短路 | f955d85 | SqlLogPanel 三处降级出口收敛 browseOnlineDoc()，isUnitTestMode 短路只记日志（定时回归弹真机浏览器根治） |
+| v2026.9.11 发行 | 0cb95eb | gradle.properties 版本号 + CHANGELOG + 变更记录 + 发行说明 + preview.update.json + changeNotes 9.11 段 |
+| 帮助页单源 | e1a9807 | 删除 docs/发行说明/marketplace-custom-page.html 副本，src/main/resources/html 为唯一 classpath 读取源 |
+| 杂项/文档 | 200b187 / e80d3ea / 7531cfb / e0b1522 / 4c59d91 / aa49c76 | .gitignore *.hprof；README「参考与致谢」；hprof 归因收口；热替换两步流程文档；交付索引；M56 计划+竞品调研 |
 
 ## 3. 文件级移植矩阵
 
@@ -91,7 +91,7 @@ master 于 2026-09-11 完成 v2026.9.11 发行日全部工作：T-DynUpdate 自�
 1. **W1 生产翻译**：update 包（PlatformPluginInstaller → DynamicInstallSupport → PluginUpdateRunner → StartupUpdateCheck → UpdateSection，InstallResult 层级自底向上）→ log 包（SqlLogParamCodec/LiteralParamRecovery 新建先行，再增量五件）→ config 两件 + reverse + execute。
 2. **W2 测试移植**：按 §3.2 矩阵。
 3. **W3 资源/构建/文档**：§3.3。
-4. **W4 验证链**：parallel_tasks 登记（沙盒 portsync23）→ compileJava compileKotlin → compileTestKotlin --rerun-tasks → 全量 test → buildPlugin → verifyPlugin 全量三版本（发行级门禁）。全绿后收官提交：.port-sync 锚点 → a0702f6 + 计划文档实施记录回填 + MEMORY/变更记录交付行。
+4. **W4 验证链**：parallel_tasks 登记（沙盒 portsync23）→ compileJava compileKotlin → compileTestKotlin --rerun-tasks → 全量 test → buildPlugin → verifyPlugin 全量三版本（发行级门禁）。全绿后收官提交：.port-sync 锚点 → aa49c76 + 计划文档实施记录回填 + MEMORY/变更记录交付行。
 
 预期基线：3261 → 约 3300+（新增套件 LiteralParamRecovery/SqlLogParamCodec/DynamicInstallSupport/HistorySqlLogPanelPreview/PlatformSignatureCrossVersion + 解析器与生成器增量用例；签名护栏无发行版时 Assume 跳过不计失败）。
 
@@ -119,4 +119,4 @@ master 于 2026-09-11 完成 v2026.9.11 发行日全部工作：T-DynUpdate 自�
 
 插曲：verifyPlugin 第二轮报 `FileAlreadyExistsException`（上一轮被中途停止的运行在报告目录留下半成品 report.html，报告器不容忍已存在文件）——清 `build/reports/pluginVerifier` 后复跑即绿，非插件问题。
 
-提交链：本笔计划 → 生产 → 测试 → 资源文档 → 收官（.port-sync 锚点 → a0702f6）。未 push，push 留用户 GUI。
+提交链：本笔计划 → 生产 → 测试 → 资源文档 → 收官（.port-sync 锚点 → aa49c76）。未 push，push 留用户 GUI。

@@ -144,12 +144,12 @@
 
 | SHA | 内容 |
 | --- | --- |
-| 0bc99b9 | F1 SqlSuppressRule bean + SqlSuppressRuleManager + SqlSuppressRuleManagerTest（13 例） |
-| 2d2f5a6 | F2 SqlLogEntryBuffer 屏蔽闸门 + BufferTest 追加 5 例 |
-| 73f0a4c | F5 SqlSuppressManagerDialog（左列表 + 右只读高亮 editor） |
-| 32cc210 | F3+F4+F6 面板存量过滤 / 右键 SuppressSqlAction / 工具栏 ManageSuppressAction + SqlLogManager 订阅桥 |
-| ae600ba | F7 i18n en/zh 21 键 × 2 + plugin.xml logsuppress 通知组 |
-| 52ecabb | SqlLogPanelFilterTest 追加 4 例（含全链路面板用例）+ LogSqlModelsTest 追加 2 例 |
+| f7ece3b | F1 SqlSuppressRule bean + SqlSuppressRuleManager + SqlSuppressRuleManagerTest（13 例） |
+| 3a9b42b | F2 SqlLogEntryBuffer 屏蔽闸门 + BufferTest 追加 5 例 |
+| 43db365 | F5 SqlSuppressManagerDialog（左列表 + 右只读高亮 editor） |
+| 0839b40 | F3+F4+F6 面板存量过滤 / 右键 SuppressSqlAction / 工具栏 ManageSuppressAction + SqlLogManager 订阅桥 |
+| c636856 | F7 i18n en/zh 21 键 × 2 + plugin.xml logsuppress 通知组 |
+| b050e80 | SqlLogPanelFilterTest 追加 4 例（含全链路面板用例）+ LogSqlModelsTest 追加 2 例 |
 
 ### 1. §四 五条待验证前提逐条证伪结论
 
@@ -197,10 +197,10 @@
 
 ## 实施记录·走查返修补记（20260924，主控收口）
 
-### 一段：UI 对齐（`37df4b5`）
+### 一段：UI 对齐（`5f821c4`）
 用户走查截图退回「弹框中间有一个白边」→ 根因 = 实施时误 import `com.intellij.ui.Splitter` 编译失败，误判「不在 classpath」退回原生 JSplitPane（分隔条新 UI 深色主题呈白竖条）。换仓内既有 `com.intellij.openapi.ui.Splitter`（LogToSqlPanel/SqlPreviewPanel/SqlToJavaPanel 同款）根除；规则行渲染器对齐 `LogEntryListCellRenderer` 两行形态（SQL 主体行 + 灰字元信息行 + matte 底分隔线）；去掉列表 preferredSize hack。教训已记 [[feedback-ui-match-existing]]：照抄既有实现的前置动作是先 grep 仓内同类构件。
 
-### 二段：尾分号剥离（`c831fc4`）
+### 二段：尾分号剥离（`c7a9e07`）
 用户实证手工新增规则「已拦截 0 次」→ 根因 = 规则粘贴态带收尾 `;` 而日志还原链不带（多行/单行空白差异本就折叠命中，分号才是杀手）。新增 `suppressFingerprint`（去重口径 + trimEnd(';') 收尾剥离；字面量内分号触不到；大小写仍敏感 D2），规则侧键集与条目侧闸门/面板过滤三处消费方同源切换；`LogSqlEntry.suppressKey` lazy 体属性。反向验证摘剥离恰 2 用例红。
 
 ### 三段：结构匹配（手动开启，用户定案 opt-in）

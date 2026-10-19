@@ -1,13 +1,13 @@
 ---
 name: t-logrownumber-plan
-description: SQL日志列表行号已交付（master 2467f94，3173 绿）——捕获序号语义、buffer 入队分配、processStarted 无条件清零、removeEntry 同一性删除修复
+description: SQL日志列表行号已交付（master c83fb56，3173 绿）——捕获序号语义、buffer 入队分配、processStarted 无条件清零、removeEntry 同一性删除修复
 metadata:
   node_type: memory
   type: project
   originSessionId: sess_144fcf04-5442-4147-8a7d-9707c2e9de7f
 ---
 
-**T-LogRowNumber（2026-09-09 立项并交付，master 2467f94，3173/0/0/6 绿）**：用户需求「sql日志的sql列表需要增加行号，每次启动项目时清0」。计划文件 `docs/开发计划/20260909-1339-T-LogRowNumber-SQL日志列表行号-开发计划.md`（含 §实施记录）。
+**T-LogRowNumber（2026-09-09 立项并交付，master c83fb56，3173/0/0/6 绿）**：用户需求「sql日志的sql列表需要增加行号，每次启动项目时清0」。计划文件 `docs/开发计划/20260909-1339-T-LogRowNumber-SQL日志列表行号-开发计划.md`（含 §实施记录）。
 
 **核心决策**：
 - 行号 = **会话内捕获序号**（非显示位置序号）——排序/过滤/头部淘汰下保持稳定可引用；`LogSqlEntry` 加 `sequenceNumber: Long = 0`（0=历史文件/round-trip 无行号）。
@@ -25,7 +25,7 @@ metadata:
 
 相关：[[t-previewlistreload-plan]]、[[t-autoshowmaster-delivery]]、[[project-test-conventions]]
 
-**2026-09-10 追加（4c1940f）**：`processStarted` 无条件清零是错的——EXECUTION_TOPIC 的 processStarted 对**任意**运行配置进程触发（HTTP 请求脚本/profiler/远程调试/重复 Run 的测试），用户反馈「项目启动中多次发请求都从头计数」。修复=主配置 gating：`env.getRunProfile()` 返回的 RunProfile 仅当 instanceof `ModuleBasedConfiguration`（Application/JUnit/SpringBoot 共同父类）才清行号。教训：**execution 域 processStarted ≠ 主应用启动**，挂「会话级清零」这类状态副作用时必须按 RunProfile 类型过滤非主进程。
-**2026-09-10 再追加（874f257）**：点击「移除重复的sql」漏裁跨窗口重复——manual 全量裁剪 `dedupeExisting` 曾复用运行时去重窗口 `dedupeWindowMs`（60s），把「短时间重复打印」的运行时语义误带进「手动一次性全量去重」，跨窗口累积的同文本 SQL 点击去重后仍在列表。修复=去时间窗口条件纯按 `dedupeKey` 判重；运行时 `isDuplicate` 窗口语义不变。教训：**运行时去重的窗口语义 ≠ 手动全量裁剪语义**，两个入口共享 `dedupeKey` 但不应共享时间窗口条件。
+**2026-09-10 追加（dab41e3）**：`processStarted` 无条件清零是错的——EXECUTION_TOPIC 的 processStarted 对**任意**运行配置进程触发（HTTP 请求脚本/profiler/远程调试/重复 Run 的测试），用户反馈「项目启动中多次发请求都从头计数」。修复=主配置 gating：`env.getRunProfile()` 返回的 RunProfile 仅当 instanceof `ModuleBasedConfiguration`（Application/JUnit/SpringBoot 共同父类）才清行号。教训：**execution 域 processStarted ≠ 主应用启动**，挂「会话级清零」这类状态副作用时必须按 RunProfile 类型过滤非主进程。
+**2026-09-10 再追加（6876689）**：点击「移除重复的sql」漏裁跨窗口重复——manual 全量裁剪 `dedupeExisting` 曾复用运行时去重窗口 `dedupeWindowMs`（60s），把「短时间重复打印」的运行时语义误带进「手动一次性全量去重」，跨窗口累积的同文本 SQL 点击去重后仍在列表。修复=去时间窗口条件纯按 `dedupeKey` 判重；运行时 `isDuplicate` 窗口语义不变。教训：**运行时去重的窗口语义 ≠ 手动全量裁剪语义**，两个入口共享 `dedupeKey` 但不应共享时间窗口条件。
 
 **历史 tab 与行号/去重物理隔离（2026-09-10 用户确认核实）**：历史面板 `HistorySqlLogPanel` 二级 SQL 列表用独立渲染器 `HistoryCellRenderer`（元信息行仅 [耗时][时间戳][来源]，无 #N 行号片段），数据源是 `SqlLogFileReader.readFromFile` 直读磁盘文件（`LogSqlEntry.sequenceNumber` 默认 0，`>0` 守卫下即使加行号也不显示），无去重勾选框、不经过 `dedupeExisting`。故「行号」与「移除重复」的两个 bug 均只存在于主 SQL 日志面板 `SqlLogPanel`，历史面板不受影响——两个列表三层隔离：渲染器不同、数据源不同（磁盘文件 vs 内存缓冲）、控制按钮不同。

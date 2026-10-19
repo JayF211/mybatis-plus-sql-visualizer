@@ -1,7 +1,7 @@
 # T-PreviewFlash：预览点击侧边栏闪烁一次 根因分析与开发计划
 
 > **创建日期**：2026-09-09
-> **分支**：master（当前 HEAD `4340ade`）
+> **分支**：master（当前 HEAD `22eeff7`）
 > **优先级**：P1（预览是插件最高频操作，每次点击伴随一次可感知闪烁 + 一批 SEVERE 错误日志）
 > **预估工时**：5~6h（守卫实现与单测 2h + 慢操作两热点与方言短路 1.5h + 全量回归 0.5h + runIde 复现复验 1h + 文档 0.5h）
 > **来源**：用户反馈原话——「目前点击 sql 预览的图标，插件侧边栏会闪烁一次，像是刷新，正常不应该出现这种情况」
@@ -117,7 +117,7 @@ com/intellij/util/SlowOperations(:114 一带)        # 本次新增：allowSlowO
 
 ### 5.2 全量回归
 
-基线 3153/0/6（master `4340ade`），新增用例净增；重点盯 SqlLogStreamingDiffTest、JdbcParser 回放、BridgeMarker 系列、T-JdbcMultiline pendingSource 状态机不回归。
+基线 3153/0/6（master `22eeff7`），新增用例净增；重点盯 SqlLogStreamingDiffTest、JdbcParser 回放、BridgeMarker 系列、T-JdbcMultiline pendingSource 状态机不回归。
 
 ### 5.3 runIde 真机验证
 

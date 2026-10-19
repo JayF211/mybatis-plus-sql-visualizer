@@ -18,8 +18,8 @@ metadata:
 Mybatis-Flex-Helper(Marketplace 1.8万下载/4.32分)迭代史与真实差评 + mybatis-flex.com 语义对照表 + flex-core 1.11.8 jar 反编译 + DBX MCP「渲染导出→执行」七家族真机验证通道。Flex = **Apache License 2.0**(GitHub/Gitee LICENSE 双源确认)。
 
 ### 实施里程碑(分支 feature/m37-competitive-fusion,领先 master 15 提交)
-- **M38.1** 锚点负例回归集 + 修复 2 个真实误报(826b9e5):`new Helper().lambdaQuery()` 撞名工厂调用被当服务链、普通类 `findByXxx` 被标 JPA 图标(JpaGutter 加 Repository 接口文本级守卫)
-- **M38.2** 81 场景端到端金样矩阵(真实 Java 源码→PSI→converter→SQL 快照,语义基线 MP 3.5.17)+ 修复 4 个 MP 语义偏差(49e06c1/6ccc6ea):
+- **M38.1** 锚点负例回归集 + 修复 2 个真实误报(71ea4a4):`new Helper().lambdaQuery()` 撞名工厂调用被当服务链、普通类 `findByXxx` 被标 JPA 图标(JpaGutter 加 Repository 接口文本级守卫)
+- **M38.2** 81 场景端到端金样矩阵(真实 Java 源码→PSI→converter→SQL 快照,语义基线 MP 3.5.17)+ 修复 4 个 MP 语义偏差(3c25cbb/904152c):
   1. **or(Consumer) 内外连接词颠倒**:`or(w->w.eq(2).eq(3))` 渲染 `AND (2 OR 3)` → 修正为 `OR (2 AND 3)`(parseGroup 组内连接词恒 AND,外层由 orPending 表达)
   2. **ne 渲染 `!=`** 与 MP SqlKeyword.NE=`<>` 不一致(QueryWrapperParser/WrapperConverter/MpjLambdaConverter 共 5 处对齐)
   3. **负数字面量** `-1`/`-5L` 落 ExpressionEvaluator else 误判为占位符 → 新增 PsiPrefixExpression 求值 + SQL 剥离 Java 数值后缀 fFlLdD
@@ -28,14 +28,14 @@ Mybatis-Flex-Helper(Marketplace 1.8万下载/4.32分)迭代史与真实差评 + 
 - **M38.4** 触发面资产化:`docs/架构设计/预览触发面清单-说明文档.md`(9 provider 入口矩阵 + 8 形态细分 + 负例边界 + 登记约定)
 - **M38.5** 描述页双场景话术(README + marketplace 页)
 
-### gutter 左右键交互 + NPE 修复(39d5fe9)
+### gutter 左右键交互 + NPE 修复(c9c61b2)
 - 重构 `SqlGutterNavigationHandler.navigate()`:按鼠标按钮区分左右键
   - **左键单击 → 直接预览 SQL**(一键路径最短)
   - **右键 → 弹出两选项菜单**(预览 SQL / 最近执行记录)
 - **NPE 根因**:M37.1 方案 `BaseListPopupStep.onChosen` 在 `finalChoice=false`(悬停预览)分支误执行动作并返回 `FINAL_CHOICE`,导致 `ListPopupImpl` 抛 `NullPointerException("FINAL_CHOICE must not be null")`。修复:仅在 `finalChoice=true` 时执行动作,`finalChoice=false` 返回 `null`。同步修复最近执行记录二级列表。
 - **为何不用自定义 GutterIconRenderer**:IntelliJ 2024.3 的 `LineMarkerInfo` 没有 `LineMarkerInfo(GutterIconRenderer)` 单参构造器(只有 7 参 handler 版),故用 handler + 鼠标按钮检测方案。
 
-### EXPLAIN 真机矩阵放开达梦/金仓(ba30330)
+### EXPLAIN 真机矩阵放开达梦/金仓(aa47fd2)
 支持矩阵(DBX 实证 2026-09-02):
 - MySQL 5.7/8.4 `EXPLAIN FORMAT=JSON`(双版本复证)
 - PostgreSQL 16 `EXPLAIN (FORMAT JSON, VERBOSE)`

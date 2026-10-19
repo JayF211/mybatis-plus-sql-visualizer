@@ -6,7 +6,7 @@
 > **占号**：O-133/R79/D135/V158（引用前实测：O 最高 O-132 / R 最高 R78 / D 最高 D134 /
 > V 最高 V157）。
 
-## 一、现状（代码实证，dev-bak `2593a54` 态）
+## 一、现状（代码实证，dev-bak `3dee2a6` 态）
 
 - **生产单点**：`AgentEventAdapter.kt:59` — `databaseName = JdbcUrlDialects.badgeName(event.url)`，
   产出「方言显示名 · 连接事实」形态（如 `MySQL · jpa_demo@localhost:3306`；只有其一输出其一；
@@ -79,7 +79,7 @@
 
 ## 七、实施记录
 
-（2026-10-09 实施回填，工作树 t-badgemode 基线 3535835）
+（2026-10-09 实施回填，工作树 t-badgemode 基线 c621f5a）
 
 ### 待验证前提证伪结论（P1~P4）
 
@@ -126,7 +126,7 @@
 
 ### 偏差登记
 
-- 任务指令所称「paginationCount 子复选框先例」属 T-CountSimToggle（仅立项 b4fe6f9，未实施，
+- 任务指令所称「paginationCount 子复选框先例」属 T-CountSimToggle（仅立项 cff0b8b，未实施，
   本基线不存在该形态）；实际照本树既有 `paginationSimCheck` / `logShowDurationCheck` 同款形态，
   同步点全数落位（声明/addRow/isModified/apply/reset 共五处，指令的「四处」未含字段声明）。
 - `ProjectPluginSettingsTest` 零改动：`ProjectPluginSettings.State` 只承载 SQL 生成语义覆盖项，

@@ -31,7 +31,7 @@ SqlLogManager 懒创建（12:41:59.8，晚于首启进程 ~17s）→ EXECUTION_T
 
 ### 4. 同意后 attach 零捕获（已立项）
 
-池化连接建于 attach 前、不可回溯包装——T-StatementWeave（624efe2）语句级织入正解，随本分支实施。
+池化连接建于 attach 前、不可回溯包装——T-StatementWeave（0e3d3ee）语句级织入正解，随本分支实施。
 
 ## 三、方案设计
 

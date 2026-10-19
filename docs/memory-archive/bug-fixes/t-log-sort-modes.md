@@ -1,13 +1,13 @@
 ---
 name: t-log-sort-modes
-description: T-LogSortModes 日志列表「排序方式」选择器（20260916 交付 aaecc79）——取代耗时双态按钮；默认时间升序=捕获顺序、选择器恒可见、空值双向沉底、时间口径跟显示时间源；UI 照抄「SQL类型：」单元
+description: T-LogSortModes 日志列表「排序方式」选择器（20260916 交付 80762b4）——取代耗时双态按钮；默认时间升序=捕获顺序、选择器恒可见、空值双向沉底、时间口径跟显示时间源；UI 照抄「SQL类型：」单元
 metadata:
   node_type: memory
   type: project
   originSessionId: sess_1818de3a-dbb9-4d6a-a3e7-39842ab1b0df
 ---
 
-2026-09-16 用户两轮要求：「耗时排序按钮 应该保留一个默认排序吧 或者改成[排序方式]支持行号 时间升序降序 耗时升序降序」→「默认是时间升序的」。已交付提交 `aaecc79`（log 包 + 全量 test 绿）。
+2026-09-16 用户两轮要求：「耗时排序按钮 应该保留一个默认排序吧 或者改成[排序方式]支持行号 时间升序降序 耗时升序降序」→「默认是时间升序的」。已交付提交 `80762b4`（log 包 + 全量 test 绿）。
 
 **形态**：工具栏「排序：」下拉（`JComboBox`），与「SQL类型：」单元**同构**——标签 + 控件打包进 `FlowLayout(FlowLayout.LEFT, 4, 0)` 面板再加进 `WrapLayout` 左侧区，窄侧边栏折行时标签与控件同进退。五项 = `时间升序(默认) / 时间降序 / 耗时升序 / 耗时降序 / 行号`；`SortMode` 由 `{NONE, DURATION_DESC}` 改为 `{TIME_ASC, TIME_DESC, DURATION_ASC, DURATION_DESC, SEQUENCE}`，原 `JToggleButton` 与 `hasAnyDurationInfo` 显隐逻辑整体移除。
 

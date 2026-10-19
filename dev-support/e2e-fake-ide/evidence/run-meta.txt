@@ -5,4 +5,4 @@ agent_jar_sha256=bff5d2470ba1c07396303bb45d6f7e0552ebef11e19842c66fba53d3a2001d5
 demo_dir=F:/code/Java/Gitee/SongRenShuo/mybatis-plus-sql-visualizer-demo/mybatis-plus-join-demo
 java=java version "1.8.0_181"
 demo_git_head=42d30597b53a961d157eab9501c9307419639136
-repo_git_head=22fe4045f8acb60313416d52f378cf08cfea4ae8
+repo_git_head=ee619b451e2f53b7ad5957e1a974fda0c8743f16

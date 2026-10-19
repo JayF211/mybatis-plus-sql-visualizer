@@ -29,7 +29,7 @@ metadata:
 
 **注册时机**（两处，缺一不可）：`createEditor` 首次写入 + `refreshCompletionContext` 新预览刷新（同一文档跨预览复用，旧上下文过期）。
 
-## M34 补全修复最终根因链（2026-08-26 三轮排查确认，提交 c5e8e5e/74b32ce/535e8ed）
+## M34 补全修复最终根因链（2026-08-26 三轮排查确认，提交 9fc6cbf/19c5f54/e6cae69）
 
 M34 后补全完全不触发，完整根因有 **3 层**，逐层修复：
 
@@ -76,11 +76,11 @@ M34 后补全完全不触发，完整根因有 **3 层**，逐层修复：
 
 **真实根因（2026-09-03 二次排查确认）**：`SqlFormatter.format()` 和 `formatClauseLine()` 的"其余关键字"分支（处理 CASE/WHEN/THEN/ELSE/END/NOT/IS/NULL/IN/LIKE 等非 JOIN/NEW_LINE/AND-OR 关键字）**缺失 `atLineStart = false`**。`atLineStart` 初始为 `true`，`flushSpace()` 检查 `!atLineStart` 决定是否加空格。首个关键字处理后 `atLineStart` 仍为 `true` → 下一个标识符前不加空格 → 输出 `CASEuse_status`（无空格）→ 编辑器将整个字符串作为单个词选中。
 
-**修复**（提交 8ad344c）：两处 `atLineStart = false`：
+**修复**（提交 261bbc7）：两处 `atLineStart = false`：
 - `format()` 方法"其余关键字"分支 L122
 - `formatClauseLine()` 方法"其余关键字"分支 L284
 
-**附带改动**：新建 `SqlSyntaxHighlighter` 包装自研 `SqlLexer` 替换平台原生高亮器（提交 a5b707a），词选择边界与高亮 token 完全一致 + 不依赖 Database 插件。31 个单测覆盖所有关键字上下文。
+**附带改动**：新建 `SqlSyntaxHighlighter` 包装自研 `SqlLexer` 替换平台原生高亮器（提交 c10e9c1），词选择边界与高亮 token 完全一致 + 不依赖 Database 插件。31 个单测覆盖所有关键字上下文。
 
 **影响范围**：所有"其余关键字"开头的 SQL 均受益：`CASE use_status WHEN ...`、`WHEN 1 THEN ...`、`ELSE 'x'`、`END AS name`、`NOT NULL`、`IS NULL`、`IN (...)`、`LIKE '%x%'` 等。
 
