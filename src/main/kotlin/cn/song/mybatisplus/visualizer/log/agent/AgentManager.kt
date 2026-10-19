@@ -580,6 +580,14 @@ class AgentManager(private val project: Project) : Disposable {
             return
         }
         val candidatePid = resolvePid(processHandler)
+        // 安全闸优先于恢复通道：IDE/构建辅助进程（含测试 JVM 自身）即使命中 attach 端口登记
+        // 也必须拒绝，端口登记不能成为绕过目标判定的入口。NON_JAVA/NEEDS_FILES 仍允许恢复。
+        if (candidatePid != null &&
+            attachTargetInspector(candidatePid, processHandler, false) == AgentAttachTarget.Decision.HELPER
+        ) {
+            LOG.info("attach 目标排除：pid=$candidatePid（IDE/构建辅助进程）——不进入恢复通道")
+            return
+        }
         // T-PremainReattach S2/P4：暂停通道与 attach 端口命中必须先于目标探测——通道/端口本身
         // 已证明该 pid 曾是本插件目标，不能因本轮 target inspector 判为 NON_JAVA/HELPER 或
         // 启动文件读失败而丢掉「重开增强即恢复」的入口。
@@ -849,6 +857,11 @@ class AgentManager(private val project: Project) : Disposable {
         val pid = resolvePid(processHandler)
         if (pid == null) {
             LOG.warn("onProcessAppeared: resolvePid 失败（handler=${processHandler?.javaClass?.name}）——跳过挂载")
+            return
+        }
+        // 安全闸优先于恢复入口：HELPER（IDE/构建辅助进程，含测试 JVM 自身）即使有端口登记也拒绝。
+        if (attachTargetInspector(pid, processHandler, false) == AgentAttachTarget.Decision.HELPER) {
+            LOG.info("attach 目标排除：pid=$pid（IDE/构建辅助进程）——不进入恢复入口")
             return
         }
         // T-PremainReattach S2/P4：暂停通道与 attach 端口命中必须先于目标探测——通道/端口本身

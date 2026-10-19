@@ -1819,7 +1819,13 @@ internal fun SqlPreviewPanel.detachConsole() {
     // T-PreviewLineCommentDash O-134：摘除先减计数（install 的对称端点之一）
     nativeConsoleEditor?.let(EditorCommentShortcuts::uninstall)
     nativeConsoleEditor = null
-    nativeEditorDoc = null // 分析监听随控制台摘除解绑，不继续读取共享控制台的旧文档。
+    // UI023：nativeEditorDoc 表示控制台文档归属，摘除组件时保留引用（dev 侧真机/回归依赖）。
+    // 洞察分析在此显式解绑，避免摘除后继续读取可能被其他面板接管的共享控制台文档；
+    // 下次 onNativeEditorReady 重新赋值时会经 setter 重新绑定。
+    if (!previewDisposed) {
+        insightController?.bind(null)
+        bindAuxiliaryInsightDocument(null)
+    }
     embeddedConsole = null
     rehostListener = null
 }
