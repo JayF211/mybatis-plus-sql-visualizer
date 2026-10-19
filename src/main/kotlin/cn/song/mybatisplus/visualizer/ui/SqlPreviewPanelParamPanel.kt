@@ -130,6 +130,7 @@ internal fun SqlPreviewPanel.rebuildLeftPanel(result: PreviewResult) {
     resetFieldFillSimulation()
     fieldFillPreview = result
     fieldFillFields.clear()
+    fieldFillNormalFields.clear()
     fieldFillSimulationComponents.clear()
     fieldFillCheckBox = null
     fieldFillStatus = null
@@ -211,6 +212,7 @@ internal fun SqlPreviewPanel.rebuildLeftPanel(result: PreviewResult) {
                 name = "fieldFillStatus"
                 toolTipText = text
                 text = fieldFillText(text, font)
+                foreground = UIUtil.getContextHelpForeground()
             }
             paramPanel.add(fieldFillRow(fieldFillStatus!!))
         }
@@ -585,6 +587,7 @@ internal fun SqlPreviewPanel.buildBatchColumnRow(col: BatchColumn, isToggle: Boo
     paramFields += field
     addCell(field, 1, 0)
     if (hasFill && isToggle) {
+        fieldFillNormalFields[col.source] = field
         val simulation = JBTextField(8).apply {
             name = "fieldFill:${col.source}"
             toolTipText = MpSqlVisualizerBundle.message("fieldFill.simulation.value.tooltip")
@@ -592,6 +595,7 @@ internal fun SqlPreviewPanel.buildBatchColumnRow(col: BatchColumn, isToggle: Boo
                 private fun changed() {
                     if (fieldFillSyncing) return
                     fieldFillValues[col.source] = text
+                    syncFieldFillNormalEnabled()
                     renderSql()
                     saveToHistory()
                 }
@@ -610,13 +614,28 @@ internal fun SqlPreviewPanel.buildBatchColumnRow(col: BatchColumn, isToggle: Boo
         addCell(simulationRow, 0, 1, 2)
         fieldFillSimulationComponents += simulationRow
     }
+    syncFieldFillNormalEnabled()
     row.border = JBUI.Borders.empty(0, 8, 2, 8)
     return row
+}
+
+/** 模拟值在场时置灰对应的普通参数输入框；清空模拟值后恢复。 */
+internal fun SqlPreviewPanel.syncFieldFillNormalEnabled() {
+    fieldFillNormalFields.forEach { (source, field) ->
+        val overridden = fieldFillEnabled && !fieldFillValues[source].isNullOrBlank()
+        field.isEnabled = !overridden
+        field.toolTipText = if (overridden) {
+            MpSqlVisualizerBundle.message("fieldFill.simulation.overrides")
+        } else {
+            "#$source"
+        }
+    }
 }
 
 /** 模拟值行显隐：仅「FieldFill 安全模拟」勾选时显示；开关切换后立即重排。 */
 internal fun SqlPreviewPanel.applyFieldFillSimulationVisibility() {
     fieldFillSimulationComponents.forEach { it.isVisible = fieldFillEnabled }
+    syncFieldFillNormalEnabled()
     paramPanel.revalidate()
     paramPanel.repaint()
 }
@@ -640,9 +659,16 @@ internal fun SqlPreviewPanel.fieldFillOverlay(): FieldFillSimulation.Overlay {
         fieldFillEnabled = false
         fieldFillCheckBox?.isSelected = false
         fieldFillValues.clear()
+        syncFieldFillNormalEnabled()
     }
     val model = current?.batchModel ?: return FieldFillSimulation.Overlay(emptyMap(), emptySet())
-    val overlay = FieldFillSimulation.overlay(model, enabledIds, paramValues, fieldFillValues, fieldFillEnabled)
+    // 模拟值在场时优先使用模拟值：对应普通参数从 explicitValues 中剔除（输入框已置灰）。
+    val explicitValues = if (fieldFillEnabled) {
+        paramValues.filterKeys { fieldFillValues[it].isNullOrBlank() }
+    } else {
+        paramValues
+    }
+    val overlay = FieldFillSimulation.overlay(model, enabledIds, explicitValues, fieldFillValues, fieldFillEnabled)
     fieldFillStatus?.apply {
         val message = if (overlay.invalidSources.isEmpty()) {
             MpSqlVisualizerBundle.message("fieldFill.simulation.status")
@@ -661,6 +687,7 @@ internal fun SqlPreviewPanel.fieldFillOverlay(): FieldFillSimulation.Overlay {
             paramScroll.revalidate()
             paramScroll.repaint()
         }
+        foreground = if (overlay.invalidSources.isEmpty()) UIUtil.getContextHelpForeground() else JBColor.RED
         toolTipText = message
     }
     return overlay
