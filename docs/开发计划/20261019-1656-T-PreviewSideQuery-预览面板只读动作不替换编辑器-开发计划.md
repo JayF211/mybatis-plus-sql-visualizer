@@ -149,7 +149,7 @@
 ### P2 执行计划
 
 - 新增 `ui/ExplainPlanDialog.kt`：非模态 `DialogWrapper` 承载 `ExplainPlanResultView` / 直送结果表格 / 错误说明。
-- 结构化通道从 `embedExplainView` 改为 `showExplainDialog`；`embedExplainView` 已删除。
+- 结构化通道从 `embedExplainView` 改为 `showExplainDialog`；`embedExplainView` 已删除。新增 `ExplainStructuredSideQueryPanelTest`：通过 `ExplainPanelChannel.structuredRunnerForTest` 注入计划结果，经真实 `submitExplainOrStructured` 分派，验证编辑器/控制台不变、结果进对话框。
 - 直送/回退通道改走 `PreviewSideQuery`（`scalar=false`，`requireSelectGuard=false`，Oracle/SQL Server 带 `channelNote`），结果显示在对话框；失败时保留显式「在控制台打开」入口。
 - 原控制台路径保留为 `submitExplainDirectConsole`，仅由「在控制台打开」/结构化视图的 `onBackToConsole` 显式调用；`ExplainPanelWiringGuardTest` 同步改为「对话框展示、不得再 embedExplainView」。
 
@@ -160,12 +160,13 @@
 
 ### 定向读数
 
-15 个受影响的测试类合计 **147/0/0/0**，其中：
+16 个受影响的测试类合计 **148/0/0/0**，其中：
 
 | 测试类 | tests |
 |---|---:|
 | `DmlImpactSideQueryPanelTest` | 2 |
 | `ExplainSideQueryPanelTest` | 1 |
+| `ExplainStructuredSideQueryPanelTest` | 1 |
 | `ExecutionDialectGateTest` | 17 |
 | `ExplainPanelWiringGuardTest` | 10 |
 | `ConsoleHostTest` | 8 |
@@ -183,7 +184,7 @@
 ### 反向验证
 
 - P1：临时把 `estimateDmlImpact` 改回 `embedConsole` → **2 红**（编辑器/控制台不变两条用例）。
-- P2：临时删掉直送结果对话框 → `ExplainSideQueryPanelTest` **1 红**。
+- P2：临时删掉直送结果对话框 → `ExplainSideQueryPanelTest` **1 红**；临时删掉结构化 `showExplainDialog` → `ExplainStructuredSideQueryPanelTest` **1 红**。
 - P3a：临时删掉执行视图头部 → `ConsoleHostTest` **2 红**（返回预览入口 + 宿主组件计数）。
 
 ### 边界与未做

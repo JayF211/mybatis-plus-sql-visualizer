@@ -137,6 +137,12 @@ internal fun SqlPreviewPanel.showRollbackSql() {
     /** T-PreviewSideQuery P2 测试缝：headless 无原生控制台绑定；生产为 null 走真链。 */
     internal var explainTargetForTest: (() -> Any?)? = null
 
+    /** T-PreviewSideQuery P2 测试缝：结构化通道的绑定数据源。 */
+    internal var explainBoundDsForTest: (() -> Any?)? = null
+
+    /** T-PreviewSideQuery P2 测试缝：headless 下 Database 插件可用性。 */
+    internal var explainDatabaseAvailableForTest: (() -> Boolean)? = null
+
     /**
      * R42：DML 影响面预演。
      *
@@ -1142,7 +1148,7 @@ internal fun SqlPreviewPanel.submitExplainOrStructured(
     allowDataSourcePrompt: Boolean = true,
 ) {
     val settings = PluginSettings.getInstance().state
-    val boundDs = runCatching {
+    val boundDs = explainBoundDsForTest?.invoke() ?: runCatching {
         cn.song.mybatisplus.visualizer.execute.DataSourceSelector.boundConsoleDataSource()
     }.getOrNull()
     // O-145 W7：结构化 EXPLAIN 不经过 SqlExecutor，必须在 JDBC 直连前用同一实际数据源闸门。
@@ -1154,7 +1160,8 @@ internal fun SqlPreviewPanel.submitExplainOrStructured(
             { message -> resultPanel.showError(message) },
         )) return
     val format = cn.song.mybatisplus.visualizer.sql.ExplainSupport.formatFor(dialect.name)
-    val databaseAvailable = cn.song.mybatisplus.visualizer.mcp.McpDbExecutor.isDatabaseAvailable()
+    val databaseAvailable = explainDatabaseAvailableForTest?.invoke()
+        ?: cn.song.mybatisplus.visualizer.mcp.McpDbExecutor.isDatabaseAvailable()
     // R33 真机走查修复：编辑器文本就是回填链的终点产物（参数击键防抖重渲染），此处残留
     // `?`（串感知位点，字符串/注释里的 `?` 不计）即真未填——不下发结构化探测（字面 `?`
     // 送 JDBC = 语法错），按响亮失败回退并明示「存在未回填参数」

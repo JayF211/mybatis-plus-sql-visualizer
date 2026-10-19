@@ -101,6 +101,17 @@ object ExplainPanelChannel {
         val dataSourceName: String?,
     )
 
+    /** 测试缝：headless 不连真库；生产为 null 走池线程真链。 */
+    @Volatile
+    internal var structuredRunnerForTest: ((
+        Project,
+        Any,
+        String,
+        Int,
+        (StructuredOutcome) -> Unit,
+        (String) -> Unit,
+    ) -> Unit)? = null
+
     /**
      * 结构化执行（JDBC 全程 pooled 线程，禁 EDT）。
      *
@@ -121,6 +132,11 @@ object ExplainPanelChannel {
         onPlan: (StructuredOutcome) -> Unit,
         onFailed: (String) -> Unit,
     ) {
+        val testRunner = structuredRunnerForTest
+        if (testRunner != null) {
+            testRunner(project, dataSource, explainSql, timeoutSeconds, onPlan, onFailed)
+            return
+        }
         ApplicationManager.getApplication().executeOnPooledThread {
             var elapsedMs = -1L
             var dataSourceName: String? = null
