@@ -90,7 +90,11 @@ class SettingsRealityGuardTest {
         // （logListSqlDisplayMode → sqlListDisplayMode()，消费点 SqlLogPanel.kt / HistorySqlLogPanel.kt）。
         // 显式登记而非泛化匹配——新增别名须留注释可审计。
         val alias = mapOf("logListSqlDisplayMode" to "sqlListDisplayMode")
-        val dead = fields.filter { f ->
+        // T-EnhancedCaptureDefaultOn（2026-10-19）：两个字段只用于旧配置兼容归一——loadState 内
+        // 写为固定值、运行期零读取，因此没有也不应有非 config 消费点。保留字段是为了旧 XML/JSON
+        // 与旧版本回退，不是假配置；下线条件 = 确认不再需要兼容旧配置。显式登记而非泛化匹配。
+        val compatOnly = setOf("enhancedCaptureConfirmed", "enhancedCaptureRejectedAtMs")
+        val dead = fields.filter { it !in compatOnly }.filter { f ->
             val probe = alias[f] ?: f
             // 词边界判定：`tablePrefix` 不再被 `removeTablePrefix` 这类更长标识符兜住（子串口径后门）
             val identifier = Regex("""(?<![\w$])${Regex.escape(probe)}(?![\w$])""")
