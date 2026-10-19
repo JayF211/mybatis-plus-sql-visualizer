@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.execute
 
+import cn.song.mybatisplus.visualizer.ui.clearImpactLoadingOnCancel
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -290,6 +291,25 @@ class ExecutionDialectGateTest {
         assertEquals(1, adhocBody.countOccurrences("SqlExecutor.executePrepared("))
         assertEquals(3, adhocBody.countOccurrences("dialectGateRequest = dialectGateRequest"))
         assertTrue(ExecutionDialectGate.uncoveredEntryPoints.isEmpty())
+    }
+
+    @Test
+    fun `影响面预演取消必须解除loading`() {
+        val preview = File(repoRoot(), "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelExecution.kt").readText()
+        val impactBody = sourceSlice(
+            preview,
+            "internal fun SqlPreviewPanel.estimateDmlImpact()",
+            "internal fun clearImpactLoadingOnCancel",
+        )
+        assertTrue(
+            "estimateDmlImpact 未接 onSubmission——取消数据源弹窗后没有错误文案，loading 会永久转圈",
+            impactBody.contains("onSubmission ="),
+        )
+        assertTrue(impactBody.contains("clearImpactLoadingOnCancel(outcome)"))
+        assertTrue(impactBody.contains("resultPanel.showEmpty()"))
+        assertTrue("取消终态必须归位", clearImpactLoadingOnCancel(ExecutionSubmission.CANCELLED))
+        assertFalse("阻断终态由 onError 负责，不能误清错误", clearImpactLoadingOnCancel(ExecutionSubmission.BLOCKED))
+        assertFalse("成功终态不能清空结果区", clearImpactLoadingOnCancel(ExecutionSubmission.SUBMITTED))
     }
 
     @Test

@@ -185,11 +185,20 @@ internal fun SqlPreviewPanel.showRollbackSql() {
                     onEditor = { consoleEditor -> onNativeEditorReady(consoleEditor) },
                     onError = { errorMsg -> resultPanel.showError(errorMsg) },
                     onErrorRich = { info -> showErrorRichWithLocate(info) },
+                    onSubmission = { outcome -> if (clearImpactLoadingOnCancel(outcome)) resultPanel.showEmpty() },
                     dialectGateRequest = dialectGateRequest,
                 )
             }
         }
     }
+
+    /**
+     * R42 终态归位：用户取消数据源弹窗/方言确认时没有错误文案，`onError` 不会触发；
+     * 必须显式解除 loading，否则面板永久停在「执行中...」。
+     */
+    internal fun clearImpactLoadingOnCancel(
+        outcome: cn.song.mybatisplus.visualizer.execute.ExecutionSubmission,
+    ): Boolean = outcome == cn.song.mybatisplus.visualizer.execute.ExecutionSubmission.CANCELLED
 
     /** R42：影响面预演的轻通知（非模态；单测模式不弹）。 */
     private fun SqlPreviewPanel.notifyDmlImpact(proj: Project, title: String, body: String) {
