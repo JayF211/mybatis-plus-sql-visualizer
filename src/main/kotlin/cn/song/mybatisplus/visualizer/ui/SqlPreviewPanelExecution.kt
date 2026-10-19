@@ -1331,6 +1331,13 @@ internal fun SqlPreviewPanel.submitExplainOrStructured(
     }
 }
 
+/** T-PreviewSideQuery P3a：从执行视图回到预览——移除头部并重渲染预览 SQL。 */
+internal fun SqlPreviewPanel.backToPreview() {
+    executeViewHeader?.let { consoleHost.remove(it) }
+    executeViewHeader = null
+    refreshView()
+}
+
 /** P3a：执行结果视图头部——明确当前不是预览编辑态，并提供显式「返回预览」。 */
 private fun SqlPreviewPanel.executeViewHeader(): JComponent =
     com.intellij.ui.components.JBPanel<com.intellij.ui.components.JBPanel<*>>(java.awt.BorderLayout()).apply {
@@ -1343,7 +1350,7 @@ private fun SqlPreviewPanel.executeViewHeader(): JComponent =
             java.awt.BorderLayout.WEST,
         )
         add(
-            smallButton(MpSqlVisualizerBundle.message("panel.backToPreview")) { refreshView() },
+            smallButton(MpSqlVisualizerBundle.message("panel.backToPreview")) { backToPreview() },
             java.awt.BorderLayout.EAST,
         )
     }
@@ -1776,6 +1783,14 @@ internal fun SqlPreviewPanel.embedConsole(consoleComponent: JComponent, embedMod
         }
     }, com.intellij.openapi.application.ModalityState.any())
     if (consoleComponent === embeddedConsole) {
+        if (embedMode == ConsoleEmbedMode.EXECUTE && executeViewHeader == null) {
+            val header = executeViewHeader()
+            executeViewHeader = header
+            consoleHost.add(header, java.awt.BorderLayout.NORTH)
+        } else if (embedMode != ConsoleEmbedMode.EXECUTE && executeViewHeader != null) {
+            consoleHost.remove(executeViewHeader)
+            executeViewHeader = null
+        }
         // M36.5.47：同实例防抖时**不清空结果、不重挂**（防闪烁），但必须清除"执行中"
         // loading 态——A 执行成功后 onResultsReady 回调同一实例（复用共享 console），
         // 原实现直接 return 导致 resultPanel 停留 loading，状态栏恒"执行中..."（用户
@@ -1812,7 +1827,11 @@ internal fun SqlPreviewPanel.embedConsole(consoleComponent: JComponent, embedMod
     consoleHost.add(consoleComponent, java.awt.BorderLayout.CENTER)
     if (embedMode == ConsoleEmbedMode.EXECUTE) {
         // P3a：执行结果视图明确标识 + 显式「返回预览」，避免用户只能靠「刷新」逃回编辑态。
-        consoleHost.add(executeViewHeader(), java.awt.BorderLayout.NORTH)
+        val header = executeViewHeader()
+        executeViewHeader = header
+        consoleHost.add(header, java.awt.BorderLayout.NORTH)
+    } else {
+        executeViewHeader = null
     }
     attachRehostListener(consoleComponent)
     if (consoleComponent is javax.swing.JSplitPane) {
@@ -1997,6 +2016,7 @@ internal fun SqlPreviewPanel.detachConsole() {
         consoleHost.remove(it)
     }
     // P3a：执行视图头部（返回预览）也属于控制台宿主层，摘除时一并清空。
+    executeViewHeader = null
     consoleHost.removeAll()
     // T-AutoFold F5：控制台组件摘除即清编辑器引用（防 EditorFactory 泄漏；新组件就绪时经
     // onNativeEditorReady 重新登记）

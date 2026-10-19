@@ -131,6 +131,22 @@ class ConsoleHostTest : BasePlatformTestCase() {
         assertNotNull("执行视图必须提供返回预览入口", button)
     }
 
+    /** P3a：返回预览必须移除执行视图头部（不能只重渲染 SQL 留着「执行结果」标识）。 */
+    @Test
+    fun testBackToPreviewRemovesExecuteHeader() {
+        val panel = newPanel()
+        panel.embedConsoleForTest(JPanel())
+        assertTrue(
+            "执行视图应显示返回预览",
+            buttons(panel.consoleHostForTest()).any { it.text == MpSqlVisualizerBundle.message("panel.backToPreview") },
+        )
+        panel.backToPreview()
+        assertTrue(
+            "返回预览后头部必须移除",
+            buttons(panel.consoleHostForTest()).none { it.text == MpSqlVisualizerBundle.message("panel.backToPreview") },
+        )
+    }
+
     private fun buttons(component: java.awt.Component): List<javax.swing.AbstractButton> =
         (if (component is javax.swing.AbstractButton) listOf(component) else emptyList()) +
             (if (component is java.awt.Container) component.components.flatMap { buttons(it) } else emptyList())

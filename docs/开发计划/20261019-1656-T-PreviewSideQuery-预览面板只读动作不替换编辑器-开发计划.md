@@ -156,12 +156,13 @@
 
 ### P3a 执行 SQL
 
-- `embedConsole(EXECUTE)` 在 `consoleHost` 顶部加执行视图头部：灰色说明 + 「返回预览」按钮（`refreshView()`）；`detachConsole` 一并清空头部。
+- `embedConsole(EXECUTE)` 在 `consoleHost` 顶部加执行视图头部：灰色说明 + 「返回预览」按钮；`detachConsole` 一并清空头部。
+- 真机发现旧实现点「返回预览」只重渲染 SQL、头部仍留着；已改为 `backToPreview()`：先移除头部再 `refreshView()`，并补 `ConsoleHostTest` 用例（9/0）。
 - 显式执行/回滚仍保留原生控制台结果网格；P3b 页签式结果区未实施（计划中列为下一期）。
 
 ### 定向读数
 
-16 个受影响的测试类合计 **153/0/0/0**，其中：
+16 个受影响的测试类合计 **154/0/0/0**，其中：
 
 | 测试类 | tests |
 |---|---:|
@@ -170,7 +171,7 @@
 | `ExplainStructuredSideQueryPanelTest` | 1 |
 | `ExecutionDialectGateTest` | 17 |
 | `ExplainPanelWiringGuardTest` | 11 |
-| `ConsoleHostTest` | 8 |
+| `ConsoleHostTest` | 9 |
 | `PrepareSingleFlightGateTest` | 26 |
 | `GuardSelfTestCoverageMetaGuardTest` | 8 |
 | `DialectStatusRefreshWiringGuardTest` | 4 |
@@ -188,9 +189,17 @@
 - P2：临时删掉直送结果对话框 → `ExplainSideQueryPanelTest` **1 红**；临时删掉结构化 `showExplainDialog` → `ExplainStructuredSideQueryPanelTest` **1 红**。
 - P3a：临时删掉执行视图头部 → `ConsoleHostTest` **2 红**（返回预览入口 + 宿主组件计数）。
 
+### 真机走查（243 沙盒，2026-10-19）
+
+- 沙盒 `build/MPSV-MasterMerge-UI243` 用 dev 包启动；在役 jar（17:49）已核含 `PreviewSideQuery`/`ExplainPlanDialog` 与 `panel.explain.openConsole`、`panel.backToPreview`、`dml.impact.*` 文案。
+- **执行计划**：在 SELECT 预览点「执行计划」，出现独立的「执行计划」窗口（490,207,1430,873），预览窗口仍在；对话框显示本地化「在控制台打开」按钮。实际计划被沙盒数据源凭据阻断（`Access denied for user 'root'@'localhost' (using password: NO)`；demo 配置为 root/root），属环境凭据未配置，不是插件路径失败。
+- **执行 SQL / 返回预览**：点「在控制台打开」后控制台嵌入，出现「当前显示执行结果；返回预览可继续编辑原 SQL」头部和「返回预览」按钮；沙盒连接仍被同一凭据问题阻断。旧包点返回只重渲染 SQL、头部仍在，本轮已改为 `backToPreview()` 移除头部（headless `ConsoleHostTest` 9/0 覆盖）。
+- **预估影响行数**：在 SELECT 预览点该动作，左侧内联行显示红色「仅 UPDATE/DELETE 语句有影响面预演」，编辑器未被 COUNT 顶掉（NotApplicable 路径真机通过）。
+- 成功 COUNT 的真机路径未完成：沙盒数据源无密码（Access denied），且 `mybatis-plus-demo`/临时夹具里的简单 UPDATE 调用在该沙盒未被预览定位器识别；成功路径由 `DmlImpactSideQueryPanelTest` 5/0 的测试缝覆盖，`McpDbExecutor` 真实连库仍待有凭据的真机补验。
+
 ### 边界与未做
 
 - 无绑定数据源路径已实现「选择器只绑定 + 绑定后重试」；用户取消/超时/绑定失败时只就地提示，不自动执行任何 SQL。
 - P3b（页签式结果区）未实施；执行 SQL 仍是「控制台结果视图 + 返回预览」。
-- 真机走查未做（需重启 dev 沙盒加载新包）；`McpDbExecutor` 真库端到端由现有集成测试/真机补验。
+- 真机走查为**部分通过**：EXPLAIN 对话框、执行视图头部/返回入口、预估 NotApplicable 已验证；成功 COUNT 受沙盒数据源凭据阻断，待有口令的环境补验。
 - 定向测试中的 `McpDbExecutor` 通过 `PreviewSideQuery.runnerForTest` 桩替换；真实执行链未在 headless 下连库。

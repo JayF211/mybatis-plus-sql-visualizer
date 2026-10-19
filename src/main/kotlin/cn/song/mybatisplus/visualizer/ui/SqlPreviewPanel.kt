@@ -407,6 +407,9 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
     /** M36：已内嵌的原生控制台 UI 组件（清空/释放时级联 dispose）。 */
     internal var embeddedConsole: JComponent? = null
 
+    /** T-PreviewSideQuery P3a：执行结果视图头部（含「返回预览」）；null=当前不是执行视图。 */
+    internal var executeViewHeader: JComponent? = null
+
     /**
      * R33：结构化 EXPLAIN 回调代际计数——每次发起新的 EXPLAIN 结构化提交/新预览/清空都递增，
      * 在途 pooled 回调（JDBC 可能慢于用户操作）按提交时捕获的代际判过期，过期即丢弃：
