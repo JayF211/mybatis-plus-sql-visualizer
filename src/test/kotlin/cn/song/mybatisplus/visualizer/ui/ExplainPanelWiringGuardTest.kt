@@ -205,6 +205,77 @@ class ExplainPanelWiringGuardTest {
         }
     }
 
+    /**
+     * T-PreviewSideQuery P1 接线钉：预估影响行数必须走 [PreviewSideQuery]，且函数体内**不得**
+     * 出现换入控制台/执行链调用。只测 DmlImpactSideQueryPanelTest 的 Result 编排不够——
+     * 把 `PreviewSideQuery.run` 换成 `embedConsole` 时用例仍绿，正是本批真机修复前的形态。
+     */
+    @Test
+    fun `P1_预估影响行数走旁路查询且不换入控制台`() {
+        val source = sqlPreviewPanelSource()
+        val estimate = functionBody(source, "internal fun SqlPreviewPanel.estimateDmlImpact(")
+        assertTrue(
+            "estimateDmlImpact 必须调用 PreviewSideQuery.run（否则又回到控制台执行）",
+            estimate.contains("PreviewSideQuery.run("),
+        )
+        assertFalse(
+            "estimateDmlImpact 不得换入控制台（只读试算不能顶掉预览编辑器）",
+            estimate.contains("embedConsole(") || estimate.contains("SqlExecutor.execute("),
+        )
+        val retry = functionBody(source, "internal fun SqlPreviewPanel.promptDataSourceThenRetryImpact(")
+        assertTrue(
+            "绑定后重试必须显式禁止二次弹选择器",
+            retry.contains("allowDataSourcePrompt = false"),
+        )
+        assertTrue(
+            "「更多」菜单必须仍挂着预估影响行数入口（否则功能不可达）",
+            source.contains("MpSqlVisualizerBundle.message(\"panel.dmlImpact\") to { estimateDmlImpact() }"),
+        )
+    }
+
+    /**
+     * T-PreviewSideQuery P3a 接线钉：执行视图头部由 embedConsole(EXECUTE) 添加、由
+     * backToPreview 移除。真机曾出现「点返回只重渲染 SQL、头部还在」——当时只测了 SQL 刷新，
+     * 没钉头部移除顺序。
+     */
+    @Test
+    fun `P3a_返回预览移除执行视图头部`() {
+        val source = sqlPreviewPanelSource()
+        val back = functionBody(source, "internal fun SqlPreviewPanel.backToPreview(")
+        val remove = back.indexOf("executeViewHeader?.let { consoleHost.remove(it) }")
+        val clear = back.indexOf("executeViewHeader = null")
+        val refresh = back.indexOf("refreshView()")
+        assertTrue(
+            "返回预览必须先移除 executeViewHeader（实际源码：$back）",
+            remove >= 0 && clear > remove && refresh > clear,
+        )
+        assertTrue(
+            "执行视图头部必须由 embedConsole 在 EXECUTE 模式添加",
+            source.contains("executeViewHeader") && source.contains("ConsoleEmbedMode.EXECUTE"),
+        )
+        for (path in listOf(
+            "src/main/resources/messages/MpSqlVisualizerBundle.properties",
+            "src/main/resources/messages/MpSqlVisualizerBundle_zh.properties",
+        )) {
+            val text = File(repoRoot(), path).readText()
+            for (key in listOf("panel.executeViewHint", "panel.backToPreview", "dml.impact.inline")) {
+                assertTrue("$path 缺 $key（界面会显示原始 key）", text.contains("$key="))
+            }
+        }
+    }
+
+    /** 截取从 [marker] 开始到下一个顶层函数声明之前的源码段。 */
+    private fun functionBody(source: String, marker: String): String {
+        val start = source.indexOf(marker)
+        assertTrue("找不到函数声明：$marker", start >= 0)
+        val tail = source.substring(start + marker.length)
+        val next = listOf("\ninternal fun ", "\nprivate fun ", "\nfun ", "\n/**")
+            .map { tail.indexOf(it) }
+            .filter { it >= 0 }
+            .minOrNull()
+        return source.substring(start, if (next == null) source.length else start + marker.length + next)
+    }
+
     private fun sqlPreviewPanelSource(): String =
         panelSourceFiles().joinToString("\n") { File(repoRoot(), it).readText() }
 

@@ -14,6 +14,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertSame
+import org.junit.Assert.assertTrue
 
 /**
  * T-PreviewSideQuery P2：执行计划直送路径走只读旁路查询 + 非模态对话框，不改写预览编辑器。
@@ -69,6 +70,8 @@ class ExplainSideQueryPanelTest : BasePlatformTestCase() {
             assertSame("EXPLAIN 不得换入控制台", beforeConsole, p.embeddedConsole)
             assertNotNull("EXPLAIN 结果必须经非模态对话框展示", captured)
             assertNotNull("对话框内容应已组装", captured!!.contentForTest())
+            val texts = texts(captured!!.contentForTest())
+            assertTrue("直送结果必须把计划单元格渲染出来：$texts", texts.contains("SIMPLE"))
         } finally {
             explainTargetForTest = null
             explainDialogSinkForTest = null
@@ -112,7 +115,93 @@ class ExplainSideQueryPanelTest : BasePlatformTestCase() {
         }
     }
 
+    fun testExplainBlockedResultShowsReasonAndConsoleEntry() {
+        val sql = "SELECT * FROM t_order WHERE id = 1"
+        val p = panel(sql)
+        var captured: ExplainPlanDialog? = null
+        explainTargetForTest = { ExplainTarget() }
+        explainDialogSinkForTest = { captured = it }
+        PreviewSideQuery.runnerForTest = { _, _, _, _, cb ->
+            cb(PreviewSideQuery.Result.Blocked("dialect mismatch"))
+        }
+        try {
+            p.submitExplainDirect(
+                project,
+                "EXPLAIN $sql",
+                ExecutionDialectGate.Request(
+                    renderMode = ExecutionDialectGate.RenderMode.AUTO,
+                    renderedDialectName = "MySQL",
+                    intent = ExecutionDialectGate.Intent.EXPLAIN,
+                    canLosslesslyRerender = false,
+                    userTextUntouched = true,
+                ),
+            )
+            val content = captured!!.contentForTest()
+            assertTrue(
+                "方言闸阻断原因必须展示：${texts(content)}",
+                texts(content).any { it.contains("dialect mismatch") },
+            )
+            assertEquals(
+                "阻断后仍保留显式控制台入口",
+                MpSqlVisualizerBundle.message("panel.explain.openConsole"),
+                buttons(content).single().text,
+            )
+            assertEquals(sql, p.currentEditorSql())
+        } finally {
+            explainTargetForTest = null
+            explainDialogSinkForTest = null
+            PreviewSideQuery.runnerForTest = null
+            p.clear()
+        }
+    }
+
+    fun testUnexpectedScalarResultIsReported() {
+        val sql = "SELECT * FROM t_order WHERE id = 1"
+        val p = panel(sql)
+        var captured: ExplainPlanDialog? = null
+        explainTargetForTest = { ExplainTarget() }
+        explainDialogSinkForTest = { captured = it }
+        PreviewSideQuery.runnerForTest = { _, _, _, _, cb ->
+            cb(PreviewSideQuery.Result.Scalar(1, McpExplainFormatter.RawResult(listOf("v"), listOf(listOf("1")))))
+        }
+        try {
+            p.submitExplainDirect(
+                project,
+                "EXPLAIN $sql",
+                ExecutionDialectGate.Request(
+                    renderMode = ExecutionDialectGate.RenderMode.AUTO,
+                    renderedDialectName = "MySQL",
+                    intent = ExecutionDialectGate.Intent.EXPLAIN,
+                    canLosslesslyRerender = false,
+                    userTextUntouched = true,
+                ),
+            )
+            assertTrue(
+                "EXPLAIN 拿到单值必须如实报错：${texts(captured!!.contentForTest())}",
+                texts(captured!!.contentForTest()).any { it.contains("unexpected") },
+            )
+            assertEquals(sql, p.currentEditorSql())
+        } finally {
+            explainTargetForTest = null
+            explainDialogSinkForTest = null
+            PreviewSideQuery.runnerForTest = null
+            p.clear()
+        }
+    }
+
     private fun buttons(component: java.awt.Component): List<javax.swing.JButton> =
         (if (component is javax.swing.JButton) listOf(component) else emptyList()) +
             (if (component is java.awt.Container) component.components.flatMap { buttons(it) } else emptyList())
+
+    /** 递归收集标签与表格单元格文本（对话框内容无公开访问器，按组件树取证）。 */
+    private fun texts(component: java.awt.Component): List<String> =
+        (if (component is javax.swing.JLabel) listOf(component.text ?: "") else emptyList()) +
+            (if (component is javax.swing.JTable) {
+                (0 until component.rowCount).flatMap { row ->
+                    (0 until component.columnCount).map { col ->
+                        component.getValueAt(row, col)?.toString() ?: ""
+                    }
+                }
+            } else emptyList()) +
+            (if (component is java.awt.Container) component.components.flatMap { texts(it) } else emptyList())
 }

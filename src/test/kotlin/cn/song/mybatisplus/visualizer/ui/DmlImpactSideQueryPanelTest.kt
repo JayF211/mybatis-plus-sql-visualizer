@@ -140,4 +140,82 @@ class DmlImpactSideQueryPanelTest : BasePlatformTestCase() {
             p.clear()
         }
     }
+
+    fun testDeleteLimitShowsCappedInlineRow() {
+        // DELETE ... LIMIT 5：试算天然有 5 行上限，内联文案必须走「≤」分支
+        val sql = "DELETE FROM t_order WHERE id = 1 LIMIT 5"
+        val p = panel(sql)
+        dmlImpactTargetForTest = { ImpactTarget() }
+        PreviewSideQuery.runnerForTest = { _, _, _, _, cb -> cb(PreviewSideQuery.Result.Scalar(9, raw("9"))) }
+        try {
+            p.estimateDmlImpact()
+            val label = p.impactResultLabel!!
+            assertTrue("上限结果应显示 ≤5：${label.text}", label.text.contains("≤") && label.text.contains("5"))
+            assertEquals("上限提示不是错误", UIUtil.getContextHelpForeground(), label.foreground)
+            assertEquals(sql, p.currentEditorSql())
+        } finally {
+            dmlImpactTargetForTest = null
+            PreviewSideQuery.runnerForTest = null
+            p.clear()
+        }
+    }
+
+    fun testBlockedResultShowsInlineMessage() {
+        val sql = "UPDATE t_order SET status = 1 WHERE id = 1111"
+        val p = panel(sql)
+        dmlImpactTargetForTest = { ImpactTarget() }
+        PreviewSideQuery.runnerForTest = { _, _, _, _, cb ->
+            cb(PreviewSideQuery.Result.Blocked("dialect mismatch"))
+        }
+        try {
+            p.estimateDmlImpact()
+            val label = p.impactResultLabel!!
+            assertTrue("方言闸阻断原因应内联展示：${label.text}", label.text.contains("dialect mismatch"))
+            assertEquals(com.intellij.ui.JBColor.RED, label.foreground)
+        } finally {
+            dmlImpactTargetForTest = null
+            PreviewSideQuery.runnerForTest = null
+            p.clear()
+        }
+    }
+
+    fun testUnexpectedTabularResultIsReportedAsError() {
+        val sql = "UPDATE t_order SET status = 1 WHERE id = 1111"
+        val p = panel(sql)
+        dmlImpactTargetForTest = { ImpactTarget() }
+        PreviewSideQuery.runnerForTest = { _, _, _, _, cb -> cb(PreviewSideQuery.Result.Table(raw("9"))) }
+        try {
+            p.estimateDmlImpact()
+            val label = p.impactResultLabel!!
+            assertTrue("单值通道拿到表格必须如实报错：${label.text}", label.text.contains("unexpected"))
+            assertEquals(com.intellij.ui.JBColor.RED, label.foreground)
+        } finally {
+            dmlImpactTargetForTest = null
+            PreviewSideQuery.runnerForTest = null
+            p.clear()
+        }
+    }
+
+    fun testNoPromptPathShowsNoDataSourceWithoutOpeningSelector() {
+        // 绑定失败后的重试路径：allowDataSourcePrompt=false，只提示不二次弹选择器
+        val sql = "UPDATE t_order SET status = 1 WHERE id = 1111"
+        val p = panel(sql)
+        var promptCalls = 0
+        dmlImpactTargetForTest = { null }
+        dmlImpactPromptForTest = { _, _, _ -> promptCalls++ }
+        try {
+            p.estimateDmlImpact(allowDataSourcePrompt = false)
+            assertEquals("不得二次弹数据源选择器", 0, promptCalls)
+            val label = p.impactResultLabel!!
+            assertTrue("无绑定数据源应就地提示：${label.text}", label.text.contains("数据源"))
+            assertEquals(com.intellij.ui.JBColor.RED, label.foreground)
+            assertEquals(sql, p.currentEditorSql())
+        } finally {
+            dmlImpactTargetForTest = null
+            dmlImpactPromptForTest = null
+            p.clear()
+        }
+    }
+
+    private fun raw(value: String) = McpExplainFormatter.RawResult(listOf("COUNT(*)"), listOf(listOf(value)))
 }

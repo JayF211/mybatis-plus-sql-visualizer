@@ -91,22 +91,30 @@ internal object PreviewSideQuery {
                 )
             }
             ApplicationManager.getApplication().invokeLater({
-                outcome.onSuccess { raw ->
-                    if (scalar) {
-                        val value = raw.rows.firstOrNull()?.firstOrNull()?.trim()?.toLongOrNull()
-                        if (value == null) {
-                            onResult(Result.Failed("query did not return a numeric count"))
-                        } else {
-                            onResult(Result.Scalar(value, raw))
-                        }
-                    } else {
-                        onResult(Result.Table(raw))
-                    }
-                }.onFailure { e ->
-                    val cause = (e as? java.lang.reflect.InvocationTargetException)?.targetException ?: e
-                    onResult(Result.Failed(cause.message ?: cause.javaClass.simpleName))
-                }
+                outcome.onSuccess { raw -> onResult(if (scalar) scalarResult(raw) else tableResult(raw)) }
+                    .onFailure { e -> onResult(Result.Failed(failureMessage(e))) }
             }, ModalityState.any())
         }
+    }
+
+    /**
+     * 标量结果映射：首行首列去空白后必须是整数，否则如实标 Failed（不把空值当 0）。
+     * 抽成纯函数是为了让 headless 覆盖真链映射——此前测试缝直接给 [Result]，这段逻辑零覆盖。
+     */
+    internal fun scalarResult(raw: McpExplainFormatter.RawResult): Result {
+        val value = raw.rows.firstOrNull()?.firstOrNull()?.trim()?.toLongOrNull()
+        return if (value == null) Result.Failed("query did not return a numeric count") else Result.Scalar(value, raw)
+    }
+
+    /** 表格结果映射（EXPLAIN 直送）。 */
+    internal fun tableResult(raw: McpExplainFormatter.RawResult): Result = Result.Table(raw)
+
+    /**
+     * 失败信息：反射通道会把目标异常包进 InvocationTargetException，必须解包后取 message；
+     * 无 message 时退回异常类简单名，保证对话框/内联行不出现空白原因。
+     */
+    internal fun failureMessage(t: Throwable): String {
+        val cause = (t as? java.lang.reflect.InvocationTargetException)?.targetException ?: t
+        return cause.message ?: cause.javaClass.simpleName
     }
 }

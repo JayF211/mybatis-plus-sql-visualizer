@@ -112,9 +112,18 @@
 
 ```text
 ./gradlew test --tests "*PreviewSideQueryTest" --tests "*DmlImpactEstimatorTest" \
-  --tests "*SqlPreviewPanelExecutionTest" --tests "*ExplainPanelChannelTest" \
-  --tests "*FieldFillSimulationPanelTest" --tests "*ExecutionDialectGateTest"
+  --tests "*DmlImpactSideQueryPanelTest" --tests "*ExplainSideQueryPanelTest" \
+  --tests "*ExplainStructuredSideQueryPanelTest" --tests "*ExplainPanelWiringGuardTest" \
+  --tests "*BundleParityGuardTest" --tests "*ExplainPanelChannelTest" \
+  --tests "*FieldFillSimulationPanelTest" --tests "*ExecutionDialectGateTest" \
+  --tests "*ConsoleHostTest" --tests "*PrepareSingleFlightGateTest" \
+  --tests "*GuardSelfTestCoverageMetaGuardTest" --tests "*DialectStatusRefreshWiringGuardTest" \
+  --tests "*ExecuteSqlErrorHandlingTest" --tests "*AiContextV2PanelTest" \
+  --tests "*SqlPreviewTopRowLayoutTest" --tests "*FieldFillSimulationTest"
 ```
+
+> 20261019 复盘补：新增/修改文案的批次**必须**带上 `BundleParityGuardTest`——它本来就能
+> 命中 `panel.explain.openConsole` 这类源码字面量，本批漏跑才让缺键活到复核阶段。
 
 必须覆盖：
 
@@ -145,7 +154,7 @@
 - 新增 `ui/PreviewSideQuery.kt`：单条 SELECT 先过 `McpSelectGuard`，再按 `ExecutionDialectGate` 对绑定数据源做方言校验，池线程走 `McpDbExecutor.executeQuery`，EDT 回调；全程不调 `SqlExecutor.execute`/`embedConsole`。
 - `estimateDmlImpact` 改为只读旁路查询；结果写入左侧参数区底部的灰色内联行（`预估影响行数：N` / `≤N`），tooltip 携带试算 SQL/目标表/上限，失败红色内联展示；不可试算时用原因覆盖旧结果，避免显示过期行数；编辑器与控制台文档保持不变。
 - 无绑定数据源时复用既有数据源选择器：`DataSourceSelector.prepareConsole(executeAfterPrepare=false)` 只绑定不执行，`awaitDataSourceBoundThen` 轮询绑定落地后重试一次预估；取消/超时就地红色提示，不再二次弹选择器。
-- 只读护栏：`PreviewSideQueryTest` 覆盖非 SELECT 输入在数据源访问前直接返回 `Blocked`。
+- 只读护栏与真链映射：`PreviewSideQueryTest` 覆盖非 SELECT 在数据源访问前返回 `Blocked`、方言不一致同样在 runner 之前阻断（并断言 runner 零调用）、方言一致才进入 runner；`scalarResult`/`tableResult`/`failureMessage` 三个纯函数直测（空行/空白/非数字/反射包装/无 message 兜底）。
 
 ### P2 执行计划
 
@@ -163,17 +172,18 @@
 
 ### 定向读数
 
-17 个受影响的测试类合计 **155/0/0/0**，其中：
+18 个受影响的测试类合计 **177/0/0/0**（20261019 补测后），其中：
 
 | 测试类 | tests |
 |---|---:|
-| `DmlImpactSideQueryPanelTest` | 5 |
-| `PreviewSideQueryTest` | 1 |
-| `ExplainSideQueryPanelTest` | 2 |
+| `DmlImpactSideQueryPanelTest` | 9 |
+| `PreviewSideQueryTest` | 10 |
+| `ExplainSideQueryPanelTest` | 4 |
 | `ExplainStructuredSideQueryPanelTest` | 1 |
 | `ExecutionDialectGateTest` | 17 |
-| `ExplainPanelWiringGuardTest` | 11 |
+| `ExplainPanelWiringGuardTest` | 13 |
 | `ConsoleHostTest` | 9 |
+| `BundleParityGuardTest` | 5 |
 | `PrepareSingleFlightGateTest` | 26 |
 | `GuardSelfTestCoverageMetaGuardTest` | 8 |
 | `DialectStatusRefreshWiringGuardTest` | 4 |
@@ -185,11 +195,32 @@
 | `DmlImpactEstimatorTest` | 13 |
 | `FieldFillSimulationTest` | 3 |
 
+### 复盘：为什么这些缺口没被测试覆盖（20261019）
+
+本批最初按「测试缝 + 编排断言」写用例，真机走查暴露了五类覆盖盲区：
+
+1. **测试缝把真链映射短路了。** `PreviewSideQuery.runnerForTest` 位于护栏/方言闸之后、`McpDbExecutor` 调用之前；所有面板用例都直接喂现成 `Result`，真链上的标量解析（`raw.rows → Long`）、表格映射、`InvocationTargetException` 解包、池线程回调从未执行。真机 `Unknown column ...` 正是解包链的产物。
+   - 补：`PreviewSideQuery` 抽出 `scalarResult` / `tableResult` / `failureMessage` 三个纯函数并直测（含空行、空白、非数字、反射包装、无 message 兜底）。
+2. **只测了「成功 + 失败」两个分支，没做分支穷举。** estimate 的 `Blocked` / 意外 `Table` / `DELETE LIMIT` 的 `≤N` / `allowDataSourcePrompt=false` 四个分支没有面板用例；EXPLAIN 的 `Blocked` 与意外 `Scalar` 同样没有。
+   - 补：`DmlImpactSideQueryPanelTest` 新增 4 例、`ExplainSideQueryPanelTest` 新增 2 例。
+3. **护栏/方言闸只测了「会阻断」，没测「阻断后不访问数据源」。** 原有非 SELECT 用例只断言返回 `Blocked`，即使护栏后仍偷偷执行也照样绿；方言不一致分支完全没测。
+   - 补：`PreviewSideQueryTest` 增加 runner 调用计数断言（护栏阻断 0 次、方言不一致 0 次、一致 1 次）。
+4. **接线没有源码级守卫。** 现有 `ExplainPanelWiringGuardTest` 只钉 EXPLAIN 通道；P1「预估不得换入控制台」与 P3a「返回预览必须先移除头部」没有守卫，改回 `embedConsole` 仍然全绿。
+   - 补：`ExplainPanelWiringGuardTest` 增加 P1/P3a 两条接线钉（函数体切片断言 + 执行视图头部顺序）+ 三个 bundle key 存在性。
+5. **bundle 守卫存在但不在本批定向清单。** `BundleParityGuardTest` 的正则本来能命中新增的 `panel.explain.openConsole`；本批测试清单没带它，缺键才活到复核。§六 的定向命令已补上该守卫，并注明「新增/修改文案必须跑」。
+
+仍不在 headless 能力内的：`McpDbExecutor` 依赖 DatabaseTools 原生控制台/项目服务，单测无法直连真库；真机侧用 mpj_demo 取证（COUNT 1 对账、EXPLAIN 78 ms）。另，注解字符串内 `Alt+Shift+Q` 落到 SQL 注入片段导致「未找到可预览的 SQL 源」是既有入口缺口，与本批改动无关，本次未修复/补测。
+
 ### 反向验证
 
 - P1：临时把 `estimateDmlImpact` 改回 `embedConsole` → **2 红**（编辑器/控制台不变两条用例）。
 - P2：临时删掉直送结果对话框 → `ExplainSideQueryPanelTest` **1 红**；临时删掉结构化 `showExplainDialog` → `ExplainStructuredSideQueryPanelTest` **1 红**。
 - P3a：临时删掉执行视图头部 → `ConsoleHostTest` **2 红**（返回预览入口 + 宿主组件计数）。
+- 20261019 补测批反向（一次摘除五处实现，恢复后全绿）：**恰 7 红**——
+  `PreviewSideQueryTest` 3（方言闸放行、非数字被当 0、空/空白被当 0）、
+  `DmlImpactSideQueryPanelTest` 1（`≤N` 分支退化成普通行数）、
+  `ConsoleHostTest` 1（返回预览不再移除头部）、
+  `ExplainPanelWiringGuardTest` 2（P1「更多」入口被删、P3a 移除顺序被删）。
 
 ### 真机走查（243 沙盒，2026-10-19）
 
