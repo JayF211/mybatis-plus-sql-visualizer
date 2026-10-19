@@ -6,11 +6,11 @@
 
 ## 一、需求分析与背景
 
-预览窗口「竖向排列」按钮（`SqlFormatter.formatVertical`）对非 INSERT 语句走 `format` 全展开 + `expandHorizontalGroups` 后处理，其中 IN 列表的展开受 2026-09-10 引入的阈值约束（T-VStack·InThreshold，master `dc308fc`）：`IN_EXPAND_MIN_ELEMENTS = 5`——元素 < 5 保持 `IN (1, 2, 3)` 同行，≥ 5 才 `(` 自占一行逐元素展开。当时裁定依据：占位符 `IN (?, ?, ?)` 等短清单竖排零增量信息（参数对应关系靠左侧参数面板顺序对照），纯花行高把相邻 WHERE 条件推出视口。
+预览窗口「竖向排列」按钮（`SqlFormatter.formatVertical`）对非 INSERT 语句走 `format` 全展开 + `expandHorizontalGroups` 后处理，其中 IN 列表的展开受 2026-09-10 引入的阈值约束（T-VStack·InThreshold，master `9ef6b20`）：`IN_EXPAND_MIN_ELEMENTS = 5`——元素 < 5 保持 `IN (1, 2, 3)` 同行，≥ 5 才 `(` 自占一行逐元素展开。当时裁定依据：占位符 `IN (?, ?, ?)` 等短清单竖排零增量信息（参数对应关系靠左侧参数面板顺序对照），纯花行高把相邻 WHERE 条件推出视口。
 
 用户现在复议该裁定：短清单同行反而要逐个数元素对位，要求**IN 列表不再分级，全部逐行竖排**。
 
-**方案即回退阈值为扩面原始守卫**：阈值引入前（`dc308fc~1`）`expandInList` 的守卫本就是 `elements.size < 2`——单元素（`IN (1)` / `IN (?)`，无顶层逗号）不展开，**含逗号即 ≥ 2 元素一律逐行**。本任务恢复该守卫并删除 `IN_EXPAND_MIN_ELEMENTS` 常量。这不是新行为设计，是回到有先例的形态，风险面最小。
+**方案即回退阈值为扩面原始守卫**：阈值引入前（`9ef6b20~1`）`expandInList` 的守卫本就是 `elements.size < 2`——单元素（`IN (1)` / `IN (?)`，无顶层逗号）不展开，**含逗号即 ≥ 2 元素一律逐行**。本任务恢复该守卫并删除 `IN_EXPAND_MIN_ELEMENTS` 常量。这不是新行为设计，是回到有先例的形态，风险面最小。
 
 ### 边界定案
 
@@ -37,7 +37,7 @@
 |---|---|---|---|
 | T-VIA-01 | 阈值回退：删除 `IN_EXPAND_MIN_ELEMENTS` 常量，`expandInList` 恢复 `elements.size < 2` 守卫，同步方法/常量处注释（`SqlFormatter.kt:31-32`、`693-724` 一带） | `SqlFormatter.kt` | 2~4 元素 IN 全部逐行；单元素/子查询/LIMIT 行为不变 |
 | T-VIA-02 | 测试反转与新增：`SqlFormatterTest` 改 4 条 + 新增 2~3 条；`SqlPreviewPanelTest` 改注释 + 补 2 元素断言 | 两个测试文件 | 见下节清单；全量 test 绿 |
-| T-VIA-03 | 文档三处同步：`CHANGELOG.md`、`docs/变更记录.md`、本计划 §实施记录 | 三处 | 条目落盘（注明对 `dc308fc` 裁定的反转与用户复议背景） |
+| T-VIA-03 | 文档三处同步：`CHANGELOG.md`、`docs/变更记录.md`、本计划 §实施记录 | 三处 | 条目落盘（注明对 `9ef6b20` 裁定的反转与用户复议背景） |
 
 ## 三、测试改动清单（T-VIA-02 展开）
 

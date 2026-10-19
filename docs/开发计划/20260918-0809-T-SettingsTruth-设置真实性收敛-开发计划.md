@@ -38,7 +38,7 @@
 
 ### P2 增强捕获状态行接线（死 UI 行）
 
-现状：`PluginSettingsPanel.kt:211` 声明、`:730` 摆放，KDoc 承诺「已挂载 pid=x / 已回落控制台捕获 / 连接中」，全历史无更新逻辑（4623a12 创建即缺更新器；795c136 删「增强捕获状态：」前缀标签时定案「状态值保留无标签显示」——即用户要的是**保留状态值**，接线是兑现该定案而非新需求）；配套 bundle 键 `settings.enhancedCapture.status` 现无人消费。
+现状：`PluginSettingsPanel.kt:211` 声明、`:730` 摆放，KDoc 承诺「已挂载 pid=x / 已回落控制台捕获 / 连接中」，全历史无更新逻辑（ae0c549 创建即缺更新器；92bcf6f 删「增强捕获状态：」前缀标签时定案「状态值保留无标签显示」——即用户要的是**保留状态值**，接线是兑现该定案而非新需求）；配套 bundle 键 `settings.enhancedCapture.status` 现无人消费。
 
 方案（状态源 = AgentManager，项目级服务，已有完整挂载生命周期 `AgentManager.kt:61` attachedPids、init 块 5s `sweepOffline` monitor、shutdownAll 回落链）：
 
@@ -100,7 +100,7 @@
 ## 五、已知边界 / 取舍
 
 - **P1 删除而非补自动语义**：「重启后自动重新注入」需在项目打开时静默改用户工程源码，打扰面大于收益，且注入产物一旦生成就长期存在——动作语义 + 不持久化最诚实。旧 XML 里的残留 `autoInjectSqlSourceInterceptor` 属性由 XmlSerializer 自动忽略，无需迁移。
-- **P2 状态行只报会话态，不报历史**：设置页打开时若无活动会话即空白行（保留一行占位与 795c136「无标签显示」定案一致）；不引入轮询，仅事件驱动。
+- **P2 状态行只报会话态，不报历史**：设置页打开时若无活动会话即空白行（保留一行占位与 92bcf6f「无标签显示」定案一致）；不引入轮询，仅事件驱动。
 - **P4 是本任务唯一可能超小修门禁的子项**（跨 config/plugin.xml/psi 四层）；若评审希望控制单任务体量，可拆为 T-SettingsTruth（P1/P2/P3/P5 先行）+ T-ProjectSettingsWire（P4）两任务串行，P5 断言三在拆分场景下随 P4 任务交付。
 - **P5 断言四的动态键白名单**是宽松机制（人工维护），防误报而非防恶意；若后续动态拼 key 增多，再考虑 message() 调用点静态收集。
 - **SettingsIO 导入重置副作用**（导入仅覆盖 21 项，其余字段重置为默认）核查中确认属设计内行为，但语义上接近「假导入」——不在本任务处理，立候选任务 T-SettingsIoScope（导入前 diff 预览或全量导出）由用户定夺。
@@ -108,21 +108,21 @@
 
 ## 六、实施记录（20260918 交付回填）
 
-**交付形态**：sam 调度并行实施——工作树 `mpsv-settings-truth`（分支 `t-settings-truth`，基 master `2ce49ca`），三波派发（P1+P2 与 P3 并行 → P4 → P5），合并树独立复核后并入 master。
+**交付形态**：sam 调度并行实施——工作树 `mpsv-settings-truth`（分支 `t-settings-truth`，基 master `a9d5525`），三波派发（P1+P2 与 P3 并行 → P4 → P5），合并树独立复核后并入 master。
 
 ### 6.1 任务 → 提交映射
 
 | 子项 | 提交 | 落点摘要 |
 |------|------|---------|
-| 立项（计划文档） | `2ce49ca` | docs/开发计划/20260918-0809 |
-| P3 搜索索引 | `fd29e59` | PluginSettingsFolderConfigurable 删 filterBar 条目 + 补录 13 项；双语 bundle 删两键 |
-| P1 假开关 | `19de6f3` | PluginSettings 删字段；面板删三处绑定 + 成败均回弹；双语 tooltip 补说明 |
-| P2 状态行接线 | `19de6f3` | AgentManager `statusSummary` + `AGENT_STATUS_TOPIC` + 三广播点；面板订阅/聚合/disposeResources；SectionConfigurable 接线 |
-| P4 项目级接线 | `6fa282f` | plugin.xml 注册 projectConfigurable；Configurable 扩 10 控件；SqlPreviewService 7 直读点 + effectiveString 转正；EntityResolver/JpaEntityResolver effectiveTableSetting；TableConfigSignature.projectSignature(project) |
-| P5 守卫测试 | `3eb05c3` | SettingsRealityGuardTest 四断言（先红后绿已验） |
-| 幽灵键收尾 | `d586487` | 删 `settings.update.envNotSupported` / `settings.search.placeholder` 双语四行；白名单收窄至两枚真动态键 |
-| 门禁收口 | `89a4651` | P4 三缺陷修复 + 用例锚点对齐（见 6.3） |
-| 合入 master | `6b3e31e` | merge（唯一冲突 AgentManager.kt，见 6.4） |
+| 立项（计划文档） | `a9d5525` | docs/开发计划/20260918-0809 |
+| P3 搜索索引 | `cb55e54` | PluginSettingsFolderConfigurable 删 filterBar 条目 + 补录 13 项；双语 bundle 删两键 |
+| P1 假开关 | `7f41182` | PluginSettings 删字段；面板删三处绑定 + 成败均回弹；双语 tooltip 补说明 |
+| P2 状态行接线 | `7f41182` | AgentManager `statusSummary` + `AGENT_STATUS_TOPIC` + 三广播点；面板订阅/聚合/disposeResources；SectionConfigurable 接线 |
+| P4 项目级接线 | `f576d4d` | plugin.xml 注册 projectConfigurable；Configurable 扩 10 控件；SqlPreviewService 7 直读点 + effectiveString 转正；EntityResolver/JpaEntityResolver effectiveTableSetting；TableConfigSignature.projectSignature(project) |
+| P5 守卫测试 | `d4f96a3` | SettingsRealityGuardTest 四断言（先红后绿已验） |
+| 幽灵键收尾 | `f3a746f` | 删 `settings.update.envNotSupported` / `settings.search.placeholder` 双语四行；白名单收窄至两枚真动态键 |
+| 门禁收口 | `20e1229` | P4 三缺陷修复 + 用例锚点对齐（见 6.3） |
+| 合入 master | `ecdb09f` | merge（唯一冲突 AgentManager.kt，见 6.4） |
 
 ### 6.2 与计划的偏离
 

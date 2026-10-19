@@ -66,7 +66,7 @@
 
 ## 八、实施记录（实施后回填）
 
-**2026-09-17 实施完毕（提交 0841dba，dev 分支直接交付）**
+**2026-09-17 实施完毕（提交 5e38728，dev 分支直接交付）**
 
 - **T-DR-01**：`execute/ConnectionErrorClassifier.kt` 连接类异常三路判定——SQLState 08xxx 优先 / vendor 码表（MySQL 2002~2013 + Oracle 17002~3114）/ 消息签名兜底；排除表（deadlock/access denied/password 等不误判为连接类）。
 - **T-DR-02**：`DdlTargetExtractor` CREATE 目标表名提取（JSqlParser CreateTable 权威 + 残缺语句正则兜底，O-12 UnsupportedStatement 实证形态）+ SqlPreviewPanel 后台退避探测（500ms/1.5s/3s 等 DBN 重连窗口，DatabaseSchemaResolver.tableMeta 复用）。

@@ -2,7 +2,7 @@
 
 > 编号占用：O-126 / R72 / D113~D117 / V137~V140（20261008 15:01 全仓 grep 实测：O 最高 O-125、R 最高 R71、D 最高 D112、V 最高 V136——均被在途 T-ErrReportSubmitNoOp 计划占用；本组各号在 `docs/` 与 `src/` 全 0 命中）
 > 来源：用户指令 2026-10-08 ——「src/main/resources/META-INF/plugin.xml 的插件描述 description 有些乱，我希望可以进行优化。你先分析需求生成开发计划文件」；同日追加「也可以参考下这个插件的精华，需求池|中文文档，并把中文放在上面 `https://plugins.jetbrains.com/plugin/9837-mybatiscodehelperpro`」
-> 前序：`20260818-2125-...发行说明.md:34`（上一次描述优化：英文段改综合描述、中文段精简为 7 条、保留 ≥40 字符拉丁开头约束）；T-McpToolset / T-McpToolset2（描述里「10 个工具」的来源）；T-StackHoverUi（`37406ac`）、T-RecentExecDialog（`e531a5f`）（描述最后两条 bullet 的来源）；T-RollbackSql（描述里回滚一条的来源）
+> 前序：`20260818-2125-...发行说明.md:34`（上一次描述优化：英文段改综合描述、中文段精简为 7 条、保留 ≥40 字符拉丁开头约束）；T-McpToolset / T-McpToolset2（描述里「10 个工具」的来源）；T-StackHoverUi（`562833d`）、T-RecentExecDialog（`374db88`）（描述最后两条 bullet 的来源）；T-RollbackSql（描述里回滚一条的来源）
 > 状态：**已实施**（2026-10-08，用户令「按照推荐 先全部修改下 我自己看看效果」；实施记录与读数见 §八）
 
 ## 一、现状与实测证据
@@ -35,7 +35,7 @@ Feedback Pool</a>.</p>
 
 **M2 双语兼容性声明不一致，且英文侧用词不可核验。** 英文只说 2025.1–2025.3，漏了现网已支持的 2026.x；中文写了「含 2025.1–2025.3 与 2026.x」。另外 `since-build=243`（`plugin.xml:11`）推导出的是「2024.3 起」，英文的 "every IntelliJ platform release since 2024.3 … continuously adapted" 属于官方 best-practices 明确点名禁止的「unverifiable claims」（原文见 1.4）。
 
-**M3 功能清单是追加式的，没有分组。** 12 条平铺：最后两条（Call stack hover、Recent executions）是上一轮功能（v2026.10.9）直接补在末尾的——`cf95acc` 的 diff 证实这两条是追加笔；「触发零门槛（gutter 图标 / 右键 / Alt+Shift+Q）」作为第 12 条混在功能清单里，而它其实是入口说明；JOIN 一条里塞了三件事（ER 图 + 内嵌控制台执行 SQL + EXPLAIN）。
+**M3 功能清单是追加式的，没有分组。** 12 条平铺：最后两条（Call stack hover、Recent executions）是上一轮功能（v2026.10.9）直接补在末尾的——`1e1acf6` 的 diff 证实这两条是追加笔；「触发零门槛（gutter 图标 / 右键 / Alt+Shift+Q）」作为第 12 条混在功能清单里，而它其实是入口说明；JOIN 一条里塞了三件事（ER 图 + 内嵌控制台执行 SQL + EXPLAIN）。
 
 **M4 关键信息缺位，且对外三份清单各行其是。** 描述里没有「要求 / 安装」行——IDEA 版本只以兼容性口号出现，哪些能力需要 Ultimate 只在内文括号里出现两次（`(Ultimate)` / `（Ultimate）`），MCP 需 2025.2+ 只在一条 bullet 尾部括号里出现一次。同时描述未提已在 README、Marketplace 自定义页里列出的多项能力：Kotlin 链支持、多租户/逻辑删除/乐观锁拦截器模拟、SQL 补全、日志屏蔽与历史落盘、`${}` 注入确认与无界写闸门、执行超时护栏、Specification / Querydsl / EasyQuery / Xbatis / MDS 链。结果是同一件事（功能清单）在三处手写、长期各自漂移——本轮就抓到一例：描述、`mcp-optional.xml` 头注与 `CHANGELOG.md:88`/`:138` 都写「MCP 需 2025.2+」，而 `plugin.xml:94` 的注释写「253+/262 内置」，同一事实仓内两说（见 §四 P2）。
 

@@ -3,7 +3,7 @@
 - 日期：2026-09-15 14:30（修订 2026-09-15 15:00：增补 T-MTS2-00 设置页总开关与工具级启用/禁用，结构决策由单 toolset 类改为按工具拆分——平台 per-tool 门控只有 toolset 粒度 `isEnabled()`）
 - 任务编号：T-McpToolset2（MCP 能力二期；用户 2026-09-15 指示「一期三工具偏少」；同日二次指示「MCP 工具需在插件设置页快速启用/禁用，且可整体开关插件 MCP 功能」；第四轮报告 N-16 位差叙事的延伸——渲染器生态位要靠工具面密度守住）
 - 性质：已交付能力（纯逻辑资产）的 MCP 面扩容（新增工具 + 既有链复用，引擎零改动）+ 插件设置页 MCP 门控
-- 实施分支：基于 dev 开任务分支 t-mcp-toolset2（dev 现含 N-16/O-9~O-14 七任务交付，HEAD c72bf1b）
+- 实施分支：基于 dev 开任务分支 t-mcp-toolset2（dev 现含 N-16/O-9~O-14 七任务交付，HEAD 8ad316b）
 - 验证基线：dev 全量 `./gradlew testShards` 360 类 / 4410 / 0 / 0 / 6 绿
 
 ---
@@ -140,7 +140,7 @@ T-MTS2-00（设置门控：状态字段+McpToolGate+设置页开关+三工具拆
 
 ## 八、实施记录（实施后回填）
 
-**2026-09-15 实施完毕并合入 dev（分支 t-mcp-toolset2 → dev 快进合并，dev HEAD f6533f7；合并后全量 testShards 367类/4421/0/0/6 绿——基线 350/4267 → +17 类 +154 例；verifyGate 三目标 exit 0，253/262 Compatible + 243 豁免留痕；独立子代理复核 9/10 通过，1 处措辞补正）**
+**2026-09-15 实施完毕并合入 dev（分支 t-mcp-toolset2 → dev 快进合并，dev HEAD f42b739；合并后全量 testShards 367类/4421/0/0/6 绿——基线 350/4267 → +17 类 +154 例；verifyGate 三目标 exit 0，253/262 Compatible + 243 豁免留痕；独立子代理复核 9/10 通过，1 处措辞补正）**
 
 > 合并踩坑留档：dev worktree 旧 build 目录直接跑 testShards 出现成片 `NoSuchMethodError`（PluginSettings 新增字段后旧 class 被陈旧产物劫持）——**清 build/classes + build/kotlin 后即绿**，与记忆 pitfall-regression-false-failure-flakes 的「合并后首跑先清产物」同型。
 
@@ -148,6 +148,6 @@ T-MTS2-00（设置门控：状态字段+McpToolGate+设置页开关+三工具拆
 - **T-MTS2-01 R1 四工具**：render_logs（三解析器 feed→takeEntries 复用面板同构，`LogSqlEntry.restoredSql` 直接消费，前缀缺省读设置可覆盖）/ check_sql（splitter+classifier+detector 组合）/ rollback_plan（RollbackSqlGenerator + messageEn）/ perf_advice（SqlPerfAnalyzer + messageEn）。**英文文案定案**：MpSqlVisualizerBundle 增 internal `messageEn`（Locale.ROOT + utf8Control 读 base 英文，零新键），替代原 McpPerfText 键映射方案（无映射不全风险）。
 - **T-MTS2-02 R2 两工具 + T-MTS2-03**：crud_sql（复用 GenerateCrudSqlFromEntityAction.entitySpec 单一真相源 + CrudSqlGenerator，无主键 `1=0` 占位与 IDE 口径一致）/ reverse_sql（SqlReverseParser+JavaCodeGenerator 字符串列形态，错误带行号）/ mapper_check（契约层 + simulate 渲染层——空参数语境下 `sqlv_mapper_check` 对渲染产物过 detector/perf，即「校验渲染产物」位差落点；空/非法 XML 转 McpExpectedError）。
 - **测试分层决策（实施中关键修正）**：243 基线测试 JVM 的 stdlib 缺 `SpillingKt`——`audit` 本体是高阶 suspend 结构性发射（一期 ignored-problems 豁免语义=mcp-optional.xml 不加载则类永不可达），**测试进程直接实例化 Tool 类调用挂起方法即 NoClassDefFoundError**。解法=七新工具核心全部抽 `internal` 非 suspend 纯函数（checkSql/rollbackPlan/perfAdvice/reverseSql/mapperCheck/renderLogs/resolveSpec+crudOutput），挂起方法只做 audit 一行委托；测试全走纯函数层，挂起链只有真机/生产触达。测试 9 类约 50 例（门控 5 + 设置页 5 + 各工具表驱动 + mapper_check 契约/simulate + crud 实体四件套/空列拒绝）。
-- **顺带收口三处 fe11c97 合并回归**（base 基线即红，非本次引入）：PluginXmlStructureGuardTest 子设置页 count 5→7（plugin.xml 声明序按 weight 降序重排至 ui/shortcuts/preview/tableMapping/sqlLog/mcp/about）；PluginSettingsFolderConfigurable.SUB_PAGES 补 shortcuts 子页（folder 搜索页）；McpScopeSourceScanTest 增 stripStrings 字符串字面量豁免（`Class.forName("com.intellij.mcpserver.settings...")` 是反射字符串非类型引用，未装环境已兜底提示）。
+- **顺带收口三处 74f7842 合并回归**（base 基线即红，非本次引入）：PluginXmlStructureGuardTest 子设置页 count 5→7（plugin.xml 声明序按 weight 降序重排至 ui/shortcuts/preview/tableMapping/sqlLog/mcp/about）；PluginSettingsFolderConfigurable.SUB_PAGES 补 shortcuts 子页（folder 搜索页）；McpScopeSourceScanTest 增 stripStrings 字符串字面量豁免（`Class.forName("com.intellij.mcpserver.settings...")` 是反射字符串非类型引用，未装环境已兜底提示）。
 - **构建接线**：mcpStub 桩源集补挂 compileTestKotlin + test 任务 + **testShardN 分片任务**（IPGP 分片默认不含桩输出，漏挂致工具类 NoClassDefFoundError 成片 28 例，定向 `test` 因已挂桩而绿——实证分片与 test 两条 classpath 独立）。
 - **sam 独立复核（写验分离）**：独立上下文子代理对照 10 项验收，9/10 通过；唯一不通过项=MapperCheckTool @McpDescription 缺 deterministic 措辞——已补「deterministic evidence a static-only validator cannot produce」，与其余 9 工具描述风格对齐。

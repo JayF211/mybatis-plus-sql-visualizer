@@ -1,6 +1,6 @@
 ---
 name: t-mergedevr2round3-delivery
-description: dev→r2 第三轮增量合并已交付（merge e4d7857 + 交付 8c90b74，2026-09-12）——21 文件 40
+description: dev→r2 第三轮增量合并已交付（merge 73eaa90 + 交付 ad292ed，2026-09-12）——21 文件 40
   冲突块取 dev 超集侧定案、台账并集去重、全量 3815 用例一次过 + verifyPlugin 三目标 Compatible
 metadata:
   node_type: memory
@@ -8,7 +8,7 @@ metadata:
   originSessionId: sess_3da5e6cf-62af-447f-aa90-8df08c999579
 ---
 
-T-MergeDevR2Round3 已交付（feature/r2-competition-response，merge `e4d7857` + 交付同步 `8c90b74`，2026-09-12）：
+T-MergeDevR2Round3 已交付（feature/r2-competition-response，merge `73eaa90` + 交付同步 `ad292ed`，2026-09-12）：
 
 - **冲突定案依据**：dev 已通过 master 合并吸收 r2 的 v2026.9.9/9.10 发行面，故 dev 对共同文件是超集/更新版。四处源码冲突（PluginSettingsPanel/LogEntryPreviewRecognizer/SqlLogPanel/DataSourceSelector）逐行 diff 核实后全部取 dev——DataSourceSelector 取 T-ReverseParenWira 的 WIRA 包裹方案**取代** r2 的 T-PreviewSlow F2 拆包（三轮踩坑收口，勿再回退拆包）。
 - **台账融合**：变更记录/MEMORY 冲突块并集去重，T-PerfBatch 交付行两侧同文各去重一次；沿用「非表格区禁整取一侧」定例（Python 整块替换，不碰自动合并区）。

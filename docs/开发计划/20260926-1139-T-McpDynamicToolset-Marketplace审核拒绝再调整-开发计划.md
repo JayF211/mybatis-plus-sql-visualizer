@@ -181,9 +181,9 @@ verifier 1.410 在线口径对上传原包 × **IU-263.5701.42**（当前 Market
 
 ## 九、实施记录（20260926 回写）
 
-**提交链**：`4bf3b6b`（B1+B2 业务层解耦+动态壳）→ `cd15454`（B3 门禁轮发现 SpillingKt 残留→audit 改
-intrinsics 透传＋AuditGate 包装续体）→ `5a1f6ca`（B4 沙盒三修复：工具类 open/AuditGate fatal 短路/
-壳 simpleName 保持＋基线/豁免清理）→ `edeb9a6`（README 校准）。并行走查计划＝
+**提交链**：`c493410`（B1+B2 业务层解耦+动态壳）→ `30e5c26`（B3 门禁轮发现 SpillingKt 残留→audit 改
+intrinsics 透传＋AuditGate 包装续体）→ `43cffcc`（B4 沙盒三修复：工具类 open/AuditGate fatal 短路/
+壳 simpleName 保持＋基线/豁免清理）→ `d8528d8`（README 校准）。并行走查计划＝
 `20260926-1730-T-FullRegression-全功能沙盒回归走查-开发计划.md`（零回归结论）。
 
 **验收标准逐项**（§七）：

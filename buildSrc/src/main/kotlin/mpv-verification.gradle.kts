@@ -8,7 +8,7 @@ plugins {
     id("org.jetbrains.intellij.platform")
 }
 
-// T-BuildScriptSplit：兼容验证门禁分治——块级逐字搬运自根 build.gradle.kts（锚点 dc047bd），
+// T-BuildScriptSplit：兼容验证门禁分治——块级逐字搬运自根 build.gradle.kts（锚点 4c3e268），
 // 注释随迁；验收=基线指纹比对（plugin.xml 字节/tasks 清单/分区日志行/verifySmoke 绿）。
 
 // T-M30：跨版本 API 兼容校验（官方推荐流程）——`./gradlew verifyPlugin` 对目标 IDE
@@ -62,7 +62,7 @@ tasks.named<VerifyPluginTask>("verifyPlugin") {
         "-Dhttp.proxyPort=7890",
         "-Dhttps.proxyHost=127.0.0.1",
         "-Dhttps.proxyPort=7890",
-        // T-VerifierHomeIso（2026-09-17 master 9578ccc，本拆分合流时回植至本 convention）：
+        // T-VerifierHomeIso（2026-09-17 master c591c7e，本拆分合流时回植至本 convention）：
         // verifier-cli 1.410 在缺省 home（~/.pluginVerifier）下提取插件 zip 恒败（2×2 矩阵实证：
         // 1.410×默认home 恒败、1.410×隔离home 与 1.409×任一 home 全绿；verifyGate 走 walkTopDown
         // 字典序实际取 1.409 故独活）。显式隔离，并与 verifyGate 共用同一 build/verify-home

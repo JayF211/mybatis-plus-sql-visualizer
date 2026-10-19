@@ -74,11 +74,11 @@ T-MRB-01（常量分层与更名）→ T-MRB-02（clamp 纯函数）→ T-MRB-03
 
 | 任务 | 提交 | 说明 / 偏离 |
 |------|------|------|
-| T-MRB-01 | a495d23 | 更名波及点全清单（grep 全仓 `MAX_ROWS`）：定义点 `McpExplainFormatter.kt:13`、传参点 `ExplainTool.kt:118`、登记表 KDoc `McpToolsetSupport.kt:26`、断言 `McpSchemaFormatterTest.kt:101/105`（后三处随各自任务提交）。**无关命中未动**：`util/BatchPredicateMerge.kt:31/41/89` 与 `BatchPredicateMergeTest.kt:46` 的 `MAX_ROWS = 500` 属同名不同物（T-BatchMerge 自有预算）；`docs/` 下历史计划与报告的引用属存档。 |
-| T-MRB-02 | a495d23 | `clampMaxRows` 照 `clampMaxTables` 形态落地（null/非正 → 200；>1000 → 1000；否则原样）。**偏离**：`format()` 增可选生效预算参数 `maxRows: Int = DEFAULT_MAX_ROWS`——否则 `maxRows=10` 时截断提示仍写 `limited to 200 rows`（谎报实际预算）；默认参数路径逐字节不变，用例用硬编码字面量钉死。 |
-| T-MRB-03 | 65f33a8 | 参数名定 `maxRows`（与 `SchemaContextTool.maxTables` 同规；DBX 侧为 `max_rows`，语义对齐而字面不同）。生效值随 `ExplainTarget` 过挂起点（挂起帧仍单引用，不破 K2 防溢出约定），执行与格式化共用该值。市场页 `marketplace-custom-page.html:319` 的 MCP 行只列十工具名、**不列参数** → 无需同步。 |
-| T-MRB-04 | 38812b8 | 兜底形态定 **clamp**（非静态断言）——照定案「钳制不抛错」；落点=顶层 `internal channelRowBudget`（与 `drainWarnings` 同规：非 object 成员，测试加载本文件门面类时不触发 `McpDbExecutor` 的 Logger 初始化）。`executeQuery` 首行取兜底值，`collect(resultSet, rowBudget)` 按兜底值截断。 |
-| T-MRB-05 | 38812b8 | 登记表改为「行默认 ≤200 / 上限 1000（maxRows 可配，越界钳制不抛错；通道层另有兜底钳制）」。新增 `src/test/.../mcp/McpRowBudgetTest.kt`（7 例：钳制边界表 / 常量口径 / 默认输出逐字节一致 / 生效预算报数 / 通道兜底 / 接线守卫 / 登记一致性守卫）。门禁读数见下。 |
+| T-MRB-01 | aeba65e | 更名波及点全清单（grep 全仓 `MAX_ROWS`）：定义点 `McpExplainFormatter.kt:13`、传参点 `ExplainTool.kt:118`、登记表 KDoc `McpToolsetSupport.kt:26`、断言 `McpSchemaFormatterTest.kt:101/105`（后三处随各自任务提交）。**无关命中未动**：`util/BatchPredicateMerge.kt:31/41/89` 与 `BatchPredicateMergeTest.kt:46` 的 `MAX_ROWS = 500` 属同名不同物（T-BatchMerge 自有预算）；`docs/` 下历史计划与报告的引用属存档。 |
+| T-MRB-02 | aeba65e | `clampMaxRows` 照 `clampMaxTables` 形态落地（null/非正 → 200；>1000 → 1000；否则原样）。**偏离**：`format()` 增可选生效预算参数 `maxRows: Int = DEFAULT_MAX_ROWS`——否则 `maxRows=10` 时截断提示仍写 `limited to 200 rows`（谎报实际预算）；默认参数路径逐字节不变，用例用硬编码字面量钉死。 |
+| T-MRB-03 | bbb0409 | 参数名定 `maxRows`（与 `SchemaContextTool.maxTables` 同规；DBX 侧为 `max_rows`，语义对齐而字面不同）。生效值随 `ExplainTarget` 过挂起点（挂起帧仍单引用，不破 K2 防溢出约定），执行与格式化共用该值。市场页 `marketplace-custom-page.html:319` 的 MCP 行只列十工具名、**不列参数** → 无需同步。 |
+| T-MRB-04 | 6a69168 | 兜底形态定 **clamp**（非静态断言）——照定案「钳制不抛错」；落点=顶层 `internal channelRowBudget`（与 `drainWarnings` 同规：非 object 成员，测试加载本文件门面类时不触发 `McpDbExecutor` 的 Logger 初始化）。`executeQuery` 首行取兜底值，`collect(resultSet, rowBudget)` 按兜底值截断。 |
+| T-MRB-05 | 6a69168 | 登记表改为「行默认 ≤200 / 上限 1000（maxRows 可配，越界钳制不抛错；通道层另有兜底钳制）」。新增 `src/test/.../mcp/McpRowBudgetTest.kt`（7 例：钳制边界表 / 常量口径 / 默认输出逐字节一致 / 生效预算报数 / 通道兜底 / 接线守卫 / 登记一致性守卫）。门禁读数见下。 |
 
 **门禁读数（2026-09-19 12:45，本工作树 `mpsv-r8-mrb`，沙盒 `mpsv-r8a`）**
 

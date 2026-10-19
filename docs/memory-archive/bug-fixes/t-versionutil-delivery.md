@@ -7,7 +7,7 @@ metadata:
   originSessionId: sess_bc501d91-a658-4cfd-a6f7-2a4ac3fc07d6
 ---
 
-T-VersionUtil（2026-09-10，master ea66ea7）：`update/VersionComparator.compare` 弃自研点分算法，改委托平台 `com.intellij.util.text.VersionComparatorUtil`（`lib/util_rt.jar`），与 IDE/Marketplace「发现新版」判定同口径。
+T-VersionUtil（2026-09-10，master 4ca1aa4）：`update/VersionComparator.compare` 弃自研点分算法，改委托平台 `com.intellij.util.text.VersionComparatorUtil`（`lib/util_rt.jar`），与 IDE/Marketplace「发现新版」判定同口径。
 
 **旧算法缺陷（实证）**：`2026.9.10-beta.1` 按 `.` 切分第三段 = `10-beta` 非数字段走字符串兜底 → 判**大于** `2026.9.10`；发版文档「semver 保证 beta.N < 正式版」只对平台比较器成立。平台比较器识别 `-beta` 预发布标记正确判小，且 `beta.10 > beta.9` 数值排仍成立（243/253/262 三平台 util_rt.jar 同程序实测行为一致）。
 

@@ -1,8 +1,8 @@
 # T-PreviewDisplayMode：预览显示模式持久化（竖向排列/关键字换行输入参数后丢失）开发计划
 
 > **创建日期**：2026-09-10
-> **状态**：✅ 已实施、已测试、已提交（master `7bf110e`，2026-09-10；SqlPreviewPanelTest 53/53 + 全量 3237/0/6 绿，sandbox-previewdm 隔离；runIde 真机走查留人工）
-> **分支**：master（HEAD `f13dc60`；`SqlPreviewPanel.kt` 含 T-PreviewTopOverlap 会话在途改动，本任务经索引级拆分提交，见 6.1）
+> **状态**：✅ 已实施、已测试、已提交（master `1305a5a`，2026-09-10；SqlPreviewPanelTest 53/53 + 全量 3237/0/6 绿，sandbox-previewdm 隔离；runIde 真机走查留人工）
+> **分支**：master（HEAD `3219428`；`SqlPreviewPanel.kt` 含 T-PreviewTopOverlap 会话在途改动，本任务经索引级拆分提交，见 6.1）
 > **优先级**：P1（功能性缺陷——用户按主流程操作即触发，竖向排列/关键字换行两个功能实际不可用）
 > **预估工时**：3~4h（F1 模式状态 + F2 按钮接线 + F3 测试，单笔 feat 提交）
 > **来源**：用户真机反馈（2026-09-10，IDEA 2026.2.1）——点「竖向排列」后左侧参数输入框填入值，右侧竖排形态消失、退回 `format()` 形态
@@ -194,7 +194,7 @@ private fun applyDisplayMode(sql: String): String = when {
 
 ---
 
-## 实施记录（2026-09-10 交付，master `7bf110e`）
+## 实施记录（2026-09-10 交付，master `1305a5a`）
 
 **与计划的偏差**：
 

@@ -55,7 +55,7 @@ If you access or modify model on EDT consider wrapping your code in WriteIntentR
 1. **243（编译基准 `ideaIU-2024.3.7.1`）**：`FileDocumentManagerBase.getDocument(VirtualFile)` 只有 `@RequiresReadLock` **注解**，无运行期检查（自官方 `ideaIU-2024.3.7.1-sources.jar` 提取原文确认）；`EditorLockFreeTyping` 这个类在 243 源码里根本不存在。
 2. **262（本机 IU-262.10315.125）**：`FileDocumentManagerBase.getDocument` 首行 `ThreadingAssertions.softAssertReadAccess()`（fernflower 反编译 `intellij.platform.core.impl.jar` 确认）；`FileDocumentManager.getDocument(vf, project)` 顶部还多一层 `EditorLockFreeTyping.assertReadAccess(file)`（反编译 `intellij.platform.core.jar` 确认，`@RequiresReadLock(generateAssertion = false)` 即由它显式断言）。而 `PsiDocumentManagerBase.getDocument(psiFile)` → `fileDocumentManager.getDocument(vf, project)`，所以**任何**「PSI 文件 → 文档」解析都被这条链覆盖。
 3. **断言的强度**：`ThreadingAssertions.softAssertReadAccess`（反编译）→ `Logger.error(exception)` → `IdeaLogger.error`。`IdeaLogger` 记 SEVERE + 版本/JDK/OS + `Plugin to blame` 头 + `reportToFus(t)`，随后 `if (shouldRethrow(t)) rethrow`。`Logger.shouldRethrow` 仅对 `ControlFlowException`/`CancellationException` 成立，故**生产模式不抛**——功能没断（真机日志显示 `createEditor` 后续 `registerContext`、控制台重建照常执行），代价是每次打开刷 4 条内部错误并上报；而 `Logger` 的 Javadoc 明示 UsefulTestCase 模式下 error 直接抛 `AssertionError`——**平台版本一旦抬到 253/262，这套测试会直接变红**。
-4. **为什么现在才暴露**：`createEditor` 这条路径自 T-PreviewFlash（7953aa2，2026-09-09）起改为「EDT 消费后台预热产物」——预热线程只产出 `(VirtualFile, PsiFile)`，**文档解析留在 EDT**（1537-1538 行）。改造前该位置在 EDT 的 `WriteIntentReadAction.compute` 之后紧接着执行，产物与锁序不同（预热竞态下 `PsiManager.findFile` 曾在 EDT 的 write-intent 区间内先建好文档缓存，后续裸 `getDocument` 命中缓存分支，绕过了 FileDocumentManager）。判定为**平台加固暴露的既有契约违约**，不是本轮新写错的逻辑。
+4. **为什么现在才暴露**：`createEditor` 这条路径自 T-PreviewFlash（89f63eb，2026-09-09）起改为「EDT 消费后台预热产物」——预热线程只产出 `(VirtualFile, PsiFile)`，**文档解析留在 EDT**（1537-1538 行）。改造前该位置在 EDT 的 `WriteIntentReadAction.compute` 之后紧接着执行，产物与锁序不同（预热竞态下 `PsiManager.findFile` 曾在 EDT 的 write-intent 区间内先建好文档缓存，后续裸 `getDocument` 命中缓存分支，绕过了 FileDocumentManager）。判定为**平台加固暴露的既有契约违约**，不是本轮新写错的逻辑。
 
 一句话根因：**在 EDT 鼠标事件里（无读权限）裸调 `PsiDocumentManager.getDocument`，243 平台只注解不检查，262 平台改成了记 ERROR 的内部错误断言。**
 
@@ -132,7 +132,7 @@ val doc = ReadAction.compute<Document, Throwable> {
 
 | 项 | 结果 |
 |----|------|
-| 代码改动 | `SqlPreviewPanel.kt` 一处（fix 提交 `e8b9d1d`）：1537-1538 行文档解析包 `ReadAction.compute<Document, Throwable>`，附注释记录 262 断言证据链与「lambda 内勿塞同步 VFS refresh」约束；上一行插入 `@Suppress("DEPRECATION")`（同文件既有写法） |
+| 代码改动 | `SqlPreviewPanel.kt` 一处（fix 提交 `1ef8bf6`）：1537-1538 行文档解析包 `ReadAction.compute<Document, Throwable>`，附注释记录 262 断言证据链与「lambda 内勿塞同步 VFS refresh」约束；上一行插入 `@Suppress("DEPRECATION")`（同文件既有写法） |
 | 编译 | `./gradlew compileKotlin` 通过 |
 | 全量回归 | `./gradlew test --no-build-cache --no-configuration-cache` BUILD SUCCESSFUL in 3m40s；解析 `build/test-results/test/*.xml` 共 263 套件、**3252/0/0/6**（用例/失败/错误/跳过），与 T-HibDualCapture 基线一致，零回归 |
 | 未做 | 262 真机日志验收（§三 第 3 步）与 `SqlInputEditor.kt:69` 的防御性包装——后者真机日志零命中，按「不修未复现的路径」留档观察 |

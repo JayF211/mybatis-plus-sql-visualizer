@@ -6,7 +6,7 @@ plugins {
     id("org.jetbrains.intellij.platform")
 }
 
-// T-BuildScriptSplit：测试基建分治——块级逐字搬运自根 build.gradle.kts（锚点 dc047bd），
+// T-BuildScriptSplit：测试基建分治——块级逐字搬运自根 build.gradle.kts（锚点 4c3e268），
 // 注释随迁；验收=分区指纹与基线一致 + testShards 全量绿。
 
 // 测试 classpath 排除 Vue 插件（org.jetbrains.plugins.vue）：

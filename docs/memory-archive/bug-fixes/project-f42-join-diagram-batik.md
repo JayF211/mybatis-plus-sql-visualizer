@@ -1,14 +1,14 @@
 ---
 name: project-f42-join-diagram-batik
-description: F-42 JOIN图渲染修复完成（2026-08-25，commit 17bb741）——PlantUML 8059→1.2024.8（Smetana 引擎）；F-xx（2026-08-26，commit c58fc2b）彻底移除 PlantUML + Batik，改用自绘 Swing Graphics2D 引擎，插件体积 42MB→5.3MB
+description: F-42 JOIN图渲染修复完成（2026-08-25，commit 82797a0）——PlantUML 8059→1.2024.8（Smetana 引擎）；F-xx（2026-08-26，commit d175317）彻底移除 PlantUML + Batik，改用自绘 Swing Graphics2D 引擎，插件体积 42MB→5.3MB
 metadata:
   type: project
   originSessionId: sess_fc75db72-2d81-4d87-92ab-0e4961722d7b
 ---
 
-## F-42 修复（已完成，2026-08-25，commit 17bb741）
+## F-42 修复（已完成，2026-08-25，commit 82797a0）
 
-F-42 JOIN 关系图渲染修复（commit b2f8be5 + 17bb741，2484 测试全绿，**已彻底解决**）。
+F-42 JOIN 关系图渲染修复（commit a4139fc + 82797a0，2484 测试全绿，**已彻底解决**）。
 
 ## 终极根因（全环境实证）
 
@@ -23,7 +23,7 @@ F-42 JOIN 关系图渲染修复（commit b2f8be5 + 17bb741，2484 测试全绿�
 - SVG 输出正常（3422 字节，无错误文本）
 - API（SourceStringReader/FileFormat/FileFormatOption）完全兼容；无外部传递依赖（21.9MB fat jar）
 
-## 辅助修复（b2f8be5 已提交）
+## 辅助修复（a4139fc 已提交）
 
 1. **模态弹窗阻塞 invokeLater**：`SqlPreviewDialog` 是模态弹窗，默认 invokeLater 在模态状态下延迟到弹窗关闭才执行回调（日志实证 40 秒）→ `invokeLater(r, ModalityState.any())`
 2. **渲染完成时组件 hidden**：标签页未选中时 swapContent/revalidate 无效 → JTabbedPane ChangeListener + `refreshAfterVisible()`

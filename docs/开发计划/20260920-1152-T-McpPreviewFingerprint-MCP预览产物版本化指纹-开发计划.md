@@ -5,7 +5,7 @@
 - 来源：第九轮报告 §7.2 **Z-28**——zMyBatis 的物化产物携带版本化 SHA-256 指纹：`zmybatis-materialized-execution-v1` 做域分隔前缀、字段 4 字节大端长度前缀防边界歧义、source revisions 排序后哈希（插入序不影响）、`declaredMutation` 与 `${}` 旗标进指纹（`Materialization.kt:331`/`:366-426`）
 - 性质：**产物可复核性**——不改渲染语义、不改工具行为；给产物加「同一 statement + revision + 参数 → 同一 SQL」的端到端复核键
 - 实施分支：自 master 拉任务分支 t-mcp-preview-fingerprint
-- 验证基线：master `22d7c49`（testShards 5383/0/0/6 + testDatabase 10/0/0/0 + agent 58/0/0/0）
+- 验证基线：master `f8c115d`（testShards 5383/0/0/6 + testDatabase 10/0/0/0 + agent 58/0/0/0）
 
 ---
 

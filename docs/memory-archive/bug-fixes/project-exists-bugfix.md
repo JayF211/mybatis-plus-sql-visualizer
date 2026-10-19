@@ -1,7 +1,7 @@
 ---
 name: project-exists-bugfix
 description: 用户实测 SQL 预览缺 exists 条件——根因是 WrapperLocator 链终结点误判（exists
-  条件方法与链终结点双语义撞名）；2026-10-07 由 T-ExistsChainTerminal 修复（7c1b079）
+  条件方法与链终结点双语义撞名）；2026-10-07 由 T-ExistsChainTerminal 修复（71e54b4）
 metadata:
   node_type: memory
   type: project
@@ -9,7 +9,7 @@ metadata:
 ---
 
 **状态勘正（2026-10-07）**：本档此前记为「修复方案已出待用户确认实施」，但长期未实施——**现已修复**，
-提交 `7c1b079`（分支 `t-exists-chain-terminal`），计划
+提交 `71e54b4`（分支 `t-exists-chain-terminal`），计划
 `docs/开发计划/20261007-1639-T-ExistsChainTerminal-工厂链带参exists误判为终结点-开发计划.md`。
 落地即本文档 §修复方案 的原文方案（按实参个数判），并抽为单一来源 `isExistsConditionCall`
 供终结点筛选与 `initializerIsWrapperChainWithoutTerminal` 共用；金样矩阵补 S91~S95，

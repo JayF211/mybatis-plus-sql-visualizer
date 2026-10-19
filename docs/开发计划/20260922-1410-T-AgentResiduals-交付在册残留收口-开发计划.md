@@ -2,7 +2,7 @@
 
 > 来源：2026-09-22 交付 **T-AgentConfigChannel（O-54）+ T-AgentSourceLocateStale（O-55）** 收口后，
 > 两份独立只读复核 + 真机级 e2e + 本机门禁实测累计登记 **7 项残留**（均不阻塞该交付；交付本体已合入并推送
-> master `c54f4f2`，门禁 testShards 495 套件 / 5645 用例 / 0 失败 + verifyGate 三目标 Compatible）。
+> master `bb5dca5`，门禁 testShards 495 套件 / 5645 用例 / 0 失败 + verifyGate 三目标 Compatible）。
 > 用户 2026-09-22 决定：**现在收**。
 > 相邻事项：两个**真缺陷** `T-ExplainChainHardening (O-48)` / `T-ErrorLocateUsability (O-49)` 另有既有计划
 > （`docs/开发计划/20260921-2322-…` / `20260921-2324-…`，均 P1），用户要求**先做那两个**；本计划写集与它们
@@ -66,17 +66,17 @@
 
 ## 实施记录
 
-### 一、车道与提交（2026-09-22，分支 `t-agent-residuals`，已合入 master `0abc1bb`）
+### 一、车道与提交（2026-09-22，分支 `t-agent-residuals`，已合入 master `b0bde1a`）
 
 | 项 | 提交 | 要点 |
 |---|---|---|
-| R1 | `0120bcf` | IDE 侧 `CallerSourceLocator` 跳过表补齐到与 agent 侧同集（15→58 项）+ 文档示例同步 + 守卫覆盖 |
-| R1b | `2e7e7b2` | **同步生效副本**：注入模板 `SourceInterceptorTemplates` 的 Java `isFrameworkFrame` 补齐同集 + 守卫扩到**全部 4 份副本**（含「四份都在扫描面内」防静默消失用例）+ KDoc 列清副本与消费者 + 迁移前提（存量已注入拦截器幂等不升级） |
-| R2 | `c27f5fb` | 测试侧 `@After` 不再取服务（快照持有 manager 引用）+ 姊妹守卫 `BannedApiSourceScanTest` 判据同步 |
-| R3 | `f6fb17b` | 心跳容差 2× **+ 形态判据移到观察窗内相邻间隔中位数（1.5×）** |
-| R4 | `6bb18d9` | ACK 超时 WARN 补判会话健康（分文案）+ `INTAKE_DROP_WARN_STEP`/`CONFIG_ACK_TIMEOUT_MS` 字面值断言 |
-| R5 | `78effae` | 按 D1 选 B：删 `ConnectionHandler` 顶层短路、`StatementHandler` 成唯一闸门、`dropToRaw` 告警名额修正 + 确定性用例 |
-| R7 | `9a2a0f5` | 真机探针包成 `e2eFakeIde` 任务并挂 `releaseGate` |
+| R1 | `345cd3c` | IDE 侧 `CallerSourceLocator` 跳过表补齐到与 agent 侧同集（15→58 项）+ 文档示例同步 + 守卫覆盖 |
+| R1b | `e601602` | **同步生效副本**：注入模板 `SourceInterceptorTemplates` 的 Java `isFrameworkFrame` 补齐同集 + 守卫扩到**全部 4 份副本**（含「四份都在扫描面内」防静默消失用例）+ KDoc 列清副本与消费者 + 迁移前提（存量已注入拦截器幂等不升级） |
+| R2 | `54bc1fa` | 测试侧 `@After` 不再取服务（快照持有 manager 引用）+ 姊妹守卫 `BannedApiSourceScanTest` 判据同步 |
+| R3 | `40d6386` | 心跳容差 2× **+ 形态判据移到观察窗内相邻间隔中位数（1.5×）** |
+| R4 | `cc0e6e2` | ACK 超时 WARN 补判会话健康（分文案）+ `INTAKE_DROP_WARN_STEP`/`CONFIG_ACK_TIMEOUT_MS` 字面值断言 |
+| R5 | `eec37d3` | 按 D1 选 B：删 `ConnectionHandler` 顶层短路、`StatementHandler` 成唯一闸门、`dropToRaw` 告警名额修正 + 确定性用例 |
+| R7 | `b388adf` | 真机探针包成 `e2eFakeIde` 任务并挂 `releaseGate` |
 
 ### 二、反向验证读数（逐项红→绿）
 
@@ -116,7 +116,7 @@
 
 ### 六、门禁（master 工作树，合并态）
 
-在 `mpsv-agent-config-locate`（master，含车道 1 合并 `7bb7eab` + 车道 2 合并 `0abc1bb`）跑全量四步：
+在 `mpsv-agent-config-locate`（master，含车道 1 合并 `95a4ebd` + 车道 2 合并 `b0bde1a`）跑全量四步：
 
 | 步骤 | 读数 | 结论 |
 |---|---|---|

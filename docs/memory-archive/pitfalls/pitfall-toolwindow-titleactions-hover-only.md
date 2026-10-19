@@ -10,9 +10,9 @@ metadata:
 
 # 工具窗标题栏动作（setTitleActions）新 UI 悬停才可见
 
-T-CaptureBack（20260918，提交 07337aa）实录：用户报「SQL 日志面板捕捉按钮不见了」。两轮截图实证按钮**存在**但平时不渲染——只有鼠标悬停工具窗后标题栏右上角才浮现。
+T-CaptureBack（20260918，提交 0239251）实录：用户报「SQL 日志面板捕捉按钮不见了」。两轮截图实证按钮**存在**但平时不渲染——只有鼠标悬停工具窗后标题栏右上角才浮现。
 
-**Why:** T-UiNative T-UN-11（提交 720ca21，2026-09-16）为退役「uiTraverser+反射 getAction+setIcon」刷新 hack，把捕捉开关从面板内工具栏迁到 `ToolWindow.setTitleActions`。迁移本身解决了刷新机制问题，但新 UI 下标题栏动作需悬停/激活才可见，主操作入口在用户视角「消失」，且与空态文案「点击『捕捉』」（指向面板工具栏心智）割裂。
+**Why:** T-UiNative T-UN-11（提交 45a9b16，2026-09-16）为退役「uiTraverser+反射 getAction+setIcon」刷新 hack，把捕捉开关从面板内工具栏迁到 `ToolWindow.setTitleActions`。迁移本身解决了刷新机制问题，但新 UI 下标题栏动作需悬停/激活才可见，主操作入口在用户视角「消失」，且与空态文案「点击『捕捉』」（指向面板工具栏心智）割裂。
 
 **How to apply:**
 - `ToolWindow.setTitleActions` 挂的动作在新 UI 是「悬停才渲染」形态——**主操作/主入口按钮不要挂标题栏**，放面板内工具栏；标题栏只适合次要或可接受隐藏形态的动作。

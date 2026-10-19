@@ -5,7 +5,7 @@
 - 来源：第十一轮报告 §8 DBX 增量清单 **#65**——DBX `80f8ed81`：T-SQL IF/ELSE/WHILE 控制流批次整体切分（`apps/desktop/src/lib/sql/sqlStatementRanges.ts:881,913,965` 的 `SQLSERVER_NON_BLOCK_BEGIN_KEYWORDS`、`scanSqlServerControlFlow`、`isSqlServerControlFlowBatch`，+201 行）
 - 性质：**正确性**——修的是「T-SQL 脚本被误合并/误武装后整段送执行或半批送执行」的切分面
 - 实施分支：自 master 拉任务分支（或按派单在在途回合分支上实施，以派单为准）
-- 验证基线：master 快照 `c07b8e3`（最近可核读数 testShards 5866 例 0 失败 6 跳过 + verifyGate 三目标 Compatible——实施时以当次实测为准）
+- 验证基线：master 快照 `51a62a7`（最近可核读数 testShards 5866 例 0 失败 6 跳过 + verifyGate 三目标 Compatible——实施时以当次实测为准）
 
 ---
 
@@ -16,7 +16,7 @@
 | 1 | 「切分器对 T-SQL 方言加控制流深度扫描，防 `IF BEGIN…END` 内分号把批次切碎」 | **不成立（口径修正 1，头号风险已被覆盖）**：我方**已有**三道 T-SQL 语义——① BEGIN/END 块感知（`SqlStatementSplitter.kt:296-303` 武装 + `:216` 判定，块内顶层 `;` 不切分）；② T-SQL 批首合并 `mergeControlFlowBatches`（`:341-364`，`CONTROL_FLOW_BATCH_HEADS={"IF"}`，裸 `IF…; ELSE…;` 并批 + 失衡截断批吞后续）；③ CASE 层隔离与 `END IF/LOOP/WHILE/REPEAT` 内层终结符（T-SSP-02 及 O-47 订正）。`IF @x=1 BEGIN SELECT 1; SELECT 2; END;` 按现态代码推演＝**1 段**（不是报告担心的碎句） | 本任务从「补控制流扫描」收窄为「治理既有机制的三个边缘」 |
 | 2 | DBX #65 的实质增量 | DBX 版在批首识别之外做了**三件我方没有的事**：① `BEGIN TRAN/DIALOG` 等非块 BEGIN 不算块（`SQLSERVER_NON_BLOCK_BEGIN_KEYWORDS`）；② 跨片段携带嵌套深度（`;` 缺省的 END 收尾也能闭合批次）；③ WHILE 同样作批首 | ①② 是我方真实缺口（见 1.2 推演）；③ 对我方不成立（见 §一.3） |
 
-### 1.1 现有状态维度（逐项实测，行号对 master 快照 `c07b8e3`）
+### 1.1 现有状态维度（逐项实测，行号对 master 快照 `51a62a7`）
 
 | 维度 | 落点 |
 |---|---|
@@ -119,7 +119,7 @@
 
 ---
 
-## 八、实施记录（2026-09-23，车道 t-tsql-splitter，基线 dev 顶 ac6a91f）
+## 八、实施记录（2026-09-23，车道 t-tsql-splitter，基线 dev 顶 09d723e）
 
 ### 8.1 逐项落地
 

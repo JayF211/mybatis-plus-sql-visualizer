@@ -5,7 +5,7 @@
 - 来源：UX 锚点核实——方言注册表 9 方言（`sql/Dialect.kt:689-699`），OceanBase / openGauss / GaussDB 全文 grep 零命中；信创双备（DM8 真机 + KingBase）已有交付与验证先例
 - 性质：功能补全（既有方言矩阵扩容，非新环；竞品侧零家支持信创方言，r11 §5 矩阵——补齐后「信创四备」叙事成立）
 - 实施分支：自 master 拉任务分支（实施前先让 O-62 §三.1 把本地 master 快进到 origin/master）
-- 验证基线：origin/master `133b4a2`
+- 验证基线：origin/master `fa9b57e`
 
 ---
 
@@ -20,13 +20,13 @@
 3. agent URL 推断：`DialectInference` 的 URL 前缀匹配面（`jdbc:oceanbase://`、`jdbc:opengauss://` 等，前缀清单见 §二.4）
 4. CRUD / 回滚 / 格式化链共用面自动继承
 
-**明确出圈（不做）**：OceanBase Oracle 模式（D1）；identity 包装（DM8 教训——先推定不需要，真机暴露再按 O-52 先例增量，`f543ae1` 先例在册）；GBase / TiDB 等（登记观察，§8.3 以族为单位控制重演半径）。
+**明确出圈（不做）**：OceanBase Oracle 模式（D1）；identity 包装（DM8 教训——先推定不需要，真机暴露再按 O-52 先例增量，`fba833c` 先例在册）；GBase / TiDB 等（登记观察，§8.3 以族为单位控制重演半径）。
 
 ## 二、待验证前提（实施前先证伪）
 
 1. **OceanBase MySQL 模式与 MySQL 方言兼容面**：backtick 引号、LIMIT 语法、EXPLAIN 形态推定高兼容（MySQL 5.7/8.0 语法族）——需真库或官方文档证实。dbx MCP 在册连接无 oceanbase 类型；若环境不可得，按「文档证实 + 真机留账」口径交付，禁冒充「验证通过」。
 2. **openGauss 内核基线**：openGauss 系 PG 9.2 演化但语法有分叉；EXPLAIN 支持面推定与 PG 同形（TEXT/JSON）。**GaussDB（华为云版）与 openGauss 社区版的 JDBC URL 前缀差异**（`jdbc:opengauss://` vs `jdbc:gaussdb://`）需查证后写入 D2 的定案。
-3. **折叠方向**：openGauss 推定 LOWER（PG 系，KingBase 同款先例）；OceanBase MySQL 模式推定 NONE。两者均属推定——真机打脸按 H2 先例处理（`df7d177` 订正 + 反向验证），不预设为已验。
+3. **折叠方向**：openGauss 推定 LOWER（PG 系，KingBase 同款先例）；OceanBase MySQL 模式推定 NONE。两者均属推定——真机打脸按 H2 先例处理（`97e28c3` 订正 + 反向验证），不预设为已验。
 4. **URL 推断注册点**：`DialectInference` 的 URL 匹配面位置与既有前缀表形态（agent 侧 URL 全链透传 → IDE 侧推断）——实施前先锚点定位，确认新前缀要在几处登记。
 5. **ExplainSupport 显式表登记格式**：按引擎文档登记 OB / openGauss 的 EXPLAIN 输出格式支持位，不臆测格式名。
 6. **Dialect 契约测试冻结面**：O-51/O-52 的契约断言族（折叠方向、identity 包装）对新增 object 的约束范围——实施前核对契约测试的扫描面，确认新方言要过哪几条。
@@ -63,7 +63,7 @@
 
 ## 七、实施记录
 
-- 实施日期：2026-09-23；分支 `t-dialect-xc`（基线 dev `3afc3bb`）；沙盒 `MPSV-DialectXc`（登记名 T-DialectXc，已注销）；`build.gradle.kts` 沙盒临时改动已还原（git diff 零残留）。
+- 实施日期：2026-09-23；分支 `t-dialect-xc`（基线 dev `0f4b531`）；沙盒 `MPSV-DialectXc`（登记名 T-DialectXc，已注销）；`build.gradle.kts` 沙盒临时改动已还原（git diff 零残留）。
 
 ### 7.1 交付物（提交清单）
 

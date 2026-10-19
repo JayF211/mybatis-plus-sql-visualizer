@@ -68,7 +68,7 @@ T-PT-01（契约升级）→ T-PT-03（mock 分派）→ T-PT-02（校验与占�
 
 ## 八、实施记录（实施后回填）
 
-- 实施分支：t-param-type-contract（git 工作树 mpsv-ptc，基线 8a3a6ff = dev 合流后 master）。
+- 实施分支：t-param-type-contract（git 工作树 mpsv-ptc，基线 a842b47 = dev 合流后 master）。
 - 交付范围：T-PT-01 ~ T-PT-05 全部条目，测试与文档同步。
 
 ### T-PT-01 契约升级（布尔 → 类型类别）

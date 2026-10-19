@@ -1,14 +1,14 @@
 ---
 name: t-inparamrec
 description: T-InParamRec IN 字面量 SQL 预览参数未识别——已交付 master
-  d98e4e9（20260916），三预览入口收编 toPreviewResult 统一识别通道
+  57dbd6a（20260916），三预览入口收编 toPreviewResult 统一识别通道
 metadata:
   node_type: memory
   type: project
   originSessionId: sess_654e670d-8553-4dd4-93fd-5b743805c7d3
 ---
 
-**T-InParamRec 已交付 master d98e4e9（2026-09-16，全量 test + agent 门禁绿，分支/工作树已清理）**。
+**T-InParamRec 已交付 master 57dbd6a（2026-09-16，全量 test + agent 门禁绿，分支/工作树已清理）**。
 
 用户反馈「in 的参数在 sql 日志中没有正常识别出参数」附实录日志与预览截图。**根因不是解析并发错挂**（与 [[project-m56-agent-bytecode]] 系列的 T-LogParseConc/T-HibConc 无关）：实录 SQL 的值全部由上游代码内联进文本，零 `?` 占位符、零绑定行——属「字面量 SQL」。项目本有 `LiteralParamRecovery` 字面量恢复方案（默认开），但三个预览入口中**源码跳转反查入口 `LogEntryPreviewOpener`（M37.1 独立实现，EntrySourceMatcher.kt）漏接**，识别失败回退后左栏「无未解析参数」、值不可编辑。
 

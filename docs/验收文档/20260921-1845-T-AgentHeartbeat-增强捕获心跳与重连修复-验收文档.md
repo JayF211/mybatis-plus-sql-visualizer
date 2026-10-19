@@ -3,7 +3,7 @@
 - 日期：2026-09-21 18:45
 - 任务编号：T-AgentHeartbeat（T-01 心跳节奏 / T-02 跨侧守卫 / T-03 premain 重连 / T-04 诊断行换行 / T-05 状态行真实性 / T-06 子类加载器静默失效）
 - 来源：用户反馈「我通过沙盒运行，sql 日志没有正常捕获到，你分析下沙盒日志看看什么原因并生成开发计划文件，还有这个提示信息可以适当换行」→ 立项 `docs/开发计划/20260921-1630-T-AgentHeartbeat-增强捕获30秒必掉线与诊断行换行-开发计划.md`；随后用户指令「`$sam` 使用 git 工作树开多个分支和目录并行实施，本次不受并发智能体数量限制」
-- 交付形态：`master` 自 `4990831`（立项提交）起，并入 5 条并行分支 + 1 条复核整改提交，末笔 `3cb9dac`
+- 交付形态：`master` 自 `5b7ec4c`（立项提交）起，并入 5 条并行分支 + 1 条复核整改提交，末笔 `c37b9d2`
 
 ---
 
@@ -13,14 +13,14 @@
 
 | 环节 | 事实 | 证据 |
 |---|---|---|
-| IDE 侧窗口 | 30 秒内无入站帧即摘除会话 | `AgentProtocol.ONLINE_WINDOW_MS` 由 T-RA-01（`a628a3b`，2026-09-18）起真正执行 |
+| IDE 侧窗口 | 30 秒内无入站帧即摘除会话 | `AgentProtocol.ONLINE_WINDOW_MS` 由 T-RA-01（`82feb08`，2026-09-18）起真正执行 |
 | agent 侧节奏 | 心跳**实际 60.6 秒**一发，非协议声明的 10 秒 | 探针直连生产 agent jar：`HELLO +17ms`、首条 `HEARTBEAT +60633ms`；独立核实代理复测 61.6s |
 | 机制 | `idleMs` 累加「假定每轮 200ms」，而每轮真实耗时≈1.2s（入站 CONFIG 读超时 1s + 睡眠 200ms）→ 凑够 10s 要 50 轮≈60s | `SenderLoop.java:70-84`（修复前） |
 | 后果 | 首条心跳永远赶不上窗口 → 会话必被摘除；沙盒日志四轮运行全部命中 | 存活 30.009 / 34.047 / 33.559 / 30.005 秒 |
 | 不可恢复 | premain 通道与 attach 链都只 `accept()` 一次就关监听 socket，重新挂载只由「进程启动」事件触发 | 现场：应用 JVM 又存活 **7 分 34 秒**（15:56:19→16:03:53），增强会话 15:56:49 摘除后**再无任何重建记录** |
 | 控制台通道 0 产出 | **不是缺陷**：demo 工程 `dev` 档不打印 MyBatis SQL（`application-dev.yml:35` 用 `Slf4jImpl`、`:45-47` 的 `logging.level` 整段注释、`logback-spring.xml` 不在 classpath 根） | 现场读数「已挂载 5 个、已扫描 88 行、产出 0 条」与此吻合 |
 
-**回归性质**：由 2026-09-18 的 `a628a3b` 引入。该提交前在线态只看 socket 是否断开，会话永不因心跳过期被摘除，agent 侧这个节奏偏差被掩盖了一个版本周期。
+**回归性质**：由 2026-09-18 的 `82feb08` 引入。该提交前在线态只看 socket 是否断开，会话永不因心跳过期被摘除，agent 侧这个节奏偏差被掩盖了一个版本周期。
 
 ---
 
@@ -28,12 +28,12 @@
 
 | 工作树 / 分支 | 提交 | 内容 |
 |---|---|---|
-| `...-t-heartbeat` / `t-agent-heartbeat` | `dc3e1c2` `f1f251d` `87777e8` | **T-01**：心跳判定改按最近出站帧的**墙钟差**（每轮都判，不被 `burst==0` 包住）；写完 HELLO 立即补发一条 HEARTBEAT；间隔可经 `sqlvis.agent.heartbeatMs` 注入；入站读超时改为 `间隔/3` 钳在 [50,1000]ms（默认仍 1000ms，与修复前逐值一致）。**T-02**：`ONLINE_WINDOW_MS = HEARTBEAT_INTERVAL_MS * 3`（值仍 30s，推导关系入码）；删掉空绿断言 `contains("10_000L")`，换成源码扫描的跨侧不变量 `window >= 3 × interval`；新增 `HeartbeatRhythmTest` 节奏实测 |
-| `...-t-reconnect` / `t-agent-reconnect` | `d8bf6c9` `2da7360` | **T-03**：`acceptPremain` 改循环 accept（上限 32）；首次回连超时与通道寿命拆成两个语义；新增 `onRunEnded()` 接在 `SqlLogManager.onConsoleRemoved`；补 pid 消亡判定（`ProcessHandle`）与 12h TTL 兜底；`PremainChannel` 实现 `Disposable` 注册进项目 disposable 树 |
-| `...-t-status` / `t-agent-status` | `dcdc5e7` `c891eea` | **T-05**：新增 `livenessFrameSeen`（HELLO 不计入）；摘除分「首条心跳未到」与「心跳停摆」两类；文案去掉「进程可能已卡死」因果断言、带上窗口秒数；双语 bundle 同步 |
-| `...-t-diagwrap` / `t-agent-diagwrap` | `37a7e9a` `a32d5aa` | **T-04**：渲染层改走 `StatusText.appendLine` + 自算折行（宽度取列表可用宽度、clamp 下限、首帧兜底、`ComponentListener` 缩放重排）；语义行切三行 |
-| `...-t-proxycl` / `t-agent-proxycl` | `d0c166b` | **T-06**（独立核实追加立项）：代理定义加载器改候选链实测校验；失败不再静默（计数 + 一次性 WARN）；语句包装失败返回原语句；夹具补驱动自定义接口 + 子加载器用例 |
-| 复核整改（直接在 master） | `3cb9dac` | `onPremainConnected` 补清两类回落标记（与 `attachToPid` 对称）；订正三处「互斥」谎报 |
+| `...-t-heartbeat` / `t-agent-heartbeat` | `5efc758` `ee10b86` `140655c` | **T-01**：心跳判定改按最近出站帧的**墙钟差**（每轮都判，不被 `burst==0` 包住）；写完 HELLO 立即补发一条 HEARTBEAT；间隔可经 `sqlvis.agent.heartbeatMs` 注入；入站读超时改为 `间隔/3` 钳在 [50,1000]ms（默认仍 1000ms，与修复前逐值一致）。**T-02**：`ONLINE_WINDOW_MS = HEARTBEAT_INTERVAL_MS * 3`（值仍 30s，推导关系入码）；删掉空绿断言 `contains("10_000L")`，换成源码扫描的跨侧不变量 `window >= 3 × interval`；新增 `HeartbeatRhythmTest` 节奏实测 |
+| `...-t-reconnect` / `t-agent-reconnect` | `6178713` `51ad43d` | **T-03**：`acceptPremain` 改循环 accept（上限 32）；首次回连超时与通道寿命拆成两个语义；新增 `onRunEnded()` 接在 `SqlLogManager.onConsoleRemoved`；补 pid 消亡判定（`ProcessHandle`）与 12h TTL 兜底；`PremainChannel` 实现 `Disposable` 注册进项目 disposable 树 |
+| `...-t-status` / `t-agent-status` | `a430c12` `80f67af` | **T-05**：新增 `livenessFrameSeen`（HELLO 不计入）；摘除分「首条心跳未到」与「心跳停摆」两类；文案去掉「进程可能已卡死」因果断言、带上窗口秒数；双语 bundle 同步 |
+| `...-t-diagwrap` / `t-agent-diagwrap` | `bc6e2f4` `b7c8058` | **T-04**：渲染层改走 `StatusText.appendLine` + 自算折行（宽度取列表可用宽度、clamp 下限、首帧兜底、`ComponentListener` 缩放重排）；语义行切三行 |
+| `...-t-proxycl` / `t-agent-proxycl` | `97a70d2` | **T-06**（独立核实追加立项）：代理定义加载器改候选链实测校验；失败不再静默（计数 + 一次性 WARN）；语句包装失败返回原语句；夹具补驱动自定义接口 + 子加载器用例 |
+| 复核整改（直接在 master） | `c37b9d2` | `onPremainConnected` 补清两类回落标记（与 `attachToPid` 对称）；订正三处「互斥」谎报 |
 
 **合流**：`AgentManager.kt` 由 git **自动合并成功**（T-03 与 T-05 两侧改动并存，各 11 处命中）；计划文档 `实施记录` 表每次冲突均按**取并集**裁决；全仓零冲突标记残留。
 
@@ -43,8 +43,8 @@
 
 | 通道 | 结果 |
 |---|---|
-| `releaseGate`（= `buildPlugin → verifyGate` 三目标兼容门禁 `→ testShards` 全量） | **BUILD SUCCESSFUL**（5m55s，末笔提交 `314e835` 上执行）；三目标 verdict 全 **Compatible**；`testShards` **491 类 / 5604 用例 / 6 跳过 / 0 失败 / 0 错误** |
-| 合流后复验（master `d4c0963` = 本批 + 另一会话的 `t-template-keydrop` 四笔） | `buildPlugin` + `verifyGate` 三目标仍全 **Compatible**；`testShards` **490 类 / 5601 用例 / 6 跳过 / 0 失败 / 0 错误**。本批全部改动经 `git show HEAD:<file>` 逐处确认仍在 HEAD（`lastOutboundMs` / `HEARTBEAT_INTERVAL_MS` / `appendLine` 均在位），`4e05100` 仍是 master 祖先——**合流未丢内容** |
+| `releaseGate`（= `buildPlugin → verifyGate` 三目标兼容门禁 `→ testShards` 全量） | **BUILD SUCCESSFUL**（5m55s，末笔提交 `4049043` 上执行）；三目标 verdict 全 **Compatible**；`testShards` **491 类 / 5604 用例 / 6 跳过 / 0 失败 / 0 错误** |
+| 合流后复验（master `a1b3068` = 本批 + 另一会话的 `t-template-keydrop` 四笔） | `buildPlugin` + `verifyGate` 三目标仍全 **Compatible**；`testShards` **490 类 / 5601 用例 / 6 跳过 / 0 失败 / 0 错误**。本批全部改动经 `git show HEAD:<file>` 逐处确认仍在 HEAD（`lastOutboundMs` / `HEARTBEAT_INTERVAL_MS` / `appendLine` 均在位），`95d8eb8` 仍是 master 祖先——**合流未丢内容** |
 | 合流后首跑的一次假失败（已三步证伪） | `McpHistoryIngestTest` 4 例红（`AlreadyDisposedException: [T-ST-02] AlreadyDisposed@shard1 … service=SqlLogManager`）。证伪：①隔离复跑 4/4 绿；②**`testShard1` 单独重跑全绿**；③随后 `testShards` 一次全绿。判为**分片顺序共享状态泄漏**（仓内既有 T-StabilityTail 在册项），由本轮测试类增删（本批新增 `EmptyTextRenderTest` 等 + 另一会话删 1 增 2 个测试类）引起的**分片重排**触发，非功能回归 |
 | `buildPlugin` | **SUCCESS** |
 | `verifyGate`（243 / 253 / 262 三目标） | 三条 verdict 全为 **Compatible** |

@@ -66,7 +66,7 @@ T-IG-01（raw 事实暴露）→ T-IG-02（执行闸门）→ T-IG-03（旁路�
 
 ## 八、实施记录（实施后回填）
 
-（2026-09-18 实施，分支 t-injection-gate，基线 8a3a6ff）
+（2026-09-18 实施，分支 t-injection-gate，基线 a842b47）
 
 **T-IG-01（raw 注入事实暴露）**：`XmlPreviewModel` 新增 `hasDollarRawSegments`（`from` 内 collect 走查 TextSqlNode 时收集 `${` token，非空即 true；转义 `\${` 经 TokenParser 逃逸不计，与 T-DollarInjectMark 引擎口径一致），`XmlPreviewService.toResult` 透传 `PreviewResult.hasDollarRawSegments`（新增参数带默认值 false，既有构造点零影响）。XML 与注解两条预览链共用 toResult，一处透传全链受益。
 

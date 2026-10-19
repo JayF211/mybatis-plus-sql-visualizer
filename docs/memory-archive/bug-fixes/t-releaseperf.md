@@ -1,6 +1,6 @@
 ---
 name: t-releaseperf
-description: T-ReleasePerf 发版链路提速已交付（t-releaseperf 分支 c44dbfd 未合
+description: T-ReleasePerf 发版链路提速已交付（t-releaseperf 分支 d0c0a16 未合
   master）——verifyGate 权威门禁离线化 7m26s→3m06s、releaseGate 一命令、verifyOnly；含 IPGP
   判定缺陷/豁免文件注释坑/verify-home 互锁/配置缓存四坑沉淀
 metadata:
@@ -9,7 +9,7 @@ metadata:
   originSessionId: sess_d9d56516-e577-4d75-9848-c27af1b05c50
 ---
 
-# T-ReleasePerf：发版链路提速（2026-09-15 交付，分支 t-releaseperf @ c44dbfd，worktree mpsv-releaseperf，**未合 master**）
+# T-ReleasePerf：发版链路提速（2026-09-15 交付，分支 t-releaseperf @ d0c0a16，worktree mpsv-releaseperf，**未合 master**）
 
 ## 结果
 - **verifyGate 三目标（243+253+262）从历史中位 7m26s → 3m06s（-58%）**，三份 verdict Compatible 且计数与历史逐一一致（243=3/253=6/262=52 deprecated、各 14 experimental），下载 0 B 离线生效；243 单目标 28s（中位 90s）。

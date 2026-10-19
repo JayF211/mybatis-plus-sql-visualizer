@@ -158,9 +158,9 @@ commonDao.findByQuery(
 
 **工作树与提交链**：
 
-- 工作树 `F:/code/Java/Gitee/SongRenShuo/mpsv-hql-noalias-prop`，分支 `t-hql-noalias-prop`（扁平名，自 master `69a4028` 切出）。
-- `69a4028` docs(计划)：计划文件 + 现状探针（master 上先行提交）。
-- `f025a67` fix(jpa)：T-01 + T-02 实施 + 探针转正（`git mv` 为 `HqlBarePropertyMappingTest`）+ 契约改造。
+- 工作树 `F:/code/Java/Gitee/SongRenShuo/mpsv-hql-noalias-prop`，分支 `t-hql-noalias-prop`（扁平名，自 master `787551a` 切出）。
+- `787551a` docs(计划)：计划文件 + 现状探针（master 上先行提交）。
+- `e9b0368` fix(jpa)：T-01 + T-02 实施 + 探针转正（`git mv` 为 `HqlBarePropertyMappingTest`）+ 契约改造。
 
 **生产代码落点**（收敛在 `converter/jpa/JpaAliasTableResolver.kt` 单文件，管线结构未动）：
 
@@ -178,7 +178,7 @@ commonDao.findByQuery(
 
 - RED 基线（实施前）：31 条跑、8 红，全红在预期断言——现状产物原样保留 `beAutoZone = true` / `stationCode = ?` / `set beAutoZone = ?`（三类形态均实证）。
 - 反向验证（临时摘除 T-01/T-02 修复分支，源内标记 REVERSE-VERIFY 后恢复）：**同样 8 条红**，与 RED 基线形态一致——绿由两修复带来，非断言空转。
-- 实施后：定向 **BUILD SUCCESSFUL 全绿**（31 条）；`testFast` 全桶 **3172 条，1 失败**——失败为 `GuardSelfTestCoverageMetaGuardTest`（`mcp/McpGateFilterRegistrationGuardTest.kt` 未登记进 GUARD_CLASSES），**master 基线自带**（69a4028 已含该类，非本任务引入，留相关会话收口）；本任务新增 10 例已进桶（3162→3172）。
+- 实施后：定向 **BUILD SUCCESSFUL 全绿**（31 条）；`testFast` 全桶 **3172 条，1 失败**——失败为 `GuardSelfTestCoverageMetaGuardTest`（`mcp/McpGateFilterRegistrationGuardTest.kt` 未登记进 GUARD_CLASSES），**master 基线自带**（787551a 已含该类，非本任务引入，留相关会话收口）；本任务新增 10 例已进桶（3162→3172）。
 - 全量门禁：**未执行**——只读收口代理按预案在第 2 步停止：`timeout 10/15 docker info`、`docker version` 三次探测全部超时挂起（引擎半活态），照「半活态跑全量会无限挂死」定例不跑 `testShards`。收口代理登记已正常注销。**权威全量门禁缺口未闭合**，待 docker daemon 恢复后可直接重派收口代理（步骤：register 独立沙盒 → docker info 验活 → testShards → done）；当前绿读数止于定向 31 条全绿 + `testFast` 全桶 3172 条（残余风险面主要是 ui 包平台测试类，其中走 HqlConverter 生产链的形态已由 `HqlAliasColumnMappingTest` 的 project 形态用例定向覆盖）。
 
 **实施过程中的坑（留档）**：

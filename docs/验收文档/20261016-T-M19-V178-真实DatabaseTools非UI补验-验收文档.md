@@ -2,7 +2,7 @@
 
 ## 范围与运行前提
 
-基线 `dev@4c7ea2c3`，独立分支 `t-m19-v178-nonui`。没有启动 runIde、GUI 验收、全量、verify、clean 或 --stop；不合并、不推送。首阶段真实平台为IU-243.28141.41；后续已追加253真实八例、262显式重排classpath对照八例及243 H2/自然注入实跑，详见后文续验节。签名证据始终与服务运行证据分开。
+基线 `dev@a434dc2c`，独立分支 `t-m19-v178-nonui`。没有启动 runIde、GUI 验收、全量、verify、clean 或 --stop；不合并、不推送。首阶段真实平台为IU-243.28141.41；后续已追加253真实八例、262显式重排classpath对照八例及243 H2/自然注入实跑，详见后文续验节。签名证据始终与服务运行证据分开。
 
 普通 test/testFast 的 classpath 主动排除 DatabaseTools，因此不具备证明真实 SQL PSI 的条件。`testDatabase` 是五个 `testDb*` 任务的聚合，而非一个 Test 任务。四类 Console/Selector/Diagram/ExecDoc 默认读取 demo 私有 `.idea/dataSources.xml` 或 `.local.xml`，部分依赖 `car_device_info/station_info`；本次没有运行这些读取路径。只运行既有 `testDbDriverPipeline`，并在同类追加真实平台 fixture。驱动种子读取的仅是驱动清单与 jar，不读取数据源密码文件。
 

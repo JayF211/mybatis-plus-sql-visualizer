@@ -61,7 +61,7 @@ T-NC-01（收集+RawResult 扩展）→ T-NC-02（ExplainTool 接线）→ T-NC-
 
 ## 八、实施记录（实施后回填）
 
-**2026-09-17 实施完毕（提交 474852e，dev 分支直接交付）**
+**2026-09-17 实施完毕（提交 c864b6f，dev 分支直接交付）**
 
 - **T-NC-01**：McpDbExecutor 执行前先 drain 一次语句级+连接级 warnings（DBX 口径，防连接复用时上一条陈旧 notices 串扰），执行成功后采集挂 RawResult.notices（默认空清单，既有构造点零感知）；失败路径直接抛出无载体=DBX「出错语句 notices 丢弃」。
 - **T-NC-02**：ExplainTool 输出方言行后尾附 `notices:` 节（每条一行，单条内换行压平）；formatNotices 空清单返回空串保证空 notices 输出逐字节与现状一致（防回归硬门禁）。

@@ -6,7 +6,7 @@
 > **占号**：O-130/R76/D129~D130/V152~V153（引用前实测：本计划生成时 O 最高 O-129 / R 最高 R75 /
 > D 最高 D128 / V 最高 V151，均已随 T-PremainReattach 消耗）。
 
-## 一、现状（代码实证，dev-bak `65d486d` 态）
+## 一、现状（代码实证，dev-bak `0e671f1` 态）
 
 分页拦截器模拟（R12 T-PaginationSim）当前**一把总开关** `paginationSimEnabled`（默认开）同时
 控制两类产出：
@@ -97,7 +97,7 @@ PaginationInnerInterceptor 不执行 COUNT，反编译实证）——但该语�
 
 ## 七、实施记录
 
-2026-10-09 实施（工作树 countsimtoggle，分支 t-countsimtoggle，基线 b4fe6f9）。S1~S6 全部落地，无方案级偏差。
+2026-10-09 实施（工作树 countsimtoggle，分支 t-countsimtoggle，基线 cff0b8b）。S1~S6 全部落地，无方案级偏差。
 
 ### 待验证前提证伪结论（§六 P1~P4）
 
@@ -118,7 +118,7 @@ PaginationInnerInterceptor 不执行 COUNT，反编译实证）——但该语�
   （不含 paginationSim 字段），其往返测试拷贝显式字段清单——零影响；
   `PluginSettingsPersistenceTest` 的 before 快照只比对显式字段清单——新增字段无破坏形态；
   XmlSerializer 对持久化缺失字段回落默认 true。但 `testLanguageWriteThroughRefreshesCheckboxTexts`
-  钉死设置页复选框总数 41，新增子复选框触发守卫红（首轮读数），按同步先例 ccd0f74 更新
+  钉死设置页复选框总数 41，新增子复选框触发守卫红（首轮读数），按同步先例 cb255be 更新
   41→42 并补 T-CountSimToggle 双语文案正反两面断言（zh「附分页 COUNT 查询预览」/
   en「Attach pagination COUNT query preview」）——非产品缺陷，测试维护点。
 

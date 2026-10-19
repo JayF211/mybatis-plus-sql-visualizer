@@ -24,5 +24,5 @@ dev 分支全套测试 2875 例中 3 例失败（2026-09-03 实测，`git stash`
 2. `PluginSettingsPersistenceTest.kt:147`：计数改 20 + 注释补 `F-44-7 +1；耗时显示 +1`。
 3. `SqlLogHistoryRoundTripTest.kt:72`：断言改为 `withTerminator(captured.restoredSql)` 比较（推荐，影响最小）。
 
-**Why:** 三处失败经 `git stash` 在干净 dev 基线（fdc9213）复现，确认非本次 T-CallerPicker 改动引入；生产行为均有明确功能意图（F-44-7 源码捕获、耗时显示、历史文件可直接执行）。
+**Why:** 三处失败经 `git stash` 在干净 dev 基线（2bd4673）复现，确认非本次 T-CallerPicker 改动引入；生产行为均有明确功能意图（F-44-7 源码捕获、耗时显示、历史文件可直接执行）。
 **How to apply:** 按开发计划 T-StaleTest-01~04 实施；修复后三个类单跑 + 全套验证。

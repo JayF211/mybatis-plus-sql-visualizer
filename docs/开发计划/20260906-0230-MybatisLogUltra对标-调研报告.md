@@ -35,7 +35,7 @@ Mybatis Log Ultra（Marketplace ID 26550，xmlId `org.tiktok.plugin`），作者
 
 ## 2. 四维对照矩阵
 
-「本插件」列依据本地代码与 CHANGELOG（分支 feature/r2-n10-ultra-recon，基线 0edb7b9），Ultra 列依据上节证据。
+「本插件」列依据本地代码与 CHANGELOG（分支 feature/r2-n10-ultra-recon，基线 3869cc1），Ultra 列依据上节证据。
 
 ### 2.1 日志还原
 

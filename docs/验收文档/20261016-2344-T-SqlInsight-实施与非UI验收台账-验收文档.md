@@ -1,6 +1,6 @@
 # T-SqlInsight 实施与非 UI 验收台账
 
-> 状态：实施与功能门禁已完成，资源预算受控复验在途；不是“全部验收通过”报告。基线 dev@44ee9d11，集成分支 t-sql-insight。**2026-10-19 用户调整：全部工作结束后不再合并 dev，成果保留在该分支与工作树。** 本专题不启动沙盒 UI。
+> 状态：实施与功能门禁已完成，资源预算受控复验在途；不是“全部验收通过”报告。基线 dev@c3fc0f52，集成分支 t-sql-insight。**2026-10-19 用户调整：全部工作结束后不再合并 dev，成果保留在该分支与工作树。** 本专题不启动沙盒 UI。
 > [开发计划](../开发计划/20261016-1716-T-SqlInsight-SQL洞察与关系流向分期建设-开发计划.md) / [调研报告](../调研报告/20261016-1716-SQL洞察与关系流向功能演进-调研报告.md) / 合入dev后的完整自动化验收见[插件自动化验收](./20261019-1140-T-SqlInsight-插件自动化验收-验收文档.md)。
 
 ## 一、目标到产物
@@ -9,34 +9,34 @@
 
 | 任务 | 具体产物/判据 | 状态及证据 |
 |---|---|---|
-| W00 | 冻结dev、独立集成树、资产和授权台账 | 已建集成树，dev@44ee9d11；文档提交9d98dd92/d23f1dd0 |
-| W01 | AST作用域、黄金语料、源码范围可证/未知 | 集成7df5c3f1/3f4623fa；21例及扩面47例绿、反向1红/2红；精确range未知 |
-| W02 | 执行身份、质量、协议及捕获覆盖探针 | 31fbeaeb/68c07266；agent66例绿，Kotlin端待整体门 |
-| W03 | 页签身份、独立移除、取消/释放 | 12c4d60b；39例绿/撤真实票据门1红/恢复39绿 |
-| W10 | SELECT/JOIN/CTE/DML角色及基础字段来源 | 3f4623fa，47例语义定向覆盖；最终集成未验 |
-| W11 | 解释结果的生产入口/视图 | f155ca22/48fd7d9b；更多“分析SQL”真实入口，57例非UI绿 |
+| W00 | 冻结dev、独立集成树、资产和授权台账 | 已建集成树，dev@c3fc0f52；文档提交2a9cf874/884ac360 |
+| W01 | AST作用域、黄金语料、源码范围可证/未知 | 集成38dcd4c8/97d4b89b；21例及扩面47例绿、反向1红/2红；精确range未知 |
+| W02 | 执行身份、质量、协议及捕获覆盖探针 | d5c15c4e/e87bd359；agent66例绿，Kotlin端待整体门 |
+| W03 | 页签身份、独立移除、取消/释放 | ea505d0e；39例绿/撤真实票据门1红/恢复39绿 |
+| W10 | SELECT/JOIN/CTE/DML角色及基础字段来源 | 97d4b89b，47例语义定向覆盖；最终集成未验 |
+| W11 | 解释结果的生产入口/视图 | b9662a23/29af3fbe；更多“分析SQL”真实入口，57例非UI绿 |
 | W12 | 图/树表、定位与复制 | 同上；纯JDK图树4例独立快桶绿，范围缺失选择全语句 |
 | W13 | 编辑失效、无数据库/插件后备与安全 | 文档身份/stamp/generation/ticket门；实际监听摘除1红/恢复57绿 |
-| W14 | 表达式、CTE透传、UNION列来源 | 48c1a58b/27c6ac81，已含于47例；支持边界仍明确 |
-| W15 | XML渲染时源片段与条件映射 | 4d32c38b/3661478b，trace与实际标量/嵌套预算已测；场景UI已接。expanded节点路径与实际追加模板，不是原XML offset |
-| W16 | 命名预设只读场景矩阵及分支状态 | 13da7b42/4d32c38b与场景入口，快照/参数/文档版本反向红闭环；当前模型场景不覆盖手工草稿 |
-| W17 | 脱敏场景与语义期望回归导出 | 5a525b1d与后台导出入口，5例核心/场景消费者纳入最终67绿；预览后显式复制，本页期望可保存比较，不执行匿名包 |
+| W14 | 表达式、CTE透传、UNION列来源 | 2c23230d/ab4e0b21，已含于47例；支持边界仍明确 |
+| W15 | XML渲染时源片段与条件映射 | 8c748e9a/36fdba96，trace与实际标量/嵌套预算已测；场景UI已接。expanded节点路径与实际追加模板，不是原XML offset |
+| W16 | 命名预设只读场景矩阵及分支状态 | dd0c6856/8c748e9a与场景入口，快照/参数/文档版本反向红闭环；当前模型场景不覆盖手工草稿 |
+| W17 | 脱敏场景与语义期望回归导出 | e74f1d6f与后台导出入口，5例核心/场景消费者纳入最终67绿；预览后显式复制，本页期望可保存比较，不执行匿名包 |
 | W20 | agent执行/run/sequence/线程/结果身份 | 已实现，可选字段兼容；agent66及后续108相关定向绿 |
 | W21 | 质量计数、终态水位与有界存储 | nonce/独立控制质量已实现；run STOP不代表request complete |
 | W22 | IDE去重前分析分流及权限停采 | 真实socket100事件/日志1行、nonce配置与可选追踪停采2例绿；Channel7/Store10绿，未知库按执行隔离不混统计 |
 | W23 | 指纹/调用点/数据库画像 | RuntimeInsightView实际启用/快照/聚合/基线消费者已接；同代bundle与未知质量说明 |
 | W24 | 预览与真实执行候选及对比 | 候选身份带入显式样本Diff，显示语句类型/占位数/结构变化；参数类型无证据保持未知，不自动认领同次执行 |
 | W30 | 标签观测分组与未知请求边界 | RuntimeEvidencePanel显式tag分组已接，标签不作请求ID |
-| W31 | javax/jakarta请求根及结束事件 | ed1be2bb/027d00eb；真实API双族及108相关定向绿，仅SERVLET_THREAD_ONLY |
+| W31 | javax/jakarta请求根及结束事件 | 0c6b7526/1049a65d；真实API双族及108相关定向绿，仅SERVLET_THREAD_ONLY |
 | W32 | 请求SQL时间轴与归因树 | 请求SQL明细/区间并集与同run/request筛选条形图已接，允许合法负nanoTime；RequestTraceStore4及时间条组件验证 |
 | W33 | 重复/N+1证据及降噪 | 请求内重复候选+显式临时忽略/恢复已接，不改事实计数或预算，不假称确定N+1 |
 | W34 | 请求基线与三态预算 | RequestBaselineView显式capture/JSON复制加载/环境声明/结构预算已接；核心19例及消费者已纳统一67绿，不完整基线永不确定FAIL/PASS |
-| W35 | 连接租借/事务提交回滚/保存点观测 | 2ff05cd9～42948877真实H2及108定向绿；事务视图已接，lease仅包装生命周期，close不等于commit |
+| W35 | 连接租借/事务提交回滚/保存点观测 | a5fe1832～a2b3ba44真实H2及108定向绿；事务视图已接，lease仅包装生命周期，close不等于commit |
 | W40 | 星号/子查询/MERGE/有序临时表扩面 | 语义47绿后独立审计8真红修至63绿，metadata显式Schema绑定/清除生产入口与2例已验证；复杂未证语法仍未知 |
 | W41 | 显式范围使用反查与影响定位 | 真实PSI8例、逻辑4例通过；当前文件/模块选择、PSI stamp导航生产入口已接 |
 | W42 | Schema/类型/映射差异 | Schema6+Audit11绿，codec4绿；双快照显式比较/nullable方向/已收集usage affected导航已接 |
-| W43 | 计划算子解释与前后联动 | 0e6771cb解释4例、既有JSON13/Diff10/ResultView14回归通过；R61/R90保持 |
-| W44 | 写目标/试算边界与局部事务证据 | eb0ec7ac不可变WriteImpactContext与人工事务关联同屏已接；生产消费者1例+模型2例绿，COUNT未执行、不自动归属提交 |
+| W43 | 计划算子解释与前后联动 | c21909b9解释4例、既有JSON13/Diff10/ResultView14回归通过；R61/R90保持 |
+| W44 | 写目标/试算边界与局部事务证据 | 0a4bab83不可变WriteImpactContext与人工事务关联同屏已接；生产消费者1例+模型2例绿，COUNT未执行、不自动归属提交 |
 | W45 | 有界SELECT结果比较及回归执行 | 75核心+Remote5+签名1（243/253/262）绿；显式目标/后台prepare/审批/取消/执行port UI已接，真实按钮消费者通过 |
 | W46 | 有证据优化候选与安全负例 | 三规则4例绿；优化页证据/前提及stamp范围定位已接，仅候选不自动改写 |
 | W47 | trace关联及版本化离线导入 | OTLP JSON v1投影8例绿；显式FileChooser+限量UTF8/粘贴+HTTPS用户链接已接，本地文件正反例通过 |
@@ -50,15 +50,15 @@
 - 真失败：execute(boolean)统一装箱Integer导致DML行数遗漏；隐式异常没有事件；内部catch接住的ATHROW被提前标执行错误。
 - 修复：Boolean独立装箱，方法外层逃逸异常处理器最后注册以保留驱动原处理优先级，不采用COMPUTE_FRAMES触发类加载。
 - 修复后定向XML：SqlInsightWeaveProbeTest 5、StatementWeaveEndToEndTest 10、StatementWeaverFramePatchVerifyTest 3、StatementWeaverVendorCoverageTest 9、ZeroLoadClassWriterWeaveTest 5，合计32/0/0/0。
-- runtime提交d75f85b6，集成收编6c1886c8。主控读取runtime树agent/build/test-results/test五个XML核对32/0/0/0。该读数不是所有驱动/JDK完整验收，也不是集成最终树全量结果。
+- runtime提交b6d36136，集成收编0c0d2b9e。主控读取runtime树agent/build/test-results/test五个XML核对32/0/0/0。该读数不是所有驱动/JDK完整验收，也不是集成最终树全量结果。
 
 ### 2026-10-17 阶段验证记录（不同冻结点不可直接相加）
 
-- 语义扩面：semantic@24523f21，四类47/0/0/0；撤metadata身份与条件更新旧来源两闸=47/2/0/0，恢复47绿。包含函数/CASE/聚合/UNION/star/MERGE/临时表与污染反例。
-- 预览生产入口：preview@6dbcca04，七类57/0/0/0；撤真实DocumentListener.invalidate=1/1/0/0，恢复57绿。纯JDK视图另testFast4例通过，不重复计入57。
-- 主控算法补测：preview固定48fd7d9b+夹具修复3e48f793，六类41/0/0/0。首轮from缺errors导致测试编译失败，修复后XML确实入场；不是NoSuchMethodError受限通过。
-- 结果/授权/离线导入：preview固定685ebfd1，四类31/0/0/0，含真实H2采集7、结果比较10、授权6、离线导入8。
-- 请求/事务agent：runtime@b6b335e2，同任务20类108/0/0/0。初轮真实H2在同测试loader提前加载导致ZeroLoad三例红；改独立驱动loader，保留原断言后同任务108全绿，不靠分任务隐藏冲突。
+- 语义扩面：semantic@defca8cf，四类47/0/0/0；撤metadata身份与条件更新旧来源两闸=47/2/0/0，恢复47绿。包含函数/CASE/聚合/UNION/star/MERGE/临时表与污染反例。
+- 预览生产入口：preview@7a6e59d2，七类57/0/0/0；撤真实DocumentListener.invalidate=1/1/0/0，恢复57绿。纯JDK视图另testFast4例通过，不重复计入57。
+- 主控算法补测：preview固定29af3fbe+夹具修复cf8e0f70，六类41/0/0/0。首轮from缺errors导致测试编译失败，修复后XML确实入场；不是NoSuchMethodError受限通过。
+- 结果/授权/离线导入：preview固定fc675406，四类31/0/0/0，含真实H2采集7、结果比较10、授权6、离线导入8。
+- 请求/事务agent：runtime@85df09d0，同任务20类108/0/0/0。初轮真实H2在同测试loader提前加载导致ZeroLoad三例红；改独立驱动loader，保留原断言后同任务108全绿，不靠分任务隐藏冲突。
 - 在途测试：使用服务/Schema/优化13纯逻辑+8真实PSI（BasePlatformTestCase，无GUI）正向已绿，反向及恢复仍在该车道进行，最终读数待收编。
 
 上述全部是阶段定向证据，不等于最终全量、兼容、性能或GUI通过。阶段独立归档已保存为集成工作树 `.local/sql-insight-stage-evidence.tar.gz`（不入公开仓），SHA256 `ae9637050ca9bb4c82654e45c6ac9d10b6d55887ba7b9f5ad5bbc29dc377bf1d`；包含h03/m1-ui/consumer/comparison-ui/final-consumer各轮XML日志、三轮agent性能summary与逐进程JSON、sender红绿和model-metrics。原工作树build仍保留；归档是证据备份，不是最终全量通过凭证。
@@ -73,19 +73,19 @@
 
 ### 首轮：模型与agent分别计量
 
-模型冻结50f3c833：普通SQL暖态P95 1.609ms（250样本）、取消含解析P95 1.759ms（100）、超长拒绝0.018ms、500列分析27.983ms。1万事件入库26.720ms、快照P95 5.461ms、估算保留3,309,388字节；500请求关联1万SQL P95 10.819ms；图200节点/400边预算构建P95 3.904ms。测量窗口heap增长不能解释为常驻增量；产物在runtime树build/sql-insight-perf/model-metrics.json。
+模型冻结d5556762：普通SQL暖态P95 1.609ms（250样本）、取消含解析P95 1.759ms（100）、超长拒绝0.018ms、500列分析27.983ms。1万事件入库26.720ms、快照P95 5.461ms、估算保留3,309,388字节；500请求关联1万SQL P95 10.819ms；图200节点/400边预算构建P95 3.904ms。测量窗口heap增长不能解释为常驻增量；产物在runtime树build/sql-insight-perf/model-metrics.json。
 
 agent首轮3组各3个独立JVM，实际心跳为实验注入200ms，warm200请求，业务每轮500请求×20SQL且checksum一致。与仅SQL捕获相比，开启请求追踪P95约+10.28%、wall约+8.03%，且SQL事件丢约70%；请求起止1000帧到齐不补偿SQL丢失。因此不达标，不能凭延迟数据宣称可靠覆盖。
 
 ### 发送调度第一刀与默认节奏复测
 
-真实socket原默认10秒心跳基线：256条SQL排空3246ms、256条控制排空3865ms，两条吞吐断言红；STOP时ACK约6ms、半帧断连正例通过。最小修复d2b86725让busy轮不阻塞等CONFIG：SQL排空232ms、控制221ms，STOP ACK约8ms，37条相关定向全绿。队列2048及隐私未改。
+真实socket原默认10秒心跳基线：256条SQL排空3246ms、256条控制排空3865ms，两条吞吐断言红；STOP时ACK约6ms、半帧断连正例通过。最小修复26057a63让busy轮不阻塞等CONFIG：SQL排空232ms、控制221ms，STOP ACK约8ms，37条相关定向全绿。队列2048及隐私未改。
 
 随后默认心跳10秒、warm2000、完整3×3独立JVM复测：tracing对SQL中位P95约+2.83%、wall+0.74%、CPU+1.18百分点，预热末两块9轮都在15%内；但tracing只收到4602/2802/2048条，仍丢5398/7198/7952条，全部采集完整性失败。无agent对照的P95与CPU增幅也不能隐藏。原因进一步指向空闲时1秒入站等待加200ms休眠，突发到来不能唤醒sender；busy优化不解决idle起始积压。
 
 ### 可唤醒发送第二刀与无损对照
 
-真实idle→burst原先首SQL要1208ms，新单reader/有界mailbox4/合并wake信号/单writer后低于1ms；256SQL约23ms、256control约15ms，STOP ACK约2ms，半帧断连及心跳/配置保持。runtime65962c3a，集成e4499a53，11类61定向绿；没有放大SQL2048队列。
+真实idle→burst原先首SQL要1208ms，新单reader/有界mailbox4/合并wake信号/单writer后低于1ms；256SQL约23ms、256control约15ms，STOP ACK约2ms，半帧断连及心跳/配置保持。runtime65962c3a，集成421df0a3，11类61定向绿；没有放大SQL2048队列。
 
 第三轮默认10秒心跳、warm2000、完整3×3独立JVM：6个agent进程每轮generated=10000且unique received=10000，SQL/control损失均0，tracing三轮500START+500END完整配对，captureCoverageComplete=true。中位none/sql/tracing分别：wall983.89/1402.53/1231.00ms；SQL P95 159.4/267.2/229.4µs；一核归一CPU100.04/236.28/178.97%；RSS135.05/180.22/153.77MiB。tracing相对SQL捕获P95为-14.15%，但第三tracing预热比0.600不稳，不能宣传负开销；相对无agentP95+43.91%、wall+25.12%、CPU+78.93百分点如实披露。无agent差异包含既有完整SQL捕获成本，不能全归因新增请求追踪。
 
@@ -97,7 +97,7 @@ agent首轮3组各3个独立JVM，实际心跳为实验注入200ms，warm200请�
 
 tracing相对sql的中位P95为-5.16%、wall为-1.54%，逐轮P95增量却为+21.71%/-5.16%/-28.35%，仍明显波动。单核归一CPU中位从170.61%增至190.74%，增加20.13个百分点；包含排空窗口仍增加21.23个百分点，超过既定5个百分点初始预算。RSS中位增加约5.63MiB，未GC heap差约-0.95MiB，均不冒充常驻内存证明。相对none的总成本另列：P95+22.86%、wall+15.53%、CPU+91.83个百分点，不把既有捕获成本全归因新增追踪。
 
-开跑前背景IDE约9%单核CPU，过程两次采样为0，Gradle daemon采样为0且无worker/verifier；这是明确记录背景负载的实验，不是认证空机。原始summary SHA256 `26688cf9181adacaff9515a2ecf7185f0136fb546c387593627a3724bc8bf6ff`，位于runtime树`build/MPSV-SqlInsight-Runtime-Perf/sql-insight-perf/agent-trials-wakeup-default-warm10000/summary.json`。结论：资源门不得记PASS，当前阻止最终合回dev；继续核计量分母、绝对CPU与线程热点，不放宽目标、不丢事件、不删除质量证据。任何后续生产优化都需新冻结重新验证，ab8b54b1的门禁只覆盖原冻结代码。
+开跑前背景IDE约9%单核CPU，过程两次采样为0，Gradle daemon采样为0且无worker/verifier；这是明确记录背景负载的实验，不是认证空机。原始summary SHA256 `26688cf9181adacaff9515a2ecf7185f0136fb546c387593627a3724bc8bf6ff`，位于runtime树`build/MPSV-SqlInsight-Runtime-Perf/sql-insight-perf/agent-trials-wakeup-default-warm10000/summary.json`。结论：资源门不得记PASS，当前阻止最终合回dev；继续核计量分母、绝对CPU与线程热点，不放宽目标、不丢事件、不删除质量证据。任何后续生产优化都需新冻结重新验证，5881e503的门禁只覆盖原冻结代码。
 
 ### CPU计量复核与有界JFR诊断
 
@@ -109,13 +109,13 @@ tracing相对sql的中位P95为-5.16%、wall为-1.54%，逐轮P95增量却为+21
 
 ### 单次UTF8编码优化与新agent功能复验
 
-实际调用链证明：原SenderLoop.sendEvent为长度校验执行一次getBytes后丢弃数组，再调用writeFrame(String)重复编码。最小修改复用已检查的byte[]，不改JSON、帧格式、锁、队列、flush或质量字段。真实class调用图测试原先expected1/actual2为红；修后9类42例全部通过，覆盖Unicode补充平面、孤立代理字符、null、UTF8精确长度边界、超长拒绝及既有I/O质量/配置/心跳行为。已收编228e8571，原全量冻结ab8b54b1不能覆盖这次生产变更。两模式都会受益，未据此宣称新增追踪成本达标。
+实际调用链证明：原SenderLoop.sendEvent为长度校验执行一次getBytes后丢弃数组，再调用writeFrame(String)重复编码。最小修改复用已检查的byte[]，不改JSON、帧格式、锁、队列、flush或质量字段。真实class调用图测试原先expected1/actual2为红；修后9类42例全部通过，覆盖Unicode补充平面、孤立代理字符、null、UTF8精确长度边界、超长拒绝及既有I/O质量/配置/心跳行为。已收编8dfe37ab，原全量冻结5881e503不能覆盖这次生产变更。两模式都会受益，未据此宣称新增追踪成本达标。
 
-基准夹具699f1595仅增加有界measureRequests（1～10000，默认500不变），5000请求长窗须独立记账，不能替代原500请求预算。原新A/B尚未执行：现场真实干扰是另一会话IDE启动的demo活动；GradleWorker经核实为闲置daemon，不应误称正在运行测试。
+基准夹具3394c255仅增加有界measureRequests（1～10000，默认500不变），5000请求长窗须独立记账，不能替代原500请求预算。原新A/B尚未执行：现场真实干扰是另一会话IDE启动的demo活动；GradleWorker经核实为闲置daemon，不应误称正在运行测试。
 
 优化产物agent SHA256 `8616b14342320a8ff1b1128f07d55d50b7aad06e05ecb886d7e7f86ac05ac876`已重新运行H09，不沿用旧agent结果。JDK 1.8.0_181、17.0.19、21.0.11均FUNCTIONAL_PASS：各5请求起止配对、4唯一功能SQL（3请求内）、7事务帧、真实commit/rollback关联及最终库行数1；SQL generated=written=5含setup，controlGenerated=written=17，全部loss0。javax/H2边界保持，summary SHA256 `e484ca4793e52a18008a20ac58f3ae398dea8a37a07005f63256a47e4ae75d3b`，原始目录为runtime树`build/MPSV-SqlInsight-Encoding-H09/functional-8-17-21`。
 
-已单向吸收dev日志时间归属修复至be132978；第五轮冻结`be132978e183e9f72967658da09141be23c6a799`，独立gate实际完成默认五片，exit0、15分15秒。主控核round5/test-audit.json：五片各1630/1505/1565/1731/1617例，共8048；external27、agent216，总814类8291/0/0/10，实际通过8281。769个计划分片类无缺，新增64类327方法全部入场且无跳过/重复；新SenderEncoding三例、dev时间归属14/15/4例均fresh通过。10项skip分类与第四轮一致，不扩大环境覆盖。日志SHA256 `0d70d6fc32ac936504239f65b42f23fef82b430ad520b6d5ec48f3672bc4a204`，审计JSON SHA256 `da1c7235c2f1de22eed1eebcc1ab69606fd4d189c1d2b26cc19a930b8bfa358b`。随后buildPlugin、产品内容检查和同ZIP三代离线verifyGate均exit0；243/253/262实际新鲜verdict均Compatible，警告分类计数与第四轮一致。第五轮不与性能A/B并行，资源预算依然未通过，不因功能全量绿而提前合流。
+已单向吸收dev日志时间归属修复至e9ed6d1c；第五轮冻结`e9ed6d1cb7eed6b7c8bb843a0af1017595d90671`，独立gate实际完成默认五片，exit0、15分15秒。主控核round5/test-audit.json：五片各1630/1505/1565/1731/1617例，共8048；external27、agent216，总814类8291/0/0/10，实际通过8281。769个计划分片类无缺，新增64类327方法全部入场且无跳过/重复；新SenderEncoding三例、dev时间归属14/15/4例均fresh通过。10项skip分类与第四轮一致，不扩大环境覆盖。日志SHA256 `0d70d6fc32ac936504239f65b42f23fef82b430ad520b6d5ec48f3672bc4a204`，审计JSON SHA256 `da1c7235c2f1de22eed1eebcc1ab69606fd4d189c1d2b26cc19a930b8bfa358b`。随后buildPlugin、产品内容检查和同ZIP三代离线verifyGate均exit0；243/253/262实际新鲜verdict均Compatible，警告分类计数与第四轮一致。第五轮不与性能A/B并行，资源预算依然未通过，不因功能全量绿而提前合流。
 
 第五轮ZIP 10,204,004字节，SHA256 `8488ebc383ea05895c7f13296348d15e1d57a145e817ca8c1094d09096eea6e5`；主JAR `7b30aaaa60a017261a0b0a51998230a73b803c422c93f76f0e14ae8f0cd8e8d6`；包内agent `eeff454d3655e24c880c6ca8832363b3f2ede0bb10debe717116fc058cf37557`与本轮build/dist逐字节相同。与优化H09制品8616b143对比，147个条目名称、顺序、解压字节全部相同，仅各条目date_time不同；无class/resource差异。关键主类、预览入口、两bundle各187键、agent关键类major52及无Servlet依赖混入均通过。最终result.json SHA256 `6abef8075a30f92b066b39200691b750bb583d7b8332eb38bc3079ac4444ec24`；制品对照JSON `f51e346612b7b5f3b9ed5ea658f5561cf7d9e91c6014d2d0153f470a257cbec1`。门禁已注销，报告停止写入；result明确性能A/B未执行、资源预算不PASS。
 
@@ -139,13 +139,13 @@ tracing相对sql的中位P95为-5.16%、wall为-1.54%，逐轮P95增量却为+21
 
 原始目录runtime树`build/MPSV-SqlInsight-Encoding/paired-5000`：summary SHA256 `26641272d9dcad29b3596e211a7740c64fbcbc0cf25849d2c5ac95a87c157d18`，背景证据 `fab24f86c20438a8f0656b3761fd92ca866068c409279af9f822eee63fc5d58c`，evaluation `30d3d66d011233f5cadd3c7999c3457ebad07ca3d92ee71c3433afe798c6c3d5`。实验任务已注销，无新实验自动重试。
 
-同期只读核dev预览/执行准备增量后，整体单向吸收至`e494c0fac1e1a095bd00d5521fd7a9a34ad573cd`（含dev b5ac5647）。必须保留执行receipt/owner/取消/交互超时完整链与洞察文档generation的独立职责；新增组合验证关注面板clear/关闭后迟到原生准备回调，不把owner校验等同面板生命周期保障。第五轮be132978绿灯不覆盖这些新增生产变更，需重新冻结验证。
+同期只读核dev预览/执行准备增量后，整体单向吸收至`17bb91f1ec6b0ca7b34e881022b6ff3300eec8db`（含dev 96fc74b9）。必须保留执行receipt/owner/取消/交互超时完整链与洞察文档generation的独立职责；新增组合验证关注面板clear/关闭后迟到原生准备回调，不把owner校验等同面板生命周期保障。第五轮e9ed6d1c绿灯不覆盖这些新增生产变更，需重新冻结验证。
 
-合后真实反例已运行：preview检查点8bddfbf1仅提取原prepareDefaultConsole两闭包作为受控派发入口，未添加失效修复。主控读取原始XML核实5例/4失败/0错误/0跳过，活跃编辑器正例通过；四红分别为A.clear后旧回调复活nativeDoc、A.dispose后旧回调仍保留nativeDoc、同面板替换内容后旧回调释放新editor，以及clear后迟到console重新嵌入。失败均为实际副作用断言，不是环境异常；证据在preview树`build/prepare-boundary-evidence/red-original`。此处覆盖面板生产消费边界，不冒充DatabaseTools会话端到端。
+合后真实反例已运行：preview检查点fc7b643b仅提取原prepareDefaultConsole两闭包作为受控派发入口，未添加失效修复。主控读取原始XML核实5例/4失败/0错误/0跳过，活跃编辑器正例通过；四红分别为A.clear后旧回调复活nativeDoc、A.dispose后旧回调仍保留nativeDoc、同面板替换内容后旧回调释放新editor，以及clear后迟到console重新嵌入。失败均为实际副作用断言，不是环境异常；证据在preview树`build/prepare-boundary-evidence/red-original`。此处覆盖面板生产消费边界，不冒充DatabaseTools会话端到端。
 
-修复已收编为18722bdd（测试缝与初始反例9f97013e）：独立consolePrepareGeneration使新请求/current每次赋值（含同对象）/clear/dispose作废旧准备，在onConsole/onEditor、方言及延后EDT副作用前校验；拒绝旧回调只返回，不释放外部拥有的editor/console。dev owner/receipt/cancel及独立ComparisonTargetSession保持不变。新增同current重复prepare、B已接管、已排EDT任务后clear反例后，精确摘代际比较而保留current/disposed，2例均真实变红；恢复后平台7类85/0/0/0、快桶2类38/0/0/0，主控读取red-original、red-token、green-restored、fast实际XML核对。无新增平台API，临时探针与沙盒恢复、工作树干净。
+修复已收编为b79983a0（测试缝与初始反例8ff3df40）：独立consolePrepareGeneration使新请求/current每次赋值（含同对象）/clear/dispose作废旧准备，在onConsole/onEditor、方言及延后EDT副作用前校验；拒绝旧回调只返回，不释放外部拥有的editor/console。dev owner/receipt/cancel及独立ComparisonTargetSession保持不变。新增同current重复prepare、B已接管、已排EDT任务后clear反例后，精确摘代际比较而保留current/disposed，2例均真实变红；恢复后平台7类85/0/0/0、快桶2类38/0/0/0，主控读取red-original、red-token、green-restored、fast实际XML核对。无新增平台API，临时探针与沙盒恢复、工作树干净。
 
-第六轮冻结`18722bdd28db31f11b1f98e945b4f35887a427d7`实际完整测试exit0，用时15分48秒。主控核round6/test-audit.json：五片1851/1341/1629/1569/1691共8081例，external28、agent216，总815类8325/0/0/10，实际通过8315；770个计划分片类齐全，新增65类336方法全部fresh、无缺席/跳过/重复。生命周期9例全部通过，changed-tests-audit的8类119例也全部通过；菜单跨版本签名三个方法实际覆盖243/253/262。10项skip仍为Docker5、外部库1、Database classpath2、symlink1、ACP1，不扩称环境覆盖。
+第六轮冻结`b79983a00a62003e37c2f8d59a597ab7bb1ec110`实际完整测试exit0，用时15分48秒。主控核round6/test-audit.json：五片1851/1341/1629/1569/1691共8081例，external28、agent216，总815类8325/0/0/10，实际通过8315；770个计划分片类齐全，新增65类336方法全部fresh、无缺席/跳过/重复。生命周期9例全部通过，changed-tests-audit的8类119例也全部通过；菜单跨版本签名三个方法实际覆盖243/253/262。10项skip仍为Docker5、外部库1、Database classpath2、symlink1、ACP1，不扩称环境覆盖。
 
 第六轮日志SHA256 `58132017ca3f25e5032a8f4814cadbb6be9436aec396c356514abb27c1ada1e9`；test-audit SHA256 `47688e868ba7fc7a261ff1fe6346ba14c7136f2c5cfaa6ffaacb049916071b63`；changed-tests-audit SHA256 `f22e88dabeb25b3ab755bedbfec714b37f1469361dd19cb328afdc8cbb0dc4f2`。冻结后主控仅改文档。随后打包、内容检查及同ZIP三代离线兼容全部通过，门禁任务已注销，报告停止写入；资源预算仍未通过。
 
@@ -155,7 +155,7 @@ tracing相对sql的中位P95为-5.16%、wall为-1.54%，逐轮P95增量却为+21
 
 ### 历史重写说明
 
-2026-10-18/19，仓库的 dev 与 t-sql-insight 引用被另一会话执行 `filter-branch` 重写。核对结果：dev 旧 tip `b5ac5647` 与新 tip 的父级 `96fc74b9` 树哈希均为 `92b1120b`；集成分支旧提交 `18722bdd` 与新提交 `b79983a0` 树哈希均为 `4b258d41`；`git diff` 两侧为空。即**提交内容未变，仅 SHA 改变**，第六轮门禁读数仍对应当前树。后续文档引用以新 SHA 为准，旧 SHA 保留作历史溯源。
+2026-10-18/19，仓库的 dev 与 t-sql-insight 引用被另一会话执行 `filter-branch` 重写。核对结果：dev 旧 tip `96fc74b9` 与新 tip 的父级 `96fc74b9` 树哈希均为 `92b1120b`；集成分支旧提交 `b79983a0` 与新提交 `b79983a0` 树哈希均为 `4b258d41`；`git diff` 两侧为空。即**提交内容未变，仅 SHA 改变**，第六轮门禁读数仍对应当前树。后续文档引用以新 SHA 为准，旧 SHA 保留作历史溯源。
 
 2026-10-19 用户调整交付去向：**最终不再合并 dev**，成果保留在 `t-sql-insight` 分支与 `mpsv-sql-insight` 工作树。计划与台账中“合回dev”表述已按此改写；未执行任何合并、推送或发布。
 
@@ -178,7 +178,7 @@ tracing相对sql：P95 **+27.17%**、wall +9.23%、CPU绝对时间 +18.8%、单�
 
 ## 五、最终冻结与自动化门禁
 
-冻结提交 `67533aca415bf227e891d697ad45cdf33563b4ff`，基于已同步dev `5d884a5e`。专用detached工作树 `mpsv-sql-insight-gate` 生产写集为空，配置/输出仅在其build下；主控期间仅提交文档，不让在途代码改变绿灯含义。
+冻结提交 `e3babd14da678ff986e5cef9c3e055dcd85d5327`，基于已同步dev `0cbf10fc`。专用detached工作树 `mpsv-sql-insight-gate` 生产写集为空，配置/输出仅在其build下；主控期间仅提交文档，不让在途代码改变绿灯含义。
 
 - 测试命令：`:testShards --no-configuration-cache -PmpvDockerTests=false -Pkotlin.compiler.execution.strategy=in-process`，默认5片，包含external与agent子项目。
 - 打包与兼容：测试通过后分别执行`:buildPlugin --no-configuration-cache`、`:verifyGate --no-configuration-cache -PverifyOnly=true`，默认243/253/262离线检查，不跑GUI。
@@ -188,9 +188,9 @@ tracing相对sql：P95 **+27.17%**、wall +9.23%、CPU绝对时间 +18.8%、单�
 - 首轮状态：全量11分33秒后失败，未执行打包/兼容。shard1=157类1777/0/0/1；shard2=152类1520/6/0/2；agent=38类213/0/0/0；external=6类27/0/0/1。shard3～5未启动，62新增类中32未入场，不构成完整覆盖。
 - 首轮6红：后台PSI捕获守卫命中UsageNavigation块内重取站点；fatal守卫命中RemoteSqlComparisonBridge/PreviewTabManager；bundle守卫把动态拼接前缀当字面量；premain重挂两例的selfPID被新辅助JVM安全闸拒绝；织入源守卫仍要求旧无参WeaveGate形态。由主控/对应车道逐项核实修复，禁止删安全闸或造无消费者bundle父键。
 - 首轮日志SHA256 `0112fedbe1a17961004f5159828e9fb4f5e46011cf4ba645f43c3c50ef7ccd5a`；审计报告SHA256 `af7090e79bdc6e641cdaf299af45be721243b15b211aec750fd2688f41f7df9d`，均在gate树build/final-gate。4项实际skip为Windows符号链接权限1、Database测试classpath不可用2、ACP impl制品缺席1；容器用例所在后续片尚未执行，不能提前算入skip。
-- 修复使67533aca的全量读数过期，须另冻新SHA完整复跑，不把第一片绿与第二轮部分绿拼成全量。首轮归档 `.local/sql-insight-gate-round1-failed.tar.gz`，SHA256 `826fb6aacb296817000865103cfff4e8996ee8a223ad8bbcd61a6019c7682759`。
-- 六红修复：Remote fatal资源关闭语义/重挂self PID夹具局部注入正对照/ExecutionScope真实嵌套守卫收编edc9a9c0，元守卫登记214adcb5；UI fatal优先透传与导航块内PSI重取精准说明988db4fe，真实去注释负例；W43动态键模板及9实际算子键双语断言43b1a351。生产attach安全闸未放宽、没有虚造bundle父键。后端定向平台32、Meta/Wiring15绿，UI守卫组合七类39/0/0/0，含Banned/Bundle/Meta全扫描及真实导航去注释1命中、fatal/普通异常行为测试。
-- 第二轮正式冻结 `b23e890de8b46cea71f9ed5b8fb5b7df16443a0c`，已单向吸收dev `c15a63cc` 的非GUI日志几何探针。授权gate干净detached切换新SHA完整复跑5片/agent/external，本地init仅强制Test任务fresh，不clean；日志/审计进round2目录，不覆盖round1。第二轮在第四片失败，完整情况如下。六红修复定向独立归档 `.local/sql-insight-gatefix-evidence.tar.gz`，SHA256 `0266f92584d119dbd33802b601b92e98a30b124d2f9f9c8e462434971a20a4c7`。
+- 修复使e3babd14的全量读数过期，须另冻新SHA完整复跑，不把第一片绿与第二轮部分绿拼成全量。首轮归档 `.local/sql-insight-gate-round1-failed.tar.gz`，SHA256 `826fb6aacb296817000865103cfff4e8996ee8a223ad8bbcd61a6019c7682759`。
+- 六红修复：Remote fatal资源关闭语义/重挂self PID夹具局部注入正对照/ExecutionScope真实嵌套守卫收编7270b67d，元守卫登记0ebf2761；UI fatal优先透传与导航块内PSI重取精准说明a43eef79，真实去注释负例；W43动态键模板及9实际算子键双语断言32f2fc71。生产attach安全闸未放宽、没有虚造bundle父键。后端定向平台32、Meta/Wiring15绿，UI守卫组合七类39/0/0/0，含Banned/Bundle/Meta全扫描及真实导航去注释1命中、fatal/普通异常行为测试。
+- 第二轮正式冻结 `acb5e0b272090d1844047164413add81272d3353`，已单向吸收dev `6e15b820` 的非GUI日志几何探针。授权gate干净detached切换新SHA完整复跑5片/agent/external，本地init仅强制Test任务fresh，不clean；日志/审计进round2目录，不覆盖round1。第二轮在第四片失败，完整情况如下。六红修复定向独立归档 `.local/sql-insight-gatefix-evidence.tar.gz`，SHA256 `0266f92584d119dbd33802b601b92e98a30b124d2f9f9c8e462434971a20a4c7`。
 
 ### 第二轮完整结果与回交
 
@@ -205,23 +205,23 @@ tracing相对sql：P95 **+27.17%**、wall +9.23%、CPU绝对时间 +18.8%、单�
 | external | 6 | 27/0/0/1 |
 | agent | 38 | 213/0/0/0 |
 
-两项为陈旧测试契约：AgentListenSyncTest期望旧JSON未含三个默认false追踪字段，原停采/脱敏值未变；JavaCodeGeneratorJoinTest期望MP核心Lambda.selectAs，本地MP3.5.17 javap证实无该API，dev UI005已改为QueryWrapper完整字符串投影，MPJ路径仍须selectAs。分别补精确字段启停闭环与真实编译/MPJ正对照，未放宽生产安全规则。修复提交3e5f31fd/142cc926，定向JavaCodeGeneratorJoinTest39、JavaCodeGeneratorTest45、AgentListenSyncTest3合计87/0/0/0已核XML。第三轮候选a9a3488b已单向吸收dev3393dc66的Sharding日志配对/徽章修复，完整复跑待短JDK功能验证结束。
+两项为陈旧测试契约：AgentListenSyncTest期望旧JSON未含三个默认false追踪字段，原停采/脱敏值未变；JavaCodeGeneratorJoinTest期望MP核心Lambda.selectAs，本地MP3.5.17 javap证实无该API，dev UI005已改为QueryWrapper完整字符串投影，MPJ路径仍须selectAs。分别补精确字段启停闭环与真实编译/MPJ正对照，未放宽生产安全规则。修复提交2baf2383/fdc83ff5，定向JavaCodeGeneratorJoinTest39、JavaCodeGeneratorTest45、AgentListenSyncTest3合计87/0/0/0已核XML。第三轮候选ba1c024d已单向吸收dev038e1442的Sharding日志配对/徽章修复，完整复跑待短JDK功能验证结束。
 
 本轮10skip：Docker明确禁用5、外部jdbcUrl未给1、Database测试classpath缺席2、符号链接权限1、ACP结构性1。round2日志SHA256 `eedb0ce810b22dc89c9855799c9f462c00981a58abe53b16e2f655288754178a`，audit `f0e9425cc6a7795162efc6bb300eed58a6958e76df94ef5c9a51b1e8a972681c`；封存 `.local/sql-insight-gate-round2-failed.tar.gz`，SHA256 `f4493623a5d9e107aa161f11037998e224aa29cff79e7b3736e0f32e6114c3a4`。
 
 ### 第三轮冻结
 
-冻结 `a9a3488b64a86264c9ac3979ba8d2e8ca0fde77a`，已吸收dev `3393dc66` 日志配对与徽章修复；R2两红为测试契约更正，原功能保护保持。gate detached完整从片1复跑，所有Test强制fresh，Docker显式禁用，默认5片。05:44 preflight Commit约51.179/73.750GB、余约22.57GB；并行仅另一dev四类短定向，不是另一全量，使用独立沙盒。本轮片1实际失败：159类1505/3/0/0，agent38类213绿、external6类27/0/0/1；片2～5未运行，63新增类48未入场。三红均为AliasDualTrackDefenseTest同族旧MP核心Lambda/selectAs预期，与已落dev UI005整链字符串Wrapper回落不符；由runtime车道扩为整族reverse定向盘点，保留真实编译/别名/WHERE/ORDER及MPJ正对照，不放宽生产逻辑。日志SHA256 `1d1510ddfbd92242642fac373166a2a1075c2d6552297779ff3a6c4716b535fe`，audit `491bf9f7770c3f77f7d1dcceeb8c4150905fcfad7d82400984f382b95621f5ed`；归档`.local/sql-insight-gate-round3-failed.tar.gz` SHA256 `29c85b20aa6790427cda9cd78e6144c4c7f982eb881215704b12c1ffd7fda2a0`。未打包、未verify，仍无全量通过读数。
+冻结 `ba1c024d5e95cfdc58f042b005d9d8d8d5a8b2b9`，已吸收dev `038e1442` 日志配对与徽章修复；R2两红为测试契约更正，原功能保护保持。gate detached完整从片1复跑，所有Test强制fresh，Docker显式禁用，默认5片。05:44 preflight Commit约51.179/73.750GB、余约22.57GB；并行仅另一dev四类短定向，不是另一全量，使用独立沙盒。本轮片1实际失败：159类1505/3/0/0，agent38类213绿、external6类27/0/0/1；片2～5未运行，63新增类48未入场。三红均为AliasDualTrackDefenseTest同族旧MP核心Lambda/selectAs预期，与已落dev UI005整链字符串Wrapper回落不符；由runtime车道扩为整族reverse定向盘点，保留真实编译/别名/WHERE/ORDER及MPJ正对照，不放宽生产逻辑。日志SHA256 `1d1510ddfbd92242642fac373166a2a1075c2d6552297779ff3a6c4716b535fe`，audit `491bf9f7770c3f77f7d1dcceeb8c4150905fcfad7d82400984f382b95621f5ed`；归档`.local/sql-insight-gate-round3-failed.tar.gz` SHA256 `29c85b20aa6790427cda9cd78e6144c4c7f982eb881215704b12c1ffd7fda2a0`。未打包、未verify，仍无全量通过读数。
 
 ### 第三轮同族修复与第四轮冻结
 
-R3三红修复已收编为638a5740（原babc87c5），仅修改AliasDualTrackDefenseTest与GeneratedProjectionCompiler两份测试文件，未改变生产行为。核心LAMBDA/WRAPPERS_LAMBDA生成结果实际编译并核完整投影、实名WHERE和ORDER；MPJ selectAs正对照、未知列限定名、错误别名不得反向纠偏的负例保留。主控读取全部实际XML复核：快桶10类275例、平台SqlToJavaConverterTest 23例，共11类298/0/0/0。该结果覆盖reverse整个测试包，不等于项目全量。XML独立归档`.local/sql-insight-reverse-r3-verified.tar.gz`，SHA256 `ca4a4b2cd43de09e0d07f9cd50bd0aeaa5a28154ba4dd80c8a14c891dd85dfe9`。
+R3三红修复已收编为9b4b8a99（原1fd090c3），仅修改AliasDualTrackDefenseTest与GeneratedProjectionCompiler两份测试文件，未改变生产行为。核心LAMBDA/WRAPPERS_LAMBDA生成结果实际编译并核完整投影、实名WHERE和ORDER；MPJ selectAs正对照、未知列限定名、错误别名不得反向纠偏的负例保留。主控读取全部实际XML复核：快桶10类275例、平台SqlToJavaConverterTest 23例，共11类298/0/0/0。该结果覆盖reverse整个测试包，不等于项目全量。XML独立归档`.local/sql-insight-reverse-r3-verified.tar.gz`，SHA256 `ca4a4b2cd43de09e0d07f9cd50bd0aeaa5a28154ba4dd80c8a14c891dd85dfe9`。
 
-第四轮冻结 `ab8b54b15e5723003c0d3af1ab3799a057380b2d`，已单向吸收dev `bfbe5b4c` 的属性门控日志几何诊断及其测试。专用gate树从片1完整复跑默认五片、agent与external；强制Test新执行，沿用独立沙盒、Docker显式禁用及非UI边界。通过后才依次打包与三代离线兼容验证。前三轮失败独立保留，不拼接部分结果，不预填本轮通过。门禁期间主控只更新文档，同时独立只读复核31工作包和17项需求的实际消费者与证据边界。
+第四轮冻结 `5881e503e6f50f4d24a126435fbb63d0232a0501`，已单向吸收dev `e90cf202` 的属性门控日志几何诊断及其测试。专用gate树从片1完整复跑默认五片、agent与external；强制Test新执行，沿用独立沙盒、Docker显式禁用及非UI边界。通过后才依次打包与三代离线兼容验证。前三轮失败独立保留，不拼接部分结果，不预填本轮通过。门禁期间主控只更新文档，同时独立只读复核31工作包和17项需求的实际消费者与证据边界。
 
 ### 第四轮完整测试结果
 
-冻结ab8b54b1，`:testShards`实际exit0，用时15分26秒。主控核对`round4/test-audit.json`：769个计划根分片类全部有本轮XML；新增63类（根55、agent8）全部入场，324个声明测试方法均匹配，无缺类、无跨片同FQCN/方法重复、无陈旧XML混入。冻结后集成树仅两份文档变化。
+冻结5881e503，`:testShards`实际exit0，用时15分26秒。主控核对`round4/test-audit.json`：769个计划根分片类全部有本轮XML；新增63类（根55、agent8）全部入场，324个声明测试方法均匹配，无缺类、无跨片同FQCN/方法重复、无陈旧XML混入。冻结后集成树仅两份文档变化。
 
 | 桶 | 类数 | tests/failures/errors/skipped |
 |---|---:|---|
@@ -258,7 +258,7 @@ H09同份fixture经`javac --release 8`后，实际java.version分别为1.8.0_181
 
 ### 第四轮冻结的独立只读范围审计
 
-审计以本开发计划为唯一需求基线，检查ab8b54b1的31工作包和17项SI需求的实际实现、生产消费者和证据边界。结论：未发现新增可确认的生产阻断或整包缺少消费者，当前不需为审计追加生产改动。核查涵盖预览版本门、场景后台和预设只读、导出、去重前agent分流与显式开关、同代际证据、请求三态和用户基线、模块使用查询与PSI版本导航、Schema关联、计划解释、静态COUNT上下文、Remote只读结果比较、离线文件与受控链接。审计写集为空，未修改代码、运行测试或GUI；本结论只证明范围及接线复核，没有替代第四轮完整测试、打包和兼容结果。
+审计以本开发计划为唯一需求基线，检查5881e503的31工作包和17项SI需求的实际实现、生产消费者和证据边界。结论：未发现新增可确认的生产阻断或整包缺少消费者，当前不需为审计追加生产改动。核查涵盖预览版本门、场景后台和预设只读、导出、去重前agent分流与显式开关、同代际证据、请求三态和用户基线、模块使用查询与PSI版本导航、Schema关联、计划解释、静态COUNT上下文、Remote只读结果比较、离线文件与受控链接。审计写集为空，未修改代码、运行测试或GUI；本结论只证明范围及接线复核，没有替代第四轮完整测试、打包和兼容结果。
 
 原始H09三JDK JSON核实为javax/H2功能通过；性能JSON的`warmStableAllTrials=false`明确说明零丢失不能推出稳定5%成本达标。以下边界继续保留：
 
@@ -276,12 +276,12 @@ H09同份fixture经`javac --release 8`后，实际java.version分别为1.8.0_181
 
 ## 六、最终门禁清单
 
-- [x] 31项范围内开发都有可达生产入口或明确内部生产消费者（冻结67533aca，逐包表及只读覆盖复核；W44最终断点已以eb0ec7ac闭合）。
+- [x] 31项范围内开发都有可达生产入口或明确内部生产消费者（冻结e3babd14，逐包表及只读覆盖复核；W44最终断点已以0a4bab83闭合）。
 - [x] 17项SI需求逐条对应用户行为和定向正反测试；最终统一门禁仍需验证所有类同时入场。
 - [x] 真实语义、请求身份/质量、事务状态与权限安全已逐链路核对；独立只读审计未发现新增可确认阻断，已知降级边界保留。
 - [x] 定向测试实际XML入场、必要反向红/恢复绿已留证；各阶段读数分冻结记录，不累计冒充全量。
 - [x] 性能/资源预算有对照，不只空载；最终排他窗口9进程完整执行，延迟+27.17%、CPU+14.28pp未达初始预算，内存+1.44MiB达标。结论为未达标并已采取“追踪默认关闭”的范围收口，不记PASS。
-- [x] 第六轮冻结完成权威全量与agent验证，8325/0/0/10，新增65类336方法全部入场；filter-branch重写后对应提交b79983a0，树与已测18722bdd一致。
+- [x] 第六轮冻结完成权威全量与agent验证，8325/0/0/10，新增65类336方法全部入场；filter-branch重写后对应提交b79983a0，树与已测b79983a0一致。
 - [x] 新平台面三代离线兼容验证及构建校验完成，同ZIP三代Compatible；不替代GUI或Marketplace在线验证。
 - [x] 独立复核闭环、未验UI与其他受限项逐条披露（GUI未验、Docker跳过、请求仅Servlet线程、事务仅代理连接、结果比较非原子、精确源码range未知）。
 - [x] 交付去向按2026-10-19用户调整：不合回dev，成果保留在t-sql-insight分支与工作树；未push、未发布、未回流master。

@@ -18,7 +18,7 @@ EXPLAIN 是「真实计划诊断」环的入口能力（7 方言含信创），�
 | 面 | 现状 | 位置/证据 |
 |---|---|---|
 | EXPLAIN 执行链 | 一键 EXPLAIN 经内嵌原生控制台执行，结果由原生控制台呈现（Ultimate） | master 执行链 + database-optional.xml |
-| MCP 侧性能建议 | dev 侧 perf_advice 工具已产性能建议文本（七工具二期交付） | dev f6533f7 |
+| MCP 侧性能建议 | dev 侧 perf_advice 工具已产性能建议文本（七工具二期交付） | dev f42b739 |
 | 需核实的落点 | 原生控制台结果集的程序化读取面（能否在结果旁挂建议）**实施前必须核实**，不得臆断平台 API | 实施第一步 T-EI-01 |
 | 备选落点 | O-16 T-NoticeChannel 立项的「结果/错误/notices 三元组」消息区可作建议承载位（协同不重复建设） | 第五轮 O-16 计划 |
 
@@ -57,7 +57,7 @@ T-EI-01（落点核实）→ T-EI-02（识别器纯函数+测试）→ T-EI-03�
 
 ## 八、实施记录（实施后回填）
 
-**2026-09-17 实施完毕（提交 f8ad545，dev 分支直接交付）**
+**2026-09-17 实施完毕（提交 804f059，dev 分支直接交付）**
 
 - **T-EI-01（落点定案）**：IDE 内嵌原生控制台结果行无程序化读取面——插件反射面仅页签选择/组件换入，网格数据由 DBN 托管，硬读需侵入平台内部网格模型——按计划兜底走 MCP explain 输出承载位（T-NoticeChannel notices 同款节形态）；IDE 面建议条挂账（备选 B 自渲染成本收益不成立）。
 - **T-EI-02**：`util/ExplainIndexAdvisor` 纯函数，MySQL 表格式（type=ALL 全表扫 rows≥10k / key=NULL 弱信号 / Using filesort / Using temporary）+ PG 文本树（Seq Scan 大表）两方言先行；行数阈值防小表噪音；列名形态不符不猜；不支持方言静默降级；单源约定=规则集在 util 一处，IDE 备选 B 与未来消费方同源取用。

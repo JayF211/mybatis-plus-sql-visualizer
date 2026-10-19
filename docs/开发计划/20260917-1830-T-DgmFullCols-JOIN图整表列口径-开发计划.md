@@ -1,7 +1,7 @@
 # T-DgmFullCols JOIN 图整表列口径 开发计划
 
 > 日期：2026-09-17 18:30
-> 状态：已实施（2026-09-17，分支 t-dgmfullcols，基线 dev 60ea0cb）
+> 状态：已实施（2026-09-17，分支 t-dgmfullcols，基线 dev c232c04）
 > 来源：T-DbSchemaCompletion 收尾时向用户提出的口径问题——用户确认按"整表列"实施
 
 ## 一、需求

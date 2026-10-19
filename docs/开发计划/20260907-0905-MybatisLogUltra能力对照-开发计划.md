@@ -173,14 +173,14 @@
 
 **四子任务全部实施完毕（dev 分支，2026-09-17；实施顺序 §4 波次一 01→02 串行、波次二 03∥04 实际按 03→04 相邻提交交付）**
 
-### T-M55-01 跳转双目标（提交 9b33f56）
+### T-M55-01 跳转双目标（提交 c72d1ca）
 
 - 新建 `log/MapperXmlLocator`：statementId 拆 namespace.id → FileTypeIndex 查 mapper XML（仿 HbmXmlEntityResolver 先例）→ PSI 校验 namespace 匹配 → 语句 XmlTag 起始行；自带 ReadAction，EDT/后台均可调。
 - 日志页/历史页右键菜单拆「跳转到 Java」「跳转到 Mapper XML」两项；XML 项仅 mapperStatement 非空且定位成功才显示，失败回退 Java 不劣化。
 - 已知边界：多模块同名 mapper 取第一个 + LOG.info 留痕；MP 内置语句 XML 不存在回退 Java（首批已知边界，真机实测留人工）。
 - 测试：MapperXmlLocatorTest 8 用例 + SqlLogPanelXmlJumpTest 4 用例；跳转/标记回归 36 用例全绿。
 
-### T-M55-02 SQL 执行报错同列（提交 83dc61a）
+### T-M55-02 SQL 执行报错同列（提交 3af7eca）
 
 - 新建 `log/SqlErrorLineRecognizer` 纯函数识别器：常量词表 contains 廉价前置判定（O(词表×行长) 无正则，含词表常量防回潮守护），覆盖 MyBatis `###` 块/Spring DAO/JDBC 家族/Hibernate/参数绑定异常（反超 Ultra 4.0.14 自述边界）；多行堆栈首行入 errorText、续行聚合（30 行/4000 字符上限）。
 - SqlLogConsoleBridge.processConsoleLine 加错误旁路分支：续行判定先行防 `###` 重开块，经 onErrorText 回调绑定；LogFilterProxyHandler 恒返回 null 约束不变，解析器主链零改动；agent 接管期整体短路；EP 通道 SqlConsoleBridgeFilterProvider 同款接线。
@@ -189,7 +189,7 @@
 - 已知边界：异常打印在 Parameters 之后按「最近一条+时间窗」绑定，并发交错控制台误绑成本低于漏绑（计划口径 §风险总表）。
 - 测试：识别器 11 + 桥时序 7 + 缓冲绑定 9 + 预览 4；桥/缓冲/Perf/渲染回归 118 用例全绿（SqlLogConsoleBridgePerfTest 6、LogListFreeze 2、Renderer 31 等）。
 
-### T-M55-03 方法级聚焦页签（提交 41a13a3）
+### T-M55-03 方法级聚焦页签（提交 5ab01a2）
 
 - 新建 `log/FocusTab`（页签模型 + filterByFocusTabs 纯函数）：页签是过滤器不是分组，多开并集过滤，method/request 双类型基础设施一次建齐；不碰 VisibleDiff 与缓冲分组模型。
 - 新建 `log/CallerMethodRangeResolver`：sourceFile+sourceLine → PsiJavaFile → 内层 PsiMethod 行号区间（1-based 含两端），嵌套类/重载/lambda-匿名类按最小包含方法取；Kotlin 调用方返回 null（首批已知边界，沿 F-4 口径）；自带 ReadAction。
@@ -197,7 +197,7 @@
 - 已知边界：行号区间近似与运行期真实方法边界差异、行号一致性真机抽查——留人工。
 - 测试：区间解析 6 + 过滤纯函数 9 + 页签交互 4；管线回归（Filter 20/StreamingDiff 10/Freeze 2/DedupeToggle 6/Sort 7）全绿。
 
-### T-M55-04 请求级聚合过滤视图（提交 6766040）
+### T-M55-04 请求级聚合过滤视图（提交 7417c74）
 
 - 面板右键「按请求聚焦」（requestTag 非空可用）：入 FocusTab.Request 页签与 03 共用基础设施，呈现保持扁平时间序（无树形/分组头，不碰差分与缓冲分组模型）。
 - K 有界防高基数：addRequestTab 去重 + 上限 8（超限挤掉最早请求页签，method 页签不受挤占）；修复其重复分支原样返回可变入参的别名回写隐患（clear+addAll 自清空）。

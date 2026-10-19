@@ -1,7 +1,7 @@
 # consoleFilterProvider EP 双轨捕获调研 开发计划
 
 > **创建日期**：2026-09-09
-> **分支**：dev（当前 HEAD `a6570ce`）
+> **分支**：dev（当前 HEAD `399eb3b`）
 > **状态**：立项调研——**仅调研与方案设计，不实施**（用户明确「先不要实施」）
 > **优先级**：P2（消灭日志捕捉链路唯一的常驻开销——反射桥 + 轮询兜底；非功能缺陷，不阻塞当前功能）
 > **来源**：T-PerfBatch 计划 §4.3 的 P2 调研项。同类工具用稳定的 `consoleFilterProvider` 扩展点注册 Filter（声明该 EP，由 `getDefaultFilters` 返回单个过滤器实例），运行期零挂载负担、零轮询、零组件树遍历。本项目当前用反射桥 + 轮询兜底（T-M31-03），每拍仍有 `hasMainConsole`（descriptor 反射 + `isProcessAlive` 进程存活反射）+ `findConsoleView` 递归组件树遍历。本计划评估把 EP 作为主通道、反射桥降级为兜底的双轨方案。

@@ -9,7 +9,7 @@ metadata:
 
 # T-FourPlans-20260914：四计划批次交付（集成链 t-fourplans-20260914）
 
-四份计划一批交付（20260914 晚~0915 凌晨）：T-MergeR2IntoMaster（r2 63 提交合流，merge 4b5b964）→ T-McpToolset（三只读 MCP 工具注册平台 mcpServer）→ T-PreviewUx-Pack（四件套）→ T-PerfTail（三项治理）。集成链 t-fourplans-20260914 终态 **4246/0/0/6 绿 + verifyGate 三目标 exit 0（243 豁免 2 项留痕/253 Compatible/262 Compatible）+ buildPlugin 出包（桩零泄漏）**。master 期间被 GIF 会话推进（0fbc8a8）已反向合入集成链；**已落地 dev（bd6e009，20260915 用户定案落地 dev 而非 master）**：dev 先 --ff-only 拉取 master（期间并行会话又落了 T-MarketInternal/T-TestPerf2），再 --no-ff 合入集成链（唯一冲突=变更记录总册顶部插行）；落地后全量 4244/0/0/6 绿（少 2 例=T-MarketInternal 摘错误池链删的测试）+ verifyGate exit 0（clean build 后跑，防陈旧产物劫持）。r2 分支本地+远端已删（tag r2-backup-pre-landing-20260915 留底 d108807），集成工作树/分支用后即删。master 收编 dev 待发行工作流。
+四份计划一批交付（20260914 晚~0915 凌晨）：T-MergeR2IntoMaster（r2 63 提交合流，merge 3fdccd8）→ T-McpToolset（三只读 MCP 工具注册平台 mcpServer）→ T-PreviewUx-Pack（四件套）→ T-PerfTail（三项治理）。集成链 t-fourplans-20260914 终态 **4246/0/0/6 绿 + verifyGate 三目标 exit 0（243 豁免 2 项留痕/253 Compatible/262 Compatible）+ buildPlugin 出包（桩零泄漏）**。master 期间被 GIF 会话推进（0844501）已反向合入集成链；**已落地 dev（5f80b6c，20260915 用户定案落地 dev 而非 master）**：dev 先 --ff-only 拉取 master（期间并行会话又落了 T-MarketInternal/T-TestPerf2），再 --no-ff 合入集成链（唯一冲突=变更记录总册顶部插行）；落地后全量 4244/0/0/6 绿（少 2 例=T-MarketInternal 摘错误池链删的测试）+ verifyGate exit 0（clean build 后跑，防陈旧产物劫持）。r2 分支本地+远端已删（tag r2-backup-pre-landing-20260915 留底 a4b0d03），集成工作树/分支用后即删。master 收编 dev 待发行工作流。
 
 **Why:** 批次依赖明确（合流先行、其余并行）；两子智能体按「文件域隔离」分工：A=全新子系统（MCP），B=共享 SqlPreviewPanel 的两任务同工作树串行——零冲突交付范式。
 

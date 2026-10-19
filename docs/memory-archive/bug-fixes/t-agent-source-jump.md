@@ -1,6 +1,6 @@
 ---
 name: t-agent-source-jump
-description: T-AgentSourceJump 增强捕获源码跳转修正（20260916 立项实施并提交 edb053e，全量 test 绿）——根因=框架帧前缀黑名单漏收 PageHelper 致误选插件帧；三层修复=JAR 来源过滤（与类名无关的通用信号）+ 前缀补齐 + 候选帧 cands 与 IDE 解析回退，含 fat jar 安全网
+description: T-AgentSourceJump 增强捕获源码跳转修正（20260916 立项实施并提交 a474447，全量 test 绿）——根因=框架帧前缀黑名单漏收 PageHelper 致误选插件帧；三层修复=JAR 来源过滤（与类名无关的通用信号）+ 前缀补齐 + 候选帧 cands 与 IDE 解析回退，含 fat jar 安全网
 metadata:
   node_type: memory
   type: project

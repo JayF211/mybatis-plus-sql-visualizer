@@ -1,7 +1,7 @@
 # T-LogListFreeze-04：日志列表 HTML 逐条解析 EDT 冻结 16 秒根治 开发计划
 
 > **创建日期**：2026-09-08（同日修订：并入 dev 分支对账结论，Wave 2 改为移植 dev T-Perf-03/24）
-> **分支**：master（当前 HEAD `dccc0b2`）；dev 对账基线 `73b16b2`（2026-09-08）
+> **分支**：master（当前 HEAD `0219f91`）；dev 对账基线 `9388cdb`（2026-09-08）
 > **优先级**：P0（日志面板打开即冻结 16 秒，IDE 判 Freeze 弹窗，主路径不可用级卡顿）
 > **预估工时**：4~6h（含全量回归与历史面板同型修复）
 > **来源**：用户真机 IDE 2026.2.1 Freeze 报告（`com.intellij.diagnostic.Freeze`，采样 11400ms，GC 0%）
@@ -34,7 +34,7 @@ java.desktop/javax.swing.plaf.basic.BasicHTML.createHTMLView / updateRenderer
 
 上轮缓存（`LogSqlEntry.cachedListHtml`）只省了 `SqlListHtmlRenderer.render` 的**字符串拼接**，而栈里可证昂贵点在 `JLabel.setText` 之后的 `BasicHTML.createHTMLView`——字符串命中缓存与否，Swing HTML 解析排版一次不少。缓存机制治标未治本。
 
-### 1.4 dev 分支对账（2026-09-08，dev HEAD `73b16b2`）
+### 1.4 dev 分支对账（2026-09-08，dev HEAD `9388cdb`）
 
 结论：**dev 未修复本冻结的两个主因，已修复管线层放大因**。逐项对账：
 
@@ -46,7 +46,7 @@ java.desktop/javax.swing.plaf.basic.BasicHTML.createHTMLView / updateRenderer
 
 dev 侧剩余风险：全量重建路径（打开面板/类型过滤/排序切换/搜索应用）仍是 `clear` + 分批 `addAll` → 每批触发 O(N) HTML 排版，同型冻结在 dev 上依然可复现；流式追加场景被 T-Perf-03 消掉的只是重建放大，不是渲染通道本身。
 
-**对计划的约束**：Wave 2（刷新管线）不再自创方案，改为**移植 dev 的 T-Perf-03/19/24/15 实现**（同源代码，后续 master→dev 合并无冲突）；Wave 1（渲染通道）替换 HTML 后须**保留 T-TwoLine 两行 UX**（元信息行在上、SQL 高亮行在下），否则 dev 的 e77b696 会在合并时形成语义冲突。
+**对计划的约束**：Wave 2（刷新管线）不再自创方案，改为**移植 dev 的 T-Perf-03/19/24/15 实现**（同源代码，后续 master→dev 合并无冲突）；Wave 1（渲染通道）替换 HTML 后须**保留 T-TwoLine 两行 UX**（元信息行在上、SQL 高亮行在下），否则 dev 的 aae6768 会在合并时形成语义冲突。
 
 ### 1.5 全库排雷：同型隐患一处
 
@@ -69,14 +69,14 @@ dev 侧剩余风险：全量重建路径（打开面板/类型过滤/排序切�
 | B | 保 HTML，仅固定行高 | 布局重排消失，但可见行滚动仍逐条 BasicHTML 解析，滚动掉帧；且放弃多行/两行结构，收益不及 A |
 | C | 保 HTML + 两行，仅移植 dev 管线层 | 即 dev 现状：只消流式追加放大，打开面板/过滤/排序的 O(N) 排版冻结仍在 |
 
-选 A。补充说明：固定行高与 T-TwoLine 两行结构兼容——元信息行恒存在（时间戳常开；四段全空时 dev 侧已用占位符 `[—]`/`[unknown]` 归元信息行，e77b696 测试锁定），两行高度为常量，`fixedCellHeight` 取实测常数即可。多行 SQL 换行展示不再保留（历史行为：HTML `<br>` 折行），全文查看由既有双击预览弹窗承接（SqlLogPanel.kt:718），列表定位概览；tooltip 保留 `restoredSql` 全文。
+选 A。补充说明：固定行高与 T-TwoLine 两行结构兼容——元信息行恒存在（时间戳常开；四段全空时 dev 侧已用占位符 `[—]`/`[unknown]` 归元信息行，aae6768 测试锁定），两行高度为常量，`fixedCellHeight` 取实测常数即可。多行 SQL 换行展示不再保留（历史行为：HTML `<br>` 折行），全文查看由既有双击预览弹窗承接（SqlLogPanel.kt:718），列表定位概览；tooltip 保留 `restoredSql` 全文。
 
 ### 2.2 方案 A 细节
 
 1. **渲染器替换 + T-TwoLine 结构保留**（SqlLogPanel）：`LogEntryListCellRenderer` 从 `DefaultListCellRenderer`+HTML 改为双 `SimpleColoredComponent` 叠放的 JPanel（元信息行在上、SQL 行在下，对齐 dev `computeRowHtml` 的两行语义）。片段映射：元信息行 = 时间戳灰片段 + 耗时片段（慢查询红/正常灰/选中白语义保留）+ `[来源:行]` 灰片段 + `⨉N` 徽章片段（trim 后单空格连接，空段跳过）；SQL 行 = `SqlLexer` 分词着色片段。选中态由平台渲染器标准绘制（`SimpleListCellRenderer`/`ColoredListCellRenderer` 实施时按 javap 结果定）——无 HTML 缓存后 dev T-Perf-23 的「选中色不固化」语义天然成立。多行 SQL 的 `\n` 折叠为单行（替换 `⏎`），tooltip 保持全文。
 2. **着色管线改造**：`SqlListHtmlRenderer` 旁新增 fragment 产出路径（`SqlLexer` 分词 → `List<Pair<text, SimpleTextAttributes>>`，色值仍走 `SqlHighlightColors` + `EditorColorsScheme`，与预览编辑器同一配色体系）。防 HTML 注入的转义逻辑随 HTML 通道退役。
 3. **固定行高**：`list.fixedCellHeight` 按两行内容实测设定（2 × 行高 + 既有 5,8,5,8 EmptyBorder + 1px matte 下边框，JBUI.scale），`buildListPane` 一次设定。固定行高使 `updateLayoutState` 走 O(1) 快路径，滚动/resize/追加均不再逐条渲染。
-4. **管线层移植 dev（Wave 2 主体）**——以 dev `73b16b2` 实现为蓝本原样移植，不自创：
+4. **管线层移植 dev（Wave 2 主体）**——以 dev `9388cdb` 实现为蓝本原样移植，不自创：
    - `applyIncremental`/`applyFullRebuild`（代际守卫）/`diffVisible`/`VisibleDiff`/`lastRendered`/`refreshGeneration` 整套差分刷新（dev SqlLogPanel.kt:876-968）；
    - `SqlLogEntryBuffer.drainEvictedCount`（evictedSinceDrain 原子计数，dev :153）；
    - `LogSqlEntry.dedupeKey`（lazy sqlFingerprint，dev LogSqlModels.kt:76）——徽章查找键从 `restoredSql` 原文（master :1242）切到指纹，与 dev 对齐；
@@ -122,7 +122,7 @@ dev 侧剩余风险：全量重建路径（打开面板/类型过滤/排序切�
 |------|------|------|
 | 迁移：LogListFreezeTest | 缓存语义用例（缓存命中/清空/独立）随 HTML 缓存退役删除；批次写入用例按移植后的差分管线改写 | 重写后全绿 |
 | 移植：SqlLogStreamingDiffTest | dev 同名测试随 Wave 2 原样移植（VisibleDiff 五分支/代际守卫/驱逐计数） | 全绿 |
-| 迁移：SqlLogPanelRendererUiTest | HTML 断言改片段断言：组件类型 is SimpleColoredComponent（通道级根治断言）、片段数与着色属性、转义用例改原文保真用例、慢查询红/选中白/徽章语义平移、**两行结构断言平移自 dev e77b696 测试**（元信息在上/来源不混入 SQL 行/占位符归元信息行） | 全绿 |
+| 迁移：SqlLogPanelRendererUiTest | HTML 断言改片段断言：组件类型 is SimpleColoredComponent（通道级根治断言）、片段数与着色属性、转义用例改原文保真用例、慢查询红/选中白/徽章语义平移、**两行结构断言平移自 dev aae6768 测试**（元信息在上/来源不混入 SQL 行/占位符归元信息行） | 全绿 |
 | 迁移：SqlListHtmlRendererTest | HTML 输出用例迁到 fragment 路径（分词正确性保留）；HTML 路径若无残留调用则删除 | 全绿 |
 | 新增：布局快路径 | `list.fixedCellHeight > 0` 断言；N 条追加后模型大小断言（增量路径不 clear 已有条目） | 全绿 |
 | 新增：搜索防抖 | T-Perf-24 同款（200ms 窗口合并击键刷新） | 全绿 |
@@ -145,12 +145,12 @@ dev 侧剩余风险：全量重建路径（打开面板/类型过滤/排序切�
 
 ## 六、实施记录
 
-（2026-09-08 实施，HEAD 基线 dd2d5c5）
+（2026-09-08 实施，HEAD 基线 8f0ba6b）
 
 - **Wave 1**：新增 `SqlListFragmentRenderer.kt`（SqlLexer→SqlTextFragment 片段管线，scheme 注入可单测，关键字 fontType 加粗随片段保留）；`SqlLogPanel.kt` 渲染器改双 SimpleColoredComponent 两行面板（元信息行在上/SQL 行在下，T-TwoLine 保留），`buildListPane` 样例实测固定行高（fallback 字体行高×2+13），`cachedListHtml` 字段/全清循环/取缓存分支退役（LogSqlModels 同步删字段）。
-- **Wave 2**：自 dev 73b16b2 移植——VisibleDiff 五分支 + diffVisible/applyIncremental/applyFullRebuild（代际守卫）+ refreshGeneration/lastRendered；buffer 增 `evictedSinceDrain`/`drainEvictedCount`，addEntry 合并临界区（T-Perf-06）+ onEvicted 移出锁（T-Perf-12）；LogSqlModels 增 `dedupeKey`（FNV-1a 指纹）+ `sqlFingerprint`；manager notifyUi 置脏合并 + 新增 `removeCapturingListener`；面板监听器命名引用 + dispose 精确注销（T-Perf-15）+ 搜索 200ms 防抖（T-Perf-24）。T-Perf-19 的 HTML 选择性失效块按计划不移植（片段无缓存）。
+- **Wave 2**：自 dev 9388cdb 移植——VisibleDiff 五分支 + diffVisible/applyIncremental/applyFullRebuild（代际守卫）+ refreshGeneration/lastRendered；buffer 增 `evictedSinceDrain`/`drainEvictedCount`，addEntry 合并临界区（T-Perf-06）+ onEvicted 移出锁（T-Perf-12）；LogSqlModels 增 `dedupeKey`（FNV-1a 指纹）+ `sqlFingerprint`；manager notifyUi 置脏合并 + 新增 `removeCapturingListener`；面板监听器命名引用 + dispose 精确注销（T-Perf-15）+ 搜索 200ms 防抖（T-Perf-24）。T-Perf-19 的 HTML 选择性失效块按计划不移植（片段无缓存）。
 - **Wave 3**：HistorySqlLogPanel 两渲染器片段化（文件列表 tooltip 保留），两列表固定行高。
-- **与并行会话协同**：T-ClickPreview（悬停 tooltip 移除 + 单击预览）与本项目同文件交织——其渲染器 tooltip 删除语义在新片段渲染器中以注释保留（不设 toolTipText）；该会话已自行提交 75f2a89/dd2d5c5，本任务工作区 diff 随之收敛为纯 T-LogListFreeze04 内容。
+- **与并行会话协同**：T-ClickPreview（悬停 tooltip 移除 + 单击预览）与本项目同文件交织——其渲染器 tooltip 删除语义在新片段渲染器中以注释保留（不设 toolTipText）；该会话已自行提交 c9d7fe2/8f0ba6b，本任务工作区 diff 随之收敛为纯 T-LogListFreeze04 内容。
 - **测试结果**：全量 `./gradlew test` **3102/0/0/6 绿**（基线 3094 + 净增 8：SqlListFragmentRendererTest 6 + SqlLogStreamingDiffTest 10 移植 − LogListFreezeTest 缓存 4 − SqlListHtmlRendererTest 5 + RendererUiTest 净增 1）。过程中修正三处断言：徽章 map 与快照键改 `sqlFingerprint` 键（T-Perf-19 语义）；「正常 50ms 灰色」旧断言实为蹭到时间戳灰，直读片段属性后修正为分档绿（0x4CAF50）。
 - **API 核实**：243 基准 app-client.jar javap——SimpleColoredComponent.append/clear、SimpleTextAttributes(int,Color)/REGULAR/GRAYED/BOLD、SimpleListCellRenderer、ColoredIterator.getFragment/getTextAttributes 全存在；WideSelectionListUI.updateLayoutState 字节码证实 fixedCellHeight≠-1 时 goto 短路逐条测量。
 - **遗留人工跟进**：runIde 真机大批量日志验证（打开/刷新/滚动/双击预览无 Freeze、两行着色视觉核对）——统一走 runide-demo-verify-workflow；T-LogDedupeMpMark（去重空白差异 + MP 计数误标）与本修复正交（isDuplicate 仍原文精确相等），由其会话继续。

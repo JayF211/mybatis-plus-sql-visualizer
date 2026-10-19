@@ -1,7 +1,7 @@
 # T-CrudColor：SQL 列表 CRUD 类型颜色标记（可自定义）开发计划
 
 > **创建日期**：2026-09-12
-> **分支**：master（当前 HEAD `a5ddc2e`，工作树干净；全量基线 3322/0/0/6——T-AutoFold 交付后，实施前复核）
+> **分支**：master（当前 HEAD `62c3c49`，工作树干净；全量基线 3322/0/0/6——T-AutoFold 交付后，实施前复核）
 > **优先级**：P2（用户明确要求的新功能；纯增量渲染 + 一个设置子分组，无存量行为变更）
 > **预估工时**：9.5h（配色/混色/描边纯逻辑 2h + 两个渲染器接线 2h + 设置项与面板 2h + 测试 3h + 文档 0.5h）
 > **来源**：用户需求原话——「目前 sql 日志页面和 sql 历史页面的 sql 列表，现在我希望支持自定义 crud 颜色标记，你分析下需求，看看是通过背景色区分还是使用小颜色标识区分合适」
@@ -374,7 +374,7 @@ internal class SqlListSelectionOutline(
 
 ### 4.3 全量回归与真机
 
-- 全量基线 3322/0/0/6（HEAD `a5ddc2e`），新增用例净增，不回归；按并行会话铁律查登记表 + 独立沙盒 + `--no-daemon`。
+- 全量基线 3322/0/0/6（HEAD `62c3c49`），新增用例净增，不回归；按并行会话铁律查登记表 + 独立沙盒 + `--no-daemon`。
 - runIde 真机走查项（留人工）：
   1. 日志页跑出 SELECT/INSERT/UPDATE/DELETE 四类 SQL → 左缘四色可辨，OTHER（如有）无色条；
   2. 上下键切换选中 → **色条不消失**（选型核心依据的真机确认）；
@@ -477,8 +477,8 @@ internal class SqlListSelectionOutline(
 
 ## 实施记录
 
-- **交付分支/提交**：worktree `F:/code/Java/Gitee/SongRenShuo/mpsv-crudcolor`，分支 `t-crudcolor`（基线 master `e190a60`）。
-  实施提交 `641c815`；为消除与 master 的分叉，合并 master（`b468b46`）并解 `docs/变更记录.md` 冲突 → 合并提交 `7dae84a`；§3.5 色块图例追加提交。
+- **交付分支/提交**：worktree `F:/code/Java/Gitee/SongRenShuo/mpsv-crudcolor`，分支 `t-crudcolor`（基线 master `193ada6`）。
+  实施提交 `ad857af`；为消除与 master 的分叉，合并 master（`dc49865`）并解 `docs/变更记录.md` 冲突 → 合并提交 `0484e51`；§3.5 色块图例追加提交。
 - **测试**：新增 44 用例——`SqlListTypeColorTest` 18（新增）+ `SqlListSelectionOutlineTest` 10（新增）+ `LogStatementClassifierTest` +3 + `SqlLogPanelRendererUiTest` +6 + `HistoryCellRendererTest` +5 + `PluginSettingsPanelBindingTest` +2。
   - 分支内自测（基线 3339）：定向 7 类 98/0/0；clean 全量 **3383/0/0/6 绿**。
   - 合并 master 后（基线 3344）：clean 全量 **3388/0/0/6 绿**（3344 + 44，与预期完全吻合，零回归）。

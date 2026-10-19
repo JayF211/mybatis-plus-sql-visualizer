@@ -97,8 +97,8 @@ private fun focusTarget(target: Configurable, focusHint: String) {
 
 ## 提交
 
-- e885e7d：第一版（DataContext 拿 project）——不彻底
-- f5c8bea：**最终修复**（Settings.KEY.select + 目标控件聚焦闪烁高亮）
+- f962769：第一版（DataContext 拿 project）——不彻底
+- 2bade45：**最终修复**（Settings.KEY.select + 目标控件聚焦闪烁高亮）
 - 本次修复：`currentSettings()` 双保险 + SectionConfigurable 缓存 + scrollRectToVisible
 
 ## How to apply

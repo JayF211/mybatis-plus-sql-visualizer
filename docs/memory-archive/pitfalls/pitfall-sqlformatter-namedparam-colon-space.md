@@ -13,7 +13,7 @@ metadata:
 
 **根因**：SQL 预览文本经 `SqlFormatter.format()` 后，命名参数 `:name` 的冒号被当作**运算符**空格化为 `: name`（冒号后多一个空格）。而 `ParameterReplacer.replaceNamedParams` 的正则 `(?<![::])[:]([A-Za-z_]...)` **要求冒号后紧邻字母**，遇到 `: `（冒号+空格）整个匹配失败 → 填参数值不替换、SQL 不更新。
 
-**修复**（提交 50eddbc，feature/jdbc-template-sql-preview）：`ParameterReplacer.NAMED_PARAM_PATTERN` 冒号后容忍可选空白 `(?<![::])[:]\s*([A-Za-z_][A-Za-z0-9_]*)`，同时覆盖 `:name` 与 `: name`；双冒号守卫（`1 :: integer`）保持不误标。新增 3 个空格化冒号回归用例。
+**修复**（提交 0dc92d6，feature/jdbc-template-sql-preview）：`ParameterReplacer.NAMED_PARAM_PATTERN` 冒号后容忍可选空白 `(?<![::])[:]\s*([A-Za-z_][A-Za-z0-9_]*)`，同时覆盖 `:name` 与 `: name`；双冒号守卫（`1 :: integer`）保持不误标。新增 3 个空格化冒号回归用例。
 
 **Why**：SQL 格式化器会把 `:` 当作二元运算符在两侧加空白；命名参数解析必须先格式化后的文本也能命中，正则不能假设冒号紧邻字母。
 

@@ -131,8 +131,8 @@ search: false
 
 ## 七、交付记录（2026-09-15 交付完毕）
 
-- 实施分支 `t-feedbackbatch2`（工作树 `../mybatis-plus-sql-visualizer-feedbackbatch2`），提交 faeccd6，merge --no-ff 入 master（751759c，与并行会话 docs 提交 7b13c11 零冲突）；分支与工作树已删。
+- 实施分支 `t-feedbackbatch2`（工作树 `../mybatis-plus-sql-visualizer-feedbackbatch2`），提交 fa1cde9，merge --no-ff 入 master（416ec26，与并行会话 docs 提交 4d4fc74 零冲突）；分支与工作树已删。
 - 落地与计划的一致性：T-01/T-02 全部按 §二 实施；一处实现细节补充——调度器 seam 用可空 `scheduler`（null 时才解析 `AppExecutorUtil` 全局调度器），保持构造零平台依赖、headless 测试直 new 不触平台工具类。
 - 验证：定向 feedback 包 13（submitter，新增合并/去重/复合回调/去抖重排/3s 兜底等 6 例）+ 23（dialog layout，新增分节可见性/头部镜像/收集语义/空集 4 例）全绿；全量 `testShards` **4173/0/0/6**（基线 4163 + 本轮 10 例净增）；master 合并后清 build/classes+kotlin 首跑复验 feedback 包绿。
-- CHANGELOG 未动（近期惯例：随发版统一收编，参照 5eeb884 先例）。
+- CHANGELOG 未动（近期惯例：随发版统一收编，参照 89a04de 先例）。
 

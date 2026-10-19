@@ -55,7 +55,7 @@ metadata:
 - **排障前提**：`diagnose()` 只在 `logLevel=info` 输出，而 premain 注入固定 `logLevel=warn`（沙盒日志实测 `=port=…;logLevel=warn`）
   → 真机拿不到 `entryKey`/`pool`，只能靠行为反推（已立 T-05 让入口键可取证）。
 
-**✅ 已合入 master（2026-09-22）**：随三车道经集成分支 `t-agent-config-locate` 合入（合并提交 `0eafa67`，集成分支已删、0 笔未合并）；
+**✅ 已合入 master（2026-09-22）**：随三车道经集成分支 `t-agent-config-locate` 合入（合并提交 `a2b973a`，集成分支已删、0 笔未合并）；
 最终态门禁 `testShards` 三片全绿（5644 用例）/ `verifyGate` 三目标 Compatible / agent 83 例 0 失败。
 
 **✅ 收口（2026-09-22）**：真机沙盒走查第 5 步通过——面板 `#1 … [DM (达梦)] [DeviceInfoServiceImpl.java:42]`（rightAlias）与

@@ -11,7 +11,7 @@
 
 ### 根因（提交级实证）
 
-`eb2f289 T-UiNative P0a` 把预览左右分栏从自绘 `ThemedSplitPane` 换成平台 `OnePixelSplitter`：
+`0e857ec T-UiNative P0a` 把预览左右分栏从自绘 `ThemedSplitPane` 换成平台 `OnePixelSplitter`：
 
 ```
 - val split = ThemedSplitPane(paramScroll, editorHolder).apply {

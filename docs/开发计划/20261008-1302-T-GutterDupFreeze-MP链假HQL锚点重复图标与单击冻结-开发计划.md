@@ -2,7 +2,7 @@
 
 > 编号占用：O-124 / R70 / D108~D110 / V132~V134（20261008 grep 实测：O 最高 O-123、R 最高 R69、D 最高 D107、V 最高 V131，本组均未占用）
 > 来源：用户指令（2026-10-08）——①「插件 demo 项目中 `cn.song.mybatisplusdemo.service.impl.WrapperFactoryCoverageServiceImpl` 中的方法出现了很多 sql 预览图标，这应该是重复了，是不正常的，现在分析问题原因生成开发计划文件」；②追加「点击 `listByBareFactoryChainExists` 方法的 `result.put("bareFactoryChain", userMapper.selectList` 行的第一个预览图标，弹框直接卡住了，也关闭不了」（随消息附四份 IDE 线程转储，含 `Freeze in EDT for 70 seconds`）
-> 前序：`bc5a7be`（2026-08-21，内容启发与共享字符串提取器引入）、`480dacb`（T-GutterDedup，图标重复/缺失第一轮）、T-M23.11（链上撞名批量方法去重）、T-DaoSql-03（字符串 SQL 让位）、T-ExistsChainTerminal（20261007，本 demo 文件即该轮复现用例，见下方「非回归」一节）
+> 前序：`1c93872`（2026-08-21，内容启发与共享字符串提取器引入）、`ed8b136`（T-GutterDedup，图标重复/缺失第一轮）、T-M23.11（链上撞名批量方法去重）、T-DaoSql-03（字符串 SQL 让位）、T-ExistsChainTerminal（20261007，本 demo 文件即该轮复现用例，见下方「非回归」一节）
 > 状态：计划待确认（用户点名的为「分析问题原因 + 生成计划文件」，未授权动工）
 
 ## 一、现象与实测证据
@@ -67,7 +67,7 @@ for (shortName in namesCache.getAllClassNames()) {
 
 ### 1.3 非回归
 
-本 demo 文件 `38e6361`（2026-10-07，T-ExistsChainTerminal 复现用例）才加入 demo 仓；触发缺陷的两条判据均早于此：`matchesHqlContent` 的共享提取器与 `else -> expression.text` 兜底同为 `bc5a7be`（2026-08-21）引入，此后被 T-Perf-02 等重构按语义保留。**本次不是 T-ExistsChainTerminal 的回归**，只是它的复现语料第一次撞上这条老缺口。
+本 demo 文件 `38e6361`（2026-10-07，T-ExistsChainTerminal 复现用例）才加入 demo 仓；触发缺陷的两条判据均早于此：`matchesHqlContent` 的共享提取器与 `else -> expression.text` 兜底同为 `1c93872`（2026-08-21）引入，此后被 T-Perf-02 等重构按语义保留。**本次不是 T-ExistsChainTerminal 的回归**，只是它的复现语料第一次撞上这条老缺口。
 
 ## 二、根因
 
@@ -194,7 +194,7 @@ else -> expression.text to false     // ← 把「整条链的源码文本」当
 
 ## 八、实施记录
 
-**实施日期**：2026-10-08；分支 `t-gutterdupfreeze`（工作树 `mybatis-plus-sql-visualizer-gdf`）；实施提交 `99d2f36`（计划落库 `dd0bd26`）。
+**实施日期**：2026-10-08；分支 `t-gutterdupfreeze`（工作树 `mybatis-plus-sql-visualizer-gdf`）；实施提交 `8312b0a`（计划落库 `50a1fcc`）。
 
 ### 8.1 改动落点（7 文件）
 
@@ -246,7 +246,7 @@ else -> expression.text to false     // ← 把「整条链的源码文本」当
 
 ### 8.6 合入落账（2026-10-08，用户明令「合并到主分支并清理新建的分支和工作树」）
 
-1. **先并回 master**（功能分支先并 master 再跑测试的定例）：`git merge master` → 冲突仅 `docs/MEMORY.md` 与 `docs/变更记录.md` 的同表顶部插入，按仓内 union 解保留双方行并按时间倒序归位（`T-ErrReportSubmitNoOp` 13:15 → 本任务 13:02 → `T-HistoryTabAlways` 12:56），消除标记后核验三行均以表格收尾符结束、长度正常；`src/main` 无冲突（落点与另两笔任务不相交）。合并提交 `e3bf1c8`，相对 master 的改动面恰为本任务 11 文件（无夹带）。
+1. **先并回 master**（功能分支先并 master 再跑测试的定例）：`git merge master` → 冲突仅 `docs/MEMORY.md` 与 `docs/变更记录.md` 的同表顶部插入，按仓内 union 解保留双方行并按时间倒序归位（`T-ErrReportSubmitNoOp` 13:15 → 本任务 13:02 → `T-HistoryTabAlways` 12:56），消除标记后核验三行均以表格收尾符结束、长度正常；`src/main` 无冲突（落点与另两笔任务不相交）。合并提交 `fe6dd8a`，相对 master 的改动面恰为本任务 11 文件（无夹带）。
 2. **合并后态复跑**：定向六类 **50/0**（13:45）、`testFast --rerun` **3409/0/0**（266 套件；比分支态 3406 多 3 例＝并回的 master 增量测试），两次退出码均 0。
-3. **合入 master**：主工作树内三重守卫（在 master / 工作树干净 / `merge-base --is-ancestor` 成立）后 `git merge --ff-only t-gutterdupfreeze` → master `7977794` → **`e3bf1c8`**，落地态即已测态；`git push origin master` 远端同步（远端此前停在 `b5e2df2`，本次一并推上并回的两笔任务提交）。
+3. **合入 master**：主工作树内三重守卫（在 master / 工作树干净 / `merge-base --is-ancestor` 成立）后 `git merge --ff-only t-gutterdupfreeze` → master `273e858` → **`fe6dd8a`**，落地态即已测态；`git push origin master` 远端同步（远端此前停在 `6a53aff`，本次一并推上并回的两笔任务提交）。
 4. **清理**：本地/远端 `t-gutterdupfreeze` 分支与工作树 `mybatis-plus-sql-visualizer-gdf` 一并删除；并行登记注销。

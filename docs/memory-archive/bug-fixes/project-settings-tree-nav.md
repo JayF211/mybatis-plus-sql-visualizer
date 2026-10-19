@@ -78,13 +78,13 @@ Settings → Tools → MyBatis-Plus SQL Visualizer（文件夹节点）
 - 彻底消除对 internal API 的编译期依赖（见 [[feedback-settings-editor-internal-dep]]）
 
 ## 提交链
-- 9d2e1e3：设置页改为左侧树导航 + 5 个独立子页面
-- 0cda75e：补充子 Configurable 类 + 开发计划文档
-- c26802b：去掉边框和折叠，主页面新增搜索栏+子页面列表
-- e885e7d：导航优化（DataContext 获取 project 避免新开窗口）+ 搜索子页面内容+双语 tab 名
-- **82999c9**：主设置页面 UI 参考 IDEA 原生风格优化
-- **f5c8bea**：导航改为 Settings.KEY.select() 同一对话框内切换 + 目标控件聚焦闪烁高亮
-- **3a1a569**：消除 SettingsEditor(@ApiStatus.Internal) 编译期依赖（Class.forName 反射）
+- 6adfae4：设置页改为左侧树导航 + 5 个独立子页面
+- 0f373d0：补充子 Configurable 类 + 开发计划文档
+- 0c7379c：去掉边框和折叠，主页面新增搜索栏+子页面列表
+- f962769：导航优化（DataContext 获取 project 避免新开窗口）+ 搜索子页面内容+双语 tab 名
+- **82a24f0**：主设置页面 UI 参考 IDEA 原生风格优化
+- **2bade45**：导航改为 Settings.KEY.select() 同一对话框内切换 + 目标控件聚焦闪烁高亮
+- **a9ab218**：消除 SettingsEditor(@ApiStatus.Internal) 编译期依赖（Class.forName 反射）
 - **本次修复**：currentSettings() 双保险 + SectionConfigurable 缓存 + scrollRectToVisible + SQL 日志 Tab→分割线 + UI Actions 排前 + 子页面标题中文
 
 ## 相关记忆

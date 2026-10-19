@@ -1,7 +1,7 @@
 # T-LogRowNumber：SQL 日志列表行号（启动项目清零）开发计划
 
 > **创建日期**：2026-09-09
-> **分支**：master（当前 HEAD `4340ade`，v2026.9.9 已发行，基线 3153/0/6 绿）
+> **分支**：master（当前 HEAD `22eeff7`，v2026.9.9 已发行，基线 3153/0/6 绿）
 > **优先级**：P2（用户明确要求的新功能；改动面小，纯增量，无存量行为变更）
 > **预估工时**：3h（字段与缓冲分配 1h + 清零接线 0.5h + 渲染 0.5h + 测试 1h）
 > **来源**：用户需求原话——「sql日志的sql列表需要增加行号，每次启动项目时清0」
@@ -109,7 +109,7 @@
 
 ### 4.3 全量回归与真机
 
-- 全量基线 3153/0/6（master `4340ade`），新增用例净增，不回归。
+- 全量基线 3153/0/6（master `22eeff7`），新增用例净增，不回归。
 - runIde 真机：demo 项目启动 → 执行若干 SQL → 行号 1..N；**再次启动项目** → 新 SQL 从 1 起计数（旧条目仍在列、保留原行号）；手动清空 → 行号归 1；耗时排序 → 行号乱序但可辨认原始顺序（预期行为，验收时向用户演示说明）。
 
 ---
@@ -134,7 +134,7 @@
 
 ## 实施记录
 
-- **交付提交**：master `2467f94`（2026-09-09）
+- **交付提交**：master `c83fb56`（2026-09-09）
 - **测试**：新增 14 用例（SqlLogEntryBufferTest 8 / LogSqlModelsTest 2 / SqlLogManagerBehaviorTest 1 / SqlLogPanelRendererUiTest 3）；定向 4 类 94/0/0；全量 3173/0/0/6 绿（sandbox-logrownum 隔离，no-daemon）
 - **实施中两处方案修正**（偏离原计划的点）：
   1. `removeEntry` 由 `entries.remove(entry)`（equals）改为 `entries.removeAll { it === entry }`（同一性）——入队分配序号走 `entry.copy(sequenceNumber = …)`，入库实例与外部持有的原型不再是同一实例，而 data class equals 含新字段，按 equals 删外部原型将永不命中（右键删除失效）。测试 `removeEntry 按同一性删除_带行号实例可删_无号原型不误删` 锁定语义。

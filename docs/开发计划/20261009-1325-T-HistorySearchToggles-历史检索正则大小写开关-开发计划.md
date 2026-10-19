@@ -100,7 +100,7 @@ Regex 不上（日志面板无正则基础，避免改动面翻倍；历史/日�
 ## 八、实施记录
 
 实施：20261009，工作树 `mybatis-plus-sql-visualizer-histsearch`（分支 `t-histsearchtoggles`，
-基线 dev-bak 2593a54）。S1~S8 全部落地，无方案偏差；两处实现细节补充如下：
+基线 dev-bak 3dee2a6）。S1~S8 全部落地，无方案偏差；两处实现细节补充如下：
 
 - **P5 补充**：`searchField.isVisible` 与宿主 `searchBar` 保持同步翻转（showSearch/hideSearch
   双写）——既有 `SqlLogPanelLayoutTest` 断言「搜索条默认隐藏」落在字段上，只动 wrapper 会让该

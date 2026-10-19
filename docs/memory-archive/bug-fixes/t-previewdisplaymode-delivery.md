@@ -1,6 +1,6 @@
 ---
 name: t-previewdisplaymode-delivery
-description: T-PreviewDisplayMode 已交付（master 7bf110e，2026-09-10，3237/0/6
+description: T-PreviewDisplayMode 已交付（master 1305a5a，2026-09-10，3237/0/6
   绿）——预览编辑器显示模式状态化，修竖向排列/关键字换行输入参数后形态消失；含"模型派生视图"设计定式
 metadata:
   node_type: memory

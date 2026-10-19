@@ -1,6 +1,6 @@
 # maintainPage XML SQL 预览开发计划
 
-> 状态：✅ 已完成（commit 0556f9e）
+> 状态：✅ 已完成（commit 9885e98）
 > 立项依据：用户真实项目使用 vTradex Forest 低代码框架，需要在插件中预览 `<maintainPage>` 的 `<datasource>` SQL。
 > 需求来源：用户提供的真实业务 XML 配置（`TfLangLib` 维护页面）。
 > **确认**：`<datasource>` 内容为 HQL（非原生 SQL），无动态参数。

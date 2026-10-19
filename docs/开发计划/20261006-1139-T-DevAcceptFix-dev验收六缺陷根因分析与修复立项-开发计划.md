@@ -1,6 +1,6 @@
 # T-DevAcceptFix：dev 验收六缺陷根因分析与修复立项——开发计划
 
-> 2026-10-06 用户对 dev 分支验收（回流 master 前置验收批）提出六项缺陷反馈，本计划逐项做根因分析与修复方案设计。分析基线 = dev 工作树 `mybatis-plus-sql-visualizer-dev` @ `caa0e48`（文中行号以该 tip 为准）。**写完停等拍板，未获确认不实施。**
+> 2026-10-06 用户对 dev 分支验收（回流 master 前置验收批）提出六项缺陷反馈，本计划逐项做根因分析与修复方案设计。分析基线 = dev 工作树 `mybatis-plus-sql-visualizer-dev` @ `9866d05`（文中行号以该 tip 为准）。**写完停等拍板，未获确认不实施。**
 >
 > 预定占号：O-112（本批验收缺陷台账）、D67~D70（四处决策点）、V84~V91（待验证前提编号，以全景盘点升版裁决为准）。
 
@@ -41,7 +41,7 @@
 用户裁决输入明确：表格形式不如原生控制台，倾向直接使用原生控制台。两案：
 
 - **A 案（彻底退役）**：摘除结构化通道全链——判定、`ExplainPlanResultView`、`ExplainPanelChannel.executeStructured`、`explainStructuredRender` 设置项、回退提示、面板侧索引建议消费与相关测试。动面大（含设置持久化残留清理），不可逆。
-- **B 案（默认关闭，观察一版）**：`explainStructuredRender` 默认值翻 `false`，设置项文案标注「实验特性，默认使用原生控制台」；结构化通道代码与测试保留一个版本周期，下版再定摘除。可逆、最小改动、保住 R33 已修缺陷（bf23915）的资产。
+- **B 案（默认关闭，观察一版）**：`explainStructuredRender` 默认值翻 `false`，设置项文案标注「实验特性，默认使用原生控制台」；结构化通道代码与测试保留一个版本周期，下版再定摘除。可逆、最小改动、保住 R33 已修缺陷（b4dd291）的资产。
 
 推荐 **B 案**。附：`ExplainIndexAdvisor` 的 MCP 侧消费（McpExplainFormatter）与面板无关，两案都不动。
 
@@ -145,12 +145,12 @@ combo.addActionListener(:3763) → switchToScheme(:3884)
 
 ## 七、实施记录（2026-10-06 当轮，三车道并行）
 
-基线：dev 工作树 @ `caa0e48`（本计划落库笔 `136b39f`）。车道=主控（①②③⑤ + ④ 尾改）＋子代理 A（⑥，agent 子项目）＋子代理 B（④ 平台线，inject 包）。
+基线：dev 工作树 @ `9866d05`（本计划落库笔 `ddc66e8`）。车道=主控（①②③⑤ + ④ 尾改）＋子代理 A（⑥，agent 子项目）＋子代理 B（④ 平台线，inject 包）。
 
 | 缺陷 | 实现要点 | 提交 | 读数 |
 |---|---|---|---|
-| ⑥ P0 织入器 | 两织入器改 `COMPUTE_MAXS`-only ＋ `ZeroLoadClassWriter`（`getCommonSuperClass` 零加载兜底）＋ EXEC 族织入方法的原帧 locals 补 LONG 槽（`EXPAND_FRAMES` 读入 + `patchFramesWithTokenSlot`） | `bc75d8b`（子代理 A） | 反向验证：未修复态首织触发 12 类加载（`-verbose:class` 三重实证 + 断言红）→ 修复态增量 0；agent 子项目 **109/0** 全绿（基线实为 104 例 + 新 5 例） |
-| ④ XmlSynHi | 平台线 per-host 化（EP 枚举 + 喂入契约预筛 + stub registrar 探测，子代理 B）；**探测域扩至全部 EP 注入器（除自身族）、单注入器异常跳过续问、三方批发让位线摘除**（主控尾改，用户真机真让位源即三方线） | `c07e282`（子代理 B）+ 主控尾改笔 | inject 包定向 51 例全绿（含三形态缝/喂入预筛/自身族排除/异常跳过续问新例）；`PlatformSignatureCrossVersionTest` 243/253/262 三平台核验过 |
+| ⑥ P0 织入器 | 两织入器改 `COMPUTE_MAXS`-only ＋ `ZeroLoadClassWriter`（`getCommonSuperClass` 零加载兜底）＋ EXEC 族织入方法的原帧 locals 补 LONG 槽（`EXPAND_FRAMES` 读入 + `patchFramesWithTokenSlot`） | `afb62e4`（子代理 A） | 反向验证：未修复态首织触发 12 类加载（`-verbose:class` 三重实证 + 断言红）→ 修复态增量 0；agent 子项目 **109/0** 全绿（基线实为 104 例 + 新 5 例） |
+| ④ XmlSynHi | 平台线 per-host 化（EP 枚举 + 喂入契约预筛 + stub registrar 探测，子代理 B）；**探测域扩至全部 EP 注入器（除自身族）、单注入器异常跳过续问、三方批发让位线摘除**（主控尾改，用户真机真让位源即三方线） | `9b7f2dd`（子代理 B）+ 主控尾改笔 | inject 包定向 51 例全绿（含三形态缝/喂入预筛/自身族排除/异常跳过续问新例）；`PlatformSignatureCrossVersionTest` 243/253/262 三平台核验过 |
 | ① 预设折叠＋指示行 | 缺省折叠（`presetSectionCollapsed=true`）；指示行从参数区迁 `northHost` CENTER（工具栏 NORTH 之下右对齐常驻薄行） | 主控笔 | O-88 四例按「展开态被捕获」反转改写；BindState 位置断言改北区宿主 CENTER + `FlowLayout.RIGHT` + 无参数常驻新例 |
 | ② EXPLAIN 默认关 | `explainStructuredRender` 默认 `false`（D67 采 B 案）＋双语设置文案标注实验特性 | 主控笔 | 持久化用例改：出厂默认 false + 显式 true 往返保留 |
 | ③ 分页分号 | `appendCountSection` 主 SQL 与 COUNT 语句各自 `;` 收尾（已带分号幂等） | 主控笔 | 面板渲染两点断言：raw 逐字 `;\n\n-- 头\n` + 尾 `TOTAL;`；格式化态放宽空白仍须有分号（首轮红：格式化形态吞掉逐字串，已按双形态断言修正） |
@@ -170,12 +170,12 @@ combo.addActionListener(:3763) → switchToScheme(:3884)
 - `testShards`（5 片，单路）：**6622 例 / 2 失败 / 9 skip**（shard1 1473/0、shard2 1098/0/8skip、shard3 1363/1、shard4 1150/0、shard5 1389/0、testExternal 40/1/1skip）。skip 全为环境性（Database 插件不在测试 classpath 2、未开 `-PmpvDockerTests` 5、未提供 `-Dmpvs.dialect.jdbcUrl` 1、T-MarketCompatProxy 无产物目录 1；`docker info` 实测 daemon 未启动）。
 - `:sql-visualizer-agent:test`：**109/0** ✓（与实施车道读数一致）。
 - `verifyGate`：IU-243.28141.41 / IU-253.33514.17 / IU-262.10968.63 三目标**全 Compatible** ✓（仅 deprecated/experimental/removal 用法计数告警）。
-- 两处红与处置（`237f770`）：
+- 两处红与处置（`95bee1f`）：
   1. `BannedApiSourceScanTest`——`XmlSynHiGate` 三处 `catch (t: Throwable)` 未判 fatal 且未登记豁免（**本批 ④ 引入**；定向 107 例不含该源码扫描守卫，首轮全量才暴露）→ 按 T-FP-02 两段式基线补 `if (FatalErrors.isFatal(t)) throw t`；三处均为探针 fail-safe 站点，fatal 不得被降级成静默让位。
-  2. `HelpDialogTest`——`SqlLogPanel.toolbarGroup` 期望 6 项实为 7 项（T-SqlLogPerf `1f92f80` 追加 `scrollToEndAction` 时漏改断言，**非本批引入**）→ 同步期望与注释，无行为改动。
+  2. `HelpDialogTest`——`SqlLogPanel.toolbarGroup` 期望 6 项实为 7 项（T-SqlLogPerf `17d9af2` 追加 `scrollToEndAction` 时漏改断言，**非本批引入**）→ 同步期望与注释，无行为改动。
 - 修复落 `src/main` → 首轮读数作废，全量门禁与 verifyGate 已复跑（读数见 §七B）。
 
-### 七B、权威门禁（复跑，`237f770`，零红）
+### 七B、权威门禁（复跑，`95bee1f`，零红）
 
 - `testShards`（5 片，单路）：`BUILD SUCCESSFUL in 4m 38s`，**6513 例 / 0 失败 / 0 错误 / 9 skip**（shard1 1257/0、shard2 1338/0/2skip、shard3 1349/0、shard4 1338/0/6skip、shard5 1191/0、testExternal 40/0/1skip）；573 个计划类全部有结果 XML（parity 过），逐 testcase 扫描 failure/error = 0。9 处 skip 全为环境性 `AssumptionViolatedException`（Docker 测试未启用 6、未提供 `-Dmpvs.dialect.jdbcUrl` 1、Database 插件不在测试 classpath 2；`docker info` 实测 daemon 未启动）。
 - `:sql-visualizer-agent:test`：**109/0/0/0**（22 个测试类）✓。
@@ -184,4 +184,4 @@ combo.addActionListener(:3763) → switchToScheme(:3884)
 - 读数差异说明：首轮 6622 含 agent 109 计入总量，复跑 6513 = 五片 + testExternal（agent 单列）——同口径对齐后逐片总量一致；分片配比两轮不同属时长均衡器行为，非回归。
 - 参照项（非 blocker，登记即可）：shard3 254.9s vs 片均值 197.6s（+29%，临界片失衡，权重画像过期嫌疑）——建议后续 clean 轮跑 `dev-support/weight-refresh.ps1` 刷新分片权重画像。
 
-**收口结论**：dev@`237f770` 权威门禁全绿，六缺陷修复批可交付；残余真机走查三项（demo attach 启动／指示行位置截图／用户环境 mapper 着色）随下轮 runIde 批。
+**收口结论**：dev@`95bee1f` 权威门禁全绿，六缺陷修复批可交付；残余真机走查三项（demo attach 启动／指示行位置截图／用户环境 mapper 着色）随下轮 runIde 批。

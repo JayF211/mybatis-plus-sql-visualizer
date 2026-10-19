@@ -59,7 +59,7 @@
 3. **缺口三（本质）：doFirst 相对路径按 daemon 进程 CWD 解析**。诊断日志抓到 `cwd=C:\Users\USER\.gradle\daemon\9.7.0\.`——「Test 任务工作目录=项目根」只对 Test worker JVM 成立，doFirst 在 daemon 跑且 CWD 跨构建不一致（前几轮种子忽好忽坏的根因）。修复=配置期 `val mpTaskProjectDirAbs = project.projectDir.absolutePath`（String 可被配置缓存序列化），doFirst 内全部 `File(mpTaskProjectDirAbs, ...)` 绝对锚定。**附带发现**：编辑时只锚了 `mpDemoProjectDirDefault` 首行、其续行 `.resolve(...).absolutePath` 被挤挂到新常量上造成编译错——Edit 锚定多行常量必须含续行。
 4. **缺口四：DBN 243 单测模式 artifact 解析不生效**。种子三件套齐（test-database-artifacts.xml / test-database-drivers.xml / jar 树）后 RemoteDriver.classpath.txt 仍仅 jdbc-console.jar，idea.log 全程零 loader 活动——test-database-* 清单机制在 243 实测不可达（与 T-Embed-08 字节码结论冲突，留档不深究）。修复=绕过解析：数据源显式携带驱动 jar——`SimpleClasspathElementFactory.createElements(String...)` + `LocalDataSource.setClasspathElements`（243 javap 实证公有 API；M36.5.23d「setClasspathElements 无效」实为当年路径指错 config/）。
 5. **门禁绿**：`./gradlew testDatabase` ExecDocGateIntegrationTest 三断言绿（prepare/reuse 后 unsaved=false 且磁盘==SQL、手改后防抖窗内磁盘对齐）；同通道既有三类同获驱动修复受益。
-- **过程纪律**：并行会话 `merge-dev-ps4`（12:31 登记）活跃期间立即提交 WIP（79b1152）保住工作区——登记表只管 gradle 沙盒不管文件；验证等其结束后在独立登记下执行。
+- **过程纪律**：并行会话 `merge-dev-ps4`（12:31 登记）活跃期间立即提交 WIP（75c48d7）保住工作区——登记表只管 gradle 沙盒不管文件；验证等其结束后在独立登记下执行。
 - 留观察：MySQL 未运行时 assumeTrue 跳过在 XML 记为 failure（四集成类既有形态，非本轮引入）；要改「跳过不红」语义另行立项。
 
 ## 七、实施结果（诚实口径）

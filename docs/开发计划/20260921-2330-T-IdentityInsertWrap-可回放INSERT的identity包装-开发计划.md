@@ -5,7 +5,7 @@
 - 来源：第十轮报告 §8 DBX 增量清单 **#61**——DBX `d715b16b`（SQL Server `SET IDENTITY_INSERT`，`useDataGridExport.ts` 透传列 EXTRA）、`0c6fc610`（Dameng identity，`crates/dbx-sql/src/db_admin_sql.rs` +44）、`abefee68`（`crates/dbx-core/src/data/database_export.rs:1253-1330` 多行批次一行一元组）
 - 性质：**正确性**——修的是「生成的 INSERT 在含自增列的库上必然报错」
 - 实施分支：自 master 拉任务分支 t-identity-insert-wrap
-- 验证基线：master `03f6d25`（最近可核读数 491 类/5604 用例 0 失败 与 5577 例 0 失败，属不同批次树；实施时以当次实测为准）
+- 验证基线：master `28a1efa`（最近可核读数 491 类/5604 用例 0 失败 与 5577 例 0 失败，属不同批次树；实施时以当次实测为准）
 
 ---
 

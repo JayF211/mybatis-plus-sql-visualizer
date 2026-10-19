@@ -329,7 +329,7 @@ def main():
                            "（看 shots/a15_pre.png）" % (last_y, sub3_y, bottom_clip))
 
     # ---- 预热已移除 ----
-    # 「首次执行结果不渲染」的根因已修（插件仓 b0e9510e：无嵌入宿主时不组整控台 SplitPane），
+    # 「首次执行结果不渲染」的根因已修（插件仓 f5c91c23：无嵌入宿主时不组整控台 SplitPane），
     # 故不再需要预热绕过。
     pyautogui.keyDown('esc'); pyautogui.keyUp('esc'); time.sleep(0.8)
 

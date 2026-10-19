@@ -37,7 +37,7 @@ Caused by: java.lang.StackOverflowError
 | L71 | `val resolved = resolveFileName()` |
 | L74 | `write(entry)` |
 
-该文件自 2969b0f 后无改动（`git log` + `git diff HEAD` 均无变化），即"旧版本"与最新代码在此文件上完全一致，缺陷仍在。
+该文件自 43d6e18 后无改动（`git log` + `git diff HEAD` 均无变化），即"旧版本"与最新代码在此文件上完全一致，缺陷仍在。
 
 ### 1.3 根因：write() 的文件切换递归永无出口
 

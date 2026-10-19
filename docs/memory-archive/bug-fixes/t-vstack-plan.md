@@ -1,6 +1,6 @@
 ---
 name: t-vstack-plan
-description: T-VStack 竖向排列两笔交付（master a86c615 首交付 + b14173f
+description: T-VStack 竖向排列两笔交付（master 6dfdf72 首交付 + db140aa
   扩面，2026-09-10）——INSERT 配对竖排 + 非语句横向组展开后处理；并行会话覆盖 build.gradle.kts 实录与计数口径修正
 metadata:
   node_type: memory
@@ -8,7 +8,7 @@ metadata:
   originSessionId: sess_7004b492-8b23-4ed0-87cd-cf9afd1a7f33
 ---
 
-**三笔交付（2026-09-10，master）**：预览面板【竖向排列】按钮 = INSERT 专用竖排（`a86c615`）+ 全语句横向组展开（`b14173f`，用户裁定扩面）+ IN 展开阈值（`dc308fc`，用户复议短清单负收益）。
+**三笔交付（2026-09-10，master）**：预览面板【竖向排列】按钮 = INSERT 专用竖排（`6dfdf72`）+ 全语句横向组展开（`db140aa`，用户裁定扩面）+ IN 展开阈值（`9ef6b20`，用户复议短清单负收益）。
 
 **InThreshold 要点**：`expandInList` 加 `IN_EXPAND_MIN_ELEMENTS=5`——元素 <5 保持 `IN (1, 2, 3)` 同行（占位符 `IN (?, ?, ?)` 是本插件 inList 特性主力形态，`?` 对应靠参数面板顺序对照，竖排零增量纯花行高）；≥5 长清单才逐行（横向溢出痛点保留）。ORDER BY/GROUP BY/FROM 字段行有语义信息不加阈值。
 
@@ -26,7 +26,7 @@ metadata:
 
 **K2J 陈旧输出劫持第三犯（新形态）**：build/classes/java/main 残留 783 旧类（含扩面前的 SqlFormatter.class，时间戳为并行 IDE 会话 Gradle 同步写入），排前于 kotlin/main 新类——**源码编译进 kotlin/main 的类是新的、jar/测试运行时吃 java/main 旧类**（javap 字节码反汇编证伪「实现错误」假设后才定位到）。清目录复绿。判别捷径：`python 搜 class 常量池 b'常量名' in data` 对比 java/main 与 kotlin/main 同名类。
 
-**IN 阈值议题全流程（已闭环）**：扩面交付后用户质疑「IN 的参数单独一行是否合适」→ 分析判定一刀切不当（长清单几十 id 溢出弹窗该展开；短清单尤其本插件自产的 `IN (?, ?, ?)` 占位符形态竖排无增量信息纯花行高——INSERT 配对有列名增量，短 IN 没有，`?` 对应靠左侧参数面板不靠读 SQL；SQL 面板纵向空间比横向紧张；业界 DataGrip/DBeaver 亦按行宽或阈值折行）→ **用户裁定实施阈值方案**（`dc308fc`，见上文 InThreshold 要点）。
+**IN 阈值议题全流程（已闭环）**：扩面交付后用户质疑「IN 的参数单独一行是否合适」→ 分析判定一刀切不当（长清单几十 id 溢出弹窗该展开；短清单尤其本插件自产的 `IN (?, ?, ?)` 占位符形态竖排无增量信息纯花行高——INSERT 配对有列名增量，短 IN 没有，`?` 对应靠左侧参数面板不靠读 SQL；SQL 面板纵向空间比横向紧张；业界 DataGrip/DBeaver 亦按行宽或阈值折行）→ **用户裁定实施阈值方案**（`9ef6b20`，见上文 InThreshold 要点）。
 
 **后续衍生缺陷（新计划）**：用户真机发现竖排/关键字换行形态在左侧输入参数后消失——根因是预览编辑器为模型派生视图（`renderSql→showSql` 全量重建覆盖），三个格式化按钮中只有 `format()` 挂在管线里。已立项 [[t-previewdisplaymode-plan]]（Plan doc 20260910-1349，未实施）。
 

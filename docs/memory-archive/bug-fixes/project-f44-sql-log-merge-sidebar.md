@@ -7,7 +7,7 @@ metadata:
   originSessionId: sess_e386e7f2-eac0-4476-bc8f-1442ea2f7dda
 ---
 
-F-44 已完成（2026-08-25），提交 `1c8bfe6`（功能）+ `8e072a1`（修正 sidebar 注册错误），已合并到 master（merge commit `028c262`），2497+ 测试全绿。
+F-44 已完成（2026-08-25），提交 `a37acbc`（功能）+ `0942e0f`（修正 sidebar 注册错误），已合并到 master（merge commit `4ccc770`），2497+ 测试全绿。
 
 **核心设计**：
 - **保留**主侧边栏 `cn.song.mybatisplus.visualizer.log`（plugin.xml 注册），**去除**独立 `cn.song.mybatisplus.visualizer.history` 侧边栏
@@ -45,7 +45,7 @@ F-44 已完成（2026-08-25），提交 `1c8bfe6`（功能）+ `8e072a1`（修�
 **实施过程中的教训**：
 - 最初错误地去除了主侧边栏（`cn.song.mybatisplus.visualizer.log`），保留了独立的 SQL 历史侧边栏——与用户意图相反
 - 用户发现"侧边栏只有sql历史图标"后纠正：应保留主侧边栏 + 去除独立 SQL 历史侧边栏
-- 修复提交 `8e072a1`
+- 修复提交 `0942e0f`
 
 **Why**: 用户希望减少侧边栏按钮，将 SQL 历史合并到主侧边栏；同时支持查看历史 SQL 并跳转回产生该 SQL 的源码位置，便于调试。
 

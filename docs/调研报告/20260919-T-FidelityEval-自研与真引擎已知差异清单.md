@@ -49,7 +49,7 @@
 - 场景：`<mapper namespace="n">…</mapper>` 不带 DOCTYPE，`SELECT * FROM t WHERE a = #{a}`
 - 真引擎：抛 `org.apache.ibatis.builder.BuilderException: Error creating document instance. Cause: SAXParseException; lineNumber: 1; columnNumber: 23; 文档根元素 "mapper" 必须匹配 DOCTYPE 根 "null"`
 - 自研：`sql=[SELECT * FROM t WHERE a = ?] props=[a] errors=[]`
-- 成因：真引擎 `XMLMapperBuilder` 经 XPathParser 校验 DOCTYPE；自研自建 DOM 解析器在 T-M25.1（`d5dcd55`）改为「接受官方 DOCTYPE + 三重 XXE 防护」，对缺失 DOCTYPE 不做强制。
+- 成因：真引擎 `XMLMapperBuilder` 经 XPathParser 校验 DOCTYPE；自研自建 DOM 解析器在 T-M25.1（`3dcb35f`）改为「接受官方 DOCTYPE + 三重 XXE 防护」，对缺失 DOCTYPE 不做强制。
 - 判定：**我方更宽容**，不是缺陷。
 - 可修：不建议（收紧=降低对片段式 mapper 的可用性）。
 - 成本量级：若强行对齐需在解析期加 DOCTYPE 校验，约 0.5 人天，方向是反的。
@@ -86,7 +86,7 @@
   `FilteredDynamicContext`**（`where`/`trim`/`set` 体内 `<if>`，一并修）。同一失败在顶层 `if`（D3）
   能记 errors，只有嵌套层静默。
 - 判定：**原为真缺陷**（唯一与真引擎硬失败相对、且用户不可见的一处），**现已修**。
-- 修复：**T-TailSweep2 T-FS-07**（`e001b6f`）——`DynamicContext.errors` 转 `open val` + 三处子上下文按既有
+- 修复：**T-TailSweep2 T-FS-07**（`4c31be4`）——`DynamicContext.errors` 转 `open val` + 三处子上下文按既有
   `bindings`/`staticFieldValues` 同款委托覆写；去重落在写入侧（`DedupErrorList`，键=完整错误文案，
   保首现顺序），逐迭代不再刷屏。
 - 与真引擎的**剩余差别**：只剩「硬失败（真引擎）vs 降级展开 + 可见提示（自研）」——即 D3 的同一取向
@@ -126,7 +126,7 @@
 | D5 | P20 DTO 属性在 `test` | 判真展开 | 判假不展开 | 求值器能力边界 | 是（暂缓） | 0.5~1 人天 |
 | D6 | P30 `${}` 求值为空 | 静默空串 | 同 SQL + 一条提示 | 提示面 | 否 | — |
 
-**修复进度**：D4 已在 T-TailSweep2 T-FS-07（`e001b6f`）落地（静默消除，剩余差别只剩「硬失败 vs 降级展开 +
+**修复进度**：D4 已在 T-TailSweep2 T-FS-07（`4c31be4`）落地（静默消除，剩余差别只剩「硬失败 vs 降级展开 +
 可见提示」这一取向，与 D3 同类）；D5 暂缓（建议随首个真实触达场景做，见 §4）。其余 4 条不建议修——
 修的方向是「对齐真引擎的硬失败」，等于主动降低可用性。
 

@@ -1,7 +1,7 @@
 # T-DsCover：双击预览无数据源时 Database 工具窗抢占侧边栏 开发计划
 
 > **创建日期**：2026-09-08
-> **分支**：master（当前 HEAD `466407a`）
+> **分支**：master（当前 HEAD `27b359d`）
 > **优先级**：P1（无数据源环境下**每次**双击预览都会把 Database 工具窗拉到前台盖掉插件侧边栏，预览是高频动作，体验持续受损；用户原话「每次插件侧边栏都会被数据源侧边栏覆盖掉，导致体验很差」）
 > **预估工时**：1~2h（改动集中在 DataSourceSelector 两个分支的条件门控与参数透传；runIde 真机人工验证另计）
 > **来源**：用户反馈原话——「现在双击预览，如果idea还没配置数据源或数据源驱动没安装等问题，每次插件侧边栏都会被数据源侧边栏覆盖掉，导致体验很差，分析问题原因生成开发计划文件」。追问「这个问题是不是没修复」——确认：**从未修过**，本计划为该问题首次立项。
@@ -173,7 +173,7 @@ runners.isEmpty() -> {
 
 ## 八、实施记录
 
-- **2026-09-08** 实施完成，fix `5e75c12`：
+- **2026-09-08** 实施完成，fix `a091811`：
   - `chooseAndPrepare` 无数据源分支 `openDatabaseToolWindow` 改 `if (executeAfterPrepare)` 门控（SqlPreviewPanel/DataSourceSelector 注释同步）；
   - `runRunner` 加 `silent: Boolean = false`，预览路径三处调用点（last-used 静默复用 `silent=true`、单数据源直选 `silent=!executeAfterPrepare`、弹窗主动选中 `silent=false`）——silent 失败仅 LOG.warn + `PropertiesComponent.unsetValue(LAST_RUNNER_KEY)` 清损坏记忆，不弹模态错误框；
   - `PropertiesComponent.unsetValue` 定位：类在 `util-8.jar`（非 app-client），`javap` 核验存在 `public abstract void unsetValue(String)`；

@@ -1,7 +1,7 @@
 # T-PreviewWiLock：日志双击预览 EDT 内 VFS 刷新断言崩溃修复 开发计划
 
 > **创建日期**：2026-09-08
-> **分支**：master（当前 HEAD `8716cf9`）
+> **分支**：master（当前 HEAD `f4a818d`）
 > **优先级**：P0（SQL 日志双击预览主路径 100% 崩溃，弹窗打不开）
 > **预估工时**：0.5~1h（含全量回归）
 > **来源**：用户真机（IDE 2026.2.1 沙盒）双击 SQL 日志条目，预览弹窗抛 `RuntimeExceptionWithAttachments: Access is allowed from write thread only`
@@ -38,7 +38,7 @@ Current thread: Thread[#58,AWT-EventQueue-0,10,main] (EventQueue.isDispatchThrea
 
 1. **直接根因**：`SqlPreviewPanel.createEditor` 回退分支把 `LocalFileSystem.refreshAndFindFileByIoFile`（同步 VFS refresh）包在 `ReadAction.compute` 内（SqlPreviewPanel.kt:1251→1256）。2024.2+ 平台线程模型要求同步 VFS refresh 必须在 write-safe context（持有 **write-intent lock**）执行。EDT 事件分发本身隐式持有 write-intent lock，本不会出事；但一旦进入 `ReadAction.compute`，平台把 write-intent lock **check out**（让后台线程的 WriteIntentReadAction 可推进），lambda 内只剩 read lock → `RefreshSessionImpl.launch` → `assertWriteSafeEnvironment` → `assertWriteIntentLockAcquired` 硬抛。
 2. **触发条件**：日志双击入口（`SqlLogPanel.openPreview` → `SqlPreviewService.showResult` → `new SqlPreviewDialog`）在**弹窗构造函数内同步**执行 `panel.showResult → renderSql → showSql → createEditor`（首帧 editor 为 null）。而 T-M36.6-03 的预热线程是面板构造尾部才发起的（pooled 线程，建文件 + VFS refresh + PSI 解析需数十 ms），EDT 几 ms 内就跑到 `createEditor`——预热**竞态必输**，`prewarmedTempFile`/`previewTempFile` 恒为 null，每次双击都走 EDT 同步回退分支。即回退路径是这条入口的事实主路径，预热救不了场。
-3. **为什么现在才炸**：`535e8ed`（M34）引入该 `ReadAction.compute` 包装时目标是消 EDT SlowOperations 硬抛，当时 243 平台对 VFS refresh 的 write-safe 检查不硬抛（只产生 SlowOperations SEVERE 日志噪音，M36.6.1/M54 治理记录可证），代码"带病存活"。沙盒切 262（IDE 2026.2.1）后 `RefreshQueueImpl` 的 write-safe 断言变硬抛，回退路径一踩即崩。旁证：262 平台已将 `ReadAction.compute(ThrowableComputable)` 标 deprecated（DataSourceSelector.kt T-M52 注释），方向上本就该迁离裸 ReadAction。
+3. **为什么现在才炸**：`e6cae69`（M34）引入该 `ReadAction.compute` 包装时目标是消 EDT SlowOperations 硬抛，当时 243 平台对 VFS refresh 的 write-safe 检查不硬抛（只产生 SlowOperations SEVERE 日志噪音，M36.6.1/M54 治理记录可证），代码"带病存活"。沙盒切 262（IDE 2026.2.1）后 `RefreshQueueImpl` 的 write-safe 断言变硬抛，回退路径一踩即崩。旁证：262 平台已将 `ReadAction.compute(ThrowableComputable)` 标 deprecated（DataSourceSelector.kt T-M52 注释），方向上本就该迁离裸 ReadAction。
 
 ### 1.3 全库排雷：同类隐患仅此一处
 

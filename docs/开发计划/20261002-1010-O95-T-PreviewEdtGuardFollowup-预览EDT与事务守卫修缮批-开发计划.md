@@ -38,11 +38,11 @@
 
 ## 五、实施记录
 
-（t-o95fix 工作树实施，2026-10-02；基线 dev `a0e2b32`；提交 `7742787`〔S2〕/`64db513`〔S1〕/S3 随后）
+（t-o95fix 工作树实施，2026-10-02；基线 dev `350680a`；提交 `1a01e1c`〔S2〕/`c203c31`〔S1〕/S3 随后）
 
-### S2 TransactionGuard write-unsafe 修复（`7742787`）
+### S2 TransactionGuard write-unsafe 修复（`1a01e1c`）
 
-- **前提②复核（grep 同族 commitDocument 全调用面）**：R33 日志帧 `DataSourceSelector.kt:3732` 对应 `writeVfTextViaDocument` 内联 lambda 区（`ExecDocAutosaveGate.suppressDuring` 内联起点，bf23915 与当前树该文件逐字节一致；`commitDocument` 在 3743，PSI commit 链是平台断言点之一——T-DynUpdateWriteSafe 记录在案）。全部四个调用点核对：
+- **前提②复核（grep 同族 commitDocument 全调用面）**：R33 日志帧 `DataSourceSelector.kt:3732` 对应 `writeVfTextViaDocument` 内联 lambda 区（`ExecDocAutosaveGate.suppressDuring` 内联起点，b4dd291 与当前树该文件逐字节一致；`commitDocument` 在 3743，PSI commit 链是平台断言点之一——T-DynUpdateWriteSafe 记录在案）。全部四个调用点核对：
   - `:471`（reuseSharedConsole）/`:1699`（prepareInConsole attach）/`:2776`（executeOnConsole runWhenSmart）——三处**均已包 `WriteAction.compute`**（与计划「未包 WriteAction」的预期不符，前提②被证伪）；R33 日志无实证指向这三处，不动；
   - `:1216`（contentAdded 重写 console 文档）——已是 `ModalityState.nonModal()` 投递（T-WSC-02 定例）；
   - **真正缺口=`dispatchDocWriteOnEdt` 的 EDT 直调分支**（原 `if (app.isDispatchThread) return docWriteOnce(...)`）：是 `writeVfTextViaDocument` 调用面里**唯一未过 `DocWriteContext` 闸的入口**（fire-and-forget/bounded 两形态已闸）。仓内平台定例（T-WriteSafeCtx 243 源码逐帧）：**WriteAction 不 confer 写安全资格**——write-unsafe EDT 活动（any() 投递/「写不安全进入」的模态泵）里包了 WriteAction 照样报 Write-unsafe context，R33 三验 2 组（EXPLAIN 验证链逐次执行 → gStrip `\G` 回写 `dispatchDocWriteOnEdt` 即此链）。
@@ -50,7 +50,7 @@
 - **反向红绿**：摘闸→`ExecDocSyncTest.testEdtDirectDispatchDefersWriteWhenContextUnsafe` 红（同步直写返回 true、deferredCount 不动；14 例 1 失败）；恢复→14/0 全绿。新增配对用例 `testEdtDirectDispatchWritesInlineWhenContextAllowed`（可写就地写零投递）。
 - **证据边界**：真实 TransactionGuard 断言需生产 EDT 活动语义（生产 IdeaLogger 只记 SEVERE 不抛、单测 TestLogger 收集不抛），单测以 `writeAllowedProbe` 注入观测**闸门分支行为**（与 T-FixWriteSafe 两例同口径）；真机门禁=沙盒日志 grep `Write-unsafe context`，随下一轮走查批。
 
-### S1 SlowOperations 定性+治理（`64db513`，D1=A）
+### S1 SlowOperations 定性+治理（`c203c31`，D1=A）
 
 - **定性（归因账）**：
   - **实栈证据**（2026-09-24 主树沙盒 `idea.log:1263`，同插件同族）：慢操作断言源=`SyntaxHighlighterFactory.getSyntaxHighlighter` → SQL 插件 `SqlLanguageSubstitutor.getSqlLanguageDialect` → `SqlDialectMappings.getMapping` → `PerFileMappingsBase.ensureStateLoaded` → `findFileByUrl`/`findFileByPath` → `VirtualDirectoryImpl.findChild` → `FSRecordsImpl.update`（**VFS 目录下沉查找本身是慢操作门控 API**）。该族在插件的触发面=编辑器创建期（`LogToSqlPanel:541` 直调〔已实证炸过〕、`SqlPreviewPanel.createEditor`→`EditorFactory.createEditor` 内部），**均不在 renderSql→showSql 逐帧链上**。
@@ -70,7 +70,7 @@
 - **定向**：`SqlPreviewPanelBindStateTest` 三例（无绑定灰字文案/有绑定态显示源名+随渲染刷新回流/指示行位于预设行之下〔组件序=BoxLayout 视觉序〕）3/0+`SqlPreviewPanelTest` 73/0+`SqlPreviewPanelParamSchemesTest` 13/0 布局回归+`BundlePlaceholderArityTest` 4/0 占位符契约（0 失败）。
 - **真机走查**（验收 3）：绑定态指示出现/未绑定灰字留下一轮沙盒走查批（计划 §二既定）。
 
-## 六、收口门禁（基线=merge `716a703`，2026-10-02）
+## 六、收口门禁（基线=merge `a5071d1`，2026-10-02）
 
 - **testShards 5 片**：6350/0/0/8（566 类，XML 产物 10:47 新鲜，python ET 聚合器直读）；**testExternal**：40/0/0/1——合计 **6390/0/0/9**（skip 9=docker 三态口径）。
 - **agent**：94/0（XML 10:45 新鲜）。

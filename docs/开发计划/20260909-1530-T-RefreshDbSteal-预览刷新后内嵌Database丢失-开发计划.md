@@ -1,7 +1,7 @@
 # T-RefreshDbSteal：预览刷新后内嵌 Database 控制台丢失（参数失同步 + 执行落 Database 工具窗）开发计划
 
 > **创建日期**：2026-09-09
-> **分支**：master（HEAD `4340ade`；工作树有 T-PreviewFlash / T-LogRowNumber 在途未提交改动，涉及同文件，实施前先并行协调）
+> **分支**：master（HEAD `22eeff7`；工作树有 T-PreviewFlash / T-LogRowNumber 在途未提交改动，涉及同文件，实施前先并行协调）
 > **优先级**：P1（M36 内嵌控制台是核心交互，用户真机复现且三症状并发；与并行计划 T-ExecCopyFix 同族，建议合流实施）
 > **预估工时**：5~6h（埋点 1h + 弹窗单例化与监听治理 2h + 所有权卫队 1.5h + 测试回归 1h + 真机复验 0.5h）
 > **来源**：用户真机反馈（2026-09-09 14:53 截图两张）——预览弹窗点「刷新」后：① 右侧内嵌 Database 控制台（DBN 工具栏）消失，变回带行号的自研回退编辑器；② 左侧动态条件/参数改动不再同步到右侧 SQL；③ 点「执行 SQL」不在当前弹窗执行，而是在 Database 工具窗的控制台执行。不点刷新一切正常。
@@ -13,7 +13,7 @@
 ### 1.1 环境与版本核实
 
 - 用户真机 IDE 2026.2.1，安装插件 **v2026.9.8**（`%APPDATA%\JetBrains\IntelliJIdea2026.2\plugins\mybatis-plus-sql-visualizer\lib\mybatis-plus-sql-visualizer-2026.9.8.jar`，安装时间 09-08 19:22）。
-- 已反编译部署 jar 的 `SqlPreviewPanel.refreshView` 字节码核对：`compactMode = !formatSqlSetting() → modeButton.setText → renderSql()`，与仓库 17bdef8 源码完全一致——**排除版本漂移**，以下代码行号按当前工作树。
+- 已反编译部署 jar 的 `SqlPreviewPanel.refreshView` 字节码核对：`compactMode = !formatSqlSetting() → modeButton.setText → renderSql()`，与仓库 2b9f7c8 源码完全一致——**排除版本漂移**，以下代码行号按当前工作树。
 
 ### 1.2 真机日志时间线（idea.log 轮转链，14:49:49 → 14:53:33）
 
@@ -120,7 +120,7 @@
 
 ### 4.2 全量回归
 
-基线 3153/0/6（master 4340ade）。K2J 陈旧输出目录与回归假失败两类坑照 [[pitfall-regression-false-failure-flakes]] 预防。
+基线 3153/0/6（master 22eeff7）。K2J 陈旧输出目录与回归假失败两类坑照 [[pitfall-regression-false-failure-flakes]] 预防。
 
 ### 4.3 runIde/真机人工验收
 
@@ -149,8 +149,8 @@
 
 ## 七、实施记录（2026-09-09 回填）
 
-按「F1→F3→F4→F2」顺序完成，全量回归 3188/0/6 绿（基线已含同日 T-LogRowNumber 2467f94 与
-T-ExecCopyFix 27799c3 两笔合入，非本计划引起的基线增长属预期）。runIde/真机人工验收（§4.3
+按「F1→F3→F4→F2」顺序完成，全量回归 3188/0/6 绿（基线已含同日 T-LogRowNumber c83fb56 与
+T-ExecCopyFix 642d73b 两笔合入，非本计划引起的基线增长属预期）。runIde/真机人工验收（§4.3
 清单）待用户复测，本记录以单测与日志埋点交付为界。
 
 ### 7.1 落地明细（与 §2 方案的偏差）

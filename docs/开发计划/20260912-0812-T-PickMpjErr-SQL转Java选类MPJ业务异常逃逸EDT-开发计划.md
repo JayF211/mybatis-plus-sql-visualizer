@@ -2,7 +2,7 @@
 
 > **创建日期**：2026-09-12
 > **状态**：🟢 已立项、当日实施（master）
-> **分支**：master（HEAD `a0702f6`）
+> **分支**：master（HEAD `aa49c76`）
 > **优先级**：P1（真机 red exclamation——预期业务报错以 `UnhandledException` 形式炸到平台顶层）
 > **预估工时**：0.5h（单点收口 + 测试）
 > **来源**：用户真机 idea.log（2026-09-12 贴出）——SQL→Java 面板经调用类选择器选定无 MPJ 能力的 `DeviceInfoMapper` 后转换多表 JOIN SQL，`SqlReverseException` 从 EDT 鼠标回调一路逃逸成 `com.intellij.openapi.diagnostic.UnhandledException`
@@ -42,7 +42,7 @@ ChooseByNameBase$7.onClick（mouseReleased，EDT）
 ### 1.3 非目标
 
 - 不改 `JavaCodeGenerator` 的抛错语义（无 MPJ 能力拒生成是正确行为）；
-- 不动 T-ReverseParenWira 已收口的 attachConsole WIRA 包裹（用户日志里那 5 条 read access 硬抛来自**旧构建**，master dab3d3b 已修，装新构建即可验证，与本任务无关）。
+- 不动 T-ReverseParenWira 已收口的 attachConsole WIRA 包裹（用户日志里那 5 条 read access 硬抛来自**旧构建**，master a24a30e 已修，装新构建即可验证，与本任务无关）。
 
 ## 二、方案
 

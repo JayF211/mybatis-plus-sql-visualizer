@@ -1,7 +1,7 @@
 # T-FullRegression：全功能沙盒回归走查——T-McpDynamicToolset 改动后零回归验证
 
 > 立项：2026-09-26（用户 goal：沙盒测试插件所有功能有无回归性问题，出现则修复并循环直到全部无问题；用 demo 项目测试）。
-> 基线：master `edeb9a6`（T-McpDynamicToolset B1~B4 已完成：MCP 全动态化+五目标 verifier 全 Compatible+十工具沙盒端到端绿）。
+> 基线：master `d8528d8`（T-McpDynamicToolset B1~B4 已完成：MCP 全动态化+五目标 verifier 全 Compatible+十工具沙盒端到端绿）。
 > 走查形态：262 沙盒（MPSV-GifFresh，信任/数据源 mp_demo@localhost/mcpServer 开关均已就绪）+ demo 项目 mybatis-plus-demo（应用端口 8081，MySQL localhost:3306/mp_demo root/root）。
 
 ## 一、目标与范围

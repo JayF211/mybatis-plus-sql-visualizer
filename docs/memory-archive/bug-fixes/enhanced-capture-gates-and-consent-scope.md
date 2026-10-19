@@ -7,7 +7,7 @@ metadata:
   originSessionId: sess_8e0c199a-6676-4570-8373-cbb9b6b85e79
 ---
 
-> **归档注记（2026-09-24 第十六次精简）**：文中「收窄方向均未实施」已被推翻——用户定案路线 A（任务语义收窄）已实施为 T-GradleTaskInjectScope（`e7112f9`，并入 dev `1597521`）：`PremainTaskScope.decide` 对 test/build 族 skip、runIde 等 IDE 族 skip、bootRun/run 等应用启动保留注入；受控实验仍在真机复验节待做。
+> **归档注记（2026-09-24 第十六次精简）**：文中「收窄方向均未实施」已被推翻——用户定案路线 A（任务语义收窄）已实施为 T-GradleTaskInjectScope（`d0a0dee`，并入 dev `b2f9f17`）：`PremainTaskScope.decide` 对 test/build 族 skip、runIde 等 IDE 族 skip、bootRun/run 等应用启动保留注入；受控实验仍在真机复验节待做。
 
 用户问「跑 Gradle 插件项目也提示增强捕获，正常吗」（2026-09-23）时的结论与依据。**正常**：这条链上没有任何项目类型闸门（不判断 Spring Boot / MyBatis，也不判断跑的是不是业务应用）。
 

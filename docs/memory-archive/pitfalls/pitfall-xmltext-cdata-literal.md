@@ -8,7 +8,7 @@ metadata:
   originSessionId: sess_e7ef117e-74b4-4cfa-95bf-4150d63d2ef4
 ---
 
-> **归档注记（2026-09-24 第十六次精简）**：连带发现的 hbm 命名查询链 CDATA 缺口已修（dev `9c0c9e7`「O-72 延伸」：抽共享 `xml/XmlDirectText.kt`，两处提取改共享口径、断言判别化）；本档保留的核心事实＝平台 `XmlText.text` 对 CDATA 返回字面全文，新增 XML 文本提取代码前仍须先读。
+> **归档注记（2026-09-24 第十六次精简）**：连带发现的 hbm 命名查询链 CDATA 缺口已修（dev `1406754`「O-72 延伸」：抽共享 `xml/XmlDirectText.kt`，两处提取改共享口径、断言判别化）；本档保留的核心事实＝平台 `XmlText.text` 对 CDATA 返回字面全文，新增 XML 文本提取代码前仍须先读。
 
 **2026-09-23 O-72 T-XmlInlineSql 实测（ideaIU 2024.3.7.1 测试环境）：PSI 的 `XmlText.text` 对 CDATA 返回的是带 `<![CDATA[ ... ]]>` 包裹的『字面全文』，不是展开后的内容。**（KDoc/注释里流传的「CDATA 已被 PSI 展开为文本节点」说法被 ComparisonFailure 判别性读数证伪：`expected:<[DELETE FROM t]> but was:<[<![CDATA[DELETE FROM t]]>]>`，首跑 11 例红。）
 

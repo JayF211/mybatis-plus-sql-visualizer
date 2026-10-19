@@ -22,7 +22,7 @@
 
 **证据链**：
 - 合并树 `SqlPreviewPanel.toolbar()`（约 481~505 行）：按钮序列为 复制错误/压缩/格式化/关键字换行/竖向排列/**刷新/更多**——无「执行计划」；500~501 行却残留 dev 侧注释「M37.2：EXPLAIN（真实执行计划……dev 侧功能保留内联，导入/对比/分享已按 T-PreviewTopOverlap F2 折叠进「更多」菜单）」。
-- M37.2 原始交付 `2536745`（dev）：按钮行确有 `add(smallButton(MpSqlVisualizerBundle.message("panel.explain")) { explainSql() })`。
+- M37.2 原始交付 `eb27063`（dev）：按钮行确有 `add(smallButton(MpSqlVisualizerBundle.message("panel.explain")) { explainSql() })`。
 - `explainSql()` 函数本体随合并入库（约 632 行起，含 renderExplainStatement 分派/执行链/showLoading），但**全树零调用者**——master 侧 T-PreviewTopOverlap 单行方案重构按钮行时删掉了 dev 的 EXPLAIN add 行，dev 侧注释行经自动合并保留，形成「注释说保留、代码已删除」的语义矛盾。无冲突标记，编译测试全绿（explainSql 无人调用不报错），正是「自动合并 ≠ 语义正确」的又一实锤。
 - 更多菜单（`moreActions()` 508~512 行）三项为 导入参数/对比/分享——EXPLAIN 也不在其中（被折叠丢失）。
 

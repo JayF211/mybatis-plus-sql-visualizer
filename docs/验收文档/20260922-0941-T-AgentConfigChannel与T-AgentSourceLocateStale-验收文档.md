@@ -34,7 +34,7 @@
 | 独立复核 | IDE 侧（另一上下文、只读） | 有条件通过：规格基本逐条落地、跨侧 ACK 字面契约逐字符一致；15 例闸门测试中 11 例有鉴别力；抓出 1 处用户可见文案缺口（裁定无需改）+ 2 中 + 6 低（处置见计划 §实施记录 §七） |
 | **真机级端到端**（假 IDE 探针 + `-javaagent` 注入真实 Spring Boot/MPJ 应用，不经 GUI） | `dev-support/e2e-fake-ide/run-e2e.sh` | **停采生效 ✓**（`disabled=true` 的 ACK 到达 + 3000ms 窗口 0 事件）；**恢复采集 ✗→已修**（`disabled=false` 的 ACK 到达但三轮 0 事件 → 定位为 T-08 连接级跳过包装，已修并加回归用例）；**P-1 取证成立**（jstack 实测 `MPJInterceptor.intercept` 在调用栈上）；证据见 `dev-support/e2e-fake-ide/evidence/` |
 | 门禁（首跑噪音） | — | 首跑 17 例 `NoSuchMethodError: AgentSession.<init>` 系**陈旧增量编译产物** flake（多分支合并后测试类解析旧构造签名），清 `build/classes`+`build/kotlin` 后即绿 |
-| **门禁（shard3 跨类服务毒化 → 已根治）** | T-ST-02b2 两层修法（`6df02ef` / `81196e5`） | 首跑 20 例、第一层后 26 例失败 → 定因「`isDisposed` 判据对 light 测试的 temporarily-disposed 窗口不可达」→ 第二层把读路径改走 `getServiceIfCreated`（**结构上不发起创建**）→ **shard3 连续三轮绿 + 全量 testShards 三片全绿**。该 flake 非确定，绿读数不构成证明；结构性论据 + 多轮读数 + 扫描守卫为准（见计划 §十一） |
+| **门禁（shard3 跨类服务毒化 → 已根治）** | T-ST-02b2 两层修法（`cfea6e8` / `28b9080`） | 首跑 20 例、第一层后 26 例失败 → 定因「`isDisposed` 判据对 light 测试的 temporarily-disposed 窗口不可达」→ 第二层把读路径改走 `getServiceIfCreated`（**结构上不发起创建**）→ **shard3 连续三轮绿 + 全量 testShards 三片全绿**。该 flake 非确定，绿读数不构成证明；结构性论据 + 多轮读数 + 扫描守卫为准（见计划 §十一） |
 
 ## 3. 真机/沙盒走查（**2026-09-22 12:37~12:45 已执行 4/6 步，读数如下**）
 
@@ -42,7 +42,7 @@
 > 未走查的步 4（脱敏打码观感）/ 步 6（增强捕获关闭时的控制台回落）保持「未走查」登记（原因见下），
 > 未因用户确认而改写为「已通过」——如需补走，流程与判据见本文件 §3 下方命令块与本节表格。
 
-**执行环境**：`runIde` 沙盒（IU-2024.3.7.1，插件为 master `6ac9e45` 构建）＋ demo `mybatis-plus-sql-visualizer-demo` 的
+**执行环境**：`runIde` 沙盒（IU-2024.3.7.1，插件为 master `013d01c` 构建）＋ demo `mybatis-plus-sql-visualizer-demo` 的
 `MybatisPlusJoinDemoApplication`（dm profile，面板角标实测 `[DM (达梦)]`）。驱动方式＝pyautogui（截图 + 坐标点击/按键）。
 截图存于 `F:/code/Java/Gitee/SongRenShuo/mpsv-walk/`。
 

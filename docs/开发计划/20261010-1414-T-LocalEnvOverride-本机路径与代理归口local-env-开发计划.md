@@ -55,7 +55,7 @@ MPSV_PROXY_PORT=7890
 - **D4（代理键的取舍）**：代理地址进 `local.env`；**默认值仍保留 `127.0.0.1:7890`**（本机现状），但在 `local.env` 里可置空以关闭代理。
 - **D5（不改 `run-ide-local-manifest.sh`）**：它已相对化，无改动。
 - **D6（不动 `.run/*.xml`）**：运行配置用 `$PROJECT_DIR$` 宏，已是 IDE 侧相对路径，不属本任务。
-- **D7（`.env` 必须钉 LF，2026-10-10 补）**：仓库已于 `49f0f74` 落 `.gitattributes`（`* text=auto eol=crlf` ＋ `*.sh`/`*.bash text eol=lf`），**但 `.env` 未覆盖**。`local.env` 由 bash `.` 加载，若检出为 CRLF，每个赋值尾部会带 `\r`（值污染——端口会变成 `7890\r`、路径会变成 `...\r`，且报错信息难以定位）。须在 `.gitattributes` 补 `*.env text eol=lf`（同时覆盖 `local.env` 与入库的 `local.env.example`）。
+- **D7（`.env` 必须钉 LF，2026-10-10 补）**：仓库已于 `28103a1` 落 `.gitattributes`（`* text=auto eol=crlf` ＋ `*.sh`/`*.bash text eol=lf`），**但 `.env` 未覆盖**。`local.env` 由 bash `.` 加载，若检出为 CRLF，每个赋值尾部会带 `\r`（值污染——端口会变成 `7890\r`、路径会变成 `...\r`，且报错信息难以定位）。须在 `.gitattributes` 补 `*.env text eol=lf`（同时覆盖 `local.env` 与入库的 `local.env.example`）。
 
 ## 四、待验证前提
 

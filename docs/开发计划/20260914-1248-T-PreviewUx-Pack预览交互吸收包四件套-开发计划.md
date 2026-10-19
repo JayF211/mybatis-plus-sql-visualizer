@@ -68,7 +68,7 @@
 ## 五、实施记录（交付后回填）
 ## 五、实施记录（交付后回填）
 
-- 交付日期：2026-09-14（分支 `t-previewux-pack`，代码提交 7c77640 + 文档提交）
+- 交付日期：2026-09-14（分支 `t-previewux-pack`，代码提交 ef05f45 + 文档提交）
 - 实施顺序：#2 诚实降级横幅 → #1 UPDATE (new) 列 → #4 多语句执行确认 → #3 ${table} 快捷模板（按计划执行）
 - 交付明细：
   - #2：新增 `ui/DegradationBanner`（面板内嵌非模态单行提示，不算弹窗——弹窗克制红线口径零新增弹窗；`RENDER_WARNING`/`DEGRADED` 双类别，降级提示挂起期间渲染警示不覆盖不清除）。触发面三类接线：`SqlPreviewPanel.updateMeta` 渲染警示（有则显示、恢复即清除）；`createEditor` 降级链层级提示（第二级内存 PSI / 第三级裸 document，不破坏 T-PreviewExecDs 降级顺序与快速降级语义，主路径成功时清除）；`LogToSqlPanel` 转换区（未识别到条目 / 还原不完整）。文案三要素（哪段没还原/为什么/能做什么）en/zh 双语键同步。

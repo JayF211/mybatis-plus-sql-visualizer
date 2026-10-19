@@ -90,8 +90,8 @@ handleInbound(cmd, readPayload(in, cmd));       // readPayload 内部才是 in.r
 
 ### 4. 为什么现在才暴露
 
-- 2026-09-18 `T-AgentListenSync`（`a5e27de`）才把「监听开关 → 应用侧采集」这条联动接上；**它只做了 IDE 侧下发**，
-  应用侧解析自 2026-09-12 `a16122c`（M56-01 基座）起就是这个错位形态，从未被任何测试或真机走查覆盖过。
+- 2026-09-18 `T-AgentListenSync`（`fb408b9`）才把「监听开关 → 应用侧采集」这条联动接上；**它只做了 IDE 侧下发**，
+  应用侧解析自 2026-09-12 `bc6351c`（M56-01 基座）起就是这个错位形态，从未被任何测试或真机走查覆盖过。
 - 在此之前，用户侧的可感症状被两件事掩盖：① `buffer.paused` 在「点过停止」后才为 true，列表会安静下来，
   掩盖了应用侧仍在采集；② 会话 30 秒必掉线（T-AgentHeartbeat，2026-09-21 才修），条目本来也到不了列表。
 - 本次现场是**从未点过捕获**的初始态（`paused=false`），于是「采集照跑 + 入队无闸门」同时成立，症状直接可见。
@@ -356,7 +356,7 @@ MCP 审计落历史（按设计不判 `capturing`）、历史面板、预览/执
 
 | 车道 | 分支 / 工作树 | 内容 | 状态 |
 |---|---|---|---|
-| A 应用侧 | `t-agent-cfg-agent` / `mpsv-agent-cfg-agent` | T-01 读帧对齐、T-01b 清队列+短路、T-02 ACK、T-07 看门狗、两个新测试类（10 例） | 首提交 `9c1a18d` + 复核整改 `4f22765`，均已合入集成分支（`bd222cc` / `deda071`） |
+| A 应用侧 | `t-agent-cfg-agent` / `mpsv-agent-cfg-agent` | T-01 读帧对齐、T-01b 清队列+短路、T-02 ACK、T-07 看门狗、两个新测试类（10 例） | 首提交 `51f94a6` + 复核整改 `4a1c22d`，均已合入集成分支（`ba3f767` / `226e972`） |
 | B IDE 侧 | `t-agent-cfg-ide` / `mpsv-agent-cfg-ide` | T-02 收 ACK+超时告警、T-03 入队闸门、T-04 关闭路径对齐、T-05 守卫换有效断言、T-06 文案、P-5 桥让位条件 | 实施中 |
 | C 定位器（O-55） | `t-agent-locate` / `mpsv-agent-locate` | 见 O-55 计划 §实施记录 | 实施中 |
 
@@ -375,7 +375,7 @@ MCP 审计落历史（按设计不判 `capturing`）、历史面板、预览/执
 - 反向验证（一轮同时摘两处：T-03 闸门改 `if (false)` + P-5 回退 `paused.set(online)`）→ **4 红**：
   `test监听关闭_事件丢弃并计数_不入队`、`test默认判据跟随捕获态`（闸门）；`test在线但未确认_桥不封`、`test确认停采_桥不封`（P-5）。
   还原后复跑 15/15 绿、工作树与提交一致、无 `RED PROBE` 残留
-- 第二笔 `deba286`（仅测试）：修掉 P-5 用例里「等中间态」的竞态假红，改为只等终态
+- 第二笔 `dff0251`（仅测试）：修掉 P-5 用例里「等中间态」的竞态假红，改为只等终态
 
 **P-5 落地形态（已核实，写进记录以免后来人猜）**：`SqlCaptureGate.paused.set(online && captureConfirmedActive())`，
 `captureConfirmedActive()` ＝「存在 alive 会话且其最近一次 ACK 为 `disabled=false`」——确认值是**值语义**、派生自会话表
@@ -385,7 +385,7 @@ MCP 审计落历史（按设计不判 `capturing`）、历史面板、预览/执
 
 **其余（全量 / verifyGate）**：待收口统一填。
 
-**合并态 agent 子项目全量套件（集成分支，2026-09-22，`deda071` 后）**：`BUILD SUCCESSFUL in 1m 1s`，
+**合并态 agent 子项目全量套件（集成分支，2026-09-22，`226e972` 后）**：`BUILD SUCCESSFUL in 1m 1s`，
 `17 套件 / 77 用例 / 0 失败 / 0 错误 / 0 跳过`（读数按 mtime 过滤本次 XML 统计）——证明帧读取层改动
 （含半截帧走重连）没有波及 `AttachGateTest`（真子 JVM + 假 IDE）等其它套件。基线对照：K2J 记录的口径为
 14 套件 / 65 用例（更早时点），本轮新增 10 例来自车道 A。
@@ -418,7 +418,7 @@ MCP 审计落历史（按设计不判 `capturing`）、历史面板、预览/执
 
 ### 四、集成分支核验（三车道合入后，2026-09-22）
 
-**跨车道契约核验通过**：IDE 侧车道在自己的分支上有两条断言**必红**（`AgentProtocolSyncTest` 的「`CMD_CONFIG_ACK` 两侧同值」与「入站读序」，因应用侧修复不在其分支），派活时即写明「合入后应自动转绿，若仍红说明应用侧修复被回退」。集成分支（`aca845b`，A+B+C 三车道合入后）实测：
+**跨车道契约核验通过**：IDE 侧车道在自己的分支上有两条断言**必红**（`AgentProtocolSyncTest` 的「`CMD_CONFIG_ACK` 两侧同值」与「入站读序」，因应用侧修复不在其分支），派活时即写明「合入后应自动转绿，若仍红说明应用侧修复被回退」。集成分支（`d82129b`，A+B+C 三车道合入后）实测：
 
 ```
 ./gradlew testFast --tests "cn.song.mybatisplus.visualizer.log.agent.*"
@@ -427,14 +427,14 @@ MCP 审计落历史（按设计不判 `capturing`）、历史面板、预览/执
 
 两条断言**如期转绿**，契约成立；同批 `AgentManagerIntakeGateTest`（15 例）与 `LocatorSkipPrefixSyncTest`（3 例）在合并态全绿。
 
-**合并顺序**：A（`bd222cc`/`deda071`）→ C（`8a88504`）→ B（`aca845b`），三路写集两两不相交、零冲突。**为不阻塞关键路径，B 的合入未等其自跑反向验证**（其实现与守卫已完整提交），反向验证改由主调度在集成分支补做。
+**合并顺序**：A（`ba3f767`/`226e972`）→ C（`cfc6793`）→ B（`d82129b`），三路写集两两不相交、零冲突。**为不阻塞关键路径，B 的合入未等其自跑反向验证**（其实现与守卫已完整提交），反向验证改由主调度在集成分支补做。
 
 ### 五、待收口补齐
 
 ~~CHANGELOG `[Unreleased]` 与 `docs/变更记录.md` 三处同步、验收文档 §2 读数、`testFast` 全量 / `testShards` / `verifyGate` 门禁读数、真机沙盒六步走查。~~
 
-**全部已落（2026-09-22）**：三处同步（`84f2cb9`）、验收文档 §2 门禁读数（testShards 三片全绿 5644 例 / verifyGate 三目标 Compatible）、
-**真机沙盒走查 4/6 步**（`3245b9c`：步 1 开关关着不采集 ✓、步 2 点开始后能捕到 ✓、步 3 停止真停 ✓、
+**全部已落（2026-09-22）**：三处同步（`3344ca5`）、验收文档 §2 门禁读数（testShards 三片全绿 5644 例 / verifyGate 三目标 Compatible）、
+**真机沙盒走查 4/6 步**（`c3b7d6d`：步 1 开关关着不采集 ✓、步 2 点开始后能捕到 ✓、步 3 停止真停 ✓、
 **步 5 位置对照 42/63 ✓✓**——面板与控制台标记行逐条一致）。**未走查 2 步如实登记**：步 4 脱敏 / 步 6 非 MPJ 回归——
 本机 GUI 自动化鼠标点击进不到设置对话框（同批坐标在主窗口有效、键盘可达），两步都需先改设置页开关；
 通道证据已有（ACK 回执含 `desensitize` 生效态、打码行为有应用侧单测），面板级观感留人工点一次即可闭环。
@@ -463,14 +463,14 @@ MCP 审计落历史（按设计不判 `capturing`）、历史面板、预览/执
 | F7 | 低 | `INTAKE_DROP_WARN_STEP`（刷屏防线）与 `CONFIG_ACK_TIMEOUT_MS` 取值无字面值断言；另称「计划未登记 IDE 侧反向验证读数」 | 后者**复核读的是旧版本**：读数已登记于 §实施记录 §二（4 红）；字面值断言登记为残留 |
 | T-06 | — | 授权弹窗 bundle「关闭开关即停止采集（已挂载的捕获点会保留但不工作）」与设置页「即时生效，无需重启应用」 | **裁定：无需改**——修复后前者**已为真**（CONFIG 现在真的能到应用侧），后者对正常路径（ACK 一次往返）成立；把「待确认」写进用户文案反而引入噪音 |
 
-**复核独立确认的正面结论（记入交付材料）**：新判据 `online && confirmed` 是旧判据的子集，只会「少封桥」不会「多封桥」→ **不新增「两条通道同时零产出且无信号」**；无永久封死；确认值复位点齐全（会话摘除/关闭、`shutdownAll`/`dispose`、每次下发转待确认）；`updateOnline`/`sweepOffline`/状态行/`epActive` 链路均未被改动（diff hunk 逐条核对）；闸门唯一生产消费者与 EP 通道自洽。**测试鉴别力逐例判定**：15 例中 11 例有鉴别力、4 例为控制例/无关例（已在测试内注明不得计入覆盖证据）；读序断言对修复前源码确判红（复核用 `9c1a18d^` 源码核对：`cmd = in.readUnsignedByte()`@127 vs `in.readInt()`@223）。
+**复核独立确认的正面结论（记入交付材料）**：新判据 `online && confirmed` 是旧判据的子集，只会「少封桥」不会「多封桥」→ **不新增「两条通道同时零产出且无信号」**；无永久封死；确认值复位点齐全（会话摘除/关闭、`shutdownAll`/`dispose`、每次下发转待确认）；`updateOnline`/`sweepOffline`/状态行/`epActive` 链路均未被改动（diff hunk 逐条核对）；闸门唯一生产消费者与 EP 通道自洽。**测试鉴别力逐例判定**：15 例中 11 例有鉴别力、4 例为控制例/无关例（已在测试内注明不得计入覆盖证据）；读序断言对修复前源码确判红（复核用 `51f94a6^` 源码核对：`cmd = in.readUnsignedByte()`@127 vs `in.readInt()`@223）。
 
 ### 八、真机级端到端（假 IDE 探针，2026-09-22）——发现 T-08 并闭合 P-1
 
 **方式**：车道 D 自建「假 IDE」探针（`dev-support/e2e-fake-ide`：loopback 按协议收发帧、可下发 CONFIG、打印 ACK 与 EVENT），
 用 `-javaagent` 把 agent 注入**真实 Spring Boot + MyBatis-Plus-Join + 真实 JDBC 驱动**的 demo 应用（JDK 1.8.0_181，
 `logLevel=info`），**不经 IntelliJ GUI** 即完成真机级验证。车道 D 实施到一半掉线（无活动任务、成果全未提交），
-其产物由主调度原样收编并提交（`9dde292`），证据保留在 `dev-support/e2e-fake-ide/evidence/`。
+其产物由主调度原样收编并提交（`d5397e9`），证据保留在 `dev-support/e2e-fake-ide/evidence/`。
 
 | 项 | 读数 |
 |---|---|
@@ -521,7 +521,7 @@ MCP 审计落历史（按设计不判 `capturing`）、历史面板、预览/执
 > **两层修法，第一层经实测证伪（如实记录，勿只读结论）**：先按本仓登记的「根治方向」加了 `isDisposed` 守卫，
 > 重跑 `testShards` **仍 26 例失败**（形状不变）→ 定因见下「为什么第一层不够」，第二层才是根治。
 
-**第一层（`6df02ef`，必要但不充分）**：新增 `log/SqlLogManagerLookup.kt#sqlLogManagerOrNull(project)`——
+**第一层（`cfea6e8`，必要但不充分）**：新增 `log/SqlLogManagerLookup.kt#sqlLogManagerOrNull(project)`——
 **在发起 `getService` 之前**先判 `project.isDisposed`；8 处取用点全部改走它，null 语义一律「跳过本次动作」
 （审计旁路跳过、EP 不挂过滤器、事件丢弃不斩断流、耗时补全退化为未命中、自动启动分流沿用既有 warn 文案）。
 **关键点：不能只靠 `runCatching`**——它只吞掉这一次的结果、仍发起了那次注定失败的创建
@@ -532,7 +532,7 @@ MCP 审计落历史（按设计不判 `capturing`）、历史面板、预览/执
 `project.isDisposed=false :: Container is already disposed`），而 `getService` 仍会因 `messageBus` owner
 已 disposed 失败并永久毒化。既然「判状态」判不准，就必须在**结构上不发起创建**。
 
-**第二层（`81196e5`，根治）**：新增 `sqlLogManagerIfCreated(project)`——只用 `getServiceIfCreated`
+**第二层（`28b9080`，根治）**：新增 `sqlLogManagerIfCreated(project)`——只用 `getServiceIfCreated`
 **读已建实例、绝不发起创建**，故**无论项目处于何种窗口都不会毒化**。读路径 6 处全部改走它
 （`AgentManager` 的 `isListenActive` / `listenActiveProvider` / 事件入队、`McpToolsetSupport` 审计、
 `SqlPreviewService` 耗时补全、`SqlConsoleBridgeFilterProvider`——服务未创建＝本插件从未启用捕获＝无过滤需求）；

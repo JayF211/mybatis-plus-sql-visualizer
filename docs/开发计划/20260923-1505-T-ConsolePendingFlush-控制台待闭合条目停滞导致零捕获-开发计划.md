@@ -145,6 +145,6 @@ closePending()          → 需外部调用
 |---|---|
 | 2026-09-23 15:05 | 立项：现场取证（IDE 日志 14:47–14:48 段 + 面板读数 + 控制台片段 + javap 平台实证）+ 根因表述（按线程分桶后待闭合条目没有产出点）+ 改动清单 + 三条待验证前提。 |
 | 2026-09-23 15:35 | 实施：`LogThreadRouter` / `JdbcTemplateLogParser` / `SqlLogConsoleBridge` 三处改动 + 新增 `ConsoleSettleFlushTest`（5 例）；反向验证红 3 → 红 4、清陈旧类后绿 17 类 237 例；§七 回填读数与假失败留痕。 |
-| 2026-09-23 15:4x | 提交：`dc7e69a`（5 文件 +553/−52：三处生产改动 + 新测试类 + 本计划）。 |
+| 2026-09-23 15:4x | 提交：`efe2c73`（5 文件 +553/−52：三处生产改动 + 新测试类 + 本计划）。 |
 | 待办 | 真机复验（日常 IDE 2026.2 起 `SelfDevFrameworkDemoApplication` → 面板是否出现 JdbcTemplate 条目 + `idea.log` 的冲刷 INFO 痕）。 |
 
