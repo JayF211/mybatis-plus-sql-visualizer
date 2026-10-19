@@ -557,18 +557,20 @@ internal fun SqlPreviewPanel.buildBatchColumnRow(col: BatchColumn, isToggle: Boo
                 renderSql()
             }
         }
-        if (hasFill) checkBox.text = fieldFillText(col.source, checkBox.font, JBUI.scale(140))
-        batchCheckBoxes += checkBox
         if (hasFill) {
-            // 角标与字段名同一行（用户定案）：复选框与 [fill=...] 共用名称单元，值输入仍在下一行。
-            addCell(fieldFillNameCell(checkBox, col.fill!!), 0, 0, 2)
-        } else {
-            addCell(checkBox, 0, 0, 2)
+            // 角标并入字段名文本：名称、[fill=...]、普通值输入保持同一行；长名称按 200px 换行。
+            checkBox.text = fieldFillText("${col.source} [fill=${col.fill}]", checkBox.font, JBUI.scale(200))
+            checkBox.toolTipText = listOfNotNull(
+                if (checkBoxText(col.source) != col.source) col.source else col.columnName,
+                MpSqlVisualizerBundle.message("fieldFill.simulation.annotation.tooltip"),
+            ).joinToString("\n")
         }
+        batchCheckBoxes += checkBox
+        addCell(checkBox, 0, 0)
     } else if (hasFill) {
-        addCell(fieldFillNameCell(paramLabel(col.source, labelWidth), col.fill!!), 0, 0, 2)
+        addCell(fieldFillNameCell(paramLabel(col.source, labelWidth), col.fill!!), 0, 0)
     } else {
-        addCell(paramLabel(col.source, labelWidth), 0, 0, 2)
+        addCell(paramLabel(col.source, labelWidth), 0, 0)
     }
     val field = JBTextField(8).apply {
         toolTipText = "#${col.source}"
@@ -581,7 +583,7 @@ internal fun SqlPreviewPanel.buildBatchColumnRow(col: BatchColumn, isToggle: Boo
         })
     }
     paramFields += field
-    addCell(field, 1, if (hasFill) 1 else 0)
+    addCell(field, 1, 0)
     if (hasFill && isToggle) {
         val simulation = JBTextField(8).apply {
             name = "fieldFill:${col.source}"
@@ -605,7 +607,7 @@ internal fun SqlPreviewPanel.buildBatchColumnRow(col: BatchColumn, isToggle: Boo
             add(simulation)
             isVisible = fieldFillEnabled
         }
-        addCell(simulationRow, 0, 2, 2)
+        addCell(simulationRow, 0, 1, 2)
         fieldFillSimulationComponents += simulationRow
     }
     row.border = JBUI.Borders.empty(0, 8, 2, 8)

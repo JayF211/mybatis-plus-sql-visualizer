@@ -88,21 +88,22 @@ class FieldFillSimulationPanelTest : BasePlatformTestCase() {
         } finally { p.clear() }
     }
 
-    fun testFillBadgeSharesNameRow() {
+    fun testFillBadgeAndValueStayOnOneRow() {
         val p = panel()
         try {
-            fun labels(component: java.awt.Component): List<javax.swing.JLabel> =
-                (if (component is javax.swing.JLabel) listOf(component) else emptyList()) +
-                    (if (component is java.awt.Container) component.components.flatMap { labels(it) } else emptyList())
-            val badges = labels(p.paramPanel).filter { it.text.startsWith("[fill=") }
-            assertEquals(2, badges.size)
-            badges.forEach { badge ->
-                val cell = badge.parent as? java.awt.Container
-                assertNotNull("fill 角标必须有名称单元父容器", cell)
-                assertEquals("名称单元只应包含字段名与角标", 2, cell!!.componentCount)
+            val toggleFields = p.paramFields.take(p.batchCheckBoxes.size)
+            val fillBoxes = p.batchCheckBoxes.withIndex().filter { (_, cb) -> visibleText(cb.text).contains("[fill=") }
+            assertEquals(2, fillBoxes.size)
+            fillBoxes.forEach { (index, cb) ->
+                assertTrue("角标应并入字段名文本：${visibleText(cb.text)}", visibleText(cb.text).contains("[fill="))
+                assertSame("名称/角标与普通值必须在同一行容器", cb.parent, toggleFields[index].parent)
+                val row = cb.parent as java.awt.Container
+                row.setSize(420, row.preferredSize.height)
+                row.doLayout()
+                val field = p.paramFields.first { it.parent === row }
                 assertTrue(
-                    "角标必须与字段名/复选框同一行",
-                    cell.components.any { it !is javax.swing.JLabel || !it.text.startsWith("[fill=") },
+                    "名称/角标与普通值必须同一水平行（cb.y=${cb.y}, field.y=${field.y}）",
+                    kotlin.math.abs(cb.y - field.y) <= 8,
                 )
             }
         } finally { p.clear() }
@@ -233,9 +234,18 @@ class FieldFillSimulationPanelTest : BasePlatformTestCase() {
                     assertEquals(visibleText(p.fieldFillStatus!!.text), p.fieldFillStatus!!.toolTipText)
                     val rowLabels = labels(p.paramPanel)
                     assertTrue(rowLabels.any { it.text == MpSqlVisualizerBundle.message("fieldFill.simulation.value.label") })
-                    val badges = rowLabels.filter { it.text.startsWith("[fill=") }
-                    assertEquals(2, badges.size)
-                    badges.forEach { assertEquals(MpSqlVisualizerBundle.message("fieldFill.simulation.annotation.tooltip"), it.toolTipText) }
+                    val fillBoxes = p.batchCheckBoxes.filter { visibleText(it.text).contains("[fill=") }
+                    assertEquals(2, fillBoxes.size)
+                    fillBoxes.forEach {
+                        assertTrue(
+                            "角标应并入字段名文本：${visibleText(it.text)}",
+                            visibleText(it.text).contains("[fill="),
+                        )
+                        assertTrue(
+                            "角标注解 tooltip 应保留",
+                            it.toolTipText.contains(MpSqlVisualizerBundle.message("fieldFill.simulation.annotation.tooltip")),
+                        )
+                    }
                     p.fieldFillFields.values.forEach {
                         assertEquals(MpSqlVisualizerBundle.message("fieldFill.simulation.value.tooltip"), it.toolTipText)
                     }
