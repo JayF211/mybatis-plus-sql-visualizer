@@ -4,11 +4,14 @@ import cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate
 import cn.song.mybatisplus.visualizer.mcp.McpExplainFormatter
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.sql.MySqlDialect
+import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.openapi.editor.EditorFactory
 import com.intellij.openapi.util.Disposer
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import com.intellij.util.ui.UIUtil
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertSame
 
@@ -73,4 +76,43 @@ class ExplainSideQueryPanelTest : BasePlatformTestCase() {
             p.clear()
         }
     }
+
+    fun testExplainFailureDialogShowsLocalizedOpenConsoleButton() {
+        val sql = "SELECT * FROM t_order WHERE id = 1"
+        val p = panel(sql)
+        var captured: ExplainPlanDialog? = null
+        explainTargetForTest = { ExplainTarget() }
+        explainDialogSinkForTest = { captured = it }
+        PreviewSideQuery.runnerForTest = { _, _, _, _, cb -> cb(PreviewSideQuery.Result.Failed("boom")) }
+        try {
+            p.submitExplainDirect(
+                project,
+                "EXPLAIN $sql",
+                ExecutionDialectGate.Request(
+                    renderMode = ExecutionDialectGate.RenderMode.AUTO,
+                    renderedDialectName = "MySQL",
+                    intent = ExecutionDialectGate.Intent.EXPLAIN,
+                    canLosslesslyRerender = false,
+                    userTextUntouched = true,
+                ),
+            )
+            val button = buttons(captured!!.contentForTest()).single()
+            assertEquals(
+                "失败对话框必须显示本地化的「在控制台打开」",
+                MpSqlVisualizerBundle.message("panel.explain.openConsole"),
+                button.text,
+            )
+            assertNotEquals("未本地化的 key 不能直接显示", "panel.explain.openConsole", button.text)
+            assertEquals(sql, p.currentEditorSql())
+        } finally {
+            explainTargetForTest = null
+            explainDialogSinkForTest = null
+            PreviewSideQuery.runnerForTest = null
+            p.clear()
+        }
+    }
+
+    private fun buttons(component: java.awt.Component): List<javax.swing.JButton> =
+        (if (component is javax.swing.JButton) listOf(component) else emptyList()) +
+            (if (component is java.awt.Container) component.components.flatMap { buttons(it) } else emptyList())
 }

@@ -194,6 +194,17 @@ class ExplainPanelWiringGuardTest {
         )
     }
 
+    @Test
+    fun `打开控制台按钮双语文案在场`() {
+        for (path in listOf(
+            "src/main/resources/messages/MpSqlVisualizerBundle.properties",
+            "src/main/resources/messages/MpSqlVisualizerBundle_zh.properties",
+        )) {
+            val text = File(repoRoot(), path).readText()
+            assertTrue("$path 缺 panel.explain.openConsole（按钮会显示原始 key）", text.contains("panel.explain.openConsole="))
+        }
+    }
+
     private fun sqlPreviewPanelSource(): String =
         panelSourceFiles().joinToString("\n") { File(repoRoot(), it).readText() }
 

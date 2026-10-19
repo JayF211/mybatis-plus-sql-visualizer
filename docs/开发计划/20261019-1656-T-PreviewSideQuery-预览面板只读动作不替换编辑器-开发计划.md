@@ -152,6 +152,7 @@
 - 结构化通道从 `embedExplainView` 改为 `showExplainDialog`；`embedExplainView` 已删除。新增 `ExplainStructuredSideQueryPanelTest`：通过 `ExplainPanelChannel.structuredRunnerForTest` 注入计划结果，经真实 `submitExplainOrStructured` 分派，验证编辑器/控制台不变、结果进对话框。
 - 直送/回退通道改走 `PreviewSideQuery`（`scalar=false`，`requireSelectGuard=false`，Oracle/SQL Server 带 `channelNote`），结果显示在对话框；失败时保留显式「在控制台打开」入口。
 - 原控制台路径保留为 `submitExplainDirectConsole`，仅由「在控制台打开」/结构化视图的 `onBackToConsole` 显式调用；`ExplainPanelWiringGuardTest` 同步改为「对话框展示、不得再 embedExplainView」。
+- 补齐 `panel.explain.openConsole` 中英文案（`在控制台打开` / `Open in Console`），并新增两条断言：双语 bundle 存在该键、失败对话框按钮文案等于本地化文案且不等于原始 key。
 
 ### P3a 执行 SQL
 
@@ -160,15 +161,15 @@
 
 ### 定向读数
 
-16 个受影响的测试类合计 **149/0/0/0**，其中：
+16 个受影响的测试类合计 **151/0/0/0**，其中：
 
 | 测试类 | tests |
 |---|---:|
 | `DmlImpactSideQueryPanelTest` | 3 |
-| `ExplainSideQueryPanelTest` | 1 |
+| `ExplainSideQueryPanelTest` | 2 |
 | `ExplainStructuredSideQueryPanelTest` | 1 |
 | `ExecutionDialectGateTest` | 17 |
-| `ExplainPanelWiringGuardTest` | 10 |
+| `ExplainPanelWiringGuardTest` | 11 |
 | `ConsoleHostTest` | 8 |
 | `PrepareSingleFlightGateTest` | 26 |
 | `GuardSelfTestCoverageMetaGuardTest` | 8 |
