@@ -2,7 +2,7 @@
 
 - 立项时间：2026-10-19 14:50
 - 基线：`dev` `9ec129b3`（T-ToolbarIconSemantics 已合入；本计划建立在其与 T-EnhancedCaptureDefaultOn `5b4fb4e0` 之上）
-- 状态：已实施（2026-10-19，用户拍板方案 B——临时全隐藏；提交 `8b797098`）。`AgentPauseAction.update` 恒置不可见/不可用，动作对象保留在工具栏组内；定向 4 类 **29/0/0/0**。补测后 `testFast` **4100/0/0/6**、`SqlLogPanelLayoutTest` **19/0/0**。复盘见 `docs/经验总结/20261019-2004-守卫类测试分桶遗漏与暂停按钮可见性补测-经验总结.md`。真机验收由用户执行；未跑全量门禁、未推送。
+- 状态：已实施（2026-10-19，用户拍板方案 B——临时全隐藏；提交 `8b797098`）。`AgentPauseAction.update` 恒置不可见/不可用，动作对象保留在工具栏组内；定向 4 类 **29/0/0/0**。补测后 `testFast` **4100/0/0/6**、`SqlLogPanelLayoutTest` **19/0/0**。复盘见 `docs/经验总结/20261019-2004-守卫类测试分桶遗漏与暂停按钮可见性补测-经验总结.md`。**沙盒真机验收已过（2026-10-19 晚，243 沙盒）**：项目打开/Run 全程零注入确认弹窗（idea.log 当日会话 consent 轨迹 0 条）、premain 注入完成且 agent 会话建立（pid=24136、在线态 false→true）、SQL 执行产生条目，工具栏 ActionButton 数 agent 在线前后恒 9（暂停按钮未出现）；设置页 XML `enhancedCaptureEnabled` 默认未序列化（出厂 true）。未跑全量门禁、未推送。
 - 编号：不预占 O/R/D/V，实施前按台账登记。
 - 关联：T-EnhancedCaptureDefaultOn（`5b4fb4e0`）、T-ToolbarIconSemantics（`9ec129b3`）、R53 双通道状态栏、`docs/设计规范-弹窗克制红线.md`。
 
