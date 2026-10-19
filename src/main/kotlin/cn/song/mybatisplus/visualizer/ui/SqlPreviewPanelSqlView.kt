@@ -579,6 +579,11 @@ internal fun SqlPreviewPanel.clear() {
     metaLineDigest = ""
     metaPerfSegments = emptyList()
     lastMetaBudget = -1
+    // T-DialectStatusLiveRefresh：方言决策与分段缓存同源复位，不跨预览残留
+    currentDialectDecision = null
+    metaCoreText = ""
+    metaTooltipCore = ""
+    metaTooltipSuffix = ""
     // T-SourceJumpFunnel P6：tooltip 基线同步复位（行内提示态据此拼接，不复用上一份预览的残留）
     metaTooltipBase = ""
     metaLabel.toolTipText = null

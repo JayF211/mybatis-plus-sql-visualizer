@@ -624,8 +624,17 @@ internal fun SqlPreviewPanel.rerenderForExecutionTarget(targetDialectName: Strin
     // Retain ownership of existing controls; storage-generation invalidation still applies.
     if (fieldFillPreview === old) fieldFillPreview = updated
     current = updated
+    // T-DialectStatusLiveRefresh：目标方言已被方言闸证实，决策同步升级——meta 行否则停留在
+    // 旧的「未验证/歧义」态与实际渲染方言自相矛盾（copy() 不会带上新决策）。
+    currentDialectDecision = cn.song.mybatisplus.visualizer.sql.DialectDecisionEngine.Decision(
+        cn.song.mybatisplus.visualizer.sql.DialectDecisionEngine.Status.RESOLVED,
+        target.name,
+        cn.song.mybatisplus.visualizer.sql.DialectDecisionEngine.Confidence.EXACT,
+        cn.song.mybatisplus.visualizer.sql.DialectDecisionEngine.Source.BOUND_DATASOURCE,
+    )
     syncPreviewDialectMapping(updated)
     renderSql()
+    applyDialectStatusSegment()
     val proj = project
     val sql = lastRenderedSql
     if (proj != null && !sql.isNullOrBlank()) {
@@ -1584,6 +1593,13 @@ internal fun SqlPreviewPanel.embedConsole(consoleComponent: JComponent, embedMod
         runCatching { refreshBindStateRow() }.onFailure { e ->
             com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
                 .warn("[O-96fix2] bind-state refresh on embed FAILED: ${e.javaClass.simpleName}: ${e.message}")
+        }
+        // T-DialectStatusLiveRefresh：绑定行升级的同时重算方言决策——执行已证明具体目标
+        // （提交闸写过模块学习/活控制台在场），「已绑定 + 方言未验证」并列的陈旧态在此消解。
+        // 重算在池线程（URL 探测不进 EDT）、EDT 只做仅升级替换与轻量重组，幂等。
+        runCatching { refreshDialectStatusRow() }.onFailure { e ->
+            com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+                .warn("[T-DialectStatusLiveRefresh] refresh on embed FAILED: ${e.javaClass.simpleName}: ${e.message}")
         }
     }, com.intellij.openapi.application.ModalityState.any())
     if (consoleComponent === embeddedConsole) {

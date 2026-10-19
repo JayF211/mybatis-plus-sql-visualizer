@@ -9,6 +9,8 @@ object DialectDecisionEngine {
         IDEA_SCOPE, IDEA_DIALECT,
         IDEA_PROVIDER, IDEA_CONFIGURED_SCOPE, IDEA_EFFECTIVE_DIALECT,
         LEARNED_MODULE, PROJECT_CONSENSUS, PROJECT_AGENT,
+        /** T-DialectStatusLiveRefresh：面板已绑定/上次使用数据源（具体执行目标，非猜测）。 */
+        BOUND_DATASOURCE,
     }
     enum class TargetStatus { MATCH, AUTO_RERENDER_REQUIRED, MANUAL_CONFLICT, TARGET_UNKNOWN }
 
@@ -26,6 +28,8 @@ object DialectDecisionEngine {
         val projectCandidates: List<Candidate> = emptyList(),
         val lastAgentDialect: String? = null,
         val singleModuleProven: Boolean = false,
+        /** T-DialectStatusLiveRefresh：面板已绑定/上次使用数据源的方言（具体目标，可为 null）。 */
+        val boundDataSourceDialect: String? = null,
     )
 
     data class Decision(
@@ -53,6 +57,11 @@ object DialectDecisionEngine {
             fromCandidates(input.scopeCandidates, input.scopeSource, idea, input.ideaDialectSource)?.let { return it }
         }
         idea?.let { return resolved(it, Confidence.STRONG, input.ideaDialectSource) }
+        // T-DialectStatusLiveRefresh（方案 B）：已绑定/上次使用数据源是具体执行目标，证据强于
+        // 模块学习与项目候选；置于 scope/idea 决策之后，保留既有 CONFLICT 阻断语义。
+        knownName(input.boundDataSourceDialect)?.let {
+            return resolved(it, Confidence.STRONG, Source.BOUND_DATASOURCE)
+        }
         input.learnedModule?.let { candidate ->
             knownName(candidate.dialectName)?.let {
                 return resolved(it, Confidence.STRONG, Source.LEARNED_MODULE, listOf(candidate.id))

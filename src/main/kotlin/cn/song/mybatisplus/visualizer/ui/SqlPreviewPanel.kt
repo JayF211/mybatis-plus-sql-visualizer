@@ -165,6 +165,21 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
     internal var lastMetaBudget: Int = -1
 
     /**
+     * T-DialectStatusLiveRefresh：当前方言决策（初值来自 [PreviewResult.dialectDecision]）。
+     * 执行/绑定后可重算升级；meta 行只重组方言段，不重跑 [updateMeta] 的警示/横幅全链。
+     */
+    internal var currentDialectDecision: cn.song.mybatisplus.visualizer.sql.DialectDecisionEngine.Decision? = null
+
+    /** 方言段之外的 meta 主体（类型/表/警示行），方言段轻量重组时的固定前缀。 */
+    internal var metaCoreText: String = ""
+
+    /** tooltip 的方言详情之前部分（meta/警示/perf），拆分保证详情追加后顺序不变。 */
+    internal var metaTooltipCore: String = ""
+
+    /** tooltip 的方言详情之后部分（方言能力矩阵），拆分同上。 */
+    internal var metaTooltipSuffix: String = ""
+
+    /**
      * T-SourceJumpFunnel P6 修复：meta 行 tooltip 的**基线文本**（[updateMeta] 每次预览重建）。
      *
      * 行内提示态（参数导入空剪贴板）需要临时改写可见行与 tooltip，但 tooltip 是「悬停见完整调用链」

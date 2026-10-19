@@ -91,3 +91,27 @@
 
 - 编号待核对台账后占号（候选 O-150 / V183；以实际台账为准，避免与并行会话冲突）。
 - 实施完成后：回写本计划「实施记录」节；在验收文档 U12/U27 方言行状态处补真机证据；提交信息中文。
+
+## 实施记录（2026-10-19，A/B/C 全部落地）
+
+**前提核实结果**（七条全部通过或按实测调整）：
+1. 学习写入：`ModuleDataSourceBindingStore` 是内存态 `PersistentStateComponent`（`remember` 即时可见，无异步落盘窗）；✔
+2. 无 PSI 重算：`DialectRegistry.decision(project, moduleKey, boundDataSourceDialect)` 不传 PSI 时走非快照分支，`learnedModule` 仍可命中 → 决策可达 `LEARNED_MODULE`；✔（未保存完整 context，规避 PsiFile 生命周期问题）
+3. 按名取 URL：绑定/记忆名即 `LocalDataSource.getName()` 原名（`boundConsoleDataSourceName` 反射 getName），`urlByName` 按 `getName()` 匹配，口径一致；✔
+4. 优先级插入点：绑定源信号插在 scope/idea 决策之后、模块学习之前（引擎 `decide` 内）——显式 scope 的 RESOLVED/AMBIGUOUS/CONFLICT 全部先于绑定信号 return（测试钉死），手动/captured 优先不变；✔
+5. EDT 约束：重算与 URL 探测全在池线程，EDT 只做替换与重组；✔
+6. `updateMeta` 重入：改为「分段缓存 + 轻量重组」——`metaCoreText`/`metaTooltipCore`/`metaTooltipSuffix` 缓存方言段外内容，`applyDialectStatusSegment()` 只重组方言段后调 `applyMetaTruncation()`（预算先复位），警示/横幅/错误按钮全链不重跑；✔
+7. 执行链覆盖：O-96fix2 钩子是全挂载路径单点（含同实例 early-return 前置），刷新调用与绑定行刷新同拍；✔
+
+**改动清单**（12 文件 +132/−11）：
+- 引擎：`DialectDecisionEngine` 增 `Source.BOUND_DATASOURCE` + `Input.boundDataSourceDialect`，优先级插在 idea 之后/learnedModule 之前；`IdeaSqlDialectDecision`、`DialectRegistry.decision` 参数透传。
+- 面板：新增 `DialectStatusRefresh.kt`（`DialectStatusRefreshPolicy.pickStronger` 纯函数 + `boundDataSourceDialectForDecision` 信号 + `refreshDialectStatusRow` 池线程重算→EDT 仅升级→轻量重组 + `applyDialectStatusSegment`）；`SqlPreviewPanel` 增 4 个分段缓存字段；`clear()` 同源复位；`updateMeta` 拆分段缓存；`embedConsole` 钩子并列调用；`rerenderForExecutionTarget` 同步升级决策（EXACT/BOUND_DATASOURCE，先于 renderSql）。
+- 文案（方案 C）：`panel.meta.dialectStatus.ambiguous` zh/en 改可操作指引（「执行一次 SQL 或手动指定方言即可确定」）；新增 `panel.meta.dialectStatus.boundSource`（「已绑定数据源」/ "bound data source"）。
+- 测试：`DialectStatusRefreshPolicyTest` 6 例、`DialectStatusRefreshWiringGuardTest` 4 例（真实接线守卫：钩子同拍/重渲染先升级/updateMeta 消费面板决策/clear 复位）、`DialectDecisionEngineTest` 增 6 例（绑定信号胜出/手动优先/captured 优先/scope 歧义不被绕过/scope 决策胜出/未知名忽略）。
+
+**读数**：
+- 定向 4 类 **30/0/0**；方言族回归 7 类 **154/0/0**（独立沙盒 MPSV-DialectRefresh，`--no-configuration-cache`）。
+- 首轮 2 红＝判据修正（scope 两候选分歧实为 AMBIGUOUS 非 CONFLICT，顺势钉死「绑定信号不绕过 scope 分歧」）+ 策略顺序修复（`old==null` 短路原在 fresh 终态守卫之前，CONFLICT 可乘虚而入——守卫前移）。
+- 反向验证两轮：①摘「仅升级」守卫（`>` 改 `>=`）→ `weaker or equal decision never replaces` **恰 1 红**；②摘 embedConsole 刷新调用 → 挂点守卫 `embedConsole hook calls refreshDialectStatusRow` **恰 1 红**；恢复后 30/0/0，`REVERSE-PROBE` 残留 0。
+
+**真机复验待做（用户侧）**：多数据源 demo 打开 MPJ Lambda 预览（复现「候选方言不一致」）→ 执行 SQL → 不关预览，方言行应在一个刷新拍内变为「方言: MySQL（已绑定数据源）」或「（模块已学数据源）」；绑定行与方言行不再自相矛盾。

@@ -944,6 +944,7 @@ object DialectRegistry {
         sourceFile: com.intellij.openapi.vfs.VirtualFile? = null,
         sqlPsiFile: com.intellij.psi.PsiFile? = null,
         moduleKey: String? = null,
+        boundDataSourceDialect: String? = null,
     ): DialectDecisionEngine.Decision {
         val settings = runCatching {
             cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state
@@ -972,6 +973,7 @@ object DialectRegistry {
                     fallbackProjectCandidates = candidates,
                     lastAgentDialect = agentDialect,
                     singleModuleProven = singleModule,
+                    boundDataSourceDialect = boundDataSourceDialect,
                 )
             }
         }
@@ -980,6 +982,7 @@ object DialectRegistry {
             ideaDialectSource = DialectDecisionEngine.Source.IDEA_EFFECTIVE_DIALECT,
             learnedModule = learnedModule,
             projectCandidates = candidates, lastAgentDialect = agentDialect, singleModuleProven = singleModule,
+            boundDataSourceDialect = boundDataSourceDialect,
         ))
     }
 
