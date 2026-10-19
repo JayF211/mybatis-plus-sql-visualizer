@@ -1844,6 +1844,14 @@ internal fun DataSourceSelector.extractConsoleError(console: Any?, LOG: com.inte
 
 internal fun DataSourceSelector.runRunner(project: Project, runner: Any, silent: Boolean = false, onError: ((String) -> Unit)? = null) {
     val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
+    // 空操作 Runner（平台组项的 EmptyRunnable）不能执行：run() 立即返回且永不回调 session，
+    // 只会把准备门拖到 60s 超时。立即结算错误，让面板红字给出可行动原因。
+    if (ExecDialectRouting.isNoOpRunner(runner)) {
+        val name = getRunnerName(runner)
+        LOG.warn("[M36] runner '$name' has EmptyRunnable; refusing to run (would wait for prepare timeout)")
+        onError?.invoke(MpSqlVisualizerBundle.message("execute.datasource.noRunnable", name))
+        return
+    }
     runCatching {
         val method = runner.javaClass.getMethod("run")
         method.isAccessible = true

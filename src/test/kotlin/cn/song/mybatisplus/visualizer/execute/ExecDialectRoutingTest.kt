@@ -1,6 +1,8 @@
 package cn.song.mybatisplus.visualizer.execute
 
+import cn.song.mybatisplus.visualizer.execute.fixture.HiddenRunnerFixture
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -36,6 +38,11 @@ class ExecDialectRoutingTest {
     }
 
     private data class R(val name: String, val subs: List<R>? = null)
+
+    /** 生产展开链按 getDisplayName 反射取名；叶子桩用 public 方法即可。 */
+    private class LeafRunner(private val displayName: String) {
+        fun getDisplayName(): String = displayName
+    }
 
     private fun repoRoot(): File {
         var dir = File(System.getProperty("user.dir")).absoluteFile
@@ -217,6 +224,61 @@ class ExecDialectRoutingTest {
         assertTrue("保留的应是原组项实例", expanded.last() === all)
     }
 
+    @Test
+    fun `组Runner展开_包私有组项必须可访问反射`() {
+        // 平台 DatabaseRunners$3/$4$1 是包私有类：生产反射漏 isAccessible=true 时
+        // Method.invoke 抛 IllegalAccessException 并被 runCatching 吞掉 → 组项原样保留；
+        // 其 runnable 是 EmptyRunnable，执行后永远等不到 session，直到准备门 60s 超时。
+        val leaf1 = LeafRunner("mysql@local")
+        val leaf2 = LeafRunner("dm@prod")
+        val group = HiddenRunnerFixture.group("All Data Sources", listOf<Any>(leaf1, leaf2))
+        val expanded = ExecDialectRouting.expandGroupRunners(listOf(group))
+        assertEquals(
+            "包私有组项未展开——组项会被当成普通项执行空操作并悬挂到超时",
+            listOf("mysql@local", "dm@prod"),
+            expanded.map { DataSourceSelector.getRunnerName(it) },
+        )
+    }
+
+    @Test
+    fun `组Runner展开_嵌套组递归浮出`() {
+        val leaf1 = LeafRunner("mysql@local")
+        val leaf2 = LeafRunner("dm@prod")
+        val inner = HiddenRunnerFixture.group("Inner", listOf<Any>(leaf2))
+        val outer = HiddenRunnerFixture.group("Outer", listOf<Any>(leaf1, inner))
+        val expanded = ExecDialectRouting.expandGroupRunners(listOf(outer))
+        assertEquals(
+            "两级组（平台 DatabaseRunners$4 → $4$1 形态）应递归展开到叶子",
+            listOf("mysql@local", "dm@prod"),
+            expanded.map { DataSourceSelector.getRunnerName(it) },
+        )
+    }
+
+    @Test
+    fun `组Runner展开_自引用组项超深度剔除`() {
+        val cycle = HiddenRunnerFixture.cycle("Cycle")
+        val expanded = ExecDialectRouting.expandGroupRunners(listOf(cycle))
+        assertTrue(
+            "自引用组项不可能展开；保留它等于把空操作句柄和 60s 悬挂留给用户，必须剔除",
+            expanded.isEmpty(),
+        )
+    }
+
+    @Test
+    fun `空操作Runner识别_EmptyRunnable与普通动作`() {
+        assertTrue(
+            "平台组项的 runnable 是 EmptyRunnable，必须在执行前识别",
+            ExecDialectRouting.isNoOpRunner(
+                HiddenRunnerFixture.withRunnable(com.intellij.openapi.util.EmptyRunnable.getInstance()),
+            ),
+        )
+        assertFalse(
+            "普通 Runner 不得被误判为空操作",
+            ExecDialectRouting.isNoOpRunner(HiddenRunnerFixture.withRunnable(Runnable { })),
+        )
+        assertFalse("没有 runnable 字段的桩对象应降级为非空操作", ExecDialectRouting.isNoOpRunner(LeafRunner("leaf")))
+    }
+
     // ------------------------------------------------------------------
     // 空 Runner 文案选择（D3/V3：方言不匹配给可行动文案）
     // ------------------------------------------------------------------
@@ -307,5 +369,32 @@ class ExecDialectRoutingTest {
             assertTrue("en 文案缺占位符 $placeholder（方言名/在册数据源清单）", enLine.orEmpty().contains(placeholder))
             assertTrue("zh 文案缺占位符 $placeholder（方言名/在册数据源清单）", zhLine.orEmpty().contains(placeholder))
         }
+    }
+
+    @Test
+    fun `接线守卫_组Runner展开设可访问且空操作立即报错`() {
+        val routing = mainSource("cn/song/mybatisplus/visualizer/execute/ExecDialectRouting.kt")
+        assertTrue("isNoOpRunner 扫描锚点缺失", routing.contains("internal fun isNoOpRunner("))
+        val subRunnersBody = routing.substringAfter("private fun subRunnersOf(")
+            .substringBefore("internal fun isNoOpRunner(")
+        assertTrue("subRunnersOf 切片为空（扫描锚点漂移）", subRunnersBody.contains("getMethod(\"getSubRunners\")"))
+        assertTrue(
+            "getSubRunners 反射未设 isAccessible=true——包私有组项会静默降级为空操作并悬挂 60s",
+            Regex("""(?m)^\s*method\.isAccessible = true\s*$""").containsMatchIn(subRunnersBody),
+        )
+        val results = mainSource("cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResults.kt")
+        assertTrue(
+            "runRunner 未在调用 run() 前拦截空操作 Runner——组项会白等准备超时",
+            Regex("""fun DataSourceSelector\.runRunner[\s\S]{0,600}isNoOpRunner\(runner\)""")
+                .containsMatchIn(results),
+        )
+    }
+
+    @Test
+    fun `接线守卫_空操作Runner文案双语在场`() {
+        val en = File(repoRoot(), "src/main/resources/messages/MpSqlVisualizerBundle.properties").readText()
+        val zh = File(repoRoot(), "src/main/resources/messages/MpSqlVisualizerBundle_zh.properties").readText()
+        assertTrue("en bundle 缺 execute.datasource.noRunnable", en.contains("execute.datasource.noRunnable="))
+        assertTrue("zh bundle 缺 execute.datasource.noRunnable", zh.contains("execute.datasource.noRunnable="))
     }
 }
