@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.log
 
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.actionSystem.ActionPlaces
 import com.intellij.openapi.actionSystem.ActionUpdateThread
@@ -73,7 +74,7 @@ class HistorySqlLogPanelScrollToEndTest : BasePlatformTestCase() {
         assertEquals(1, panel.navigationActionsForTest.count { it === panel.scrollToEndAction })
         val event = event()
         panel.scrollToEndAction.update(event)
-        assertSame(AllIcons.General.ArrowDown, event.presentation.icon)
+        assertSame(MpvsIcons.ScrollToEnd, event.presentation.icon)
         assertEquals(MpSqlVisualizerBundle.message("log.panel.scrollBottom"), event.presentation.text)
         assertEquals(MpSqlVisualizerBundle.message("log.panel.scrollBottom"), event.presentation.description)
         assertEquals(ActionUpdateThread.EDT, panel.scrollToEndAction.actionUpdateThread)

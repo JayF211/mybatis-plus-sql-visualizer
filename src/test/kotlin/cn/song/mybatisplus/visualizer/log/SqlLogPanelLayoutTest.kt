@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.log
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons
 import com.intellij.openapi.actionSystem.ActionPlaces
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.DataContext
@@ -64,7 +65,7 @@ class SqlLogPanelLayoutTest : BasePlatformTestCase() {
             assertTrue("搜索应直达", main.any { it is SqlLogPanel.ShowSearchAction })
             assertTrue("预览应归入左侧动作组", main.contains(panel.previewToggleAction))
             assertSame("预览动作必须带平台图标，不能渲染占位圆圈",
-                com.intellij.icons.AllIcons.Actions.Preview, panel.previewToggleAction.templatePresentation.icon)
+                MpvsIcons.DockedPreview, panel.previewToggleAction.templatePresentation.icon)
             assertEquals(MpSqlVisualizerBundle.message("log.dockedPreview.toggle.tip"),
                 panel.previewToggleAction.templatePresentation.description)
             assertTrue("设置应直达", main.any { it is SqlLogPanel.SettingsAction })

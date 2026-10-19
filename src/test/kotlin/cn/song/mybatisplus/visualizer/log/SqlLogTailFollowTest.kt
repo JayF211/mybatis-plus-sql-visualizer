@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.log
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.actionSystem.ActionPlaces
 import com.intellij.openapi.actionSystem.AnActionEvent
@@ -25,7 +26,7 @@ class SqlLogTailFollowTest : BasePlatformTestCase() {
         try {
             val action = panel.toolbarGroup.getChildren(null)[2]
             assertTrue("清除动作仍须位于工具栏第三位", action is SqlLogPanel.ClearAction)
-            assertSame("首次 update 前模板已有平台清除图标", AllIcons.Actions.GC, action.templatePresentation.icon)
+            assertSame("首次 update 前模板已有平台清除图标", MpvsIcons.Clear, action.templatePresentation.icon)
             assertTrue(action.templatePresentation.isVisible)
         } finally {
             panel.dispose()
@@ -49,7 +50,7 @@ class SqlLogTailFollowTest : BasePlatformTestCase() {
                 }
                 event.presentation.icon = if (round == 1) AllIcons.Actions.Search else null
                 action.update(event)
-                assertSame("空列表、有数据、清除后均应恢复清除图标", AllIcons.Actions.GC, event.presentation.icon)
+                assertSame("空列表、有数据、清除后均应恢复清除图标", MpvsIcons.Clear, event.presentation.icon)
                 assertEquals(MpSqlVisualizerBundle.message("log.panel.clear"), event.presentation.text)
                 assertTrue("清除入口应始终可见", event.presentation.isVisible)
                 assertTrue("清除入口应可用", event.presentation.isEnabled)

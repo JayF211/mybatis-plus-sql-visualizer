@@ -2,10 +2,10 @@ package cn.song.mybatisplus.visualizer.log
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.ui.SqlResultPanel
+import cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.util.UiTextClipboard
-import com.intellij.icons.AllIcons
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.actionSystem.ActionManager
 import com.intellij.openapi.actionSystem.AnAction
@@ -187,7 +187,7 @@ class LogToSqlPanel(
 
     private inner class ConvertAction : AnAction() {
         override fun update(e: AnActionEvent) {
-            e.presentation.icon = AllIcons.Actions.Execute
+            e.presentation.icon = MpvsIcons.Convert
             e.presentation.text = MpSqlVisualizerBundle.message("logToSql.panel.convert")
         }
 
@@ -209,7 +209,7 @@ class LogToSqlPanel(
      */
     private inner class ReadClipboardAction : AnAction() {
         override fun update(e: AnActionEvent) {
-            e.presentation.icon = AllIcons.Actions.MenuPaste
+            e.presentation.icon = MpvsIcons.Paste
             e.presentation.text = MpSqlVisualizerBundle.message("logToSql.panel.readClipboard")
         }
 
@@ -220,7 +220,7 @@ class LogToSqlPanel(
 
     private inner class ClearInputAction : AnAction() {
         override fun update(e: AnActionEvent) {
-            e.presentation.icon = AllIcons.Actions.GC
+            e.presentation.icon = MpvsIcons.Clear
             e.presentation.text = MpSqlVisualizerBundle.message("logToSql.panel.clearInput")
         }
 
@@ -231,7 +231,7 @@ class LogToSqlPanel(
 
     private inner class CopyAction : AnAction() {
         override fun update(e: AnActionEvent) {
-            e.presentation.icon = AllIcons.Actions.Copy
+            e.presentation.icon = MpvsIcons.Copy
             e.presentation.text = MpSqlVisualizerBundle.message("logToSql.panel.copy")
             e.presentation.isEnabled = resultEditor.document.text.isNotBlank()
         }
@@ -245,7 +245,7 @@ class LogToSqlPanel(
     /** 压缩/多行切换：立即用当前输入重转（空输入不动作）。 */
     private inner class ToggleFormatAction : AnAction() {
         override fun update(e: AnActionEvent) {
-            e.presentation.icon = AllIcons.Actions.ReformatCode
+            e.presentation.icon = MpvsIcons.Format
             e.presentation.text = MpSqlVisualizerBundle.message("logToSql.panel.toggleFormat")
         }
 
@@ -257,7 +257,7 @@ class LogToSqlPanel(
 
     private inner class ClearResultAction : AnAction() {
         override fun update(e: AnActionEvent) {
-            e.presentation.icon = AllIcons.Actions.GC
+            e.presentation.icon = MpvsIcons.Clear
             e.presentation.text = MpSqlVisualizerBundle.message("logToSql.panel.clearResult")
         }
 
@@ -278,7 +278,7 @@ class LogToSqlPanel(
      */
     private inner class ExecuteResultAction : AnAction() {
         override fun update(e: AnActionEvent) {
-            e.presentation.icon = AllIcons.Actions.Execute
+            e.presentation.icon = MpvsIcons.Execute
             e.presentation.text = MpSqlVisualizerBundle.message("logToSql.panel.execute")
             e.presentation.isEnabled = resultEditor.document.text.isNotBlank()
         }
