@@ -243,10 +243,10 @@ class PluginSettingsPanel @JvmOverloads constructor(
 
     // ---------- M56 T-M56-08：增强捕获（agent 字节码通道；对用户不出现 agent 字样） ----------
 
-    /** 增强捕获开关（默认关）：开启时弹注入确认对话框（JEP 451 预告 + 数据留本机说明）。 */
+    /** 增强捕获开关（默认开）：勾选即授权，不再弹注入确认对话框。 */
     internal val enhancedCaptureCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.enhancedCapture"))
 
-    /** 脱敏开关（默认开）：对疑似敏感形态打码，agent 采集层执行。 */
+    /** 脱敏开关（默认关）：对疑似敏感形态打码，agent 采集层执行。 */
     internal val enhancedDesensitizeCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.enhancedCapture.desensitize"))
 
     /** R60（T-LaneB D96）：展示/导出链脱敏（日志列表/预览浮层/导出文本打码；默认关）。 */
@@ -255,39 +255,17 @@ class PluginSettingsPanel @JvmOverloads constructor(
     /** T-StackHoverUi：调用栈快照总帧数（agent 两端采样预算；CONFIG 帧热下发）。 */
     internal val stackMaxFramesField = JBTextField(6)
 
-    /** 增强捕获状态行：已挂载 pid=x / 未授权注入 / 已回落控制台捕获（T-CaptureTruth T-CT-01 五态）。 */
+    /** 增强捕获状态行：已挂载 pid=x / 等待应用启动 / 已回落控制台捕获。 */
     internal val enhancedStatusLabel = JBLabel(" ")
-
-    /**
-     * T-CaptureTruth T-CT-02：重新授权按钮——仅在「开关开着但未授权」时露出（拒绝冷却期的恢复入口）。
-     *
-     * 监听器在字段初始化时挂一次：本面板 [rebuild]（语言切换）会重跑 buildSections，若在 addRow
-     * 处挂监听会随重建叠加重复回调。
-     */
-    internal val enhancedReauthButton = JButton(MpSqlVisualizerBundle.message("settings.enhancedCapture.reauth")).apply {
-        toolTipText = MpSqlVisualizerBundle.message("settings.enhancedCapture.reauth.tip")
-        isVisible = false
-        addActionListener { onReauthorizeClicked() }
-    }
-
-    /** T-CaptureTruth T-CT-02：对首个「待授权」项目重走确认流（多项目取值歧义属既有边界）。 */
-    private fun onReauthorizeClicked() {
-        ProjectManager.getInstance().openProjects
-            .firstOrNull { p ->
-                runCatching { !p.isDisposed && AgentManager.getInstance(p).needsReauthorization() }
-                    .getOrDefault(false)
-            }
-            ?.let { p -> runCatching { AgentManager.getInstance(p).requestReauthorization() } }
-        refreshEnhancedStatusLabel()
-    }
 
     /** T-SettingsTruth P2：AgentManager 状态行 messageBus 连接（disposeResources 断开）。 */
     private var agentStatusConnection: com.intellij.openapi.Disposable? = null
 
     /**
-     * T-SettingsTruth P2 / T-CaptureTruth T-CT-01/02：聚合各打开项目的 AgentManager 状态写入增强捕获
-     * 状态行，并按「是否存在待授权项目」控制重新授权按钮可见性。
-     * 无任何活动叙事（各项目均 null）→ 显示空串；多项目以「；」连接。
+     * T-SettingsTruth P2 / T-CaptureTruth T-CT-01：聚合各打开项目的 AgentManager 状态写入增强捕获
+     * 状态行。无任何活动叙事（各项目均 null）→ 显示空串；多项目以「；」连接。
+     *
+     * T-EnhancedCaptureDefaultOn（2026-10-19）：重新授权入口已移除，本函数只刷新文本。
      */
     internal fun refreshEnhancedStatusLabel() {
         val agents = ProjectManager.getInstance().openProjects.mapNotNull { p ->
@@ -298,9 +276,6 @@ class PluginSettingsPanel @JvmOverloads constructor(
             .filterNotNull()
             .joinToString("；")
         enhancedStatusLabel.text = text.ifEmpty { " " }
-        enhancedReauthButton.isVisible = agents.any { a ->
-            runCatching { a.needsReauthorization() }.getOrDefault(false)
-        }
     }
 
     /**

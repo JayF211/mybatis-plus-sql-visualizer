@@ -528,4 +528,36 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
             settings.loadState(snapshot)
         }
     }
+
+    /**
+     * T-EnhancedCaptureDefaultOn G3：旧 XML/JSON 的确认记忆与拒绝冷却在加载时幂等归一。
+     * 只碰这两个字段——用户显式关闭的 enhancedCaptureEnabled 必须原样保留。
+     */
+    fun testLoadStateNormalizesLegacyConsentFields() {
+        val settings = PluginSettings.getInstance()
+        val snapshot = settings.getState().copy()
+        try {
+            val legacyEnabled = snapshot.copy().apply {
+                enhancedCaptureEnabled = true
+                enhancedCaptureConfirmed = false
+                enhancedCaptureRejectedAtMs = 123_456L
+            }
+            settings.loadState(legacyEnabled)
+            assertEquals("旧 confirmed=false 应归一为 true", true, settings.state.enhancedCaptureConfirmed)
+            assertEquals("旧拒绝时刻应归一为 0", 0L, settings.state.enhancedCaptureRejectedAtMs)
+            assertTrue("用户开着增强时不得被归一关掉", settings.state.enhancedCaptureEnabled)
+
+            val legacyDisabled = snapshot.copy().apply {
+                enhancedCaptureEnabled = false
+                enhancedCaptureConfirmed = false
+                enhancedCaptureRejectedAtMs = 999L
+            }
+            settings.loadState(legacyDisabled)
+            assertEquals("用户显式关闭必须保持关闭", false, settings.state.enhancedCaptureEnabled)
+            assertEquals("确认记忆仍归一为 true", true, settings.state.enhancedCaptureConfirmed)
+            assertEquals("拒绝时刻仍归一为 0", 0L, settings.state.enhancedCaptureRejectedAtMs)
+        } finally {
+            settings.loadState(snapshot)
+        }
+    }
 }

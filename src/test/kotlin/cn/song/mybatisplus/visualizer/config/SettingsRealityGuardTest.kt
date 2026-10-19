@@ -121,9 +121,6 @@ class SettingsRealityGuardTest {
             "updateSection", "shortcutEditor", "reverseShortcutEditor",
             // T-SettingsTruth P1：autoInjectInterceptorCheck 为纯动作开关（勾选即注入、无论成败终态复位），不进 apply/reset
             "autoInjectInterceptorCheck",
-            // T-CaptureTruth T-CT-02：enhancedReauthButton 为纯动作按钮（点击即清零拒绝冷却并重走确认流，
-            // 无自身状态可存可回填），与 clearCacheButton / crudColorResetButton 同类。
-            "enhancedReauthButton",
             // T-PrefixValidate（master 7b51d57，20260926）：前缀校验结果行与一键修复按钮——
             // label 纯展示（可见性随校验结果翻转）、button 纯动作（点击回写两栏后自隐），
             // 均无自身状态可存可回填，按本白名单既有口径豁免（20260927 T-TestPerf7 合流树首轮全量红补登记）

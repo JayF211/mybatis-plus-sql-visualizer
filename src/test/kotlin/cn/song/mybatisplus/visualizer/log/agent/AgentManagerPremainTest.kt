@@ -31,8 +31,6 @@ class AgentManagerPremainTest : BasePlatformTestCase() {
         manager = AgentManager.getInstance(project)
         val state = PluginSettings.getInstance().state
         state.enhancedCaptureEnabled = false
-        state.enhancedCaptureConfirmed = false
-        state.enhancedCaptureRejectedAtMs = 0
         manager.clockMs = { System.currentTimeMillis() }
     }
 
@@ -41,8 +39,6 @@ class AgentManagerPremainTest : BasePlatformTestCase() {
             manager.shutdownAll()
             val state = PluginSettings.getInstance().state
             state.enhancedCaptureEnabled = false
-            state.enhancedCaptureConfirmed = false
-            state.enhancedCaptureRejectedAtMs = 0
             manager.clockMs = { System.currentTimeMillis() }
         } finally {
             super.tearDown()
@@ -52,27 +48,25 @@ class AgentManagerPremainTest : BasePlatformTestCase() {
     // ---------- 闸门 ----------
 
     fun test未开启增强捕获_不注入不协商端口() {
-        val state = PluginSettings.getInstance().state
-        state.enhancedCaptureEnabled = false
-        state.enhancedCaptureConfirmed = true
+        PluginSettings.getInstance().state.enhancedCaptureEnabled = false
         assertNull("未开启时不得注入", manager.preparePremainVmOption())
         assertTrue("未开启时不得协商端口", manager.premainChannels.isEmpty())
         assertFalse(SqlCaptureGate.paused.get())
     }
 
-    fun test已开启未确认_不注入不协商端口() {
+    /** T-EnhancedCaptureDefaultOn：旧 XML 残留 confirmed=false 不得再拦 premain。 */
+    fun test已开启_旧未确认态也注入() {
         val state = PluginSettings.getInstance().state
         state.enhancedCaptureEnabled = true
         state.enhancedCaptureConfirmed = false
-        assertNull("未确认时不得注入（首次知情同意仍走既有 attach 链）", manager.preparePremainVmOption())
-        assertTrue("未确认时不得协商端口", manager.premainChannels.isEmpty())
-        assertFalse(SqlCaptureGate.paused.get())
+        assertNotNull("开关打开即注入，confirmed 不再参与判定", manager.preparePremainVmOption())
+        manager.shutdownAll()
     }
 
     // ---------- 注入产物 ----------
 
     fun test已确认_注入_端口协商与jar落盘同在位() {
-        enableAndConfirm()
+        enableCapture()
         val option = manager.preparePremainVmOption()
         assertNotNull("已确认应产出 -javaagent VM 选项", option)
         assertTrue(option!!.startsWith("-javaagent:"))
@@ -99,7 +93,7 @@ class AgentManagerPremainTest : BasePlatformTestCase() {
     }
 
     fun test挂起通道达上限_拒绝继续协商() {
-        enableAndConfirm()
+        enableCapture()
         val options = (1..AgentManager.MAX_PREMAIN_CHANNELS).map { manager.preparePremainVmOption() }
         assertTrue("上限内每次准备都应成功", options.all { it != null })
         assertNull("超上限应拒绝（防重复准备泄漏 ServerSocket）", manager.preparePremainVmOption())
@@ -109,7 +103,7 @@ class AgentManagerPremainTest : BasePlatformTestCase() {
     // ---------- 回连 ----------
 
     fun test回连_建会话_写幂等表_置在线态() {
-        enableAndConfirm()
+        enableCapture()
         val option = manager.preparePremainVmOption()!!
         val port = portOf(option)
         val pid = 424242L
@@ -144,7 +138,7 @@ class AgentManagerPremainTest : BasePlatformTestCase() {
     }
 
     fun test同pid二次回连被丢弃_会话不叠加() {
-        enableAndConfirm()
+        enableCapture()
         val first = portOf(manager.preparePremainVmOption()!!)
         val second = portOf(manager.preparePremainVmOption()!!)
         val pid = 515151L
@@ -169,7 +163,7 @@ class AgentManagerPremainTest : BasePlatformTestCase() {
      * 该次运行永久失去增强通道。本用例断言重连能重建会话并恢复在线态。
      */
     fun test会话被摘除后同pid回连_自动恢复在线() {
-        enableAndConfirm()
+        enableCapture()
         val port = portOf(manager.preparePremainVmOption()!!)
         val pid = 636_001L
         val first = Socket("127.0.0.1", port)
@@ -197,7 +191,7 @@ class AgentManagerPremainTest : BasePlatformTestCase() {
 
     /** 反复摘除/重连多轮：同一通道持续服役，通道表与会话表规模都不随轮次增长。 */
     fun test重复多轮回连_通道与会话规模有界() {
-        enableAndConfirm()
+        enableCapture()
         val port = portOf(manager.preparePremainVmOption()!!)
         val pid = 636_002L
         repeat(10) { i ->
@@ -224,7 +218,7 @@ class AgentManagerPremainTest : BasePlatformTestCase() {
      * 连续多次运行不累积通道——否则第 `MAX_PREMAIN_CHANNELS` 次运行起 premain 注入会被上限拒绝。
      */
     fun test运行结束关闭本轮通道_连续多次运行不累积() {
-        enableAndConfirm()
+        enableCapture()
         val runs = AgentManager.MAX_PREMAIN_CHANNELS + 3
         repeat(runs) { i ->
             val option = manager.preparePremainVmOption()
@@ -248,7 +242,7 @@ class AgentManagerPremainTest : BasePlatformTestCase() {
 
     /** 回连次数达上限后通道退休（防异常抖动下的 accept 热循环）。 */
     fun test回连次数达上限_通道退休() {
-        enableAndConfirm()
+        enableCapture()
         val port = portOf(manager.preparePremainVmOption()!!)
         val pid = 636_003L
         repeat(AgentManager.MAX_PREMAIN_RECONNECTS) { i ->
@@ -281,7 +275,7 @@ class AgentManagerPremainTest : BasePlatformTestCase() {
      * 即「被当成重复连接丢弃」；非 -1（服务端写了 CONFIG 帧）或读超时（连接仍在服务端手里）都表示放行。
      */
     fun test半死会话语境下同pid重连放行() {
-        enableAndConfirm()
+        enableCapture()
         val port = portOf(manager.preparePremainVmOption()!!)
         val pid = 717_001L
         // 可控时钟：把会话建好后再推过心跳窗口，制造「alive 但心跳过期」的半死会话
@@ -330,7 +324,7 @@ class AgentManagerPremainTest : BasePlatformTestCase() {
     }
 
     fun testpremain通道在场_attach不排队() {
-        enableAndConfirm()
+        enableCapture()
         manager.preparePremainVmOption()
         assertTrue(manager.hasPendingPremainChannel())
         manager.onProcessAppeared(FakeProcessHandler(nativePid = 777_001L))
@@ -339,7 +333,7 @@ class AgentManagerPremainTest : BasePlatformTestCase() {
     }
 
     fun test跳过窗失效后_attach恢复排队() {
-        enableAndConfirm()
+        enableCapture()
         val base = 1_000_000L
         manager.clockMs = { base }
         manager.preparePremainVmOption()
@@ -392,10 +386,8 @@ class AgentManagerPremainTest : BasePlatformTestCase() {
 
     // ---------- 辅助 ----------
 
-    private fun enableAndConfirm() {
-        val state = PluginSettings.getInstance().state
-        state.enhancedCaptureEnabled = true
-        state.enhancedCaptureConfirmed = true
+    private fun enableCapture() {
+        PluginSettings.getInstance().state.enhancedCaptureEnabled = true
     }
 
     private fun portOf(vmOption: String): Int =

@@ -1,6 +1,5 @@
 package cn.song.mybatisplus.visualizer.log.agent
 
-import cn.song.mybatisplus.visualizer.config.EnhancedCaptureConsent
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.log.LogSqlEntry
 import cn.song.mybatisplus.visualizer.log.LogTimeCorrelator
@@ -35,7 +34,6 @@ import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicLong
 
 /**
  * AgentManager（§4.4，M56 T-M56-01/02）：project 级服务，agent 生命周期全权管理。
@@ -67,15 +65,6 @@ class AgentManager(private val project: Project) : Disposable {
 
         /** T-FirstUsePremainConsent S2：attach 兜底能力边界通知的独立分组（「一域一组」惯例）。 */
         const val AGENT_NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.agent"
-
-        /**
-         * 拒绝冷却默认窗（T-PS4-01）：24h。冷却只作用于确认弹窗频率、不改变同意门槛（保守口径——
-         * 冷却过期后再弹一次，用户仍可同意）；设置页关闭再开启增强捕获时重置。
-         */
-        const val DEFAULT_REJECT_COOLDOWN_MS = 24L * 60 * 60 * 1000
-
-        /** 确认请求去重窗默认值（T-FirstUsePremainConsent R2）：吸收上升沿与 O-66 引导流毫秒级连发的第二次请求。 */
-        const val DEFAULT_CONSENT_ASK_GUARD_MS = 1_500L
 
         /** attach 排队去抖窗默认值（T-PS4-03）：同 pid 窗口内重复启动不重复排队（与挂载前静默等待解耦）。 */
         const val DEFAULT_ATTACH_DEBOUNCE_MS = 3_000L
@@ -251,29 +240,13 @@ class AgentManager(private val project: Project) : Disposable {
      */
     internal val premainChannels = CopyOnWriteArrayList<PremainChannel>()
 
-    // ---------- T-PS4-01/03 测试缝：冷却窗、去抖窗与时间源可注入（生产链路勿改默认值） ----------
-
-    /** 拒绝冷却窗（默认 [DEFAULT_REJECT_COOLDOWN_MS]；测试注入短窗驱动冷却语义）。 */
-    internal var rejectCooldownMs: Long = DEFAULT_REJECT_COOLDOWN_MS
+    // ---------- T-PS4-03 测试缝：去抖窗与时间源可注入（生产链路勿改默认值） ----------
 
     /** attach 排队去抖窗（默认 [DEFAULT_ATTACH_DEBOUNCE_MS]；测试注入短窗驱动去抖语义）。 */
     internal var attachDebounceMs: Long = DEFAULT_ATTACH_DEBOUNCE_MS
 
-    /** 时间源（冷却判断与 attach 排队去抖共用；默认系统时钟，测试注入可控时钟）。 */
+    /** 时间源（attach 排队去抖等使用；默认系统时钟，测试注入可控时钟）。 */
     internal var clockMs: () -> Long = { System.currentTimeMillis() }
-
-    /**
-     * 去重窗宽度（默认 [DEFAULT_CONSENT_ASK_GUARD_MS]；测试注入 0 = 关闭去重）。
-     *
-     * 须声明在 init 块**之前**：SETTINGS_CHANGE 监听（init 注册）的上升沿回调链同步走
-     * [requestConsentOnce] 读之——声明在 init 之后则构造期触发时读到 JVM 默认值 0（去重窗
-     * 失效）且 `lastConsentAskAtMs` 为 null（NPE），初始化顺序守卫
-     * （DialogWrapperInitOrderGuardTest）按此钉死声明位置。
-     */
-    internal var consentAskGuardMs: Long = DEFAULT_CONSENT_ASK_GUARD_MS
-
-    /** 最近一次确认弹窗时刻（[requestConsentOnce] 去重窗基准；测试复位缝）。 */
-    internal val lastConsentAskAtMs = AtomicLong(0L)
 
     /**
      * T-ReachAudit T-RA-01：心跳窗口（默认 [AgentProtocol.ONLINE_WINDOW_MS]；测试注入短窗驱动过期语义）。
@@ -339,49 +312,27 @@ class AgentManager(private val project: Project) : Disposable {
 
     init {
         // T-PS5-04：monitor 定时任务不再在此排定（见 ensureMonitorStarted）。
-        // T-M56-08：设置变更驱动——开启（已确认）→ 惰性挂载由进程出现回调承接；
+        // T-M56-08：设置变更驱动——开启 → 惰性挂载由进程出现回调承接；
         // 关闭 → CONFIG 停采集 + 会话关闭 + 桥回落；脱敏开关 → CONFIG 下发
         project.messageBus.connect(this).subscribe(
             PluginSettings.SETTINGS_CHANGE_TOPIC,
             cn.song.mybatisplus.visualizer.config.SettingsChangeListener {
                 val state = PluginSettings.getInstance().state
-                // T-PS4-01：关闭 → 再开启的上升沿重置拒绝冷却（保留用户改主意的入口；
-                // 仅此边沿重置，其余设置变更不动冷却，防改无关设置白涮 24h 冷却窗）
+                // T-EnhancedCaptureDefaultOn（2026-10-19）：关闭 → 再开启的上升沿只做两件事——
+                // 复位用户暂停、扫描在跑进程补挂。注入确认与拒绝冷却已随确认流整体移除。
                 if (state.enhancedCaptureEnabled && !lastKnownEnabled) {
-                    state.enhancedCaptureRejectedAtMs = 0L
                     // R53（V80③）：关闭→再开启的上升沿复位用户暂停——不残留「暂停中但开关重开」的悬空态
                     userPaused = false
-                    LOG.info("设置变更：增强捕获重新开启——拒绝冷却已重置，用户暂停已复位")
-                    // T-FirstUsePremainConsent R2-C：确认前置到「开启」时刻。Round1 把确认挂在
-                    // updateJavaParameters 窗口，沙盒实测（idea.log 11:06:54）该窗口在后台线程跑、
-                    // EDT 闸门恒跳过 → 首轮仍静默。开启那一刻在设置页/引导链上下文天然是 EDT——
-                    // 在此同步弹一次确认，授权持久化先于任何 Run，之后每轮启动即带 premain。
-                    // O-66 引导链「置位+发布+requestReauthorization」会连发两次请求：requestConsentOnce
-                    // 的去重窗吸收第二次，只弹一个框。
-                    var consentedNow = true
-                    if (needsReauthorization() && premainConsentGate()) {
-                        when (requestConsentOnce()) {
-                            EnhancedCaptureConsent.ACCEPTED ->
-                                LOG.info("设置变更上升沿确认：用户同意注入——后续 Run 即可 premain（启动即捕获）")
-                            EnhancedCaptureConsent.REJECTED -> {
-                                LOG.info("设置变更上升沿确认：用户拒绝注入——进冷却（Run 链不再重复弹）")
-                                consentedNow = false
-                            }
-                            else -> Unit
-                        }
-                    }
+                    LOG.info("设置变更：增强捕获重新开启——用户暂停已复位")
                     // 20261008 验收偏差 #6 修复（D120，拍板 A）：上升沿扫描本工程在跑 JVM 进程主动
                     // attach——此前 attach 只挂进程启动钩子，对已在跑的应用开开关无任何入口挂载
                     // （真机实测仅记本行日志，进程零挂载），验收文档 3.27「无需重启应用」不可达。
-                    // 已确认（或本次刚同意）才扫；用户拒绝注入则不扫（弹窗克制红线）。后台线程执行，
-                    // attachedPids 幂等表防重复挂载；反射失败内部只 WARN 不影响设置链。
-                    if (consentedNow) {
-                        executor.execute {
-                            val attached = RunConfigurationProcessListener
-                                .scanAndAttachRunningProcesses(project, logTag = "settings-rescan")
-                            if (attached > 0) {
-                                LOG.info("设置变更上升沿：在跑进程补挂 $attached 个——存量连接下一次执行即被捕获")
-                            }
+                    // 后台线程执行，attachedPids 幂等表防重复挂载；反射失败内部只 WARN 不影响设置链。
+                    executor.execute {
+                        val attached = RunConfigurationProcessListener
+                            .scanAndAttachRunningProcesses(project, logTag = "settings-rescan")
+                        if (attached > 0) {
+                            LOG.info("设置变更上升沿：在跑进程补挂 $attached 个——存量连接下一次执行即被捕获")
                         }
                     }
                 }
@@ -390,7 +341,7 @@ class AgentManager(private val project: Project) : Disposable {
                     // T-PS5-07：关闭下降沿复位 EP 短路标志——[SqlCaptureGate.epActive] 是「EP 在本会话
                     // 实证产出过条目」的**会话级粘滞**标志（置位点 SqlConsoleBridgeFilterProvider），
                     // 解耦前无任何复位点：关掉增强捕获再新建控制台时桥侧仍被粘滞标志短路 = 两条通道
-                    // 同时零产出（静默零捕获的复发形态）。与上方上升沿重置拒绝冷却对称；EP 链路失效的
+                    // 同时零产出（静默零捕获的复发形态）。与上方上升沿复位用户暂停对称；EP 链路失效的
                     // 极端场景由短路计数 + debug 日志（epActiveShortCircuitCount）可观测兜底。
                     SqlCaptureGate.epActive = false
                     executor.execute { shutdownAll() }
@@ -520,20 +471,11 @@ class AgentManager(private val project: Project) : Disposable {
      * 进程出现回调（RunConfigurationProcessListener.processStarted 转接；增强未开启时空操作）。
      * 后台线程：进程就绪等待 + 3s 去抖 + attach——全程不进 EDT。
      *
-     * 默认开（2026-09-16 定案）后的确认闸门：enabled 默认 true 而 confirmed 默认 false——
-     * 若沿用「仅设置页勾选时弹确认」，默认勾上的开关将永不弹框、永不 attach（死开关）。
-     * 故未确认时在**首次挂载请求**处征求一次知情同意（EDT 弹框），同意后继续挂载。
-     *
-     * T-PS4-01 触发面收窄：未确认态的确认弹窗仅对主配置启动（[isMainConfigLaunch]）触发；
-     * HTTP Client/测试/profiler 等非主配置进程在未确认态**静默跳过**（不弹窗、不入 attach 队列），
-     * 杜绝「拒绝注入的用户每进程启动挨一次 EDT 模态弹窗」。UI-007：confirmed 仅代表授权，
-     * 不代表任意进程可注入；已知 IDE/构建 helper 与非 Java 入口始终排除。
-     *
-     * @param isMainConfigLaunch 是否主业务配置启动（ModuleBasedConfiguration 子类，与
-     *   RunConfigurationProcessListener.isModuleBasedLaunch 同源判定）。默认 true =
-     *   保守按主配置处理（未知调用方保留既有弹窗语义，知情同意不静默吞）；生产唯一调用点显式传参。
+     * T-EnhancedCaptureDefaultOn（2026-10-19）：注入确认闸门已整体移除——开关打开即挂载，
+     * 不再区分主配置/非主配置（原区分只为决定是否弹确认框）。UI-007 目标身份门仍然保留：
+     * 开关打开不等于 IDE/构建 helper 可注入，已知非目标进程始终排除。
      */
-    fun onProcessAppeared(processHandler: Any?, isMainConfigLaunch: Boolean = true) {
+    fun onProcessAppeared(processHandler: Any?) {
         if (!isEnhancedEnabled()) {
             LOG.info("onProcessAppeared: 增强未开启（enabled=${PluginSettings.getInstance().state.enhancedCaptureEnabled}, " +
                 "disposed=${project.isDisposed}）——跳过挂载")
@@ -547,252 +489,7 @@ class AgentManager(private val project: Project) : Disposable {
             return
         }
         if (candidatePid != null && !permitsAttachTarget(candidatePid, processHandler, readFiles = false)) return
-        if (!isEnhancedConfirmed()) {
-            if (!isMainConfigLaunch) {
-                LOG.info("onProcessAppeared: 增强已开启但未确认且非主配置进程——静默跳过（不弹窗不入队，T-PS4-01）")
-                return
-            }
-            if (isInRejectCooldown()) {
-                LOG.info("onProcessAppeared: 拒绝冷却期内（${remainingRejectCooldownMs()}ms）——不弹窗不排队（T-PS4-01）")
-                return
-            }
-            LOG.info("onProcessAppeared: 增强已开启但未确认注入——请求确认后挂载")
-            requestConsentThenAttach(processHandler)
-            return
-        }
         doAttachAsync(processHandler)
-    }
-
-    /**
-     * 拒绝冷却判断（T-PS4-01）：自持久化的「拒绝时刻」（[PluginSettings.State.enhancedCaptureRejectedAtMs]）
-     * 起 [rejectCooldownMs] 窗口内为 true。冷却只作用于弹窗频率、不改变同意门槛（保守口径——
-     * 冷却过期后再弹一次）；总开关关闭时本判断不会被走到（enabled 门在前，关闭增强 > 冷却）。
-     */
-    internal fun isInRejectCooldown(): Boolean {
-        val rejectedAt = PluginSettings.getInstance().state.enhancedCaptureRejectedAtMs
-        if (rejectedAt <= 0L) return false
-        return clockMs() - rejectedAt < rejectCooldownMs
-    }
-
-    internal fun remainingRejectCooldownMs(): Long =
-        (rejectCooldownMs - (clockMs() - PluginSettings.getInstance().state.enhancedCaptureRejectedAtMs)).coerceAtLeast(0)
-
-    /**
-     * T-CaptureTruth T-CT-02：重新授权入口（设置页「重新授权」按钮 / 面板链路诊断行的恢复动作 /
-     * O-66 引导弹框「开启增强捕获」动作）。
-     *
-     * 语义 = 清零拒绝冷却（与「关闭→再开启」上升沿同一条重置语义，抽为单一入口）后立即重走确认流：
-     * 同意 → 置 confirmed 并（有进程句柄时）挂载；拒绝 → 重新计时冷却。此前用户被拒后唯一恢复路径是
-     * 「设置页取消勾选→应用→重新勾选→应用」，而复选框本就显示勾选态，实际无从下手（T-CaptureTruth 根因之二）。
-     *
-     * 无进程句柄：本入口不携带 processStarted 事件，故只恢复授权、不尝试挂载——挂载由下一次
-     * 应用进程启动承接（状态行随即转「已授权，等待应用进程启动后挂载」）。
-     *
-     * O-66 T-GuideEnhancedFirst：[onOutcome] 把三态结果回传给调用方（引导弹框据此决定是否展示
-     * 「重启应用后生效」提示）。持久化仍单点收在本类，调用方只消费不落盘；增强未开启早退时
-     * **不回调**（用户未做任何选择，不得谎报 REJECTED）。
-     */
-    fun requestReauthorization(onOutcome: (EnhancedCaptureConsent) -> Unit = {}) {
-        if (!isEnhancedEnabled()) {
-            LOG.info("requestReauthorization: 增强未开启——忽略")
-            return
-        }
-        PluginSettings.getInstance().state.enhancedCaptureRejectedAtMs = 0L
-        LOG.info("requestReauthorization: 拒绝冷却已清零，重走注入确认流")
-        publishStatusChanged()
-        requestConsentThenAttach(null, onOutcome)
-    }
-
-    /**
-     * 首次挂载确认（EDT 弹一次）。T-PS4-01 三态语义：
-     * - 同意 → 置 confirmed 持久化并继续挂载（此后任何进程都不再弹）；
-     * - 拒绝 → 持久化「拒绝时刻」进入 [DEFAULT_REJECT_COOLDOWN_MS] 冷却（冷却期内不重复弹，
-     *   冷却过期后再弹一次；冷却只作用于弹窗频率、不改变同意门槛——保守口径）；
-     * - 关闭增强 → 总开关 enhancedCaptureEnabled 置 false 持久化（语义优先级：关闭增强 > 冷却，
-     *   总开关关闭后冷却无意义），此后任何进程启动都不弹窗、不 attach，直到用户在设置页重新开启
-     *   （重开的上升沿由 SETTINGS_CHANGE 监听重置冷却）。
-     * 确认结果持久化（重开不再弹）；headless 由 [consentProvider] 默认实现直接拒绝。
-     * O-66：[onOutcome] 在三态各自落盘后回传（确认框异常按拒绝处理的路径同样回传）；
-     * 前置早退（项目已释放 / 增强未开启）不回调。
-     */
-    private fun requestConsentThenAttach(processHandler: Any?, onOutcome: (EnhancedCaptureConsent) -> Unit = {}) {
-        com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater {
-            val outcome = requestConsentOnce() ?: return@invokeLater
-            when (outcome) {
-                EnhancedCaptureConsent.ACCEPTED -> {
-                    onOutcome(EnhancedCaptureConsent.ACCEPTED)
-                    if (processHandler == null) {
-                        // T-CaptureTruth T-CT-02：重新授权入口无进程句柄——只恢复授权，
-                        // 挂载由下一次应用进程启动承接（避免 resolvePid(null) 的误导性 WARN）。
-                        LOG.info("requestConsentThenAttach: 用户同意注入——已授权，等待应用进程启动后挂载")
-                        return@invokeLater
-                    }
-                    LOG.info("requestConsentThenAttach: 用户同意注入——继续挂载")
-                    doAttachAsync(processHandler)
-                }
-                EnhancedCaptureConsent.DISABLE_CAPTURE -> {
-                    LOG.info("requestConsentThenAttach: 用户选择关闭增强捕获并不再询问——总开关已持久化关闭")
-                    onOutcome(EnhancedCaptureConsent.DISABLE_CAPTURE)
-                }
-                EnhancedCaptureConsent.REJECTED -> {
-                    LOG.info("requestConsentThenAttach: 用户拒绝注入——进入 ${rejectCooldownMs}ms 冷却（冷却期内不重复弹，不改同意门槛）")
-                    onOutcome(EnhancedCaptureConsent.REJECTED)
-                }
-            }
-        }
-    }
-
-    /**
-     * 确认落盘单点（T-FirstUsePremainConsent S1 抽取，原 requestConsentThenAttach 内联体）：
-     * 调 [consentProvider] 取三态结果并按既有语义持久化。**须在 EDT 调用**（默认 provider 弹模态框）。
-     *
-     * 早退返回 null（不弹、不落盘、调用方不得误当拒绝）：项目已释放 / 增强未开启 / 拒绝冷却期内
-     * （冷却只作用于弹窗频率、不改变同意门槛——保守口径，与 onProcessAppeared 入口判定同源）。
-     * 三态各自落盘并广播（T-CaptureTruth T-CT-01：三态结果都广播，否则设置页状态行等到下一次
-     * attach/掉线才刷新）：ACCEPTED → confirmed=true；REJECTED → 拒绝时刻；DISABLE_CAPTURE →
-     * 总开关 false（与设置页 Apply 同通道，XmlSerializer 随平台自动保存落盘）。
-     */
-    internal fun confirmEnhancedCapture(): EnhancedCaptureConsent? {
-        if (project.isDisposed || !isEnhancedEnabled()) return null
-        if (isInRejectCooldown()) {
-            LOG.info("confirmEnhancedCapture: 拒绝冷却期内——不弹窗不落盘")
-            return null
-        }
-        val outcome = try {
-            consentProvider()
-        } catch (t: Throwable) {
-            // T-FatalPassthrough T-FP-02：JVM 级致命错误透传（见 util/FatalErrors.kt）——本文件
-            // 是长驻链路（attach / premain / 会话读线程 / CONFIG 下发），捕获面覆盖 Error：
-            // 普通异常（含 ClassNotFoundException 这类可选能力缺失）仍走既有降级，
-            // VirtualMachineError/LinkageError 不得被吞成一条 warn 后让流程带病继续。
-            if (FatalErrors.isFatal(t)) throw t
-            LOG.warn("requestConsentThenAttach: 确认框异常——按拒绝处理（进冷却）", t)
-            EnhancedCaptureConsent.REJECTED
-        }
-        val state = PluginSettings.getInstance().state
-        when (outcome) {
-            EnhancedCaptureConsent.ACCEPTED -> state.enhancedCaptureConfirmed = true
-            EnhancedCaptureConsent.DISABLE_CAPTURE -> state.enhancedCaptureEnabled = false
-            EnhancedCaptureConsent.REJECTED -> state.enhancedCaptureRejectedAtMs = clockMs()
-        }
-        publishStatusChanged()
-        return outcome
-    }
-
-    /**
-     * T-FirstUsePremainConsent S1：进程启动**前**的注入确认（[PremainRunConfigurationExtension]
-     * 的 updateJavaParameters 窗口内同步调用）。首次使用的旧语义是「首轮 Run 注入跳过
-     * enhanced-unconfirmed → 同意弹窗由 attach 链在进程启动后弹」，而 agent 只在驱动 connect 时
-     * 包装连接、retransform 不能回溯已存在的池化连接——首轮必然零捕获。本入口把确认前置到
-     * JavaParameters 构建期，同意后首轮 Run 即带 -javaagent（连接从建池起就被包装）。
-     *
-     * 返回 true = 确认已达成（或本就 confirmed），可继续 [preparePremainVmOption]；false = 本轮
-     * 不注入（未开启 / 冷却 / headless / 非EDT 早退，回落既有 attach 链确认，零劣化）。
-     * EDT 守卫（待验证前提 1）：updateJavaParameters 若不在 EDT，同步弹模态框有死锁风险——
-     * 静默跳过不跨线程弹窗；生产形态由沙盒实测落账。
-     */
-    fun ensureConfirmedBeforePremain(): Boolean {
-        if (!isEnhancedEnabled()) return false
-        if (isEnhancedConfirmed()) return true
-        if (!premainConsentGate()) {
-            LOG.info("premain 提前确认跳过：headless 或非 EDT 线程——回落既有 attach 链确认（零劣化）")
-            return false
-        }
-        return when (requestConsentOnce()) {
-            EnhancedCaptureConsent.ACCEPTED -> {
-                LOG.info("premain 提前确认：用户同意注入——本轮即可注入 premain")
-                true
-            }
-            EnhancedCaptureConsent.REJECTED -> {
-                LOG.info("premain 提前确认：用户拒绝注入——本轮不注入（冷却语义同 attach 链）")
-                false
-            }
-            EnhancedCaptureConsent.DISABLE_CAPTURE, null -> {
-                LOG.info("premain 提前确认：增强已关闭或早退——本轮不注入")
-                false
-            }
-        }
-    }
-
-    /**
-     * 提前确认的线程/环境闸门（默认 = EDT 且非 headless）；测试注入以驱动「可弹/不可弹」两分支。
-     */
-    internal var premainConsentGate: () -> Boolean = {
-        val app = com.intellij.openapi.application.ApplicationManager.getApplication()
-        app != null && !app.isHeadlessEnvironment && app.isDispatchThread
-    }
-
-    /**
-     * T-FirstUseFreshInstallConsent S1：项目打开即确认（出厂未确认态专用通道）。
-     *
-     * 出厂态 `enhancedCaptureEnabled=true`（默认开）+ `confirmed=false`——从出生就是开着的，
-     * **永远不产生 SETTINGS_CHANGE 上升沿**，R2「开启时刻确认」在最普遍的首次使用形态永不触发；
-     * 首轮 Run 回落 attach 链又撞 SqlLogManager 懒创建的订阅竞态（沙盒 12:41 会话实录：首启全程静默）。
-     * 本入口在项目打开期主动补一次确认：同意持久化先于任何 Run → 首轮 Run 的
-     * updateJavaParameters 即产出 premain（连接从建池起包装、捕获完整），attach 链与订阅竞态整体旁路。
-     *
-     * 调用方（LogStartupCapture ProjectActivity）在 BG 线程：invokeLater 转 EDT 弹窗；
-     * EDT/headless 前提不成立（headless 测试）静默跳过回落既有 attach 链——零劣化不变。
-     * 三态语义沿用 [requestConsentOnce] 单点（同意=confirmed / 取消=24h 冷却 / 关闭增强=enabled=false），
-     * 去重窗天然防「启动即弹 + O-66 引导链」双弹。已知边界（登记）：多项目同时打开各自实例独立计数，
-     * 极端并发下可能各弹一次（第二次读 state 多半已被第一次的落盘短路）。
-     */
-    fun maybeAskConsentAtStartup() {
-        if (!needsReauthorization()) {
-            LOG.info("maybeAskConsentAtStartup: 无需授权（已确认或未开启）——跳过")
-            return
-        }
-        com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater {
-            if (project.isDisposed) return@invokeLater
-            if (!premainConsentGate()) {
-                LOG.info("maybeAskConsentAtStartup: headless 或非 EDT——静默跳过（回落 attach 链确认，零劣化）")
-                return@invokeLater
-            }
-            when (requestConsentOnce()) {
-                EnhancedCaptureConsent.ACCEPTED ->
-                    LOG.info("maybeAskConsentAtStartup: 项目打开期确认——用户同意注入，首轮 Run 即可 premain")
-                EnhancedCaptureConsent.REJECTED ->
-                    LOG.info("maybeAskConsentAtStartup: 项目打开期确认——用户拒绝注入，进冷却")
-                else -> Unit
-            }
-        }
-    }
-
-    /**
-     * 去重确认入口（T-FirstUsePremainConsent R2）：四个触发点（设置页开启上升沿 / O-66 引导链
-     * requestReauthorization / 进程出现 attach 链 / premain 提前确认）共用。同一时刻只应有一个框——
-     * O-66 引导链「置位开关 + 发布 SETTINGS_CHANGE + 立即 requestReauthorization」会让上升沿与
-     * 引导流在毫秒级内连发两次请求，本入口按 [consentAskGuardMs] 时间窗把第二次吞掉（只弹一个框）。
-     *
-     * 早退返回 null（不弹不落盘）：项目已释放 / 未开启 / 冷却期内 / 去重窗内。
-     * 其余语义（三态落盘、广播、fatal 透传）收口在 [confirmEnhancedCapture] 单点不变。
-     */
-    internal fun requestConsentOnce(): EnhancedCaptureConsent? {
-        if (project.isDisposed || !isEnhancedEnabled()) return null
-        if (isInRejectCooldown()) {
-            LOG.info("requestConsentOnce: 拒绝冷却期内——不弹窗")
-            return null
-        }
-        val now = clockMs()
-        val last = lastConsentAskAtMs.get()
-        if (last > 0L && now - last < consentAskGuardMs) {
-            LOG.info("requestConsentOnce: ${now - last}ms 前已弹过确认（去重窗 ${consentAskGuardMs}ms）——吞掉本次重复请求")
-            return null
-        }
-        lastConsentAskAtMs.set(now)
-        return confirmEnhancedCapture()
-    }
-
-    /**
-     * 确认提供者（默认弹注入确认框三态结果，headless 恒拒绝；测试替换以驱动同意/关闭/拒绝分支）。
-     * T-PS4-01 三态：ACCEPTED 同意 / DISABLE_CAPTURE 关闭增强并不再询问 / REJECTED 拒绝（进冷却）。
-     */
-    internal var consentProvider: () -> EnhancedCaptureConsent = {
-        if (com.intellij.openapi.application.ApplicationManager.getApplication().isHeadlessEnvironment) {
-            EnhancedCaptureConsent.REJECTED
-        } else {
-            cn.song.mybatisplus.visualizer.config.EnhancedCaptureConfirmDialog.confirmOutcome(null)
-        }
     }
 
     /** 实际挂载（阻塞等待与 attach 全链在单线程 executor；T-PS4-03：pid 解析与排队去抖前移到请求线程）。 */
@@ -1074,29 +771,25 @@ class AgentManager(private val project: Project) : Disposable {
 
     /**
      * premain 注入准备（`PremainRunConfigurationExtension.updateJavaParameters` 的唯一入口）：
-     * 过四道闸门 → 产出 `-javaagent:…` VM 选项字符串，null = 本次不注入。
+     * 过三道闸门 → 产出 `-javaagent:…` VM 选项字符串，null = 本次不注入。
      *
-     * 闸门顺序与副作用解耦（零劣化的关键）：开关/确认两道为假时**不提取 jar、不协商端口**——
+     * 闸门顺序与副作用解耦（零劣化的关键）：开关为假时**不提取 jar、不协商端口**——
      * 这两步在未开启态纯属浪费（且端口协商会开 ServerSocket）。判定本身走纯函数
      * [PremainInjection.decide]，此处只负责按序求值事实与打日志。
      *
-     * 注意确认闸门：本入口只读不弹——未确认态不注入。知情同意的前置弹出由调用方
-     * （[PremainRunConfigurationExtension]）在调用本方法前走 [ensureConfirmedBeforePremain]
-     * （T-FirstUsePremainConsent S1）；EDT/headless 前提不成立的路径回落既有 attach 链确认
-     * （[onProcessAppeared]），attach 兜底挂载成功后由能力边界通知如实告知捕获范围
-     * （[notifyAttachFallbackOnce]，S2）。
+     * T-EnhancedCaptureDefaultOn（2026-10-19）：注入确认闸门已移除——开关打开即注入，
+     * 不再有 confirmed 前置条件，也不再有弹窗与 EDT 依赖。
      */
     internal fun preparePremainVmOption(): String? {
         val enabled = isEnhancedEnabled()
-        val confirmed = isEnhancedConfirmed()
-        if (!enabled || !confirmed) {
-            val reason = (PremainInjection.decide(enabled, confirmed) as PremainInjection.Decision.Skip).reason
+        if (!enabled) {
+            val reason = (PremainInjection.decide(false) as PremainInjection.Decision.Skip).reason
             LOG.info("premain 注入跳过：$reason（不提取 jar、不协商端口）")
             return null
         }
         val jar = extractPremainAgentJar()
         val port = if (jar != null) openPremainChannel() else null
-        return when (val decision = PremainInjection.decide(true, true, jar != null, port)) {
+        return when (val decision = PremainInjection.decide(true, jar != null, port)) {
             is PremainInjection.Decision.Inject -> {
                 LOG.info("premain 注入：端口 ${decision.port} 已前置协商（agent 回连前不阻塞用户 Run）")
                 // T-StackHoverUi：-javaagent 选项随带调用栈快照帧数预算（premain 场景无 attach 二次下发）
@@ -1581,8 +1274,6 @@ class AgentManager(private val project: Project) : Disposable {
     internal fun statusSummary(): String? = agentStatusText(
         AgentStatusSnapshot(
             enabled = isEnhancedEnabled(),
-            confirmed = isEnhancedConfirmed(),
-            rejectCooldownRemainingMs = remainingRejectCooldownMs(),
             // T-ReachAudit T-RA-01：只把**健康**会话算作「已挂载」——半死会话（socket 在、心跳停）
             // 若仍显示「已挂载 pid=…」，用户会以为捕获正常，实际两条通道都已零产出
             livePids = sessions.filter { isSessionHealthy(it) }.map { it.pid },
@@ -1646,17 +1337,19 @@ class AgentManager(private val project: Project) : Disposable {
         attachPorts.entries.removeIf { e -> !isProcessAlive(e.key) }
     }
 
-    private fun isEnhancedActive(): Boolean = isEnhancedEnabled() && isEnhancedConfirmed()
+    /**
+     * 增强捕获当前是否生效。
+     *
+     * T-EnhancedCaptureDefaultOn（2026-10-19）：授权语义已收敛到总开关，本入口与
+     * [isEnhancedEnabled] 等价；保留独立名字是为了让调用点继续表达「生效」而非「配置开」。
+     */
+    private fun isEnhancedActive(): Boolean = isEnhancedEnabled()
 
-    /** 开关已开且项目未销毁（不含确认态）。 */
+    /** 开关已开且项目未销毁。 */
     internal fun isEnhancedEnabled(): Boolean {
         val state = PluginSettings.getInstance().state
         return state.enhancedCaptureEnabled && !project.isDisposed
     }
-
-    /** 注入确认已达成（同意过一次即持久为 true）。 */
-    internal fun isEnhancedConfirmed(): Boolean =
-        PluginSettings.getInstance().state.enhancedCaptureConfirmed
 
     /**
      * 关闭并摘除单个通道（T-AgentReconnect T-03 单一收口出口）：关监听 socket（阻塞中的 accept
@@ -1811,13 +1504,6 @@ class AgentManager(private val project: Project) : Disposable {
         closePremainChannels()
         LOG.info("onRunEnded: 本次运行结束——关闭 $closed 个 premain 通道（该轮不再等重连）")
     }
-
-    /**
-     * T-CaptureTruth T-CT-02：是否处于「开关开着但未授权」（含拒绝冷却期）——设置页据此露出
-     * 重新授权按钮。区别于 [isEnhancedActive]：未授权态下增强功能实际不工作，状态行与按钮
-     * 就是为了把这一真相摆到用户面前。
-     */
-    internal fun needsReauthorization(): Boolean = isEnhancedEnabled() && !isEnhancedConfirmed()
 
     /** 关闭开关：CONFIG 下发停采集（禁用不卸载语义）→ 会话关闭 → 桥回落。 */
     fun shutdownAll() {

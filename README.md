@@ -117,7 +117,7 @@ Claude Code、Cursor、JetBrains AI Assistant 等客户端可经 IDEA MCP Server
 
 ### 运行期：捕获、筛选、溯源与历史
 
-- **增强捕获**：启用或首次打开未授权项目时先确认，再向应用 JVM 接入 agent。正常随应用启动的通道可采集启动期 SQL；对已运行应用的热挂载能力受驱动与语句创建时机限制，必要时重启应用完整采集。默认不脱敏，可在设置中开启参数打码。
+- **增强捕获**：默认开启，无需确认即向应用 JVM 接入 agent；可在设置页关闭并回落控制台捕获。正常随应用启动的通道可采集启动期 SQL；对已运行应用的热挂载能力受驱动与语句创建时机限制，必要时重启应用完整采集。默认不脱敏，可在设置中开启参数打码。
 - **控制台回落**：支持 MyBatis、Hibernate、JdbcTemplate 日志；按线程分桶还原并发日志。ShardingSphere 的 Logic SQL 可作为主语句，Actual SQL 作为路由附注；「日志 → SQL」页签支持粘贴整段日志或主动点击「从剪贴板读取」。
 - **新版列表**：SQL 高亮跟随 IDE 编辑器配色；单击只选中，底部快速预览按需打开，双击打开完整弹窗。支持类型筛选、搜索与大小写开关、多选复制、慢查询筛选、同结构聚类和按目标库分组。手动向上浏览暂停跟随，点击「滚动到底部」恢复。
 - **降噪与定位**：精确 / 结构匹配屏蔽刷屏 SQL；同模板计数辅助排查 N+1。可按调用方法、请求或模板聚焦；增强捕获使用真实调用栈定位，JAR 业务包可单独登记，避免跳转停在框架入口。
@@ -153,7 +153,7 @@ Claude Code、Cursor、JetBrains AI Assistant 等客户端可经 IDEA MCP Server
 1. 在 `Settings → Plugins → Marketplace` 搜索 **SQL Visualizer**，或打开 [插件市场页面](https://plugins.jetbrains.com/plugin/33633-sql-visualizer) 安装。
 2. 打开业务工程，在可识别的 Wrapper、Mapper XML、注解或 JPA 查询旁点击预览图标；也可按 `Alt+Shift+Q`（macOS 为 `Option+Shift+Q`）。
 3. 在预览左侧切换条件、填写参数，右侧查看或复制 SQL。需要执行时先在 Database 工具窗口配置数据源。
-4. 要查看真实执行，在增强捕获提示中确认接入，然后运行应用；在「SQL Visualizer」工具窗口查看日志。若不使用增强捕获，可开启应用 SQL 日志后使用控制台通道。
+4. 要查看真实执行，直接运行应用即可（增强捕获默认开启）；在「SQL Visualizer」工具窗口查看日志。若在设置中关闭了增强捕获，可开启应用 SQL 日志后使用控制台通道。
 
 SQL → Java 的快捷键为 `Alt+Shift+J`。快捷键可在 Keymap 或插件设置页修改；预览图标可按 Wrapper、XML、注解、JPA / HQL 等来源分组开关。
 

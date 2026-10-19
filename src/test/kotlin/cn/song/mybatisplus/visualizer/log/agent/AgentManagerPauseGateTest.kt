@@ -161,21 +161,17 @@ class AgentManagerPauseGateTest : BasePlatformTestCase() {
         assertEquals("恢复后不得计暂停丢弃", 0L, session.pausedDropped.get())
     }
 
-    // ---------- ② V80③ 三态状态机：暂停与冷却/总开关/确认态正交 ----------
+    // ---------- ② V80③ 状态机：暂停与总开关正交 ----------
 
-    /** 暂停只动 userPaused，不动总开关/确认态/拒绝冷却（V80③ 排查结论：与 24h 冷却正交）。 */
-    fun test暂停_不动总开关与确认态与冷却() {
+    /** 暂停只动 userPaused，不动总开关（T-EnhancedCaptureDefaultOn：确认/冷却语义已移除）。 */
+    fun test暂停_不动总开关() {
         val manager = freshManager()
         val state = PluginSettings.getInstance().state
         val enabledBefore = state.enhancedCaptureEnabled
-        val confirmedBefore = state.enhancedCaptureConfirmed
-        val rejectedBefore = state.enhancedCaptureRejectedAtMs
 
         manager.setUserPaused(true)
 
         assertEquals("暂停不得动总开关", enabledBefore, state.enhancedCaptureEnabled)
-        assertEquals("暂停不得动确认态", confirmedBefore, state.enhancedCaptureConfirmed)
-        assertEquals("暂停不得动拒绝冷却（冷却只作用于确认弹窗频率）", rejectedBefore, state.enhancedCaptureRejectedAtMs)
     }
 
     /** 关开关（shutdownAll）复位用户暂停——不残留「暂停中但开关已关」的悬空态。 */

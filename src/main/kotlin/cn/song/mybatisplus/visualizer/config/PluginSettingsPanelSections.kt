@@ -587,19 +587,10 @@ internal fun PluginSettingsPanel.buildSections(panel: JPanel) {
             // M56 T-M56-08：增强捕获设置（捕获通道类设置与源码位置捕获同组）
             addRow(p, g, "", enhancedCaptureCheck.apply {
                 text = MpSqlVisualizerBundle.message("settings.enhancedCapture")
+                toolTipText = MpSqlVisualizerBundle.message("settings.enhancedCapture.tip")
                 addActionListener {
-                    if (isSelected && !PluginSettings.getInstance().state.enhancedCaptureConfirmed) {
-                        // T-M56-08：首次启用弹注入确认（确认记忆持久化，重开不弹）
-                        if (EnhancedCaptureConfirmDialog.confirm(null)) {
-                            PluginSettings.getInstance().state.enhancedCaptureConfirmed = true
-                        } else {
-                            isSelected = false
-                        }
-                        // T-ConsentTruth T-CN-03：确认结果直接写全局 state，不经过 AgentManager 的
-                        // 状态广播——不在这里补一次刷新的话，五态状态行会停在旧文案（如仍显示
-                        // 「未授权注入——下次启动主配置时会询问」），直到下一次 attach/掉线才纠正。
-                        refreshEnhancedStatusLabel()
-                    }
+                    // T-EnhancedCaptureDefaultOn：勾选即授权，不再弹注入确认；只刷新状态行。
+                    refreshEnhancedStatusLabel()
                 }
             })
             addRow(p, g, "", enhancedDesensitizeCheck.apply { text = MpSqlVisualizerBundle.message("settings.enhancedCapture.desensitize") })
@@ -613,11 +604,6 @@ internal fun PluginSettingsPanel.buildSections(panel: JPanel) {
                 toolTipText = MpSqlVisualizerBundle.message("settings.enhancedCapture.stackMaxFrames.tip")
             })
             addRow(p, g, "", enhancedStatusLabel)
-            // T-CaptureTruth T-CT-02：重新授权入口（仅未授权态可见，文本随语言重建刷新）
-            addRow(p, g, "", enhancedReauthButton.apply {
-                text = MpSqlVisualizerBundle.message("settings.enhancedCapture.reauth")
-                toolTipText = MpSqlVisualizerBundle.message("settings.enhancedCapture.reauth.tip")
-            })
             // T-SourceJumpFunnel P1-3：帧过滤前缀（自研框架包名登记，热下发 agent）
             frameSkipPrefixesField.apply {
                 text = PluginSettings.getInstance().state.sourceFrameSkipPrefixes
