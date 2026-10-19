@@ -193,15 +193,22 @@
 
 ### 真机走查（243 沙盒，2026-10-19）
 
-- 沙盒 `build/MPSV-MasterMerge-UI243` 用 dev 包启动；在役 jar（17:49）已核含 `PreviewSideQuery`/`ExplainPlanDialog` 与 `panel.explain.openConsole`、`panel.backToPreview`、`dml.impact.*` 文案。
-- **执行计划**：在 SELECT 预览点「执行计划」，出现独立的「执行计划」窗口（490,207,1430,873），预览窗口仍在；对话框显示本地化「在控制台打开」按钮。实际计划被沙盒数据源凭据阻断（`Access denied for user 'root'@'localhost' (using password: NO)`；demo 配置为 root/root），属环境凭据未配置，不是插件路径失败。
-- **执行 SQL / 返回预览**：点「在控制台打开」后控制台嵌入，出现「当前显示执行结果；返回预览可继续编辑原 SQL」头部和「返回预览」按钮；沙盒连接仍被同一凭据问题阻断。旧包点返回只重渲染 SQL、头部仍在，本轮已改为 `backToPreview()` 移除头部（headless `ConsoleHostTest` 9/0 覆盖）。
+**第一轮（17:49 包）**
+
+- 沙盒 `build/MPSV-MasterMerge-UI243` 用 dev 包启动；在役 jar 已核含 `PreviewSideQuery`/`ExplainPlanDialog` 与 `panel.explain.openConsole`、`panel.backToPreview`、`dml.impact.*` 文案。
+- **执行计划**：在 SELECT 预览点「执行计划」，出现独立的「执行计划」窗口（490,207,1430,873），预览窗口仍在；对话框显示本地化「在控制台打开」按钮。实际计划被沙盒数据源凭据阻断（`Access denied for user 'root'@'localhost' (using password: NO)`；demo 配置为 root/root）。
+- **执行 SQL / 返回预览**：点「在控制台打开」后控制台嵌入，出现「当前显示执行结果；返回预览可继续编辑原 SQL」头部和「返回预览」按钮。旧包点返回只重渲染 SQL、头部仍在，本轮已改为 `backToPreview()` 移除头部（headless `ConsoleHostTest` 9/0 覆盖）。
 - **预估影响行数**：在 SELECT 预览点该动作，左侧内联行显示红色「仅 UPDATE/DELETE 语句有影响面预演」，编辑器未被 COUNT 顶掉（NotApplicable 路径真机通过）。
-- 成功 COUNT 的真机路径未完成：沙盒数据源无密码（Access denied），且 `mybatis-plus-demo`/临时夹具里的简单 UPDATE 调用在该沙盒未被预览定位器识别；成功路径由 `DmlImpactSideQueryPanelTest` 5/0 的测试缝覆盖，`McpDbExecutor` 真实连库仍待有凭据的真机补验。
+
+**第二轮（18:14 包，含 `a93bf7ca`）**
+
+- 用 `mpsv-walk-proj` 重启沙盒，并在数据源 `mpj_demo@localhost` 上通过「Change Credentials」把口令存为 root/root。重跑控制台 SELECT 后错误从 `Access denied ... (using password: NO)` 变为 `[42S22][1054] Unknown column 'username' in 'field list'`——**凭据链路已通，SQL 已真正到达 MySQL**（mpj_demo 的 `user` 表没有 username 列，属夹具表结构不匹配）。
+- 成功 COUNT / EXPLAIN 仍未取到：该工程里 `userMapper.delete(...)` wrapper 链与 `ProbeMapper.deleteMysqlUserById` 注解（gutter 图标可见）在该沙盒均未打开预览，`Alt+Shift+Q` 提示「未在光标处找到可预览的 SQL 源」，因此没有可估算的 DML 预览对象。这是预览定位器的独立问题，不是本次改动路径的失败；`mybatis-plus-demo` 模块的 Maven 依赖在该沙盒同样未解析完整，未作为替代入口。
+- `backToPreview()` 的头部移除逻辑本轮未能在新包上复现点击走查（同因无法打开执行入口）；该分支由 `ConsoleHostTest` 9/0 与反向（删头部 → 2 红）覆盖。
 
 ### 边界与未做
 
 - 无绑定数据源路径已实现「选择器只绑定 + 绑定后重试」；用户取消/超时/绑定失败时只就地提示，不自动执行任何 SQL。
 - P3b（页签式结果区）未实施；执行 SQL 仍是「控制台结果视图 + 返回预览」。
-- 真机走查为**部分通过**：EXPLAIN 对话框、执行视图头部/返回入口、预估 NotApplicable 已验证；成功 COUNT 受沙盒数据源凭据阻断，待有口令的环境补验。
+- 真机走查为**部分通过**：EXPLAIN 对话框/失败对话框文案、执行视图头部与返回入口、预估 NotApplicable 已验证；**成功 COUNT/EXPLAIN 的端到端未被真机取证**——凭据已通（错误推进到列不存在），但沙盒工程打不开 DML 预览；成功路径由 `DmlImpactSideQueryPanelTest` 5/0、`ExplainSideQueryPanelTest` 2/0 的测试缝覆盖，`McpDbExecutor` 真实连库仍待可打开预览的真机补验。
 - 定向测试中的 `McpDbExecutor` 通过 `PreviewSideQuery.runnerForTest` 桩替换；真实执行链未在 headless 下连库。
