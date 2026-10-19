@@ -200,15 +200,18 @@
 - **执行 SQL / 返回预览**：点「在控制台打开」后控制台嵌入，出现「当前显示执行结果；返回预览可继续编辑原 SQL」头部和「返回预览」按钮。旧包点返回只重渲染 SQL、头部仍在，本轮已改为 `backToPreview()` 移除头部（headless `ConsoleHostTest` 9/0 覆盖）。
 - **预估影响行数**：在 SELECT 预览点该动作，左侧内联行显示红色「仅 UPDATE/DELETE 语句有影响面预演」，编辑器未被 COUNT 顶掉（NotApplicable 路径真机通过）。
 
-**第二轮（18:14 包，含 `a93bf7ca`）**
+**第二轮（18:14 包，含 `a93bf7ca`）：成功路径已真机取证**
 
-- 用 `mpsv-walk-proj` 重启沙盒，并在数据源 `mpj_demo@localhost` 上通过「Change Credentials」把口令存为 root/root。重跑控制台 SELECT 后错误从 `Access denied ... (using password: NO)` 变为 `[42S22][1054] Unknown column 'username' in 'field list'`——**凭据链路已通，SQL 已真正到达 MySQL**（mpj_demo 的 `user` 表没有 username 列，属夹具表结构不匹配）。
-- 成功 COUNT / EXPLAIN 仍未取到：该工程里 `userMapper.delete(...)` wrapper 链与 `ProbeMapper.deleteMysqlUserById` 注解（gutter 图标可见）在该沙盒均未打开预览，`Alt+Shift+Q` 提示「未在光标处找到可预览的 SQL 源」，因此没有可估算的 DML 预览对象。这是预览定位器的独立问题，不是本次改动路径的失败；`mybatis-plus-demo` 模块的 Maven 依赖在该沙盒同样未解析完整，未作为替代入口。
-- `backToPreview()` 的头部移除逻辑本轮未能在新包上复现点击走查（同因无法打开执行入口）；该分支由 `ConsoleHostTest` 9/0 与反向（删头部 → 2 红）覆盖。
+- 沙盒沿用 `MPSV-MasterMerge-UI243` 配置（在役 jar 18:14 已核含 `PreviewSideQuery`）。`mpsv-walk-proj` 只有 `mpsv-walk-probe` 一个模块，Go to Class 搜不到 demo 控制器，故改用探针源码 + gutter 图标进入预览。
+- 数据源：在 `.idea/dataSources.xml` 里加 `mpj_demo@localhost`（MySQL 8，JDBC URL 带 `user=root&password=root`），无需再走 Change Credentials；预览面板的数据源标签显示 `mpj_demo@localhost`。
+- **预估影响行数（成功 COUNT）**：`MpjProbeService.deleteOne()` 的 `userMapper.delete(...eq(id, 2))` 经 gutter 打开 DELETE 预览，更多 → 预估影响行数，左侧内联行显示 **`预估影响行数：1`**，参数面板与编辑器仍为原 DELETE，未被 COUNT 顶掉；通知区显示试算语句 `SELECT COUNT(*) FROM user WHERE id = 2`。DBX 直查 `mpj_demo.user WHERE id = 2` 同为 **1** 行（`id = 1` 时为 0，与更早一次内联读数一致），读数闭合。
+- **执行计划（成功 EXPLAIN）**：`MpjProbeService.selectOne()` 的 SELECT 链预览 SQL 为 `SELECT id,name,age,sex,head_img FROM user WHERE id = 1`，点「执行计划」弹出独立窗口，标题行 **`EXPLAIN · MySQL · mpj_demo@localhost · 78 ms`**，计划表 `SIMPLE / user / rows=1`，并提示「计划已保存到 SQL 历史（每条最多 5 份）」；原预览窗口仍在（P2 成立）。
+- 过程中先用了列面为 `username/password/email` 的 `probe/User`，EXPLAIN 返回 `Unknown column 'username' in 'field list'`——这本身证明旁路查询已真正连到 `mpj_demo`；换成与 `mpj_demo.user` 列面一致的临时实体后成功。临时实体与两个探针源码已删除，`.idea` 数据源块已还原。
+- entry 细节：`Alt+Shift+Q` 在注解字符串内会落到 SQL 注入片段、报「未在光标处找到可预览的 SQL 源」（既有独立缺口）；gutter 图标需点到像素中心才能打开预览，这是本轮走查的定位口径。
 
 ### 边界与未做
 
 - 无绑定数据源路径已实现「选择器只绑定 + 绑定后重试」；用户取消/超时/绑定失败时只就地提示，不自动执行任何 SQL。
 - P3b（页签式结果区）未实施；执行 SQL 仍是「控制台结果视图 + 返回预览」。
-- 真机走查为**部分通过**：EXPLAIN 对话框/失败对话框文案、执行视图头部与返回入口、预估 NotApplicable 已验证；**成功 COUNT/EXPLAIN 的端到端未被真机取证**——凭据已通（错误推进到列不存在），但沙盒工程打不开 DML 预览；成功路径由 `DmlImpactSideQueryPanelTest` 5/0、`ExplainSideQueryPanelTest` 2/0 的测试缝覆盖，`McpDbExecutor` 真实连库仍待可打开预览的真机补验。
-- 定向测试中的 `McpDbExecutor` 通过 `PreviewSideQuery.runnerForTest` 桩替换；真实执行链未在 headless 下连库。
+- 真机走查：预估成功 COUNT（1 行，DBX 对账一致）与 EXPLAIN 成功路径（MySQL · 78 ms）均已取证；`backToPreview()` 的头部移除仍由 `ConsoleHostTest` 9/0 与反向（删头部 → 2 红）覆盖，本轮未再点执行入口复验。
+- 定向测试中的 `McpDbExecutor` 通过 `PreviewSideQuery.runnerForTest` 桩替换；真机侧已由上面的 COUNT/EXPLAIN 补上真实连库证据。
