@@ -80,9 +80,9 @@ T-FP-01（判据纯函数）→ T-FP-02（子集落地，执行链 → agent 链
 
 | 任务 | 提交 | 说明 / 偏离 |
 |------|------|------|
-| T-FP-01 | `5cc0710` | `util/FatalErrors.kt`：`isFatal` 纯函数，白名单 `VirtualMachineError`/`LinkageError`/`ThreadDeath`（KDoc 逐类说明为何不该吞，并写明「其余 Error（如 AssertionError）刻意不算 fatal」）。用例 `FatalErrorsTest` 5 例（表驱动三类及子类 true / 普通异常与白名单外 Error false / **真递归撞栈**得到的真实 `StackOverflowError` / 反射 `InvocationTargetException` 须解包后判 / 形态 A 片段只放行 fatal）。 |
-| T-FP-02 | `e2517bf` | 形态 A（`if (FatalErrors.isFatal(t)) throw t`）落地 **30 处 / 3 文件**：`execute/DataSourceSelector.kt` 13、`log/agent/AgentManager.kt` 10、`log/RunConfigurationProcessListener.kt` 7。原生执行链的捕获点先解包 `InvocationTargetException.targetException` 再判（只判外层会漏判目标方法抛出的 fatal）。行为用例 `FatalPassthroughTest` 3 例（`AgentSession.sendConfig` 站点：真 SOE 与 `NoClassDefFoundError` 原样透传且**不执行降级副作用**——`alive` 不置 false、不触发状态回调；`IOException` 仍 `alive=false` + 状态回调，防「顺手全改」回归）。 |
-| T-FP-03 | `4147432` | 守卫落在 `convention/BannedApiSourceScanTest.kt`（同文件 T-FS-06 已重构完毕，串行约束满足）：扫全部 `catch (…: Throwable)` 块（嵌套块独立成站点、注释与字符串经 `maskNonCode` 涂白），要求块内出现 `FatalErrors.isFatal(` 或文件在豁免表登记。**豁免 44 处 / 18 文件**（文件 + 站点数 + 理由；逐处行号清单在 `fatalPassthroughOffenders` KDoc）；已落地 3 文件不得进豁免表且站点须全带判定；另设反射解包锚点。**先红后绿实录**：临时移除 `RunConfigurationProcessListener.kt:88` 判定 → 守卫红（报「命中 1 处：[…RunConfigurationProcessListener.kt:88]」），还原后绿；行为用例同样先红（移除 `AgentManager` `sendConfig` 判定 → 2 例红、`IOException` 例仍绿）。自证用例覆盖三态 + 边界（嵌套内层、注释里的判定字样、`catch (…: Exception)`、Java 模板字符串里的 `catch (Throwable t)`）。 |
+| T-FP-01 | `61ebce0` | `util/FatalErrors.kt`：`isFatal` 纯函数，白名单 `VirtualMachineError`/`LinkageError`/`ThreadDeath`（KDoc 逐类说明为何不该吞，并写明「其余 Error（如 AssertionError）刻意不算 fatal」）。用例 `FatalErrorsTest` 5 例（表驱动三类及子类 true / 普通异常与白名单外 Error false / **真递归撞栈**得到的真实 `StackOverflowError` / 反射 `InvocationTargetException` 须解包后判 / 形态 A 片段只放行 fatal）。 |
+| T-FP-02 | `349717b` | 形态 A（`if (FatalErrors.isFatal(t)) throw t`）落地 **30 处 / 3 文件**：`execute/DataSourceSelector.kt` 13、`log/agent/AgentManager.kt` 10、`log/RunConfigurationProcessListener.kt` 7。原生执行链的捕获点先解包 `InvocationTargetException.targetException` 再判（只判外层会漏判目标方法抛出的 fatal）。行为用例 `FatalPassthroughTest` 3 例（`AgentSession.sendConfig` 站点：真 SOE 与 `NoClassDefFoundError` 原样透传且**不执行降级副作用**——`alive` 不置 false、不触发状态回调；`IOException` 仍 `alive=false` + 状态回调，防「顺手全改」回归）。 |
+| T-FP-03 | `c1a5b90` | 守卫落在 `convention/BannedApiSourceScanTest.kt`（同文件 T-FS-06 已重构完毕，串行约束满足）：扫全部 `catch (…: Throwable)` 块（嵌套块独立成站点、注释与字符串经 `maskNonCode` 涂白），要求块内出现 `FatalErrors.isFatal(` 或文件在豁免表登记。**豁免 44 处 / 18 文件**（文件 + 站点数 + 理由；逐处行号清单在 `fatalPassthroughOffenders` KDoc）；已落地 3 文件不得进豁免表且站点须全带判定；另设反射解包锚点。**先红后绿实录**：临时移除 `RunConfigurationProcessListener.kt:88` 判定 → 守卫红（报「命中 1 处：[…RunConfigurationProcessListener.kt:88]」），还原后绿；行为用例同样先红（移除 `AgentManager` `sendConfig` 判定 → 2 例红、`IOException` 例仍绿）。自证用例覆盖三态 + 边界（嵌套内层、注释里的判定字样、`catch (…: Exception)`、Java 模板字符串里的 `catch (Throwable t)`）。 |
 | T-FP-04 | 见本文件所在提交 | 未收口点登记位置 = 守卫 `throwableCatchExemptions`（44 处 / 18 文件，逐条理由；**T-FP-02b 后为 43 处 / 17 文件**——`ui/SqlPreviewService.kt` 收口移入已落地表，见 §十）+ 本表；「四通道职责 + fatal 透传约定」落在 `util/FatalErrors.kt` KDoc。计划 §T-FP-04①（`docs/架构设计/` 错误通道一节）与 ③（CHANGELOG `[Unreleased]` + 变更记录行 + 第八轮报告 Z-21 备注）落在**写集外文件**，未改——见 §九。 |
 
 ## 九、实施后补充（偏离与未验证项）
@@ -130,7 +130,7 @@ T-FP-01（判据纯函数）→ T-FP-02（子集落地，执行链 → agent 链
 
 ### 10.2 阻断 2：§九 残留枚举与写集归属不实
 
-**订正内容**：初版 §九「已核实的具体残留（**均在写集外**，未改）」的写集归属错误——同族 `runCatching` 抵消点实际分布如下（行号为 2026-09-19 复核时 HEAD `c21e331` 的基线行号；括注为 T-FP-02b 改动后的最终行号）：
+**订正内容**：初版 §九「已核实的具体残留（**均在写集外**，未改）」的写集归属错误——同族 `runCatching` 抵消点实际分布如下（行号为 2026-09-19 复核时 HEAD `8148305` 的基线行号；括注为 T-FP-02b 改动后的最终行号）：
 
 | # | 抵消点（最终行号） | 被抵消的透传 | 写集 | 处置 |
 |---|---|---|---|---|

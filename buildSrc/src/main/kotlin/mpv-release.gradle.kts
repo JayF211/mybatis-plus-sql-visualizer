@@ -4,7 +4,7 @@ plugins {
     id("org.jetbrains.intellij.platform")
 }
 
-// T-BuildScriptSplit：发版链路分治——块级逐字搬运自根 build.gradle.kts（锚点 dc047bd），
+// T-BuildScriptSplit：发版链路分治——块级逐字搬运自根 build.gradle.kts（锚点 4c3e268），
 // 注释随迁；验收=buildPlugin 产物 plugin.xml 与基线字节比对。
 
 tasks {

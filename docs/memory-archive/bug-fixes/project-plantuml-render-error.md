@@ -40,7 +40,7 @@ PlantUML JOIN 图渲染问题（2026-08-23~25 持续调试，**本文件记录�
 - 根因：`IllegalAccessError` 是 `Error` 非 `Exception`，`catch (e: Exception)` 捕获不到
 - 修复：`catch (e: Throwable)` + `renderWithFallback()` PNG→SVG 降级
 
-## 最终代码状态（commit 4737dd5）
+## 最终代码状态（commit 3936207）
 
 - `JoinDiagramGenerator.kt`：移除 `!theme plain`
 - `SqlPreviewService.kt`：`previewModel` 始终非 null

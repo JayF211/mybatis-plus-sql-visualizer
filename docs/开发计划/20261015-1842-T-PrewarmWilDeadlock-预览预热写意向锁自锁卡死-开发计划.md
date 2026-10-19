@@ -3,7 +3,7 @@
 - 日期：2026-10-15
 - 任务码：T-PrewarmWilDeadlock
 - 工作树：`F:/code/Java/Gitee/SongRenShuo/mybatis-plus-sql-visualizer-prewarm-wil`（已删除，实施完毕）
-- 分支：`t-prewarm-wil-deadlock`（自 master@3588b04c，已 ff 并入 master `eae26483`，分支已删）
+- 分支：`t-prewarm-wil-deadlock`（自 master@cf093188，已 ff 并入 master `ee828397`，分支已删）
 - 状态：已实施、已验证、已合 master（实施记录见文末）
 - 合并说明：本档吸收了同日另一会话的排查档 `20261015-1830-T-SqlPreviewPrepareFreeze`（原文件已删除）。
   该档立项早于线程转储到位，其主嫌疑（schema 遍历长读挡写锁）后被证伪；其中仍有长期价值的
@@ -37,10 +37,10 @@
 - 会话推进需要 WIL 空闲（及/或 EDT 推进），而 WIL 被等待者自己持有——自锁；用户此时在预览编辑器上点击，
   EDT 也排进等 WIL 队列，互等扩大为全 IDE 冻结。
 
-**引入史**：T-ExecCopyFix F2b（27799c37）为修「262 平台 EDT + plain ReadAction 内同步 refresh 硬抛
+**引入史**：T-ExecCopyFix F2b（642d73ba）为修「262 平台 EDT + plain ReadAction 内同步 refresh 硬抛
 write thread only」，给 **EDT 冷路径** `createTempPsiFile` 的 refresh 段包了 WIRA——该语境安全（EDT 持
-WIL 时刷新会话在调用线程同步处理）。随后 T-ExecSlowOps（1198fee5）把预热链整体搬到 BGT，从冷路径
-**同款复制**了 WIRA 包装（`git show 1198fee5` L3164-3170 实证预热链生而带 WIRA），自锁自此埋下。
+WIL 时刷新会话在调用线程同步处理）。随后 T-ExecSlowOps（c27ff317）把预热链整体搬到 BGT，从冷路径
+**同款复制**了 WIRA 包装（`git show c27ff317` L3164-3170 实证预热链生而带 WIRA），自锁自此埋下。
 243 定向测试跑不出 262 NestedLocksThreadingSupport 语义，故从未暴露。
 
 ## 3. 待验证前提

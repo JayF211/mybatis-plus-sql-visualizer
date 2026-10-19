@@ -1,7 +1,7 @@
 # T-ExecSilentNoop：预览面板首次执行 SQL 静默不执行、误报凭据提示（根因定位与治理）开发计划
 
 > **创建日期**：2026-09-10
-> **分支**：master（HEAD `299607e`；工作树另有 T-PreviewTopOverlap / T-VStack 会话在途改动——`SqlPreviewPanel.kt`、bundle 正在被改，本计划 F3 若要动面板元信息行须排在其后）
+> **分支**：master（HEAD `8afe07a`；工作树另有 T-PreviewTopOverlap / T-VStack 会话在途改动——`SqlPreviewPanel.kt`、bundle 正在被改，本计划 F3 若要动面板元信息行须排在其后）
 > **优先级**：P1（主链路可用性缺陷：点「执行 SQL」什么都不发生，且提示把用户引向错误方向）
 > **预估工时**：F1+F2 共 5~6h（埋点 + 执行回执 + 提示分流，必做，第一笔提交）；F3 数据源绑定 3~4h、F4 执行范围 2~3h（第二笔，视 F1 结论取舍）
 > **来源**：用户真机反馈（2026-09-10）——点「执行 SQL」第一次弹出「执行超时，可能是密码过期或驱动未下载……」；关闭面板重新打开预览后第二次执行，密码框正常弹出、查询正常返回。沙盒日志 `.intellijPlatform/sandbox/mybatis-plus-sql-visualizer/IU-2024.3.7.1/log/idea.log` 09:10:43~09:11:37 完整记录两次执行，本文全部结论出自该日志与 DBN 字节码，无推测成分的部分都标了证据行

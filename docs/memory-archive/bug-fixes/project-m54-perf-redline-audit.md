@@ -8,7 +8,7 @@ metadata:
   originSessionId: sess_d9b78293-002f-4e38-aad5-4c0dc19f0de2
 ---
 
-2026-09-05 用户提出性能红线要求（禁卡死/禁拖慢 IDEA/禁插件报错弹窗），五子智能体并行审查 236 源文件定稿计划 `docs/开发计划/20260905-1024-插件性能红线全面治理-开发计划.md`（M54，T-Perf-01~24 四波），随后**单个 general-purpose 子智能体在 worktree `F:/code/Java/Gitee/SongRenShuo/mpsv-perf`（分支 `perf/redline-hardening`，基线 master 37027d5）实施全部 24 任务并完成验收**。
+2026-09-05 用户提出性能红线要求（禁卡死/禁拖慢 IDEA/禁插件报错弹窗），五子智能体并行审查 236 源文件定稿计划 `docs/开发计划/20260905-1024-插件性能红线全面治理-开发计划.md`（M54，T-Perf-01~24 四波），随后**单个 general-purpose 子智能体在 worktree `F:/code/Java/Gitee/SongRenShuo/mpsv-perf`（分支 `perf/redline-hardening`，基线 master 44e8eb2）实施全部 24 任务并完成验收**。
 
 **Why:** 24 任务交付对应 28 提交（24 任务 + 3 回归修复 + 1 docs 变更记录）；全量 test 0 失败（3084 用例，6 跳过为 Docker 条件测试——计划里"基线 3321"是含 testDatabase 集成测试口径，默认 test 任务本就排除）、buildPlugin 通过；grep 红线 LOG.error=0、NotificationType.ERROR=0、showErrorDialog 仅剩设置导入导出/图导出 6 处允许项。主会话独立复核（git log/status/grep/复跑 test）通过。
 

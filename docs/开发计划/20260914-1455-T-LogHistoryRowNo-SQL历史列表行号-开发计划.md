@@ -1,7 +1,7 @@
 # T-LogHistoryRowNo：SQL 历史列表行号 开发计划
 
 > **创建日期**：2026-09-14
-> **分支**：master（当前 HEAD `651cbf2`）
+> **分支**：master（当前 HEAD `d6bdbfd`）
 > **优先级**：P2（用户明确要求的新功能；改动面小，纯增量渲染，无存量行为变更）
 > **预估工时**：2h（读取层序号 + 渲染片段 1h + 测试 1h）
 > **来源**：用户需求原话——「sql历史中的sql列表 也需要显示行号」（延续 T-LogRowNumber 主列表行号后的历史面板补齐）
@@ -98,7 +98,7 @@
 
 ### 4.3 全量回归与真机
 
-- 全量基线 3228/0/0/6（master `874f257`；当前 HEAD `651cbf2` 较其又有并行会话提交，实施时以实际基线为准），新增用例净增。
+- 全量基线 3228/0/0/6（master `6876689`；当前 HEAD `d6bdbfd` 较其又有并行会话提交，实施时以实际基线为准），新增用例净增。
 - runIde 真机：历史 tab 打开某历史文件 → 二级列表显示 `#1 #2 #3...`；搜索过滤 → 行号跟随条目不变；一级文件列表无行号；与主 SQL 日志列表行号视觉一致（灰色 `#N` 前缀）。
 
 ---
@@ -123,10 +123,10 @@
 
 ## 实施记录
 
-- **交付提交**：master `dee44ae`（功能）+ `e78b151`（文档），2026-09-14
+- **交付提交**：master `9e01e26`（功能）+ `4e477f6`（文档），2026-09-14
 - **测试**：新增 8 用例（SqlLogFileReaderTest 4 / HistoryCellRendererTest 3 / SqlLogHistoryRoundTripTest 1）；定向 50/0/0；全量 4020/0/0/6 绿（sandbox-loghistrow 隔离）
 - **实施说明**：
   - 序号在 `SqlLogFileReader.parseContent` 返回前 `mapIndexed` 注入（防御已有序号不覆盖）——一处覆盖 readFromFile / readAll / 后台 keepReload 全部读取路径，旧文件零迁移；
   - `HistoryCellRenderer` 元信息行最前 `#N ` HISTORY_META_GRAY 片段（`sequenceNumber > 0` 才显示，与日志页 `LogEntryListCellRenderer` 守卫一致）；
-  - 并行会话 t-intrup（T-IntrUpg）在工作树同改 `HistorySqlLogPanel.kt` 显示模式行高逻辑，与本次渲染片段改动不同段，无冲突；其提交先落（a7bb545），本次提交干净。
+  - 并行会话 t-intrup（T-IntrUpg）在工作树同改 `HistorySqlLogPanel.kt` 显示模式行高逻辑，与本次渲染片段改动不同段，无冲突；其提交先落（fec7d33），本次提交干净。
 - **runIde 真机验证**：留人工（历史 tab 打开文件 → #1 #2 #3；搜索过滤行号跟随；一级文件列表无行号；与主列表视觉一致）。

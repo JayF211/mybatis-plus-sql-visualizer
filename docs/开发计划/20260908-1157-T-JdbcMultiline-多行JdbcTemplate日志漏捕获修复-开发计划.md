@@ -1,7 +1,7 @@
 # T-JdbcMultiline：多行 JdbcTemplate 日志漏捕获修复 开发计划
 
 > **创建日期**：2026-09-08
-> **分支**：master（当前 HEAD `86105cd`）
+> **分支**：master（当前 HEAD `7aac2cb`）
 > **优先级**：P1（用户项目实际日志整条漏捕获——COUNT 查询一条不进列表，捕获核心能力缺口）
 > **预估工时**：1.5~2h（含全量回归；runIde 真机重放用户项目人工跟进）
 > **来源**：用户反馈——一段 Spring JdbcTemplate 控制台日志没有被 SQL 日志捕获（原始样本见 §1），要求对照主 IDEA 2026.2 在售的 MyBatisCodeHelper-Pro 插件，吸收其 SQL 日志功能精华后出开发计划。对照分析已完成（§2.4），结论先行：**MyBatisCodeHelper-Pro 只支持 MyBatis `Preparing:/Parameters:` 成对格式，用户样本它同样捕获不到**；本次修复靠自己补多行缺口，对方的价值在架构与容错细节（§2.4/§3.2）。

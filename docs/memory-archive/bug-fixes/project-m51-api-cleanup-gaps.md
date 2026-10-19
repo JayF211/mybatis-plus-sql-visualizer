@@ -54,8 +54,8 @@ T-M51（废弃 API 清理与兼容性加固）已实施完成（2026-08-19），
 
 ## 提交记录
 
-- `873d848` — T-M51 主体（Java 改写 + 9 项 API 替换）
-- `4bbff37` — T-M51-01-ALT（`PluginManager.getPlugin()` 完全消除）
+- `31b5b43` — T-M51 主体（Java 改写 + 9 项 API 替换）
+- `04fcf3a` — T-M51-01-ALT（`PluginManager.getPlugin()` 完全消除）
 
 **Why:** Marketplace 阻断级修复完成，双版本 0 Internal API，可重新提交。
 

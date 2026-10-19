@@ -1,9 +1,9 @@
 # T-VStack·扩面：竖向排列覆盖 SELECT/UPDATE/DELETE 横向组开发计划
 
 > **创建日期**：2026-09-10
-> **状态**：✅ 已实施、已测试、已提交（master `b14173f`，2026-09-10；SqlFormatterTest 50/50 + SqlPreviewPanelTest 46/46 + 全量 2555/0/6 绿；runIde 真机走查留人工）
-> **分支**：master（HEAD `0a5417f`；工作树仍含 T-PreviewTopOverlap 与 T-ExecSilentNoop 两会话在途，共享文件面不变，见「五、并行协调」）
-> **优先级**：P2（延续 T-VStack 交付 `a86c615`，把「竖向排列」从 INSERT 专用扩为全语句的「逐行展开」开关）
+> **状态**：✅ 已实施、已测试、已提交（master `db140aa`，2026-09-10；SqlFormatterTest 50/50 + SqlPreviewPanelTest 46/46 + 全量 2555/0/6 绿；runIde 真机走查留人工）
+> **分支**：master（HEAD `d803a0b`；工作树仍含 T-PreviewTopOverlap 与 T-ExecSilentNoop 两会话在途，共享文件面不变，见「五、并行协调」）
+> **优先级**：P2（延续 T-VStack 交付 `6dfdf72`，把「竖向排列」从 INSERT 专用扩为全语句的「逐行展开」开关）
 > **预估工时**：4~5h（F1 通用组展开器 + F2 逐语句语境规则 + F3 测试 + F4 文档）
 > **来源**：用户决策（2026-09-10）——确认竖向排列应对 SELECT/UPDATE 同样可用（现版对这两类输出与「格式化」完全一致，悬在 INSERT 一格），裁定走扩面方案
 
@@ -11,7 +11,7 @@
 
 ## 一、现状与缺口
 
-T-VStack（`a86c615`）交付的 `formatVertical()`：首主子句 INSERT → 专用竖排（列清单 + VALUES 配对）；非 INSERT → `return format(sql)`。因此 SELECT/UPDATE/DELETE 点竖向排列**与「格式化」按钮产出逐字节相同**，无独立价值。
+T-VStack（`6dfdf72`）交付的 `formatVertical()`：首主子句 INSERT → 专用竖排（列清单 + VALUES 配对）；非 INSERT → `return format(sql)`。因此 SELECT/UPDATE/DELETE 点竖向排列**与「格式化」按钮产出逐字节相同**，无独立价值。
 
 核对 `format()` 已竖排的部分（不受本计划影响）：SELECT 列清单（:101 newline+4）、UPDATE SET 赋值清单（同 :101 + :152 逗号换行）、顶层 AND/OR 缩进（:106-115）、主子句顶格换行。
 
@@ -120,7 +120,7 @@ return if (expanded != sql) expanded else format(sql)
 
 - `docs/变更记录.md`、`docs/MEMORY.md` 变更记录行（倒序插入）；
 - 本计划 §实施记录回填；
-- 变更记录须标注「T-VStack·扩面续」以区别于 `a86c615` 首交付。
+- 变更记录须标注「T-VStack·扩面续」以区别于 `6dfdf72` 首交付。
 
 ---
 
@@ -159,7 +159,7 @@ return if (expanded != sql) expanded else format(sql)
 
 ---
 
-## 实施记录（2026-09-10 交付，master `b14173f`）
+## 实施记录（2026-09-10 交付，master `db140aa`）
 
 **与计划的偏差**：
 
@@ -180,7 +180,7 @@ return if (expanded != sql) expanded else format(sql)
 
 ---
 
-## 追加交付：IN 展开阈值（T-VStack·InThreshold，master `dc308fc`，2026-09-10）
+## 追加交付：IN 展开阈值（T-VStack·InThreshold，master `9ef6b20`，2026-09-10）
 
 **用户复议**：扩面交付后用户指出「IN 的参数单独一行是否合适」——裁定短清单竖排是负收益（占位符 `IN (?, ?, ?)` 是本插件 inList 特性主力形态，`?` 对应关系靠左侧参数面板顺序对照，竖排零增量信息、纯花行高把相邻条件推出视口）。
 

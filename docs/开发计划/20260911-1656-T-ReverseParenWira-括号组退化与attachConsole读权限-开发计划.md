@@ -1,6 +1,6 @@
 # T-ReverseParenWira：SQL 转 Java 括号组退化 + attachConsole 读权限硬抛
 
-日期：2026-09-11　基线：master 4a62cbb（v2026.9.11 发行后）
+日期：2026-09-11　基线：master 0cb95eb（v2026.9.11 发行后）
 
 ## 一、问题一：括号条件导致 MPJ lambda 形态退化
 

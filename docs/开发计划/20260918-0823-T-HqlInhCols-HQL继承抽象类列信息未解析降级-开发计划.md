@@ -11,7 +11,7 @@
 
 ## 一、背景与依据
 
-用户实测：HQL 预览出现 `列信息未解析，降级为 x.*`，怀疑与「实体类继承了父类并且还有抽象类」有关。立项后对 master（锚点 6e280f2）全链排查，降级注释唯一出处是 `SelectClauseExpander.kt:103`（`renderColumns`），触发条件是 `aliasColumns` 中该别名的列清单为 null——而列清单为 null 的唯一判据是 `table.columns.isEmpty()`（`parseAliasColumns`，SelectClauseExpander.kt:128/134）。因此**一切上游实体解析失败都汇聚到这一行注释**，本次把上游四个缺口逐一收口。
+用户实测：HQL 预览出现 `列信息未解析，降级为 x.*`，怀疑与「实体类继承了父类并且还有抽象类」有关。立项后对 master（锚点 d2f2f66）全链排查，降级注释唯一出处是 `SelectClauseExpander.kt:103`（`renderColumns`），触发条件是 `aliasColumns` 中该别名的列清单为 null——而列清单为 null 的唯一判据是 `table.columns.isEmpty()`（`parseAliasColumns`，SelectClauseExpander.kt:128/134）。因此**一切上游实体解析失败都汇聚到这一行注释**，本次把上游四个缺口逐一收口。
 
 ## 二、现状核实（master 实测，2026-09-18）
 

@@ -9,7 +9,7 @@ metadata:
   originSessionId: sess_3da5e6cf-62af-447f-aa90-8df08c999579
 ---
 
-M56 增强捕获（agent 字节码通道）一期已交付，分支 `feature/t-m56-01-agent-base`（worktree `F:/code/Java/Gitee/SongRenShuo/mpsv-m56`，基于 T-M56-00 栈式叠加，未合 master——用户要求最终自行合并）。提交：`a16122c`（agent 基座）+ `4623a12`（IDE 集成）+ `bea1751`（文档）。
+M56 增强捕获（agent 字节码通道）一期已交付，分支 `feature/t-m56-01-agent-base`（worktree `F:/code/Java/Gitee/SongRenShuo/mpsv-m56`，基于 T-M56-00 栈式叠加，未合 master——用户要求最终自行合并）。提交：`bc6351c`（agent 基座）+ `ae0c549`（IDE 集成）+ `e3f62b9`（文档）。
 
 - **agent 子项目**（`agent/`，Java 8 fat jar，无 shadow 插件——自写 RelocateAsmMain 用 ASM 重定位自身+agent 类引用）：织入=ASM Tree API 每方法出口零分支直线 invokestatic；织入期判定回调类对定义 loader 可见性（不可见整类不织入）。**AdviceAdapter 反射内联方案因帧合并/VerifyError 组合坑弃用**。
 - **关键踩坑**（细节见变更记录 2026-09-12 行）：①relocator 须同时重写 agent 类的 ASM 引用（否则 NCDFE）；②hook 须返回包装连接+checkcast（void 侧效调用包装结果被丢弃）；③instrument transform 传斜杠内部名；④fat jar 并发首定义竞争→AgentMain `<clinit>` eager 加载规避；⑤State 数据类加字段后 copy$default 增量中间态假象（全清产物复绿）。

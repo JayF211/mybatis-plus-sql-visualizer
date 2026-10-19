@@ -9,7 +9,7 @@ metadata:
 
 2026-08-16 新增 `docs/Marketplace发布流程-说明文档.md`（基于 JetBrains 官方文档查证，链接见文档 §12 附录）。
 
-**T-M51 + T-M52 废弃 API 清理完成（2026-08-19，v2026.8.19 已发行）**：Marketplace 审核拒绝后修复全部 Internal/Scheduled-for-removal API，三版本 verifyPlugin 结果 0 Internal + 0 Scheduled-removal + Deprecated 9/11/27→3/4/20。修复清单见 [[pitfall-tm51-api-cleanup]]。提交：873d848（主体）+ 4bbff37（PluginManager 消除）+ ac673b8（projectOpened 消除）+ 952b340（T-M52 deprecated 替代）。
+**T-M51 + T-M52 废弃 API 清理完成（2026-08-19，v2026.8.19 已发行）**：Marketplace 审核拒绝后修复全部 Internal/Scheduled-for-removal API，三版本 verifyPlugin 结果 0 Internal + 0 Scheduled-removal + Deprecated 9/11/27→3/4/20。修复清单见 [[pitfall-tm51-api-cleanup]]。提交：31b5b43（主体）+ 04fcf3a（PluginManager 消除）+ 22d94ed（projectOpened 消除）+ c378a5e（T-M52 deprecated 替代）。
 
 关键结论（用户首次发布，勿凭记忆重查）：
 - **双仓库方案**：官方要求开源插件源码链接公网可达，文档只举例 GitHub/GitLab 未提 Gitee → Gitee 主仓库（现状 origin）+ GitHub 镜像（`git remote add github ...`），Marketplace 源码字段填 GitHub；`scripts/push-all.sh` 双推
@@ -29,6 +29,6 @@ metadata:
 
 **How to apply:** 首次发布按文档 §11 检查清单逐项执行；流程细节变更时回写文档。相关记忆：[[project-doc-conventions]]、[[project-m28-inflight]]（自更新机制）
 
-**2026-08-18 进展（首次发布进行中）**：verifyPlugin 三版本全过 → buildPlugin 产物就绪 → 发行文档已提交推送（fb82677）→ 用户正通过网页表单上传 v2026.8.18。**关键决策**：不用 GitHub 镜像，直接用 Gitee 作为 Marketplace 源码链接（官方要求「公网可达」Gitee 满足，审核若要求换 GitHub 再补）。经验证 Marketplace tags 非固定下拉——输入关键词自动补全，无 `sql`/`mybatis` 等预设，选最贴切的 ≥1 个即可。
+**2026-08-18 进展（首次发布进行中）**：verifyPlugin 三版本全过 → buildPlugin 产物就绪 → 发行文档已提交推送（e191973）→ 用户正通过网页表单上传 v2026.8.18。**关键决策**：不用 GitHub 镜像，直接用 Gitee 作为 Marketplace 源码链接（官方要求「公网可达」Gitee 满足，审核若要求换 GitHub 再补）。经验证 Marketplace tags 非固定下拉——输入关键词自动补全，无 `sql`/`mybatis` 等预设，选最贴切的 ≥1 个即可。
 
 **2026-08-18 Marketplace 被拒（Internal API 阻断）**：审核团队邮件"Your plugin uses the Internal API, which is private and must not be used outside the IntelliJ Platform itself." Plugin Verifier 扫描结果：2024.3 有 7 个 internal（6 被忽略→1 实际），2025.3+ 仅 1-2 个。5 个被点名的 API：①②③ `ToolWindowFactory.getAnchor()`/`getIcon()`/`manage()`（Kotlin synthetic bridge，源码未显式覆写）④ `ToolWindowManagerListener.stateChanged(TWM, TW, EventType)` 三参版（experimental+internal 双标记）⑤ `PluginManagerCore.getPlugin()`（源码显式调用）。修复计划见 T-M51 文档。官方文档（api-internal.html，2026-04-20 更新）给出完整替换表，`ToolWindowManager.registerToolWindow(String, RegisterToolWindowTaskBuilder)` 是 false positive（MP-6705）可忽略。

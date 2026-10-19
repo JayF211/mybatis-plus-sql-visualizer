@@ -1,14 +1,14 @@
 ---
 name: t-archdocs-sync-dev
 description: docs/架构设计 五文件同步至 dev 代码基线已交付（dev
-  6f9bd5e，2026-09-13）——范围定案：只写分支自身代码、三矩阵不事后追改、02 篇 §7 JOIN 新章重编号
+  2eaf8dc，2026-09-13）——范围定案：只写分支自身代码、三矩阵不事后追改、02 篇 §7 JOIN 新章重编号
 metadata:
   node_type: memory
   type: project
   originSessionId: sess_008f61dd-8ad2-481a-ac90-dac7eccf92a9
 ---
 
-2026-09-13 dev 工作树（`../mybatis-plus-sql-visualizer-dev`）提交 6f9bd5e：01-项目架构总览 / 02-核心流程详解 / 03-开发与测试指南 / 预览触发面清单 / M37M38 说明 五文件从 09-02/09-05 旧基线同步至 dev HEAD（adaa2f4 口径，测试基线 295 类/3788 用例 2026-09-12 全量）。触发面 gutter 9→13（plugin.xml 14 注册）、ConverterRegistry 10→11（+XbatisConverter；EasyQueryConverter/MdsConverter/QuerydslConverter 不进 SPI 走 SqlPreviewService 前置派发）、18 顶层包（新 feedback/psource）、JOIN 原生图/免重启热替换/历史参数 v2 全部入册。
+2026-09-13 dev 工作树（`../mybatis-plus-sql-visualizer-dev`）提交 2eaf8dc：01-项目架构总览 / 02-核心流程详解 / 03-开发与测试指南 / 预览触发面清单 / M37M38 说明 五文件从 09-02/09-05 旧基线同步至 dev HEAD（0a6696e 口径，测试基线 295 类/3788 用例 2026-09-12 全量）。触发面 gutter 9→13（plugin.xml 14 注册）、ConverterRegistry 10→11（+XbatisConverter；EasyQueryConverter/MdsConverter/QuerydslConverter 不进 SPI 走 SqlPreviewService 前置派发）、18 顶层包（新 feedback/psource）、JOIN 原生图/免重启热替换/历史参数 v2 全部入册。
 
 **范围定案（下次文档同步沿用）**：
 

@@ -1,7 +1,7 @@
 # T-ListPreviewCopy：预览默认格式化与多选批量复制 开发计划
 
 > **创建日期**：2026-09-14
-> **分支**：t-list-preview-copy（自 master `b9b7d0a` 新建 worktree `wt-t-list-preview-copy`）
+> **分支**：t-list-preview-copy（自 master `8aa5261` 新建 worktree `wt-t-list-preview-copy`）
 > **优先级**：P1（用户真机反馈三件套，交互体验直接缺陷）
 > **预估工时**：3h（预览格式化 1h + 多选防误弹 0.5h + 批量复制 1h + 测试 0.5h）
 > **来源**：用户需求原话——「一：sql日志和sql历史的sql列表，点击预览的sql应该默认格式化显示；二：如果同时选择多个sql不要在出现单机预览的效果了；三：选择多个sql需要支持批量复制，多条sql一次性复制」
@@ -110,6 +110,6 @@
 - 分支 t-list-preview-copy（worktree wt-t-list-preview-copy；并行任务 T-ExecSlowOps-Merge 活跃期，按并行铁律登记 T-ListPreviewCopy + build.gradle.kts 临时 `sandboxContainer = mpsv-lpc-sb`，跑完已还原不随提交）。
 - 落地与计划 §三零偏差：`clickPreviewSql` 顶层 helper + `onClick`/`show` 双守卫（SqlClickPreview.kt）；日志/历史/死代码三面板 lambda 换装；`buildPreviewResult` formatSql 改读 `logFormatSql`；`resolveContextMenuSelection`/`batchCopySql`/`copyMenuText` 纯函数收口两页右键菜单；i18n 双语 4 键（log.panel.copySelected / log.history.copySelected）。
 - 测试 +9：SqlClickPreviewTest 4（多选不排程/恢复单选恢复排程/clickPreviewSql 关=原文开=多行）——**多选恢复用例首跑暴露新坑**：断言后挂起定时器 300ms 到点在 EDT 真弹带编辑器的预览浮窗，fixture teardown 报 Editor hasn't been released（TraceableDisposable$DisposalException），修复=测试内 finally `cp.dispose()` 停表；SqlLogListCopyTest 4（batchCopySql 拼接/单条分号/空列表 + resolveContextMenuSelection 保留/收敛两分支）；HistorySqlLogPanelPreviewTest +1（logFormatSql=true 双击预览多行；setUp 钉 false 隔离既有识别断言）。
-- worktree 独立沙盒全量裸命令 **4033/0/0/6 绿**（4m01s，基线 master b9b7d0a 4024+9）。verifyFull/buildPlugin 按口径跳过；真机走查四步留人工（§4.3）。合入后复跑与 docs 同步见变更记录总册同日行。
-- 合入 master（merge 412a762，跨 T-ExecSlowOps/T-ReportL10n2/T-FeedbackDlg3 合流，自动合并零冲突）：主仓清 build/classes+build/kotlin 防陈旧产物后复跑全量 **4039/0/0/6 绿**（5m37s，4028 基线 + FeedbackDlg3 +2 + 本任务 +9）。docs 同步（变更记录总册同日行 + MEMORY 台账行 + 本节回填）随 docs 提交入册。
+- worktree 独立沙盒全量裸命令 **4033/0/0/6 绿**（4m01s，基线 master 8aa5261 4024+9）。verifyFull/buildPlugin 按口径跳过；真机走查四步留人工（§4.3）。合入后复跑与 docs 同步见变更记录总册同日行。
+- 合入 master（merge 280eddc，跨 T-ExecSlowOps/T-ReportL10n2/T-FeedbackDlg3 合流，自动合并零冲突）：主仓清 build/classes+build/kotlin 防陈旧产物后复跑全量 **4039/0/0/6 绿**（5m37s，4028 基线 + FeedbackDlg3 +2 + 本任务 +9）。docs 同步（变更记录总册同日行 + MEMORY 台账行 + 本节回填）随 docs 提交入册。
 

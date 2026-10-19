@@ -7,7 +7,7 @@ metadata:
   originSessionId: sess_6ead7341-d9ce-4d6d-9060-a428d7b1b1b5
 ---
 
-> **归档注记（2026-09-24 第十六次精简）**：日常处置口径已沉淀进 `~/.zcode/AGENTS.md`（跑全量前 `timeout 10 docker info` 验 daemon 活性）与 project-test-conventions「外部环境依赖型测试口径（docker 三态）」；**根治的显式开关路线已兑现**＝`mpvs.docker.tests.enabled`（`b71b382`，读 `-PmpvDockerTests` 缺省关，半活挂死与真容器不可控两形态都根治）；executor+超时路线未做，dbx 替代 Oracle 用例仍未实施，恢复分析先读本档。
+> **归档注记（2026-09-24 第十六次精简）**：日常处置口径已沉淀进 `~/.zcode/AGENTS.md`（跑全量前 `timeout 10 docker info` 验 daemon 活性）与 project-test-conventions「外部环境依赖型测试口径（docker 三态）」；**根治的显式开关路线已兑现**＝`mpvs.docker.tests.enabled`（`e166ee1`，读 `-PmpvDockerTests` 缺省关，半活挂死与真容器不可控两形态都根治）；executor+超时路线未做，dbx 替代 Oracle 用例仍未实施，恢复分析先读本档。
 
 **「docker 环境没启动会阻塞还是跳过」的答案分三态，不是二态。**（2026-09-23 实测）
 

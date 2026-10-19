@@ -13,7 +13,7 @@ metadata:
 
 **根因**：PSI 链式调用中外层/中层/内层 `append` 的 `startOffset` **相同**（都从 `sql` 起）。`sortedBy { startOffset }` 无法区分，保留 `collectElementsOfType` 返回顺序（外层先于内层），拼接顺序颠倒。同时原过滤只接受 qualifier 为 `PsiReferenceExpression` 的直接 append，链式外层 qualifier 是 `PsiMethodCallExpression` 被全部过滤。
 
-**修复**（`8461d2e`）：
+**修复**（`bb0da3c`）：
 1. 加 `resolveRootVariable` 沿 qualifier 链回溯根变量，正确处理链式调用
 2. 排序改用 `sortedWith(compareBy({ it.textRange.startOffset }, { it.textLength }))`——startOffset 相同时按文本长度升序（内层最短 → 排前面）
 

@@ -1,7 +1,7 @@
 # T-ToolSiteBizFrame 执行点在业务工具类跳转上顶-开发计划
 
 - **日期**：2026-09-26 18:57
-- **工作树**：`F:/code/Java/Gitee/SongRenShuo/mybatis-plus-sql-visualizer-toolsite`（分支 `toolsite-bizframe`，基线 `edeb9a6`）
+- **工作树**：`F:/code/Java/Gitee/SongRenShuo/mybatis-plus-sql-visualizer-toolsite`（分支 `toolsite-bizframe`，基线 `d8528d8`）
 - **上游依据**：demo 仓库 PR !1（已合并，`29d64ad`）——「SQL 执行点在业务工具类」语料 E28~E34 + JAR 态子工程 `selfdev-shared-lib`，其开发计划 `20260923-1520-执行点在业务工具类跳转上顶场景-开发计划.md` §7.3/§7.5 用桩边界真实栈逐字复刻 `StackLocator` v2026.9.23 规则实测，钉死两个**未修机制**。
 - **用户现场**（脱敏）：公司自研框架场景下部分 SQL 捕获位置不识别、跳转不精准——面板/跳转落在上层 Service 里「调用工具类」的那一行，而不是工具类内的 SQL 行。
 
@@ -62,15 +62,15 @@ agent 单测（同包缝：`jarOriginProbe` + `clearLocatorCachesForTest`，合�
 
 | 步 | 内容 | 交付 |
 |---|---|---|
-| M1 | agent 侧复现测试（E34/E29 同形两用例，先红留读数） | ✅ `9d7f5d6` |
-| M2 | 修 1：判定缓存命中深度比选 + 快路径；回归护栏跑绿 | ✅ `2eed8f9` |
-| M3 | 修 2 agent 侧：EXTRA_BIZ_PREFIXES + isBusinessOrigin + SenderLoop 提取/ACK；M1 用例转绿 | ✅ `c25d780` |
-| M4 | IDE 侧：AgentProtocol/AgentManager/设置面/i18n；同步测试补断言 | ✅ `7a6fc81` |
+| M1 | agent 侧复现测试（E34/E29 同形两用例，先红留读数） | ✅ `dda0e21` |
+| M2 | 修 1：判定缓存命中深度比选 + 快路径；回归护栏跑绿 | ✅ `c16e27b` |
+| M3 | 修 2 agent 侧：EXTRA_BIZ_PREFIXES + isBusinessOrigin + SenderLoop 提取/ACK；M1 用例转绿 | ✅ `6e24112` |
+| M4 | IDE 侧：AgentProtocol/AgentManager/设置面/i18n；同步测试补断言 | ✅ `a16644a` |
 | M5 | 定向测试收口＋计划文档实施记录回填 | ✅ 本提交 |
 
 ## 六、实施记录（2026-09-26 收口）
 
-**提交链**：`50cc15a`（计划）→ `9d7f5d6`（M1 复现）→ `2eed8f9`（M2 修 B′）→ `c25d780`（M3 修 A·agent 侧）→ `7a6fc81`（M4 修 A·IDE 侧）→ 本提交（M5 收口）。
+**提交链**：`b27ab1c`（计划）→ `dda0e21`（M1 复现）→ `c16e27b`（M2 修 B′）→ `6e24112`（M3 修 A·agent 侧）→ `a16644a`（M4 修 A·IDE 侧）→ 本提交（M5 收口）。
 
 **复现读数（先红）**：M1 跑 `StackLocatorToolSiteTest`，机制 B′ 用例唯一失败，读数
 `第二条应落工具类内真执行点 expected:<cn/song/selfdevdemo/[util/PlanTreeQueryBuilder].java> but was:<…[service/impl/SourceCaptureToolSiteServiceImpl].java>`

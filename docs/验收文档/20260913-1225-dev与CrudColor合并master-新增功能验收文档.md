@@ -1,6 +1,6 @@
 # dev 与 t-crudcolor 分支合并 master 验收文档
 
-> **验收对象**：2026-09-13 master 吸收 dev（119 提交）与 t-crudcolor（7 提交）两分支的合并交付（merge `a5d9307` + `8d2c919`，文档同步 `d879760`）。
+> **验收对象**：2026-09-13 master 吸收 dev（119 提交）与 t-crudcolor（7 提交）两分支的合并交付（merge `4f60553` + `37e0728`，文档同步 `829a226`）。
 > **面向读者**：功能验收人（含用户本人真机走查）。实现细节见 [T-MergeDevCrudcolorIntoMaster 开发计划](../开发计划/20260913-1134-T-MergeDevCrudcolorIntoMaster-dev与CrudColor分支合并master-开发计划.md)，M37 系列功能的使用说明另见 [M37/M38 竞品融合新增功能说明](../架构设计/M37M38新增功能-说明文档.md)。
 > **回归基线**：全量 3880/0/6 绿（303 测试类）；verifyPlugin 三目标 Compatible（IU-243/253/262）；buildPlugin 产出 `mybatis-plus-sql-visualizer-2026.9.14-beta.1.zip`。
 

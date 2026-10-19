@@ -5,7 +5,7 @@
 - 来源：第十轮报告 §8 DBX 增量清单 **#50**（`3a44507a`：`crates/dbx-sql/src/query_execution_sql.rs:230-247` `is_safe_explain_source` + `starts_with_explain_keyword_boundary`，测试 `:1073-1115`）与 **#51**（同文件 `:163-175` `supports_explain_plan`、`:178-186` `estimated_plan_format`），并入 **#49** 的四条原则（`f909f850`：只做 estimated / 能力探测与取计划共用错误 / 限额 / 降级 warnings）
 - 性质：**正确性 + 一致性**——含一个已实测证实的真缺陷（PG 索引建议永不触发）
 - 实施分支：自 master 拉任务分支 t-explain-chain-hardening
-- 验证基线：master `03f6d25`（最近可核读数 491 类/5604 用例 0 失败 与 5577 例 0 失败，属不同批次树；实施时以当次实测为准）
+- 验证基线：master `28a1efa`（最近可核读数 491 类/5604 用例 0 失败 与 5577 例 0 失败，属不同批次树；实施时以当次实测为准）
 
 ---
 
@@ -108,7 +108,7 @@
 | T-ECH-02 | 见下 | 新文件 `sql/ExplainSupport.kt`：`ExplainOutputFormat{TABLE,TEXT,JSON,XML}` + `Entry(dialectName, template, outputFormat, evidence)` 表（9 方言全量，Oracle/SQL Server 显式 `template=null`）；模板占位符 `{sql}` 为**字面量**替换（SQL 里的 `$`/`\`/`{sql}` 不受影响，有用例钉住）。`Dialect.renderExplainStatement` 默认实现改读表，**7 处覆写全删**；查找按方言显示名、大小写不敏感。逐字节不变实证：既有 7 方言字面量断言全绿 + 新增「表 vs 实现一致」「表覆盖注册表全量」「格式取值与模板自洽」三组守卫（`DialectExplainTest` 19 例全绿） |
 | T-ECH-03 | 见下 | **先红后绿两次读数**：新增真库实测形态用例（PG 16.14 实测 JSON，见 §八 前提 1 复验）后，临时摘掉 JSON 修复分支 → `ExplainIndexAdvisorTest` 18 例中 **5 例红**（`testPG_JSON形态_SeqScan超阈提示`/`testPG_JSON形态_嵌套子计划可识别`/`testPG_JSON被截断_分片扫描仍能识别顶层节点`/`testKingBase_JSON形态同PG`/`test方言名大小写不敏感` 的 PG 半）；还原修复 → 18 例全绿。解析形态：Gson 对象树取 `"Node Type"`/`"Relation Name"`(退 `"Alias"`)/`"Plan Rows"`(退 `"Actual Rows"`)，容错三段（严格 JSON → 截断时的节点分片正则 → 文本树回落）。分派改读 `ExplainSupport.formatFor` 而非方言名 |
 | T-ECH-04 | 见下 | 用例：`ExplainGateTest` 14 例、`DialectExplainTest` 19 例、`ExplainIndexAdvisorTest` 18 例，**共 51 例 0 失败**；analyze 双守卫防回退：`SqlTypeClassifierTest` 66 例 + `McpSelectGuardTest` 16 例全绿（未弱化）。MCP 链回归：`McpRowBudgetTest` 7 例 + `McpNoticeChannelTest` 8 例全绿。文档：CHANGELOG `[Unreleased]` Changed（IDE 行为变更明示）+ Fixed 两条；变更记录行；第十轮报告 §8 #50/#51 落地备注。**门禁**：按主调度统一跑 `testShards`/`verifyGate`，本任务只跑定向用例 |
-| 本轮订正（复核 minor㉓） | 无 | **行号引用口径订正**：本表（以及 §一/§二 的落点描述）里的 `文件:行号` 是**合并前**在分支自有实现上取的快照；master 侧并行会话的独立实现（`7bb7eab`）在合并（`914724c`）中整体取代了分支的同源文件，偏移因此漂移，复核据此判「无法按址复核」——该判据成立。**本轮实测**：复核点名的 `Dialect.kt:150-153` 一条在本表已不存在（属被取代的分支版本）；仍在本表的引用抽查 3 处（`ExplainSupport.kt:19` → `enum class ExplainOutputFormat` 的 KDoc、`McpExplainFormatter.kt:66-78` → `format(raw, maxRows)`、`SqlTypeClassifier.kt` 相关条）**均落在所声称的符号上**。**此后引用规则**：以**符号名**（类/函数/常量）为准定位，行号只作辅助；行号与本表不符时按符号复核，不得据行号判「不存在」 |
+| 本轮订正（复核 minor㉓） | 无 | **行号引用口径订正**：本表（以及 §一/§二 的落点描述）里的 `文件:行号` 是**合并前**在分支自有实现上取的快照；master 侧并行会话的独立实现（`95a4ebd`）在合并（`9068fad`）中整体取代了分支的同源文件，偏移因此漂移，复核据此判「无法按址复核」——该判据成立。**本轮实测**：复核点名的 `Dialect.kt:150-153` 一条在本表已不存在（属被取代的分支版本）；仍在本表的引用抽查 3 处（`ExplainSupport.kt:19` → `enum class ExplainOutputFormat` 的 KDoc、`McpExplainFormatter.kt:66-78` → `format(raw, maxRows)`、`SqlTypeClassifier.kt` 相关条）**均落在所声称的符号上**。**此后引用规则**：以**符号名**（类/函数/常量）为准定位，行号只作辅助；行号与本表不符时按符号复核，不得据行号判「不存在」 |
 
 **门禁后订正（2026-09-22，合并态 testShards 首跑）**：`ExplainOutputFormat.XML` 原按「SQL Server 未接入、留占位避免将来改枚举」保留，被仓内守卫 `EnumReachabilityGuardTest` 判为**死常量**（声明了却零产出，消费者恒走不到）→ 已删除该常量及其 KDoc、`ExplainIndexAdvisor` 分派里的占位注释；将来接入 SQL Server 的 `SET SHOWPLAN_XML` 时再补一个常量与一条表项。**红→绿读数**：修前 `testShard2` 报 `EnumReachabilityGuardTest.kt:258` 断言失败（点名 `ExplainSupport.kt:19 ExplainOutputFormat.XML`）；删常量后定向重跑 `EnumReachabilityGuardTest` 3 例 + `DialectExplainTest` 19 例 + `ExplainIndexAdvisorTest` 18 例 = **40 例 0 失败**。教训：守卫的「有意保留的未产出位」白名单口子是给**有产出计划**的占位留的，本处属纯投机预留（YAGNI），补一行的成本远低于长期维护死分支。
 

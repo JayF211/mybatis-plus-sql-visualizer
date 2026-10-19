@@ -192,6 +192,6 @@ onConsoleRemoved = { this@SqlLogManager.onConsoleRemoved() }  // ✅ 显式限�
 - **2026-08-18 v1~v11**：双保险机制 → onConsoleAppeared → 500ms 补捞 → contentRemoved → apply 边沿检测
 - **2026-08-18 v12**：ContentManagerListener 不可用实证 → 100ms 持续快速轮询 + lastConsoleIds 移除检测
 - **2026-08-18 最终**：processTerminated 误触发已移除 → 主控制台检测（忽略常驻 HttpSingleResponseConsole）+ `.apply{}` 作用域修复
-- **最新测试**：1221 全绿（commit c17ed9d 已提交第一条 SQL 修复 + 机制重写）
+- **最新测试**：1221 全绿（commit ecf9e8a 已提交第一条 SQL 修复 + 机制重写）
 
 **相关**：[[pitfall-log-startup-capture-regression]]、[[pitfall-execution-api-missing]]、[[pitfall-plugin-xml-listener-unsupported]]、[[pitfall-classloader-forname-execution-api]]

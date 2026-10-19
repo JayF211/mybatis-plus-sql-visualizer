@@ -8,7 +8,7 @@ metadata:
   originSessionId: sess_6dc70ac0-3f5e-41b1-bd6f-1543fbbd1baf
 ---
 
-T-FeedbackBatch2 已交付并合 master（merge 751759c，2026-09-15，testShards 4173/0/0/6 绿；分支 t-feedbackbatch2 与工作树已删，计划 20260915-2325 含交付记录）。
+T-FeedbackBatch2 已交付并合 master（merge 416ec26，2026-09-15，testShards 4173/0/0/6 绿；分支 t-feedbackbatch2 与工作树已删，计划 20260915-2325 含交付记录）。
 
 **根因（定案，字节码实证）**：262 平台 `IdeErrorsDialog`（intellij.platform.ide.impl.jar）「Report All」（用户口中「包含全部」）= `reportAll` 逐 `ErrorMessageCluster` 循环调 `access$reportMessage`（`IdeErrorsDialog$reportAll$reported$1` 引用实证）；`reportMessage` 固定 `anewarray 1` + `cluster.getFirst()` 构造**长度 1** 的事件数组调 `ErrorReportSubmitter.submit`。所以 T-FeedbackBatch 的「平台多选一次传 N 条 events」前提在 262 不成立：N 个错误 = N 次独立 submit = N 个弹窗、每框批次只有 1 条（同簇多次重复也只报首条）。用户假设「多次触发而非一次多堆栈」正确。日常 IDEA 2026.2 当天日志（8 文件）无本插件 ERROR——定案不依赖日志。
 

@@ -8,7 +8,7 @@ plugins {
     id("org.jetbrains.changelog")
     id("org.jetbrains.intellij.platform")
     // T-BuildScriptSplit：构建逻辑分治——convention 插件见 buildSrc/src/main/kotlin/，
-    // 块级逐字搬运自本文件（锚点 dc047bd，注释随迁），来源与去向见计划 §2.1。
+    // 块级逐字搬运自本文件（锚点 4c3e268，注释随迁），来源与去向见计划 §2.1。
     id("mpv-verification")
     id("mpv-testing")
     id("mpv-runide")

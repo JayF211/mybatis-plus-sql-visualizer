@@ -7,7 +7,7 @@ metadata:
   originSessionId: sess_265db880-45c6-4317-8db4-4afe70065e95
 ---
 
-**SQL→Java 反向联表转换修复（2026-08-17~18，reverse 包，v2026.8.17）**。用户实测联表 SQL（`biz_bike_device_info t LEFT JOIN ...`，ON 带 MPJ 自动追加的 `deleted=0`）反向转换出现的问题，六轮修复（提交 9e1a214 + 3d9bf04 + 0fd6b1f + 55177b8 + 7463ad0 + 5cc8659 + 64bd1c3）：
+**SQL→Java 反向联表转换修复（2026-08-17~18，reverse 包，v2026.8.17）**。用户实测联表 SQL（`biz_bike_device_info t LEFT JOIN ...`，ON 带 MPJ 自动追加的 `deleted=0`）反向转换出现的问题，六轮修复（提交 a64dddb + b0f9c85 + e6968e0 + 55177b8 + 7463ad0 + 5cc8659 + df6ac82）：
 
 ① **反引号列紧跟表别名丢列**（生成 `.select("t.")`）：根因=SqlTokenizer 把 `t.` 并成单个 WORD token（续读循环里 `.` 无条件并入），反引号列 `` `signal` `` 被 `consumeSelectAlias` 误当 select 别名吞掉。修复=点号仅在「后一字符不是反引号」时并入 WORD（`sql[j]=='.' && j+1<len && sql[j+1]!='`'`），`` t.`signal` `` 拆成 t、.、`signal` 三 token 由 consumeQualified 合并。**只影响「点号后紧跟反引号」这一当前已损坏路径**。
 
@@ -27,7 +27,7 @@ metadata:
 
 **教训（isSubLogicalDelete 列名白名单）**：容忍 ON 逻辑删除条件必须用列名白名单（LOGICAL_DELETE_COLUMNS），不能用「任意副表列 =0/1」——否则真过滤条件（type=1/status=1）被误吞，破坏既有 raw join 回落行为。
 
-⑧ **invocationHasMpj 接口继承误判**（第三轮，提交 0fd6b1f）：`BikeDeviceInfoService extends MPJBaseService<BikeDeviceInfoEntity>` 被误判无 MPJ 能力 → 多表 JOIN 报错。根因=`hasMpjInterface` 主路径 `getInterfaces()` 需完整解析泛型超类型，jar-loaded 跨模块时返空数组。修复=混合双路径（保留 getInterfaces+superClass 主路径 + superTypes+resolve() 回退，resolve 失败从 canonicalText 取 raw 全命名匹配）。详见 [[project-reverse-invocation-has-mpj-interface-bug]]。
+⑧ **invocationHasMpj 接口继承误判**（第三轮，提交 e6968e0）：`BikeDeviceInfoService extends MPJBaseService<BikeDeviceInfoEntity>` 被误判无 MPJ 能力 → 多表 JOIN 报错。根因=`hasMpjInterface` 主路径 `getInterfaces()` 需完整解析泛型超类型，jar-loaded 跨模块时返空数组。修复=混合双路径（保留 getInterfaces+superClass 主路径 + superTypes+resolve() 回退，resolve 失败从 canonicalText 取 raw 全命名匹配）。详见 [[project-reverse-invocation-has-mpj-interface-bug]]。
 
 ⑨ **selectAs 字符串联接形态修复（T-M48）**（第四轮，提交 55177b8，用户反馈 `.selectAs("t.name", VO::getProductName)` 非法）：**MPJQueryWrapper 无 selectAs(String, SFunction) 重载**（只有 selectAs(SFunction,SFunction) 和 selectAs(SFunction,String)）。当 ON 含额外条件（无法 lambda 化）回落 MPJQueryWrapper 时，列是字符串，selectAs(String, SFunction) 编译报错。修复=`generateSelect` 计算 `rawMode = (effectiveKind == MPJ_QUERY)`，`renderSelectCall` 在 rawMode 下取原始列表达式字符串、别名列渲染为 `.select("t.name AS productName")`；lambda 形态（MPJLambdaWrapper）保持 `.selectAs(Entity::getX, VO::getY)`。**关键：isSubLogicalDelete 过滤 deleted=0 后若可 lambda 化则生成更优 lambda 形态（对齐正向代码）；仅当无法 lambda 化（如 ON 含 type=1 非逻辑删除）才回落字符串形态。**
 
@@ -35,7 +35,7 @@ metadata:
 
 ⑪ **VO-only selectAs 引用 VO 方法（T-M50）**（第六轮，提交 5cc8659，用户反馈只选 VO 不选调用类时 as 没方法引用）：`buildInvocation()` 无调用类返回 null → selectAsVoClass=null → 字符串别名。修复=(1) `buildInvocation()` 无调用类但选 VO 时返回 VO-only `InvocationTarget(callerClass="", voClass=vo, mpj=true)`；(2) `appendWrapperAndInvocation()` callerClass 为空时跳过调用行生成。VO 方法引用不依赖调用类 MPJ 能力。测试 +1。
 
-⑫ **invocationHasMpj jar-loaded 泛型超类型修复（T-M48.5）**（第七轮，提交 64bd1c3，沙盒模式 CarDeviceInfoService 仍误判）：上一版 canonicalText 回退在 jar-loaded 未解析场景返简单名不匹配。重写双路回退（direct FQN match + PsiShortNamesCache.allScope lookup）。详见 [[project-reverse-invocation-has-mpj-interface-bug]]。
+⑫ **invocationHasMpj jar-loaded 泛型超类型修复（T-M48.5）**（第七轮，提交 df6ac82，沙盒模式 CarDeviceInfoService 仍误判）：上一版 canonicalText 回退在 jar-loaded 未解析场景返简单名不匹配。重写双路回退（direct FQN match + PsiShortNamesCache.allScope lookup）。详见 [[project-reverse-invocation-has-mpj-interface-bug]]。
 
 **教训（select 渲染两分支约定）**：renderSelectColumn 不能返回整条 `select(...)`/`selectAs(...)`——非联表分支把列并成单个 `.select(a, b)`（joinToString ","），联表分支逐列 `.select`。故拆成 `renderSelectRef`（内层列引用，非联表分组用）+ `renderSelectCall`（整条调用，联表逐列用 + 非联表含别名时逐列）。非联表分支含别名时无法并入单个 .select，须逐列渲染。
 

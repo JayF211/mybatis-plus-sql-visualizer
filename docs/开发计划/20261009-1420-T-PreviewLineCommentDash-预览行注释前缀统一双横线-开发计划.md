@@ -65,7 +65,7 @@
 
 ## 六、实施记录
 
-实施：t-linedash 工作树（基线 a1d32be），2026-10-09，提交 d672855（实现 + 单测 + CHANGELOG）。
+实施：t-linedash 工作树（基线 c3a86bd），2026-10-09，提交 06cb4d4（实现 + 单测 + CHANGELOG）。
 
 ### P1~P4 证伪结论（javap 双版本）
 

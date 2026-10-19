@@ -29,7 +29,7 @@ gutter 图标由多个相互独立的 `LineMarkerProvider` 并行产生，各自
 ## 适用铁律
 写/加 LineMarkerProvider 或给方法名集合增名时，先问"这个方法名会不会同时命中其它 provider（尤其通用名 execute/update/query/find/delete/insert）"；要么按接收者消歧，要么在对方 provider 里显式排除。相关：all gutter 是 Java 文件方法名锚点，不能只靠方法名独特性。
 
-## 实施完成（2026-09-04，提交 480dacb）
+## 实施完成（2026-09-04，提交 ed8b136）
 
 最终落地（6 文件）：`psi/PreviewReceiverResolver.kt`（Family 枚举 CUSTOM_DAO/HIBERNATE_TEMPLATE/JDBC_TEMPLATE/JPA_SESSION/UNKNOWN；classify 按 qualifier 文本启发 → 类型 resolve 兜底；isStringLikeFirstArg=字面量/拼接/解析到 String 的引用）+ `CustomDaoHqlLocator`（execute 移出关键字；HIBERNATE_HQL_METHODS={find,findByNamedParam,findByValueBean,iterate} 由本定位器认领 HibernateTemplate 家族，未新建 provider）+ `JdbcTemplateSqlGutterLineMarkerProvider`（JDBC 家族 + 首参字符串双门）+ `GutterIconDedupTest`（11 场景）+ `DemoRecognitionTest`（加载真实 demo 文件，逐调用点断言恰 1 图标、execute(callback)=0）+ 计划文档（含实施记录节）。测试全绿；沙盒容器已还原、并行登记已注销。
 

@@ -2,26 +2,26 @@
 
 - 日期：2026-09-12 08:42
 - 分支方向：`git merge master`（在 dev worktree `F:/code/Java/Gitee/SongRenShuo/mybatis-plus-sql-visualizer-dev` 执行，master 合入 dev）
-- merge-base：`2543203`（v2026.9.10 发行提交）
-- 分叉规模：master 独有 29 提交（含 1 个 merge f60e419）/ dev 独有 114 提交
+- merge-base：`06d742a`（v2026.9.10 发行提交）
+- 分叉规模：master 独有 29 提交（含 1 个 merge 771b5f2）/ dev 独有 114 提交
 - 前置侦察：`git merge-tree --write-tree master dev` 预演完成，**5 文件 5 冲突块**逐块过目定性（§四）
-- 关联：上轮同类合并 `docs/开发计划/20260910-1211-T-MergeMasterIntoDev-master合入dev增量合并-开发计划.md`（merge d5130ab）；dev→master 丢功能审计 `docs/memory-archive/`（branch-port-loss-audit）
+- 关联：上轮同类合并 `docs/开发计划/20260910-1211-T-MergeMasterIntoDev-master合入dev增量合并-开发计划.md`（merge e6a42ff）；dev→master 丢功能审计 `docs/memory-archive/`（branch-port-loss-audit）
 
 ## 一、背景与两侧增量分布
 
-上轮合并（d5130ab）后两侧再次分叉约两天。master 走完了 v2026.9.11 发行与三条修复线；dev 走完了 GIF 录制管线治理与性能第二批。
+上轮合并（e6a42ff）后两侧再次分叉约两天。master 走完了 v2026.9.11 发行与三条修复线；dev 走完了 GIF 录制管线治理与性能第二批。
 
 **master 独有（29 提交）**：
 
 | 线 | 提交 | 落点域 |
 |---|---|---|
-| T-DynUpdate 自更新免重启动态安装 | 23cf667 主路径 + DynamicInstallSupport/InstallResult 三分支 + bundle 三键；3a89976 计划；f60e419 合并 feature/t-dynupdate（带入 T-HistParam） | update 包、PlatformPluginInstaller |
-| T-HistParam 历史参数持久化与识别统一 | cef6081 v2 格式 `-- pd:` 注释行 + SqlLogParamCodec + 双面板识别通道统一；f5983b8 二轮数值谓词扩面（比较/IN/BETWEEN/VALUES 语境限定） | log 包（AutoSaver/Reader/HistoryPanel）、bundle |
-| T-DynUpdate 热替换本地验证套件 | ca0db67/86b4004/c4043d5/1046b1a/e3d3dab/7327042 六笔：本地真包服务脚本 + runIdeHotSwap 生命周期 + manifest 执行期转发 + `.run` 双配置 | build.gradle.kts、.run、dev-support |
-| 262 平台适配与护栏 | 6bb98dd unloadPlugin 首参弹性匹配（PluginMainDescriptor 漂移）；4df60a2 PlatformSignatureCrossVersionTest 三平台签名护栏；cf3138b 更新通知 Gitee 入口去重 | update 包、测试 |
-| T-ReverseParenWira | dab3d3b MPJ 括号条件反向退化 + **attachConsole 包 WIRA / getDocument 包 ReadAction**（262 读权限硬抛根治） | DataSourceSelector、SqlReverseParser |
-| T-PickMpjErr | 7218078 SqlToJavaPanel render 单点 generateCodeOrReport 收口 SqlReverseException | SqlToJavaPanel |
-| v2026.9.11 发行 | 4a62cbb 版本号 + CHANGELOG + preview.update.json；dc2d04c marketplace 页单源化；2a5a88a README 致谢；412c544 gitignore hprof；5059dfb/40fe920/81ecf14/d1b3cda/a0702f6/9f0cd87/821c859/56df6d6 文档与测试基建 | 发行物、docs |
+| T-DynUpdate 自更新免重启动态安装 | 34055dd 主路径 + DynamicInstallSupport/InstallResult 三分支 + bundle 三键；7b4b906 计划；771b5f2 合并 feature/t-dynupdate（带入 T-HistParam） | update 包、PlatformPluginInstaller |
+| T-HistParam 历史参数持久化与识别统一 | bceeee9 v2 格式 `-- pd:` 注释行 + SqlLogParamCodec + 双面板识别通道统一；3d72025 二轮数值谓词扩面（比较/IN/BETWEEN/VALUES 语境限定） | log 包（AutoSaver/Reader/HistoryPanel）、bundle |
+| T-DynUpdate 热替换本地验证套件 | 50748d1/11407b7/7e1d3e0/1a1faac/5083859/e0b1522 六笔：本地真包服务脚本 + runIdeHotSwap 生命周期 + manifest 执行期转发 + `.run` 双配置 | build.gradle.kts、.run、dev-support |
+| 262 平台适配与护栏 | 9c2788f unloadPlugin 首参弹性匹配（PluginMainDescriptor 漂移）；9f8821d PlatformSignatureCrossVersionTest 三平台签名护栏；171b7a3 更新通知 Gitee 入口去重 | update 包、测试 |
+| T-ReverseParenWira | a24a30e MPJ 括号条件反向退化 + **attachConsole 包 WIRA / getDocument 包 ReadAction**（262 读权限硬抛根治） | DataSourceSelector、SqlReverseParser |
+| T-PickMpjErr | ce62959 SqlToJavaPanel render 单点 generateCodeOrReport 收口 SqlReverseException | SqlToJavaPanel |
+| v2026.9.11 发行 | 0cb95eb 版本号 + CHANGELOG + preview.update.json；e1a9807 marketplace 页单源化；e80d3ea README 致谢；200b187 gitignore hprof；7531cfb/2a65d6b/f949d8c/4c3ed7c/aa49c76/a6bdfc7/4c59d91/f955d85 文档与测试基建 | 发行物、docs |
 
 **dev 独有（114 提交）**：T-GifRecordSwitch（`-PgifRecord` 属性开关替代常驻 262 录制态 + buildPlugin 误开闸门）、GIF 录制脚本管线与经验总结修订、T-PerfBatch 第二轮（SqlLogEntryBuffer 三出口拆分 + 列表通知节流）、T-PerfSweep 四项热点清扫、上轮 T-MergeMasterIntoDev 合并交付、docs 同步。
 
@@ -75,7 +75,7 @@
 
 ### 4.4 docs/变更记录.md —— 表格行时序并集
 
-master 侧 9 行（2026-09-11：T-ReverseParenWira、hprof 收口、热替换缓解+Gitee 去重、跨版本签名护栏、262 unloadPlugin 漂移、T-DynUpdate 实测、f60e419 合并行、T-HistParam 两行、T-DynUpdate 主行）+ dev 侧 4 行（2026-09-11：录制配置治理、T-PerfBatch 第二轮；2026-09-10：上轮合并交付、T-VStack·InThreshold）。交叉核对无同内容重复行，按日期倒序合并（同日按 master 交付时序），表头分隔行只留一份。
+master 侧 9 行（2026-09-11：T-ReverseParenWira、hprof 收口、热替换缓解+Gitee 去重、跨版本签名护栏、262 unloadPlugin 漂移、T-DynUpdate 实测、771b5f2 合并行、T-HistParam 两行、T-DynUpdate 主行）+ dev 侧 4 行（2026-09-11：录制配置治理、T-PerfBatch 第二轮；2026-09-10：上轮合并交付、T-VStack·InThreshold）。交叉核对无同内容重复行，按日期倒序合并（同日按 master 交付时序），表头分隔行只留一份。
 
 ### 4.5 docs/MEMORY.md —— 变更记录行并集
 
@@ -128,7 +128,7 @@ master 侧 9 行（2026-09-11：T-ReverseParenWira、hprof 收口、热替换缓
 
 ## 九、实施记录
 
-- 2026-09-12 09:15 全项完成，merge 提交 `613eae6`，冲突预演与实际零偏差（5 文件 5 块）。
+- 2026-09-12 09:15 全项完成，merge 提交 `28765fa`，冲突预演与实际零偏差（5 文件 5 块）。
 - **逐块落地与 §四 定案一致**：
   - DataSourceSelector：master 的 `getDocument` ReadAction 包裹 + dev 的 T-Perf-13 异步等待链融合；`prepareAfterEditorResolved`（dev 独有，master 0 引用）已承载 master 内联续链全部语义（M36.5.16/M36.5.24/refreshConsoleModel），attachConsole WIRA 包裹在自动合并区落位，编译即过。
   - SqlLogAutoSaver：dev 的 T-Perf-12 批量写结构 + master 的条件 pd 行（`-- pd:`）插入头部行后；`countPlaceholders` 系 `LogEntryPreviewRecognizer.kt` 顶层 internal 函数（同包免 import），`SqlLogParamCodec.kt` 同包新文件干净落入；`SimpleDateFormat/Date/Locale` 三个 import 经查仍有文件名模板解析读者，保留。
@@ -136,4 +136,4 @@ master 侧 9 行（2026-09-11：T-ReverseParenWira、hprof 收口、热替换缓
   - docs/MEMORY.md 与 docs/变更记录.md：时序并集去重（master 09-11 十行 + dev 09-11 两行 + dev 09-10 两行；MEMORY 侧 master 09-12 两行 + 双侧 09-11/09-10 行），交叉核对无重复行；脚本重组时踩 CRLF 匹配坑一次（`=======` 带 `\r` 致精确等值失配，rstrip 处理），首次运行在写盘前失败文件无损。
 - **自动合并区复核（§五）结果**：gradle.properties 收敛 2026.9.11；build.gradle.kts 的 `-PgifRecord` 闸门（读 startParameter.taskNames）与 master 新增 runIdeHotSwap/本地清单任务共存无冲突（闸门只拦 buildPlugin/publishPlugin/publish，runIde 族任务语义上应放行）；CHANGELOG 暂存 blob crlf=0（上轮行尾归一红利兑现，本轮无伪冲突）；bundle en/zh 各 557 键、键集合双向差集为空（master 既有重复键 `gutter.pages.accessible.name` 已在其后续提交消除，未随合并带入）；`InstalledLive` 三态在 UpdateSection/StartupUpdateCheck 落位；SqlLogPanel 中 T-HistParam F3 `toPreviewResult`（1258 行）与 dev 片段管线 `lineFragments`（1508 行）共存；SqlLogHistoryRoundTripTest 走 dev 保留的同步 `write()` API；SqlLogFileReader pd 探测解码（PD_PREFIX/v2 头部判据排除）完整。
 - **验收**：全量 `./gradlew test` BUILD SUCCESSFUL 4m32s——**295 类 / 3788 用例 / 0 失败 / 0 错误 / 6 跳过**（dev 基线 3733 + master 侧 55，一次通过零修复）；`verifyPlugin` 三目标（IU-243.28141.41 / IU-253.33514.17 / IU-262.9437.185）BUILD SUCCESSFUL 且均 **Compatible**（deprecated 3/6/47、scheduled-for-removal 1、experimental 12，均为 warning 级；较上轮 3/6/44+10 的增量来自 master v2026.9.11 已过发行门禁的 update 域代码，随合并带入非本次引入）；`buildPlugin` 出产物 `mybatis-plus-sql-visualizer-2026.9.11.zip`（6.6MB）。
-- 备份锚点 `dev-backup-pre-master-merge-20260912`（tag，指向 30e0375 立项提交；合并废弃时 `git merge --abort`，已提交后回退 `git reset --hard dev-backup-pre-master-merge-20260912`）。
+- 备份锚点 `dev-backup-pre-master-merge-20260912`（tag，指向 5d66df0 立项提交；合并废弃时 `git merge --abort`，已提交后回退 `git reset --hard dev-backup-pre-master-merge-20260912`）。

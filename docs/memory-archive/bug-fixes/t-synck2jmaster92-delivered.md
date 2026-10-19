@@ -1,6 +1,6 @@
 ---
 name: t-synck2jmaster92-delivered
-description: T-SyncK2JMaster92 已交付（2026-09-19，锚点 ec584e2→b9aeeba，123 提交同步；含 Java
+description: T-SyncK2JMaster92 已交付（2026-09-19，锚点 6f78eda→be1d4e5，123 提交同步；含 Java
   侧 fatal 透传形态收窄与守卫两段式口径两处结构性决策，以及三处本轮新发现的移植陷阱）
 metadata:
   node_type: memory
@@ -9,8 +9,8 @@ metadata:
 ---
 
 **2026-09-19 T-SyncK2JMaster92 已交付**（feature/kotlin-to-java，worktree `mybatis-plus-sql-visualizer-kotlin-to-java`，未 push，落后 origin 15 提交）：
-同步范围 `ec584e2..b9aeeba` 共 **123 提交**（原计划钉 2d40564/92 提交，作业期间 master 两度前进共 31 提交，按上轮惯例一并吸收、锚点两度改钉）。
-提交链：`f7c9313` 立项计划 → `d9f4d91` 生产移植 → `263d689` 测试移植 → `3814236` 收口修复 → `b304599` 文档同步 → `056032c` post-anchor 31 提交。
+同步范围 `6f78eda..be1d4e5` 共 **123 提交**（原计划钉 6c6fcaf/92 提交，作业期间 master 两度前进共 31 提交，按上轮惯例一并吸收、锚点两度改钉）。
+提交链：`9d160b4` 立项计划 → `10dd23b` 生产移植 → `13988be` 测试移植 → `68cc1e8` 收口修复 → `4f39022` 文档同步 → `5207ab4` post-anchor 31 提交。
 门禁：**testShards 5390/0/0/6 绿（472 套件）+ testDatabase 10/0/0/0 + buildPlugin 出包 2026.9.18 + verifyGate 三目标 Compatible**（243:4for-removal+10dep+10exp+1internal / 253:6+13+10+1 / 262:7+67+10+1；各 +1 for-removal 与 262 的 +1 dep 为 master 新增 `FatalErrors` 引用 `ThreadDeath` 同源，非翻译漂移）。
 内容：生产 4 新建翻译（`util/FatalErrors`、`xml/SecureXml` 492 行、`psi/PsiSnapshot`、`log/agent/AgentUrlRegistry`）+ `acp/AcpIdeaMcpTransportProviderImpl` + 49 增量 + 10 个 MCP 工具类改名；测试 19 新建 + 30 增量 + 3 ACP；`BannedApiSourceScanTest` 1035→2734 行新增五族守卫。
 

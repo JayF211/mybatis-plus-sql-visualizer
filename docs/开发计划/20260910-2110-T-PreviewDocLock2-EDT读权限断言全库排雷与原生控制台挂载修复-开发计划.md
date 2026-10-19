@@ -1,10 +1,10 @@
 # T-PreviewDocLock2：EDT 读权限断言全库排雷 + 原生控制台挂载免包装 + 预览临时文件降级 开发计划
 
 > **创建日期**：2026-09-10
-> **分支**：master（HEAD `1f9143b`，工作树干净）
+> **分支**：master（HEAD `96a1dcb`，工作树干净）
 > **优先级**：P1（每发一版在 262 真机上持续刷 SEVERE「Plugin to blame: SQL Visualizer」并上报 FUS；平台一抬版跑测试即红）
 > **预估工时**：F1 单点 0.5h + F2/F3 设计 1~1.5h + 全量回归
-> **来源**：T-PreviewDocLock（e8b9d1d）交付后用户要求「分析整个项目是否存在类似问题，一起修复，含先前记录的后续项」
+> **来源**：T-PreviewDocLock（1ef8bf6）交付后用户要求「分析整个项目是否存在类似问题，一起修复，含先前记录的后续项」
 > **实施状态**：已实施（F1 单点 + F2/F3 设计落档），全量回归与 262 真机日志验收见 §八
 
 ---
@@ -25,7 +25,7 @@
 
 | 业务帧（方法，文件，行） | 累计命中 | 定性 |
 |--------------------------|:---:|------|
-| `createEditor(SqlPreviewPanel.kt:1538)` | 32 | **已修复**（T-PreviewDocLock e8b9d1d） |
+| `createEditor(SqlPreviewPanel.kt:1538)` | 32 | **已修复**（T-PreviewDocLock 1ef8bf6） |
 | `prepareInConsole(DataSourceSelector.kt:1109)` | 16 | **本次 F1 修复** |
 | `prepareInConsole(DataSourceSelector.kt:1116)` | 4 | **本次 F1 修复**（同函数另一句） |
 | 其余（`idea.2.log` 内 54 条 ReadAccessSoftAssert，业务帧为 INFO 级 `SqlCompletionContributor` 日志，非断言源） | — | 假阳性（见 1.3） |
@@ -38,7 +38,7 @@
 
 | 调用点 | 上下文 | 262 断言 | 定性/处置 |
 |--------|--------|:---:|-----------|
-| `SqlPreviewPanel:1549` `getDocument(psi)` | EDT 鼠标事件 | softAssertReadAccess | ✅ 已修（e8b9d1d ReadAction 包裹） |
+| `SqlPreviewPanel:1549` `getDocument(psi)` | EDT 鼠标事件 | softAssertReadAccess | ✅ 已修（1ef8bf6 ReadAction 包裹） |
 | `DataSourceSelector:1109` `attachConsole`（平台 `LanguageConsoleImpl$Helper.getDocument` → `FileDocumentManager.getDocument`） | EDT（consumer 由 MyRunner.run 经 `ModalityUiUtil.invokeLaterIfNeeded` 回 ED） | softAssertReadAccess（2 条）+ EditorLockFreeTyping | ❌ **F1 修复** |
 | `DataSourceSelector:1116` `console.getDocument` 反射（平台 `JdbcConsole.getDocument` → `FileDocumentManagerBase.getDocument:54`） | EDT（同上） | softAssertReadAccess | ❌ **F1 修复** |
 | `DataSourceSelector:371/1169/2071/2809` `FileDocumentManager.getDocument` | `WriteAction.compute` 内（写权限隐含读） | 无（不触发） | ✅ 安全 |
@@ -190,6 +190,6 @@ val doc: Document = runCatching {
 
 | 项 | 结果 |
 |----|------|
-| 代码改动 | F1：`DataSourceSelector.prepareInConsole` 两处反射（`attachConsole` + `console.getDocument`）各包 `ReadAction.compute`，附注释记录 262 饱和栈证据链与「lambda 内勿塞同步 refresh」约束（fix 提交 7bf5860）；F2：`ProjectTypeDetector.detect` 包 `ReadAction.compute`（探测主体拆 `detectSync` 私有方法，`inject` 的文件创建段仍 `WriteCommandAction` 与探测分离——方案 B，fix 提交）；F3：`SqlPreviewPanel.createEditor` 临时文件支链 `runCatching{...}.getOrElse{ 纯内存文档兜底 }` 降级（主路径不变、降级态无 PSI/高亮/补全，fix 提交） |
+| 代码改动 | F1：`DataSourceSelector.prepareInConsole` 两处反射（`attachConsole` + `console.getDocument`）各包 `ReadAction.compute`，附注释记录 262 饱和栈证据链与「lambda 内勿塞同步 refresh」约束（fix 提交 3cba9f6）；F2：`ProjectTypeDetector.detect` 包 `ReadAction.compute`（探测主体拆 `detectSync` 私有方法，`inject` 的文件创建段仍 `WriteCommandAction` 与探测分离——方案 B，fix 提交）；F3：`SqlPreviewPanel.createEditor` 临时文件支链 `runCatching{...}.getOrElse{ 纯内存文档兜底 }` 降级（主路径不变、降级态无 PSI/高亮/补全，fix 提交） |
 | 全量回归 | F1 轮：`./gradlew test` BUILD SUCCESSFUL in 3m56s，3252/0/0/6；F2+F3 轮：见本次补充（同基线零回归） |
 | 证据留存 | 真机日志 `idea.log`~`idea.5.log` 业务帧归一化统计（createEditor 32 / prepareInConsole:1109 16 / :1116 4，其余断言类型插件帧零命中）；262 反编译 `FileTypeManagerImpl`（`getStdFileType` 用 java ReadWriteLock）/`FileDocumentManagerBase`/`IdeaLogger`/`Logger.shouldRethrow`/`ThreadingAssertions`，及真机栈 `LanguageConsoleImpl$Helper.getDocument(kt:406)`/`JdbcConsole.getDocument(Java:371)`；243 sources jar 对照 |

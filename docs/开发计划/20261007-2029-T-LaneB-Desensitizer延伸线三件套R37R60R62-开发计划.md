@@ -1,7 +1,7 @@
 # T-LaneB：Desensitizer 延伸线三件套（R60 展示/导出链脱敏 + R37 安全 AI 上下文交递 + R62 更新失败可诊断化）
 
 - 日期：2026-10-07 20:29（车道 B 全批，20261007 盘点 72 版定案「立即可动」车道）
-- 基线：dev `fe7d7db`（车道 A 批一 F79+R54 已并入后）
+- 基线：dev `508205e`（车道 A 批一 F79+R54 已并入后）
 - 定位：本册是车道 B 的立项与实施分册。R37/R60 按 0701 第十七轮审计「同 Desensitizer 延伸线一次设计」合并立项（D95），R62 独立快件。上位定义以 `20261007-0701` §二（R60/R62 + V112/V114）与 `20261002-0645` §三.1/§五 D39（R37 + V51）为准，冲突时以上位册为准。
 
 ## §一 前提回执（动手前证伪，全部实测）
@@ -85,9 +85,9 @@
 
 ## §六 实施记录
 
-- 2026-10-07 20:29 立项册落盘（车道 B，工作树 mpsv-laneb，分支 t-laneb，基线 fe7d7db）。前提回执 V112/V114/V51 三册九条全部实测落档（§一）。待实施：R60 → R37 → R62（分件提交）。
-- 2026-10-07 21:0x **R60 落地（提交 c9c9397）**：DisplayMasker（util 包纯 Kotlin）+四链挂接（列表两面板 sqlLineFragmentsFor 经 maskDisplay＋缓存键补 cachedListLineFragmentsMasked；clickPreviewSql/format/formatPortable/renderLogs 各增 mask 形参，调用方传设置）＋双开关（displayMaskEnabled/mcpMaskEnabled 默认关，PluginSettingsPanel 增强捕获区与 McpConfigurable 各一勾选）＋i18n 双语。定向读数：DisplayMaskerTest 17/0、SqlExportServiceTest 9/0、RenderLogsToolTest 7/0、SqlLogPanelRendererUiTest 38/0、SqlClickPreviewTest 18/0。先红＝compileTestKotlin 失败（Unresolved reference 'DisplayMasker'）；反向验证＝maskDisplay 摘除→89 例 7 红精确落四链「脱敏开」用例，复原复绿。实施勘误一处：IN 列表同列多值全打码（hint 按 IN 前列名继承）对齐采集侧「该列全部参数值打码」语义，测试期望据此修正。插曲：DisplayMasker.kt 首版 Write 引号转义被吃（`"\'`）致语法红，经探针测试定位后改 `SQL_QUOTE` 常量规避引号字面量。
-- 2026-10-07 21:1x **R37 落地（提交 97a72a5）**：AiContextExport（纯 Kotlin）+预览面板「更多」菜单「复制为 AI 上下文」动作（copyAsAiContext：currentEditorSql+方言→块→剪贴板→toast）。AiContextExportTest 5/0（红＝Unresolved reference 'AiContextExport'——测试先落盘、实现后写，红读数取自实现落盘前的编译轮）。与 R60 提交拆分：SqlPreviewPanel 的 R60 hunk（可移植导出脱敏）随 R60 笔、R37 hunk（动作）随 R37 笔（中间态手工摘复原，两笔各自可编译）。
-- 2026-10-07 21:2x **R62 落地（提交 7e15119）**：UpdateApi.FetchOutcome 三分支（HttpError 经 HttpStatusException.getStatusCode() 分层，fetchManifest 保留兼容视图）＋PluginUpdateRunner.FailureKind 四枚举（404/410→CHANNEL_MISSING，其余 HTTP→NETWORK 带状态码）＋UpdateSource.MARKETPLACE_URL 新常量＋UpdateSection 三态文案与兜底链接行（仅 CHANNEL_MISSING 可见）。定向读数：UpdateCheckDiagnosisTest 8/0、PluginUpdateRunnerTest 14/0、UpdateSectionTest 17/0、StartupUpdateCheckTest 7/0、UpdateSource/UpdateManifest 回归 2/0+6/0。反向验证＝404 判别分支摘除→「通道404_通道缺失态」精确复红（25 例 1 红），复原复绿。启动检查静默语义未动（既有定案）。
+- 2026-10-07 20:29 立项册落盘（车道 B，工作树 mpsv-laneb，分支 t-laneb，基线 508205e）。前提回执 V112/V114/V51 三册九条全部实测落档（§一）。待实施：R60 → R37 → R62（分件提交）。
+- 2026-10-07 21:0x **R60 落地（提交 8a903d5）**：DisplayMasker（util 包纯 Kotlin）+四链挂接（列表两面板 sqlLineFragmentsFor 经 maskDisplay＋缓存键补 cachedListLineFragmentsMasked；clickPreviewSql/format/formatPortable/renderLogs 各增 mask 形参，调用方传设置）＋双开关（displayMaskEnabled/mcpMaskEnabled 默认关，PluginSettingsPanel 增强捕获区与 McpConfigurable 各一勾选）＋i18n 双语。定向读数：DisplayMaskerTest 17/0、SqlExportServiceTest 9/0、RenderLogsToolTest 7/0、SqlLogPanelRendererUiTest 38/0、SqlClickPreviewTest 18/0。先红＝compileTestKotlin 失败（Unresolved reference 'DisplayMasker'）；反向验证＝maskDisplay 摘除→89 例 7 红精确落四链「脱敏开」用例，复原复绿。实施勘误一处：IN 列表同列多值全打码（hint 按 IN 前列名继承）对齐采集侧「该列全部参数值打码」语义，测试期望据此修正。插曲：DisplayMasker.kt 首版 Write 引号转义被吃（`"\'`）致语法红，经探针测试定位后改 `SQL_QUOTE` 常量规避引号字面量。
+- 2026-10-07 21:1x **R37 落地（提交 1cb2a24）**：AiContextExport（纯 Kotlin）+预览面板「更多」菜单「复制为 AI 上下文」动作（copyAsAiContext：currentEditorSql+方言→块→剪贴板→toast）。AiContextExportTest 5/0（红＝Unresolved reference 'AiContextExport'——测试先落盘、实现后写，红读数取自实现落盘前的编译轮）。与 R60 提交拆分：SqlPreviewPanel 的 R60 hunk（可移植导出脱敏）随 R60 笔、R37 hunk（动作）随 R37 笔（中间态手工摘复原，两笔各自可编译）。
+- 2026-10-07 21:2x **R62 落地（提交 5e47d6a）**：UpdateApi.FetchOutcome 三分支（HttpError 经 HttpStatusException.getStatusCode() 分层，fetchManifest 保留兼容视图）＋PluginUpdateRunner.FailureKind 四枚举（404/410→CHANNEL_MISSING，其余 HTTP→NETWORK 带状态码）＋UpdateSource.MARKETPLACE_URL 新常量＋UpdateSection 三态文案与兜底链接行（仅 CHANNEL_MISSING 可见）。定向读数：UpdateCheckDiagnosisTest 8/0、PluginUpdateRunnerTest 14/0、UpdateSectionTest 17/0、StartupUpdateCheckTest 7/0、UpdateSource/UpdateManifest 回归 2/0+6/0。反向验证＝404 判别分支摘除→「通道404_通道缺失态」精确复红（25 例 1 红），复原复绿。启动检查静默语义未动（既有定案）。
 - 2026-10-07 21:3x **收口**：全量定向复跑（脱敏/导出/MCP/更新/设置五族 15 类）＋SettingsRealityGuardTest/McpConfigurableGateTest/PluginSettingsPanelBindingTest/SettingsIOTest/PluginSettingsPersistenceTest 设置族回归——新 State 字段两枚（displayMaskEnabled 消费在 log 包、mcpMaskEnabled 消费在 mcp 包，断言一「写而不读」不触发）；push t-laneb 留底，不并 dev。
 - 实施与计划的偏差登记：①R62 的「三态」按 V121.3 落为「失败二分（网络/通道404）+已最新」合计三态，与 §二 定义一致；②`settings.update.checkFailed` 旧键保留（MANIFEST_MALFORMED/VERSION_UNREADABLE 两辅助态沿用），仅 NETWORK/CHANNEL_MISSING 走新键——安装失败（installFailed）文案路径未动。

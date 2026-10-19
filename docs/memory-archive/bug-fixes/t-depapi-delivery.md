@@ -1,13 +1,13 @@
 ---
 name: t-depapi-delivery
-description: T-DepApi 已交付——三处弃用 API 换现代等价物（master 3ba0708），三平台弃用 40→38；剩余四项 javap 实证无等价替换留档
+description: T-DepApi 已交付——三处弃用 API 换现代等价物（master 08d75c4），三平台弃用 40→38；剩余四项 javap 实证无等价替换留档
 metadata:
   node_type: memory
   type: project
   originSessionId: sess_5361d041-6f37-4c2c-9d97-515b95c961df
 ---
 
-T-DepApi 已交付（2026-09-09，master 3ba0708）：verifyPlugin 弃用 API 渐进清债第一轮。三处替换均有 243/253/262 三平台 javap 实证（transform 缓存解包 dist 路径：`~/.gradle/caches/9.7.0/transforms/*/transformed/idea-*-win`，`lib/util-8.jar`(243/253) 与 `lib/intellij.platform.core.jar`(262) 是核心 API 权威）：
+T-DepApi 已交付（2026-09-09，master 08d75c4）：verifyPlugin 弃用 API 渐进清债第一轮。三处替换均有 243/253/262 三平台 javap 实证（transform 缓存解包 dist 路径：`~/.gradle/caches/9.7.0/transforms/*/transformed/idea-*-win`，`lib/util-8.jar`(243/253) 与 `lib/intellij.platform.core.jar`(262) 是核心 API 权威）：
 
 - `StdLanguages.JAVA` → `com.intellij.lang.java.JavaLanguage.INSTANCE`（java 插件 jar：243 `plugins/java/lib/java-frontback.jar` / 253 `java-impl-frontend.jar` / 262 `intellij.java.frontback.psi.jar`；plugin.xml 已依赖 com.intellij.java）
 - `FilenameIndex.getFilesByName(project, name, scope)` → `getVirtualFilesByName(name, scope)`（**无 project 重载**才不弃用，有 project 参数的全部弃用；返回 VirtualFile 后 PsiManager.findFile 转 PsiFile）

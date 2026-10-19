@@ -20,7 +20,7 @@
 
 **诊断探针已在读光标（但不参与决策）**：`DataSourceSelector.kt:1036-1046` 调 `ScriptModelUtil.getSelectedStatementsRange(client, editor, execOption)`，日志打印 `caret=${editor.caretModel.offset}`、`execSelection=…`（`:1172`），但整段在 `LOG.isDebugEnabled` 下（`:1005` 早退）——**只诊断、不决策**。这给「真机核实」提供了现成的取证入口。
 
-**最优落点（若要做提交前预处理）**：`DataSourceSelector.stripGSuffixForSubmit(sqlText, dataSourceUrl)`（`:3332`）+ 纯函数 `execute/MysqlClientGSuffix.kt`（`:47`/`:70`）——`\G` 剥离（T-MysqlGStrip `87b6160`）就在这一层，形态是「提交前预处理 + 回写文档」（`:2367-2374`），有现成测试范式（`MysqlClientGSuffixTest`/`MysqlClientGSuffixSubmitChainTest`）。DELIMITER 处理可挂同族。
+**最优落点（若要做提交前预处理）**：`DataSourceSelector.stripGSuffixForSubmit(sqlText, dataSourceUrl)`（`:3332`）+ 纯函数 `execute/MysqlClientGSuffix.kt`（`:47`/`:70`）——`\G` 剥离（T-MysqlGStrip `6810ad1`）就在这一层，形态是「提交前预处理 + 回写文档」（`:2367-2374`），有现成测试范式（`MysqlClientGSuffixTest`/`MysqlClientGSuffixSubmitChainTest`）。DELIMITER 处理可挂同族。
 
 ## 二、目标与非目标
 
@@ -74,8 +74,8 @@ T-DA-01（真机核实，先做——可能结案）→ T-DA-02（拆分器感�
 | 任务 | 提交 | 说明 / 偏离 |
 |------|------|------|
 | T-DA-01 | 无提交（探针代码已删除，结论见 §8.2） | 判定＝**原生已覆盖（静态证据）＋光标行取值环境受限未验证**；两次探针实录见 §8.2 |
-| T-DA-02 | `26487b8` | `SqlStatementSplitter` 增「当前界符」维度 + 行首 `DELIMITER <token>` 指令识别；先红后绿见 §8.3 |
-| T-DA-03 | `3a3fa04` | 四消费面各 1 例（log/execute×2/mcp），共 +4 例；读数见 §8.4 |
+| T-DA-02 | `b1b63ef` | `SqlStatementSplitter` 增「当前界符」维度 + 行首 `DELIMITER <token>` 指令识别；先红后绿见 §8.3 |
+| T-DA-03 | `a981e13` | 四消费面各 1 例（log/execute×2/mcp），共 +4 例；读数见 §8.4 |
 | T-DA-04 | 不实施 | 已定案（2026-09-19，用户认可）：不做；留档备选。T-DA-01 结论亦不构成启动理由（§8.2） |
 | T-DA-05 | 收窄（见 §8.6 偏离①） | 仅本计划 §八；`CHANGELOG.md`、`docs/变更记录.md`、第八轮报告 §8 #39 落地备注未动 |
 
@@ -177,7 +177,7 @@ T-DA-01（真机核实，先做——可能结案）→ T-DA-02（拆分器感�
 2. **T-DA-01 的取证方式**：计划 §三 指定用现成 `[M36]` debug 探针在真机实录；实际改为「静态证据 + 两次
    探针尝试」，原因见 §8.2（该探针只在 `LOG.isDebugEnabled` 下打日志、且要真机交互放光标，本机不具备）。
    探针代码跑完即删、未入库（第一版曾把探针留在 `DataSourceSelectorIntegrationTest`/`DbConsoleIntegrationTest`，
-   实测会扰动同 JVM 内的既有 e2e 用例——控制台被回收——故整段还原，两文件回到 `1e51ce7` 原状）。
+   实测会扰动同 JVM 内的既有 e2e 用例——控制台被回收——故整段还原，两文件回到 `6a6e963` 原状）。
 3. **`split()` 与 `splitStripped()` 同口径丢弃指令行**：计划 §三 只要求「指令行不作为独立语句产出」，
    实现上两者都把指令行整行丢弃（含界符 token），未采用「把指令行挂到下一条语句前」的备选形态——
    后者会让 `SqlTypeClassifier` 首关键字回 `DELIMITER` 判 UNKNOWN，与验收 4② 冲突。

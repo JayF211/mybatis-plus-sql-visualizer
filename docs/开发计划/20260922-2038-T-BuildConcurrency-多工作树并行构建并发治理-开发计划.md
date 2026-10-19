@@ -4,7 +4,7 @@
 > 编号：占用 **O-65**（2026-09-23 订正：立项时自称 O-59，第三轮全景审计发现与台账冲突，改占 O-65；O-59 实为 T-RollbackIdentityWrap 已交付）。O-57/O-58 已由并行会话占用，O-56 为 T-AgentResiduals。
 > 性质：工程效能治理（Gradle 配置 + 环境变量 + 协调脚本，**源码零改动、测试零改动**）。
 > 实施方式：先做只读核实与对照实测，破坏性动作（停 daemon、迁盘）逐项经用户确认后执行。
-> 前置：本计划全部实测快照点为 **2026-09-22 20:00~20:38**，HEAD=`t-round10` `1504fa0`。并行会话高频推进，实施时若环境已变（daemon 数、worktree 数、磁盘余量），**先重跑 §一 的核实命令**。
+> 前置：本计划全部实测快照点为 **2026-09-22 20:00~20:38**，HEAD=`t-round10` `fa1cf55`。并行会话高频推进，实施时若环境已变（daemon 数、worktree 数、磁盘余量），**先重跑 §一 的核实命令**。
 
 ---
 
@@ -239,7 +239,7 @@ Gradle 属性优先级为 GRADLE_USER_HOME > 项目根，故项目级那份 `-Xm
 
 ### 一、P-2 实测（2026-09-23 08:45~09:47）
 
-**设计**：以同一提交（`24d6e33`）的两个工作树做对照——`mpsv-agent-config-locate`（基线）与 `mpsv-hql-colmap`（陪跑），各跑 `testShards -PtestShardCount=3`。单路与双路各采 CPU 与内存提交量（3 秒粒度）。实测前确认无其他 Gradle 构建在跑（CPU 基线 12~23%）。
+**设计**：以同一提交（`01c6a99`）的两个工作树做对照——`mpsv-agent-config-locate`（基线）与 `mpsv-hql-colmap`（陪跑），各跑 `testShards -PtestShardCount=3`。单路与双路各采 CPU 与内存提交量（3 秒粒度）。实测前确认无其他 Gradle 构建在跑（CPU 基线 12~23%）。
 
 **读数**：
 
@@ -322,11 +322,11 @@ Gradle 属性优先级为 GRADLE_USER_HOME > 项目根，故项目级那份 `-Xm
 
 ### 六、B 项实施：daemon 参数统一 + Kotlin in-process（2026-09-24 00:30~01:45）
 
-**实施位置**：独立工作树 `F:\code\Java\Gitee\SongRenShuo\mpsv-build-conc`（分支 `t-build-concurrency`，基于 dev 顶 `1b9ee73`）。开工第一步 `./gradlew --stop`（停 3 个 daemon，窗口期避开并行车道）。
+**实施位置**：独立工作树 `F:\code\Java\Gitee\SongRenShuo\mpsv-build-conc`（分支 `t-build-concurrency`，基于 dev 顶 `92b906e`）。开工第一步 `./gradlew --stop`（停 3 个 daemon，窗口期避开并行车道）。
 
 **改动**：
 1. 用户级 `~/.gradle/gradle.properties`（junction 实体 `F:\gradle-home\gradle.properties`）：`org.gradle.jvmargs` 由 `-Xmx2g -XX:MaxMetaspaceSize=256m` 改为 `-Xmx4096m -XX:MaxMetaspaceSize=1536m`，其余条目逐字保留（`codex.sdk.jar` 等）。
-2. 项目 `gradle.properties`：新增 `kotlin.compiler.execution.strategy=in-process` 常驻配置（注释写明机制、内存代价承接、OOM 回退方式与 §九 D2 备选）；订正「jvmargs 被用户级覆盖从未生效」的过时注释。提交 `2932b46`。
+2. 项目 `gradle.properties`：新增 `kotlin.compiler.execution.strategy=in-process` 常驻配置（注释写明机制、内存代价承接、OOM 回退方式与 §九 D2 备选）；订正「jvmargs 被用户级覆盖从未生效」的过时注释。提交 `0472a59`。
 
 **改前留底（用户级文件全文，2026-09-24 01:36 读）**：
 
@@ -354,7 +354,7 @@ codex.sdk.jar=F:/code/Java/Github/other/houxinlin/coolrequest-vip/libs/codex-jav
 
 ### 七、C 项实施：机器级构建闸门 dev-support/gradle-gate.ps1（2026-09-24 01:45~02:05）
 
-**实现形态**（`dev-support/gradle-gate.ps1`，提交 `038a662`）：
+**实现形态**（`dev-support/gradle-gate.ps1`，提交 `913f8c9`）：
 - 锁目录 `%TEMP%\<GateName>\slot-0..slot-(N-1)`，**目录创建（create-or-fail）为原子互斥原语**；槽内 `holder.txt` 记 pid/session/utc/cmd。`%TEMP%` 按用户隔离，全部车道同一 Windows 用户运行时即等价机器级。
 - 默认 `-MaxConcurrent 2`（内存约束依据 §九 D3）；**无任何降片逻辑**（§三 C 行已订正）。
 - 两种用法：`-Command "<gradle 命令>"`（拿锁-执行-还锁-传播退出码，推荐）；`-Acquire [-HoldSeconds N] [-NoRelease]` / `-Release -Session <guid>` 两段式。

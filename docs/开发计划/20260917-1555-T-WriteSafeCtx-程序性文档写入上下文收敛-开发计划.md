@@ -6,7 +6,7 @@
 - 取证：运行环境 = 243.28141.41（IDEA 2024.3.7.1，与 `build.gradle.kts:93` 编译目标一致）——本次以 gradle 缓存内的 `ideaIU-2024.3.7.1-sources.jar` 平台源码逐帧对齐，不做推理
 - 性质：上下文合法性缺陷（平台断言违反），非功能逻辑错误；多数表现为 SEVERE 日志 + 插件错误上报，单测/内部模式下会硬抛
 - 实施方式：任务分支 t-writesafectx（扁平分支名）
-- 前置：无（master 侧 `33b068a` 为本轮引入点，尚未推送发行，可直接在 master 上前置修复）
+- 前置：无（master 侧 `ae0c56d` 为本轮引入点，尚未推送发行，可直接在 master 上前置修复）
 
 ---
 
@@ -22,7 +22,7 @@
 
 | 真机帧 | 平台源码 | 事实 |
 |---|---|---|
-| `SqlPreviewPanel.kt:800-806` | 本仓 `SqlPreviewPanel.kt:800-806` | `invokeLater({ renderSql() }, ModalityState.any())`（T-PreviewConsoleFmt `33b068a` 引入的「挂载后回填」） |
+| `SqlPreviewPanel.kt:800-806` | 本仓 `SqlPreviewPanel.kt:800-806` | `invokeLater({ renderSql() }, ModalityState.any())`（T-PreviewConsoleFmt `ae0c56d` 引入的「挂载后回填」） |
 | `ApplicationImpl$2.run(ApplicationImpl.java:421)` | `ApplicationImpl.java:409-421` | `wrapWithRunIntendedWriteActionAndModality` 的匿名 Runnable 转 `runIntendedWriteActionOnCurrentThread` |
 | `AnyThreadWriteThreadingSupport.kt:216/128` | 同文件 `:215-219`/`:125-133` | 只授予 **write-intent（读意图）**，不打开"允许写模型" |
 | `TransactionGuardImpl$1.run(TransactionGuardImpl.java:201)` | `TransactionGuardImpl.java:192-203` | **关键帧**：`wrapLaterInvocation` 的 `else { runnable.run() }` 分支——**排队 modality 非 write-safe 时不套 `runWithWritingAllowed`** |
@@ -49,7 +49,7 @@
 ### 1.5 历史账（同一坑的第三、第四次）
 
 - 第一次：M36.5.21c `invokeLater(any)` 调 `doRunQueryInConsole`（write-unsafe）→ M36.5.21d 终局改 `TransactionGuard.submitTransactionLater`。归档见 `docs/memory-archive/pitfalls/feedback-m36-native-console-misalignment.md` 第 15 条。
-- 第二、三、四次即本计划 §二 清单（M36.5.x 的 contentAdded 重写、执行错误回显；`33b068a` 的挂载后回填；SqlToJava 生成码回填）。
+- 第二、三、四次即本计划 §二 清单（M36.5.x 的 contentAdded 重写、执行错误回显；`ae0c56d` 的挂载后回填；SqlToJava 生成码回填）。
 - **前三轮都在"改那一处"，没有制度约束**——本计划的核心价值在 T-WSC-04/05（闸门 + 守卫测试），§三 的 P0 两行只是止血。
 
 ---
@@ -60,8 +60,8 @@
 
 | # | 站点 | 引入 | 写入内容 | 判定 |
 |---|---|---|---|---|
-| 1 | `SqlPreviewPanel.kt:800-806` | `33b068a` T-PreviewConsoleFmt | `renderSql()` → `showSql` → `setText` | **必改**（本次报错站点；每次预览必触发，因预热原文≠渲染文本） |
-| 2 | `DataSourceSelector.kt:884-935` | `0e57b4b3`/`2b44cbb6`/`68ebdab1` M36.5.25c | `consoleDoc.setText(currentSql)` + `commitDocument` + `saveDocument` | **必改**（条件：`consoleDoc.text != currentSql`，故偶发） |
+| 1 | `SqlPreviewPanel.kt:800-806` | `ae0c56d` T-PreviewConsoleFmt | `renderSql()` → `showSql` → `setText` | **必改**（本次报错站点；每次预览必触发，因预热原文≠渲染文本） |
+| 2 | `DataSourceSelector.kt:884-935` | `13201b39`/`9785c348`/`f68372e2` M36.5.25c | `consoleDoc.setText(currentSql)` + `commitDocument` + `saveDocument` | **必改**（条件：`consoleDoc.text != currentSql`，故偶发） |
 | 3 | `DataSourceSelector.kt:796-798` | M36.5.70 | `writeConsoleOutput` → `doc.insertString` | **必改**（执行失败回显路径；Timer 拍内触发） |
 | 4 | `SqlToJavaPanel.kt:968-975` | 既有 | `render(...)` → `setResultText` → `setText` | **必改**（sql→java 生成码回填） |
 | 5 | `SqlPreviewPanel.kt:843/879/970` | M36.5.x | 仅 divider/revalidate/relayout | 保留（纯 UI），加豁免标注 |

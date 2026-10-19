@@ -1,8 +1,8 @@
 # T-VPairAnno：竖向排列 VALUES 行尾列名标注做成配置项开发计划
 
 > **创建日期**：2026-09-10
-> **状态**：✅ 已实施、已测试、已提交（master `770313a`，2026-09-10；全量 3242/0/6 绿，sandbox-vpairanno 隔离；runIde 真机走查留人工）
-> **分支**：master（HEAD `cefc258`；工作树含 T-ExecSilentNoop 等会话在途改动，见 6.1）
+> **状态**：✅ 已实施、已测试、已提交（master `ca1a376`，2026-09-10；全量 3242/0/6 绿，sandbox-vpairanno 隔离；runIde 真机走查留人工）
+> **分支**：master（HEAD `820a258`；工作树含 T-ExecSilentNoop 等会话在途改动，见 6.1）
 > **优先级**：P2（增强型配置项，非缺陷——现有行为默认保留，仅增加关闭通道）
 > **预估工时**：1.5~2h（F1 参数化 + F2~F4 设置四处接线 + F5 测试，单笔 feat 提交）
 > **来源**：用户需求（2026-09-10）——竖向排列下 INSERT 的 VALUES 值旁边显示的注释信息（`-- 列名` 配对标注）做成配置项，默认开启，可自行关闭
@@ -173,7 +173,7 @@ PluginSettingsPanelBindingTest / PluginSettingsPersistenceTest：实施时核对
 
 ---
 
-## 实施记录（2026-09-10 交付，master `770313a`）
+## 实施记录（2026-09-10 交付，master `ca1a376`）
 
 **与计划的偏差**：
 

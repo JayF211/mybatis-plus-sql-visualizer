@@ -60,7 +60,7 @@
 
 ## 七、实施记录
 
-（2026-09-30 实施，分支 t-r12pagsim，基=dev c9c05eb；D1/D2/D3 全按推荐 A 定案。）
+（2026-09-30 实施，分支 t-r12pagsim，基=dev f6768c0；D1/D2/D3 全按推荐 A 定案。）
 
 **重锚与证伪（§五待验证前提逐条落地）**
 
@@ -74,7 +74,7 @@
 - **V13a 落点结论**：仓内无独立 MapperMethodLocator——XML 路径「namespace+语句 id → mapper 方法」定位现居 `ui/XmlParamTypeResolver.resolveTypes`（JavaPsiFacade findClass→findMethodsByName）；新定位器 MapperPageParamLocator 与其同链就近落位 ui/ 包（计划写集标 psi/ 偏差已留痕）。
 - **V13c 边界定案**：XML 语句已含 LIMIT（手写）→ 不重复追加、不产 COUNT（预览保守口径；MP 运行时为字面拼接会双 LIMIT，预览偏离已登记）——用例 testXmlStatementWithHandWrittenLimitNotDuplicated 钉住。
 
-**实施内容（提交 2eb2c49 全案 + 7061309 契约对账）**
+**实施内容（提交 00b3813 全案 + 55e271e 契约对账）**
 
 - T-01（缺口 A）：`WrapperLocator.pageConsumerMethodNames` 补注册 selectList/selectMaps/selectMapsPage（反编译全集）；`parsePageArg` 连带解析 Page 构造器第 3/4 参布尔字面量为 searchCount（三处 WrapperChain 装配点透传新字段 `pageSearchCount`，默认 true）；XML/注解路径 `MapperPageParamLocator`（Page/IPage/PageImpl 简单名文本匹配，任意位置形参）+ `XmlPreviewService.applyPaginationShared`（SELECT 尾追方言 LIMIT 占位 `LIMIT ?, ?`，参数来源标注 `(形参.current-1)*形参.size` 公式）。
 - T-02（缺口 B）：`sql/interceptor/PaginationSimulator.kt` 纯函数新件（对齐三件先例形态）；Wrapper 链 `SqlPreviewService.paginationCountSql`（模型级 `copy(limit=null)` 重生成包裹体——运行时 COUNT 先于 LIMIT 执行的反编译顺序；count/exists 消费与 searchCount=false 与开关关闭三重跳过）；`PreviewResult.countSql` 新字段 + `SqlPreviewPanel.appendCountSection`（照 T-MpjFill fill 段先例，主 SQL 后注释头并列渲染第二条语句，D1=A）。
@@ -85,7 +85,7 @@
 - PaginationSimTest 17 用例（wrapper IPage 三方法+负例 / XML 四形态 / 注解 / COUNT 包裹含字节形态钉 / searchCount / 开关 / last 并存单 LIMIT / 方言矩阵 MySQL-PG-Oracle）：
   - **红（钩子摘除）**：17 completed, **9 failed**——判别用例全红（ComparisonFailure/AssertionFailedError 逐条在案），8 个负例守卫与形态钉按设计不判红；
   - **绿（还原）**：17 completed, **0 failed**。
-- 零回归定向（不跑全量，按分层纪律交收口代理）：批次一 180 completed 1 failed（=PluginSettingsPersistenceTest 复选框总数契约 38→39，预期内连带，7061309 修正后 15/15 绿）；批次二 72/72（SettingsIOTest 11 / PluginSettingsPanelBindingTest 14 / UnknownParamGateTest 6 / DollarInjectBannerTest 6 / HeavyXmlParamTypeResolverTest 16 / DialectTest 19）。
+- 零回归定向（不跑全量，按分层纪律交收口代理）：批次一 180 completed 1 failed（=PluginSettingsPersistenceTest 复选框总数契约 38→39，预期内连带，55e271e 修正后 15/15 绿）；批次二 72/72（SettingsIOTest 11 / PluginSettingsPanelBindingTest 14 / UnknownParamGateTest 6 / DollarInjectBannerTest 6 / HeavyXmlParamTypeResolverTest 16 / DialectTest 19）。
 
 **遗留登记**
 

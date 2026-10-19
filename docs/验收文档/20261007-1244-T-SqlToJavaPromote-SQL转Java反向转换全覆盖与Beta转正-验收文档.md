@@ -1,22 +1,22 @@
 # T-SqlToJavaPromote SQL→Java 反向转换全覆盖与 Beta 转正 验收文档
 
-- **验收时间**：20261007 12:44（master `3c19aa6` 时点实测）
+- **验收时间**：20261007 12:44（master `0d3c4f0` 时点实测）
 - **计划**：`docs/开发计划/20261006-1020-SQL转Java反向转换全覆盖增强与Beta转正-开发计划.md`（§十 实施记录已回填）
-- **实施分支**：`t-sqltojava-promote`（工作树 `mybatis-plus-sql-visualizer-t-sqltojava-promote`，合并后已清退）→ **并入 master `7d7b8cd`**（`master..origin/t-sqltojava-promote=0` rev-list 实测，零残留）
+- **实施分支**：`t-sqltojava-promote`（工作树 `mybatis-plus-sql-visualizer-t-sqltojava-promote`，合并后已清退）→ **并入 master `7811d2a`**（`master..origin/t-sqltojava-promote=0` rev-list 实测，零残留）
 - **验收方式**：SQL 层往返门禁（用户点名「Java 转 SQL 再 SQL 转 Java」的测试化落地）+ 全量 testShards 分片门禁
 
 ## §一 提交清单（分支自有 8 笔，按实施序）
 
 | 提交 | 里程碑 | 内容 |
 |---|---|---|
-| `0cb9c8e` | M1 门禁基建 | 语料库 70 条四档基线 + `ReverseBridge`（反向→正向桥接 + INSERT 测试渲染器 + 词法安全规范化）+ `ReverseRoundTripGateTest` 四档断言；生产侧仅 `SqlReverseResult` 字段增量（tableAlias/distinct/groupBy/having/unions/forUpdate + `ReverseUnion`）与三 body 主表别名捕获，行为零变化 |
-| `6db3179` | M2 G1~G6 | GROUP BY→`.groupBy(...)`、HAVING→`.having("...")`、DISTINCT 建模、FOR UPDATE→`.last(...)`（与 LIMIT 合并单 last）、聚合/函数列收集原文（**G5 语义修复**）、INSERT NULL→Java `null`；语料升档 7 条 |
-| `8ee6e0c` | M3 G7~G11 | tokenizer 方言宽容（双引号标识符/`0x` 十六进制/反斜杠转义）+ DATE/TIMESTAMP ANSI 字面量 + `<=>`/算术/ILIKE 降级透传 + UNION [ALL] 解析（SQL 往返通、Java 生成层降级注释）+ G7 参数化 apply；语料升档 9 条 |
-| `4769a77` | M4 生成层 | 全语料生成代码不崩断言（多表删除需实体上下文显式豁免） |
-| `5d11133` | M5 转正 | bundle en/zh `log.tab.sqlToJava` 去 Beta + CHANGELOG [Unreleased] Added 两条/Changed 两条 |
-| `93b174f` | 收口 | 计划 §十 实施记录回填（含并行 daemon 争用/OOM 环境波折留痕） |
-| `76f41ca` | 对齐 | master 32 笔并入分支（零冲突，三处重叠文件双侧在场校验） |
-| `4efc369` | 对齐 | 反馈分类文案 `feedback.category.sql-to-java` 中英双包统一箭头写法（与页签/菜单命名一致） |
+| `686b382` | M1 门禁基建 | 语料库 70 条四档基线 + `ReverseBridge`（反向→正向桥接 + INSERT 测试渲染器 + 词法安全规范化）+ `ReverseRoundTripGateTest` 四档断言；生产侧仅 `SqlReverseResult` 字段增量（tableAlias/distinct/groupBy/having/unions/forUpdate + `ReverseUnion`）与三 body 主表别名捕获，行为零变化 |
+| `26caf97` | M2 G1~G6 | GROUP BY→`.groupBy(...)`、HAVING→`.having("...")`、DISTINCT 建模、FOR UPDATE→`.last(...)`（与 LIMIT 合并单 last）、聚合/函数列收集原文（**G5 语义修复**）、INSERT NULL→Java `null`；语料升档 7 条 |
+| `f7fe2aa` | M3 G7~G11 | tokenizer 方言宽容（双引号标识符/`0x` 十六进制/反斜杠转义）+ DATE/TIMESTAMP ANSI 字面量 + `<=>`/算术/ILIKE 降级透传 + UNION [ALL] 解析（SQL 往返通、Java 生成层降级注释）+ G7 参数化 apply；语料升档 9 条 |
+| `59069c9` | M4 生成层 | 全语料生成代码不崩断言（多表删除需实体上下文显式豁免） |
+| `498f17c` | M5 转正 | bundle en/zh `log.tab.sqlToJava` 去 Beta + CHANGELOG [Unreleased] Added 两条/Changed 两条 |
+| `901e9f1` | 收口 | 计划 §十 实施记录回填（含并行 daemon 争用/OOM 环境波折留痕） |
+| `760e80b` | 对齐 | master 32 笔并入分支（零冲突，三处重叠文件双侧在场校验） |
+| `a2333fd` | 对齐 | 反馈分类文案 `feedback.category.sql-to-java` 中英双包统一箭头写法（与页签/菜单命名一致） |
 
 ## §二 能力面落地（缺口台账 G1~G12 处置）
 
@@ -40,14 +40,14 @@
 1. **SQL 层往返门禁**（`ReverseRoundTripGateTest`，全语料四档断言）：最终分布 **ROUND_TRIP 52 / PARSE_OK 7 / RAW_DEGRADE 6 / PARSE_ERROR 5**（70 条）。实施起点基线为 38/10/3/19——报错档 19→5，收敛的 14 条全部转 ROUND_TRIP（13 条）或 RAW_DEGRADE/结构断言（算术/`<=>`/ILIKE 降级+FOR UPDATE 建模断言），先红后绿逐条留痕于语料文件与实施记录。
 2. **reverse 全族回归**：279 例多轮绿（M2 轮 4 处既有断言随 G5 行为变化更新为新语义并登记；M3 轮零既有断言破坏）。
 3. **生成层覆盖**（M4）：凡可解析语料（65 条非 PARSE_ERROR）走 JavaCodeGenerator 必产非空代码不抛异常。
-4. **全量门禁**：实施期 shard1~5 + testExternal 分片全绿（合计 6186 例；docker 三态按惯例 skip）。**合并后首全量 `6218/0/0/9`（543 类 parity，3m16s）已由 T-StackHoverUi 统一门禁复跑通过**（`3c19aa6` 登记在读）——含本功能合并后的最终态，权威读数以此为准。
+4. **全量门禁**：实施期 shard1~5 + testExternal 分片全绿（合计 6186 例；docker 三态按惯例 skip）。**合并后首全量 `6218/0/0/9`（543 类 parity，3m16s）已由 T-StackHoverUi 统一门禁复跑通过**（`0d3c4f0` 登记在读）——含本功能合并后的最终态，权威读数以此为准。
 5. **过程环境波折（均环境性、留痕）**：并行会话 t-sqllogperf 期间共享 gradle daemon 两次意外消失；testExternal IU-253 目标 JVM 页面文件 OOM（errno=1455，内存回落后自愈）；FatalPassthroughTest 全量并发 flaky（单跑绿自证非回归）；残留 Test Executor 锁沙盒（taskkill 清理后复跑通过）。
 
 ## §四 UI 验收
 
 本任务 UI 面改动范围：工具窗页签文案（去 Beta）与生成代码内容（新能力产物）——面板构建/交互/渲染逻辑零改动，UI 验收=自动化 UI 回归读数 + 文案面实测 + 真机走查清单（待执行，见 §六 遗留）。
 
-### 4.1 自动化 UI 测试读数（master `3c19aa6` 时点复跑，61 例全绿）
+### 4.1 自动化 UI 测试读数（master `0d3c4f0` 时点复跑，61 例全绿）
 
 | 测试类 | 例数 | 覆盖面 |
 |---|---|---|
@@ -59,13 +59,13 @@
 
 **覆盖边界声明**：以上 61 例全部运行于 Light fixture 环境（测试工程无实体类、无 MPJ 依赖、无真实项目索引）——对「真实项目索引反查」（MPJ 能力判定/方法集反查）、同表多候选实体分发、跨形态列名（@TableField 显式驼峰列）三类真实数据面**零覆盖**；该面由 §4.3/§4.4 真机走查兜底（4.3 两缺陷即从此现形）。
 
-### 4.2 文案面实测（master `3c19aa6`）
+### 4.2 文案面实测（master `0d3c4f0`）
 
 - 页签：`MpSqlVisualizerBundle.properties:526` / `_zh.properties:507` 均为 `SQL → Java`（`(Beta)` 已去，grep 实测）；
-- 反馈分类：`feedback.category.sql-to-java` 中英双包统一箭头写法（`4efc369`，与页签/菜单「发送到 SQL → Java 转换」命名一致）；
+- 反馈分类：`feedback.category.sql-to-java` 中英双包统一箭头写法（`a2333fd`，与页签/菜单「发送到 SQL → Java 转换」命名一致）；
 - 帮助页 html/md 与 plugin.xml：grep 实测零功能 Beta 表述。
 
-### 4.3 真机走查发现缺陷与闭环（20261007 用户真机两例，`ab0d8fb` 修复）
+### 4.3 真机走查发现缺陷与闭环（20261007 用户真机两例，`131c7cc` 修复）
 
 1. **调用类 MPJ 能力 stale 误报**（T-FixMpjStale）：`DeviceInfoMapper extends MPJBaseMapper<DeviceInfoEntity>` 明确具备 MPJ 能力，面板仍报「调用类无 MPJ 能力」——根因=选类回调只重生成、`callerMpj` 仅在 SQL 解析链反查，「先贴 SQL 后选调用类」路径拿 stale `false`。修复=选类回调改后台反查（`invocationHasMpj`/`invocationMethods`）→EDT 回填→重生成；面板测试两处随异步化适配轮询。
 2. **列名→字段映射回落大列表**（T-FixCamelMap）：`role_id`/`email` 等大列表回落字符串列名——两因复合：①`resolveColumn` 列名查询无驼峰归一（`role_id` 查 `roleId` 键 miss，`@TableField` 显式驼峰列真机仍会回落）→双向归一（原样/snake/camel 三变体）；②**多候选实体静默取首**（同表多实体如 User/UserDO 静默取到字段子集实体，用户误判为映射缺陷）→状态栏新键 `entityAmbiguous` 明示全部候选与已选项并指路「手动选择实体」。demo 仓实测仅 `User` 无 `UserDO`，截图 2 错配来源待真机复测确认。
@@ -83,7 +83,7 @@
 ## §五 行为变化登记（CHANGELOG 已同步）
 
 1. **聚合/函数列语义修复**（G5）：`SELECT COUNT(*) AS cnt` 等此前 select 生成整体放弃（往返变全列查询、聚合语义丢失），现收集原文生成 `select("COUNT(*) AS cnt")`——CHANGELOG [Unreleased] Changed 已登记。
-2. **页签去 Beta**：`log.tab.sqlToJava` en/zh 两行 `SQL → Java (Beta)`→`SQL → Java`；反馈分类文案箭头统一（`4efc369`）。
+2. **页签去 Beta**：`log.tab.sqlToJava` en/zh 两行 `SQL → Java (Beta)`→`SQL → Java`；反馈分类文案箭头统一（`a2333fd`）。
 3. **4 处既有断言更新**（M2 轮先红后绿）：函数列收集（原 assertNull→收集原文）、DISTINCT 建模（原不收集→distinct=true+收集）、GROUP BY/HAVING 建模（原报错→建模断言）、聚合列回落字符串 select（原别名零泄漏→回落字符串断言）。
 
 ## §六 遗留项

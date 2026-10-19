@@ -11,7 +11,7 @@ metadata:
 
 # 第二轮竞品调研响应（R2）交付状态
 
-**2026-09-06 交付**。主分支 `feature/r2-competition-response`（worktree `F:/code/Java/Gitee/SongRenShuo/mpsv-r2`，基于 dev 0edb7b9），8 merge 提交 + 各任务实施提交。**未合并 dev、未 push**，回合与否待用户决定。
+**2026-09-06 交付**。主分支 `feature/r2-competition-response`（worktree `F:/code/Java/Gitee/SongRenShuo/mpsv-r2`，基于 dev 3869cc1），8 merge 提交 + 各任务实施提交。**未合并 dev、未 push**，回合与否待用户决定。
 
 ## 九任务落点（8 个子分支 + O-5，全部已合并主分支）
 

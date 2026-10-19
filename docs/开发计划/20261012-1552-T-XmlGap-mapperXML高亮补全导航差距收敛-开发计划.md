@@ -170,9 +170,9 @@
 
 | 项 | 落法 |
 |---|---|
-| 工作树/分支 | `xmlgap`（主控自持：W1/W6/W7）、`xmlgap-hl`（子代理 A1：W2/W3）、`xmlgap-cmpl`（子代理 A2：W4/W5），三者均自 master `c9518e8` 派生 |
+| 工作树/分支 | `xmlgap`（主控自持：W1/W6/W7）、`xmlgap-hl`（子代理 A1：W2/W3）、`xmlgap-cmpl`（子代理 A2：W4/W5），三者均自 master `7cc0032` 派生 |
 | 内部仓读取 | 按用户指定方式——**绝对路径直读主树** `…/mybatis-plus-sql-visualizer/docs/内部/…`（新工作树不含该嵌套私有仓） |
-| 合并 | 主控执行；A2 一支并入 `4dcb2ef`（**零冲突**，写集不相交） |
+| 合并 | 主控执行；A2 一支并入 `b227af8`（**零冲突**，写集不相交） |
 | 测试次数控制 | 各波次只跑定向 `--tests`；全量门禁**全流程只跑一次**（收口阶段）；合并点只做 `compileTestKotlin` 校验，不重复跑测试 |
 
 ### 前提 1 结论（W1 解锁依据，静态证据闭环，未打扰用户 IDE）
@@ -218,7 +218,7 @@
 - 红线守法：**全部 soft 引用**（目标缺失零报红）+ 零 inspection/annotator（有专门守卫用例扫本包源码禁词）。
 - 复用：mapper 文件清单单槽 TTL 缓存沿用 `log/MapperXmlLocator` 的成熟模式（禁引监听器）。
 
-### W2+W3 高亮粒度与覆盖面（子代理 A1，`75491fd`）
+### W2+W3 高亮粒度与覆盖面（子代理 A1，`b124203`）
 
 - 交付：`PARAM` 拆为 `PARAM_HASH`/`PARAM_DOLLAR`；`#{}` 参数规格与 `${}` OGNL 双子状态机（含花括号深度、未闭合容错、`\#` 转义）；实现 `RestartableLexer` 支持增量续扫；`IDENTIFIER`/`OPERATOR`/标点族（`PAREN`/`BRACKET`/`BRACE`/`COMMA`/`DOT`）接平台语义槽；关键字集 **41 → 589 词**（原 41 ∪ `SqlLexer.KEYWORDS` ∪ 十一方言 `reservedWords`，只增不删）；新增 `BOOLEAN`、`STATIC_REF` token。
 - **键位取舍（主控评审接受）**：计划 §四 决策 2-A 的三句参考取向互斥（一个 token 只能落一组属性），子代理按「分色优先」裁决并写明 KDoc——`#{`/`}` → `KEYWORD`、`${`/`}` → `INSTANCE_FIELD`；**代价＝原「`#{}` 整段淡底」不再存在**。颜色页（见下）已把 14 键全部暴露为可调项，用户可自行调回偏好配色。
@@ -226,7 +226,7 @@
 - **主控补验（新增平台 API 面的兼容性）**：`com.intellij.lexer.RestartableLexer` 在 **243**（`ideaIU-2024.3.7.1-win/lib/util-8.jar`）与 **253**（`idea-2025.3.5-win/lib/util-8.jar`）签名**逐字一致**（`getStartState`/`isRestartableState`/5 参 `start`），262 亦在（`intellij.platform.core.jar`）→ 无最低版本兼容问题；因属「新平台 API 面」，收口仍加 `verifyPlugin` 三目标。
 - 子代理登记的 8 条未做/不确定项中，最需用户知情的三条：布尔当前与关键字同色（颜色页可拆）；OGNL 关键字集只取 `Ognl.kt` 实际支持的 `and/or/not/in/null`（`eq/neq/lt/gt` 等该求值器无实现）；方言并集有**已知过度着色面**（顶层裸用 `key`/`size` 等保留字会着关键字色，精确收敛需 per-file 方言链，列为后续）。
 
-### W4+W5 补全扩面（子代理 A2，`f8474b1`）
+### W4+W5 补全扩面（子代理 A2，`03bd178`）
 
 - 交付：`#{}` 结构属性（7 键 + 41 jdbcType + mode 三值，逗号后切换）、属性值逐属性分流（`id`/`keyProperty`/`refid`/`resultMap`/`extends`/`parameterMap`/`resultType` 族/`property`/`jdbcType`/`column` 族）、语句标签与 resultMap 族属性名（MyBatis DTD 逐条抄录）、OGNL 变量来源（`<bind>`/foreach item·index/include property/config properties/`_databaseId`·`_parameter`）、OGNL 智能片段与运算符、select 投影按 resultType、反引号列名、SQL 函数表、单字母捷径、resultMap「引用它的 select」列来源。
 - 硬编码表全部实读（`javap` + `unzip -p … mybatis-3-mapper.dtd`）：7 键与调研报告 §3.2 逐项一致；jdbcType 按前提 8 用 **41 项全枚举**（非报告里的 16 项）。
@@ -256,7 +256,7 @@
 | 项 | 读数 |
 |---|---|
 | `testShards` 首轮（只读收口代理，未清测试产物） | **FAILED 5m 2s**；5 片 1439/1585/1225/1401/1297 = **6947 例 / 2 失败 / 0 错误 / 8 skipped / 629 类** |
-| ├ 失败 1（shard2，**真红**） | `GuardSelfTestCoverageMetaGuardTest.磁盘守卫类必须全部登记_防新守卫类整体脱离扫描面`：W3 新增 `ui/inject/SqlMapperKeywordCoverageGuardTest.kt` 未登记进 `GUARD_CLASSES`（整体脱离自证覆盖率扫描面）→ **已修 `7a97a77`**（按登记表口径补登，判定内核内联于用例故 `decisionFns` 留空 + 写明依据与灵敏度实测） |
+| ├ 失败 1（shard2，**真红**） | `GuardSelfTestCoverageMetaGuardTest.磁盘守卫类必须全部登记_防新守卫类整体脱离扫描面`：W3 新增 `ui/inject/SqlMapperKeywordCoverageGuardTest.kt` 未登记进 `GUARD_CLASSES`（整体脱离自证覆盖率扫描面）→ **已修 `0d85a74`**（按登记表口径补登，判定内核内联于用例故 `decisionFns` 留空 + 写明依据与灵敏度实测） |
 | └ 失败 2（shard4，**陈旧测试字节码**） | `SqlTextAnalysisTest.strip后where内裸列补全产出主表列` → `NoSuchMethodError`（旧 3 参 `sqlCompletions` 重载）：W4/W5 给该公开方法加了 2 个默认参数，旧 3 参 JVM 重载随之消失，而 `compileTestKotlin` 判 UP-TO-DATE 未重编 → 测试类停在旧 ABI。**主控独立复核**：源码侧 3 参调用对新签名合法（`SqlTextAnalysisTest.kt:266`），属本仓已登记的假失败形态（改带默认参数后旧测试类 NoSuchMethodError） |
 | `testShards` 复跑（清 `build/classes/kotlin/test` 强制重编，**非 `clean`**） | **BUILD SUCCESSFUL 5m 15s，EXIT=0**；5 片 1520/1272/1392/1364/1399 = **6947 例 0 失败 0 错误 8 skipped** |
 | `verifyPlugin`（IPGP，收口代理） | 任务非零退出，但三目标 verdict 逐字 `Compatible.`（243：4 removal/29 deprecated/98 experimental；253：5/36/96；262：7/97/96）。非零退出源自项目既有 `failureLevel` 口径（`FailureLevel.entries - COMPATIBILITY_PROBLEMS`，把 DEPRECATED/EXPERIMENTAL/MISSING_DEPENDENCIES 也算失败），**非兼容性问题**；`MISSING_DEPENDENCIES` 两条（`com.intellij.ml.llm`/`com.intellij.mcpServer`）均为既有 `depends optional` |
@@ -265,7 +265,7 @@
 | 喂入税性能守卫 | `XmlSynHiGateYieldCostTest`（900+ 喂入元素、断言整 pass 零 app 级服务查找 + 反向验证位）在定向批次内绿 ⇒ W1 的区间探针**未破坏**喂入税纪律（设置快照仍在最前短路） |
 | W8 熔断阈值测试（本轮补齐） | 新增 `ui/inject/XmlSynHiFuseTest`（4 例 0 失败）：语句文本 100_000 边界两侧（恰等放行 / 超一熔断）、属性值 4096 边界、非 mapper 根守卫（语句侧经 `allowStatementText`、属性值侧经 `inMapperFile`——`allowAttributeValue` 本身不含文件上下文，测试首跑抓出该判据归属写错并已修正） |
 
-**门禁时效性说明**：`testShards` 复跑与 `verifyGate` 的读数对应提交 `7a97a77`；其后仅新增**测试类** `XmlSynHiFuseTest`（零生产代码改动），已定向验证绿——如需严格同树对账，下次门禁即覆盖。
+**门禁时效性说明**：`testShards` 复跑与 `verifyGate` 的读数对应提交 `0d85a74`；其后仅新增**测试类** `XmlSynHiFuseTest`（零生产代码改动），已定向验证绿——如需严格同树对账，下次门禁即覆盖。
 
 ### W8 沙盒走查读数（IU-2024.3.7.1 = 243，最低支持版本）
 
@@ -301,7 +301,7 @@
 **影响面判定**：本批次**全部**新增测试类都不在清单内（逐类核对 `SqlMapperKeywordCoverageGuardTest`/`InjectRangePlanTest`/`XmlSynHiGateRangeTest`/`XmlGapEditingAssistTest`/`SqlMapperColorSettingsPageTest`/`SqlMapperFoldingBuilderTest`/`XmlSynHiFuseTest`/`MybatisConfigCompletionContributorTest`/`MybatisXmlReferenceTest`/`XmlSqlCompletionW4W5Test`/`MyBatisXmlCompletionDataTest`/`ResultMapColumnsGapTest` 等 14 个 = 权重表命中 0）。即：**不带处置的全量绿不构成本批次测试的覆盖证据**。
 
 **处置**：收口门禁带 `--no-configuration-cache` 重跑（清单重算，新增类入场）；此后读数才是本批次的有效全量证据。
-**处置后读数（最终树，`b9a472b`）**：`testShards --no-configuration-cache` → **6959 例 / 0 失败 / 0 错误 / 8 skipped**，5 片 1378/1386/1467/1413/1315（= 原 6947 **+ 本轮净增 12 例**，逐类核对 `SqlMapperFoldingBuilderTest`/`XmlSynHiFuseTest`/`InjectRangePlanTest`/`MybatisXmlReferenceTest`/`XmlSqlCompletionW4W5Test`/`SqlMapperKeywordCoverageGuardTest` 等结果文件均已在各片产出）；`verifyGate --no-configuration-cache` → **BUILD SUCCESSFUL 1m54s，EXIT=0**，三目标 verdict 仍全 `Compatible.`。
+**处置后读数（最终树，`0bfc4bf`）**：`testShards --no-configuration-cache` → **6959 例 / 0 失败 / 0 错误 / 8 skipped**，5 片 1378/1386/1467/1413/1315（= 原 6947 **+ 本轮净增 12 例**，逐类核对 `SqlMapperFoldingBuilderTest`/`XmlSynHiFuseTest`/`InjectRangePlanTest`/`MybatisXmlReferenceTest`/`XmlSqlCompletionW4W5Test`/`SqlMapperKeywordCoverageGuardTest` 等结果文件均已在各片产出）；`verifyGate --no-configuration-cache` → **BUILD SUCCESSFUL 1m54s，EXIT=0**，三目标 verdict 仍全 `Compatible.`。
 **给后人的判据**：见到「新增测试类后全量各片计数不变」即为本缺口形态；`testShards` 读数与「新增用例数」对不上账时，先查 configuration cache。
 
 ### W8 走查（二）：Ultimate 262 + 竞品 + zMyBatis **共存环境**（本批次最关键的一站）
@@ -344,7 +344,7 @@
 **两次未成功的试验（均已还原，留痕防重走）**：
 - ① 给注入片段换成绑定语言的 `LanguageFileType`（原为 `PlainTextFileType`）→ 无效（探针仍 0）；
 - ② 临时停用 `RestartableLexer`（A1 登记的风险项）→ 无效（探针仍 0）。
-两次都只改了「高亮器被调用之后」的环节，而问题在**平台根本不来取我们的高亮器**，故均无法生效；两者都是未被证实的改动，已整批回退（工作树回到 `be7d222`）。
+两次都只改了「高亮器被调用之后」的环节，而问题在**平台根本不来取我们的高亮器**，故均无法生效；两者都是未被证实的改动，已整批回退（工作树回到 `a47a441`）。
 
 **原待定问题**：为何平台不为该注入片段取 `SyntaxHighlighterFactory`（两版皆然）。候选方向（①平台 Database 插件同区间注入抢占渲染；②注入片段语言在高亮 pass 侧未被识别为可着色语言）**两个都错**——真因见下节。
 
@@ -393,14 +393,14 @@
 **⚠️ 本条结论已按上节修正（留原文防误导）**：配 SQL 方言上色**只能证明平台 SQL 注入链路是通的**，不能证明「用户『整段白』的根因是没配方言」——我方链路的真因是 EP 名写错（上节），且**不需要**用户配方言。两条链路互相独立，谁在渲染取决于环境（平台注入在位时会盖在我方之上，观感一致，故不能用「配了方言就上色」反推我方是否生效）。
 **残留缺口（原判）**：`<sql id=...>` 片段体这类**非语句标签**平台不覆盖，配上方言也不上色；本应由此处由我方注入着色，但我方高亮器不被调用（上表）⇒ 该处仍是白。**⚠️ 该判据随上节修复作废**：我方注入器按「mapper 文件内任意标签的直属文本」注入（不按标签名收窄），修复后 `<sql>`/`<if>`/`<foreach>` 体内同样着色——原先「非平台可解」的表述不成立。
 
-### 收口轮（EP 名修复）门禁读数（2026-10-12，对应提交 `8cd794a`）
+### 收口轮（EP 名修复）门禁读数（2026-10-12，对应提交 `94961fe`）
 
 | 项 | 读数 |
 |---|---|
 | 定向（`ui.inject.*` + `ui.highlight.Xml*` + `ui.highlight.Mybatis*` + `config.PluginXml*` + `convention.GuardSelfTestCoverageMetaGuardTest`） | **28 类 / 250 例 / 0 失败 / 0 错误** |
 | `testShards` 首轮 | **FAILED 3m 24s**；5 片 1248/1510/1429/1384/1390 = 6961 例 / **1 失败**——失败＝`SqlTextAnalysisTest` 的 `NoSuchMethodError`（旧 3 参 `sqlCompletions` 重载）＝本仓**已登记**的「陈旧测试字节码」假失败形态（W4/W5 加默认参数改了 JVM 签名，`compileTestKotlin` 判 UP-TO-DATE 未重编） |
 | `testShards` 复跑（清 `build/classes/kotlin/test` 强制重编，**非 `clean`**；带 `--no-configuration-cache`） | **BUILD SUCCESSFUL 11m 11s，EXIT=0**；5 片 **1228/1525/1491/1227/1490 = 6985 例 / 0 失败 / 0 错误 / 9 skipped**（+ `testExternal` 24 例 1 skipped）；`parity: 计划类全集 632 个均有结果 XML` ✓；本轮新增的 `PluginXmlExtensionPointResolutionTest` 落在 shard3（2 例 0 失败，结果 XML 已产出） |
-| 计数对账 | 上一轮权威读数（`b9a472b`）为 6959 例 / 629 类；本轮 6985 例 / 632 类（+26 例 / +3 类）——**差额未逐类归因**（分片清单在 `--no-configuration-cache` 下重算，且其间 master 有合并提交），仅确认本轮新增类**确在**清单内（parity 632 全覆盖 + shard3 结果 XML 在场）。如后续需严格对账，按「各片计数 vs 新增用例数」逐类核 |
+| 计数对账 | 上一轮权威读数（`0bfc4bf`）为 6959 例 / 629 类；本轮 6985 例 / 632 类（+26 例 / +3 类）——**差额未逐类归因**（分片清单在 `--no-configuration-cache` 下重算，且其间 master 有合并提交），仅确认本轮新增类**确在**清单内（parity 632 全覆盖 + shard3 结果 XML 在场）。如后续需严格对账，按「各片计数 vs 新增用例数」逐类核 |
 | 门禁告警 | `testShards WARN: 临界片失衡 +19%（shard1 125.2s vs 均值 105.2s）——权重失准/新类缺权嫌疑`：属权重画像过期提示（新类零权重插值），非失败；如需消警跑 `dev-support/weight-refresh.ps1` |
 | 未跑项 | `verifyGate`/`verifyPlugin` 本轮**未重跑**——理由：本轮无新增 EP 面（同一 EP 仅改正名字），且已实证 Plugin Verifier **不覆盖** EP 名可解析性（见「为什么三道既有门禁都没拦住」），重跑对本 bug 类零判别力 |
 
@@ -457,7 +457,7 @@
 
 **顺带记两个工具/环境事实（供后续走查复用）**：①折叠键位是 **NumPad 专用**——`Collapse` = `Ctrl+NumPad-`、`Collapse All` = `Ctrl+Shift+NumPad-`，普通 `-` 无效（Find Action 列表里的键位提示即证），无小键盘的机器须走 Find Action；②**243 New UI 的折叠标记在 gutter 里不常驻显示**（逐行放大实证：`<select>` 行只有我方两枚 gutter 图标，`<mapper>` 行什么都没有），故「点 gutter 标记折叠」这条常规路在本环境走不通，须用 Find Action 驱动。
 
-### 收口第二轮门禁读数（2026-10-12，对应提交 `e711dd7`）
+### 收口第二轮门禁读数（2026-10-12，对应提交 `5d1b910`）
 
 | 项 | 读数 |
 |---|---|
@@ -465,7 +465,7 @@
 | 计数对账（**逐项闭合，无空绿**） | 上一轮 6985 例 / 632 类 → 本轮 **6997 例 / 635 类**：**+12 例恰好等于本轮新增三个测试类的用例数之和**（`XmlSqlCompletionW4W5CrossFileTest` 7 + `SqlMapperFoldingPriorityTest` 3 + `SqlMapperHighlighterDispatchTest` 2），**+3 类**同源——差额完全归因，排除「新类未进分片清单」形态（该形态见前节「配置缓存 × 分片清单」） |
 | 门禁告警 | `临界片超预期 +11%`：权重画像对新类零插值所致（非失败）；消警跑 `dev-support/weight-refresh.ps1` |
 | 未跑项 | `verifyGate`/`verifyPlugin` 本轮**未重跑**——本轮无新增 EP 面（只改了一个函数实现 + 新增测试），且已实证 Plugin Verifier **不覆盖** EP 名可解析性（见「为什么三道既有门禁都没拦住」），重跑对本 bug 类零判别力 |
-| 读数时效 | 本轮门禁跑在提交 `e711dd7` 上；其后仅两处**非行为**改动（测试文件删 2 个未用 import、测试 KDoc 订正措辞 + 文档回填），不影响该读数 |
+| 读数时效 | 本轮门禁跑在提交 `5d1b910` 上；其后仅两处**非行为**改动（测试文件删 2 个未用 import、测试 KDoc 订正措辞 + 文档回填），不影响该读数 |
 
 ### 沙盒走查（六）：剩余视觉项与补全大小写口径（IU-2024.3.7.1，收口第三轮）
 
@@ -484,7 +484,7 @@
 
 **工具坑（本轮实录，已并入前节清单）**：①本机 **`Ctrl+Space` 被中文输入法占用**（切换输入法），沙盒里触发补全须走 Find Action；②**Find Action 弹窗关闭后再按 Enter 会落进编辑器插入换行**（本轮两次踩到，均已 Ctrl+Z 撤销 + `git diff` 核对还原）；③Find Action 的 `Basic` 需**两次 Enter**（首次给搜索框自身的补全）。
 
-### 收口第三轮门禁读数（2026-10-12，对应提交 `76c559c`）
+### 收口第三轮门禁读数（2026-10-12，对应提交 `532dbb5`）
 
 | 项 | 读数 |
 |---|---|

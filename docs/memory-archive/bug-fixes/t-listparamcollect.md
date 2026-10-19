@@ -7,7 +7,7 @@ metadata:
   originSessionId: sess_2792d388-d5c9-49dc-bb14-7c5cda4b53d7
 ---
 
-2026-09-15 用户真机反馈已实施交付并**已合入 master（merge 9fcc20f，2026-09-15，分支已删）**：Spring NamedParameterJdbcTemplate 单行日志 `sql = … IN (:param3) , parameters = {param3=[6b31…]}` 此前被还原成 `IN ('[6b31…]')`——方括号进了字符串字面量，集合查询恒空。全量 testShards **4123/0/0/6 绿**（基线 4103 + 20 净增，分支上两跑 + 合入后 master 编译零差异）。
+2026-09-15 用户真机反馈已实施交付并**已合入 master（merge 09cc6c6，2026-09-15，分支已删）**：Spring NamedParameterJdbcTemplate 单行日志 `sql = … IN (:param3) , parameters = {param3=[6b31…]}` 此前被还原成 `IN ('[6b31…]')`——方括号进了字符串字面量，集合查询恒空。全量 testShards **4123/0/0/6 绿**（基线 4103 + 20 净增，分支上两跑 + 合入后 master 编译零差异）。
 
 根因：`JdbcTemplateLogParser.renderUntyped`（`log/JdbcTemplateLogParser.kt:220-224`）只有「数值裸 / 其余整体引号」两分支，全文件无 `IN` 位置识别与 Java List `toString()` 形态（`[a]`）处理；集合判定此前只活在预览面板（`ParamHint.inList` 拆逗号），日志还原链路从未接上。
 

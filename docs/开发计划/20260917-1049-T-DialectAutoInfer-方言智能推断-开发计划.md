@@ -131,10 +131,10 @@ fun effectiveRenderDialect(): Dialect {
 
 ## 八、实施记录
 
-- 2026-09-17 feature/dialect-auto-infer 工作树实施（主仓 docs 立项 c1fde05，分支六提交 6d5bb34..本提交）：
-  - T-DAI-01/02（6d5bb34）：`UrlSubprotocolDialects`（子协议→渲染方言名，与 JdbcUrlDialects 展示名双轨）+ `DialectInference` 优先级合并 + `AgentSession.lastConnectionUrl` 会话记忆 + `AgentManager.lastConnectionUrl()` 活跃会话优先读取 + `DataSourceUrlProbe` 数据源反射探测（262.3 javap 实锤 DataSourceManager→RawConnectionConfig.getUrl）+ 10 例单测绿
-  - T-DAI-03/04（823fa9e）：`PluginSettings.dialectAuto`（默认 true）/`ProjectPluginSettings.dialectAuto: Boolean?`（null=跟随全局）/`ProjectPluginSettings.effectiveDialectAuto` + `DialectRegistry.effective` 统一读取 + SettingsIO 导入导出白名单 + `SqlPreviewService.currentDialect`/`PsiDialect.currentDialect` 收口（MySQL 兜底保留）
-  - T-DAI-05（25d98d2）：双 UI 哨兵项改造 + 推断状态只读行 + bundle 双语 4 键
+- 2026-09-17 feature/dialect-auto-infer 工作树实施（主仓 docs 立项 db7dee0，分支六提交 2c88454..本提交）：
+  - T-DAI-01/02（2c88454）：`UrlSubprotocolDialects`（子协议→渲染方言名，与 JdbcUrlDialects 展示名双轨）+ `DialectInference` 优先级合并 + `AgentSession.lastConnectionUrl` 会话记忆 + `AgentManager.lastConnectionUrl()` 活跃会话优先读取 + `DataSourceUrlProbe` 数据源反射探测（262.3 javap 实锤 DataSourceManager→RawConnectionConfig.getUrl）+ 10 例单测绿
+  - T-DAI-03/04（f0acfee）：`PluginSettings.dialectAuto`（默认 true）/`ProjectPluginSettings.dialectAuto: Boolean?`（null=跟随全局）/`ProjectPluginSettings.effectiveDialectAuto` + `DialectRegistry.effective` 统一读取 + SettingsIO 导入导出白名单 + `SqlPreviewService.currentDialect`/`PsiDialect.currentDialect` 收口（MySQL 兜底保留）
+  - T-DAI-05（8334cb6）：双 UI 哨兵项改造 + 推断状态只读行 + bundle 双语 4 键
   - T-DAI-06：CHANGELOG [Unreleased] Changed 行 + 本节
   - 勘误（对照 §三 偏离）：计划中「effectiveRenderDialect 挂 PluginSettings」落位为 `DialectRegistry.effective`（注册表自持，避免 config→sql 反向依赖）；推断状态行 basis 仅显示 URL 原文（未做 i18n 模板插值，信息等价）
   - 明确不做边界与 §六 一致（DialectPreMapping 零改动实测确认）

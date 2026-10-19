@@ -26,7 +26,7 @@ M36.5 之后的收尾阶段。计划文档：`docs/开发计划/20260830-0038-M3
 
 **修正后的探针（下轮沙盒日志直接判定 ▶ 灰真断点）**：`helper=<类名>`（null=forLanguage 失效）+ `isStatement=true/false`（正确实例调用）+ `probe01=<count>:<range>`（subModel(TextRange(0,1)).statements()）+ `consoleIsClient/sameModel`（模型替换是否到达启用链）。
 
-**提交链**：f08a74c（M36.6.1 slowops 治理）→ e2d69ca（docs）→ fdfd031（M36.6.2 布局+探针）。全量 2656 测试全绿。
+**提交链**：ac1ec03（M36.6.1 slowops 治理）→ c825f53（docs）→ 38e48fd（M36.6.2 布局+探针）。全量 2656 测试全绿。
 
 **Why:** 布局问题三个表象一个根因（保险条件永不触发），字节码级取证才能避免再猜；探针第二次假阴性证明「反射探针必须核对 invoke 语义（接收者/静态性）」，否则诊断数据本身是错的。
 **How to apply:** ▶ 灰下轮按探针四项定位；布局再漂移查一次性监听是否被移除过早；M36.6 轮次记录写 M36.6 计划文档并 bump BUILD_STAMP。关联 [[project-m36-direct-execute]] [[feedback-m36-native-console-misalignment]] [[pitfall-slowoperations-edt-readaction]]。

@@ -8,7 +8,7 @@ metadata:
   originSessionId: sess_e386e7f2-eac0-4476-bc8f-1442ea2f7dda
 ---
 
-F-43 已完成（2026-08-25），提交 `4a07b51`（功能）+ `959974b`（跨平台修复），已合并到 master（merge commit `028c262`），2497+ 测试全绿。
+F-43 已完成（2026-08-25），提交 `0df8844`（功能）+ `1178e31`（跨平台修复），已合并到 master（merge commit `4ccc770`），2497+ 测试全绿。
 
 **核心设计**：
 - `SqlLogEntryBuffer` 新增 `onEvicted: ((LogSqlEntry) -> Unit)?` 回调——淘汰最早条目时触发，null 时零开销

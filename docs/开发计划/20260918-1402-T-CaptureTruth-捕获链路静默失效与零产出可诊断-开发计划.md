@@ -13,7 +13,7 @@
 
 | 项 | 值 |
 |---|---|
-| 沙盒容器 | `build/mpsv-stfix/`（`build.gradle.kts` 当前 `sandboxContainer`，工作区在途改动，master 基线 ed43cc0） |
+| 沙盒容器 | `build/mpsv-stfix/`（`build.gradle.kts` 当前 `sandboxContainer`，工作区在途改动，master 基线 1420673） |
 | IDE 日志 | `build/mpsv-stfix/mybatis-plus-sql-visualizer/IU-2024.3.7.1/log/idea.log`（会话 13:38:21–13:46:01） |
 | 沙盒插件设置 | `build/mpsv-stfix/.../config/options/mp-sql-visualizer.xml` |
 | 被测工程 | `F:/code/Java/Gitee/SongRenShuo/easy-code-demo`（project=easy-code-demo） |
@@ -159,7 +159,7 @@
 
 ### T-CT-07（P1）确认框第三动作「关闭增强捕获并不再询问」根本没渲染出来
 
-**实施期新增（用户提问触发）**：用户问「我加了一个关闭增强，是不是实现到其他分支了」。git 核实：**没跑到别的分支**——`0fbd147`（T-PS4-01）同时在 master 与 dev，沙盒已构建 jar 内含双语文案。真相是**按钮从未渲染**：
+**实施期新增（用户提问触发）**：用户问「我加了一个关闭增强，是不是实现到其他分支了」。git 核实：**没跑到别的分支**——`1219d6a`（T-PS4-01）同时在 master 与 dev，沙盒已构建 jar 内含双语文案。真相是**按钮从未渲染**：
 
 - 243 平台 `com/intellij/openapi/ui/DialogWrapper` 字节码直证 `init()` 方法体内调用 `createActions()`（本仓 Python 类文件解析实测，非推断）；
 - 而 `EnhancedCaptureConfirmDialog` 把 `private val disableCaptureAction` **声明在 `init {}` 块之后**——Kotlin 属性初始化按文本顺序执行，平台在构造期回调 `createActions()` 时该字段仍是 null（非空类型不拦，编译静默通过），传进动作数组的是 null；
@@ -204,7 +204,7 @@ build/mpsv-stfix/mybatis-plus-sql-visualizer/IU-2024.3.7.1/config/options/mp-sql
 
 ## 七、实施记录
 
-实施环境：工作树 `F:/code/Java/Gitee/SongRenShuo/mpsv-capture-truth`，分支 `t-capture-truth`（基线 master ed43cc0），沙盒容器 `mpsv-ct`（并行会话隔离，用后还原）。
+实施环境：工作树 `F:/code/Java/Gitee/SongRenShuo/mpsv-capture-truth`，分支 `t-capture-truth`（基线 master 1420673），沙盒容器 `mpsv-ct`（并行会话隔离，用后还原）。
 
 | 任务 | 提交 | 说明 / 偏离 |
 |------|------|------|

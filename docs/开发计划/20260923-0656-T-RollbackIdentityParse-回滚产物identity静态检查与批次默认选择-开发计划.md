@@ -6,7 +6,7 @@
 - 性质：正确性（用户可见误报 + 产物执行不完整）
 - 影响面：仅 SQL Server / DM8 的 identity 包装产物（O-52 + O-59 链路）；不会静默成功（失败可见），但会让「回滚」这个核心安全网在关键数据库上体验残缺
 - 实施分支：自 master 拉任务分支
-- 验证基线：origin/master `133b4a2`
+- 验证基线：origin/master `fa9b57e`
 
 ---
 
@@ -20,7 +20,7 @@
 1. **JSqlParser 对 `SET IDENTITY_INSERT` 的实际行为**：抛错位置与异常形态需先复现钉住（是 parse error 还是 AST 缺节点）——它直接决定 §三.1 选剥离还是选豁免。
 2. **静态检查面的输入源**：该检查是否只服务插件自产产物，还是同时服务用户手写输入——决定剥离逻辑的误伤半径（自产形态封闭，剥离安全；用户输入则要收窄判据）。
 3. **Statements 默认选择的代码位置与现态**：`ui/RollbackSqlDialog.kt` 执行链（O-59 后带 identityColumns 消费逻辑），选择框初始化逻辑需锚点定位后定改法。
-4. **DM8 侧同形确认**：DmDialect 与 SqlServerDialect 共用 `identityInsertWrapper`（`f543ae1`），同病推定成立——测试覆盖面核对，确认修一处双方言受益。
+4. **DM8 侧同形确认**：DmDialect 与 SqlServerDialect 共用 `identityInsertWrapper`（`fba833c`），同病推定成立——测试覆盖面核对，确认修一处双方言受益。
 5. **真机环境**：O-59 曾用真 SQL Server 2022 容器验通，但 docker daemon 此前一度未运行——实施时复测容器可用性，不可用则真机条目按「环境受限」登记。
 
 ## 三、方向（两半各一）
@@ -50,7 +50,7 @@
 
 ## 七、实施记录
 
-实施：2026-09-23，工作树 mpsv-rb-identity（分支 t-rollback-identity），提交 `c718e3d`（D1）+ `8eb2c0a`（D2）。
+实施：2026-09-23，工作树 mpsv-rb-identity（分支 t-rollback-identity），提交 `0226a8e`（D1）+ `9833619`（D2）。
 
 ### 前提证伪结论（逐条）
 
@@ -62,8 +62,8 @@
 
 ### 实施（两半）
 
-- **D1 静态检查**（c718e3d）：新增 `sql/IdentityInsertStatements`（`stripForParse`/`containsStatement` 纯函数）；无痕迹返回**原引用**，T-PS5-02 AST 单槽 `===` 快路径不受影响（剥离只对 identity 文本换解析键，后果=该文本多一次解析，语义不变）。`UnboundedWriteDetector.detect` 解析输入换剥离文本；开关语句本不产生发现，真写语句发现原样浮出（剥离不构成洗白，有测试钉住）。
-- **D2 默认整批**（8eb2c0a）：`DataSourceSelector.wholeScriptExecOption(base)` 副本工厂（反射不可用原样返回=维持现态）；`wholeScriptExec` 旗标沿 executePrepared / selectAndExecute→chooseAndPrepare→reuseSharedConsole / prepareInConsole / prepareAfterEditorResolved→executeOnConsole 三路径贯通（`effectiveExecOption` 五处使用点收口）；`SqlExecutor.execute/executePrepared` 透传（默认 false，既有调用点零变化）；`SqlPreviewPanel.executeAdhocSql` 按 `containsStatement` 计算（生产入口仅回滚弹窗链；executeSql 用户编辑器链不接旗标，D2=A 普通多语句产物保持现态）。
+- **D1 静态检查**（0226a8e）：新增 `sql/IdentityInsertStatements`（`stripForParse`/`containsStatement` 纯函数）；无痕迹返回**原引用**，T-PS5-02 AST 单槽 `===` 快路径不受影响（剥离只对 identity 文本换解析键，后果=该文本多一次解析，语义不变）。`UnboundedWriteDetector.detect` 解析输入换剥离文本；开关语句本不产生发现，真写语句发现原样浮出（剥离不构成洗白，有测试钉住）。
+- **D2 默认整批**（9833619）：`DataSourceSelector.wholeScriptExecOption(base)` 副本工厂（反射不可用原样返回=维持现态）；`wholeScriptExec` 旗标沿 executePrepared / selectAndExecute→chooseAndPrepare→reuseSharedConsole / prepareInConsole / prepareAfterEditorResolved→executeOnConsole 三路径贯通（`effectiveExecOption` 五处使用点收口）；`SqlExecutor.execute/executePrepared` 透传（默认 false，既有调用点零变化）；`SqlPreviewPanel.executeAdhocSql` 按 `containsStatement` 计算（生产入口仅回滚弹窗链；executeSql 用户编辑器链不接旗标，D2=A 普通多语句产物保持现态）。
 
 ### 定向读数
 

@@ -8,9 +8,9 @@
 
 ## 冻结与环境
 
-- 合并前 dev：`66f8645e2b4d88964106da1a6cd1bdd60dc7a6ec`。
-- 当前合入 master：`d7cdfb8f`。主工作树的未跟踪 JDK8/Redis 调查计划不纳入。
-- 首次批次合并提交：`be3ff18b`，父提交 `66f8645e`、`d7cdfb8f`；第一批沙盒由该提交构建，实际插件哈希见第一批记录。最新B8运行包及哈希见第八批；PID57840已正常GUI退出，runIde退出0并自动注销，未强杀，主demo工作树干净。
+- 合并前 dev：`9e5e87cf4db2e4102af966261e413e071dd68399`。
+- 当前合入 master：`39473a6b`。主工作树的未跟踪 JDK8/Redis 调查计划不纳入。
+- 首次批次合并提交：`667d7d15`，父提交 `9e5e87cf`、`39473a6b`；第一批沙盒由该提交构建，实际插件哈希见第一批记录。最新B8运行包及哈希见第八批；PID57840已正常GUI退出，runIde退出0并自动注销，未强杀，主demo工作树干净。
 - 启动前编译：243配置下 `compileKotlin compileTestKotlin -Pkotlin.incremental=false --no-configuration-cache` 成功，2026-10-16 17:54:44退出0，3m4s；尚未执行本次定向/全量测试，不能记为UI通过。
 - 目标平台：默认 IU 2024.3.7.1（243）；不使用 gifRecord 切换262。
 - 独立沙盒容器：`build/MPSV-MasterMerge-UI243`，通过 `.local/master-merge-ui243.init.gradle` 配置并关闭runIde自动重载，防止后台修复构建改变本批在验版本；实际子目录、PID、全屏/置顶证据待启动后记录。
@@ -108,41 +108,41 @@
 
 | 缺陷 | 发现批次/用例 | 复现/实际与预期 | 独立修复分支/提交 | 定向验证 | 沙盒复验 |
 |---|---|---|---|---|---|
-| UI-001 | B1/U18、U40 | Settings默认998×742控件右移，开关文案与R90披露被截；frame-43bc71fb/766d6787 | t-devui-settings-layout：b0433976→dev 38a595cf | 独立27/0/0/0；撤首列过滤2/2红、恢复27绿；B2十类合流116/0/0/0 | B2中文998×742布局/披露/下拉复验通过；B3 Light125%原生1247×925顶部与末尾可读；英文及其余视觉矩阵待验 |
+| UI-001 | B1/U18、U40 | Settings默认998×742控件右移，开关文案与R90披露被截；frame-43bc71fb/766d6787 | t-devui-settings-layout：b0433976→dev 0bc74e37 | 独立27/0/0/0；撤首列过滤2/2红、恢复27绿；B2十类合流116/0/0/0 | B2中文998×742布局/披露/下拉复验通过；B3 Light125%原生1247×925顶部与末尾可读；英文及其余视觉矩阵待验 |
 
-| UI-002 | B1/U18、U25 | 基线显示内部R61、历史原UTC时间+UUID，不易区分会话与快照；frame-499e339e/40716065 | t-devui-plan-baseline：8fd89abc→dev 3f55c74a；独立证据09c8c978 | 两类18/0/0/0；临时R61标签4/4红、恢复18绿；纳入B2十类116/0/0/0 | B2中文本地时间/快照来源及“上次执行（当前会话）”复验通过，跨IDE重启读回；不代证R90隔离/清理等其余子项 |
+| UI-002 | B1/U18、U25 | 基线显示内部R61、历史原UTC时间+UUID，不易区分会话与快照；frame-499e339e/40716065 | t-devui-plan-baseline：8fd89abc→dev 1d8c41bc；独立证据09c8c978 | 两类18/0/0/0；临时R61标签4/4红、恢复18绿；纳入B2十类116/0/0/0 | B2中文本地时间/快照来源及“上次执行（当前会话）”复验通过，跨IDE重启读回；不代证R90隔离/清理等其余子项 |
 
-| UI-003 | B1/U05；用户现场指出 | ClearAction已注册但未配图标，宽栏第三动作占位；frame-9baa1a8e | 原12c01f4d→dev 44ee9d11 | 定向9/0/0/0；摘图标三例2红1绿、恢复9绿；纳入B2十类116/0/0/0 | B2暗色宽栏空/有数据图标可见，清5条后继续捕获2条；约300像素窄栏及B3 Light125%图标可见；其余主题/缩放/精确宽度待验 |
+| UI-003 | B1/U05；用户现场指出 | ClearAction已注册但未配图标，宽栏第三动作占位；frame-9baa1a8e | 原12c01f4d→dev c3fc0f52 | 定向9/0/0/0；摘图标三例2红1绿、恢复9绿；纳入B2十类116/0/0/0 | B2暗色宽栏空/有数据图标可见，清5条后继续捕获2条；约300像素窄栏及B3 Light125%图标可见；其余主题/缩放/精确宽度待验 |
 
-| UI-004 | B2/U36 | 设置时空扫后首切历史不刷新，手动刷新才显示7条；JBTabs old/new反置且首扫兜底已消耗 | t-devui-history-refresh：9e32ad43→dev e6f3de57 | B3首跑历史两类19项全绿；五类最终98/0/0/0；恢复错误回调顺序与移除填充高度失效联合三例全红，恢复后98绿 | B3首切既有文件及Light125%两文件可见；B5专属ui004-b5目录06:35:13空扫0文件，随后ids21~23落盘8460字节，未手动刷新、未提前切历史，首次切入直接显示3条（frame-ebcb96a1）；原复现路径复验完成，不代证万条/迟到/保留策略 |
-| UI-005 | B2/U38 | GROUP/HAVING聚合AUTO生成不可编译Lambda、Query连续select覆盖投影；双引号表名又污染Java类型名 | t-devui-reverse-projection→dev f9fd950d/ad91a474/c39a5c4d；夹具后备续修8aeb0b50 | 独立MP3.5.7真实编译及SQL片段两类68/0，基线5红；合流首跑68项6失败为夹具CodeSource问题，续修后五类98/0/0/0 | B3 Query单select、双引号类型/列边界及Lambda/AUTO回落QueryWrapper<User>同样本复验通过；不代证所有生成形态；旧异步回灌另记UI-010 |
-| UI-006 | B2/U20 | 参数区开关右移、模拟输入在横向视口外；frame-307e73ef/219fc32e；初修后安全说明高度仍不足 | t-devui-fill-layout：97a6b6b4→dev 02201dbc；高度缓存续修纳入B3 8aeb0b50运行包 | B3首跑FieldFill 11项2失败，续修11绿；与历史回调联合反向三例全红，恢复五类98/0/0/0 | B3开关/说明左对齐、两组输入纵排无需横滚，显式优先及非法值字段提示完整；完整宽度/主题缩放矩阵待验 |
-| UI-007 | B3归因；U37/U41相关 | B2日志证实非主配置仍attach RemoteJdbcServer并获CONFIG ACK；授权不涵盖平台helper，未证明与退出等待有因果关系 | dev e50e2b4c、867ff37d；独立签名补交6f756735 | 独立六类69绿/撤拒绝14项9红/恢复69绿；纳入B4最终十五类234/0/0/0，两项平台签名检查已纳入 | B4原生Test Connection成功且日志明确排除RemoteJdbcServer pid28492，真实MP应用pid17744捕获五条业务源码/耗时（frame-b1d5094d/fff8c33f），正反通过；未知启动器/后补扫描组合待验。B6无agent同配置Stop仍90秒未退出，agent非必要条件，不归为本项关停死锁 |
-| UI-008 | B3/U31 | 真5.5.2 Actual无Parameters前缀，参数未恢复、误提示Hibernate且路由附注未见；物理参数不可安全映射Logic | dev abf4d745、5f2c614c、64295b4a、6a7c90b6、8bf18589；最终保守问号与只读路由，不自动回填无类型Actual参数 | 纳入B4最终十五类234/0/0/0；与UI-009联合撤闸25项恰5红，其中Actual秘密哨兵1红，恢复通过 | B4真框架PASS、控制台Logic主SQL保留问号，来源说明不再误称Hibernate；展开只读附注可见ds_0与[100, BOOK,100]，开启展示脱敏后重开附注整体隐藏（frame-f6014b10/37e470bd/acaf4859）；已开面板即时响应GUI及长警告/附注可读性待验，执行级丢路由另记UI-013 |
-| UI-009 | B3/U29 | 历史正则输入非法左括号误报“该文件暂无SQL条目”，合法正则立即恢复2条；frame-178d73d2/d5d54289 | dca7b369→dev 4ead7c50 | 纳入B4最终十五类234/0/0/0；与UI-008联合撤闸25项恰5红，其中历史4红，恢复通过 | B4原七条文件非法左括号显示红色错误且列表明确非法正则；关正则清错并显示无匹配，合法id=6或id=7再开正则恢复2条（frame-25a6bf10/e3889556/97c02eb3）；原路径复验通过，不代证全部检索Diff场景 |
-| UI-010 | B3/U38 | 切AUTO发旧ui_probe查询后输入换user，旧候选弹层仍出现且取消后旧输出残留；frame-84fa67aa | dev 659ac9b8、b0935599；测试前提修正aac693dc | B4旧请求18项全绿，撤代次18项恰17红、仅撤写文档末端复查单例1红；全部恢复，纳入最终十五类234/0/0/0 | B4原序列旧ui_probe→AUTO立即换user→转换，仅出现新user候选并生成新QueryWrapper<User>聚合链（frame-933cc0a0/6841613d），旧候选/输出未回灌；一次GUI时序不外推所有竞态，确定性旧回调由定向正反覆盖 |
-| UI-011 | B3/U39 | 243页顶称11工具已注册可调用，平台设置入口却提示需2025.2+及MCP Server；就绪文案矛盾，导航降级正常 | dev b02dda7f；测试夹具修正993262cf、5d884a5e | 跨发行物改用各版自身JBR与真实class资源定位，能力探测纳入B4最终十五类234/0/0/0；243/253/262签名不代证实际调用 | B4真实243缺接口提示与插件选择分行，页头声明数不冒充可调用数；关总开关、单项停用及Revert文案正常（frame-fe2e36f0/e15e2dc7/eff2e5c4/7ecbccec），未Apply临时改动；原误报路径通过，有能力平台11工具实调另验 |
-| UI-012 | B4/U02；B5勘误 | 原“底部只到#8”不是布局裁剪或丢行：真实几何/model10正常，行号排序可达#9/#10，时间升序实际9、10、1…；无时间StdOut借IDE解析时刻、无签名匹配退队首造成时间关联失真 | dev 6ef4afcf、e0280084、f13307a6；仅修时间关联，不改排序/布局/容量；临时几何诊断清理94718343 | B5几何四类92绿不能称修复；B6时间关联四类35绿，恢复两旧借时分支35项恰7红，恢复35绿；清理诊断独立TailFollow11绿 | B6 Light125%真实storm463→清空→时间升序→ids1~10，底#9/#10、顶#1/#2/#3（frame-3a8109d7/4f35873c），原错序路径闭环；不外推真实带时间日志跨线程顺序，U02其余尾随/排序仍待验 |
-| UI-013 | B4/U31 | 真100/101两次Logic相同但Actual分别ds0/100与ds1/101；去重合为一行×2仅留ds0，重复分支跳过保存；基线已存在，不能把两执行拼成一次跨片 | t-devui-sharding-dedup：91e15538/ba0deb91→dev cc151a87/3393dc66；Sharding执行级保真，其他日志族不改 | B5四类90绿，摘两生产闸门90项恰6红（五保真、一徽章），恢复并加诊断测试后92/0/0/0 | B6新包真框架PASS、去重勾选下by-id为独立#3/#4；07:23:39历史两条独立o147-id，pd.a分别ds0/100/BOOK,100与ds1/101/BOOK,101，主SQL问号、params空（frame-a2505757）；逐次保存/路由保真已验，同模板无Actual尾条未归因，全部flush边界不判通过 |
-| UI-014 | B6/U14、U15；B7新回归 | 原未知QUERY确认No未见SUBMITTED却误报已提交，runner final-step同步模态另有焦点SEVERE；B7修复把60秒选择思考时间计入prepare预算，并有popup选择dispose触发canceled问题，直接CANCELLED未到确认，不是原No路径通过 | 原修复dev 32f36cb4、90122af6、5f44b0db；续修381a9ad8→dev e47e2877，choiceAccepted防误取消、用户交互暂停预算、后台真超时BLOCKED | 原独立56绿/撤owner比较24项2红/恢复56绿；B7七类111/0/0/0；续修独立60绿/撤保护44项4红/恢复60绿；B8合流及诊断清理后七类115/0/0/0，fresh XML2026-10-17 10:15:22～52 | B7直接CANCELLED回归保留；B8源选择等253秒仍进入正确MySQL会话/确认，确认再等约505秒点No显示已取消、无SUBMITTED及原焦点SEVERE（frame-935a2641/66c752e3）；重试两阶段Yes后10:45:44.405 SUBMITTED，真实id=1一行且回执正确（frame-2b825722）。原取消误报、交互等待超时及选择dispose误取消路径复验通过，不代证U14/U15整组或合并两阶段安全确认 |
-| UI-015 | B6/U15 | 注解预览选中user右键只有Cut/Copy/Paste，模板仅挂EditorPopupMenu而自建Editor用BasicEditorPopupMenu，非选区错误；frame-46060b15/5a314a84 | dev a8748dbc、8a5480ae；保留基础动作并挂既有模板组 | 独立四类69绿/摘模板引用69项恰3红/恢复69绿，243/253/262 EditorEx菜单签名已核；B7七类合流111/0/0/0；B8七类115/0/0/0 | B7预览选user基础动作保留、三模板启用，整SQL三项禁用（frame-43056bbb/1474e441/00a5fa50）；B8同入口COUNT于11:05:47.751 SUBMITTED返回41（frame-a02fdf2f），抽样取回10行（frame-38181c91），原预览SQL/id71不变。菜单正反及预览COUNT/抽样实执行已验；预览快捷模板EXPLAIN、长WHERE等业务边界仍待，不升级U15整组 |
-| UI-016 | B8登记/U41；08:58:47退出现场 | Bus is already disposed、Double release of editor、RunnerLayoutUi保存状态访问已销毁project；243原生clientView挂应用级服务、JdbcConsole挂project，插件共享view关闭协议待修。首次释放栈不在idea.log，未归因为插件直接双重释放 | 独立修复458f6950/d832d2c4及边界/签名提交已合dev c75c17d9/0d9743f1等，最终签名1c93c99d | 真实初始两例1绿1目标红UI016-OWNED-VIEW-RETAINED；仅撤关闭前释放三例恰1红，恢复与异常边界最终5/0/0/0（04:40:18Z）；243/253/262签名4/0/0/0（04:49:30Z），主控核XML。编译/ProjectEntity/grid缺依赖前提失败不计目标红 | B8退出仍有Bus/ClientSession/RunnerLayoutUi同族错误，没有新增Double release；正常退出0不代证已修。待新包退出复验；主动INFO Throwable与Y盘访问拒绝不列入缺陷 |
-| UI-017 | B8/U23 | foreach已存UI-Shared（三值71/72/73），另一selectByAnnotationId默认id91、列表仅默认，另存同名两次报已存在（frame-25d8a81d）；与跨语句同名独立快照文案冲突 | 独立8b10f9bd/c31cc9d7→dev177da143/f2da12ce；验证证据1bc062b5→fe0bef4c | 与UI019三类最终60/0/0/0（缓存28、对话框11、面板21）；只撤按键查重3例全红，恢复60绿，主控核XML | 待新包跨语句同名隔离、同语句重复保护及独立快照复验；自动测试通过不代证GUI |
-| UI-018 | B8/U37 | 有效单列TSV先生成回滚INSERT，改invalid_snapshot后生成报错却仍留旧INSERT、黄色可执行提示与执行/复制按钮（frame-9d584547）；应失效旧模型及操作入口，现场未点击执行 | 独立f283b0c6/79716ad2→dev823cef4f/68500208；监听输入及主键失效、失败撤旧，保留重生成元数据 | 三类最终75/0/0/0（Generator49、Dialog15、Panel11），XML 04:23:33–41Z主控核对；分别摘监听、生成前失效、元数据保留各2例全红，恢复75绿 | 待新包输入失效/生成失败路径复验；有效TSV只证明生成，未执行写SQL，U37该子项未通过 |
-| UI-019 | B8后定向测试/U23 | UI017新面板回归返回foreach方法，缓存/权威map已有81,82但重建输入框为空；首轮57项1失败，不用额外切预设救绿 | 独立2d3dd7cc→dev1bda62be；监听注册前初始化字段，保留原失败断言 | 首轮57项1失败；修复后与UI017最终60绿；只撤初始化3例2红1绿，无值null负对照通过；恢复最终60/0/0/0，主控核XML | 待新包默认/命名/null重新打开及方法往返复验，不冒充已实测UI缺陷 |
-| UI-020 | B8后代码复核/U37 | executeRollback调用返回Unit的executeAdhocSql后无条件标执行；DML确认No直接return，旧对话框仍标成功。属于代码确认，未在GUI点击回滚执行 | 独立b2fa9e02→dev58ad8dce：透传prepared/nonprepared回执，仅SUBMITTED留痕；关闭弹窗不丢真实提交记录但禁止迟到改UI | 五类最终119/0/0/0（04:50:33–46Z）主控核XML；恢复旧假成功3红、断prepared回执1红、撤恰一次保护3红，全部恢复。旧ABI 3例NoSuchMethodError经强制重编译排除；不把Boolean就绪或调用返回当提交 | 待仅取消的安全GUI负例；真实回滚写入未授权，不能用自动测试代称写库实测 |
+| UI-004 | B2/U36 | 设置时空扫后首切历史不刷新，手动刷新才显示7条；JBTabs old/new反置且首扫兜底已消耗 | t-devui-history-refresh：9e32ad43→dev 83fbae85 | B3首跑历史两类19项全绿；五类最终98/0/0/0；恢复错误回调顺序与移除填充高度失效联合三例全红，恢复后98绿 | B3首切既有文件及Light125%两文件可见；B5专属ui004-b5目录06:35:13空扫0文件，随后ids21~23落盘8460字节，未手动刷新、未提前切历史，首次切入直接显示3条（frame-ebcb96a1）；原复现路径复验完成，不代证万条/迟到/保留策略 |
+| UI-005 | B2/U38 | GROUP/HAVING聚合AUTO生成不可编译Lambda、Query连续select覆盖投影；双引号表名又污染Java类型名 | t-devui-reverse-projection→dev a72d3b15/1ac4a5d1/43e3ec1b；夹具后备续修40cfff4e | 独立MP3.5.7真实编译及SQL片段两类68/0，基线5红；合流首跑68项6失败为夹具CodeSource问题，续修后五类98/0/0/0 | B3 Query单select、双引号类型/列边界及Lambda/AUTO回落QueryWrapper<User>同样本复验通过；不代证所有生成形态；旧异步回灌另记UI-010 |
+| UI-006 | B2/U20 | 参数区开关右移、模拟输入在横向视口外；frame-307e73ef/219fc32e；初修后安全说明高度仍不足 | t-devui-fill-layout：97a6b6b4→dev 0feb403d；高度缓存续修纳入B3 40cfff4e运行包 | B3首跑FieldFill 11项2失败，续修11绿；与历史回调联合反向三例全红，恢复五类98/0/0/0 | B3开关/说明左对齐、两组输入纵排无需横滚，显式优先及非法值字段提示完整；完整宽度/主题缩放矩阵待验 |
+| UI-007 | B3归因；U37/U41相关 | B2日志证实非主配置仍attach RemoteJdbcServer并获CONFIG ACK；授权不涵盖平台helper，未证明与退出等待有因果关系 | dev 07ad5ce5、3b964a8b；独立签名补交6f756735 | 独立六类69绿/撤拒绝14项9红/恢复69绿；纳入B4最终十五类234/0/0/0，两项平台签名检查已纳入 | B4原生Test Connection成功且日志明确排除RemoteJdbcServer pid28492，真实MP应用pid17744捕获五条业务源码/耗时（frame-b1d5094d/fff8c33f），正反通过；未知启动器/后补扫描组合待验。B6无agent同配置Stop仍90秒未退出，agent非必要条件，不归为本项关停死锁 |
+| UI-008 | B3/U31 | 真5.5.2 Actual无Parameters前缀，参数未恢复、误提示Hibernate且路由附注未见；物理参数不可安全映射Logic | dev 07a1c3a7、e5347b61、1a569037、5274c8ef、cea4c4a6；最终保守问号与只读路由，不自动回填无类型Actual参数 | 纳入B4最终十五类234/0/0/0；与UI-009联合撤闸25项恰5红，其中Actual秘密哨兵1红，恢复通过 | B4真框架PASS、控制台Logic主SQL保留问号，来源说明不再误称Hibernate；展开只读附注可见ds_0与[100, BOOK,100]，开启展示脱敏后重开附注整体隐藏（frame-f6014b10/37e470bd/acaf4859）；已开面板即时响应GUI及长警告/附注可读性待验，执行级丢路由另记UI-013 |
+| UI-009 | B3/U29 | 历史正则输入非法左括号误报“该文件暂无SQL条目”，合法正则立即恢复2条；frame-178d73d2/d5d54289 | dca7b369→dev b75b56b7 | 纳入B4最终十五类234/0/0/0；与UI-008联合撤闸25项恰5红，其中历史4红，恢复通过 | B4原七条文件非法左括号显示红色错误且列表明确非法正则；关正则清错并显示无匹配，合法id=6或id=7再开正则恢复2条（frame-25a6bf10/e3889556/97c02eb3）；原路径复验通过，不代证全部检索Diff场景 |
+| UI-010 | B3/U38 | 切AUTO发旧ui_probe查询后输入换user，旧候选弹层仍出现且取消后旧输出残留；frame-84fa67aa | dev fa40f9a6、85296035；测试前提修正338e1544 | B4旧请求18项全绿，撤代次18项恰17红、仅撤写文档末端复查单例1红；全部恢复，纳入最终十五类234/0/0/0 | B4原序列旧ui_probe→AUTO立即换user→转换，仅出现新user候选并生成新QueryWrapper<User>聚合链（frame-933cc0a0/6841613d），旧候选/输出未回灌；一次GUI时序不外推所有竞态，确定性旧回调由定向正反覆盖 |
+| UI-011 | B3/U39 | 243页顶称11工具已注册可调用，平台设置入口却提示需2025.2+及MCP Server；就绪文案矛盾，导航降级正常 | dev 2511c047；测试夹具修正be23f767、0cbf10fc | 跨发行物改用各版自身JBR与真实class资源定位，能力探测纳入B4最终十五类234/0/0/0；243/253/262签名不代证实际调用 | B4真实243缺接口提示与插件选择分行，页头声明数不冒充可调用数；关总开关、单项停用及Revert文案正常（frame-fe2e36f0/e15e2dc7/eff2e5c4/7ecbccec），未Apply临时改动；原误报路径通过，有能力平台11工具实调另验 |
+| UI-012 | B4/U02；B5勘误 | 原“底部只到#8”不是布局裁剪或丢行：真实几何/model10正常，行号排序可达#9/#10，时间升序实际9、10、1…；无时间StdOut借IDE解析时刻、无签名匹配退队首造成时间关联失真 | dev 07be126f、5d300bd2、d2cbc0ed；仅修时间关联，不改排序/布局/容量；临时几何诊断清理6d24b4ba | B5几何四类92绿不能称修复；B6时间关联四类35绿，恢复两旧借时分支35项恰7红，恢复35绿；清理诊断独立TailFollow11绿 | B6 Light125%真实storm463→清空→时间升序→ids1~10，底#9/#10、顶#1/#2/#3（frame-3a8109d7/4f35873c），原错序路径闭环；不外推真实带时间日志跨线程顺序，U02其余尾随/排序仍待验 |
+| UI-013 | B4/U31 | 真100/101两次Logic相同但Actual分别ds0/100与ds1/101；去重合为一行×2仅留ds0，重复分支跳过保存；基线已存在，不能把两执行拼成一次跨片 | t-devui-sharding-dedup：91e15538/ba0deb91→dev 790b4420/038e1442；Sharding执行级保真，其他日志族不改 | B5四类90绿，摘两生产闸门90项恰6红（五保真、一徽章），恢复并加诊断测试后92/0/0/0 | B6新包真框架PASS、去重勾选下by-id为独立#3/#4；07:23:39历史两条独立o147-id，pd.a分别ds0/100/BOOK,100与ds1/101/BOOK,101，主SQL问号、params空（frame-a2505757）；逐次保存/路由保真已验，同模板无Actual尾条未归因，全部flush边界不判通过 |
+| UI-014 | B6/U14、U15；B7新回归 | 原未知QUERY确认No未见SUBMITTED却误报已提交，runner final-step同步模态另有焦点SEVERE；B7修复把60秒选择思考时间计入prepare预算，并有popup选择dispose触发canceled问题，直接CANCELLED未到确认，不是原No路径通过 | 原修复dev 25ca6578、7adab32d、692637a5；续修381a9ad8→dev dd0f8347，choiceAccepted防误取消、用户交互暂停预算、后台真超时BLOCKED | 原独立56绿/撤owner比较24项2红/恢复56绿；B7七类111/0/0/0；续修独立60绿/撤保护44项4红/恢复60绿；B8合流及诊断清理后七类115/0/0/0，fresh XML2026-10-17 10:15:22～52 | B7直接CANCELLED回归保留；B8源选择等253秒仍进入正确MySQL会话/确认，确认再等约505秒点No显示已取消、无SUBMITTED及原焦点SEVERE（frame-935a2641/66c752e3）；重试两阶段Yes后10:45:44.405 SUBMITTED，真实id=1一行且回执正确（frame-2b825722）。原取消误报、交互等待超时及选择dispose误取消路径复验通过，不代证U14/U15整组或合并两阶段安全确认 |
+| UI-015 | B6/U15 | 注解预览选中user右键只有Cut/Copy/Paste，模板仅挂EditorPopupMenu而自建Editor用BasicEditorPopupMenu，非选区错误；frame-46060b15/5a314a84 | dev 891d5718、55e27661；保留基础动作并挂既有模板组 | 独立四类69绿/摘模板引用69项恰3红/恢复69绿，243/253/262 EditorEx菜单签名已核；B7七类合流111/0/0/0；B8七类115/0/0/0 | B7预览选user基础动作保留、三模板启用，整SQL三项禁用（frame-43056bbb/1474e441/00a5fa50）；B8同入口COUNT于11:05:47.751 SUBMITTED返回41（frame-a02fdf2f），抽样取回10行（frame-38181c91），原预览SQL/id71不变。菜单正反及预览COUNT/抽样实执行已验；预览快捷模板EXPLAIN、长WHERE等业务边界仍待，不升级U15整组 |
+| UI-016 | B8登记/U41；08:58:47退出现场 | Bus is already disposed、Double release of editor、RunnerLayoutUi保存状态访问已销毁project；243原生clientView挂应用级服务、JdbcConsole挂project，插件共享view关闭协议待修。首次释放栈不在idea.log，未归因为插件直接双重释放 | 独立修复458f6950/d832d2c4及边界/签名提交已合dev 6b226bb4/8eeca1cf等，最终签名bb27983f | 真实初始两例1绿1目标红UI016-OWNED-VIEW-RETAINED；仅撤关闭前释放三例恰1红，恢复与异常边界最终5/0/0/0（04:40:18Z）；243/253/262签名4/0/0/0（04:49:30Z），主控核XML。编译/ProjectEntity/grid缺依赖前提失败不计目标红 | B8退出仍有Bus/ClientSession/RunnerLayoutUi同族错误，没有新增Double release；正常退出0不代证已修。待新包退出复验；主动INFO Throwable与Y盘访问拒绝不列入缺陷 |
+| UI-017 | B8/U23 | foreach已存UI-Shared（三值71/72/73），另一selectByAnnotationId默认id91、列表仅默认，另存同名两次报已存在（frame-25d8a81d）；与跨语句同名独立快照文案冲突 | 独立8b10f9bd/c31cc9d7→dev3713c14f/a6f2467f；验证证据1bc062b5→69b17567 | 与UI019三类最终60/0/0/0（缓存28、对话框11、面板21）；只撤按键查重3例全红，恢复60绿，主控核XML | 待新包跨语句同名隔离、同语句重复保护及独立快照复验；自动测试通过不代证GUI |
+| UI-018 | B8/U37 | 有效单列TSV先生成回滚INSERT，改invalid_snapshot后生成报错却仍留旧INSERT、黄色可执行提示与执行/复制按钮（frame-9d584547）；应失效旧模型及操作入口，现场未点击执行 | 独立f283b0c6/79716ad2→dev334e996d/6c019eac；监听输入及主键失效、失败撤旧，保留重生成元数据 | 三类最终75/0/0/0（Generator49、Dialog15、Panel11），XML 04:23:33–41Z主控核对；分别摘监听、生成前失效、元数据保留各2例全红，恢复75绿 | 待新包输入失效/生成失败路径复验；有效TSV只证明生成，未执行写SQL，U37该子项未通过 |
+| UI-019 | B8后定向测试/U23 | UI017新面板回归返回foreach方法，缓存/权威map已有81,82但重建输入框为空；首轮57项1失败，不用额外切预设救绿 | 独立2d3dd7cc→devd60a50e7；监听注册前初始化字段，保留原失败断言 | 首轮57项1失败；修复后与UI017最终60绿；只撤初始化3例2红1绿，无值null负对照通过；恢复最终60/0/0/0，主控核XML | 待新包默认/命名/null重新打开及方法往返复验，不冒充已实测UI缺陷 |
+| UI-020 | B8后代码复核/U37 | executeRollback调用返回Unit的executeAdhocSql后无条件标执行；DML确认No直接return，旧对话框仍标成功。属于代码确认，未在GUI点击回滚执行 | 独立b2fa9e02→devc0d06101：透传prepared/nonprepared回执，仅SUBMITTED留痕；关闭弹窗不丢真实提交记录但禁止迟到改UI | 五类最终119/0/0/0（04:50:33–46Z）主控核XML；恢复旧假成功3红、断prepared回执1红、撤恰一次保护3红，全部恢复。旧ABI 3例NoSuchMethodError经强制重编译排除；不把Boolean就绪或调用返回当提交 | 待仅取消的安全GUI负例；真实回滚写入未授权，不能用自动测试代称写库实测 |
 | UI-021 | 批C/U31 | **INSERT VALUES 场景展示脱敏列名-值对位错位**：`DisplayMasker.columnHintBefore` 把前一个字面量值当列名 hint——`VALUES ('ui_mask_probe','Secret123X','mask@probe.test',…)` 中 password 列 `Secret123X` **漏打**（其 hint=ui_mask_probe 不含关键词），紧随 email 值被**误打**（其 hint=Secret123X，lowercase 含 `secret` 命中）。JDK21 直调 dev 编译产物判别实证（本机 java 跑 `DisplayMasker.INSTANCE.maskSqlText`）：compact/spaced 两形态均输出 `'ui_mask_probe', 'Secret123X', '***'`；对照 `WHERE password = 'Secret123X'` 正确打码。`DisplayMaskerTest` 17 用例无 INSERT VALUES 场景（测试盲区） | **已修**：`maskSqlText`/`parameterize` 增 INSERT 列清单对位（`INSERT_COLUMNS` 正则解析 + 按 LITERAL 出现序取列名，解析失败/超列数逐位回退旧规则）；`DisplayMaskerTest` 增 5 例 | **定向 22/0/0 绿**（17 旧+5 新）；**反向验证恰 3 红**（摘对位后列名对位/多列对位/parameterize 对位三例红，回退路径与非 INSERT 对照保持绿），恢复再绿 | 列表/导出/回放/MCP/AI 上下文五消费面同源 |
 | UI-022 | 批C/U17 | **降级模式（内存 PSI）下动态条件勾选联动失效**：降级横幅在场时勾选 XML 动态条件复选框（status/age 已勾选实证），SQL 不追加 WHERE；**同面板完整模式对照**（act-3，无降级）勾选 status 即出现 `WHERE status = 1`——联动本身正常，失效限定于降级态。降级横幅文案仅称「表/列上下文补全受限」，**未披露交互缺失**，用户会误以为勾选已生效（frame bc-U17-p2-xml-q2-sql / act-3-after-check） | **已修（披露面最小修复）**：降级横幅 zh/en 文案加「参数联动与动态条件勾选在降级期不生效」+ 重试恢复指引；**联动功能修复（降级文档重渲染 write 链）保留后续专项**——重试路径可自愈 | 文案改动已提交；功能面待专项 | 降级触发面=预热迟到/失败（重启初期/重渲染路径） |
-| UI-023 | 批C/U29 | **「差异对比」全形态恒报「无上次预览可对比」**：`SqlPreviewPanelResultView.kt:220` 的 `previousSql = editor?.document?.text` 在首渲染链执行时 editor 常尚未创建（控制台/预热抢占）→ `previousSql` 恒 null → `showSqlDiff` 永远走 `preview.diff.noPrevious` 空态。三场景实测——注解预览（selectByAnnotationId）、XML 预览（selectUserListByXml/selectUserByChoose）、参数重渲染（#id 91→92）后点击「更多→差异对比」**均报无上次预览**（frame imgu29d2-2/imgu29x-1-diff/imgui023-3-diff） | **已修**（`03fc1b28`）：editor 缺失时用本次预览原文 `result.sql` 兜底（语义不变：缓存本次 SQL 供下次对比）；`compileKotlin` BUILD SUCCESSFUL | **专项已闭环（2026-10-18 晚，真机复核通过）**。真相两段：①先前「修复入包后点击无输出」读数全部来自**旧包**——沙盒 `plugins/` jar 实际停在 10-16 18:01，18:28~18:40 的 diff 探针全跑在修复部署（10-18 20:01 installPlugin+IDE 重启）之前；`imgu29d7-2-diff.png` 全屏帧右下角实捕两条「无上次预览可对比」toast（旧探针只截预览区 `bbox=rect` 把右下 toast 裁掉，造成「无输出」假象）。②20:01 后修复包在役（沙盒 jar javap 第 816/838 行 `PreviewResult.getSql`→`setPreviousSql` 实证），像素直点「差异对比」仍「无可见输出」——win32 `EnumWindows` 实锤 **Diff 窗口已创建（标题「SQL 差异对比」，20:53 键盘路线与 20:54 像素路线各建一个）但 z 序落在 IDE 主窗之后**（rect=(100,100,1820,980) 与主窗全等、被完全遮挡）；对照实验「分享」弹窗阳性（frame imgdr5-1）证明菜单点击链路无恙。最小化主窗后完整出图：上次带 `WHERE t.sex = 1`（删除行高亮）/当前无 WHERE、右上 `2 differences`、Side-by-side+SQL 语法高亮+变更标记（frame imgdr8-1-diff-alone/imgdr8-2）——**UI-023 修复真机闭环 ✅**；z 序残留登记 UI-024 | 同族：U29 有变化 Diff 正例（已随本项闭环出图）；**新观察项 UI-024（候选缺陷）**：DiffManager.showDiff 的窗口不抢前台 |
+| UI-023 | 批C/U29 | **「差异对比」全形态恒报「无上次预览可对比」**：`SqlPreviewPanelResultView.kt:220` 的 `previousSql = editor?.document?.text` 在首渲染链执行时 editor 常尚未创建（控制台/预热抢占）→ `previousSql` 恒 null → `showSqlDiff` 永远走 `preview.diff.noPrevious` 空态。三场景实测——注解预览（selectByAnnotationId）、XML 预览（selectUserListByXml/selectUserByChoose）、参数重渲染（#id 91→92）后点击「更多→差异对比」**均报无上次预览**（frame imgu29d2-2/imgu29x-1-diff/imgui023-3-diff） | **已修**（`267649c4`）：editor 缺失时用本次预览原文 `result.sql` 兜底（语义不变：缓存本次 SQL 供下次对比）；`compileKotlin` BUILD SUCCESSFUL | **专项已闭环（2026-10-18 晚，真机复核通过）**。真相两段：①先前「修复入包后点击无输出」读数全部来自**旧包**——沙盒 `plugins/` jar 实际停在 10-16 18:01，18:28~18:40 的 diff 探针全跑在修复部署（10-18 20:01 installPlugin+IDE 重启）之前；`imgu29d7-2-diff.png` 全屏帧右下角实捕两条「无上次预览可对比」toast（旧探针只截预览区 `bbox=rect` 把右下 toast 裁掉，造成「无输出」假象）。②20:01 后修复包在役（沙盒 jar javap 第 816/838 行 `PreviewResult.getSql`→`setPreviousSql` 实证），像素直点「差异对比」仍「无可见输出」——win32 `EnumWindows` 实锤 **Diff 窗口已创建（标题「SQL 差异对比」，20:53 键盘路线与 20:54 像素路线各建一个）但 z 序落在 IDE 主窗之后**（rect=(100,100,1820,980) 与主窗全等、被完全遮挡）；对照实验「分享」弹窗阳性（frame imgdr5-1）证明菜单点击链路无恙。最小化主窗后完整出图：上次带 `WHERE t.sex = 1`（删除行高亮）/当前无 WHERE、右上 `2 differences`、Side-by-side+SQL 语法高亮+变更标记（frame imgdr8-1-diff-alone/imgdr8-2）——**UI-023 修复真机闭环 ✅**；z 序残留登记 UI-024 | 同族：U29 有变化 Diff 正例（已随本项闭环出图）；**新观察项 UI-024（候选缺陷）**：DiffManager.showDiff 的窗口不抢前台 |
 | UI-024 | UI-023 专项现场 | **Diff 窗口开在 IDE 主窗之后**：`DiffManager.showDiff` 创建的「SQL 差异对比」modeless 窗口 rect=(100,100,1820,980) 与主窗全等且 z 序在主窗之下，用户点击「差异对比」后主窗前无任何可见变化（无窗口、无 toast、idea.log 无插件异常），须 Alt+Tab/任务栏才能看到 Diff——易被感知为「点击无响应」（frame imgdr7-1/imgdr8-1 证据链）。两次独立触发（键盘+像素）均复现 | 未修（登记项）；修复方向候选：showDiff 后请求窗口前置/激活，或改 `WindowManager` 上的_dialog 路线；需先在真机人工确认是否合成输入环境的窗口激活策略产物 | 证据充分（EnumWindows 两实例 rect + 最小化主窗后出图），但**沙盒合成输入无法完全排除窗口激活策略因素**，修复前需真机人工点一次「差异对比」定性 | 同族：IDEA 原生 Diff 从 VCS 等入口打开时是否同样置后（对照面） |
 
 ## 第二批修复合流与复验
 
-首批沙盒通过原生Exit后，运行中演示应用Terminate卡在Waiting for process detach；90秒有界等待结束仍在运行，已先保存JDK8线程现场，再按IDE原生Kill process结束本次应用。归属核实为PID24408、父54712、命令行含本次MPSV-MasterMerge-UI243 agent路径；没有操作其他进程。随后runIde任务退出0。线程现场见会话日志call_BS521Rpri31WTvUICa2mT7yM-stdout.log，归因未定，不预判插件关闭死锁。原始界面保持be3ff18b直到本批结束。
+首批沙盒通过原生Exit后，运行中演示应用Terminate卡在Waiting for process detach；90秒有界等待结束仍在运行，已先保存JDK8线程现场，再按IDE原生Kill process结束本次应用。归属核实为PID24408、父54712、命令行含本次MPSV-MasterMerge-UI243 agent路径；没有操作其他进程。随后runIde任务退出0。线程现场见会话日志call_BS521Rpri31WTvUICa2mT7yM-stdout.log，归因未定，不预判插件关闭死锁。原始界面保持667d7d15直到本批结束。
 
-- UI-001：原修复b0433976→dev `38a595cf`，独立定向27/0/0/0，撤首列过滤2/2红、恢复27绿。
-- UI-002：原修复8fd89abc→dev `3f55c74a`；此前并非中断，而是主动留待测试。用户要求检查后已恢复原代理补验：两类18/0/0/0，临时R61标签4/4红，恢复18绿；证据记录09c8c978留在独立分支。
-- UI-003：原修复12c01f4d→dev `44ee9d11`，定向9/0/0/0，摘图标三例2红1绿、恢复9绿，清空/尾随业务未改。
+- UI-001：原修复b0433976→dev `0bc74e37`，独立定向27/0/0/0，撤首列过滤2/2红、恢复27绿。
+- UI-002：原修复8fd89abc→dev `1d8c41bc`；此前并非中断，而是主动留待测试。用户要求检查后已恢复原代理补验：两类18/0/0/0，临时R61标签4/4红，恢复18绿；证据记录09c8c978留在独立分支。
+- UI-003：原修复12c01f4d→dev `c3fc0f52`，定向9/0/0/0，摘图标三例2红1绿、恢复9绿，清空/尾随业务未改。
 - 三个源码修复均已合入，未合入代理的旧整份验收文档以免覆盖主控现场账。合流后定向回归在后台运行，通过后以同一独立配置启动第二批；尚不能写UI复验通过。
 - 子代理核验：四个修复/夹具工作树均干净，有提交和实际证据；没有发现掉线遗留的未提交成果。只有UI-002缺执行证据，已补齐。
 
@@ -150,7 +150,7 @@
 
 ### 第二批实际结果
 
-运行包dev@44ee9d11，十类合流定向116/0/0/0，重新启动PID36912并自动恢复1920×1080全屏。系统级置顶仍未证明。
+运行包dev@c3fc0f52，十类合流定向116/0/0/0，重新启动PID36912并自动恢复1920×1080全屏。系统级置顶仍未证明。
 
 - UI-001中文默认窗口复验通过：998×742设置页控件正常靠左、无横向截断，R90三行隐私全文可见（frame-879d2246），代码生成下拉含五选项且末项换行不截断（frame-01c745b6）。英文/缩放矩阵待后续复验。
 - UI-002中文复验通过：重启后读取上一批19:21:05历史计划，显示本地时间/快照来源（frame-4e984f16）；再执行显示“上次执行（当前会话）”（frame-a8a53746），不再显示R61。R90跨IDE重启正例与普通参数ui_alpha/1/18召回同时通过；预设栏重启默认收起（frame-376e94b9）。
@@ -167,7 +167,7 @@
 
 ## 第三批准备
 
-第二批源码保持44ee9d11至GUI退出；新修复已合dev：UI-004 e6f3de57；UI-005 f9fd950d/ad91a474/c39a5c4d；UI-006 02201dbc。UI-005独立真实MP3.5.7编译生成代码及getSqlSelect/getSqlSegment，两类68/0，基线生成器68项5红；不冒充Gradle门禁。UI-004/UI-006此前未跑定向，本轮合流五类后台验证，测试未终态前不标修复通过。
+第二批源码保持c3fc0f52至GUI退出；新修复已合dev：UI-004 83fbae85；UI-005 a72d3b15/1ac4a5d1/43e3ec1b；UI-006 0feb403d。UI-005独立真实MP3.5.7编译生成代码及getSqlSelect/getSqlSegment，两类68/0，基线生成器68项5红；不冒充Gradle门禁。UI-004/UI-006此前未跑定向，本轮合流五类后台验证，测试未终态前不标修复通过。
 
 第二次退出再次等待process detach，已取IDE线程栈，定位为原生WaitForProcessTask等待而非插件锁。应用53644结束后IDE仍有残留运行确认，选择Disconnect才退出。另数据库驱动进程50828存在agent会话，疑似挂载范围过宽，留待独立归因；不据此断言是退出阻塞原因。
 
@@ -175,7 +175,7 @@
 
 UI-007辅助进程误挂载已证：第二批IDE日志5887–5889识别非主配置后仍排队attach50828，5919–5927实际RemoteJdbcServer输出agent retransform及CONFIG ACK。监听和补扫在授权后无身份排除，用户确认不能授权平台helper注入；独立t-devui-attach-target已派修复。前述命令行末尾MySQL Driver只是参数，真实main为com.intellij.database.remote.RemoteJdbcServer，归因已校正。未证明它导致退出卡住。
 
-第三批续修与正反闭环：CodeSource后备须同时支持IDE自定义jar URLConnection，不只JDK JarURLConnection；主控解析实测jar:file资源并核class字节一致，提交8aeb0b50。FieldFill动态错误状态显式失效父布局缓存后11例通过。五类最终98/0/0/0；临时恢复错误回调顺序及移除高度失效，三例全红（进入刷新计数2≠3、状态高度32不足64），立即恢复并五类98/0/0/0。主控src/main与HEAD无差异，反向探针已清。第三批沙盒按8aeb0b50启动，UI007尚未纳入。
+第三批续修与正反闭环：CodeSource后备须同时支持IDE自定义jar URLConnection，不只JDK JarURLConnection；主控解析实测jar:file资源并核class字节一致，提交40cfff4e。FieldFill动态错误状态显式失效父布局缓存后11例通过。五类最终98/0/0/0；临时恢复错误回调顺序及移除高度失效，三例全红（进入刷新计数2≠3、状态高度32不足64），立即恢复并五类98/0/0/0。主控src/main与HEAD无差异，反向探针已清。第三批沙盒按40cfff4e启动，UI007尚未纳入。
 
 ### 第三批UI已取证
 
@@ -206,29 +206,29 @@ UI-007辅助进程误挂载已证：第二批IDE日志5887–5889识别非主配
 
 ## 第四批合流与验证
 
-第三批沙盒保持8aeb0b50直到正常Exit，runIde退出0，本次未出现前两轮的process detach等待。第三批累计证据已提交4f0f7a18。Kotlin普通声明行主动入口显示“未找到可预览SQL源”（frame-364d7b58）；两类清理确认分别明示删除范围与互不删除边界（frame-04643638/a744f805），均选择No，未执行持久数据删除。Light125%日志页存储披露及两个清理按钮可见（frame-4ed28edb）。搜索打开Kotlin文件时多按一次Return产生未保存首空行，已GUI移除并保存，demo工作树实测干净；该过程不是产品缺陷。
+第三批沙盒保持40cfff4e直到正常Exit，runIde退出0，本次未出现前两轮的process detach等待。第三批累计证据已提交a08d556d。Kotlin普通声明行主动入口显示“未找到可预览SQL源”（frame-364d7b58）；两类清理确认分别明示删除范围与互不删除边界（frame-04643638/a744f805），均选择No，未执行持久数据删除。Light125%日志页存储披露及两个清理按钮可见（frame-4ed28edb）。搜索打开Kotlin文件时多按一次Return产生未保存首空行，已GUI移除并保存，demo工作树实测干净；该过程不是产品缺陷。
 
 本批合流：
 
 | 缺陷 | dev提交 | 当前验证边界 |
 |---|---|---|
-| UI-007辅助JVM挂载过滤 | e50e2b4c、867ff37d | 原独立69绿/撤修9红/恢复69绿；补跨版本签名未跑，真实helper负例待新包 |
-| UI-008分片来源与只读路由 | abf4d745、5f2c614c、64295b4a、6a7c90b6、8bf18589 | 最终不将任何无类型Actual参数自动回填Logic；脱敏开时整附注隐藏、已开面板响应设置；全部新增测试待集中运行 |
-| UI-009历史正则反馈 | 4ead7c50 | 错误配色/提示、无匹配空态、原生开关观察；定向/反向/GUI待验 |
-| UI-010反向转换旧异步回灌 | 659ac9b8、b0935599 | 请求代次、输入/形态与实际写入复查；18项受控顺序测试待验 |
-| UI-011 MCP就绪误报 | b02dda7f | 工具声明数、平台能力与插件开关分离；243缺能力/253与262接口签名登记；定向/GUI待验 |
+| UI-007辅助JVM挂载过滤 | 07ad5ce5、3b964a8b | 原独立69绿/撤修9红/恢复69绿；补跨版本签名未跑，真实helper负例待新包 |
+| UI-008分片来源与只读路由 | 07a1c3a7、e5347b61、1a569037、5274c8ef、cea4c4a6 | 最终不将任何无类型Actual参数自动回填Logic；脱敏开时整附注隐藏、已开面板响应设置；全部新增测试待集中运行 |
+| UI-009历史正则反馈 | b75b56b7 | 错误配色/提示、无匹配空态、原生开关观察；定向/反向/GUI待验 |
+| UI-010反向转换旧异步回灌 | fa40f9a6、85296035 | 请求代次、输入/形态与实际写入复查；18项受控顺序测试待验 |
+| UI-011 MCP就绪误报 | 2511c047 | 工具声明数、平台能力与插件开关分离；243缺能力/253与262接口签名登记；定向/GUI待验 |
 
-合流冲突仅PlatformSignatureChecker两项登记，保留AttachTarget和McpToolset两边调用及实现；没有整取一侧。UI007携带旧验收文档的hunk未采用，以主控新账为准。当前生产冻结b0935599，十五类`:test`定向通过`.local/validate-b4.ps1`后台执行；脚本核旧IDE已退出、审查其他会话登记并限两槽，独立同名沙盒、关闭自动重载、无configuration cache。此时尚未有结果，不能把合流记为测试或GUI通过。
+合流冲突仅PlatformSignatureChecker两项登记，保留AttachTarget和McpToolset两边调用及实现；没有整取一侧。UI007携带旧验收文档的hunk未采用，以主控新账为准。当前生产冻结85296035，十五类`:test`定向通过`.local/validate-b4.ps1`后台执行；脚本核旧IDE已退出、审查其他会话登记并限两槽，独立同名沙盒、关闭自动重载、无configuration cache。此时尚未有结果，不能把合流记为测试或GUI通过。
 
 ### 第四批定向实测进展
 
-- 首轮233项/2失败/0错误/0跳过，生产与测试编译通过。UI010正对照误以为解析器剥双引号，期望ui_probe而实际为带引号表名；修正精确前提并增加确认前后输出哨兵（dev aac693dc）。UI011跨发行物用243 JBR21加载262 Java25字节码而假红，改每版自身JBR调用实际生产探测（dev 993262cf）。均非“环境限制跳过”。
+- 首轮233项/2失败/0错误/0跳过，生产与测试编译通过。UI010正对照误以为解析器剥双引号，期望ui_probe而实际为带引号表名；修正精确前提并增加确认前后输出哨兵（dev 338e1544）。UI011跨发行物用243 JBR21加载262 Java25字节码而假红，改每版自身JBR调用实际生产探测（dev be23f767）。均非“环境限制跳过”。
 - 脱敏与正则反向：临时摘Actual展示闸门与非法正则错误投影，25项恰5失败（历史四例、Actual秘密哨兵一例），全部为预期断言；立即恢复生产并diff确认无残留。随后的十五类恢复复跑233项仅1失败：历史24、预览29及UI010十八项全绿；唯一失败为MCP测试夹具又使用CodeSource.location而在IDE PathClassLoader下为空，已回交继续适配，不能用独立CLI成功冒充平台绿。
-- UI010第一轮反向：仅令生产isCurrent恒true，18项恰17失败，唯一非过期正对照保持绿；旧弹窗、候选覆盖、批量、clear/dispose及延迟写均触达真实断言。已恢复代次闸门；第二轮只撤实际写文档前复查，单例恰1红，失败输出为旧UiProbe覆盖新结果，证明末端复查不能被上游闸门代替。两轮探针均恢复，src/main对HEAD无差异。MCP资源定位继续修成可空CodeSource＋真实class资源、目录/JAR候选字节一致性校验（dev 5d884a5e），最终十五类恢复复跑234/0/0/0（新增一项资源定位判别例），fresh XML 2026-10-17 04:27:55～04:28:55；生产冻结5d884a5e（较b0935599仅测试夹具修正），所有反向探针已恢复。真实跨发行物MCP能力和两项平台签名检查纳入本次绿，不等于三平台完整插件验证或GUI验收完成。
+- UI010第一轮反向：仅令生产isCurrent恒true，18项恰17失败，唯一非过期正对照保持绿；旧弹窗、候选覆盖、批量、clear/dispose及延迟写均触达真实断言。已恢复代次闸门；第二轮只撤实际写文档前复查，单例恰1红，失败输出为旧UiProbe覆盖新结果，证明末端复查不能被上游闸门代替。两轮探针均恢复，src/main对HEAD无差异。MCP资源定位继续修成可空CodeSource＋真实class资源、目录/JAR候选字节一致性校验（dev 0cbf10fc），最终十五类恢复复跑234/0/0/0（新增一项资源定位判别例），fresh XML 2026-10-17 04:27:55～04:28:55；生产冻结0cbf10fc（较85296035仅测试夹具修正），所有反向探针已恢复。真实跨发行物MCP能力和两项平台签名检查纳入本次绿，不等于三平台完整插件验证或GUI验收完成。
 
 ### 第四批真实UI复验
 
-第四批PID23656、主窗口21169148恢复1920×1080全屏，Light125%，生产5d884a5e加文档06b89352；未完成系统置顶。UI-009原七条文件输入`(`，出现红色错误文字且列表中央同样明确非法正则（frame-25a6bf10）；关正则立即清错并显示“没有匹配的结果”（frame-e3889556）；改合法id=6|id=7再开正则得到2条（frame-97c02eb3），该原始路径复验通过。
+第四批PID23656、主窗口21169148恢复1920×1080全屏，Light125%，生产0cbf10fc加文档d21208db；未完成系统置顶。UI-009原七条文件输入`(`，出现红色错误文字且列表中央同样明确非法正则（frame-25a6bf10）；关正则立即清错并显示“没有匹配的结果”（frame-e3889556）；改合法id=6|id=7再开正则得到2条（frame-97c02eb3），该原始路径复验通过。
 
 UI-011：243页头明确“声明11个工具，不代表已注册或可调用数量”，缺平台接口提示与插件选择分行（frame-fe2e36f0）；关总开关即时更新、不谎称服务器启停（frame-e15e2dc7）；关单工具显示停用1项，Revert changes恢复全部勾选（frame-eff2e5c4/7ecbccec）。未Apply该临时改动，也未实际启动MCP服务器；243中文原误报路径复验通过，有能力平台实调仍待验。
 
@@ -238,7 +238,7 @@ UI-012待根因：真实storm只读流463条后列表上限200，同结构徽章
 
 UI-008真框架复验：第四批重新IDE Run内存分片pid24004，真实三查询PASS（frame-3800a54f）；暂停增强、清空后both命令进入控制台Logic链，预览说明明确ShardingSphere无可靠类型/映射、主SQL保留两个问号，无Hibernate TRACE误提示。折叠附注展开并到末尾能看到ds_0物理表及原文`[100, BOOK,100]`（frame-f6014b10/37e470bd）；开启展示与导出脱敏、采集脱敏保持关，同条重开附注整体隐藏且说明原因（frame-acaf4859）。当前只验重新打开，已开面板即时刷新由29项预览定向覆盖，尚未GUI补；未执行带问号SQL。新增长警告在顶部被截省略、附注默认仅两行需滚动，记录可读性待收敛，不把“能看到一部分”当完整披露通过。
 
-UI-013分片去重丢路由已实证：同批100/101真实两次Logic相同但Actual分别ds0/100与ds1/101；去重开启只显示一行×2，附注保留ds0。关闭去重、清空再both可见两条独立by-id（另有前一组待flush跨片）（frame-be362566）。代码确认dedupeKey只按restoredSql、融合不含actualSql、重复分支提前返回不走保存回调；8aeb0b50基线也存在，不是本轮新引入。已派t-devui-sharding-dedup仅让Sharding条目退出自动/手动执行级裁剪，保留每次Logic/Actual配对，其他日志族不改，不把两次执行拼成一次跨片。
+UI-013分片去重丢路由已实证：同批100/101真实两次Logic相同但Actual分别ds0/100与ds1/101；去重开启只显示一行×2，附注保留ds0。关闭去重、清空再both可见两条独立by-id（另有前一组待flush跨片）（frame-be362566）。代码确认dedupeKey只按restoredSql、融合不含actualSql、重复分支提前返回不走保存回调；40cfff4e基线也存在，不是本轮新引入。已派t-devui-sharding-dedup仅让Sharding条目退出自动/手动执行级裁剪，保留每次Logic/Actual配对，其他日志族不改，不把两次执行拼成一次跨片。
 
 U35精确屏蔽局部：主项目真实SELECT1，右键屏蔽后旧条隐藏；再请求两次，管理窗口显示“已拦截2次”（frame-daf30595）。单条切结构匹配有明确标记及关闭按钮（frame-204fdc72）；切回精确并删除本轮临时规则，缓存旧#11恢复、被拦截两次没有补放（frame-bb7084b4）。规则已恢复为空；结构不同参数、全局结构/大小写空白/双项目与重启十次仍待验。清过滤空态仍称“暂无捕获SQL”而非被筛空，属于与历史UI009同族的可发现性待核，不据此认采集失败。
 
@@ -246,11 +246,11 @@ UI-010原序列复验：Query旧ui_probe输出→切AUTO立即替换为user聚�
 
 ## 第五批准备
 
-UI012完整容器几何探针67a57e9f已合dev c15a63cc，只有测试，没有声称根因已复现。UI013独立只读复核未见阻断后，两提交91e15538/ba0deb91合dev cc151a87/3393dc66，尚未定向。第四批已在真实内存分片输入quit正常结束，主应用点原生Stop，再发IDE Exit；第五批脚本核PID23656退出后才取槽，避免旧沙盒与新测试共享目录。四类定向（TailFollow、DedupeIndex、Buffer、Presentation）通过`.local/validate-b5.ps1`后台启动，另一会话FinalGate-R2保持独立，本轮不启动全量、不降低分片。首次脚本在90秒旧IDE仍存活检查处安全退出，未调用Gradle；GUI发现原生MybatisPlusDemoApplication运行确认，随后选择Terminate，再次后台检查退出并验证，不能把首次前置退出计为测试失败。
+UI012完整容器几何探针67a57e9f已合dev 6e15b820，只有测试，没有声称根因已复现。UI013独立只读复核未见阻断后，两提交91e15538/ba0deb91合dev 790b4420/038e1442，尚未定向。第四批已在真实内存分片输入quit正常结束，主应用点原生Stop，再发IDE Exit；第五批脚本核PID23656退出后才取槽，避免旧沙盒与新测试共享目录。四类定向（TailFollow、DedupeIndex、Buffer、Presentation）通过`.local/validate-b5.ps1`后台启动，另一会话FinalGate-R2保持独立，本轮不启动全量、不降低分片。首次脚本在90秒旧IDE仍存活检查处安全退出，未调用Gradle；GUI发现原生MybatisPlusDemoApplication运行确认，随后选择Terminate，再次后台检查退出并验证，不能把首次前置退出计为测试失败。
 
 第四批退出再次出现MP应用Waiting for process detach。核登记及命令行确认仅自有PID17744/父23656，JDK8线程现场取证后原生Kill结束应用；PID已消失仍有残留运行确认，选择Disconnect后runIde退出0。第五批两次前置检查因此安全停止，未启动Gradle，第三次已重新后台发起。线程复核未见ShutdownHook执行或关停锁，Tomcat仍正常服务等待，agent sender是daemon且实际JAR读超时1s，不能归因sender或已修helper；下一步需同MP/JDK8单变量禁注入且禁自动attach的A/B，尚未做。证据会话call_3uFZfaT3mUdBBBtv84GA7NPG-stdout.log，UI frame-6dd1b4ab/c1bd5024。
 
-第五批首轮四类90/0/0/0：Presentation5、DedupeIndex15、Buffer59、TailFollow11。UI012两比例完整容器测试均绿，125%模型10/首尾bounds与preferredHeight1070、viewport和滚动最大值一致，未复现现场；不能称UI012修复。测试主动递归布局与原生真机仍有差异，已续派仅显式系统属性开启的真实滚底几何日志探针，不输出SQL/参数、不改布局，以便下轮现场定因。UI013两生产闸门临时摘除后首次被新并行登记R3前置拦截，旧XML90绿不是反向结果；核实R3独立沙盒后实际运行90项恰6红（五个去重保真、一个徽章），其余原用例不退化。立即恢复，合入属性门控现场探针bfbe5b4c后四类92/0/0/0（新增两项默认关闭/隐私诊断），src/main反向探针清除。第五批runIde仅本地init加-Dmpsv.ui012.diagnostics=true，供真实滚底前后几何取证，不自动布局救绿；当前UI012仍未修。
+第五批首轮四类90/0/0/0：Presentation5、DedupeIndex15、Buffer59、TailFollow11。UI012两比例完整容器测试均绿，125%模型10/首尾bounds与preferredHeight1070、viewport和滚动最大值一致，未复现现场；不能称UI012修复。测试主动递归布局与原生真机仍有差异，已续派仅显式系统属性开启的真实滚底几何日志探针，不输出SQL/参数、不改布局，以便下轮现场定因。UI013两生产闸门临时摘除后首次被新并行登记R3前置拦截，旧XML90绿不是反向结果；核实R3独立沙盒后实际运行90项恰6红（五个去重保真、一个徽章），其余原用例不退化。立即恢复，合入属性门控现场探针e90cf202后四类92/0/0/0（新增两项默认关闭/隐私诊断），src/main反向探针清除。第五批runIde仅本地init加-Dmpsv.ui012.diagnostics=true，供真实滚底前后几何取证，不自动布局救绿；当前UI012仍未修。
 
 ### UI012归因勘误：不是末条不可达
 
@@ -264,7 +264,7 @@ UI004原路径补验完成：在日志页设置新专属build/ui243-history/ui00
 
 ## 第六批时间保真修复准备
 
-真实history重建显示十条执行相对ms为0/2/3/4/6/8/13/16/19/21，前八条关联日志时间为214/214/215/216/217/217/218/218，后两条缺失；参数签名对应本轮1～10。文件能证错序，不能独立证被消费的候选签名。源码核实桥把无时间StdOut的IDE解析时刻当日志时间put，相关器无签名匹配又退队首；这两处保真缺口分别补真实桥及容量8判别测试。独立静态复核未见阻断，三提交合dev6ef4afcf/e0280084/f13307a6，仅时间关联，不改排序/布局/容量。首轮四类35/0/0/0（Parity14、Decouple2、Correlator15、CaptureGate4），fresh XML 2026-10-17 06:52:43～47；真实无时间桥/参数超容量均入场。临时恢复两处旧借时分支，35项恰7红（真实桥三项、相关器三项、无时间嗅探一项），失败明确为候选不应入册及跨签名借时，非配置失败。两处已恢复并diff确认，恢复四类35/0/0/0（fresh XML 2026-10-17 07:01:30）；中间一次因新并行Runtime-Encoding登记被前置拦下，不计测试红。第六批修复沙盒后台启动，尚未新包GUI。第五批沙盒仍需原生Kill后Disconnect处理同MP应用退出等待，runIde已退出0。
+真实history重建显示十条执行相对ms为0/2/3/4/6/8/13/16/19/21，前八条关联日志时间为214/214/215/216/217/217/218/218，后两条缺失；参数签名对应本轮1～10。文件能证错序，不能独立证被消费的候选签名。源码核实桥把无时间StdOut的IDE解析时刻当日志时间put，相关器无签名匹配又退队首；这两处保真缺口分别补真实桥及容量8判别测试。独立静态复核未见阻断，三提交合dev07be126f/5d300bd2/d2cbc0ed，仅时间关联，不改排序/布局/容量。首轮四类35/0/0/0（Parity14、Decouple2、Correlator15、CaptureGate4），fresh XML 2026-10-17 06:52:43～47；真实无时间桥/参数超容量均入场。临时恢复两处旧借时分支，35项恰7红（真实桥三项、相关器三项、无时间嗅探一项），失败明确为候选不应入册及跨签名借时，非配置失败。两处已恢复并diff确认，恢复四类35/0/0/0（fresh XML 2026-10-17 07:01:30）；中间一次因新并行Runtime-Encoding登记被前置拦下，不计测试红。第六批修复沙盒后台启动，尚未新包GUI。第五批沙盒仍需原生Kill后Disconnect处理同MP应用退出等待，runIde已退出0。
 
 第六批UI012真机原路径复验：IDE35652、业务28932、Light125%；真实storm463条→清空→明确时间升序→n1 ids1~10，底部#9/#10、顶部#1/#2/#3，未再出现9/10排最前（frame-3a8109d7/4f35873c）。日志无时间StdOut候选保持空、回落执行时间，35绿/7红/恢复35绿对应两处保真修复；本原场景闭环，不外推所有带真实时间日志的跨线程顺序。
 
@@ -276,31 +276,31 @@ U32引用导航五点实测：UserMapper.xml namespace→UserMapper.java22（fra
 
 UI015预览快捷模板入口漏接：注解预览已选中user，右键只有Cut/Copy/Paste（frame-46060b15/5a314a84），不是选区错误。平台243自建Editor默认BasicEditorPopupMenu，模板仅挂EditorPopupMenu，原PreviewUx计划明确包含预览编辑器；已派独立修复保留基础动作并加既有模板组，不把所有主编辑器动作整包搬入。主编辑器XML为既有可用入口，后续从该入口继续COUNT/抽样。
 
-UI015独立四类69绿、摘模板引用69项恰3红、恢复69绿，跨243/253/262 EditorEx菜单API签名已核；合dev a8748dbc/8a5480ae，当前运行包尚未包含，待下一批GUI。UI014首版静态复核指出排队覆盖/取消和缺编辑器路径可能漏终态，已回交补齐，未合入。主编辑器XML里右键未弹与全局快捷键warning未证因果：实际warning发生预览关闭恢复动作，只LOG.warn不throw，不能凭此归菜单失败。
+UI015独立四类69绿、摘模板引用69项恰3红、恢复69绿，跨243/253/262 EditorEx菜单API签名已核；合dev 891d5718/55e27661，当前运行包尚未包含，待下一批GUI。UI014首版静态复核指出排队覆盖/取消和缺编辑器路径可能漏终态，已回交补齐，未合入。主编辑器XML里右键未弹与全局快捷键warning未证因果：实际warning发生预览关闭恢复动作，只LOG.warn不throw，不能凭此归菜单失败。
 
 退出A/B对照在途：关闭增强设置后停止旧agent进程28932仍需第二次原生强停，随后同IDE/同JDK8/同MybatisPlus配置重新Run，PID18824父35652，实查命令行MPSV-agent=false、idea_rt=true。执行同十条只读查询后按同一普通Stop，后台WaitForExit(90s)实测Exited=false、ObservedMs=90015（call_nQz5uTwwBD2vPfmGSLJjA5GA-stdout.log）。无MPSV agent仍复现普通Stop不退出，故MPSV agent不是必要条件，不按插件ShutdownHook死锁修；不能进一步外推IDE侧插件完全无影响。未把“关闭采集但agent仍在”冒充无agent对照。
 
 U15主编辑器模板正例：Java注解27行选user，右键SQL快捷模板三项可见；COUNT选mp_demo，原生结果41（frame-9a780984），08:46:28明确native query SUBMITTED。随后抽样10行复用本地目标，原生Output实证`SELECT * FROM user LIMIT 10`并取回10行（frame-a13f4c1c），不能依据仍显示COUNT的旧控制台标题判断实际SQL。预览模板待UI015新包；XML注入区菜单未触达而Java可达，仍不据无菜单推断模板业务执行失败。
 
-UI014最终owner补齐后独立56绿、摘owner比较24项恰2红、恢复56绿；只读复核确认旧链迟到abort/finish不能清新链，三个提交合dev32f36cb4/90122af6/5f44b0db。当前沙盒未含此修复，合流后定向及GUI待下一批。其修复不扩executePrepared回执覆盖口径。
+UI014最终owner补齐后独立56绿、摘owner比较24项恰2红、恢复56绿；只读复核确认旧链迟到abort/finish不能清新链，三个提交合dev25ca6578/7adab32d/692637a5。当前沙盒未含此修复，合流后定向及GUI待下一批。其修复不扩executePrepared回执覆盖口径。
 
 ## 第七批准备
 
-第六批内存分片已quit，无agent MP对照90秒未退后由原生强停结束，确认进程结束后退出IDE；runIde退出0，本次无遗留运行确认阻挡。UI014/015合流生产5f44b0db，七类合流定向111/0/0/0（日志还原执行16/方言闸16/单飞24/错误处理16/预览编辑器31/抽样5/三代签名3），fresh XML2026-10-17 09:01:06～32，不把独立56绿与69绿相加冒充合流绿。第七批新沙盒已后台启动，本地诊断属性关闭，诊断生产代码最终清除待做。增强设置目前为对照而关闭、展示脱敏开启，后续采集复验须显式恢复增强。
+第六批内存分片已quit，无agent MP对照90秒未退后由原生强停结束，确认进程结束后退出IDE；runIde退出0，本次无遗留运行确认阻挡。UI014/015合流生产692637a5，七类合流定向111/0/0/0（日志还原执行16/方言闸16/单飞24/错误处理16/预览编辑器31/抽样5/三代签名3），fresh XML2026-10-17 09:01:06～32，不把独立56绿与69绿相加冒充合流绿。第七批新沙盒已后台启动，本地诊断属性关闭，诊断生产代码最终清除待做。增强设置目前为对照而关闭、展示脱敏开启，后续采集复验须显式恢复增强。
 
-第七批PID22516、生产5f44b0db。UI015原路径复验：注解gutter直开预览，选user右键保留Cut/Copy/Paste并出现SQL快捷模板（frame-43056bbb），子菜单三项启用（frame-1474e441）；Ctrl+A整SQL后同三项灰色禁用（frame-00a5fa50），未误把整SQL当表名。
+第七批PID22516、生产692637a5。UI015原路径复验：注解gutter直开预览，选user右键保留Cut/Copy/Paste并出现SQL快捷模板（frame-43056bbb），子菜单三项启用（frame-1474e441）；Ctrl+A整SQL后同三项灰色禁用（frame-00a5fa50），未误把整SQL当表名。
 
 UI014新包复验未通过：09:13:02弹数据源选择，09:14:57选择mp_demo直接CANCELLED，未到未知QUERY确认。原代理核实新增60秒prepare Timer把用户思考时间计入、提前过期，属于修复引入的交互回归；已回交暂停用户选择/确认阶段预算、恢复后台超时且区分超时与主动取消，同时核canceled/finalRunnable生命周期。不能把显示“已取消”当No原路径已验。
 
 U23命名快照继续：注解selectByAnnotationId设id71另存UI-Shared，改输入72后默认/命名往返回71（frame-78b72363）；管理重命名UI-Renamed后保持原71快照（frame-8e0335b8），没有将编辑默认值覆盖命名快照。跨方法同名、删除及20上限尚未补，不将本轮局部升级整项。
 
-UI014续修381a9ad8已合dev e47e2877：真实popup选择dispose也会canceled，新增choiceAccepted防误取消；用户选择/确认期间暂停后台预算，后台真超时单独BLOCKED。独立60绿/撤保护44项4红/恢复60绿，当前运行包仍旧，下一批需合流门禁及长等待GUI复验。临时几何诊断清理cb9811b6已合94718343，独立TailFollow11绿，最终统一门禁仍待。
+UI014续修381a9ad8已合dev dd0f8347：真实popup选择dispose也会canceled，新增choiceAccepted防误取消；用户选择/确认期间暂停后台预算，后台真超时单独BLOCKED。独立60绿/撤保护44项4红/恢复60绿，当前运行包仍旧，下一批需合流门禁及长等待GUI复验。临时几何诊断清理cb9811b6已合6d24b4ba，独立TailFollow11绿，最终统一门禁仍待。
 
 第七批退出前发现无MPSV-agent业务PID61704（父22516）实际仍在运行，09:29:15启动，日志明确enhanced-disabled且未attach。对应此前Shift+F10尝试“上下文菜单”，该键在IDE默认实际为Run，故这不是后台自启或产品缺陷；已勘误“不启动业务应用”的操作记录，后续不再用Shift+F10当菜单键。该次应用在已授权只读demo范围，无新写库操作。退出确认按实际存活进程处理，未把它当死会话直接Disconnect。
 
 ## 第八批交互等待复验
 
-合流e47e2877及诊断清理后七类115/0/0/0（新增交互时钟/真实popup生命周期四例），fresh XML2026-10-17 10:15:22～52。第八批IDE57840、窗口89985620，Light125%全屏；运行主JAR6062925字节、SHA256 `6a03a316af433e0ebf6c09fe425b164a05d703a4ad91834840c8ccb6ccb7f64e`。
+合流dd0f8347及诊断清理后七类115/0/0/0（新增交互时钟/真实popup生命周期四例），fresh XML2026-10-17 10:15:22～52。第八批IDE57840、窗口89985620，Light125%全屏；运行主JAR6062925字节、SHA256 `6a03a316af433e0ebf6c09fe425b164a05d703a4ad91834840c8ccb6ccb7f64e`。
 
 数据源弹窗10:24:36出现，10:28:49选择mp_demo，停留253秒后仍popup selected并创建正确MySQL UUID会话，进入未知QUERY确认（frame-935a2641）。确认框继续停留约505秒，10:37:14点No，面板显示“已取消执行，未提交数据库控制台”（frame-66c752e3）；该请求无SUBMITTED，也未出现原popup焦点SEVERE。用户选择及确认的长等待均不再被后台60秒预算误取消。
 
@@ -326,7 +326,7 @@ B8退出：PID57840正常GUI退出，runIde退出0并自动注销，未强杀；
 
 ## 第九批合流门禁
 
-生产冻结`58ad8dce`，包含UI016～UI020全部修复（UI019/020为测试/代码发现待GUI）。合流后根`:test`十一类fresh XML时间2026-10-17T04:57:33～04:58:03Z，227/0/0/0：预设缓存28、预设对话框11、预设面板21、回滚对话框22、回滚面板15、回滚生成器49、日志转SQL18、执行方言闸17、准备单飞26、错误处理16、跨版签名4。使用`-Pkotlin.incremental=false --no-configuration-cache`避免新默认参数的旧测试ABI缓存；主控逐文件核实，不把独立60/75/119相加冒充合流读数。真实native view五例仍为独立testDbConsole证据，最终统一全量未执行。
+生产冻结`c0d06101`，包含UI016～UI020全部修复（UI019/020为测试/代码发现待GUI）。合流后根`:test`十一类fresh XML时间2026-10-17T04:57:33～04:58:03Z，227/0/0/0：预设缓存28、预设对话框11、预设面板21、回滚对话框22、回滚面板15、回滚生成器49、日志转SQL18、执行方言闸17、准备单飞26、错误处理16、跨版签名4。使用`-Pkotlin.incremental=false --no-configuration-cache`避免新默认参数的旧测试ABI缓存；主控逐文件核实，不把独立60/75/119相加冒充合流读数。真实native view五例仍为独立testDbConsole证据，最终统一全量未执行。
 
 第九批runIde已启动：PID37948、主窗口21499930，243/Light125%、1920×1080全屏，autoReload关闭。运行JAR6,074,072字节、SHA256 `31998253e1473e6525eb88610edd8117ca786e895a1df537b75e4c87525d7753`；系统级置顶仍未完成，不混称全屏置顶。
 
@@ -336,13 +336,13 @@ UI018原路径复验：DELETE id71回滚输入单列快照id/71生成INSERT正�
 
 U36/U29万条真实UI补验：将已核合成文件不覆盖复制到当前ui004-b5目录，刷新后显示10000条（frame-eac690af），打开首屏同结构徽章10000（frame-b50185e7）。搜索UI_MATCH显示1000条（frame-289d20ac），精准搜索id = 10000 AND能取得末条#10000（frame-914a1052）；小写ui_match开启大小写敏感为0条，关闭立刻恢复1000条（frame-fecdb046/835c2f5e）。End先到当前30条批次末端，下一次再触发追加；已核既有30条惰性模型，不误报数据丢失，尚未以连续滚动遍历全万条。
 
-用户现场新增需求：SQL历史页参照日志页增加“滚动到底部”按钮。已派独立工作树`mpsv-devui-history-bottom`/分支`t-devui-history-bottom`后台实施，要求复用现有图标文案、跳到当前过滤集合真实末条而非仅已加载30条；不阻塞主控其他验收。首件2cdd1b12已合dev83b70283，真实工具栏动作三类46/0/0/0（新动作5、导航17、搜索24），摘批量补齐5项3红，恢复46绿，主控核XML。复用ArrowDown与中性scrollBottom文案，不宣称实时跟随；文件态隐藏、空态禁用，一次addAll补齐过滤全集后同步到底。待下一包GUI及窄宽复验。
+用户现场新增需求：SQL历史页参照日志页增加“滚动到底部”按钮。已派独立工作树`mpsv-devui-history-bottom`/分支`t-devui-history-bottom`后台实施，要求复用现有图标文案、跳到当前过滤集合真实末条而非仅已加载30条；不阻塞主控其他验收。首件2cdd1b12已合dev6cd42588，真实工具栏动作三类46/0/0/0（新动作5、导航17、搜索24），摘批量补齐5项3红，恢复46绿，主控核XML。复用ArrowDown与中性scrollBottom文案，不宣称实时跟随；文件态隐藏、空态禁用，一次addAll补齐过滤全集后同步到底。待下一包GUI及窄宽复验。
 
 主控同时继续U29/U36：返回文件态后搜索2026-10-17恰一文件（frame-f3c8e1ff）；打开真实658条文件后SQL搜索框清空且首屏恢复真实来源（frame-532c15e5），搜索合成哨兵UI_MATCH为0（frame-9b16c06e），没有把另一万条文件混入。该顺序验证文件边界，不代证受控迟到竞态。
 
 ## 第十批准备
 
-第九批14:37:56正常退出0，退出时无新增SEVERE；该批未真正建立native执行控制台，因此不能用此次干净退出替代UI016原始触发链。第十批包含历史到底按钮83b70283与UI021长度同步65869281，合流十四类278/0/0/0，fresh XML 2026-10-17T06:41:50～06:42:28Z，主控核每类及总数。新包已后台启动，待按钮真实末条/窄宽、foreach首开SQL及带原生控制台退出复验。
+第九批14:37:56正常退出0，退出时无新增SEVERE；该批未真正建立native执行控制台，因此不能用此次干净退出替代UI016原始触发链。第十批包含历史到底按钮6cd42588与UI021长度同步56d066cf，合流十四类278/0/0/0，fresh XML 2026-10-17T06:41:50～06:42:28Z，主控核每类及总数。新包已后台启动，待按钮真实末条/窄宽、foreach首开SQL及带原生控制台退出复验。
 
 第十批PID50152/主窗235412392，Light125%全屏。用户新增历史到底按钮真实复验通过：文件态隐藏（frame-5a6fe6aa），万条列表首屏点击一次后末项#10000完整可见（frame-52bcf869），过滤UI_MATCH的1000条结果点击一次仍直达原始#10000而不是前30条末项（frame-751eac3d）；无匹配时按钮灰化（frame-f42c3d5c）。收窄右栏到约255图像像素（当前截图1280×720，非声称255物理像素）后按钮仍直接可见可用，再点仍到#10000（frame-6bca7f2f）。未引入实时跟随，合流278绿与本次真实按钮证据互相补充。
 
@@ -360,7 +360,7 @@ UI016完整IDE退出复验未完全通过：本批15:17:02/15:20:30两次native 
 - 历史目录在GUI指向ui004-b5，保留上限0保护既有证据。真实history_search命中1000、maxResults1000被钳到100、最新首项id10000，坏正则返回INVALID_ARGUMENT。产物`build/ui262-mcp-history-first.json`。
 - 初次本地schema返回SCHEMA_NOT_AVAILABLE（模型0表），EXPLAIN返回DATASOURCE_UNREACHABLE；原生连接正对照证实新沙盒缺MySQL驱动与密码。经原生Download补驱动、只为本地mp_demo补既有测试凭据，Test Connection成功MySQL8.0.12（frame-8a3ba70f），随后重测在途。DELETE传给EXPLAIN明确MCP_READ_ONLY拒绝，未执行写SQL。未修改或连接其他远程业务源。
 
-UI016续修已完整合入dev121a9c60～c5b4d4fb，保留session、只提前释放LanguageConsoleImpl子树；独立真实项目关闭8绿，撤session早释8项恰2红，恢复8绿，跨版签名5绿，主控核XML。纯原生保留session对照也复现同Bus栈，明确为平台释放时序被执行链触发。运行262包仍旧，最终原路径退出复验尚待换包。
+UI016续修已完整合入dev28dce39e～dccc6af0，保留session、只提前释放LanguageConsoleImpl子树；独立真实项目关闭8绿，撤session早释8项恰2红，恢复8绿，跨版签名5绿，主控核XML。纯原生保留session对照也复现同Bus栈，明确为平台释放时序被执行链触发。运行262包仍旧，最终原路径退出复验尚待换包。
 
 MCP数据库复测完成：`build/ui262-mcp-database-connected.json`中schema-local返回真实user的13列与中文注释，明确source=mp_demo@localhost；explain-local返回MySQL PRIMARY/const/rows1计划及原生notice；DELETE仍MCP_READ_ONLY。11个不同sqlv工具均已有本次实际成功调用（8静态＋history＋schema＋explain），未以首轮环境错误代证成功。项目外受控文件参数返回SOURCE_NOT_FOUND，未读取正文；审计包含对应EXPECTED_ERROR。合成密码脱敏调用返回***，审计行不含M19_FAKE_PASSWORD。禁用直调为平台Tool not found，不声称已走到内部TOOL_DISABLED；内部闸仍以定向测试补充。网络传输仅本机沙盒端口，未外发诊断内容。
 
@@ -380,15 +380,15 @@ U30日志还原补验：双行Preparing/Parameters输入Timestamp含.123及O'Rei
 
 U30剪贴板边界增量：在日志输入编辑器内造双行id314日志，Ctrl+A/C复制后删除输入，再点还原只提示“请先粘贴MyBatis日志”，未自动读剪贴板（frame-2fa2b34a）；只有点专用剪贴板按钮才读回两行并还原id314（frame-8b61f733）。复制三个空格再清输入，点专用按钮提示“剪贴板中没有文本”，未读回旧日志（frame-8a658d66）。Ctrl+A只选输入区，未改左侧XML；旧输出保留但未执行，真正null剪贴板尚未造，空白分支已触达。
 
-UI022独立23330aaf/d92a2657已合dev11e96331/9c0887ff。真实PSI链先红8项6失败，修后70绿，撤三个修复入口再次8项6红，恢复70/0/0/0（09:36:44～09:37:18Z，主控核XML）；手写LIMIT两正对照保持绿。运行262包未更新，GUI原样本复验仍待换包。UI023已完成隔离树代码，第二槽接续定向正反验证在途，未预填绿。
+UI022独立23330aaf/d92a2657已合dev33f8762a/801ca399。真实PSI链先红8项6失败，修后70绿，撤三个修复入口再次8项6红，恢复70/0/0/0（09:36:44～09:37:18Z，主控核XML）；手写LIMIT两正对照保持绿。运行262包未更新，GUI原样本复验仍待换包。UI023已完成隔离树代码，第二槽接续定向正反验证在途，未预填绿。
 
-UI023独立25925ae2/2dc1f681/5ed9148d/5b22953a已合dev afea7f3d～7e065275。十类147/0/0/0（10:04:59～10:05:32Z，主控核XML）；摘主入口20项4红，跨源/库缓存4红，面板所有权/编辑器/限定表/当前库4红，复杂SQL3红，全部恢复。新接线仅对本面板匹配且库上下文可证明的MySQL/MariaDB精确缓存启用，不以项目首缓存猜目标；其他场景保守跳过。运行旧262包不能验证新接线，原样本仍待换包。
+UI023独立25925ae2/2dc1f681/5ed9148d/5b22953a已合dev 8b01108e～5fe17279。十类147/0/0/0（10:04:59～10:05:32Z，主控核XML）；摘主入口20项4红，跨源/库缓存4红，面板所有权/编辑器/限定表/当前库4红，复杂SQL3红，全部恢复。新接线仅对本面板匹配且库上下文可证明的MySQL/MariaDB精确缓存启用，不以项目首缓存猜目标；其他场景保守跳过。运行旧262包不能验证新接线，原样本仍待换包。
 
 U28选择集CSV导出：历史两条合成DDL/SELECT仅选SELECT导出，实际`build/ui262-history-selection.csv`为一行表头＋一条SELECT，未含未选DDL，GUI通知“已导出1条”（frame-4ec00fc2）。真实格式菜单是CSV/TSV/TXT/SQL（frame-95e80143），不是JSON/Markdown。Windows原生保存对话框拒绝正斜杠全路径，改反斜杠后实际落盘，不误报导出功能失败；另三格式仍待验。
 
 262首批正常GUI退出，runIde退出0。主dev已合UI022/023及session续修，下一批合流定向25类已后台启动，未用各独立读数相加冒充整体通过。
 
-下一批合流定向已完成：生产7e065275，25类463/0/0/0，fresh XML 2026-10-17T10:36:37～10:38:15Z逐文件核对。覆盖分页/参数类型/显示、Schema实际执行入口与目标作用域、动态批次/注入/未知参数/方言错误、历史到底/导航/搜索、预设、回滚与提交回执。默认243沙盒已后台启动，准备UI016/022/023真实原路径复验；不是最终testShards全量。
+下一批合流定向已完成：生产5fe17279，25类463/0/0/0，fresh XML 2026-10-17T10:36:37～10:38:15Z逐文件核对。覆盖分页/参数类型/显示、Schema实际执行入口与目标作用域、动态批次/注入/未知参数/方言错误、历史到底/导航/搜索、预设、回滚与提交回执。默认243沙盒已后台启动，准备UI016/022/023真实原路径复验；不是最终testShards全量。
 
 UI022新包243原路径复验通过：PID34400，注解175填1/20/10后LIMIT20,10（frame-04ffddbb）、COUNT内部status1（frame-208f57b9）；改status2并点刷新，主查询status2/LIMIT20,10与COUNT内部status2同时保持（frame-0147e002/37062d78），不再残留问号。合成分页两输入现为数字提示，不再page.size对象JSON提示。仅静态预览未执行该分页脚本；参数区长表达式导致输入右侧裁剪仍属视觉矩阵待核，未据此改分页逻辑。
 
@@ -398,7 +398,7 @@ UI023新包GUI仍未闭环：243已原生选择mp_demo内省tables10，日志18:
 
 视觉批次局部证据（243 Light125%，合成VisualMatrix五条，未执行）：实际阈值1000ms（frame-e2a232e2），12ms/0ms绿色、500ms橙色、1500ms红色、未知破折号灰色，CRUD四色边条（frame-ea2098fb）。选中UPDATE行统一高对比文本（frame-d02512a1），焦点移到源码后仍可读（frame-7a97582c）。三显示模式在相同文件真实切换：关键字换行、单行（frame-8d0378f8）、完整格式化（frame-62b75ab1）；长句列表省略后Ctrl+C粘入本地输入仍保末尾ORDER BY created_at DESC,id ASC（frame-a99e2cce）。此为历史面Light125局部，日志/底部/完整预览同源及Dark/100矩阵仍待。
 
-UI023二次续修已合dev f99f32bd/701a0b1c/a3e2ff63。真实onNativeEditorReady→embedConsole会清nativeConsoleEditor而保nativeEditorDoc；前轮手工设编辑器夹具漏该顺序。改以实际文档对象身份匹配preparedEditor.document；先红15项3失败，文档保护摘闸3红，精确撤修fresh15项3红，恢复十类149/0/0/0（主控核XML）。运行视觉包不热替，下一包真实绑定错列复验仍待，不能据149绿标完成。
+UI023二次续修已合dev 55e5f2a7/533a5565/a9811746。真实onNativeEditorReady→embedConsole会清nativeConsoleEditor而保nativeEditorDoc；前轮手工设编辑器夹具漏该顺序。改以实际文档对象身份匹配preparedEditor.document；先红15项3失败，文档保护摘闸3红，精确撤修fresh15项3红，恢复十类149/0/0/0（主控核XML）。运行视觉包不热替，下一包真实绑定错列复验仍待，不能据149绿标完成。
 
 视觉矩阵补充（Dark125/Dark100）：同一历史文件在Dark125下四档耗时色与CRUD边条清晰（frame-ea2098fb），选中行高对比、焦点移出后仍可读（frame-d02512a1/7a97582c）；三种显示模式切换真实生效（关键字换行、单行frame-8d0378f8、格式化frame-62b75ab1），长SQL省略后复制仍含末尾ORDER BY（frame-a99e2cce）。Alt+Shift+0重置100%后日志页工具栏与四页签单行可见（frame-6014e8e3）。动作搜索可查到“Submit Feedback (SQL Visualizer)”“SQL Visualizer设置/项目设置”（frame-42c35f98），帮助入口存在但二维码三态未触达。Light100及日志/底部同源色仍待。
 
@@ -468,9 +468,9 @@ U28导出入口（本轮）：日志条目右键菜单完整列出「导出可�
 
 ## 最终门禁与合流状态
 
-- UI024（存储按钮裁切）已合 dev `da85fb11`；UI026（英文设置页横向溢出）已合 dev `22691596`，合流后定向 `StorageRowLayoutTest` 3/0/0/0。
-- UI025 已合 dev `688c649d`；其真实场景缺口 UI029 的修复已合 dev `e0f3681f`，合流后定向 `testDbSchemaAnnotator` 41/0/0/0（反向摘回落分支恰 3 红）。
-- 全量门禁：UI029 合流后新一轮默认 5 片 `testShards --continue --no-configuration-cache` 已绿：**7867 例 / 9 跳过 / 0 失败 / 0 错误**（14m34s，tip `f17b2895` 之前的 `e0f3681f` 源码树）；本机 Docker 不可用，按项目定例自动跳过 Docker 测试。
+- UI024（存储按钮裁切）已合 dev `de170ecb`；UI026（英文设置页横向溢出）已合 dev `eb6d2af0`，合流后定向 `StorageRowLayoutTest` 3/0/0/0。
+- UI025 已合 dev `6f96429a`；其真实场景缺口 UI029 的修复已合 dev `052df70b`，合流后定向 `testDbSchemaAnnotator` 41/0/0/0（反向摘回落分支恰 3 红）。
+- 全量门禁：UI029 合流后新一轮默认 5 片 `testShards --continue --no-configuration-cache` 已绿：**7867 例 / 9 跳过 / 0 失败 / 0 错误**（14m34s，tip `d217261b` 之前的 `052df70b` 源码树）；本机 Docker 不可用，按项目定例自动跳过 Docker 测试。
 - 243/253/262 兼容与构建门禁按用户要求排在全部验收之后，尚未执行；未执行前不声称通过。
 
 ## 全量门禁首轮红灯与处置（2026-10-17 晚）
@@ -479,13 +479,13 @@ U28导出入口（本轮）：日志条目右键菜单完整列出「导出可�
 
 - `AliasDualTrackDefenseTest` 3 例：断言 lambda 链产出 `selectAs(...)`。javap 实证 MP core 3.5.14/3.5.17 的 `Query`/`AbstractWrapper`/`LambdaQueryWrapper`/`QueryWrapper` 均无 `selectAs` 重载，lambda 链无法表达“列 AS 别名”，带别名投影必须整链回落 `QueryWrapper.select(String...)`（现行生成物可编译）。原测试按不存在的 API 断言，属过时契约；已按现行契约校正三例并在生成器回落分支补 javap 依据，未放宽任何产品行为。
 - `AgentManagerPremainReattachTest` 2 例：T-AttachTarget 接入后 `onProcessAppeared` 先做目标探测，`NON_JAVA/HELPER` 直接返回，暂停通道与 attach 端口的恢复判定被挡在后面，导致“重开增强即恢复”失效。修复为恢复判定前移（通道/端口本身已证明该 pid 曾是本插件目标），`doAttachAsync` 同位置补防御性判定。
-- 修复后复跑：`AliasDualTrackDefenseTest` 7/0/0/0、`AgentManagerPremainReattachTest` 16/0/0/0，提交 `fe6d16c9`。
+- 修复后复跑：`AliasDualTrackDefenseTest` 7/0/0/0、`AgentManagerPremainReattachTest` 16/0/0/0，提交 `5e08f860`。
 
-UI025 已合 dev `688c649d`：ExternalAnnotator 只认预览临时文件与插件自有 exec 路径、只读预热缓存；平台不分析 `.idea` 配置目录，故补 RangeHighlighter 兜底通道（红波浪/错误条/悬停建议），两通道按路径互斥；偏移取 JSqlParser token。合流后定向 `testDbSchemaAnnotator` 27/0/0/0、`PlatformSignatureCrossVersionTest` 6/0/0/0、plugin.xml 两组结构测试 BUILD SUCCESSFUL，随后以包含该提交的 tip 重跑默认 5 片全量。
+UI025 已合 dev `6f96429a`：ExternalAnnotator 只认预览临时文件与插件自有 exec 路径、只读预热缓存；平台不分析 `.idea` 配置目录，故补 RangeHighlighter 兜底通道（红波浪/错误条/悬停建议），两通道按路径互斥；偏移取 JSqlParser token。合流后定向 `testDbSchemaAnnotator` 27/0/0/0、`PlatformSignatureCrossVersionTest` 6/0/0/0、plugin.xml 两组结构测试 BUILD SUCCESSFUL，随后以包含该提交的 tip 重跑默认 5 片全量。
 
-第三轮全量又暴露一处约定守卫红灯（`BannedApiScanServiceStateTest`）：`SqlPreviewSchemaGateTest` 在 tearDown 里再次 `project.getService(RollbackSnapshotStore)`。已改为 setUp 捕获服务引用、tearDown 只对引用调 `clearForTest()`，守卫 4/0/0/0、夹具 15/0/0/0，提交 `dfae16f5`。第四轮默认 5 片全量在无 IDE 干扰、清理旧分片结果后重跑。
+第三轮全量又暴露一处约定守卫红灯（`BannedApiScanServiceStateTest`）：`SqlPreviewSchemaGateTest` 在 tearDown 里再次 `project.getService(RollbackSnapshotStore)`。已改为 setUp 捕获服务引用、tearDown 只对引用调 `clearForTest()`，守卫 4/0/0/0、夹具 15/0/0/0，提交 `074419b6`。第四轮默认 5 片全量在无 IDE 干扰、清理旧分片结果后重跑。
 
-第三轮之后又发现同族过时断言 `JavaCodeGeneratorJoinTest.SELECT列带别名_生成selectAs`（普通 LAMBDA 也按不存在的 API 断言），按同一契约校正；MPJ_LAMBDA 的 selectAs 断言保持不变（MPJ wrapper 自身提供该重载）。反向包 298/0/0/0，提交 `70878f6c`。第五轮全量改为 `--continue`，让五个分片一次跑完以便一次看全失败面。
+第三轮之后又发现同族过时断言 `JavaCodeGeneratorJoinTest.SELECT列带别名_生成selectAs`（普通 LAMBDA 也按不存在的 API 断言），按同一契约校正；MPJ_LAMBDA 的 selectAs 断言保持不变（MPJ wrapper 自身提供该重载）。反向包 298/0/0/0，提交 `a3afbe37`。第五轮全量改为 `--continue`，让五个分片一次跑完以便一次看全失败面。
 
 UI024/UI026 新包 GUI 观察（2026-10-17 深夜，重建 243 沙盒、英文 IDE UI）：设置窗口在较宽默认尺寸下，SQL Log 页「自动保存」区三个存储按钮完整可见、右缘无裁切；把窗口缩到 998×742 的尝试被设置窗口自身尺寸策略回弹（SetWindowPos 报成功但界面未变），所以 998 默认宽的真机画面仍未取到，不能以宽窗截图代证。UI026 的英文文案场景也未触发：IDE 是英文，但插件界面按插件侧语言显示中文；英文溢出仍以 `StorageRowLayoutTest` 的真实 JBScrollPane/880/998 断言为准。UI025 的红色波浪视觉复验未完成：新沙盒未打开 SQL 日志工具窗、注解 gutter 图标点击未唤出预览对话框，只有自动化 27/27（含 RangeHighlighter 通道与 token 偏移）覆盖，按「未真机复验」记录。
 
@@ -514,7 +514,7 @@ U28 可移植 CSV（本轮真机落盘）：同一预览「更多 → 导出可�
 - U16：错列条目预览完整展示 `SQLSyntaxErrorException` 并提供「复制错误信息」；缺表/语法错/失效连接/原生超时未验，保持部分。
 - U22：回放脚本与可移植 SQL 两个出口已真实落盘；分享、差异对比、AI 上下文（剪贴板读取被上游拒绝，未能核验内容）与旧六出口未验，保持部分。
 - U28：回放脚本（SQL）与可移植 CSV 已落盘并核对表头与脱敏；TSV/TXT/可移植 SQL 三格式未逐一执行，保持部分。
-- UI029 修复已合 dev `e0f3681f`，定向 `testDbSchemaAnnotator` 41/0/0/0，含 UI029 的新一轮全量为 7867/0/0/9。
+- UI029 修复已合 dev `052df70b`，定向 `testDbSchemaAnnotator` 41/0/0/0，含 UI029 的新一轮全量为 7867/0/0/9。
 
 UI029 真机闭环（2026-10-18，新包）：重建 243 沙盒后，开启捕捉并用 `/user/fixture/unknown-col` 产生条目 `#2 [2026-10-18 00:56:56] 11ms MySQL SQLSyntaxErrorException: Unknown column 'usernme' in 'field list' [UserController.java:80]`；双击打开「SQL 预览」，编辑器第 2 行 `usernme` 出现红色波浪下划线（放大取证 `build/ui243-shots/ui029-redwave-zoom.png`），与顶部执行报错横幅并存。UI025 在“日志条目预览 + 无附着控制台”真实场景下由 UI029 的 last-used 目标回落生效，红色波浪视觉闭环；悬停建议文案本轮未截到（自动化用例断言在场）。demo 临时夹具（mapper 两个方法与 controller 两个端点）已在验证后撤销。
 
@@ -613,7 +613,7 @@ robot 机制 A 生效后重跑 U17/U19/U30/U43，两轮结果同批失败——*
 - **SQL 历史跨重启读回（持久性证据①）**：SQL 历史 tab 五个历史文件全部在列——2026-10-17（1.3MB/875 条）、2026-10-18（77.8KB/27 条）、ui-synthetic-10000（1.7MB/10000 条）、ui-ddl-literals（2 条）、ui-visual-matrix（5 条）；展开 10-18 文件条目正文完整（frame b1-1/b1-3）。顺带新线索：历史条目 `#2 …WHERE password = '***'`——历史文件保存链也有打码痕迹（并入 U31 专项谜面）。
 - **PG EXPLAIN 计划持久+读回（U18 计划留存闭环）**：重启后 UserMapper 预览点执行计划 → 模块学习与绑定**都跨重启保留**（方言行「PostgreSQL（模块已学数据源）」+「已绑定： dbx_test@114.66.55.245」）；结构化计划正确包装 `EXPLAIN (FORMAT JSON, VERBOSE) …`；口令弹窗如预期（Until restart 语义如实）——无口令时右下通知如实披露「结构化计划视图不可用，已回退原生控制台：SQLException: SCRAM…no password」（fail-closed）；填回口令后改 SQL=bench_items 重跑 → **PG 树重现（223ms）且历史基线自动挂上重启前 14:48:19 的快照 #0d5b5db5**，「与上次执行对比：计划无变化」判定链工作（frame b1-5/b1-7）。
 - **U16 增证**：重启后首跑 EXPLAIN 落在 `FROM user`（PG 伪表）→ 控制台 `[42703] column "id" does not exist 位置: 64` 原文回显 + 底部超时引导文案完整（「SQL 已提交执行，但等待结果超时…检查 IDEA 主窗口是否有密码输入框…」，等待凭据场景的用户指引，frame b1-6）。
-- **robot-server 机制 B 被否决 → 机制 A 落地生效**：`idea.log` JVM 参数实证 `-Didea.plugins.path=<沙盒>/plugins` 被 runIde 显式钉死——拷进 `config/plugins` 的 robot-server 不在加载路径（idea.log 零 robot 痕迹、8580 拒连）。改走机制 A（提交 `fec2eccd`）：`build.gradle.kts:171` 的 `gifRecord && gifRobotServer` 解耦为 `gifRobotServer` 独立生效 + robot-plugins 拷入 dev 树（gitignore 在案）+ `start-ui243.ps1` 传 `-PgifRobotServer=true`。重启后 **8580 LISTENING（pid 44664）、`robot.py probe` 返回 324 根节点、IdeFrameImpl 1920×1080**——robot-server 0.11.23 随 prepareSandbox 正常装入。批 C 无 robot 降级跑的四组（U17/U19/U30/U23）全因按钮/页签定位「robot 未启且 anchor 模板未标定」失败——证实这些探针为 robot 硬依赖，需 robot 在场重跑。
+- **robot-server 机制 B 被否决 → 机制 A 落地生效**：`idea.log` JVM 参数实证 `-Didea.plugins.path=<沙盒>/plugins` 被 runIde 显式钉死——拷进 `config/plugins` 的 robot-server 不在加载路径（idea.log 零 robot 痕迹、8580 拒连）。改走机制 A（提交 `f1ed75d9`）：`build.gradle.kts:171` 的 `gifRecord && gifRobotServer` 解耦为 `gifRobotServer` 独立生效 + robot-plugins 拷入 dev 树（gitignore 在案）+ `start-ui243.ps1` 传 `-PgifRobotServer=true`。重启后 **8580 LISTENING（pid 44664）、`robot.py probe` 返回 324 根节点、IdeFrameImpl 1920×1080**——robot-server 0.11.23 随 prepareSandbox 正常装入。批 C 无 robot 降级跑的四组（U17/U19/U30/U23）全因按钮/页签定位「robot 未启且 anchor 模板未标定」失败——证实这些探针为 robot 硬依赖，需 robot 在场重跑。
 - **现场态**：口令已重填（Until restart）；SQL 日志捕获条目如预期清空（内存态）；待验=参数预设读回（预览参数区）、屏蔽规则保留（需先造规则）、U31 判别实验（导出 CSV vs 列表——需从新 IDE Run 应用造新条目）。
 
 ## 剩余批次执行计划（2026-10-18 定稿）
@@ -630,15 +630,15 @@ robot 机制 A 生效后重跑 U17/U19/U30/U43，两轮结果同批失败——*
 
 ## 全量门禁终局（2026-10-18，第 10 轮全绿）
 
-- 修复分支 `t-uifix-gate9`（dispose 守卫 + smoke 收窄 + 零窗口直写，正向 50/50+65 例组合连续绿、反向 B 未修复树复现 victim 红）并入 dev `674327c6`。
-- **第 10 轮全量（独立沙盒 MPSV-Gate10 + 登记表隔离）：合并读数 7918 例 / 0 失败 / 0 错误 / 10 跳过——全绿**。首轮 shard1 唯一红为新增守卫类未登记元守卫清单（20260923 已知族），补登记 `f8444ba0` 后 shard1 重跑 1582/0/0/2；shard1 来自登记后重跑，shard2~5 为原收集（登记行只影响元守卫内部清单）。**此前 5 轮轮番单红的 exec-doc 冲突族在本轮零复发**。
+- 修复分支 `t-uifix-gate9`（dispose 守卫 + smoke 收窄 + 零窗口直写，正向 50/50+65 例组合连续绿、反向 B 未修复树复现 victim 红）并入 dev `5da5d2d4`。
+- **第 10 轮全量（独立沙盒 MPSV-Gate10 + 登记表隔离）：合并读数 7918 例 / 0 失败 / 0 错误 / 10 跳过——全绿**。首轮 shard1 唯一红为新增守卫类未登记元守卫清单（20260923 已知族），补登记 `e9ca529e` 后 shard1 重跑 1582/0/0/2；shard1 来自登记后重跑，shard2~5 为原收集（登记行只影响元守卫内部清单）。**此前 5 轮轮番单红的 exec-doc 冲突族在本轮零复发**。
 - 后续收尾事项：`build.gradle.kts` 的 Gate10 临时沙盒行已按承诺还原（未入库）；`mpsv-uifix-gate9` 工作树保留（其 build.gradle.kts 含同款临时行未提交）。
 
 U25/U12/U13 本轮真机（重建后沙盒）：方法预览头部显示 `方言: MySQL（模块已学数据源）  XML select: annotation`，证明方言由模块数据源学习得出；「执行计划」绑定数据源后执行 `EXPLAIN SELECT * FROM mp_demo.user WHERE id = 91`，Database 控制台返回原生 MySQL 计划表格（列：id/select_type/table/partitions/type/possible_keys/key/key_len/ref/rows/filtered/Extra），同时弹出「结构化执行计划视图不可用，已回退原生控制台：当前无结果集含有可解释数据源（先在控制台里执行一次查询即可）」——结构化开关默认关闭时的回退文案与 B1 原生表格路径均复现。为打通该路径，把 kotlin_demo@localhost 数据源密码补齐为 demo 应用 `application.yml` 中的本地 MySQL 口令（root/root，仅本地测试库）。
 
 U15/U27 本轮真机：方法预览中选中表名 `user` 后右键「SQL 快捷模板」子菜单完整列出 EXPLAIN 选中表 / COUNT 选中表 / 抽样 10 行；点击「COUNT 选中表」后 Database 控制台实际执行 `SELECT COUNT(*) FROM user`（111ms），返回 `[42000][1146] Table 'kotlin_demo.user' doesn't exist` 并提示当前库为 kotlin_demo——模板动作与执行链已真实触达，报错仅因目标库缺少该表；待用 `mp_demo.user` 限定名复验成功路径。
 
-UI030（用户现场 UX 改进，已合 `650ef6b3`）：「结构化执行计划视图不可用，已回退原生控制台：当前预览会话没有已绑数据源」原为纯告知。改为——无已绑数据源时**直接弹既有数据源选择器**（与执行 SQL 同一 runner 选择器），只绑定不执行任何语句，用户选中后自动重试结构化 EXPLAIN；取消则收口为一次明确说明，不重复弹窗、不形成循环；结构化开关关闭时通知附带「启用结构化并重试」动作。定向 `ExplainFallbackGuidanceTest` 10/0、`ExplainFallbackNotificationTest` 3/0、`ExplainPanelWiringGuardTest` 10/0、`ExplainPanelChannelTest` 12/0；反向摘动作/改取消判定/摘调用各恰 1~2 红。真机弹窗时序与通知动作点击仍需 runIde 复验。
+UI030（用户现场 UX 改进，已合 `74087f17`）：「结构化执行计划视图不可用，已回退原生控制台：当前预览会话没有已绑数据源」原为纯告知。改为——无已绑数据源时**直接弹既有数据源选择器**（与执行 SQL 同一 runner 选择器），只绑定不执行任何语句，用户选中后自动重试结构化 EXPLAIN；取消则收口为一次明确说明，不重复弹窗、不形成循环；结构化开关关闭时通知附带「启用结构化并重试」动作。定向 `ExplainFallbackGuidanceTest` 10/0、`ExplainFallbackNotificationTest` 3/0、`ExplainPanelWiringGuardTest` 10/0、`ExplainPanelChannelTest` 12/0；反向摘动作/改取消判定/摘调用各恰 1~2 红。真机弹窗时序与通知动作点击仍需 runIde 复验。
 
 U23 预设管理本轮真机：方法预览展开「预设」后显示命名预设下拉（此前会话留下的 `UI-Shared`）与「管理预设…」；管理对话框列出「默认预设」与「UI-Shared · 本语句 1 条快照」，提供另存为预设…/重命名…/删除，并明确说明：预设按语句保存参数快照（参数值/条件勾选/foreach 值）、按语句隔离、列表只显示当前语句的预设、同名预设在不同语句下各存各的值、重命名/删除作用于同名预设的全部语句、默认预设保持自动召回。与既有 UI017/UI019 的跨方法同名与返回方法复验互补；P2/20 上限与 OGNL 边界仍未验。
 
@@ -675,7 +675,7 @@ U36 屏蔽规则本轮真机：日志面板漏斗打开「管理 SQL 屏蔽规�
 
 **视觉观察（登记非缺陷）**：333px 窄栏下「日志 → SQL」页签左端被裁无省略号（平台 JBTabs）；228px 以下工具窗整体收起（平台最小宽度）；降级横幅触发面（重启初期/重渲染）。
 
-**证据索引**：截图 `build/ui243-shots/`（pg4/pg5/pg6/b1/u27/u31/dd/bc-* 系列）；提交链 `780427d2`→`44c28842`→`998f1f9a`→`3892646c`→`fec2eccd`→`b5c7ce41`→`515e82f0`→`947fe9da`→`4dcf9485`→`6f4c3d10`→`b65c0cfb`→`cae1031d`；工具层正典 `dev-support/acceptance/`（11 探针 + lib/nav + BC_RUNBOOK）。
+**证据索引**：截图 `build/ui243-shots/`（pg4/pg5/pg6/b1/u27/u31/dd/bc-* 系列）；提交链 `79bbeed3`→`c09f5451`→`388807b8`→`ff9dbeb7`→`f1ed75d9`→`80b94009`→`754856e8`→`358d5595`→`e16519ed`→`9d168f8f`→`ec3060dd`→`a6e0a321`；工具层正典 `dev-support/acceptance/`（11 探针 + lib/nav + BC_RUNBOOK）。
 
 ## 测试收口补充（2026-10-18 晚，替代 GUI 交互面）
 

@@ -7,7 +7,7 @@ metadata:
   originSessionId: sess_1d002463-c35f-40bf-bc67-5767d2c2b20d
 ---
 
-T-HistParam 已交付两轮（2026-09-11，cef6081 + f5983b8；全量 3292/0/0/6 绿，runIde 真机留人工）：SQL 历史 tab 预览「无未解析参数」根治 + 字面量内联 SQL 参数恢复。二轮补数值谓词识别——用户追加反馈 `WHERE (t.id = 1)` 仍无参数行，一期只认单引号字符串漏掉数值。
+T-HistParam 已交付两轮（2026-09-11，bceeee9 + 3d72025；全量 3292/0/0/6 绿，runIde 真机留人工）：SQL 历史 tab 预览「无未解析参数」根治 + 字面量内联 SQL 参数恢复。二轮补数值谓词识别——用户追加反馈 `WHERE (t.id = 1)` 仍无参数行，一期只认单引号字符串漏掉数值。
 
 落地五件套：SqlLogParamCodec（Base64(JSON{r,p}) 载荷）+ SqlLogAutoSaver 写 `-- pd: ` 行（params 非空或 rawSql 有 `?` 才写）+ SqlLogFileReader 读 v2（解码失败降级正文注释行）+ LogEntryPreviewRecognizer.toPreviewResult(formatSql, literalRecovery) 统一识别通道（双面板 openPreview 共用；历史页 formatSql=false 现状）+ LiteralParamRecovery 字面量恢复。设置 literalParamRecovery 默认开，PluginSettingsPersistenceTest 计数 23→24。
 

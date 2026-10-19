@@ -1,13 +1,13 @@
 ---
 name: pitfall-selectcollection-preview-sql-bug
-description: selectCollection/selectAssociation 类参必须解析为 EntityRefArg（PSI 层），否则子查询表名推断错误/重复 JOIN/ON 别名不一致（2026-08-21 已修复，commit 68992ce）
+description: selectCollection/selectAssociation 类参必须解析为 EntityRefArg（PSI 层），否则子查询表名推断错误/重复 JOIN/ON 别名不一致（2026-08-21 已修复，commit bfdd238）
 metadata:
   node_type: memory
   type: project
   originSessionId: sess_0f76781d-7b55-4784-8e56-f549f79a5023
 ---
 
-`selectCollection` / `selectAssociation` 预览 SQL 三缺陷已修复（2026-08-21，commit 68992ce，1574 测试全绿）：
+`selectCollection` / `selectAssociation` 预览 SQL 三缺陷已修复（2026-08-21，commit bfdd238，1574 测试全绿）：
 
 **根因**：PSI 层 `ArgResolver` 对 selectCollection/selectAssociation 的类参未做实体解析（走通用 `resolveValueArg` 求值为类名字面量 ValueArg），丢失 @TableName 注解。对比 leftJoin 有专门 `resolveJoinClass` → `EntityRefArg`。
 

@@ -45,7 +45,7 @@ openapi/application/impl/modality.kt:9-17  inModalContext = enterModal + action 
 
 ### 2. 我们是用 `ModalityState.any()` 从后台任务派发这次卸载的
 
-`DynamicInstallSupport.kt:226-248`（T-DynUpdate，2026-09-11 `23cf667` 引入）：
+`DynamicInstallSupport.kt:226-248`（T-DynUpdate，2026-09-11 `34055dd` 引入）：
 
 ```kotlin
 ApplicationManager.getApplication().invokeAndWait({
@@ -196,14 +196,14 @@ internal fun chooseDispatchModality(captured: ModalityState?): ModalityState
 
 ### 一、车道与提交（2026-09-22）
 
-- 工作树 `F:/code/Java/Gitee/SongRenShuo/mpsv-dynws`，分支 `t-dynws-writesafe`，基点 `master` `ddb694a`。
-- 代码提交 `b7ac235`（本计划 + `DynamicInstallSupport.kt` + 新测试类 + 守卫规则，4 文件 +476/−4）；
+- 工作树 `F:/code/Java/Gitee/SongRenShuo/mpsv-dynws`，分支 `t-dynws-writesafe`，基点 `master` `c68dbc8`。
+- 代码提交 `a79708f`（本计划 + `DynamicInstallSupport.kt` + 新测试类 + 守卫规则，4 文件 +476/−4）；
   文档同步提交（计划实施记录 / 变更记录 / CHANGELOG）。
-- 两度并 master 均零冲突（期间 master 被并行会话推进两次）：`7bb7eab`（T-ExplainChainHardening + T-ErrorLocateUsability）→ `3ef8236`，`0abc1bb`（T-AgentResiduals）→ 见提交历史。
-- 三度并 master（期间 master 被并行会话推进三次）：`7bb7eab`（T-ExplainChainHardening + T-ErrorLocateUsability）→ `3ef8236`；
-  `0abc1bb`（T-AgentResiduals）→ `bd549ec`；`c482859`（explain 死常量修复，即本项门禁里那条 master 既有红）→ `f54584b`
+- 两度并 master 均零冲突（期间 master 被并行会话推进两次）：`95a4ebd`（T-ExplainChainHardening + T-ErrorLocateUsability）→ `8df2aa3`，`b0bde1a`（T-AgentResiduals）→ 见提交历史。
+- 三度并 master（期间 master 被并行会话推进三次）：`95a4ebd`（T-ExplainChainHardening + T-ErrorLocateUsability）→ `8df2aa3`；
+  `b0bde1a`（T-AgentResiduals）→ `fae01ae`；`d848784`（explain 死常量修复，即本项门禁里那条 master 既有红）→ `b5054a2`
   （唯一冲突 `docs/变更记录.md` 台账行，按「保留双方全部行、本批置顶」解）。
-- **合入 master `6e2a34d`**（`--no-ff`，6 文件 +539/−5）；合并后定向复验 7 类 96 例 0 失败（含此前 master 侧红的
+- **合入 master `cd54905`**（`--no-ff`，6 文件 +539/−5）；合并后定向复验 7 类 96 例 0 失败（含此前 master 侧红的
   `EnumReachabilityGuardTest` 3 例转绿）。收口：工作树 `mpsv-dynws` 删除、分支 `t-dynws-writesafe` 删除、
   并行登记注销。
 - §四 T-01~T-04 全量落地；T-04 的规则形态在实施中被修正（见 §四）。
@@ -213,8 +213,8 @@ internal fun chooseDispatchModality(captured: ModalityState?): ModalityState
 | 项 | 读数 | 说明 |
 |----|------|------|
 | 定向（新测试类 + 守卫类） | 32 例 / 0 失败 | 守卫类由 24 例增至 26 例（本项 +2） |
-| 全量 `testShards`（并入 master 后，清 `build/classes`+`build/kotlin` 重跑） | **498 类 / 5695 例 / 1 失败 / 0 错误 / 6 跳过** | `7bb7eab` 并轨点读数；含本项新增 1 类 8 例 |
-| 全量 `testShards`（再并 `0abc1bb` 后的最终树，即待并入 master 的那棵树） | **499 类 / 5705 例 / 1 失败 / 0 错误 / 6 跳过** | 两段链读数（另一段来自 T-AgentResiduals 自身门禁）；唯一失败仍为 **master 既有**（见 §五） |
+| 全量 `testShards`（并入 master 后，清 `build/classes`+`build/kotlin` 重跑） | **498 类 / 5695 例 / 1 失败 / 0 错误 / 6 跳过** | `95a4ebd` 并轨点读数；含本项新增 1 类 8 例 |
+| 全量 `testShards`（再并 `b0bde1a` 后的最终树，即待并入 master 的那棵树） | **499 类 / 5705 例 / 1 失败 / 0 错误 / 6 跳过** | 两段链读数（另一段来自 T-AgentResiduals 自身门禁）；唯一失败仍为 **master 既有**（见 §五） |
 
 ### 三、反向验证（两臂；均临时改动 → 必红 → 逐字节还原，`sha256` 还原前后一致）
 
@@ -248,7 +248,7 @@ internal fun chooseDispatchModality(captured: ModalityState?): ModalityState
 - **master 既有红（非本项引入）**：`EnumReachabilityGuardTest` 1 例失败，指向 `sql/ExplainSupport.kt:19`
   的 `ExplainOutputFormat.XML`——T-ExplainChainHardening 有意留的占位枚举值（KDoc 自述「本插件未接入，
   仅占位」），零产出点故被枚举可达性守卫判死常量。本项 diff 未触及该文件
-  （`git diff 7bb7eab..t-dynws-writesafe` 仅 4 文件），系并入 master 时带进来的既有红；该任务有在途复核
+  （`git diff 95a4ebd..t-dynws-writesafe` 仅 4 文件），系并入 master 时带进来的既有红；该任务有在途复核
   会话，本项**登记不修**。
 - **环境噪音（已如实登记，非代码问题）**：①首轮门禁 5 例 `ConnectionErrorClassifierTest` `NoSuchMethodError`
   经清 `build/classes` + `build/kotlin` 重跑证伪为增量陈旧类；②本会话一次被超时中断的 gradle 运行遗留了 3 个分片

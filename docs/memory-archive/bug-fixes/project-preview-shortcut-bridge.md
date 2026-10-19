@@ -8,7 +8,7 @@ metadata:
   originSessionId: sess_9174d2f4-819c-44dc-9e3d-20d63ca9bbef
 ---
 
-# T-PreviewShortcut：非 Wrapper 预览快捷键贯通（2026-09-04，提交 210c802；前置 merge 151d56e）
+# T-PreviewShortcut：非 Wrapper 预览快捷键贯通（2026-09-04，提交 ad7dfb1；前置 merge 03629d8）
 
 ## 背景与洞察
 所有"非 Wrapper"预览都有两套入口：**gutter 点击**（各 LineMarkerProvider → 各自 preview 方法）与 **快捷键 `Alt+Shift+Q`**（`ConvertToSqlAction` actionPerformed）。二者原本是两条互不相通的链路——gutter 能点，快捷键却因为 `ConvertToSqlAction` 的兜底链（`service.preview()` 只识别 MP Wrapper → `tryJpaFallback()` 只识别 @Query/派生/CriteriaQuery → `@Select` 注解候选）不含这些定位器而落到"未找到"。
@@ -33,7 +33,7 @@ else if (!tryHqlFallback(...) && !tryNamedQueryFallback(...) && !tryJdbcTemplate
 仿 JpqlGutter：注释类 gutter 锚 `JavaTokenType.AT` token；`@NamedQueries` 容器内子 `@NamedQuery` 自带独立 `@` token 逐个锚定，容器本身（短名 NamedQueries）跳过。测试注意：`@interface X {}` 声明的 `@` 也是 AT token，断言别按原始 @ 计数，应数"产生 marker 的个数"。
 
 ## 并行会话连带事故（再次实证）
-本会话中途，另一个并行会话做了 `git add`+commit（9dd4825 JOIN 工作），把**我写入 docs/MEMORY.md 的索引行也一并提交**进它的提交里——导致我的文档改动"神秘消失"从 status 里不见（实际被它提交）。教训：有并行会话在 master 活动时主动提交前先 `git log`/`git status` 核对，别假设工作区干净。
+本会话中途，另一个并行会话做了 `git add`+commit（1c18e52 JOIN 工作），把**我写入 docs/MEMORY.md 的索引行也一并提交**进它的提交里——导致我的文档改动"神秘消失"从 status 里不见（实际被它提交）。教训：有并行会话在 master 活动时主动提交前先 `git log`/`git status` 核对，别假设工作区干净。
 
 ## 迁移记录
 计划文档已从 T-HqlShortcut 重命名为 `docs/开发计划/20260904-1010-T-PreviewShortcut-...`。同系列"JDBC 模板原 i18n 文案已写支持 Alt+Shift+Q 但快捷键未真正接线"，本修复让文档承诺变现实。后续 GutterDedup 图标去重见 [[pitfall-gutter-provider-receiver-not-checked]]。

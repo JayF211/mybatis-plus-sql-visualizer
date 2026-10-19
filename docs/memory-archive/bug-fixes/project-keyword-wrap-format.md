@@ -1,6 +1,6 @@
 ---
 name: project-keyword-wrap-format
-description: 关键字换行格式化——预览面板按钮（70f8383）+ 延伸为 SQL 日志/历史列表三种显示模式（T-ListMode，dev 8990b3c 已交付）
+description: 关键字换行格式化——预览面板按钮（4d2703d）+ 延伸为 SQL 日志/历史列表三种显示模式（T-ListMode，dev bbcc300 已交付）
 metadata:
   node_type: memory
   type: project
@@ -51,8 +51,8 @@ ORDER BY id DESC
 4. 括号内逗号有空格：`pendingComma` 条件扩展为 `depth > 0`
 5. 右括号前多余空格：`flushSpace()` 在 `)` 前加空格 → 改为 `pendingSpace = false`
 
-**提交**：`70f8383` fix: XML/MP/MPJ IN 子句参数标记 inList=true（并行会话将本功能与其 IN-clause 工作一并提交）。
+**提交**：`4d2703d` fix: XML/MP/MPJ IN 子句参数标记 inList=true（并行会话将本功能与其 IN-clause 工作一并提交）。
 
 状态：✅ 已实施、已测试、已提交。详见 [[pitfall-sql-formatter-clause-line]]。
 
-**2026-09-08 延伸（T-ListMode，✅ 已交付 dev 8990b3c）**：`formatClauseLine` 与 `format` 已作为 SQL 日志/SQL 历史列表「三种显示模式」（单行/关键字换行/格式化，默认关键字换行）的变换器复用——枚举 `SqlListDisplayMode` + `prepareSqlForList` 在 `SqlListHtmlRenderer.kt`，模式存 `PluginSettings.logListSqlDisplayMode`，两列表工具栏下拉广播 SETTINGS_CHANGE_TOPIC 统一清缓存刷新；计划文档 docs/开发计划/20260908-1135，全量 3558/0/6 绿。关键平台陷阱：Swing BasicHTML 折叠连续空格，缩进须 `&nbsp;` 保真（[[pitfall-swing-basichtml-whitespace-collapse]]）；State 加字段触发的旧签名 NoSuchMethodError 见 [[pitfall-kotlin-dataclass-field-add-stale-copy]]。
+**2026-09-08 延伸（T-ListMode，✅ 已交付 dev bbcc300）**：`formatClauseLine` 与 `format` 已作为 SQL 日志/SQL 历史列表「三种显示模式」（单行/关键字换行/格式化，默认关键字换行）的变换器复用——枚举 `SqlListDisplayMode` + `prepareSqlForList` 在 `SqlListHtmlRenderer.kt`，模式存 `PluginSettings.logListSqlDisplayMode`，两列表工具栏下拉广播 SETTINGS_CHANGE_TOPIC 统一清缓存刷新；计划文档 docs/开发计划/20260908-1135，全量 3558/0/6 绿。关键平台陷阱：Swing BasicHTML 折叠连续空格，缩进须 `&nbsp;` 保真（[[pitfall-swing-basichtml-whitespace-collapse]]）；State 加字段触发的旧签名 NoSuchMethodError 见 [[pitfall-kotlin-dataclass-field-add-stale-copy]]。

@@ -6,9 +6,9 @@
 
 | 注入产物 | 应用启动 | EVENT 帧 | VerifyError |
 |---|---|---|---|
-| `bc75d8b` 帧补丁产物（旧） | ❌ 启动期即崩 | 0 | ✅ `Stack map does not match … exception handler` |
-| pre-`bc75d8b` 沙盒残留 jar（对照） | ✅ | 9 | 无 |
-| `647dce8` 修复后产物 | ✅ `Started … in 3.129 seconds` | 9（启动期 schema.sql 6 + 请求线程 3） | 无 |
+| `afb62e4` 帧补丁产物（旧） | ❌ 启动期即崩 | 0 | ✅ `Stack map does not match … exception handler` |
+| pre-`afb62e4` 沙盒残留 jar（对照） | ✅ | 9 | 无 |
+| `9810df8` 修复后产物 | ✅ `Started … in 3.129 seconds` | 9（启动期 schema.sql 6 + 请求线程 3） | 无 |
 
 → 结论：**事件产出与传输链路本身没问题**，宿主崩溃（帧补丁槽位错位 ⇒ 一建 Statement 即 `VerifyError`）导致「无 SQL ⇒ 0 事件」。对应日志见 `demo-prefix-ok.log`（对照）、`demo-postfix-crash.log`（旧补丁崩溃）、`demo-fixed-ok.log`（修复后）、`recv*.log`（接收端逐帧输出）。
 

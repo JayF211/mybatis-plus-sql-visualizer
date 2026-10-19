@@ -11,9 +11,9 @@ metadata:
 
 **1. agent 侧心跳节奏比声明慢 6 倍。** `SenderLoop.java` 主循环每轮：① 事件尽出；② 读入站 CONFIG（`socket.setSoTimeout(1000)`，无数据时**阻塞满 1000ms**）；③ `if (burst == 0) { Thread.sleep(200); idleMs += slept; if (idleMs >= 10_000) 发心跳 }`。问题在 ③：`idleMs` 累加的是**假定耗时**（每轮 +200ms），而每轮真实耗时约 1200ms → 凑够「静默 10s」要 50 轮 ≈ **60 秒**。独立探针直连真实 agent jar 实测：`HELLO` 在 +17ms 到达，**第一条 `HEARTBEAT` 在 +60,633ms**，100 秒窗口内只有这一条。
 
-**2. IDE 侧在线窗口 30s 由 T-RA-01（`a628a3b`，2026-09-18）真正执行了。** `AgentProtocol.ONLINE_WINDOW_MS = 30_000L`，`AgentManager.isSessionHealthy = alive && (now - lastSeen) <= heartbeatWindowMs`，`sweepOffline()` 每 5s 摘除不健康会话。**首条心跳永远赶不上 30 秒窗口 → 会话必在建立后 30 秒被误杀**（应用启动本身常要 20~40 秒，故首轮查询几乎必然落在掉线之后）。沙盒日志四轮运行全部命中：30.0 / 34.0 / 33.6 / 30.0 秒（>30 的是 5s 巡检量化误差，不是第二个成因）。
+**2. IDE 侧在线窗口 30s 由 T-RA-01（`82feb08`，2026-09-18）真正执行了。** `AgentProtocol.ONLINE_WINDOW_MS = 30_000L`，`AgentManager.isSessionHealthy = alive && (now - lastSeen) <= heartbeatWindowMs`，`sweepOffline()` 每 5s 摘除不健康会话。**首条心跳永远赶不上 30 秒窗口 → 会话必在建立后 30 秒被误杀**（应用启动本身常要 20~40 秒，故首轮查询几乎必然落在掉线之后）。沙盒日志四轮运行全部命中：30.0 / 34.0 / 33.6 / 30.0 秒（>30 的是 5s 巡检量化误差，不是第二个成因）。
 
-**回归性质**：`a628a3b` 之前在线态只看 socket 是否断开，会话永不因心跳过期被摘除 → agent 侧这个节奏偏差**被掩盖了一个版本周期**。
+**回归性质**：`82feb08` 之前在线态只看 socket 是否断开，会话永不因心跳过期被摘除 → agent 侧这个节奏偏差**被掩盖了一个版本周期**。
 
 **3. 掉线后无法重连，对该次应用运行是终局。** `acceptPremain()` 与 `attachAndOffer()` 都是 `ServerSocket.use { accept() }` 一次性，accept 到就 `finally { server.close(); premainChannels.remove(channel) }`；重新 attach 的唯一触发点是 `onProcessAppeared`（进程启动事件），应用已在跑不会再触发；`sweepOffline` 还把该 pid 从幂等表摘掉。而 agent 侧 `SenderLoop` 设计上是无限退避重连同一端口——**只是撞在一个已关闭的端口上**。现场：应用 JVM 存活 15:56:19 → 16:03:53（7 分 34 秒），增强会话 15:56:49 摘除后**再无任何 `premain 会话建立` / `attachToPid` 记录**。
 

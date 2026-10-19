@@ -16,6 +16,6 @@ metadata:
 
 **三路修复**：① filter 层重放守卫（ConsoleReplayGuard 四态：watermark + docStamp + 行 0 文本）；② createEditor 消费预热 psi 不重复 findFile + createTempPsiFile 跨点击缓存 vf+psi（`vf.isValid()` 失效回退）；③ mapDialectBeforePsi 插件侧内存缓存短路（不读平台映射——`PerFileMappingsBase.getNotInHierarchy` 读映射本身就是同源慢操作）。
 
-**验证锚点**：真机点击预览后 idea.log 出现重放丢弃计数 + 零新增 Slow operations SEVERE + `dialect pre-mapped` 仅首次。基线 3153/0/6（master 4340ade）。
+**验证锚点**：真机点击预览后 idea.log 出现重放丢弃计数 + 零新增 Slow operations SEVERE + `dialect pre-mapped` 仅首次。基线 3153/0/6（master 22eeff7）。
 
 **已实施（2026-09-09）**：三路修复全部落码，全量 3173 绿。反编译补充实现：`SlowOperations.startSection` 首行 `if(!EDT.isCurrentThreadEdt()) return EMPTY` 不压栈 + `isAlwaysAllowed()` 沙盒恒 false——故 EDT 上 allowSlowOperations(GENERIC) 是空壳，逃生舱只对非 EDT 线程生效，创建/refresh/findFile 必须移出 EDT（预热线程+有界等待+跨点击缓存），不能靠逃生舱压制。建设细节：ConsoleReplayGuard 四态 + BridgeLineContext 挂守卫（docStampReader!=null 才走守卫否则降级直连，测试桩无 getEditor 不误丢）；与并行会话 T-ExecCopyFix 共享 DataSourceSelector.kt（其冷路径后台化已吸收 cachedTempPsiFile 字段）。runIde 真机复验留人工。

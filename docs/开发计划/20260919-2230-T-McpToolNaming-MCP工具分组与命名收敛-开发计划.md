@@ -141,7 +141,7 @@ sqlv_mapper_check
 
 ## 八、实施记录
 
-- 实施：sam 实施子代理；工作树 `F:\code\Java\Gitee\SongRenShuo\mpsv-mtn`，分支 `t-mcp-tool-naming`，基点 master `edc33e5`；沙盒 `mpsv-mtn`（并行登记表 `T-MTN`）
+- 实施：sam 实施子代理；工作树 `F:\code\Java\Gitee\SongRenShuo\mpsv-mtn`，分支 `t-mcp-tool-naming`，基点 master `a27c198`；沙盒 `mpsv-mtn`（并行登记表 `T-MTN`）
 - **T-MTN-01 落地（方案 B，逐工具门控零损失）**：十个 toolset 类统一加 `SqlVisualizer` 前缀，源文件同步重命名——
   `SqlVisualizerRenderSqlTool` / `SqlVisualizerSchemaContextTool` / `SqlVisualizerExplainTool` / `SqlVisualizerRenderLogsTool` / `SqlVisualizerCheckSqlTool` / `SqlVisualizerRollbackPlanTool` / `SqlVisualizerPerfAdviceTool` / `SqlVisualizerCrudSqlTool` / `SqlVisualizerReverseSqlTool` / `SqlVisualizerMapperCheckTool`；
   `mcp-optional.xml` 十处 `implementation` 全限定类名同步；`McpToolsetSupport` KDoc 登记「`SqlVisualizer` 前缀是硬约定（分组名 = toolset 类 simpleName，`McpToolset` 接口无名字属性），新增工具照此命名」；一工具一 toolset 类与基类三钩子字面量覆写原样保留。
@@ -152,7 +152,7 @@ sqlv_mapper_check
 - **设置迁移：不设**（计划 §三 实施要点 2 与 §四.3 已按此改写）。核验依据：MCP 工具未随任何发布产物交付——Gitee 21 个发行版无 `2026.9.18` 正式版（只有 beta.1~4）；`2026.9.14` / `2026.9.18-beta.1` / `2026.9.18-beta.4` 三个 tag 的树里 `mcp/` 文件数 0、`mcp-optional.xml` 不存在（发行 tag 从旁支切出，MCP 只在 master 主线）。故不存在旧前缀的工具名配置，迁移是死代码
 - **全仓改名**：以 `grep -rl`（旧前缀，排除 `build/`、`.git/`）为清单逐文件改净，**含历次开发计划与 `docs/memory-archive/`**；改后复查零残留（唯一保留的旧名提及是 §三 选型对照表里被否决的候选行，属决策依据）。顺带把 `database-lab/docker-compose.dialects-cn.example.yml` 的 `INSTANCE_NAME`（非 MCP 工具名，全仓唯一引用）一并对齐，以满足零残留
 - **文档同步**：README MCP 节、`docs/架构设计/` 两篇三处、CHANGELOG（`[Unreleased]` 段内的工具名）、`marketplace-custom-page.html`、双语 bundle 的 `settings.section.mcp.desc`、`mcpStub` 注解 KDoc；CHANGELOG 不写破坏性变更段（按「本来就叫 `sqlv_`」直述）
-- 提交：`c3a276d`（类名 + 工具名 + 迁移 + 测试引用，47 文件）、`b48cbc9`（去遗留叙事）、`22abdf1`（架构设计两篇）、末笔（删迁移 + 全仓改名 + 计划回填 + 变更记录）
+- 提交：`7f984c6`（类名 + 工具名 + 迁移 + 测试引用，47 文件）、`120975f`（去遗留叙事）、`37618ac`（架构设计两篇）、末笔（删迁移 + 全仓改名 + 计划回填 + 变更记录）
 - 门禁：见 §九
 
 ## 九、实施小结：偏离、阻塞与未验证项

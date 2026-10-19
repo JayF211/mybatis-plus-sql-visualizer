@@ -8,7 +8,7 @@ metadata:
   originSessionId: sess_15c7f18d-3ce4-4fcb-9e13-b7a17c341f44
 ---
 
-**T-13 SQL Capture No Project Required** 已实施并提交（c1632ab + 71e7294，2026-08-20）。最终采用 **Option A armed 态**方案。
+**T-13 SQL Capture No Project Required** 已实施并提交（e63d0db + 91e6939，2026-08-20）。最终采用 **Option A armed 态**方案。
 
 ## 核心设计
 

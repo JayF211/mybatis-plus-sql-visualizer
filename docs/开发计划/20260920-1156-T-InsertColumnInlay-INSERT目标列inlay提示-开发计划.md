@@ -5,7 +5,7 @@
 - 来源：第九轮报告 §8 DBX 增量清单 **#45**——DBX `3cb1faf`：INSERT 目标列 inlay 提示（`insertValueHints.ts:23` `InsertValueSource` 带 alias 字段、`:286` `selectProjectionAlias` 去重）——INSERT VALUES / INSERT…SELECT 逐表达式挂目标列名 inlay；**本轮新增规则**：投影项已自带同名列别名（尾随 `AS` 或隐式别名，点名不算）时丢弃提示避免重复
 - 性质：**编辑器提示增量**——不改 SQL、不改渲染；让多列动态 INSERT 的「列-值错位」一眼可见
 - 实施分支：自 master 拉任务分支 t-insert-column-inlay
-- 验证基线：master `22d7c49`（testShards 5383/0/0/6 + testDatabase 10/0/0/0 + agent 58/0/0/0）
+- 验证基线：master `f8c115d`（testShards 5383/0/0/6 + testDatabase 10/0/0/0 + agent 58/0/0/0）
 
 ---
 
@@ -182,7 +182,7 @@ T-ICI-01（EP 核实——决定做/不做）→ [D1 定案]
 4. DBX 去重规则的确切判据 → 按我方词法形态重定义（`AS` 别名 + 隐式别名；`*` 投影不提示），**未逐行核对 DBX 实现**（其 CodeMirror 解析形态与我方词法不同）。
 5. **本轮新暴露的未验证面（真机走查须优先确认）**：inlay pass 由 daemon 驱动，`InlayHintsPass.doCollectInformation` 首行是 `HighlightingLevelManager.shouldHighlight(myFile)` 门；一级预览文件位于 `<项目>/.idea/sql-visualizer/preview/mpsql-preview.sql`——**该路径是否被判为可高亮，headless 无法证实**（测试环境文件索引形态与真机不同，且 `ProjectFileIndex` 读法本身是慢操作、EDT 上直调会撞平台断言）。若真机上主路径 inlay 不出现，**先查这道门而非锚点**（锚点已由用例钉死）。
 
-**与 T-PreviewWhitespaceToggle（`20260920-1154-…`）的同文件串行（交叉登记）**：两件计划都改 `ui/SqlPreviewPanel.kt`（本件的语句类型载体接线 `:1986-1987` + 两条渲染路径 `assemblePreviewEditor` / `refreshCompletionContext`；T-PWT 的 9 处编辑器构造点收口 + 面板 5 处控件改动）。**落地顺序：T-PWT 先（`9b37f73` 主体 + `9fee344` 搜索索引），本件后（`100d03c` 主体 + `138b42d` 用例与守卫）**——两件的改动落在同一文件的编辑器构造/刷新链**同一批函数**上，故**同文件串行、不可并行**；后续读者若把两件当可并行任务分派，会在同一区域产生冲突（本轮即按「1154 先、1156 后」串行落地）。
+**与 T-PreviewWhitespaceToggle（`20260920-1154-…`）的同文件串行（交叉登记）**：两件计划都改 `ui/SqlPreviewPanel.kt`（本件的语句类型载体接线 `:1986-1987` + 两条渲染路径 `assemblePreviewEditor` / `refreshCompletionContext`；T-PWT 的 9 处编辑器构造点收口 + 面板 5 处控件改动）。**落地顺序：T-PWT 先（`f4745dc` 主体 + `1e7d803` 搜索索引），本件后（`e85180e` 主体 + `cd4bfd8` 用例与守卫）**——两件的改动落在同一文件的编辑器构造/刷新链**同一批函数**上，故**同文件串行、不可并行**；后续读者若把两件当可并行任务分派，会在同一区域产生冲突（本轮即按「1154 先、1156 后」串行落地）。
 
 ## 九、独立复核登记（复核员实测，2026-09-20）
 
