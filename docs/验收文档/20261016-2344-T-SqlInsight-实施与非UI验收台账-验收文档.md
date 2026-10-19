@@ -161,6 +161,21 @@ tracing相对sql的中位P95为-5.16%、wall为-1.54%，逐轮P95增量却为+21
 
 生命周期红绿证据归档`.local/sql-insight-prepare-boundary-evidence.tar.gz` SHA256 `6b185ad59758e185ce785a56d29b0e1e34f5e132ddb88c1f59a059ba46a07199`；长窗竞争证据归档`.local/sql-insight-paired5000-contention.tar.gz` SHA256 `c2831c3be27d8c241c4515bc658ff6fe28ba13057e00215b31ce1b494d6e14bb`。
 
+### 最终排他窗口资源复验（2026-10-19）
+
+额度恢复后，`parallel_tasks`检查无活跃任务；实测三个Java进程瞬时CPU均0%，可用内存6839MiB。登记`T-SqlInsight-ExclusivePerf-Final`并注明排他计时窗口后，使用既有固定脚本对最终优化agent（`8616b143…`，与第六轮包内agent解压字节一致）执行原500请求预算：none/sql/tracing各3轮、warm10000、默认10秒心跳，共9个独立JVM。
+
+- 9轮全部exit0；每轮500请求、10000 SQL、checksum 12454200000。
+- 6个agent轮`captureCoverageComplete=true`：收到SQL均10000，tracing均收到1000请求帧（500起+500止），质量损失计数全0，无drain超时。
+- 预热稳定：none 3/3、sql 3/3、tracing 2/3；第3个tracing轮末块比值约1.36，原样保留未剔除。
+- 中位读数：P95为156.9/154.6/196.6µs，wall 990.7/1066.7/1165.2ms，CPU绝对时间1000.0/1828.1/2171.9ms，单核归一99.36/166.39/180.67%，RSS（after）143.3/156.1/157.7MiB。
+
+tracing相对sql：P95 **+27.17%**、wall +9.23%、CPU绝对时间 +18.8%、单核归一 **+14.28个百分点**，每请求CPU 3.6562→4.3438ms；RSS增加约1.44MiB。按初始预算（P95≤5%、CPU≤5pp、常驻内存≤64MiB），**延迟与CPU均未达标，内存达标**。结合此前两组独立对照（+8.85%/+9.54pp、-5.97%/+7.31pp），CPU开销多次观测均高于5个百分点，延迟增量不稳定；不能判PASS，也不把该结果宣传为优化收益。
+
+已按计划采取范围收口：请求追踪与事务追踪默认关闭，仅在用户显式开启时承担该成本；未删减质量计数、请求配对或覆盖说明，未用采样丢弃事件换低耗时。剩余限制：环境为时点采样而非连续空机认证；本地合成H2+Servlet派发，不代表HTTP/容器延迟；启动阶段不计入；RSS为端点采样而非长期驻留证明。
+
+原始目录runtime树`build/MPSV-SqlInsight-Encoding/final-budget-500`，summary SHA256 `981be489d71257601372c80eb078a22e035ca803d70fea32a9dea7dfad890e0a`；完整归档`.local/sql-insight-final-budget-500-fail.tar.gz` SHA256 `cbf241dd23e34e49455b4208458adccf0c0c18e3c65edc0cb777db9040ee9726`。计时登记已注销，运行后复采Java进程CPU均0%。
+
 ## 五、最终冻结与自动化门禁
 
 冻结提交 `67533aca415bf227e891d697ad45cdf33563b4ff`，基于已同步dev `5d884a5e`。专用detached工作树 `mpsv-sql-insight-gate` 生产写集为空，配置/输出仅在其build下；主控期间仅提交文档，不让在途代码改变绿灯含义。
@@ -259,7 +274,7 @@ H09同份fixture经`javac --release 8`后，实际java.version分别为1.8.0_181
 - [x] 17项SI需求逐条对应用户行为和定向正反测试；最终统一门禁仍需验证所有类同时入场。
 - [x] 真实语义、请求身份/质量、事务状态与权限安全已逐链路核对；独立只读审计未发现新增可确认阻断，已知降级边界保留。
 - [x] 定向测试实际XML入场、必要反向红/恢复绿已留证；各阶段读数分冻结记录，不累计冒充全量。
-- [ ] 性能/资源预算有对照，不只空载；500与5000请求对照均已执行但分别受干扰，最终排他窗口复验在途，未出结论前不勾选。
+- [x] 性能/资源预算有对照，不只空载；最终排他窗口9进程完整执行，延迟+27.17%、CPU+14.28pp未达初始预算，内存+1.44MiB达标。结论为未达标并已采取“追踪默认关闭”的范围收口，不记PASS。
 - [x] 第六轮冻结完成权威全量与agent验证，8325/0/0/10，新增65类336方法全部入场；filter-branch重写后对应提交b79983a0，树与已测18722bdd一致。
 - [x] 新平台面三代离线兼容验证及构建校验完成，同ZIP三代Compatible；不替代GUI或Marketplace在线验证。
 - [x] 独立复核闭环、未验UI与其他受限项逐条披露（GUI未验、Docker跳过、请求仅Servlet线程、事务仅代理连接、结果比较非原子、精确源码range未知）。
