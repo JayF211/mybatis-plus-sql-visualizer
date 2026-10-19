@@ -621,7 +621,7 @@ internal fun SqlPreviewPanel.buildBatchColumnRow(col: BatchColumn, isToggle: Boo
 }
 
 /** T-PreviewSideQuery P1：预估影响行数内联结果；不触碰编辑器/控制台。 */
-internal fun SqlPreviewPanel.showDmlImpactResult(text: String, error: Boolean) {
+internal fun SqlPreviewPanel.showDmlImpactResult(text: String, error: Boolean, tooltip: String? = null) {
     val label = impactResultLabel ?: JBLabel().also {
         it.name = "dmlImpactResult"
         it.alignmentX = java.awt.Component.LEFT_ALIGNMENT
@@ -630,7 +630,7 @@ internal fun SqlPreviewPanel.showDmlImpactResult(text: String, error: Boolean) {
         impactResultLabel = it
     }
     label.text = fieldFillText(text, label.font, JBUI.scale(260))
-    label.toolTipText = text
+    label.toolTipText = tooltip ?: text
     label.foreground = if (error) JBColor.RED else UIUtil.getContextHelpForeground()
     paramPanel.revalidate()
     paramPanel.repaint()

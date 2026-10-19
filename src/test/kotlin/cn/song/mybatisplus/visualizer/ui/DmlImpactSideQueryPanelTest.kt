@@ -51,6 +51,7 @@ class DmlImpactSideQueryPanelTest : BasePlatformTestCase() {
             val label = p.impactResultLabel!!
             assertTrue("内联结果应显示行数：${label.text}", label.text.contains("7"))
             assertEquals("内联结果应为灰色说明", UIUtil.getContextHelpForeground(), label.foreground)
+            assertTrue("内联行 tooltip 应包含试算语句详情：${label.toolTipText}", label.toolTipText.contains("COUNT(*)"))
         } finally {
             dmlImpactTargetForTest = null
             PreviewSideQuery.runnerForTest = null

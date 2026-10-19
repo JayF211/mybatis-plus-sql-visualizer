@@ -143,7 +143,7 @@
 ### P1 预估影响行数
 
 - 新增 `ui/PreviewSideQuery.kt`：单条 SELECT 先过 `McpSelectGuard`，再按 `ExecutionDialectGate` 对绑定数据源做方言校验，池线程走 `McpDbExecutor.executeQuery`，EDT 回调；全程不调 `SqlExecutor.execute`/`embedConsole`。
-- `estimateDmlImpact` 改为只读旁路查询；结果写入左侧参数区底部的灰色内联行（`预估影响行数：N` / `≤N`），失败红色内联展示；编辑器与控制台文档保持不变。
+- `estimateDmlImpact` 改为只读旁路查询；结果写入左侧参数区底部的灰色内联行（`预估影响行数：N` / `≤N`），tooltip 携带试算 SQL/目标表/上限，失败红色内联展示；编辑器与控制台文档保持不变。
 - 无绑定数据源时内联提示，不再拉数据源选择弹窗；旧 `clearImpactLoadingOnCancel` 及其测试随旧弹窗路径一并删除。
 
 ### P2 执行计划

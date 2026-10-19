@@ -173,15 +173,16 @@ internal fun SqlPreviewPanel.showRollbackSql() {
                 } else {
                     MpSqlVisualizerBundle.message("dml.impact.probe.uncapped")
                 }
+                val probeBody = MpSqlVisualizerBundle.message(
+                    "dml.impact.probe.body",
+                    probe.probeSql,
+                    probe.targetTable,
+                    capLine,
+                )
                 notifyDmlImpact(
                     proj,
                     MpSqlVisualizerBundle.message("dml.impact.probe.title"),
-                    MpSqlVisualizerBundle.message(
-                        "dml.impact.probe.body",
-                        probe.probeSql,
-                        probe.targetTable,
-                        capLine,
-                    ),
+                    probeBody,
                 )
                 val target = dmlImpactTargetForTest?.invoke() ?: runCatching {
                     cn.song.mybatisplus.visualizer.execute.DataSourceSelector.boundConsoleDataSource()
@@ -202,7 +203,7 @@ internal fun SqlPreviewPanel.showRollbackSql() {
                             } else {
                                 MpSqlVisualizerBundle.message("dml.impact.inline", result.value)
                             }
-                            showDmlImpactResult(text, false)
+                            showDmlImpactResult(text, false, probeBody)
                         }
 
                         is PreviewSideQuery.Result.Blocked -> showDmlImpactResult(result.message, true)
