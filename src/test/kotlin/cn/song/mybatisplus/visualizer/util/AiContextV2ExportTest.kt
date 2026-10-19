@@ -63,6 +63,66 @@ class AiContextV2ExportTest {
         assertTrue(huge.contains("SQL: omitted"))
     }
 
+    @Test fun structuralKeywordsRemainVisibleInDefaultMode() {
+        val block = AiContextExport.buildV2(
+            "SELECT customer_name FROM customers WHERE id = 42 AND status = 'active'",
+            "MySQL",
+        ).block
+        assertTrue("默认模式仍须声明标识符隐藏", block.contains("identifiers hidden"))
+        listOf("FROM", "WHERE", "AND").forEach { keyword ->
+            assertTrue(
+                "结构词 $keyword 应保留，否则接收方读不出查询结构：$block",
+                Regex("(?<![A-Za-z0-9_])$keyword(?![A-Za-z0-9_])").containsMatchIn(block),
+            )
+        }
+        assertFalse("表列名仍须隐藏", block.contains("customer"))
+        assertFalse("字面量仍须打码", block.contains("42"))
+    }
+
+    @Test fun includeIdentifiersHeaderAndStaticSchema() {
+        val schema = AiContextExport.StaticSchema("customers", listOf("customer_name", "status", "customer_name"))
+        val block = AiContextExport.buildV2(
+            "SELECT customer_name FROM customers WHERE id = 42",
+            "MySQL",
+            schema = schema,
+            includeIdentifiers = true,
+        ).block
+        assertTrue(
+            "含名模式头部须明确告知标识符可见且引号内容仍隐藏",
+            block.contains("identifiers visible as written (quoted tokens stay hidden)"),
+        )
+        assertTrue("SQL 段应保留表列名：$block", block.contains("SELECT customer_name FROM customers"))
+        assertTrue(
+            "静态摘要应列出表名与去重后的列名：$block",
+            block.contains("Static schema: table=customers; columns=2: customer_name, status"),
+        )
+        assertFalse("含名模式仍须遮蔽字面量", block.contains("42"))
+    }
+
+    @Test fun includeIdentifiersStillHidesQuotedTokensAndValues() {
+        val block = AiContextExport.buildV2(
+            "SELECT customer_name, \"SENTINEL_QUOTED\" FROM customers WHERE note = 'SENTINEL_VALUE'",
+            "MySQL",
+            includeIdentifiers = true,
+        ).block
+        assertTrue(block.contains("customer_name"))
+        assertFalse("引号内容在含名模式下仍不复制", block.contains("SENTINEL_QUOTED"))
+        assertFalse("字面量在含名模式下仍打码", block.contains("SENTINEL_VALUE"))
+    }
+
+    @Test fun includeIdentifiersCapsSchemaColumns() {
+        val columns = (1..60).map { "col_$it" }
+        val block = AiContextExport.buildV2(
+            "SELECT 1", "MySQL",
+            schema = AiContextExport.StaticSchema("wide_table", columns),
+            includeIdentifiers = true,
+        ).block
+        assertTrue(block.contains("columns=60: col_1"))
+        assertTrue(block.contains("col_50"))
+        assertFalse("超过 50 列不应继续列出", block.contains("col_51"))
+        assertTrue("超限应标注剩余数量", block.contains("…(+10)"))
+    }
+
     @Test fun v1GoldenBytesUnchanged() {
         assertArrayEquals("-- SQL Visualizer AI context (sensitive literals masked)\n-- dialect: MySQL\n-- masked literals: 0\nSELECT 1".toByteArray(),
             AiContextExport.build("SELECT 1", "MySQL").block.toByteArray())

@@ -200,7 +200,7 @@ internal fun SqlPreviewPanel.showRollbackSql() {
     }
 
     /** R91: only reads current editor/model and previously acquired history; never acquires a plan/schema. */
-    internal fun SqlPreviewPanel.copyAsAiContext() {
+    internal fun SqlPreviewPanel.copyAsAiContext(includeIdentifiers: Boolean = false) {
         val sql = currentEditorSql() ?: return
         val preview = current
         val dialect = preview?.effectiveDialect
@@ -225,9 +225,12 @@ internal fun SqlPreviewPanel.showRollbackSql() {
         val schema = preview?.takeIf { sql == it.sql || sql == lastRenderedSql }?.let {
             it.tableName?.let { table -> cn.song.mybatisplus.visualizer.util.AiContextExport.StaticSchema(table, it.columns) }
         }
-        val result = cn.song.mybatisplus.visualizer.util.AiContextExport.buildV2(sql, dialect?.name, key, plans, schema)
+        val result = cn.song.mybatisplus.visualizer.util.AiContextExport.buildV2(
+            sql, dialect?.name, key, plans, schema, includeIdentifiers,
+        )
         cn.song.mybatisplus.visualizer.util.UiTextClipboard.copy(result.block)
-        showDiffToast(MpSqlVisualizerBundle.message("ai.context.v2.copied", result.maskedCount))
+        val toastKey = if (includeIdentifiers) "ai.context.v2.copied.identifiers" else "ai.context.v2.copied"
+        showDiffToast(MpSqlVisualizerBundle.message(toastKey, result.maskedCount))
     }
 
 internal fun SqlPreviewPanel.exportPortableSql() {

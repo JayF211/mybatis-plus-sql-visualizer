@@ -102,11 +102,13 @@ object ShareContentProjection {
                     if (upper in VALUE_KEYWORDS) {
                         out.append('?')
                         values++
+                    } else if (upper in STRUCTURAL_KEYWORDS) {
+                        // 结构词保留：FROM/WHERE/JOIN 等在各主流方言都是保留字，未加引号不能作列名。
+                        // 歧义词（COUNT/SUM/JSON/FIRST/NEXT 等）不进白名单，仍按标识符匿名。
+                        out.append(upper)
                     } else {
                         // Without a dialect grammar, keyword-looking names can still be identifiers.
-                        // Preserve only the leading statement kind; remaining words become stable tokens.
-                        val statementKind = out.isBlank() && upper in STATEMENT_KINDS
-                        out.append(if (statementKind) upper else identifier(word))
+                        out.append(identifier(word))
                     }
                 }
                 c in "(),.;?=<>!+-*/%|&^~" -> { out.append(c); i++ }
@@ -126,5 +128,21 @@ object ShareContentProjection {
     private fun omitted() = SqlProjection(null, 0, 0, true)
     private val IDENTIFIER = Regex("[\\p{L}_][\\p{L}\\p{N}_.$]{0,127}")
     private val VALUE_KEYWORDS = setOf("NULL", "TRUE", "FALSE")
-    private val STATEMENT_KINDS = setOf("SELECT", "INSERT", "UPDATE", "DELETE", "WITH", "EXPLAIN")
+
+    /**
+     * 结构关键词白名单（T-AiContextLegibility A）：只收 MySQL/PostgreSQL/Oracle 等主流方言的
+     * 保留字——未加引号时不能作为列名，因此原样输出不会把真实标识符当关键词泄漏。
+     *
+     * 明确不收：COUNT/SUM/AVG/MIN/MAX/COALESCE/CAST/FORMAT/JSON/FIRST/NEXT/KEY/INDEX/TYPE/
+     * NAME/VALUE/STATUS/USER/DATE/TIME/TIMESTAMP 等可作裸列名的词；它们继续走 identifier 匿名。
+     * 方言保留级别不一致的 TOP/ROWS/WINDOW/FILTER/LATERAL/RETURNING 等也暂不加入。
+     */
+    private val STRUCTURAL_KEYWORDS = setOf(
+        "SELECT", "INSERT", "UPDATE", "DELETE", "WITH", "EXPLAIN",
+        "FROM", "WHERE", "AND", "OR", "NOT", "AS", "ON", "IN", "IS",
+        "JOIN", "LEFT", "RIGHT", "INNER", "OUTER", "FULL", "CROSS",
+        "UNION", "ALL", "DISTINCT", "GROUP", "BY", "ORDER", "HAVING", "ASC", "DESC",
+        "LIMIT", "OFFSET", "CASE", "WHEN", "THEN", "ELSE", "END",
+        "EXISTS", "BETWEEN", "LIKE", "INTO", "VALUES", "SET",
+    )
 }

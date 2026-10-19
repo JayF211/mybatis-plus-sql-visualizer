@@ -13,7 +13,7 @@ class AiContextV2OfflineBoundaryTest {
 
     @Test fun realCopyAndProjectionClosureHaveNoAcquisitionCalls() {
         val execution = source("ui/SqlPreviewPanelExecution.kt")
-        val copy = between(execution, "internal fun SqlPreviewPanel.copyAsAiContext()", "internal fun SqlPreviewPanel.exportPortableSql()")
+        val copy = between(execution, "internal fun SqlPreviewPanel.copyAsAiContext(", "internal fun SqlPreviewPanel.exportPortableSql()")
         assertTrue(copy.contains("AiContextExport.buildV2("))
         assertTrue(copy.contains("matchingExplainPlans(it)"))
         assertTrue(copy.contains("UiTextClipboard.copy(result.block)"))

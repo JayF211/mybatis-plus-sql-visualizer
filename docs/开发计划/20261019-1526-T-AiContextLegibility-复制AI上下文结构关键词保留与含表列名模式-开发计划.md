@@ -154,4 +154,25 @@ SELECT identifier_1.identifier_2, identifier_1.identifier_3, ..., identifier_6.i
 
 ## 七、实施记录
 
-（待实施后回填：提交 SHA、定向 tests/failures/errors、反向验证红数、真机走查结论）
+2026-10-19 实施完成（本条提交）。
+
+- 结构关键词白名单：`ShareContentProjection.STRUCTURAL_KEYWORDS`，只收主流方言保留字；`COUNT/SUM/JSON/FIRST/NEXT` 等继续匿名，`NULL/TRUE/FALSE` 仍作值打码。
+- 含表列名出口：`AiContextExport.buildV2(..., includeIdentifiers = false)`；头部、静态摘要按模式分支；列名上限 50，超出 `…(+N)`；引号内容仍不复制。菜单第九项为「复制为 AI 上下文（含表列名）」，toast 双语提示含表列名。
+- 离线边界守卫的切片锚点随 `copyAsAiContext(includeIdentifiers)` 签名更新；两个出口仍零 SQL/HTTP/JDBC/MCP 调用。
+
+定向读数（5 类合计 **33/0/0/0**）：
+
+| 测试类 | tests | failures | errors | skipped |
+|---|---:|---:|---:|---:|
+| `ShareContentProjectionTest` | 8 | 0 | 0 | 0 |
+| `AiContextV2ExportTest` | 10 | 0 | 0 | 0 |
+| `AiContextV2PanelTest` | 5 | 0 | 0 | 0 |
+| `AiContextV2OfflineBoundaryTest` | 1 | 0 | 0 | 0 |
+| `SqlPreviewTopRowLayoutTest` | 9 | 0 | 0 | 0 |
+
+反向验证：
+
+- 摘掉结构关键词白名单（仅保留原逻辑）→ **恰 3 红**（`结构关键词保留而同名裸列继续匿名`、既有 `默认省略…` 的 `SELECT` 保留断言、`structuralKeywordsRemainVisibleInDefaultMode`）；
+- 忽略 `includeIdentifiers` 透传（投影固定 `false`）→ **恰 3 红**（两个导出用例 + 面板含名用例）。
+
+真机走查未做（需重启 dev 沙盒加载新包）；含引号标识符（如 `"user"`）在含名出口中仍为占位，属本计划明确接受的范围。

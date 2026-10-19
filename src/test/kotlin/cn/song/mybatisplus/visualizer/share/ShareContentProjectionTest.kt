@@ -4,6 +4,9 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ShareContentProjectionTest {
+    private fun hasKeyword(text: String, word: String): Boolean =
+        Regex("(?<![A-Za-z0-9_])$word(?![A-Za-z0-9_])").containsMatchIn(text)
+
     @Test
     fun `默认省略全部字面量注释参数名和标识符`() {
         val projected = ShareContentProjection.sql(
@@ -73,6 +76,37 @@ class ShareContentProjectionTest {
             assertFalse("同名标识符或布尔值泄漏：$text", text.contains(it, ignoreCase = true))
         }
         assertEquals(2, projected.maskedValues)
+    }
+
+    @Test
+    fun `结构关键词保留而同名裸列继续匿名`() {
+        val projected = ShareContentProjection.sql(
+            "select count, sum, json from private_table where private_flag = true and id in (select 1 from other_table)",
+        )
+        assertFalse(projected.omitted)
+        val text = projected.sql!!
+        listOf("SELECT", "FROM", "WHERE", "AND", "IN").forEach {
+            assertTrue("结构词 $it 应保留（否则接收方读不出查询结构）：$text", hasKeyword(text, it))
+        }
+        listOf("count", "sum", "json", "private_table", "private_flag", "other_table").forEach {
+            assertFalse("同名标识符不得借白名单泄漏 $it：$text", text.contains(it, ignoreCase = true))
+        }
+        assertEquals(2, projected.maskedValues)
+    }
+
+    @Test
+    fun `含标识符模式保留未加引号名字但引号内容仍不复制`() {
+        val projected = ShareContentProjection.sql(
+            "SELECT customer_name, \"SENTINEL_QUOTED\" FROM customers WHERE note = 'VALUE_SECRET'",
+            true,
+        )
+        val text = projected.sql!!
+        assertTrue("含标识符模式应保留未加引号表列名：$text", text.contains("customer_name"))
+        assertTrue("含标识符模式应保留未加引号表列名：$text", text.contains("customers"))
+        assertTrue("结构词应保留：$text", hasKeyword(text, "FROM"))
+        assertTrue("结构词应保留：$text", hasKeyword(text, "WHERE"))
+        assertFalse("引号内容在含标识符模式下仍不复制：$text", text.contains("SENTINEL_QUOTED"))
+        assertFalse("字面量仍须打码：$text", text.contains("VALUE_SECRET"))
     }
 
     @Test
