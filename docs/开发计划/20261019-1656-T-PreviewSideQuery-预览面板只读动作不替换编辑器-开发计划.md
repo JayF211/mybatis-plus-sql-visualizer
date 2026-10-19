@@ -111,15 +111,22 @@
 定向（独立沙盒，跑前 `parallel_tasks.py check` + register；`--no-configuration-cache`）：
 
 ```text
-./gradlew test --tests "*PreviewSideQueryTest" --tests "*DmlImpactEstimatorTest" \
-  --tests "*DmlImpactSideQueryPanelTest" --tests "*ExplainSideQueryPanelTest" \
-  --tests "*ExplainStructuredSideQueryPanelTest" --tests "*ExplainPanelWiringGuardTest" \
-  --tests "*BundleParityGuardTest" --tests "*ExplainPanelChannelTest" \
-  --tests "*FieldFillSimulationPanelTest" --tests "*ExecutionDialectGateTest" \
-  --tests "*ConsoleHostTest" --tests "*PrepareSingleFlightGateTest" \
-  --tests "*GuardSelfTestCoverageMetaGuardTest" --tests "*DialectStatusRefreshWiringGuardTest" \
-  --tests "*ExecuteSqlErrorHandlingTest" --tests "*AiContextV2PanelTest" \
-  --tests "*SqlPreviewTopRowLayoutTest" --tests "*FieldFillSimulationTest"
+./gradlew test --tests "*ConvertToSqlInjectedAnnotationTest" --tests "*PreviewSideQueryTest" \
+  --tests "*DmlImpactEstimatorTest" --tests "*DmlImpactSideQueryPanelTest" \
+  --tests "*ExplainSideQueryPanelTest" --tests "*ExplainStructuredSideQueryPanelTest" \
+  --tests "*ExplainPanelWiringGuardTest" --tests "*BundleParityGuardTest" \
+  --tests "*ExplainPanelChannelTest" --tests "*FieldFillSimulationPanelTest" \
+  --tests "*ExecutionDialectGateTest" --tests "*ConsoleHostTest" \
+  --tests "*PrepareSingleFlightGateTest" --tests "*GuardSelfTestCoverageMetaGuardTest" \
+  --tests "*DialectStatusRefreshWiringGuardTest" --tests "*ExecuteSqlErrorHandlingTest" \
+  --tests "*AiContextV2PanelTest" --tests "*SqlPreviewTopRowLayoutTest" \
+  --tests "*FieldFillSimulationTest"
+```
+
+真库链路（`testDatabase` 通道，需本地 MySQL；未就绪时测试 `assumeTrue` skip）：
+
+```text
+./gradlew testDbPreviewSideQuery
 ```
 
 > 20261019 复盘补：新增/修改文案的批次**必须**带上 `BundleParityGuardTest`——它本来就能
@@ -131,10 +138,13 @@
 - **内联结果**：COUNT=12 显示 `预估影响行数：12`；`rowCap` 显示 `≤N`；空结果/非数字/超时显示红色错误；loading 被清除。
 - **EXPLAIN 不换编辑器**：结构化与直送路径都不改 `editorHolder` 的预览页；对话框/独立面板可关闭，关闭后预览仍可编辑。
 - **只读护栏**：`McpSelectGuard` 拒绝非 SELECT；方言闸在旁路查询前生效；无绑定数据源走“选择后重试”而不静默执行。
+- **注入片段入口**：光标在注解 SQL 字符串的注入片段内（含动作拿到注入文件入参的形态）必须归位到宿主注解并产出预览。
+- **真库链路**（`testDatabase`）：COUNT 标量、EXPLAIN 表格、失败消息解包都走真实 MySQL 的 `McpDbExecutor` 反射链。
 - **反向验证**：
   - 把 `estimateDmlImpact` 改回 `SqlExecutor.execute`/`embedConsole` → “编辑器不变”用例必红；
   - 去掉内联结果行 → 结果视读断言必红；
-  - 去掉 `McpSelectGuard` → 非 SELECT 用例必红。
+  - 去掉 `McpSelectGuard` → 非 SELECT 用例必红；
+  - `resolveCaretElement` 改回 `file.findElementAt(offset)` → 注入文件形态用例必红（实测恰 1 红）。
 - **真机**：243 沙盒多数据源，点「预估影响行数」→ 结果内联、编辑器原样；点「执行计划」→ 计划在对话框/独立面板；点「执行 SQL」→ 结果网格 + 可见的「返回预览」；全程不再需要手动刷新。
 - 不跑全量/构建校验；发版前按三档分层跑 `releaseGate`。
 
@@ -172,10 +182,11 @@
 
 ### 定向读数
 
-18 个受影响的测试类合计 **177/0/0/0**（20261019 补测后），其中：
+默认 `test` 通道 19 个受影响的测试类合计 **179/0/0/0**（20261019 补测后）；另有 `testDatabase` 通道 `PreviewSideQueryIntegrationTest` **1/0/0/0**（真库）。其中：
 
 | 测试类 | tests |
 |---|---:|
+| `ConvertToSqlInjectedAnnotationTest` | 2 |
 | `DmlImpactSideQueryPanelTest` | 9 |
 | `PreviewSideQueryTest` | 10 |
 | `ExplainSideQueryPanelTest` | 4 |
@@ -209,7 +220,13 @@
    - 补：`ExplainPanelWiringGuardTest` 增加 P1/P3a 两条接线钉（函数体切片断言 + 执行视图头部顺序）+ 三个 bundle key 存在性。
 5. **bundle 守卫存在但不在本批定向清单。** `BundleParityGuardTest` 的正则本来能命中新增的 `panel.explain.openConsole`；本批测试清单没带它，缺键才活到复核。§六 的定向命令已补上该守卫，并注明「新增/修改文案必须跑」。
 
-仍不在 headless 能力内的：`McpDbExecutor` 依赖 DatabaseTools 原生控制台/项目服务，单测无法直连真库；真机侧用 mpj_demo 取证（COUNT 1 对账、EXPLAIN 78 ms）。另，注解字符串内 `Alt+Shift+Q` 落到 SQL 注入片段导致「未找到可预览的 SQL 源」是既有入口缺口，与本批改动无关，本次未修复/补测。
+关于「能不能连库」：默认 `test` 任务的 classpath 剥离了 Database 插件，`McpDbExecutor` 在那里加载即失败——但 `testDatabase` 通道（独立沙盒、Database 插件真实加载、复用已下载的 MySQL 驱动）**可以直连真库**，本批已补 `PreviewSideQueryIntegrationTest`（见下节）。注解字符串内的入口缺口也已修复并补测。
+
+### 入口修复与真库集成（20261019 第二轮）
+
+- **注解注入片段入口**：`ConvertToSqlAction` 原先直接 `file.findElementAt(offset)`；光标在注解 SQL 的注入片段里时，动作拿到的是注入文件/元素，父链上没有宿主 `PsiAnnotation`，于是误报「未在光标处找到可预览的 SQL 源」。新增 `resolveCaretElement`：先 `getTopLevelFile` 回到宿主文件（offset 仍是编辑器宿主偏移），再用 `getInjectionHost` 归位到宿主字面量。`ConvertToSqlInjectedAnnotationTest` 用测试注入器复刻平台形态，覆盖「宿主文件入参」与「注入文件入参」两种形态（后者是真机失败形态），2/0/0/0；反向把函数改回旧实现 → **恰 1 红**（注入文件形态）。
+- **真库旁路查询**：新增 `PreviewSideQueryIntegrationTest`（`testDatabase` 通道，任务 `testDbPreviewSideQuery`，并从默认 `test` 与分片清单排除）。同一数据源内验证三件事：`SELECT COUNT(*) ... id=2` → `Scalar(1)`（与库中唯一行对账）；`EXPLAIN SELECT ...` → `Table`，含 `select_type` 列与计划行；`SELECT * FROM mpsv_no_such_table` → `Failed`，消息含真实表名。读数 **1/0/0/0（10.4s，无 skip）**。
+- 真库测试顺带抓到一个生产缺口：`executeOnPooledThread` 不携带 Job/ProgressIndicator，而 `DatabaseConnectionManager.Builder.createBlocking` 要求当前线程有进度上下文（headless 报 `no ProgressIndicator or Job, the current job is not cancellable`）。已在 `PreviewSideQuery` 的池线程调用外包 `ProgressManager.runProcess(..., EmptyProgressIndicator())`，只读查询在任意后台上下文可执行；真机 IDE 的池线程恰好有上下文，所以此前未暴露。
 
 ### 反向验证
 
@@ -245,4 +262,4 @@
 - 无绑定数据源路径已实现「选择器只绑定 + 绑定后重试」；用户取消/超时/绑定失败时只就地提示，不自动执行任何 SQL。
 - P3b（页签式结果区）未实施；执行 SQL 仍是「控制台结果视图 + 返回预览」。
 - 真机走查：预估成功 COUNT（1 行，DBX 对账一致）与 EXPLAIN 成功路径（MySQL · 78 ms）均已取证；`backToPreview()` 的头部移除仍由 `ConsoleHostTest` 9/0 与反向（删头部 → 2 红）覆盖，本轮未再点执行入口复验。
-- 定向测试中的 `McpDbExecutor` 通过 `PreviewSideQuery.runnerForTest` 桩替换；真机侧已由上面的 COUNT/EXPLAIN 补上真实连库证据。
+- 默认 `test` 中的 `McpDbExecutor` 仍通过 `PreviewSideQuery.runnerForTest` 桩替换（classpath 无 Database 插件）；真实连库由 `testDatabase` 通道的 `PreviewSideQueryIntegrationTest` 覆盖（1/0/0/0），两者互补。

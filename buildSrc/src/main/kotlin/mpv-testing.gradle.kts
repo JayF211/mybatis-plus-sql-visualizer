@@ -120,6 +120,8 @@ val dbIntegrationTaskSpecs: List<Pair<String, String>> = listOf(
     "testDbExecDocGate" to "cn.song.mybatisplus.visualizer.execute.ExecDocGateIntegrationTest",
     "testDbDriverPipeline" to "cn.song.mybatisplus.visualizer.execute.DbDriverPipelineTest",
     "testDbSchemaAnnotator" to "cn.song.mybatisplus.visualizer.ui.annotate.PreviewUnknownColumnAnnotatorTest",
+    // T-PreviewSideQuery：旁路查询真库链（COUNT/EXPLAIN/失败解包），需 Database 插件与真实 MySQL
+    "testDbPreviewSideQuery" to "cn.song.mybatisplus.visualizer.execute.PreviewSideQueryIntegrationTest",
 )
 
 // T-TestPerf2：Gradle JUnit XML testsuite 根属性解析（只读文件头，避免大文件全读）与结果文件枚举。
@@ -402,6 +404,8 @@ intellijPlatformTesting {
             "cn.song.mybatisplus.visualizer.execute.DbDriverPipelineTest",
             // UI025：预览错列 ExternalAnnotator（需要 SQL 语言/文件类型 = Database 插件）
             "cn.song.mybatisplus.visualizer.ui.annotate.PreviewUnknownColumnAnnotatorTest",
+            // T-PreviewSideQuery：旁路查询真库链（Database 插件 + 真实 MySQL）
+            "cn.song.mybatisplus.visualizer.execute.PreviewSideQueryIntegrationTest",
         )
         val discoveredTestClasses: List<String> = testFileEntries
             .flatMap { (pkg, classNames, _) -> classNames.map { cn -> if (pkg.isEmpty()) cn else "$pkg.$cn" } }
@@ -877,7 +881,7 @@ intellijPlatformTesting {
 tasks.register("testDatabase") {
     group = "verification"
     description =
-        "DB 插件 classpath 门禁（T-TestPerf14 S2：各任务独占 JVM+沙盒；UI025 起 6 个，原单任务串行形态见 git 历史）"
+        "DB 插件 classpath 门禁（T-TestPerf14 S2：各任务独占 JVM+沙盒；UI025 起 6 个、T-PreviewSideQuery 起 7 个，原单任务串行形态见 git 历史）"
     dependsOn(*dbIntegrationTaskSpecs.map { it.first }.toTypedArray())
 }
 
@@ -1061,6 +1065,8 @@ tasks.test {
         excludeTestsMatching("cn.song.mybatisplus.visualizer.execute.DbDriverPipelineTest")
         // UI025：错列标注判别测试需要 Database 插件提供 SQL 语言/文件类型，同上
         excludeTestsMatching("cn.song.mybatisplus.visualizer.ui.annotate.PreviewUnknownColumnAnnotatorTest")
+        // T-PreviewSideQuery：旁路查询真库链需要 Database 插件与真实 MySQL，同上
+        excludeTestsMatching("cn.song.mybatisplus.visualizer.execute.PreviewSideQueryIntegrationTest")
     }
 }
 

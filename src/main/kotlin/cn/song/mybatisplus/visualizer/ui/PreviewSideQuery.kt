@@ -8,7 +8,10 @@ import cn.song.mybatisplus.visualizer.mcp.McpExplainFormatter
 import cn.song.mybatisplus.visualizer.mcp.McpSelectGuard
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ModalityState
+import com.intellij.openapi.progress.EmptyProgressIndicator
+import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.util.Computable
 
 /**
  * 预览面板只读旁路查询（T-PreviewSideQuery P1/P2）。
@@ -81,13 +84,23 @@ internal object PreviewSideQuery {
         val timeoutSeconds = PluginSettings.getInstance().state.executionTimeoutSeconds
         ApplicationManager.getApplication().executeOnPooledThread {
             val outcome = runCatching {
-                McpDbExecutor.executeQuery(
-                    project,
-                    dataSource,
-                    sql,
-                    if (scalar) 1 else McpExplainFormatter.DEFAULT_MAX_ROWS,
-                    timeoutSeconds = timeoutSeconds,
-                    channelNote = channelNote,
+                // T-PreviewSideQuery：`executeOnPooledThread` 不携带 Job/ProgressIndicator，而
+                // DatabaseConnectionManager.Builder.createBlocking 明确要求当前线程有进度上下文
+                // （headless 实测：no ProgressIndicator or Job, the current job is not cancellable）。
+                // 真机 IDE 的池线程恰好有上下文，测试/纯后台调用没有——给一次空指示器让只读查询
+                // 在任意后台上下文可执行；查询本身不读取消状态（只读短查询，超时由驱动护栏负责）。
+                ProgressManager.getInstance().runProcess(
+                    Computable {
+                        McpDbExecutor.executeQuery(
+                            project,
+                            dataSource,
+                            sql,
+                            if (scalar) 1 else McpExplainFormatter.DEFAULT_MAX_ROWS,
+                            timeoutSeconds = timeoutSeconds,
+                            channelNote = channelNote,
+                        )
+                    },
+                    EmptyProgressIndicator(),
                 )
             }
             ApplicationManager.getApplication().invokeLater({
