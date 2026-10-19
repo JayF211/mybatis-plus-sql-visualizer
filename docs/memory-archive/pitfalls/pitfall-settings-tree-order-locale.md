@@ -13,4 +13,4 @@ metadata:
 
 **Why**：子页 EP 全部不设 groupWeight 时，兜底名称比较随插件语言走——中文按码点序（SQL日志<SQL预览<关于<界面与操作<表名映射），英文声明序只是显示名解析路径差异下的隐式侥幸，中英文顺序必然漂移（2026-09-15 真机截图实证，码点序 5/5 吻合）。
 
-**How to apply**：同级子页显式声明递减 groupWeight（本项目 ui=50/preview=40/tableMapping=30/sqlLog=20/about=10，新增子页按区间插值）；守卫=PluginXmlStructureGuardTest「设置子页面groupWeight按声明序严格递减」（提交 6177b17）。诊断路线：平台类查本机 IDEA lib 各 jar（javap 按 .class 文件路径反编译最稳），243 全源码 jar 在 gradle caches ideaIU-*-sources.jar。
+**How to apply**：同级子页显式声明递减 groupWeight（本项目 ui=50/preview=40/tableMapping=30/sqlLog=20/about=10，新增子页按区间插值）；守卫=PluginXmlStructureGuardTest「设置子页面groupWeight按声明序严格递减」（提交 d186d5c）。诊断路线：平台类查本机 IDEA lib 各 jar（javap 按 .class 文件路径反编译最稳），243 全源码 jar 在 gradle caches ideaIU-*-sources.jar。

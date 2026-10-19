@@ -3,7 +3,7 @@
 > **状态**：已由 `20260909-1328-T-PreviewFlash-预览点击侧边栏闪烁-开发计划.md` 接续收编（2026-09-09）——触发源推断已由该计划沙盒日志实证，重放守卫方案原样并入，实施随新计划推进。当前文件仅按要求补状态标注。
 
 > **创建日期**：2026-09-08
-> **分支**：master（当前 HEAD `4a15230`）
+> **分支**：master（当前 HEAD `3f30ffe`）
 > **优先级**：P1（任何预览操作都触发，日志列表是插件最高频查看面；列表成倍增长伴随徽章膨胀与多行状态机污染）
 > **预估工时**：3~4h（守卫改造与单测 2h + runIde 真机复现与复验 1h + 文档 0.5h）
 > **来源**：用户反馈原话——「目前点击任何地方的预览 sql，插件侧边栏的 sql 列表都会重新加载」
@@ -164,7 +164,7 @@ ConsoleView.getEditor()  // public，attachFilter 时反射缓存用于守卫降
 
 ### 5.2 全量回归
 
-基线 3112/0/0/6（master `2326fb4`），新增用例净增；重点盯 SqlLogStreamingDiffTest、JdbcParser 回放、BridgeMarker 系列不回归。
+基线 3112/0/0/6（master `8c796cd`），新增用例净增；重点盯 SqlLogStreamingDiffTest、JdbcParser 回放、BridgeMarker 系列不回归。
 
 ### 5.3 runIde 真机验证
 

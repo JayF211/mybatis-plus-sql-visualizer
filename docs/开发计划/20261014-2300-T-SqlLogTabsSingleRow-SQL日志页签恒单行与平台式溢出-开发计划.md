@@ -2,7 +2,7 @@
 
 - 占号：**O-149 / R99 / D159 / V182**（2026-10-14 复核：O-146/O-148 为本轮已实施计划，O-147 为 T-AgentCaptureProvenance，本组仅本计划在用）
 - 日期：2026-10-14
-- 基线：`master@ab167790` 之上的实施分支 `t-sql-list-native-tail`（HEAD `35b41ae1`）
+- 基线：`master@803ef689` 之上的实施分支 `t-sql-list-native-tail`（HEAD `a29ea923`）
 - 状态：需求分析完成、方案定案，随本计划一并实施
 - 用户触发（原话）：「这个 tab 能不能也优化下，现在侧边栏变窄，上方 tab 实际上是可以一行的，可以参考下 idea 打开多个类时候的交互方式，生成开发计划文件并实施」
 - 关联：T-SqlListNativeVisual（O-146）、T-SqlLogTailFollow（O-148）——同一面板族；本计划只动页签容器，不改列表/工具栏
@@ -92,9 +92,9 @@ JBTabsFactory.createTabs(project, this)      // 产出 JBTabsImpl
 
 ## 八、实施记录
 
-- 2026-10-14 第一轮：定位根因（`JBTabbedPane()` 未设 `tabLayoutPolicy`，默认 `WRAP_TAB_LAYOUT`），双版本 `javap` 实证 `setTabComponentInsets` 在 243/262 均可用；**错误定案**为「SCROLL 策略 + 紧凑内边距」并实施（提交 `22a74acf`）。
+- 2026-10-14 第一轮：定位根因（`JBTabbedPane()` 未设 `tabLayoutPolicy`，默认 `WRAP_TAB_LAYOUT`），双版本 `javap` 实证 `setTabComponentInsets` 在 243/262 均可用；**错误定案**为「SCROLL 策略 + 紧凑内边距」并实施（提交 `5cba13b1`）。
 - 2026-10-14 第二轮（用户报「严重问题」后）：先回退第一轮（页签重新可见），再用无头探针量出各宽度下的页签几何（原文案 WRAP：230/260/300px 折 2 行、≥360px 一行；所需宽度 ~321px），确认第一轮的 8px 内边距把所需宽度推到 ~385px 是压垮点。随后按用户「反编译看 IDEA 怎么复用」的指引查平台源码（`javap` 243/262），改用 `JBTabsFactory.createTabs` + `setSingleRow(true)` + `setSupportsCompression(true)`，即平台自带的单行＋压缩＋`MorePopupAware` 下拉；页签身份迁移到 `TabInfo` 句柄。`SqlLogPanelLayoutTest` 15/15 绿。
-- 2026-10-14 真机复看（262 沙盒，HEAD `faf46ba0`）：四个页签**一行显示**且为编辑器式样式（选中项带框）；点「SQL 历史」正常切到历史面板（其搜索栏与空态引导就位）；工具栏八个动作图标同时可见。
-- 2026-10-14 权威全量（`HEAD=faf46ba0`，Docker 29.6.2，`testShards --no-configuration-cache`）：`BUILD SUCCESSFUL in 14m 6s`，退出码 0，合计 **7159/0/0/9**；`SqlLogPanelLayoutTest` 15/0、`SqlLogPanelTypePopupToggleTest` 6/0、`SqlLogTailFollowTest` 5/0、`BundleParityGuardTest` 5/0。期间未改工作树。
-- 2026-10-14 定稿轮（`HEAD=b9f39fe8`）：清理迁移残留（未用 import／失效注释，`dde2b74d`）后重跑，`BUILD SUCCESSFUL in 12m 13s`，合计 **7159/0/0/9**。
-- 过程中被分片重排暴露的一条**假红**（与本计划无关）：`HistorySqlLogPanelJumpToSourceTest` 断言历史目录「恰好 1 个文件」但自己不清目录，同分片残留使其读到 2（`expected:<1> but was:<2>`）；隔离单跑 6/6 通过即证为顺序依赖而非缺陷。按同族用例做法加 `cleanHistoryDir()` 并把实际目录内容写进断言消息（`b9f39fe8`，纯测试改动）。**教训：断言「精确数量」的用例必须先清理共享目录**。
+- 2026-10-14 真机复看（262 沙盒，HEAD `7b163516`）：四个页签**一行显示**且为编辑器式样式（选中项带框）；点「SQL 历史」正常切到历史面板（其搜索栏与空态引导就位）；工具栏八个动作图标同时可见。
+- 2026-10-14 权威全量（`HEAD=7b163516`，Docker 29.6.2，`testShards --no-configuration-cache`）：`BUILD SUCCESSFUL in 14m 6s`，退出码 0，合计 **7159/0/0/9**；`SqlLogPanelLayoutTest` 15/0、`SqlLogPanelTypePopupToggleTest` 6/0、`SqlLogTailFollowTest` 5/0、`BundleParityGuardTest` 5/0。期间未改工作树。
+- 2026-10-14 定稿轮（`HEAD=9223c277`）：清理迁移残留（未用 import／失效注释，`c1eaf771`）后重跑，`BUILD SUCCESSFUL in 12m 13s`，合计 **7159/0/0/9**。
+- 过程中被分片重排暴露的一条**假红**（与本计划无关）：`HistorySqlLogPanelJumpToSourceTest` 断言历史目录「恰好 1 个文件」但自己不清目录，同分片残留使其读到 2（`expected:<1> but was:<2>`）；隔离单跑 6/6 通过即证为顺序依赖而非缺陷。按同族用例做法加 `cleanHistoryDir()` 并把实际目录内容写进断言消息（`9223c277`，纯测试改动）。**教训：断言「精确数量」的用例必须先清理共享目录**。

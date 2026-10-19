@@ -7,7 +7,7 @@ metadata:
   originSessionId: sess_78ed53d8-61b6-4559-85f2-8d3034738e74
 ---
 
-T-MarketInternal 插件市场内部 API 整改**已合入 master**（fix ea4d983 经 merge 700cf0b 落 master，合并提交上全量 4081/0/0/6 绿复验；分支与工作树 mpsv-t-marketinternal 合并后即删，2026-09-15）。
+T-MarketInternal 插件市场内部 API 整改**已合入 master**（fix 2567812 经 merge 208f9b3 落 master，合并提交上全量 4081/0/0/6 绿复验；分支与工作树 mpsv-t-marketinternal 合并后即删，2026-09-15）。
 
 - 病灶：`MessagePool`/`AbstractMessage` 的 `@ApiStatus.Internal` 标注是 **262 才加的**（243 app-client.jar 无标注），编译基准 243 的 `verifySmoke` 永远看不见——262 检出 6 条 Internal 全部集中在 `FeedbackReporting.pluginErrorPoolStacks()`（T-FeedbackDlg2/3 引入的「从 IDE 错误池导入」）。方法论坑：**新触平台 API 只核签名不够，必须 javap 常量池核 ApiStatus 标注，且须跑含 262 的 verifyMinimal**。
 - 整改：错误池候选整链删除（平台侧无公开替代——整条诊断链含 ErrorReportSubmitter/IdeErrorsDialog 均 Internal），手动报告对话框收敛为自主粘贴+占位文案引导；errorHandler EP 主链确认全程平台内部、合规不动。

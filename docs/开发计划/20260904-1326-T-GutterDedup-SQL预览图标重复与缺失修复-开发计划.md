@@ -1,7 +1,7 @@
 # T-GutterDedup：SQL 预览图标重复与缺失修复 开发计划
 
 > **创建日期**：2026-09-04
-> **分支**：master（当前 HEAD `210c802`）
+> **分支**：master（当前 HEAD `ad7dfb1`）
 > **优先级**：P1（预览图标错乱直接影响可用性：重复图标扰视线、命中后部分预览无效；缺失图标使 HibernateTemplate HQL 无可预览入口）
 > **预估工时**：4~6h
 > **来源**：用户真机 demo（`jpa-hibernate-demo`）标注：`commonDao.execute` 重复图标、`getHibernateTemplate().execute` 三图标、`HibernateTemplate.find/findByValueBean` 无图标

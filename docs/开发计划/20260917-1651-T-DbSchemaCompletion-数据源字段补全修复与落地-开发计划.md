@@ -1,7 +1,7 @@
 # T-DbSchemaCompletion 数据源字段补全修复与落地 开发计划
 
 > 日期：2026-09-17 16:51
-> 状态：**已实施（2026-09-17，分支 t-dbschemacompletion，基线 dev ed3e1f1）**——P0-1 + P0-2 交付，P1（库表名候选）按计划留待 P0 真机效果后决策
+> 状态：**已实施（2026-09-17，分支 t-dbschemacompletion，基线 dev 2d1faa5）**——P0-1 + P0-2 交付，P1（库表名候选）按计划留待 P0 真机效果后决策
 > 触发：用户实测——SQL 预览页只有实体类字段补全，数据库字段补全不生效，数据源配置正常
 > 取证环境：日常 IDE 2026.2.3（262.10968.63，装 v2026.9.18-beta.4）+ 2024.3 实例，日志 `%LOCALAPPDATA%\JetBrains\IntelliJIdea2026.2\log\idea.log`、`idea.1.log`
 
@@ -152,7 +152,7 @@ JOIN 图字段注释与类型串一并恢复。
 
 ## 八、实施记录
 
-**状态**：P0-1 + P0-2 已实施（分支 `t-dbschemacompletion`，基线 dev ed3e1f1）；P1 未实施。
+**状态**：P0-1 + P0-2 已实施（分支 `t-dbschemacompletion`，基线 dev 2d1faa5）；P1 未实施。
 **门禁**：全量 `./gradlew testShards` **4829/0/0/6 绿**（基线 4817，+12 全为本次新增用例；跳过 6 = Docker 条件测试）。
 
 改动文件：

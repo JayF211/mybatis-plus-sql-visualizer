@@ -2,7 +2,7 @@
 
 - 占号：O-137/R83/D141/V164（引用前已实测未占用；O-136 已被 T-PreviewExecDsDialect 占用）
 - 日期：2026-10-09 晚
-- 关联：T-HistorySearchToggles（`87ebbfe`，dev-bak `87ebbfe`/合并批 42f1ba6 交付）——本项为其**样式迭代**，行为语义零变化
+- 关联：T-HistorySearchToggles（`81d96ab`，dev-bak `81d96ab`/合并批 6feb163 交付）——本项为其**样式迭代**，行为语义零变化
 - 载体建议：dev-bak 直提（UI 单点小改）或独立工作树
 
 ## 一、现状与差距
@@ -103,7 +103,7 @@
 gradle 缓存 `ideaIC-243.28141.41-sources.jar` 内 `SearchReplaceComponent.java`（此类 243 已是 Java 源）逐行核对：
 
 1. **唯一框内嵌入路径 = `addExtraSearchActions`**：构造期只从 `searchToolbar2Actions`（即 Builder 的 `myExtraSearchActions` 组）过滤 `instanceof Embeddable` 抽进 `myEmbeddedSearchActions`（源码 158-164 行），再经 `SearchTextArea.setExtraActions` 渲染进框内按钮行（611-618 行）。ToggleMatchCase/ToggleRegex 均实现 `Embeddable` 标记接口。
-2. **`addPrimarySearchActions` 恒不可见**：其动作进 `mySearchActionsToolbar` → `rightPanel`；`withShowOnlySearchPanel()` 形态下构造器 267-269 行 **只 `add(leftPanel, BorderLayout.CENTER)`，rightPanel 根本没挂进布局**。前一轮（9bf81fb）恰挂在此。
+2. **`addPrimarySearchActions` 恒不可见**：其动作进 `mySearchActionsToolbar` → `rightPanel`；`withShowOnlySearchPanel()` 形态下构造器 267-269 行 **只 `add(leftPanel, BorderLayout.CENTER)`，rightPanel 根本没挂进布局**。前一轮（04989ac）恰挂在此。
 3. **`addSearchFieldActions` 不渲染**：`mySearchFieldActions` 组仅被 `updateBindings` 用于快捷键绑定，无任何渲染路径（组名有误导性）。
 4. **`setStatusText` 只存字段不渲染**：平台原生读数组件 `StatusTextAction` 靠 ActionToolbar 的 CustomComponentAction 路径显示；而框内嵌入钮是 `ActionButton`（只画 presentation 图标，`ActionButton` 源码完全不处理 CustomComponentAction）——**文本标签在框内无路**。
 
@@ -116,7 +116,7 @@ gradle 缓存 `ideaIC-243.28141.41-sources.jar` 内 `SearchReplaceComponent.java
 #### 测试基建新知（对照实验证伪旧读数）
 
 - NativeSearchTextField 构造链经 `DefaultActionGroup.addAll` → `ActionManager.getInstance()`——**纯 headless TestCase 无 Application 必炸**（ProviderContractTest 旧基类 junit TestCase 即此形态）。结构/契约测试均迁 `BasePlatformTestCase`（仓内 SqlLogPanelFilterTest 先例）。
-- **对照实验**：stash 本轮改动后单跑旧代码（9bf81fb 态）ProviderContractTest ⇒ 同样 NPE 红。即此前记录的「定向 46/0」读数不覆盖构造路径、不可信（验证盲区新实例：**测试绿只证明断言被执行，不证明构造链真实走过**——构造即炸的测试类整类红，若当时只跑纯函数过滤类则全绿假象成立）。
+- **对照实验**：stash 本轮改动后单跑旧代码（04989ac 态）ProviderContractTest ⇒ 同样 NPE 红。即此前记录的「定向 46/0」读数不覆盖构造路径、不可信（验证盲区新实例：**测试绿只证明断言被执行，不证明构造链真实走过**——构造即炸的测试类整类红，若当时只跑纯函数过滤类则全绿假象成立）。
 
 #### 读数
 
@@ -127,7 +127,7 @@ gradle 缓存 `ideaIC-243.28141.41-sources.jar` 内 `SearchReplaceComponent.java
 
 用户真机报同一 mapper 内 140 块（selectUserWithOrdersXml）有 SQL 着色+补全、160 块（selectUserPageXml，含 `<include refid="Base_Column_List"/>`）全无。三层实证：
 
-1. **本插件注入链无 include 降级**：新增平价守卫 `XmlMapperInjectorIncludeParityTest`（真平台 enumerate 断言同 mapper 内含/不含 include 的语句文本注入位等价，绿；`e3f2bbd`）。守卫链（设置/per-host 让位/mapper 祖先/长度熔断）均不含 include/resultMap 维度。
+1. **本插件注入链无 include 降级**：新增平价守卫 `XmlMapperInjectorIncludeParityTest`（真平台 enumerate 断言同 mapper 内含/不含 include 的语句文本注入位等价，绿；`e954298`）。守卫链（设置/per-host 让位/mapper 祖先/长度熔断）均不含 include/resultMap 维度。
 2. **发行版（master=v2026.10.9）没有注入着色器**：git ls-tree 实测 `SqlMapperInjector`/`XmlSynHiGate` 仅存在于 dev-bak（T-XmlSynHi 未回流 master）。用户真机装 10.9 ⇒ 其 140 块的色与补全来自 **MyBatisCodeHelperPro**（真机在装；20261006 D68 调查记录在案）——160 块它没给是它自身对该块的处理（include/`Base_ResultMap` 引用），与本插件无关。
 3. **dev-bak 构建沙盒实证两块等价**（v5-01~03 截图）：140/160 两块关键字橙、`#{}` 参数粉、数字青——注入着色全部生效；补全链按注入语言派发，同等平价。
 

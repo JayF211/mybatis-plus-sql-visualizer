@@ -2,7 +2,7 @@
 
 > **2026-09-20 脚本化验收**：30 条真机走查项改为「配置预置 + 文件系统/日志 + 单元测试」脚本化核验，结论逐条回填在下方判定卡。全量 `testShards` 5383/0/0/6 绿；agent 子项目 `:sql-visualizer-agent:test` 58/0/0 绿（该子项目不进 testShards，本轮单独补跑）。
 
-> **验收对象**：master 提交 `7c8a680`（主功能）+ 压测补充与并发丢条修复（`SqlLogAutoSaver` drainAndWrite 加锁）。背景与设计见 [T-SqlHistoryFull 开发计划](../开发计划/20260917-2118-T-SqlHistoryFull-SQL历史全量化与防卡顿-开发计划.md)。
+> **验收对象**：master 提交 `9f54bba`（主功能）+ 压测补充与并发丢条修复（`SqlLogAutoSaver` drainAndWrite 加锁）。背景与设计见 [T-SqlHistoryFull 开发计划](../开发计划/20260917-2118-T-SqlHistoryFull-SQL历史全量化与防卡顿-开发计划.md)。
 > **回归基线**：IDE 全量 testShards **4317/0/0/6 绿**（含压测新增）；编译 0 错；log+config 定向全绿。
 
 ---

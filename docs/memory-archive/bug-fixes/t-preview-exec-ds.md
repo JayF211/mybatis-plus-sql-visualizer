@@ -32,4 +32,4 @@ T-PreviewExecDs **已实施交付**（2026-09-14，计划 `docs/开发计划/202
 
 **Why:** 三根因都是跨项目/生命周期类，单项目回归测不出；console 清扫链是平台内部行为，不反编译字节码不可能定位。并行铁律：T-FeedbackDlg 占用默认沙盒 → 登记 T-PreviewExecDs + build.gradle.kts 临时 `-PparallelSandbox=mpsv-preview-exec-ds` 独立沙盒隔离（用完还原）。
 
-**How to apply:** 再遇 "parent has already been disposed (JdbcConsole)" 或弹窗数据源串项目，先查 cachedTempPsiFile 项目绑定（isCacheUsable）与 isValid 三分量。核实 Database 插件 API 用 243 发行版 unzip+javap（见 [[idea-262-platform-jar-verify]]）；沙盒真机流程见 [[runide-demo-verify-workflow]]。注意：i18n 新键（execute.console.disposed / execute.datasource.select.in）被并行会话 T-FeedbackDlg 提交时 git add 顺带卷进其提交（8ccb0ac），内容完整但 git 归属在别处；代码/测试/文档改动留工作区未提交。
+**How to apply:** 再遇 "parent has already been disposed (JdbcConsole)" 或弹窗数据源串项目，先查 cachedTempPsiFile 项目绑定（isCacheUsable）与 isValid 三分量。核实 Database 插件 API 用 243 发行版 unzip+javap（见 [[idea-262-platform-jar-verify]]）；沙盒真机流程见 [[runide-demo-verify-workflow]]。注意：i18n 新键（execute.console.disposed / execute.datasource.select.in）被并行会话 T-FeedbackDlg 提交时 git add 顺带卷进其提交（96bcb62），内容完整但 git 归属在别处；代码/测试/文档改动留工作区未提交。

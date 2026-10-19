@@ -1,6 +1,6 @@
 ---
 name: project-screenshot-placeholders
-description: 功能截图占位方案（7ca3f05）——docs/images/screenshot-01~04
+description: 功能截图占位方案（d32d9a8）——docs/images/screenshot-01~04
   命名规范、1200×760、二维码占位图、三处展示位置（plugin.xml 外链/README/项目介绍）
 metadata:
   node_type: memory
@@ -8,7 +8,7 @@ metadata:
   originSessionId: sess_59b5b8b2-2456-4526-a6e9-f90baa01516f
 ---
 
-**功能截图占位已就位（2026-08-16，提交 7ca3f05，已推送）**：插件说明与项目文档此前无功能截图（Marketplace 流程文档 §2.2 待办 P1）。用户要求预留位置 + 二维码占位 + 命名规范 + 尺寸调整，后续只替换图片。
+**功能截图占位已就位（2026-08-16，提交 d32d9a8，已推送）**：插件说明与项目文档此前无功能截图（Marketplace 流程文档 §2.2 待办 P1）。用户要求预留位置 + 二维码占位 + 命名规范 + 尺寸调整，后续只替换图片。
 
 - **图片命名**（docs/images/，4 张）：`screenshot-01-sql-preview.png`（Wrapper→SQL 预览弹窗）/ `screenshot-02-log-panel.png`（SQL 日志工具窗口）/ `screenshot-03-sql-to-java.png`（SQL→Java 反向转换）/ `screenshot-04-xml-preview.png`（XML·注解动态 SQL 预览）。规则：`screenshot-{序号}-{功能短名}.png`，带序号保证展示顺序。
 - **尺寸**：占位图 1200×760（Marketplace 推荐比例 1.58）；展示处 width=720 控制不溢出。

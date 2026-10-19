@@ -5,7 +5,7 @@
 - 来源：ACP 验收文档 §七-7 待决策项——**`@ApiStatus.Internal` 类型的漂移没有任何自动化门禁**：verifier 对 optional 依赖走「不可用」分支、完全不做类型解析，三个目标平台都没有 AI Assistant（依赖树逐目标记 `(failed) com.intellij.ml.llm (optional): Unavailable`），故 ACP 绕行所依赖的 internal 类型漂移不会让任何门禁转红
 - 性质：**测试基建新增护栏**——不改产品代码、不改 ACP 绕行实现；为「上游修复后绕行可移除」提供唯一自动信号
 - 实施分支：自 master 拉任务分支 t-ml-llm-signature-guard
-- 验证基线：master `22d7c49`（testShards 5383/0/0/6 + testDatabase 10/0/0/0 + agent 58/0/0/0 + verifyGate 三目标 Compatible）
+- 验证基线：master `f8c115d`（testShards 5383/0/0/6 + testDatabase 10/0/0/0 + agent 58/0/0/0 + verifyGate 三目标 Compatible）
 
 ---
 

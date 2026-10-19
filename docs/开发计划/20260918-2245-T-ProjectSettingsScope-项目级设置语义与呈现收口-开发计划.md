@@ -159,7 +159,7 @@
 
 ## 八、风险与取舍
 
-- **与在途分支冲突（最高优先级风险）**：`feature/dialect-auto-infer`（tip `a481a4f`，2026-09-18 10:23）**不含** P4 提交 `6fa282f`（09:09，未推远端），其 `ProjectPluginSettingsConfigurable.kt` 仍是 2 控件旧形态 + "智能推断"哨兵项（`dialectAuto`），并已改 `ProjectPluginSettings.kt`（+`dialectAuto: Boolean?`）。两分支同改本文件，合流必冲突。**本任务应在该分支合流后再开工**，或明确以本任务为准、合流时按 10 控件形态吸收 auto 哨兵（`dialectAuto` 的 null 语义与"空=跟随全局"同构，可与 P1 的分态呈现一并处理）。开工前先确认该分支状态。
+- **与在途分支冲突（最高优先级风险）**：`feature/dialect-auto-infer`（tip `fbda23a`，2026-09-18 10:23）**不含** P4 提交 `f576d4d`（09:09，未推远端），其 `ProjectPluginSettingsConfigurable.kt` 仍是 2 控件旧形态 + "智能推断"哨兵项（`dialectAuto`），并已改 `ProjectPluginSettings.kt`（+`dialectAuto: Boolean?`）。两分支同改本文件，合流必冲突。**本任务应在该分支合流后再开工**，或明确以本任务为准、合流时按 10 控件形态吸收 auto 哨兵（`dialectAuto` 的 null 语义与"空=跟随全局"同构，可与 P1 的分态呈现一并处理）。开工前先确认该分支状态。
 - **"空 = 跟随全局"的固有歧义不因本任务消失**：开关开启时，留空字段显示的是全局值，用户可能误以为"已覆盖为这个值"。P2 的重置按钮 + tooltip 缓解；彻底消除需逐项显式三态控件（B 方案），本次不做。
 - **开关语义的用户面 ≈ 0**：项目页 2026-08-26 至 2026-09-18 未注册（死类），残值只能靠手工编辑 `.idea/mp-sql-visualizer-project.xml` 产生——故 P1 无升级迁移负担，但也意味着**本任务的实际价值要等真机走查确认该页真有人用**；若走查后判定使用频率极低，"删 UI 保后端"仍是干净退路（历史先例：2026-08-26 曾因"套娃"困惑移除注册）。
 - **P1 属用户可见行为变更**，须进 CHANGELOG [Unreleased]；不涉及发行元数据与八处同步全流程（用户侧文档 grep 实测未单独描述该页）。
@@ -178,7 +178,7 @@
 
 ## 十、实施记录（2026-09-19 回填）
 
-- 实施：T-TailSweep G7 / `T-TS-13`，分支 `t-ts-projsettings`（`a7c3742`）+ 阻断项修正 `t-ts-fix-g7`（`96579a7`），已并入 master。
+- 实施：T-TailSweep G7 / `T-TS-13`，分支 `t-ts-projsettings`（`4eec7ec`）+ 阻断项修正 `t-ts-fix-g7`（`ba88d6d`），已并入 master。
 - **D1 决策：方案 A**（用户 2026-09-18 定案）——保留总开关，关闭态置灰并显示全局生效值。
 - P1：四处联动收敛到单一入口 `refreshControls(showProject)`（createComponent / reset / 总开关监听器共用），9 项灌值 + `projectValueCells` 统一 `enabled(showProject)` + apply 分态写入 + isModified 分态比对；可选增强（关闭态范围提示行）一并做。
 - P2：`row { button(...) }` 形态照抄「恢复默认颜色」（**行号订正：参照点现为 `PluginSettingsPanel.kt:768-777`，原写 `:754-762` 已移位**）；行为=9 项归零/null、总开关不动、直接改 state（关闭态 apply 不写这 9 项，只改控件残值清不掉）。
@@ -186,7 +186,7 @@
   **越界申报**：登记后 `PluginSettingsFolderConfigurableTest.kt:113-121` 既有断言失效（共享渲染器导致各行指向最后渲染那份），改该文件 6 行——不在 G7 声明写集内，验证者判定「改动必要且未放宽断言，'二者只能留一'论断成立」，此处补记。
 - P4：选 (a)，仅改双语 bundle（两个 tip + 两个 success 键明示「全局设置」）。
 - P5：`ProjectPluginSettingsConfigurableTest` 扩 7 个用例（P1 四条 + P2 一条 + P3 探针/索引两条）；**回放验证**：修复前真红 4~5 条（作者原文「3 条」属低报），apply/isModified 两条用注释式回放验证判别力。
-- **阻断项修正（`96579a7`）**：验证者推演「开启态 reset 后编辑任一项并 apply → 全部 9 项被写回 → '跟随全局'静默钉成当时的全局快照」，且现有 P2 用例不调 apply（假绿）。修法=**apply 逐项门控**（只写回「控件显示值 ≠ state 推导值」的项，判据与 `isModified` 同源，零新增可变状态；顺带消除 apply 与 isModified 的判据不对称）；并补 `injectLogicDelete` 灌值守卫（验证者指出删该行现有用例全绿——实测关闭态分支确无覆盖）。先红后绿：阻断项用例修复前 `expected:<[]> but was:<[MySQL]>`。
+- **阻断项修正（`ba88d6d`）**：验证者推演「开启态 reset 后编辑任一项并 apply → 全部 9 项被写回 → '跟随全局'静默钉成当时的全局快照」，且现有 P2 用例不调 apply（假绿）。修法=**apply 逐项门控**（只写回「控件显示值 ≠ state 推导值」的项，判据与 `isModified` 同源，零新增可变状态；顺带消除 apply 与 isModified 的判据不对称）；并补 `injectLogicDelete` 灌值守卫（验证者指出删该行现有用例全绿——实测关闭态分支确无覆盖）。先红后绿：阻断项用例修复前 `expected:<[]> but was:<[MySQL]>`。
 - 未验证：真机走查七项（关闭态置灰与全局页逐字一致、切开关/应用/重开值保留、重置后 XML 归空、关闭态不出现「已修改」、并排两页文案一致、P3 实际跳转与高亮）；P3 的 `focusTarget` 高亮对 DSL v2 的 `JLabel` 与文本框大概率不生效（已登记 §七）。
 （实施后回填）
 

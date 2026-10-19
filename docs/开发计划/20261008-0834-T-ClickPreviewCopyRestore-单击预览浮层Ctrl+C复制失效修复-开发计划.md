@@ -22,9 +22,9 @@
 
 | 时间 | 提交 | 变化 |
 |---|---|---|
-| 2026-09-08 | `75f2a89` | T-ClickPreview 一轮引入单击预览，**不抢焦点**（「JBPopup 轻量预览不抢焦点点外即关」）——此时代 Ctrl+C 仍直达列表，批量复制不受影响 |
-| 2026-09-08 | `66635c3` | T-ClickPreview 四轮：为「弹出即可编辑打字」把弹窗改成 `setRequestFocus(true)`——**焦点改道从此上线**（回归引入点） |
-| 2026-09-14 | `b93b36c9` | T-ListPreviewCopy：加「多选 ≥2 行时单击不排程预览」保护 + 右键批量复制 |
+| 2026-09-08 | `c9d7fe2` | T-ClickPreview 一轮引入单击预览，**不抢焦点**（「JBPopup 轻量预览不抢焦点点外即关」）——此时代 Ctrl+C 仍直达列表，批量复制不受影响 |
+| 2026-09-08 | `725507c` | T-ClickPreview 四轮：为「弹出即可编辑打字」把弹窗改成 `setRequestFocus(true)`——**焦点改道从此上线**（回归引入点） |
+| 2026-09-14 | `d89aad43` | T-ListPreviewCopy：加「多选 ≥2 行时单击不排程预览」保护 + 右键批量复制 |
 
 根因链三层：
 
@@ -36,7 +36,7 @@
 
 ## 三、修复方案
 
-原则：不回退四轮拍板的「弹出即聚焦可编辑」（`66635c3` 是用户反馈驱动的修复，不能翻案）；不动 `SqlEntryList.itemToText` 纯 SQL 输出契约与 `batchCopySql` 逐字节同构（右键批量与 Ctrl+C 产物一致性红线）。
+原则：不回退四轮拍板的「弹出即聚焦可编辑」（`725507c` 是用户反馈驱动的修复，不能翻案）；不动 `SqlEntryList.itemToText` 纯 SQL 输出契约与 `batchCopySql` 逐字节同构（右键批量与 Ctrl+C 产物一致性红线）。
 
 ### S1（D98）：浮层内 Ctrl+C——无选中复制全文，有选中放行原生复制
 
@@ -53,7 +53,7 @@
 
 ### S2（D99）：带修饰键的单击不排程预览——多选全程零干扰
 
-`onClick` 签名扩展（转发修饰键），Ctrl/Shift/拖框意图的单击（`CTRL_DOWN_MASK`/`SHIFT_DOWN_MASK`）一律停表关旧、不排程——把 T-ListPreviewCopy 的保护从「≥2 行」前移到「第一击」，多选全程焦点不离列表、浮层永不弹出，Ctrl+C 批量复制恢复到 `75f2a89` 之前时代的行为。
+`onClick` 签名扩展（转发修饰键），Ctrl/Shift/拖框意图的单击（`CTRL_DOWN_MASK`/`SHIFT_DOWN_MASK`）一律停表关旧、不排程——把 T-ListPreviewCopy 的保护从「≥2 行」前移到「第一击」，多选全程焦点不离列表、浮层永不弹出，Ctrl+C 批量复制恢复到 `c9d7fe2` 之前时代的行为。
 
 接线点三处核查：
 
@@ -110,7 +110,7 @@
 
 ## 七、实施记录
 
-分支 `t-clickpreview-copy-restore`（自主仓 master `cf95acc` 拉出）。
+分支 `t-clickpreview-copy-restore`（自主仓 master `1e1acf6` 拉出）。
 
 **S2（D99）已实施**：`SqlClickPreview.onClick` 签名扩为 `(clickCount, clickPoint, modifiersEx = 0)`（默认参数保既有测试零改动）；顶层纯函数 `isMultiSelectIntent`（只认 `CTRL_DOWN_MASK`/`SHIFT_DOWN_MASK`，真实转发的 `BUTTON1_DOWN_MASK` 位并存不误报）；守卫条件 `selectedIndices.size > 1 || isMultiSelectIntent(modifiersEx)`；`SqlLogPanel`/`HistorySqlLogPanel` 两处转发点带 `e.modifiersEx`。类注释宿主清单修正（F-7 历史窗列表实测不存在，初版三处接线经重构仅存两处）。
 
@@ -148,7 +148,7 @@
 
 ## 八、二轮实施记录（真机反馈「问题没有解决」后重定位）
 
-**触发**：一轮修复随 master 合并（`d332744`）后用户复测仍报「复制不成功」。
+**触发**：一轮修复随 master 合并（`61146ed`）后用户复测仍报「复制不成功」。
 
 **证据链（三处实测 + 一处源码核验）**：
 

@@ -1,11 +1,11 @@
 # O-77 T-EwStatementScope XML 预览 ew 占位按语句域收敛 — 开发计划
 
-- **编号**：O-77（占号前已实测：`git log master --oneline` 顶=`2e4aa83`，`docs/开发计划/` 当日已有 0145=O-76 / 0240=T-TestPerf4 / 0442=O-74 / 0633=批次 / 0839=T-PerfSweep8，后者编号走 T-PS8-xx 不占 O 号；台账快照「下一号 O-77」无冲突）
+- **编号**：O-77（占号前已实测：`git log master --oneline` 顶=`45421ef`，`docs/开发计划/` 当日已有 0145=O-76 / 0240=T-TestPerf4 / 0442=O-74 / 0633=批次 / 0839=T-PerfSweep8，后者编号走 T-PS8-xx 不占 O 号；台账快照「下一号 O-77」无冲突）
 - **任务名**：T-EwStatementScope
 - **日期**：2026-09-24
 - **状态**：待用户确认，未动码
 - **来源**：用户问题反馈——demo 仓 `OrderMapper.selectOrdersByCondition`（无 ew 参数的普通 XML select）预览时出现「方法 … 无 Wrapper 参数（ew），无法展开 MP 占位」红色警示，用户预期该语句不该提示 ew 相关内容
-- **基线**：master=`2e4aa83`（20260924 实测；相关四文件 master 与 dev 零差异，`git diff master dev --stat` 为空）
+- **基线**：master=`45421ef`（20260924 实测；相关四文件 master 与 dev 零差异，`git diff master dev --stat` 为空）
 
 ## 一、问题与复现
 
@@ -37,7 +37,7 @@ SQL 本身渲染正常（动态条件、foreach 都对），警示属于误报�
 
 ## 三、影响面
 
-- **引入提交**：`3959a8e4`（M26-B 占位展开特性）；`git tag --contains` 实测 `2026.8.15` 起全部 tag 包含 → **发布版 2026.9.14 与所有本地构建均受影响**，非新回归。
+- **引入提交**：`0f42a80b`（M26-B 占位展开特性）；`git tag --contains` 实测 `2026.8.15` 起全部 tag 包含 → **发布版 2026.9.14 与所有本地构建均受影响**，非新回归。
 - **波及入口**（生产调用 `XmlPreviewService.preview` 的全部路径，已 grep 实测）：SQL 预览弹窗/面板（`SqlPreviewPanel` 红横幅）、两个 gutter marker（`XmlSqlGutterLineMarkerProvider` / `PagesXmlGutterLineMarkerProvider`）、MCP render 工具（`McpSourceLocator` 同链路，warning 文本随工具出参外泄）、`ConvertToSqlAction`。
 - **触发条件**：同一 mapper 文件内既有 wrapper 风格语句又有普通语句——MP 项目混写一个文件的常见形态，命中面不小。
 
@@ -89,7 +89,7 @@ SQL 本身渲染正常（动态条件、foreach 都对），警示属于误报�
 
 ## 九、实施记录
 
-（20260924 本会话实施完毕，分支 `t-ew-statement-scope`，基线 master=`969b06f`。）
+（20260924 本会话实施完毕，分支 `t-ew-statement-scope`，基线 master=`c3cb052`。）
 
 **生产改动**（与 §四方案 A 一致，共两文件）：
 

@@ -147,8 +147,8 @@ public AcpIdeaMcpTransport getTransport(AcpAgentId agentId) {
 
 ## 八、实施记录
 
-实施分支 `t-acp-mcp-transport`（基点 master `fe423e7`）。提交：`8b4dd8f`（T-AMT-01/02/03 + 守卫测试）、
-`43b59be`（T-AMT-04 可测部分的隔离实证）、本文件所在提交（构建脚本注释 + §八/§九 回填）。
+实施分支 `t-acp-mcp-transport`（基点 master `21bf7a7`）。提交：`b93add1`（T-AMT-01/02/03 + 守卫测试）、
+`1a4f009`（T-AMT-04 可测部分的隔离实证）、本文件所在提交（构建脚本注释 + §八/§九 回填）。
 
 ### 8.1 T-AMT-03 桩源集与编译期类型
 

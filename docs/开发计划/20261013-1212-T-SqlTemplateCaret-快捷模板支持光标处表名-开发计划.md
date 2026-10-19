@@ -24,7 +24,7 @@
 - `update()`（旧 `:35-47`）：`isEnabled = selectedText(e) != null`。
 - `actionPerformed()`（旧 `:49-71`）：`selectedText(e) ?: return`，再 `template(text.trim())`。
 - 三个子类只差模板串：`EXPLAIN SELECT * FROM <选中>` / `SELECT COUNT(*) FROM <选中>` / `SELECT * FROM <选中> LIMIT <sampleLimit 默认 10>`（旧 `:161-195`）。
-- P2（`f6b4d159`）已给失败气泡挂「定位到出错语句 / 复制错误信息」两个动作（旧 `:88-159`）——**本轮保留不动**。
+- P2（`254a3670`）已给失败气泡挂「定位到出错语句 / 复制错误信息」两个动作（旧 `:88-159`）——**本轮保留不动**。
 
 ### 2.2 实证读数（本轮沙盒日志）
 

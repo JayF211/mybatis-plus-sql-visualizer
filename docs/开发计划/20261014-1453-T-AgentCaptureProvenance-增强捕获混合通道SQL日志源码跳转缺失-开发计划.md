@@ -4,7 +4,7 @@
 >
 > 编号：O-147 / R97 / D157 / V180（立项期间 O-146 / R96 / D156 / V179 被并行计划占用，已避让并复核 `docs/`）
 >
-> 基线：`master` `760f4670`；日常 IDE：IntelliJ IDEA 2026.2.1，已安装发行版 `v2026.10.13`
+> 基线：`master` `e15ee699`；日常 IDE：IntelliJ IDEA 2026.2.1，已安装发行版 `v2026.10.13`
 >
 > 状态：已实施（2026-10-14，W0~W3 全落地；定向 97 例绿 + 两轮反向验证定向命中；真机复验留用户，见 §八）。
 >
@@ -159,7 +159,7 @@ W0 的验收是能从单条诊断判断 V180-1/2，而不是仅靠 UI 猜测。�
 - 完成日常 IDEA 2026.2 `idea.log`/`idea.1.log`/`idea.2.log` 与截图对照：截图时段 agent 事件持续入站（日志时间未命中累计 600→1200，13:55→14:31 稳定流），带 `[PostgreSQL] [RefundOrderService.java:67]` 的条目证实增强通道有效；`—`（无耗时）行按渲染契约（agent 事件缺 `dn` 也补 0ms、`—` 恒等于 `executionTimeMs == null`）只能产自控制台通道——两通道并存实锤。
 - **闸门史取证**：`增强捕获在线态切换: true -> false` 出现在 13:14:40，此后到 14:32 新进程启动前无回升记录；但事件流持续（未命中计数在涨），且现场两个会话 pid（47740 投递事件、12144 持续 ACK）的建立记录在所有日志卷中均缺位。据此判定：**现场无法离线裁决 V180-1/V180-2**（回落沿完全静默 + 会话建立面缺记录），可观测缺口即 W0 的立项动因，而非先入为主改闸门状态机。
 
-### 2026-10-14 实施（分支 `t-agent-capture-prov` 自 master `647c9ce1`，工作树 mpsv-o147）
+### 2026-10-14 实施（分支 `t-agent-capture-prov` 自 master `16e30bc4`，工作树 mpsv-o147）
 
 - **W0 通道归因**：新增 `CaptureProvenance`（AGENT / CONSOLE_EP / CONSOLE_BRIDGE / MERGED / UNKNOWN，`LogSqlModels.kt`），三条生产点打标——`AgentEventAdapter.toEntry`（AGENT）、`SqlConsoleBridgeFilterProvider.EpLineFilter`（CONSOLE_EP）、`SqlLogConsoleBridge.emitEntries`（CONSOLE_BRIDGE）；`SqlLogEntryBuffer` 对「缺源码入队」与「同指纹跨通道融合」两条限频 INFO 诊断（10s 窗 + 抑制计数，内容红线＝指纹前 8 位/布尔位/通道/`SqlCaptureGate` 快照，不含 SQL 原文与参数）。
 - **W1 同桶信息融合**：去重索引由「键 → 时间戳」升级「键 → 保留实例」（`isDuplicate`/淘汰回扫/单删重算/裁剪重建/通道纪元重置五处维护面同步，O(1) 判定不变）；去重命中分支改调纯函数 `mergeDuplicateEntry`——桶身份（序号/捕获时间/rawSql/params）不动，耗时/行数/库标/mapper 语句/请求标签/报错/日志时间按「只补空不覆盖」（`existing ?: incoming`）合并，源码位置真实值优先（MP 分页伪标记让位于 agent 真实调用点）、候选帧/类名/栈快照只增不删，跨通道标 MERGED、同通道纯重复零替换（全等即跳过，不制造假刷新）；融合仍计一次 ⨉N、不触发 `onEntryAccepted`、`addEntry` 返回 false 不变。

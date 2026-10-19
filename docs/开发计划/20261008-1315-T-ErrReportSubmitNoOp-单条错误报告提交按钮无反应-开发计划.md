@@ -2,7 +2,7 @@
 
 > 编号占用：O-125 / R71 / D111~D112 / V135~V136（20261008 13:09 grep 实测：O 最高 O-124、D 最高 D110、V 最高 V134、R 最高 R70〔R100 系他处数字串，非本系列〕，本组五号在 `docs/` 全 0 命中）
 > 来源：用户指令 2026-10-08 ——「我在日常 idea 里报告问题，点击确认没有反应，入口是 idea 提示的『插件可能会拖慢 idea』里的『报告问题』，现在分析问题原因生成开发计划文件」（附冻结通知与报告对话框两张截图）
-> 前序：`faeccd6`（2026-09-15 T-FeedbackBatch2，**缺陷引入笔**）、`0f305b4`/`ed2f92e`/`4fd5ce4`（2026-09-14 T-FeedbackErr 提交状态机三轮真机走查）、`5ae7b90`（2026-09-19 T-ErrorReportRedact，本文件最后一次改动）、`cd04ddc`（T-SyncK2JMaster176 译入笔，Java 端口侧同函数**已带界守卫**）
+> 前序：`fa1cde9`（2026-09-15 T-FeedbackBatch2，**缺陷引入笔**）、`c406063`/`d192216`/`9a5091f`（2026-09-14 T-FeedbackErr 提交状态机三轮真机走查）、`6600605`（2026-09-19 T-ErrorReportRedact，本文件最后一次改动）、`d85473c`（T-SyncK2JMaster176 译入笔，Java 端口侧同函数**已带界守卫**）
 > 状态：计划待确认（用户点名的为「分析问题原因 + 生成计划文件」，未授权动工）
 
 ## 一、现象与实测证据
@@ -42,7 +42,7 @@ java.lang.ArrayIndexOutOfBoundsException: No such child: 0
 栈里的三个行号与当前工作树逐一对齐：`ErrorReportDialog.kt:321` = `selectedBatchItems(),`（`composeSubmission` 的第二个实参）、`:337` = `else selectedBatchItemsFor(`、`:665` = 头部复选框镜像行。另有佐证：
 
 - 用户机已装版本 = `%APPDATA%\JetBrains\IntelliJIdea2026.2\plugins\mybatis-plus-sql-visualizer\lib\mybatis-plus-sql-visualizer-2026.10.9.jar`（20261008 12:43 落盘），与日志 `version: 2026.10.9` 一致；
-- `git diff 2026.10.9 HEAD -- src/main/kotlin/cn/song/mybatisplus/visualizer/feedback/` 输出为空，`feedback/` 目录自 `5ae7b90`（09-19）后未再改动。
+- `git diff 2026.10.9 HEAD -- src/main/kotlin/cn/song/mybatisplus/visualizer/feedback/` 输出为空，`feedback/` 目录自 `6600605`（09-19）后未再改动。
 
 即：用户遇到的就是仓库里的这份代码，不是历史版本或构建产物漂移。
 
@@ -84,8 +84,8 @@ return all.filterIndexed { index, _ ->
 ### 1.5 影响面与非回归
 
 - **影响面（P0）**：本插件「报告到需求池」的**主路径整体不可用**——用户从 IDE 错误/冻结通知进来的单条上报，点提交永远没反应；多选/报告全部（≥2 条）与手动形态仍可用。
-- **受影响的发行版**：缺陷笔 `faeccd6`（2026-09-15）之后的全部 tag 都带它 —— `2026.9.18-beta.2/.3/.4`、`2026.9.23`、`2026.10.6`、`2026.10.7`、`2026.10.9`（`git tag --contains faeccd6` 实测）。用户装的 2026.10.9 就是当前最新发行版，**Marketplace 上所有用户的这条路径都是坏的**。
-- **为什么此前没暴露**：T-FeedbackErr 的三轮真机走查（`0f305b4`/`ed2f92e`/`4fd5ce4`，09-14）都发生在缺陷引入笔（09-15）**之前**；引入之后本文件再无真机走查，只剩 headless 用例（09-19 的 `5ae7b90`）。
+- **受影响的发行版**：缺陷笔 `fa1cde9`（2026-09-15）之后的全部 tag 都带它 —— `2026.9.18-beta.2/.3/.4`、`2026.9.23`、`2026.10.6`、`2026.10.7`、`2026.10.9`（`git tag --contains fa1cde9` 实测）。用户装的 2026.10.9 就是当前最新发行版，**Marketplace 上所有用户的这条路径都是坏的**。
+- **为什么此前没暴露**：T-FeedbackErr 的三轮真机走查（`c406063`/`d192216`/`9a5091f`，09-14）都发生在缺陷引入笔（09-15）**之前**；引入之后本文件再无真机走查，只剩 headless 用例（09-19 的 `6600605`）。
 - **无服务端副作用**：崩溃点（`:321`）在 `beginSubmitting()`（`:323`）与 `onSubmit(...)`（`:326`）之前，这一次点击没有发出任何请求 —— 未产生帖子、未消耗服务端「5 次/小时/IP」额度、未记 `ErrorFingerprint`（指纹记录在 `submit` 回调内）。副作用只有一处：`collectRequest()` 按求值顺序先执行，昵称/邮箱被写入 State（无害）。
 
 ## 二、根因
@@ -124,7 +124,7 @@ boolean checked = index < batchList.getComponentCount()
         && ((JCheckBox) batchList.getComponent(index)).isSelected();
 ```
 
-守卫在译入笔 `cd04ddc`（T-SyncK2JMaster176）就存在，Kotlin 侧从未有过（`git log -S "batchList.getComponent(0)"` 只有引入笔 `faeccd6` 一笔）——译入期的一次自主加固，反过来把 master 侧的真缺陷标了出来。端口侧测试树里有同名 `ErrorReportDialogLayoutTest.kt`（Kotlin 测试保留），但那三条用例的覆盖缺口**同样存在**（无「单条 + 空容器」组合），所以端口不是「靠测试保住的」，是「靠译入时的防御写法保住的」。
+守卫在译入笔 `d85473c`（T-SyncK2JMaster176）就存在，Kotlin 侧从未有过（`git log -S "batchList.getComponent(0)"` 只有引入笔 `fa1cde9` 一笔）——译入期的一次自主加固，反过来把 master 侧的真缺陷标了出来。端口侧测试树里有同名 `ErrorReportDialogLayoutTest.kt`（Kotlin 测试保留），但那三条用例的覆盖缺口**同样存在**（无「单条 + 空容器」组合），所以端口不是「靠测试保住的」，是「靠译入时的防御写法保住的」。
 
 ## 三、方案
 
@@ -186,7 +186,7 @@ val submission = runCatching {
 
 ### S4 端口同步与 parity 注记
 
-- 生产码**无需移植**（端口 `ErrorReportDialog.java` 已等价带界，见 2.4）；本笔只需把 S3 的两条用例搬到端口测试树，并在下次 K2J 同步的登记里注明「master 侧 `faeccd6` 修复在 Java 端已等价存在、仅补测试」，防止将来按文件对账时误判为「端口漏译」而重复改写。
+- 生产码**无需移植**（端口 `ErrorReportDialog.java` 已等价带界，见 2.4）；本笔只需把 S3 的两条用例搬到端口测试树，并在下次 K2J 同步的登记里注明「master 侧 `fa1cde9` 修复在 Java 端已等价存在、仅补测试」，防止将来按文件对账时误判为「端口漏译」而重复改写。
 - 反向意义：本笔证实「译入期自主加固」会与 master 产生静默分叉。若采纳 S3 矩阵用例，两侧就会用同一份测试把这条分叉封死。
 
 ## 四、改动清单
@@ -223,18 +223,18 @@ val submission = runCatching {
 ## 七、文档同步（实施后）
 
 1. `CHANGELOG.md` `[Unreleased]` 增一条用户可见修复：「修复单条错误上报点『提交』无反应（批次收集容器越界）」。
-2. `docs/变更记录.md` 追加一笔（缺陷引入笔 `faeccd6`、受影响发行版区间、修复笔）。
+2. `docs/变更记录.md` 追加一笔（缺陷引入笔 `fa1cde9`、受影响发行版区间、修复笔）。
 3. `docs/MEMORY.md` 索引 + 项目记忆（本缺陷的「假绿形态=分支未交叉」值得进 `pitfall-fake-green-test-assertions` 形态库；「译入期自主加固 = 静默分叉」值得进 K2J 同步档）。
 4. 发行面：缺陷已随 `2026.9.18-beta.2` 起全部发行版外发，是否随即发补丁版（`v2026.10.10`？）**由用户拍板**；若发，按发行工作流 8 处同步 + `releaseGate`。
 5. 需求池/官网：如做补丁版，发行说明里点明「此前版本请升级到 vX 后再上报」；已发出的 FR 无需回滚（本轮未产生帖子）。
 
 ## 八、实施记录
 
-**落点**：分支 `t-errreport-submitnoop`，独立工作树 `mybatis-plus-sql-visualizer-errdlg`（自 master `b5e2df2` 切出，2026-10-08）；依据＝用户「从主分支新建分支和工作树 实施」。
+**落点**：分支 `t-errreport-submitnoop`，独立工作树 `mybatis-plus-sql-visualizer-errdlg`（自 master `6a53aff` 切出，2026-10-08）；依据＝用户「从主分支新建分支和工作树 实施」。
 
 **提交**：
-1. `2fdaa9f` `docs(plan): …` —— 本计划落库（计划笔，233 行）。
-2. `e5c4000` `fix: T-ErrReportSubmitNoOp …` —— S1 + S2 + S3 + 文档同步（7 文件 +96/−6）。
+1. `7980ad3` `docs(plan): …` —— 本计划落库（计划笔，233 行）。
+2. `ddf8717` `fix: T-ErrReportSubmitNoOp …` —— S1 + S2 + S3 + 文档同步（7 文件 +96/−6）。
 
 **与计划的一致性**：S1/S2/S3 均按计划落地，无方案变更。S1 未触碰 T-FeedbackBatch2 的「单条不出分节」契约，只把容器访问改带界；语义核对＝单条收集为空集 → `BatchSubmitter.submit(submission, emptyList())` 正是其头注释表第一行的「1 条 = 原样单帖」路径，主表单「附带异常堆栈」照常上传（用户现场勾了堆栈，行为不变）。S2 复用 `finishSubmitting(Failure)` 既有状态机（按钮回「提交」可再点、红字原因、复制按钮出现、窗不关），未新增状态分支。S3 两条用例按计划新增，既有三条用例零改动。
 
@@ -260,6 +260,6 @@ line 667 → offset 238 → 241: invokevirtual #531  // Method java/awt/Containe
 
 **未做 / 待办（如实）**：
 - **真机 sandbox 走查未做**：单条插件错误 → 报告 → 提交的端到端按钮状态机推进、以及沙盒 `idea.log` 零 `No such child: 0` 检索，本机沙盒 GUI 自动化不可用（CUA 对 243/262 IDE 窗口点击按键不落地，与 T-ClickPreviewCopyRestore 二轮同因），留用户真机或改 pyautogui 路线（`mpsv_walk.py`）。headless 侧已用「生产同形异常 + 状态行纯函数」覆盖判据，但**按钮真按下去的链路**只能由真机证。
-- **K2J 端口同步登记**：生产码无需移植（端口 `ErrorReportDialog.java:810-817` 自 `cd04ddc` 起已带 `getComponentCount()` 守卫），下次 T-SyncK2J 同步轮按「master 已等价、仅需搬本笔两条用例」处理，勿重复改写。
+- **K2J 端口同步登记**：生产码无需移植（端口 `ErrorReportDialog.java:810-817` 自 `d85473c` 起已带 `getComponentCount()` 守卫），下次 T-SyncK2J 同步轮按「master 已等价、仅需搬本笔两条用例」处理，勿重复改写。
 - **合 master 与补丁发行**：本分支未合 master（用户明令的分界线）；缺陷已随 `2026.9.18-beta.2` 起全部发行版外发，是否发补丁版由用户拍板（见 §七.4）。
 

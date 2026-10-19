@@ -7,7 +7,7 @@ metadata:
   originSessionId: sess_fc75db72-2d81-4d87-92ab-0e4961722b7b
 ---
 
-# F-42 JOIN 图渲染失败终极踩坑（2026-08-25，commit b2f8be5 + 17bb741）
+# F-42 JOIN 图渲染失败终极踩坑（2026-08-25，commit a4139fc + 82797a0）
 
 ## 严重级别：高（功能完全不可用，多次误诊）
 
@@ -65,7 +65,7 @@ metadata:
 - 主 IDE 插件目录被进程锁定（Permission denied）——更新插件 jar 必须重启主 IDE
 - `jar` 任务只产 base jar，最终须 `composedJar`/`buildPlugin`；沙盒 jar 需重启 runIde（prepareSandbox 复制）
 - Kotlin 匿名对象私有成员不可达 → 持有器数组；`HierarchyEvent.SHOWING_CHANGED` 是 int 需 `.toLong()`
-- 清理调试代码的 commit（4737dd5）曾导致后续排查无日志——排查期间保留诊断代码，修完再清理
+- 清理调试代码的 commit（3936207）曾导致后续排查无日志——排查期间保留诊断代码，修完再清理
 
 ## 最终验证
 

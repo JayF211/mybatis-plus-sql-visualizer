@@ -7,7 +7,7 @@ metadata:
   originSessionId: sess_7df0cdd5-3a65-4027-a272-9744d81d0e80
 ---
 
-> **归档注记（2026-09-24 第十六次精简）**：T-ConsolePendingFlush（O-70）已交付 dev `dc7e69a`（docs `f0d5360`），真机复验判据在 project-pending-plans 真机复验节续踪；残留＝Hibernate 零参语句同族未修（须另立计划）。
+> **归档注记（2026-09-24 第十六次精简）**：T-ConsolePendingFlush（O-70）已交付 dev `efe2c73`（docs `7262253`），真机复验判据在 project-pending-plans 真机复验节续踪；残留＝Hibernate 零参语句同族未修（须另立计划）。
 
 2026-09-23 用户报障「日常 IDE 2026.2 关闭增强捕获后控制台日志没成功捕获」，面板读数 `捕捉中 | 增强捕获: 未启用 / 控制台：已挂载 5 个，已扫描 149 行，产出 0 条`。定案任务 **T-ConsolePendingFlush（O-70）**，计划 `docs/开发计划/20260923-1505-T-ConsolePendingFlush-控制台待闭合条目停滞导致零捕获-开发计划.md`。
 

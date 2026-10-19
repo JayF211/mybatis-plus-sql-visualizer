@@ -79,7 +79,7 @@ T-UW-01（探测器+表驱动测试）→ T-UW-02（执行链文案接线）
 
 ## 八、实施记录（实施后回填）
 
-**2026-09-15 实施完毕（基于 fe11c97，任务相关定向套件全绿）**
+**2026-09-15 实施完毕（基于 74f7842，任务相关定向套件全绿）**
 
 - **T-UW-01**：`execute/UnboundedWriteDetector.kt` 交付——七规则（MISSING_WHERE / TAUTOLOGY / OR_TAUTOLOGY / LIKE_WILDCARD / NO_COLUMN_REF / SUBQUERY 提示型 / PARSE_FAILED fail closed），多语句取并集，INSERT 忽略；SUBQUERY 不算危险（dangerous 仅对其余类别）。实施中两处 JSqlParser 5.3 实证修正：① OR 链无论结合方向摊平 `collectOrSides`（首版把 OrExpression 整个当 side 传导致 OR 恒真恒漏报，表驱动测试当场抓获）；② 括号组在 5.3 解析为 `ParenthesedExpressionList`（单元素列表）而非 `Parenthesis`——`unwrapGroup` 双形态递归解包，`(a=1 AND 1=1)` 括号内 AND 组也摊平不漏报。
 - **T-UW-02**：三处确认流共用新 `execute/ExecuteConfirmMessages.build`（纯函数可测）——LogToSqlPanel.executeStatement / SqlPreviewPanel.executeSql / SqlPreviewPanel.executeAdhocSql（计划只点名 LogToSqlPanel，三处同对话框同键，只升级一处会造成不一致，故全接；dmlConfirmed 豁免路径不动）。无危险发现文案逐字节不变；有发现 → 摘要 + 类别去重清单（每类一行）。零新弹窗形态/步骤。

@@ -61,9 +61,9 @@ List<Map<String, Object>> result =
 
 **(b) 用户看到的旧提示文案，说明装的是旧版构建；但旧版不是本缺陷的成因。**
 截图提示为「…Wrapper 调用**或** IService/BaseMapper 内置方法…」的窄口径文案。该窄文案在
-`cab636a4 docs(bundle): 「未找到可预览 SQL 源」文案覆盖全类型面`（2026-10-11）已被替换为覆盖
+`1b9b2a8e docs(bundle): 「未找到可预览 SQL 源」文案覆盖全类型面`（2026-10-11）已被替换为覆盖
 JPA/JPQL/HQL/Criteria/JdbcTemplate 的全类型面文案（现 `action.notFound.message`）。
-`cab636a4` 不含任何 tag，故截图对应的是**发布构建**。本机实测安装的是
+`1b9b2a8e` 不含任何 tag，故截图对应的是**发布构建**。本机实测安装的是
 `mybatis-plus-sql-visualizer-2026.9.18-beta.4.jar`（`%APPDATA%\JetBrains\IntelliJIdea2024.1\plugins\`）。
 但即便升到已发布的最新 tag（2026.10.9），本缺陷**依然存在**——见 §2.3 的代码分支：`psi/jpa`
 两个定位器全文无 `StringBuilder|StringBuffer` 处理（实测 grep 为空）。

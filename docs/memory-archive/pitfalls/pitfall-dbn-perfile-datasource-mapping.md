@@ -20,7 +20,7 @@ metadata:
 
 **How to apply**：
 - 用户报「同样的 SQL 在原生控制台能跑、预览里不能跑」时，先比「库上下文」（控制台提示符/库下拉 + `.idea/data_source_mapping.xml`），别从 SQL 文本或方言找原因。
-- **已修（T-ConsoleDbContext，20260917 当日交付并真机通过，master d51cc0a 合入 d894e6b）**：用户定案语义 = **预览默认以「数据源 URL 里的库」为准；用户在控制台手调库后，数据源记忆照常保留**；方案 = A+B（C 未做）。A=`extractConsoleError` 追加 `[当前库=…，数据源=…，数据源默认库=…]`（裸 1054 报文看不出库选错）；B=控制台就绪两处（`prepareAfterEditorResolved`、`reuseSharedConsole`）调 `ExecConsoleContext.alignToDataSourceDatabase`——`JdbcUrlDatabase.nameFromUrl`（纯函数，表驱动 11 例）解析 URL 库 → 与 `SearchPath.current` 比对，**一致即 no-op（不覆盖用户手选）** → 不一致 `switchSchema(SearchPath.of(ObjectPath.ROOT.append(db, ObjectKind.DATABASE)), false)`，未生效退回 `setSearchPath` 并读回校验。
+- **已修（T-ConsoleDbContext，20260917 当日交付并真机通过，master 7a36f53 合入 ad06ca8）**：用户定案语义 = **预览默认以「数据源 URL 里的库」为准；用户在控制台手调库后，数据源记忆照常保留**；方案 = A+B（C 未做）。A=`extractConsoleError` 追加 `[当前库=…，数据源=…，数据源默认库=…]`（裸 1054 报文看不出库选错）；B=控制台就绪两处（`prepareAfterEditorResolved`、`reuseSharedConsole`）调 `ExecConsoleContext.alignToDataSourceDatabase`——`JdbcUrlDatabase.nameFromUrl`（纯函数，表驱动 11 例）解析 URL 库 → 与 `SearchPath.current` 比对，**一致即 no-op（不覆盖用户手选）** → 不一致 `switchSchema(SearchPath.of(ObjectPath.ROOT.append(db, ObjectKind.DATABASE)), false)`，未生效退回 `setSearchPath` 并读回校验。
 - **对齐所依赖的 API 面（243 jar 反编译实证，可复用）**：`JdbcConsole.getDataSource()/getSearchPath()/setSearchPath()/switchSchema(SearchPath, boolean)`（后两者：`switchSchema` 带事务与越界校验）；`SearchPath.of/getCurrent/getDisplayName`、`ObjectPath.ROOT.append(String, ObjectKind)`、`ObjectNamePart.name`（public final 字段）。
 - **映射本身没有可用写入口**：`SqlDataSourceMappings` 只读，per-file mappings 的服务类在 243 全 jar 扫描中**找不到**——所以修法是「显式切库」而非「改映射」。
 - 相关：[[pitfall-console-doc-is-file-doc]]（同一份「挂文件」结构的另一半）、[[project-pending-plans]] 的待决条目、[[pitfall-log-first-not-code-reasoning]]。

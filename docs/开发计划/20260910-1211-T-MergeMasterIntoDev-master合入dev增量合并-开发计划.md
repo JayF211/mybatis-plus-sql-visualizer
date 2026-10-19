@@ -2,10 +2,10 @@
 
 - 日期：2026-09-10 12:11
 - 分支方向：`git merge master`（在 dev worktree `F:/code/Java/Gitee/SongRenShuo/mybatis-plus-sql-visualizer-dev` 执行，master 合入 dev）
-- merge-base：`29fbf556`（Master33，Kotlin→Java 移植 .port-sync 锚点）
+- merge-base：`bef7c152`（Master33，Kotlin→Java 移植 .port-sync 锚点）
 - 分叉规模：master 独有 22 提交 / dev 独有 98 提交
 - 前置侦察：`git merge-tree --write-tree dev master` 预演完成，10 文件 11 冲突块已逐块人工过目
-- 关联：上次同类合并 `docs/开发计划/20260908-2315-master合并到dev-开发计划.md`（a6570ce）
+- 关联：上次同类合并 `docs/开发计划/20260908-2315-master合并到dev-开发计划.md`（399eb3b）
 
 ## 一、背景与两侧增量的真实分布
 
@@ -45,7 +45,7 @@
 | 引用 | 行尾 |
 |---|---|
 | master:CHANGELOG.md | 全 LF（722 行） |
-| merge-base 29fbf556:CHANGELOG.md | 全 LF（689 行） |
+| merge-base bef7c152:CHANGELOG.md | 全 LF（689 行） |
 | dev:CHANGELOG.md | **全 CRLF（707 行）** |
 
 全库扫描结论：除了四分支共有的 `LICENSE`（CRLF，历史遗留无害），**只有 `CHANGELOG.md` 在 dev 与 `feature/r2-competition-response` 上是 CRLF，master 与 `feature/kotlin-to-java` 是 LF**；其余所有文本文件（含 Kotlin 源码、bundle、其他 docs）四分支一致为 LF。仓库无 `.gitattributes`，`core.autocrlf=true`（约定：库内 LF、工作树 CRLF）。
@@ -184,7 +184,7 @@ dev 侧 5 条 T-ListMode 用例（单行恒单行走不走片段缓存 / 关键�
 
 ### Wave 0 前置（本计划）
 - merge-tree 预演 + 11 冲突块逐块分析；本计划文档提交入库。
-- 备份：dev 当前位置（`c423986`）打本地分支 `dev-backup-pre-master-merge-20260910`，合并失误可整树复位。
+- 备份：dev 当前位置（`51053f8`）打本地分支 `dev-backup-pre-master-merge-20260910`，合并失误可整树复位。
 - 并行任务登记表 check（已确认无活跃任务）。
 
 ### Wave 1 合并与冲突解决
@@ -211,14 +211,14 @@ dev 侧 5 条 T-ListMode 用例（单行恒单行走不走片段缓存 / 关键�
 
 ## 八、风险与回滚
 
-- 回滚锚点：`dev-backup-pre-master-merge-20260910`（= `c423986`）；中途废弃 `git merge --abort`，定稿后回退 `git reset --hard dev-backup-pre-master-merge-20260910`。
+- 回滚锚点：`dev-backup-pre-master-merge-20260910`（= `51053f8`）；中途废弃 `git merge --abort`，定稿后回退 `git reset --hard dev-backup-pre-master-merge-20260910`。
 - 最大技术风险：JpaGutter 与 DataSourceSelector 两块都是「结构性取边」，若判断有误会丢功能。两块均已在第五节给出实证依据（helper 实现、反编译结论），并以全量测试 + 定向 gutter/执行测试双重把关。
 - 行尾归一风险：CHANGELOG.md 从 CRLF 变 LF 会使该文件「全文件变更」，提交后 diff 体积大，但这是回归全库约定的必要动作，不改变内容语义。
 - 并行会话风险：跑 gradle 前 check 登记表并用独立 sandbox 名；dev worktree 当前 clean（已核实）。
 
 ## 九、实施记录（回填）
 
-- **Wave 0**：备份分支 `dev-backup-pre-master-merge-20260910`（= `c423986`）已打；并行登记表 check 无活跃任务，本次以 `T-MergeMasterIntoDev` / `sandbox-mergedev` 登记。
+- **Wave 0**：备份分支 `dev-backup-pre-master-merge-20260910`（= `51053f8`）已打；并行登记表 check 无活跃任务，本次以 `T-MergeMasterIntoDev` / `sandbox-mergedev` 登记。
 - **Wave 1**：`git merge master` 起手即复现预演的 10 文件 11 冲突块，无一例外。CHANGELOG.md 按第三节归一并集，落盘 736 行全 LF（`git cat-file blob` 复核 `crlf=0`）；变更记录并集 175 行（dev 163 ∪ master 170，双侧重复的 20260908 自动监听两行去重），日期倒序无重复行；其余 8 文件按第五节逐块解决。
 - **踩坑（本次最重要教训）**：首轮对 `PluginSettings.kt` / `JpaGutterLineMarkerProvider.kt` / `DataSourceSelector.kt` / `SqlLogManagerAutoShowTest.kt` 四文件用了 `git checkout --ours/--theirs -- <file>` 整取一边——编译立刻报 `SqlExecutor.kt:102 Unresolved reference 'releaseForPanel'`，暴露 `DataSourceSelector.kt` 的 dev 侧自动合并区成果（T-Perf-13 `prepareAfterEditorResolved` 异步准备链、T-Perf-16 `releaseForPanel`、runRunner 双参）被整取抹掉。改法：用 `git merge-file -p ours base theirs` 复现 git 的自动合并结果（已与 `merge-tree` 预演产物逐字节比对确认一致），再**只替换冲突块**重做三个文件，`SqlLogManagerAutoShowTest.kt`（add/add）以预演产物为底同法重做。修复后 `releaseForPanel`/`prepareAfterEditorResolved`/`silent = true` 全部回归。
 - **回归修复（1 处）**：首跑全量 3693 例中 `JpaGutterLineMarkerProviderTest.testInterfaceWithoutRepositoryExtendsZeroMarker` 红——初版计划判定「master 的 `isInRepositoryInterface` 被 dev 结构吸收、是冗余前置」被实测证伪：dev 的 `DerivedMethodLocator.isRepositoryInterface` 路径 2 是「接口名以 `Repository` 结尾」启发式，会放行未 extends Repository 基类的裸接口 `UserRepository`，正是 M38.1 负例回归集要拦的误报面。改为把 `isInRepositoryInterface(method)` 收窄落到派生锚点分支内（`isInRepositoryInterface(method) && DerivedMethodLocator.isRepositoryMethod(method)`）并补回该 helper，定向 JpaGutter 9/9 + GutterIconDedup 14/14 绿。
@@ -234,5 +234,5 @@ dev 侧 5 条 T-ListMode 用例（单行恒单行走不走片段缓存 / 关键�
 
   计数说明：均为 warning 级，不阻断发布。与 dev 合并前对比用源码级 grep 代理（`JavaLanguage.INSTANCE` / `getVirtualFilesByName` / `BrowseNotificationAction` / `StdLanguages.JAVA` / `getFilesByName` / `setListener` 六项计数，dev 合并前与合并后**逐一相同**），确认本次合并没有引入新的弃用用法；262 的 44 高于 master 记录的 38，来源是 dev 侧更大的 API 面（M39 JPA / M44 ORM / T-Perf 系列），非本次合并所致（dev 合并前未跑过 verifyPlugin 留基线，此项为推断而非实测，如实标注）。
 - `buildPlugin` 出产物 `build/distributions/mybatis-plus-sql-visualizer-2026.9.9.zip`。
-- **commit**：合并提交 `d5130ab`，正文四段式列 11 冲突块逐块解决明细 + 自动合并区语义核验 + 整取踩坑留档。
+- **commit**：合并提交 `e6a42ff`，正文四段式列 11 冲突块逐块解决明细 + 自动合并区语义核验 + 整取踩坑留档。
 - **未做**：不主动 push（依惯例留待用户决定）；runIde 真机验证项留人工（行号显示与启动清零、预览刷新后 DBN 工具栏、单击预览闪烁、临时文件失败文案、JPA gutter 三锚点与裸接口负例）。

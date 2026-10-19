@@ -57,5 +57,5 @@
 
 ## 六、相关
 
-- 门禁侧首版已提交 `4624c69`（verifyMarketplace 在线无豁免按文本判失败 + 挂 releaseGate）；本计划的基线机制改造见提交记录；
+- 门禁侧首版已提交 `cc6adbf`（verifyMarketplace 在线无豁免按文本判失败 + 挂 releaseGate）；本计划的基线机制改造见提交记录；
 - 本会话分析记录：`docs/变更记录.md` T-MarketCompatFix 行；本地记忆 pitfall-verification-blindspots §十二。

@@ -72,7 +72,7 @@
 |----|------|
 | 定向测试（3 类） | 17 例，0 失败（`SqlPreviewPanelPrewarmLateRecoverTest` 6 + `PrewarmAwaitTest` 8 + `SqlPreviewPanelPrewarmConsumeTest` 3）；同批另有横幅/i18n 守卫等 9 类 40 例全绿（首轮定向） |
 | 全量测试（分支树） | `./gradlew test` → **492 类 / 5616 用例 / 0 失败 / 0 错误 / 6 跳过**（BUILD SUCCESSFUL 8m37s，结果 2026-09-22 11:11:02 落盘） |
-| 全量测试（**合并后 master**，`2efa881`） | `./gradlew test` → **492 类 / 5624 用例 / 0 失败 / 0 错误 / 6 跳过**（BUILD SUCCESSFUL 9m57s，结果 11:25:28 落盘）——合并引入的并行会话改动（T-ConsoleErrorCoverage：`DataSourceSelector` 错误判据 + bundle 新键）与本次改动同树验证通过；用例数 5616→5624 的差额来自对方新增用例 |
+| 全量测试（**合并后 master**，`5e086d5`） | `./gradlew test` → **492 类 / 5624 用例 / 0 失败 / 0 错误 / 6 跳过**（BUILD SUCCESSFUL 9m57s，结果 11:25:28 落盘）——合并引入的并行会话改动（T-ConsoleErrorCoverage：`DataSourceSelector` 错误判据 + bundle 新键）与本次改动同树验证通过；用例数 5616→5624 的差额来自对方新增用例 |
 | 反向验证 | 移除「用户已编辑」守卫 + 移除迟到通道投递 → **4 例变红**（`PrewarmAwaitTest.test超时后产物到达_走迟到通道`、`SqlPreviewPanelPrewarmLateRecoverTest` 的自动换装/重试/用户已编辑 3 例）；恢复后复绿 |
 | 构建门禁 | `./gradlew buildPlugin verifyGate` → **BUILD SUCCESSFUL 5m55s**；三目标全部 **Compatible**（IU-243.28141.41 / IU-253.33514.17 / IU-262.10968.63），报告目录 `build/reports/pluginVerifierGate`。注：verifyGate 需要 253/262 平台发行物，私有 Gradle home 中不存在，该步改用共享 home（发行物已在共享 transforms 缓存中） |
 

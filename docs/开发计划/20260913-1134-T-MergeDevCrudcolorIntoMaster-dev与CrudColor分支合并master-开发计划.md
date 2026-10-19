@@ -9,10 +9,10 @@
 
 | 事实 | 证据 |
 |---|---|
-| merge-base(master, dev) = 81ecf14 | `git merge-base master dev` |
-| dev 领先 master 119 提交 | M37 竞品融合 28 提交（84eb34f）、T-ErrReport、T-ListMode 三显示模式、T-TwoLine 元信息换行、T-Perf-05/12/13/14、T-PerfSweep、gif 录制套件、T-MergeMasterIntoDev2 等 |
+| merge-base(master, dev) = f949d8c | `git merge-base master dev` |
+| dev 领先 master 119 提交 | M37 竞品融合 28 提交（23ca4dc）、T-ErrReport、T-ListMode 三显示模式、T-TwoLine 元信息换行、T-Perf-05/12/13/14、T-PerfSweep、gif 录制套件、T-MergeMasterIntoDev2 等 |
 | master 领先 dev 30 提交 | T-CrudSql 全系（实体/表右键生成 CRUD SQL + 弹窗原生化三轮 + JBPopup）、T-AutoFold、T-SelToggle、v2026.9.14-beta.1 发行、市场页/README 文档、Gitee 发行工作流文档等 |
-| t-crudcolor 领先 master 7 提交 | T-CrudColor 实现（641c815 主体 + dbc45bf 图例 + e57a34e perf + 2 docs + 2 次 merge master），已两度反向合并 master，基点 f09c88c |
+| t-crudcolor 领先 master 7 提交 | T-CrudColor 实现（ad857af 主体 + c2bb5df 图例 + 26c4952 perf + 2 docs + 2 次 merge master），已两度反向合并 master，基点 6898b7f |
 | feature/t-crudsql 已完全在 master | `git rev-list --count master..feature/t-crudsql` = 0，无需处理 |
 | dev 树无 CrudColor 符号 | `git grep -i crudcolor dev -- src/` 零匹配，无同域重复实现 |
 
@@ -77,7 +77,7 @@ merge-tree 显示 PluginSettings.kt、PluginSettingsPanel.kt、SqlPreviewPanel.k
 
 - PluginSettings：dev 侧新增字段（显示模式等）与 master 侧 T-CrudColor/T-AutoFold/T-HistParam 字段共存，确认序列化兼容与 isModified/load/apply 无互相覆盖。
 - build.gradle.kts：dev 侧 -PgifRecord 开关等与 master 侧发行相关改动共存，确认 verifyPlugin/buildPlugin 任务配置未被冲掉。
-- SqlPreviewPanel：dev 侧 T-PreviewTopOverlap 转正（344977c 预览顶部「更多」折叠菜单）与 master 侧 T-AutoFold/T-SelToggle 共存，编译+用例验证。
+- SqlPreviewPanel：dev 侧 T-PreviewTopOverlap 转正（90cc747 预览顶部「更多」折叠菜单）与 master 侧 T-AutoFold/T-SelToggle 共存，编译+用例验证。
 
 ## 四、实施步骤
 
@@ -103,10 +103,10 @@ merge-tree 显示 PluginSettings.kt、PluginSettingsPanel.kt、SqlPreviewPanel.k
 
 ### 提交与顺序
 
-- 备份锚点 `master-backup-pre-dev-merge-20260913`（指向合并前 master 6f626ab）。
-- 第一步 merge t-crudcolor（a5d9307）：与预演一致，仅 CHANGELOG.md / docs/MEMORY.md / docs/变更记录.md 三 docs 冲突，取两侧并集（CHANGELOG 的 T-CrudColor 两条留在 Unreleased——未随 beta.1 发行；MEMORY 计划表按 1612/1118/1003 立项号倒序穿插）。代码全自动合并。
-- 第一步全量 clean test：3401 用例 1 失败——**T-SelToggle 弹窗测试与 T-CrudColor 图例的真实交互冲突**（图例把每个复选框包进 FlowLayout 行面板，`content.components.filterIsInstance<JCheckBox>()` 顶层直查取到 0 个）。修复=测试改递归收集（collectCheckBoxes 帮助函数，两处调用点），产品代码不动（7f20336）。t-crudcolor 分支树上没有该测试（分叉早于 T-SelToggle），属跨分支适配欠账。
-- 第二步 merge dev（8d2c919）：13 文件冲突与预演完全一致，逐块按 §三 定案解决。
+- 备份锚点 `master-backup-pre-dev-merge-20260913`（指向合并前 master 762741f）。
+- 第一步 merge t-crudcolor（4f60553）：与预演一致，仅 CHANGELOG.md / docs/MEMORY.md / docs/变更记录.md 三 docs 冲突，取两侧并集（CHANGELOG 的 T-CrudColor 两条留在 Unreleased——未随 beta.1 发行；MEMORY 计划表按 1612/1118/1003 立项号倒序穿插）。代码全自动合并。
+- 第一步全量 clean test：3401 用例 1 失败——**T-SelToggle 弹窗测试与 T-CrudColor 图例的真实交互冲突**（图例把每个复选框包进 FlowLayout 行面板，`content.components.filterIsInstance<JCheckBox>()` 顶层直查取到 0 个）。修复=测试改递归收集（collectCheckBoxes 帮助函数，两处调用点），产品代码不动（5f1a155）。t-crudcolor 分支树上没有该测试（分叉早于 T-SelToggle），属跨分支适配欠账。
+- 第二步 merge dev（37e0728）：13 文件冲突与预演完全一致，逐块按 §三 定案解决。
 
 ### 冲突解法实录（偏离计划的两处）
 

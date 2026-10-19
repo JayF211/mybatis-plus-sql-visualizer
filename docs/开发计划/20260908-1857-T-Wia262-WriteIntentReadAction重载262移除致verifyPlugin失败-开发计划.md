@@ -1,8 +1,8 @@
 # T-Wia262：WriteIntentReadAction 重载 262 移除致 verifyPlugin 失败（插件市场发布受阻）修复 开发计划
 
 > **创建日期**：2026-09-08
-> **分支**：master（当前 HEAD `8cfcac7`）
-> **优先级**：P0（阻断 2026.9.8 插件市场发布——`verifyPlugin` 为发布前官方推荐流程，全量三版本校验 BUILD FAILED；自更新清单 `update/update.json` 已回退至已发布的 2026.9.4 防误推，commit `8cfcac7`）
+> **分支**：master（当前 HEAD `d8dfea5`）
+> **优先级**：P0（阻断 2026.9.8 插件市场发布——`verifyPlugin` 为发布前官方推荐流程，全量三版本校验 BUILD FAILED；自更新清单 `update/update.json` 已回退至已发布的 2026.9.4 防误推，commit `d8dfea5`）
 > **预估工时**：0.5~1h（单行换型；大头是全量 verifyPlugin 复跑约 7 分钟）
 > **来源**：发布 2026.9.8 前跑 `./gradlew verifyPlugin`（与 JetBrains 市场同款字节码级校验），IU-262 报 1 个兼容性问题
 
@@ -33,7 +33,7 @@ This can lead to **NoSuchMethodError** exception at runtime.
 
 ### 1.2 根因：T-PreviewWiLock 引入的重载在 262 平台被移除
 
-- **引入链**：T-PreviewWiLock（`27ccfcf`）为修 262 真机「双击预览 write-intent 断言崩溃」，把 `SqlPreviewPanel.createEditor` 回退分支的 `ReadAction.compute` 换成 `WriteIntentReadAction.compute(ThrowableComputable)`。当时只对 **243 编译基准**（`ideaIU-2024.3.7.1/lib/util-8.jar`）做了 javap 核验，该重载在 243 存在（@Experimental）、253 仍存在，但 **262 平台（IDE 2026.2.1）已移除该重载**——编译期（243 目标）查不出来，直到 verifyPlugin 字节码级对 262 校验才暴露。
+- **引入链**：T-PreviewWiLock（`6f6a693`）为修 262 真机「双击预览 write-intent 断言崩溃」，把 `SqlPreviewPanel.createEditor` 回退分支的 `ReadAction.compute` 换成 `WriteIntentReadAction.compute(ThrowableComputable)`。当时只对 **243 编译基准**（`ideaIU-2024.3.7.1/lib/util-8.jar`）做了 javap 核验，该重载在 243 存在（@Experimental）、253 仍存在，但 **262 平台（IDE 2026.2.1）已移除该重载**——编译期（243 目标）查不出来，直到 verifyPlugin 字节码级对 262 校验才暴露。
 - **javap 三版本对照矩阵**（方法名唯一权威，逐 jar 定位 + javap 核验；243/253 在 `lib/util-8.jar`，262 在 `lib/intellij.platform.core.jar`）：
 
 | `WriteIntentReadAction` 成员 | 243.28141.41 | 253.33514.17 | 262.9437.185 |

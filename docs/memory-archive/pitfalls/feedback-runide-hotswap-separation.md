@@ -7,7 +7,7 @@ metadata:
   originSessionId: sess_64deca82-5ab0-4c33-8746-620c51b51af1
 ---
 
-2026-09-12 用户纠偏：T-DynUpdate 曾把 hotswap 本地服务起停同时挂上普通 `runIde`（build.gradle.kts doFirst + finalizedBy），理由是「旧 .run 配置误触 :runIde 也通」——用户明确指出两个运行配置本就该分工：「Run IDE (Local Manifest)」= runIdeHotSwap（热替换验证链路，需要 serve 新版 zip 的本地服务）；「Run IDE with Plugin」= runIde（纯开发沙盒，不依赖清单服务）。已修复为 runIde 摘除服务起停 + 删除 .run 旧配置（master a274e30）。
+2026-09-12 用户纠偏：T-DynUpdate 曾把 hotswap 本地服务起停同时挂上普通 `runIde`（build.gradle.kts doFirst + finalizedBy），理由是「旧 .run 配置误触 :runIde 也通」——用户明确指出两个运行配置本就该分工：「Run IDE (Local Manifest)」= runIdeHotSwap（热替换验证链路，需要 serve 新版 zip 的本地服务）；「Run IDE with Plugin」= runIde（纯开发沙盒，不依赖清单服务）。已修复为 runIde 摘除服务起停 + 删除 .run 旧配置（master d0afda0）。
 
 **Why:** 为兼容一个本该删除的误触入口而给所有入口加副作用，把一次性补救固化成了常驻行为；该行为在 build/distributions 缺 zip（clean 后）时直接让 runIde 启动硬失败。
 

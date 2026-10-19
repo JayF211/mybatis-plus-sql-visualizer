@@ -146,11 +146,11 @@ SQL」是本插件不可让渡的承诺；更糟的是会把用户代码里的�
 
 ### 落地与提交（master，未 push）
 
-- `e0fd930` 步骤 1：`Dialect.identifierQuotes`（基类空集 + 11 方言覆盖）+ `PerfRulesBatch4Test` 引号集合断言。
-- `a3f587e` 步骤 2+3：`DialectAwarePerfRule` 子接口、`PerfRuleEngine.apply` 方言参、
+- `cf893a4` 步骤 1：`Dialect.identifierQuotes`（基类空集 + 11 方言覆盖）+ `PerfRulesBatch4Test` 引号集合断言。
+- `aa180f7` 步骤 2+3：`DialectAwarePerfRule` 子接口、`PerfRuleEngine.apply` 方言参、
   `PerfRulesBatch4.dialect_quote_mismatch`（AST 优先 + 正则降级）与 `PerfRulesBatch4Test`（18 例）。
-- `0e71c64` 步骤 4：`SqlPerfAnalyzer` 注册 Batch4 + 缓存键带方言 + `SqlPerfAnalyzerTest` 补 2 例。
-- `72564e8` 步骤 5+6+7：三调用点传方言、中英 bundle 文案、CHANGELOG `[Unreleased]` 增 Added。
+- `1d2d30f` 步骤 4：`SqlPerfAnalyzer` 注册 Batch4 + 缓存键带方言 + `SqlPerfAnalyzerTest` 补 2 例。
+- `d4396e0` 步骤 5+6+7：三调用点传方言、中英 bundle 文案、CHANGELOG `[Unreleased]` 增 Added。
 
 ### 定向测试读数
 
@@ -258,12 +258,12 @@ gitignore，属本机 IDE 状态，非仓库内容）。**上一轮据此得出�
 
 ### 落地与提交（master，未 push）
 
-- `318e9c5` 步骤 1+2：`PerfContext(sql, ast, dialect, ansiQuotes)` 上下文对象、`DialectAwarePerfRule.check(ctx)`、
+- `756ca70` 步骤 1+2：`PerfContext(sql, ast, dialect, ansiQuotes)` 上下文对象、`DialectAwarePerfRule.check(ctx)`、
   `PerfRuleEngine.apply(ctx)`、`SqlPerfAnalyzer.analyze(sql, dialect, ansiQuotes)`（缓存键含方言 + ANSI_QUOTES 三态）；
   `dialect_quote_mismatch` 三态判定 + 测试改造。
-- `41ed9f3` 步骤 3：`DataSourceUrlProbe.urlByName` / `ansiQuotesFromUrl`；`SqlPreviewService.analyzePerf` 接线；
+- `5867f17` 步骤 3：`DataSourceUrlProbe.urlByName` / `ansiQuotesFromUrl`；`SqlPreviewService.analyzePerf` 接线；
   两个 MCP 工具传 `null`。
-- `9805817` 步骤 4：中英 WARN 文案 + CHANGELOG。
+- `4d057cf` 步骤 4：中英 WARN 文案 + CHANGELOG。
 - 本段：计划回填。
 
 ### 三态实际行为（方言属 MySQL / MariaDB / OceanBase，且 SQL 里出现双引号标识符）

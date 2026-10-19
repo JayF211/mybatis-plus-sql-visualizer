@@ -8,7 +8,7 @@ metadata:
   originSessionId: sess_6788f15d-681b-4ddc-9163-ec8a754c2c1b
 ---
 
-T-AutoFold「字段较多时自动折叠」配置项（默认关）**2026-09-12 已实施（master 4a754ba）**（计划 `docs/开发计划/20260911-1028-T-AutoFold-SQL预览字段列表自动折叠-开发计划.md`，§七有实施差异记录；clean 全量 3322/0/6 绿 + verifySmoke 通过）。
+T-AutoFold「字段较多时自动折叠」配置项（默认关）**2026-09-12 已实施（master a120bfa）**（计划 `docs/开发计划/20260911-1028-T-AutoFold-SQL预览字段列表自动折叠-开发计划.md`，§七有实施差异记录；clean 全量 3322/0/6 绿 + verifySmoke 通过）。
 
 落地结构：
 - `SqlAutoFoldPlanner`（ui/highlight/）纯逻辑规划器：SqlLexer 单遍状态机识别 SELECT 列清单/INSERT 列清单/VALUES 每组/UPDATE SET 四类顶层列表，顶层元素数 ≥ 阈值且跨 ≥ 2 行才折叠；嵌套外层命中即互斥；字符串/括号内逗号不误分段；纯 JUnit 12 例。

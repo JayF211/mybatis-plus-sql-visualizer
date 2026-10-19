@@ -16,6 +16,6 @@ metadata:
 
 **五路修复**：F1 埋点（createEditor 带栈、showSql 三分支、refreshView 入口、去抖 skip）→ F3 监听生命周期（引用保存 + detachConsole/dispose 移除 + skip 后单次延迟复查）→ F4 面板所有权卫队 `consoleHost.isAncestorOf(embeddedConsole)`（showSql/executeSql/createEditor 三处，失联先 recoverConsole 重嵌）→ F2 弹窗单例化关旧开新（治本灭僵尸军团）→ F5 与 T-ExecCopyFix 合流。
 
-**版本核实法**：真机部署 jar 反编译（javap 输出含 NUL 被 grep 判二进制，须 `grep -a`）确认 refreshView 字节码与 17bdef8 一致，排除版本漂移。用户真机日志在 `%LOCALAPPDATA%/JetBrains/IntelliJIdea2026.2/log/`，**持续轮转**（10MB/卷，分析窗口会被轮转改名——先 stat 各卷覆盖时间窗再 grep）。executeSql 入口日志无条件打，真机「执行进 IDEA 控制台」时段零 executeSql 日志 → 该执行不是插件按钮发起的（或早于截图时段）。
+**版本核实法**：真机部署 jar 反编译（javap 输出含 NUL 被 grep 判二进制，须 `grep -a`）确认 refreshView 字节码与 2b9f7c8 一致，排除版本漂移。用户真机日志在 `%LOCALAPPDATA%/JetBrains/IntelliJIdea2026.2/log/`，**持续轮转**（10MB/卷，分析窗口会被轮转改名——先 stat 各卷覆盖时间窗再 grep）。executeSql 入口日志无条件打，真机「执行进 IDEA 控制台」时段零 executeSql 日志 → 该执行不是插件按钮发起的（或早于截图时段）。
 
 相关：[[t-dscover-t-clickpreview05-delivery]]（executeAfterPrepare 门控/silent 分流）、[[t-previewflash-plan]]（同一工作树在途改动 + dumb dance 实证）、[[t-execcopyfix-parallel-plan]]（并行会话同族计划）。

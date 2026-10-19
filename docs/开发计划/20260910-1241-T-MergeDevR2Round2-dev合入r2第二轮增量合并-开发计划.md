@@ -2,11 +2,11 @@
 
 - 日期：2026-09-10 12:41
 - 分支方向：`git merge dev`（在 r2 worktree `F:/code/Java/Gitee/SongRenShuo/mpsv-r2` 执行，dev 合入 feature/r2-competition-response）
-- merge-base：`31ecb5f`（dev 的 T-PerfBatch 立项提交，即上一轮 T-MergeDevR2 的合并锚点）
+- merge-base：`e64987e`（dev 的 T-PerfBatch 立项提交，即上一轮 T-MergeDevR2 的合并锚点）
 - 分叉规模：dev 独有 27 提交 / r2 独有 28 提交
 - 前置侦察：`git merge-tree --write-tree r2 dev` 预演完成，**仅 2 个文档文件冲突**，已逐块过目
-- 关联：上一轮同类合并 `docs/开发计划/20260909-2308-T-MergeDevR2-dev合入r2竞品应答分支-开发计划.md`（merge 063ed5d）
-- 依赖：本计划排在上游「T-MergeMasterIntoDev（master 合入 dev，merge d5130ab）」之后执行——dev 的这 27 提交里绝大部分来自那次合并
+- 关联：上一轮同类合并 `docs/开发计划/20260909-2308-T-MergeDevR2-dev合入r2竞品应答分支-开发计划.md`（merge 9b477fe）
+- 依赖：本计划排在上游「T-MergeMasterIntoDev（master 合入 dev，merge e6a42ff）」之后执行——dev 的这 27 提交里绝大部分来自那次合并
 
 ## 一、背景与两侧增量的真实分布
 
@@ -72,7 +72,7 @@ dev 侧 14 行：`2026-09-10` 四条（含本次 T-MergeMasterIntoDev 合并行�
 
 ### Wave 0 前置（本计划）
 - merge-tree 预演 + 2 冲突块分析；本计划文档提交入库。
-- 备份：r2 当前位置（`b2fc4ea`）打本地分支 `r2-backup-pre-dev-merge-20260910`。
+- 备份：r2 当前位置（`b632086`）打本地分支 `r2-backup-pre-dev-merge-20260910`。
 - 并行任务登记表：任务一登记项注销后以 `T-MergeDevR2Round2` / 独立沙盒重新登记。
 
 ### Wave 1 合并与冲突解决
@@ -97,7 +97,7 @@ dev 侧 14 行：`2026-09-10` 四条（含本次 T-MergeMasterIntoDev 合并行�
 
 ## 七、风险与回滚
 
-- 回滚锚点：`r2-backup-pre-dev-merge-20260910`（= `b2fc4ea`）；中途废弃 `git merge --abort`。
+- 回滚锚点：`r2-backup-pre-dev-merge-20260910`（= `b632086`）；中途废弃 `git merge --abort`。
 - 最大风险不是冲突（仅 2 处文档表），而是**版本号与发行面的语义**：合并后 r2 版本变为 2026.9.9、CHANGELOG 含 `[2026.9.9]` 段。若 r2 另有独立发版计划，需在发版时重新定版本，本次不做额外处理（保持与 dev 一致，避免又一处 EOL/内容分叉）。
 - 次风险：r2 竞品应答的 plugin.xml 描述与 dev 上游若在未来同时改动会再冲突；本次 dev 未动该文件，无风险。
 
@@ -112,7 +112,7 @@ dev 侧 14 行：`2026-09-10` 四条（含本次 T-MergeMasterIntoDev 合并行�
 
 ## 九、实施记录（回填）
 
-- **Wave 0**：备份分支 `r2-backup-pre-dev-merge-20260910`（= `b2fc4ea`）已打；并行登记表由任务一的 `T-MergeMasterIntoDev` 注销后换 `T-MergeDevR2Round2` / `sandbox-r2merge` 登记。
+- **Wave 0**：备份分支 `r2-backup-pre-dev-merge-20260910`（= `b632086`）已打；并行登记表由任务一的 `T-MergeMasterIntoDev` 注销后换 `T-MergeDevR2Round2` / `sandbox-r2merge` 登记。
 - **Wave 1**：`git merge dev` 起手即复现预演的 **2 文件 2 冲突块**，与预判完全一致，源码零冲突。
   - `docs/变更记录.md`：并集 189 行（r2 176 ∪ dev 独有 13），去重、日期倒序、无丢行。该文件两侧非表格行内容**逐字相同**（实测），故可直接按「表头 + 并集行 + 表尾」重写。
   - `docs/MEMORY.md`：该文件非表格区域两侧**各有改动**（不是纯表格文件），因此不能沿用上一条的整表重写法——首次用「表头取 r2 侧」的脚本会把 dev 对非表格区的改动抹掉，遂改用 `git checkout -m` 恢复真实自动合并结果、只替换冲突块，并集后块内 6 行（r2 2 ∪ dev 4）。
@@ -128,6 +128,6 @@ dev 侧 14 行：`2026-09-10` 四条（含本次 T-MergeMasterIntoDev 合并行�
   | IU-262.9437.185 | Compatible | 1 | 44 | 10 |
 
   均为 warning 级，不阻断发布。`buildPlugin` 出产物 `build/distributions/mybatis-plus-sql-visualizer-2026.9.9.zip`。
-- **commit**：合并提交 `e72dd57`。
+- **commit**：合并提交 `e1471fc`。
 - **未做**：不主动 push；runIde 真机抽验留人工（r2 面：冷启动首屏 / 承接老用户文案 / 弹窗克制；dev 面：行号 / 竖向排列 / 预览闪烁）。
 - **版本号说明**：合并后 r2 版本由 2026.9.8 变为 2026.9.9（随 dev 的 v2026.9.9 发行面）。r2 若另有独立发版计划，发版时需重新定版本号，本次不做额外处理。

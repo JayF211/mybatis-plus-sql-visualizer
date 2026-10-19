@@ -5,7 +5,7 @@
 - 来源：用户实测——SQL 条目无源码位置时的「无法跳转到源码」引导弹框，当前把「打开设置」排为首选出口；而增强捕获（agent 通道）本身就是携带源码位置的通道，引导应**优先提示开启增强捕获**（一键开启），而不是让用户自己去设置页翻开关
 - 性质：UX 引导（无行为缺陷，两个既有出口都保留）
 - 实施分支：自 master 拉任务分支（或按派单在在途回合分支上实施，以派单为准）
-- 验证基线：master 快照 `7ec1271`
+- 验证基线：master 快照 `1ff820c`
 
 ---
 
@@ -122,7 +122,7 @@ T-GEF-02 文案先行 → T-GEF-03 红用例（decideActions 判定+序表映射
 
 ## 实施记录
 
-（2026-09-23 本工作树实施，分支 `t-guide-enhanced-first`，基线 master `d41b0d5`）
+（2026-09-23 本工作树实施，分支 `t-guide-enhanced-first`，基线 master `71a0c46`）
 
 - **T-GEF-02 文案**：`log.jump.guide.enableEnhanced` / `log.jump.guide.message.enhanceFirst` / `log.jump.guide.enhanceDone` 三键双语落地（zh 781-783 行区 / 默认 bundle 同位）；生效提示弹窗 title 复用 `settings.enhancedCapture.confirm.title`，状态行复用 `log.diag.enhanced`，零冗余键。
 - **T-GEF-01 编排**：`SourceCaptureGuide` 状态感知三分支（`decideActions` 纯函数 + `resolveChoice(rc, branch)` 分支序表 + `legacyMessage` D1 状态行）；`enableEnhancedCapture(project, onOutcome)`：开关关闭时置位 + 发布 `SETTINGS_CHANGE_TOPIC`（已开启不重复发布），随后复用 `AgentManager.requestReauthorization`。`AgentManager.requestReauthorization` / `requestConsentThenAttach` 增可选 `onOutcome`（默认空实现，既有调用方零行为变化；持久化单点不变，三态各自落盘后回传，前置早退不回调）。

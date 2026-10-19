@@ -1,6 +1,6 @@
 ---
 name: project-m39-orm-implementation
-description: M39 ORM 缺口补全实施完成（worktree mpsv-orm / feature/m39-orm-coverage 三提交 3f42eb6/cca224e/151a55e，用户明确不合并 master，全量 3321 测试绿 + buildPlugin 通过）；分波文件独占模式与波次执行踩坑
+description: M39 ORM 缺口补全实施完成（worktree mpsv-orm / feature/m39-orm-coverage 三提交 a0bd5aa/7e11d31/bb86675，用户明确不合并 master，全量 3321 测试绿 + buildPlugin 通过）；分波文件独占模式与波次执行踩坑
 metadata:
   node_type: memory
   type: project
@@ -10,12 +10,12 @@ metadata:
 M39「ORM 框架功能覆盖补全」（计划与任务号 [[project-orm-gap-analysis]]，J1~J23 / 里程碑 M39~M43）实施于 git worktree `F:\code\Java\Gitee\SongRenShuo\mpsv-orm`，分支 `feature/m39-orm-coverage`。用户指令：多智能体并行、铁律登记、文件互斥、测试验收后提交 git、**不合并主分支**。parallel_tasks 登记 name=m39-orm-coverage sandbox=m39orm（完成须 done 注销）。
 
 **进度（2026-09-05 会话中断点）**：
-- master f724fbf：两份覆盖矩阵 + 开发计划文档已提交
-- **Wave1（3f42eb6，38 文件 +8600 行、129 测试）**：四智能体并行——A 线 J2/J13/J19（JpaUpdateParser UPDATE→UpdateStatement、JpaJoinOnResolver JOIN ON 三级解析+JpaJoinRewriter、JpaFromEntityMapper 子查询实体映射、HQL 高级特性透传保护+SelectClauseExpander 短路）；B 线 J17/J6/J4（Criteria 函数全集/单层子查询/CriteriaUpdate+Delete→语句模型/notIn+getRestriction 死条目清理）；C 线 J7/J8/J14/J18（JpaMetadataReader 三轨注解读取，TableInfo/AssociationInfo/ColumnInfo **只做加法**：软删除族/@GeneratedValue/复合主键/嵌入展平/@ElementCollection/@Inheritance）；D 线 J3/J4/J11/J12/J21（query/search/stream 前缀+无 By 门控、IgnoreCase→LOWER、hbm 多 class+FileTypeIndex、NamedQuery 双 FQN、DaoQueryKind 分类 ENTITY_OP/QBC）
-- **Wave2（cca224e）**：E 线 J1/J6/J21/M2——新 `JpaCrudOperationConverter`（Spring Data CRUD/EntityManager/HibernateTemplate 三家族统一转换器，IDENTITY 主键不进 INSERT 列）+ SqlPreviewService JPA CRUD 派发（**修复 save 撞 MP 转换器输出错误表名问题**，receiver 家族×方法名双重消歧）+ WrapperAnchorDetector 场景 E + @KeySequence；H 线 C1/C2 demo 写路径语料（demo 工程 4 新文件 + JpaDemoIntegrationTest 23→36 用例）
-- **Wave3（151a55e，已提交）**：J5 SpecificationQueryConverter / J20 QueryByExampleConverter / J10·J15·J16·J22 JpaQueryEnhancer（Pageable/Limit 静态求值、@Lock FOR UPDATE、@EntityGraph JOIN 注入、@Procedure CALL、Page count SQL 展示）/ J9 调用点动作路径，27 测试；F 退回修复的 8 个失败全清（4 个是实现缺陷：projectionNote 无 JDK 解析态、@Procedure 空输出参数注释、调用点 pageNotes 二次分析矛盾、Pageable 本体进参数行）
+- master 2e64aa8：两份覆盖矩阵 + 开发计划文档已提交
+- **Wave1（a0bd5aa，38 文件 +8600 行、129 测试）**：四智能体并行——A 线 J2/J13/J19（JpaUpdateParser UPDATE→UpdateStatement、JpaJoinOnResolver JOIN ON 三级解析+JpaJoinRewriter、JpaFromEntityMapper 子查询实体映射、HQL 高级特性透传保护+SelectClauseExpander 短路）；B 线 J17/J6/J4（Criteria 函数全集/单层子查询/CriteriaUpdate+Delete→语句模型/notIn+getRestriction 死条目清理）；C 线 J7/J8/J14/J18（JpaMetadataReader 三轨注解读取，TableInfo/AssociationInfo/ColumnInfo **只做加法**：软删除族/@GeneratedValue/复合主键/嵌入展平/@ElementCollection/@Inheritance）；D 线 J3/J4/J11/J12/J21（query/search/stream 前缀+无 By 门控、IgnoreCase→LOWER、hbm 多 class+FileTypeIndex、NamedQuery 双 FQN、DaoQueryKind 分类 ENTITY_OP/QBC）
+- **Wave2（7e11d31）**：E 线 J1/J6/J21/M2——新 `JpaCrudOperationConverter`（Spring Data CRUD/EntityManager/HibernateTemplate 三家族统一转换器，IDENTITY 主键不进 INSERT 列）+ SqlPreviewService JPA CRUD 派发（**修复 save 撞 MP 转换器输出错误表名问题**，receiver 家族×方法名双重消歧）+ WrapperAnchorDetector 场景 E + @KeySequence；H 线 C1/C2 demo 写路径语料（demo 工程 4 新文件 + JpaDemoIntegrationTest 23→36 用例）
+- **Wave3（bb86675，已提交）**：J5 SpecificationQueryConverter / J20 QueryByExampleConverter / J10·J15·J16·J22 JpaQueryEnhancer（Pageable/Limit 静态求值、@Lock FOR UPDATE、@EntityGraph JOIN 注入、@Procedure CALL、Page count SQL 展示）/ J9 调用点动作路径，27 测试；F 退回修复的 8 个失败全清（4 个是实现缺陷：projectionNote 无 JDK 解析态、@Procedure 空输出参数注释、调用点 pageNotes 二次分析矛盾、Pageable 本体进参数行）
 - 文档已同步：JPA-Hibernate 矩阵勾行 83→✅、39→🟡；开发计划实施记录已回填
-- **终验（2026-09-05）**：全量 `gradlew test` 3321 用例 0 失败；`buildPlugin` 产出 mybatis-plus-sql-visualizer-2026.9.4.zip（6.0M）；parallel_tasks 已 done 注销；分支领先 master 3 提交，实施时按用户指令不合并——**2026-09-05 用户改要求 dev 全量合并，本分支已合入 dev**（合并提交 487d8ee，见 [[project-dev-merge-all-branches]]），仍未合 master、未 push
+- **终验（2026-09-05）**：全量 `gradlew test` 3321 用例 0 失败；`buildPlugin` 产出 mybatis-plus-sql-visualizer-2026.9.4.zip（6.0M）；parallel_tasks 已 done 注销；分支领先 master 3 提交，实施时按用户指令不合并——**2026-09-05 用户改要求 dev 全量合并，本分支已合入 dev**（合并提交 1849005，见 [[project-dev-merge-all-branches]]），仍未合 master、未 push
 
 **未做（按计划留档）**：J23 Querydsl（文档化边界）、M1 字符串版 QueryWrapper 消费（依赖 M37/M38 分支合并）、M3 Kotlin PSI（独立立项）、J18 SQL 注入层、J19 高级特性建模（透传保护已做）、jakarta @Version 与软删除注解的 SQL 注入未接。
 

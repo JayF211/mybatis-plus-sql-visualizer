@@ -7,10 +7,10 @@ metadata:
   originSessionId: sess_2283dbb9-5a2f-456f-9fb3-dac6c32e5832
 ---
 
-2026-09-17 用户指令「切 dev、master 合入 dev、实施盘点 2.2 五计划 + T-PerfSweep4 + 2.4 尾巴项」批次会话（dev worktree 直接实施，未建任务分支——用户指令）。提交图谱：3552d4b merge master（mcpStub×3+snakeyaml 四块增量回植，shard 桩 classpath 落 mpv-testing.gradle.kts 惰性求值）→ 9399fee 负缓存 TTL `<=`→`<` flake 修复 → f3c0007 T-TxnReadOnlyProof+T-ExecTimeoutGuard 合笔 → afb3a8a T-DmlAliasGuard → 69a6095 T-TsqlBatchSplit → e24f536 T-UpdateZipBounds → 5fa6187 T-PerfSweep4 → 99370a9 文档批次（盘点第 3 版）→ bd863f0 基线回填（412 类/4817 用例）→ **ed3e1f1 验收文档 `docs/验收文档/20260917-1435-master合入dev与第六轮五计划PerfSweep4尾巴项-验收文档.md`（8 入口速查+六节步骤+真机走查 13 条总清单，MEMORY.md 已登记）**。全量 testShards 4817/0/0/6 绿，dev 已全推送（origin/dev=ed3e1f1）。
+2026-09-17 用户指令「切 dev、master 合入 dev、实施盘点 2.2 五计划 + T-PerfSweep4 + 2.4 尾巴项」批次会话（dev worktree 直接实施，未建任务分支——用户指令）。提交图谱：ee376e3 merge master（mcpStub×3+snakeyaml 四块增量回植，shard 桩 classpath 落 mpv-testing.gradle.kts 惰性求值）→ 83d4744 负缓存 TTL `<=`→`<` flake 修复 → 8db852c T-TxnReadOnlyProof+T-ExecTimeoutGuard 合笔 → 2d6dc96 T-DmlAliasGuard → eea2a1a T-TsqlBatchSplit → 56beade T-UpdateZipBounds → 021e8a4 T-PerfSweep4 → 2f2ccc2 文档批次（盘点第 3 版）→ 37eaf12 基线回填（412 类/4817 用例）→ **2d1faa5 验收文档 `docs/验收文档/20260917-1435-master合入dev与第六轮五计划PerfSweep4尾巴项-验收文档.md`（8 入口速查+六节步骤+真机走查 13 条总清单，MEMORY.md 已登记）**。全量 testShards 4817/0/0/6 绿，dev 已全推送（origin/dev=2d1faa5）。
 
 **关键定案/教训**：
-- 盘点 2.4 SpeedSearch 尾巴是**陈旧条目**——t-uinative 5b0e2c3+0330cb8 已修（git 实测在位），勘误而非重做；盘点引用条目必须先实测（[[pitfall-stale-session-git-snapshot]] 再证）
+- 盘点 2.4 SpeedSearch 尾巴是**陈旧条目**——t-uinative cce2aa3+a92ea65 已修（git 实测在位），勘误而非重做；盘点引用条目必须先实测（[[pitfall-stale-session-git-snapshot]] 再证）
 - T-TsqlBatchSplit 批首收窄为**仅 IF**：裸 BEGIN 与 MySQL `BEGIN…COMMIT` 事务形态冲突（既有保守测试钉死）
 - T-ExecTimeoutGuard：RemoteStatement（DBN 镜像）setQueryTimeout/cancel 243+262 javap 同形；控制台链 DBN 托管无语句句柄 v1 如实登记不覆盖
 - UpdateZipGuard 头谎报双路检测：本机 JBR17 实测「读超声明+1」命中（JDK 实现差异，两路都拦）；测试手工造 zip 用 `Deflater(6, true)`（nowrap——默认 zlib 包装流 zip 内非法）

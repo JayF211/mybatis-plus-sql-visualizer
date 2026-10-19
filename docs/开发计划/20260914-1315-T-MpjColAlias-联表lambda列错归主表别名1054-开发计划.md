@@ -2,7 +2,7 @@
 
 - 登记时间：2026-09-14 13:15（parallel_tasks T-MpjAlias，worktree wt-t-mpjalias）
 - 任务类型：缺陷修复（真机用户反馈）
-- 基线：master 58a2ea5（T-ExplainIdempotent 合入后）
+- 基线：master e1653e6（T-ExplainIdempotent 合入后）
 
 ## 一、问题现象
 
@@ -74,8 +74,8 @@ QueryWrapperParser 委托链没有这层归属。
 
 - 修复：`MpjLambdaConverter.kt`（attributedRest 委托 + attributeJoinColumns/attributeColumn）。
 - 测试：`MpjJoinExtConverterTest.kt` +5 例。
-- worktree 分支（基线 58a2ea5，3980+5）全量：**3985/0/0/6 绿**。
-- 合入 master（merge 75c0cdb，master 侧含 T-FeedbackDlg2 +2 基线 3982）后 detached 复测：
+- worktree 分支（基线 e1653e6，3980+5）全量：**3985/0/0/6 绿**。
+- 合入 master（merge 4cab880，master 侧含 T-FeedbackDlg2 +2 基线 3982）后 detached 复测：
   **3987/0/0/6 绿**。主仓库默认沙盒复跑曾报 `SqlPreviewPanelTest` 5 例
   `cannot open system clipboard`——同 commit 独立沙盒全绿实锤环境型剪贴板 flake
   （并行会话占锁 + 系统剪贴板竞争，见回归假失败清单），非本改动。

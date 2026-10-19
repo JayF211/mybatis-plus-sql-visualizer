@@ -17,7 +17,7 @@
 
 | 环节 | 位置 | 实测 |
 |---|---|---|
-| 字段声明 | `PluginSettingsPanel.kt:217` | `JBTextArea(3, 24)` + `emptyText` 占位提示（870affc） |
+| 字段声明 | `PluginSettingsPanel.kt:217` | `JBTextArea(3, 24)` + `emptyText` 占位提示（ebcaf00） |
 | 构建注册 | `:732-736` | 在「源码位置捕获」分组（`sectionGroup("settings.log.tab.sourceCapture")`，:704）**内部**，`addRow` 已调用（:736），括号归属逐行核对无误 |
 | 分组位置 | `:704-737` | 「SQL 日志」子页面（`SECTION_SQL_LOG`）的第 4 组「源码位置捕获」**最后一行**——排在自动注入/增强捕获/脱敏/状态行之后，**页面底部，需向下滚动** |
 | 子页面注册 | `plugin.xml:129-135` | Settings → Tools → SQL Visualizer → **SQL 日志**（`SqlLogConfigurable` → `SECTION_SQL_LOG`），groupWeight=20 |
@@ -31,7 +31,7 @@
 | # | 假设 | 判据 | 处置 |
 |---|------|------|------|
 | H1 | **窗口/页面不对**（截图即 ZCode 侧栏；或进了 IDE 但停在别的子页面） | 用户当前窗口是否为 IDE Settings → Tools → SQL Visualizer → **SQL 日志** | 引导到正确页面（§四 走查 1），零代码改动 |
-| H2 | **装的发行包是旧构建**（不含 b117d8c/870affc） | 设置页 SQL 日志分组里连「增强捕获状态」行下方也没有任何新行；或「关于」页构建号早于本次 | 重跑 `./gradlew buildPlugin` 装新 zip；走查 2 |
+| H2 | **装的发行包是旧构建**（不含 6fa6e57/ebcaf00） | 设置页 SQL 日志分组里连「增强捕获状态」行下方也没有任何新行；或「关于」页构建号早于本次 | 重跑 `./gradlew buildPlugin` 装新 zip；走查 2 |
 | H3 | **Settings 页缓存旧面板实例**（`SectionConfigurable.createComponent` 首建后缓存 `panel`，动态安装/更新插件后不重建——`SectionConfigurable.kt:31-37`） | 重开 Settings 窗口仍不见；但重启 IDE 后可见 | 走查 3；若证实可考虑 Configurable 生命周期修正（§五 F2） |
 | H4 | **布局压扁**（`addRow` 的 `fill=NONE` + GridBag 高度分配下，3 行 JBTextArea 被上方行挤压成一条线，视觉近似不存在） | 页面能滚到「源码位置捕获」组、状态行可见但下方无框 | 走查 4；证实则按 §五 F1 修（`fill=HORIZONTAL` + `preferredSize` 保底，或包 ScrollPane） |
 

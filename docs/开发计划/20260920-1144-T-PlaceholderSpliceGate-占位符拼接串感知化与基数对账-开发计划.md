@@ -5,7 +5,7 @@
 - 来源：第九轮报告 §7.2 **Z-24**——zMyBatis 的可证拓扑替换：替换 `?` 前先证明 SQL 不含引号/注释符/`$`，任一命中即整体拒绝，再要求 `?` 计数与绑定数全等（`Materialization.kt:279-299`，`:167-168` 注释自述「拒绝半吊子 lexer」）
 - 性质：**输出侧正确性**——不改输入侧闸门、不改渲染算法；把「朴素逐字符替换」换成既有的串感知实现并加对账
 - 实施分支：自 master 拉任务分支 t-placeholder-splice-gate
-- 验证基线：master `22d7c49`（testShards 5383/0/0/6 + testDatabase 10/0/0/0 + agent 58/0/0/0）
+- 验证基线：master `f8c115d`（testShards 5383/0/0/6 + testDatabase 10/0/0/0 + agent 58/0/0/0）
 
 ---
 
@@ -87,11 +87,11 @@ T-PSG-01（位点实现上提到 sql 包，行为不变）→ T-PSG-02（复制�
 
 | 任务 | 提交 | 说明 / 偏离 |
 |------|------|------|
-| T-PSG-01 | `57b95c1` | 新落点 `sql/PlaceholderPositions.kt`（`internal fun placeholderPositions`，实现逐字节搬运）；`log` 包原处改为顶部 import 引用 + 一行说明注释，`log/LogEntryPreviewRecognizer.kt:100` 的 `countPlaceholders` **留在 log 包**（薄封装 `placeholderPositions(sql).size`，另一路 T-RealEngineCardinality 依赖其在 log 包内可达） |
-| T-PSG-02 | `57b95c1` | `buildExecutableSql` 改位点替换（`prev` 游标 + `append(sql, prev, pos)`）；**share 链自动受益已核实**：`share/format/ExecutableSqlFormatter.kt:28` 转调该函数，`ExecutableSqlFormatterTest` 8 例绿 |
-| T-PSG-03 | `57b95c1` | 面板改动行区间：字段 `:368`、`backfillParamsBySource` `:3665-3683`、执行门 `:1089`、EXPLAIN 门 `:1246`、测试缝 `:3959`；`renderParamValue`/`renderSingleValue`（`:3685`/`:3726`）**一行未动**（diff 无该区间 hunk） |
-| T-PSG-04 | `57b95c1` | 对账形态定案：照抄既有头部标记形态的 `-- placeholder/param count mismatch (N placeholders vs M params)`（`sql/PlaceholderPositions.kt` 的 `PlaceholderCardinality`）。落点：①复制产物头部（`CopyExecutableSqlAction`，`buildList` 收口标记，单标记时与改前逐字节一致）；②面板 `executeSql`/`explainSql` 两道确认门后 **warn 日志**（不弹窗、不中止）。**偏离**：复制链判定口**有意不对称**——只认「占位符多于参数」（本链拼的是面板已回填文本，位点少于参数是常态，严格等值会「填一个参数报一次不等」）；面板链走严格等值 |
-| T-PSG-05 | `57b95c1` | 先红后绿两次读数：改前 5 例红（见下方「前提 1 实证」）；改后定向 10 类全绿 + `testShards` 5412/0/0/6 + `testDatabase` 10/0/0/0 + agent 58/0/0/0 |
+| T-PSG-01 | `2d389f5` | 新落点 `sql/PlaceholderPositions.kt`（`internal fun placeholderPositions`，实现逐字节搬运）；`log` 包原处改为顶部 import 引用 + 一行说明注释，`log/LogEntryPreviewRecognizer.kt:100` 的 `countPlaceholders` **留在 log 包**（薄封装 `placeholderPositions(sql).size`，另一路 T-RealEngineCardinality 依赖其在 log 包内可达） |
+| T-PSG-02 | `2d389f5` | `buildExecutableSql` 改位点替换（`prev` 游标 + `append(sql, prev, pos)`）；**share 链自动受益已核实**：`share/format/ExecutableSqlFormatter.kt:28` 转调该函数，`ExecutableSqlFormatterTest` 8 例绿 |
+| T-PSG-03 | `2d389f5` | 面板改动行区间：字段 `:368`、`backfillParamsBySource` `:3665-3683`、执行门 `:1089`、EXPLAIN 门 `:1246`、测试缝 `:3959`；`renderParamValue`/`renderSingleValue`（`:3685`/`:3726`）**一行未动**（diff 无该区间 hunk） |
+| T-PSG-04 | `2d389f5` | 对账形态定案：照抄既有头部标记形态的 `-- placeholder/param count mismatch (N placeholders vs M params)`（`sql/PlaceholderPositions.kt` 的 `PlaceholderCardinality`）。落点：①复制产物头部（`CopyExecutableSqlAction`，`buildList` 收口标记，单标记时与改前逐字节一致）；②面板 `executeSql`/`explainSql` 两道确认门后 **warn 日志**（不弹窗、不中止）。**偏离**：复制链判定口**有意不对称**——只认「占位符多于参数」（本链拼的是面板已回填文本，位点少于参数是常态，严格等值会「填一个参数报一次不等」）；面板链走严格等值 |
+| T-PSG-05 | `2d389f5` | 先红后绿两次读数：改前 5 例红（见下方「前提 1 实证」）；改后定向 10 类全绿 + `testShards` 5412/0/0/6 + `testDatabase` 10/0/0/0 + agent 58/0/0/0 |
 
 **前提 1 实证（实施第一步，改前代码实测）**：引号/注释内 `?` 确实错位——`buildExecutableSql` 与 `backfillParamsBySource` 两条链都实测复现：
 

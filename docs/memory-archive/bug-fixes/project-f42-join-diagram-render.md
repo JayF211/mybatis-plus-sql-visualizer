@@ -60,7 +60,7 @@ DiagramModel → DiagramRenderer → DiagramPanel (UI)
 - 基数标记（1/0..*）在实体端居中
 - 重要验证：只通过单元测试不足以证明视觉不重叠，必须在 runIde/真实弹窗截图中检查；用户在 2026-08-26 两次反馈截图仍有标签重叠，说明纯静态边界框策略不可靠，后续应优先采用每条关系独立标签轨道或改为卡片内/边缘显示，而不是依赖同一水平分叉段
 
-**已提交修复**：`e50c1cf fix: prevent JOIN relation labels overlapping`；此前 F-1.1 主实现提交为 `3543431`。
+**已提交修复**：`e50c1cf fix: prevent JOIN relation labels overlapping`；此前 F-1.1 主实现提交为 `0347405`。
 
 ## F-1.2 后续布局调整（2026-08-26）
 
@@ -72,7 +72,7 @@ DiagramModel → DiagramRenderer → DiagramPanel (UI)
 
 **当前仍需真实截图验收**：用户反馈最新截图仍有标签/关系视觉重叠。后续不能继续叠加固定偏移量；应建立统一 Layout Snapshot/Scene（节点矩形、边路径、ON 标签矩形、基数矩形、content bounds），让 PNG、SVG、Canvas 共用同一快照，并增加矩形碰撞测试。鼠标平移、节点/关系悬停高亮、点击选中已写入开发计划，暂缓实现。
 
-**最新状态（2026-08-26）**：布局经过 `054407d`、`71dbf94`、`f10d374` 多轮调整后基本稳定为主表左侧、JOIN 表右侧纵向分行；ON 标签进入独立标签行/列，且画布尺寸包含标签区域。随后在 `2b7dfd3` 修复了中间 ON 条件别名：图节点使用归一化 alias（如 `stationInfoEntity` fallback 为 `t1`）时，关系标签同步显示 `t.id = t1.user_id`，不再混用原始实体类名。相关 `JoinDiagramGeneratorTest` 已通过。
+**最新状态（2026-08-26）**：布局经过 `054407d`、`71dbf94`、`f10d374` 多轮调整后基本稳定为主表左侧、JOIN 表右侧纵向分行；ON 标签进入独立标签行/列，且画布尺寸包含标签区域。随后在 `31e06bb` 修复了中间 ON 条件别名：图节点使用归一化 alias（如 `stationInfoEntity` fallback 为 `t1`）时，关系标签同步显示 `t.id = t1.user_id`，不再混用原始实体类名。相关 `JoinDiagramGeneratorTest` 已通过。
 
 **卡片样式**：JOIN 表标题右侧标注 JOIN 类型（如 `[LEFT]`）
 

@@ -61,7 +61,7 @@ T-MG-01（剥离纯函数+表驱动）→ T-MG-02（提交链挂点）→ T-MG-0
 
 ## 八、实施记录（实施后回填）
 
-实施日期 2026-09-18，分支 t-mysql-g-strip（工作树 mpsv-mgs，基线 master 8a3a6ff）。
+实施日期 2026-09-18，分支 t-mysql-g-strip（工作树 mpsv-mgs，基线 master a842b47）。
 
 ### T-MG-01 剥离纯函数
 

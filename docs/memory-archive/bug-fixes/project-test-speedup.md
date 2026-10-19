@@ -27,7 +27,7 @@ metadata:
 ## verifyPlugin 提速（T-M31.1 实证，2026-08-15）
 
 - 耗时构成：三版本串行字节码分析 243≈1min / 253≈5.7min / 262≈7.5min，**分析不可缓存**（`.pluginVerifier` 3.8GB 缓存仅覆盖插件集提取，每次全量分析）→ 单次全量 ≈ 9.5min
-- **minimal 开关**：`./gradlew verifyPlugin -PverifyIdes=minimal` 只验证边界（243+262，253 被两头覆盖）；发布/里程碑仍全量（build.gradle.kts pluginVerification 属性分支，2737fab）
+- **minimal 开关**：`./gradlew verifyPlugin -PverifyIdes=minimal` 只验证边界（243+262，253 被两头覆盖）；发布/里程碑仍全量（build.gradle.kts pluginVerification 属性分支，ed7a591）
 - **⚠️ minimal 实测收益修正**：首次 minimal 运行 11m24s（cold 缓存）≈ full 9m42s——**262 的 ~7.5min 是主导项**，minimal 的收益 = 省 253 的 ~5.7min 串行分析（缓存热时显现；「省 40%」是暖缓存预期，勿对外承诺）
 - **verifyPlugin 与并行会话互斥**：前置 prepareSandbox 用默认沙盒（对方测试也用它）——文件锁「用户映射区域」互相阻塞，且共享 `.pluginVerifier` 缓存同锁；跑前错峰/查登记表
 - 日常开发可完全不跑（编译 + 全量测试已覆盖行为，反射桥零新 API 引用）

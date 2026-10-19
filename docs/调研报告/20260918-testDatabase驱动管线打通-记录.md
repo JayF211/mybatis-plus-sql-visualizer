@@ -55,7 +55,7 @@ LocalDataSource.getClasspathElements()
 ## 四、未合并说明（本分支停在 `t-testdb-driver`，未回合 dev）
 
 > **状态更新（2026-09-18，T-TailSweep G5 补记）**：本节已成历史留档——本分支内容已入 master
-> （cherry-pick 为 `6017fe4`，见 T-TS-11），表内 7 项失败已由 T-Fix-TestDb（`3457f77`，稳定工程目录
+> （cherry-pick 为 `c1bc3f1`，见 T-TS-11），表内 7 项失败已由 T-Fix-TestDb（`627fd13`，稳定工程目录
 > + 控制台/编辑器夹具 + 发现链收敛等待 + `forkEvery = 1`）清偿。**合并后的正确口径与剩余未验证边界
 > 见 §六**，勿再按本节「未合并 / testDatabase 变红」的表述引用。
 
@@ -78,7 +78,7 @@ LocalDataSource.getClasspathElements()
 ## 五、建议后续
 
 > **状态更新（2026-09-18，T-TailSweep G5 补记）**：第 1 条（合并决策）已按「先修好再合并」落地
-> （`3457f77` → master）；第 2 条的四个修复方向除 ④ 外均已实施（④ 的 `assumeTrue` → `println + return`
+> （`627fd13` → master）；第 2 条的四个修复方向除 ④ 外均已实施（④ 的 `assumeTrue` → `println + return`
 > 亦已在本分支完成）；第 3 条真机路径仍为未验证项（见 §六）。
 
 1. **合并决策**：要么接受 `testDatabase` 变红（诚实口径）并随即立项修复这四个类；要么先修好四个类再合并。**不建议**把断言改回 skip。

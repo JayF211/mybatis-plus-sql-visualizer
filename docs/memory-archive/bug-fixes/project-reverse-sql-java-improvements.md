@@ -1,13 +1,13 @@
 ---
 name: project-reverse-sql-java-improvements
-description: SQL→Java 反向链路质量大修已提交（4d174c2 + 017d874，23+10 文件）——? 占位符/实体推断/调用形态 MP·MPJ 1.5.6 实证/继承链 MPJ 能力/性能修复/缓存管理/交互优化，1111 全绿
+description: SQL→Java 反向链路质量大修已提交（c1b8f56 + b77361f，23+10 文件）——? 占位符/实体推断/调用形态 MP·MPJ 1.5.6 实证/继承链 MPJ 能力/性能修复/缓存管理/交互优化，1111 全绿
 metadata:
   node_type: memory
   type: project
   originSessionId: sess_51eafb4b-6feb-4624-a097-590ca8ab7f68
 ---
 
-2026-08-16 SQL→Java 反向链路连续多轮优化，全部由用户反馈驱动，**已提交 4d174c2（23 文件 +1512/-148，提交时精确排除并行会话的图标改动，见 [[pitfall-parallel-inflight-block]]）；最新 1104 全绿（clean test --rerun-tasks）**。最后两轮（类选择字段交互 + 空态提示）未提交。
+2026-08-16 SQL→Java 反向链路连续多轮优化，全部由用户反馈驱动，**已提交 c1b8f56（23 文件 +1512/-148，提交时精确排除并行会话的图标改动，见 [[pitfall-parallel-inflight-block]]）；最新 1104 全绿（clean test --rerun-tasks）**。最后两轮（类选择字段交互 + 空态提示）未提交。
 
 1. **`?` 参数占位符反向识别**（[[project-reverse-placeholder-bugfix]]）：`parseValue` 的 `?` → `SqlValue.Placeholder("?")`，WHERE 各算子（eq/ne/gt/ge/lt/le/in/between/like 占位符→LikePosition.NONE）+ UPDATE SET/INSERT VALUES/LIMIT 全链路；生成器头部统一注释（hasPlaceholder 扫描）。
 2. **AUTO 优先对象引用**：`EntityClassFinder.find` 两级查找——类名推断快路径 + 未命中时全量 @TableName 注解值/推断表名反查（`AccountRoleRelEntity`↔`sys_account_role_rel` 兜底）；结果按类名排序。

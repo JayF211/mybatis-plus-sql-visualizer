@@ -7,7 +7,7 @@ metadata:
   originSessionId: sess_72d892cb-ed00-4438-973d-6c286c20766d
 ---
 
-四框架（MP/MPJ/JPA/Hibernate）功能缺口调研于 2026-09-04 完成两轮，计划文件 `docs/开发计划/20260904-2340-ORM框架功能覆盖缺口分析与补全-开发计划.md`（任务号 J1~J23/M1~M4/C1~C3，里程碑 M39~M43）。**实施已启动（2026-09-05）**：worktree mpsv-orm / 分支 feature/m39-orm-coverage，Wave1 3f42eb6 + Wave2 cca224e 已提交、Wave3 修复中，进度与执行踩坑见 [[project-m39-orm-implementation]]（用户明确该分支不合并 master）。
+四框架（MP/MPJ/JPA/Hibernate）功能缺口调研于 2026-09-04 完成两轮，计划文件 `docs/开发计划/20260904-2340-ORM框架功能覆盖缺口分析与补全-开发计划.md`（任务号 J1~J23/M1~M4/C1~C3，里程碑 M39~M43）。**实施已启动（2026-09-05）**：worktree mpsv-orm / 分支 feature/m39-orm-coverage，Wave1 a0bd5aa + Wave2 7e11d31 已提交、Wave3 修复中，进度与执行踩坑见 [[project-m39-orm-implementation]]（用户明确该分支不合并 master）。
 
 **二轮（四智能体并行，本地 jar javap 权威 + 官方文档 + releases）**：
 - 新建《docs/架构设计/JPA-Hibernate官方API覆盖矩阵.md》——8 分类面约 200 行 API 条目逐行挂任务号，与 MP-MPJ 矩阵同风格，后续按行交付。

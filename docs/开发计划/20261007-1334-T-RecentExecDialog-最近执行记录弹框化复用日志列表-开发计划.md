@@ -142,11 +142,11 @@ T-SqlSuppress O-69 交付、经 O-80 拖拽缩放走查定型的成熟形态，�
 
 | 步 | 提交 | 内容 |
 | --- | --- | --- |
-| S1 | master `f329686` | 计划文档落 master（D86=A/D87=A 已拍板；master 主树在途改动未混提交） |
-| S2 | `aa9b31e` | 分支 `t-recentexec-dialog` 实现：`RecentExecutionsDialog.kt`（非模态+可拖拽+尺寸记忆 `mpsv.recent.executions.dialog`+`Splitter` 0.45 分栏+`LogEntryListCellRenderer` 复用+`SqlListSyntaxHighlighter` 只读编辑器+dispose 释放 editor）+gutter 接线（二级 ListPopup/轻通知分支删除，`NOTIFICATION_GROUP_ID` 随退役）+bundle 5 键×2+headless 测试 7 例+CHANGELOG `[Unreleased]` 行 |
-| S3 | `7717cb1` | **用户指示：先并 master 再跑测试**——master `1841c3f`（T-SqlToJavaPromote 验收+CHANGELOG）并入，bundle 双方键共处核验过 |
-| S4 | `9f580f2` | 测试闭环两修（见下「实施偏差」） |
-| S5 | `4f60ab6` | master 增量 `142a8df`（T-MapResultVo 计划，**纯 docs** 2 文件）并入——与已测态零生产码差，读数不失效；最终回并 master 走 ff-only，落地态=已测态 |
+| S1 | master `4d9a7f2` | 计划文档落 master（D86=A/D87=A 已拍板；master 主树在途改动未混提交） |
+| S2 | `3b212d2` | 分支 `t-recentexec-dialog` 实现：`RecentExecutionsDialog.kt`（非模态+可拖拽+尺寸记忆 `mpsv.recent.executions.dialog`+`Splitter` 0.45 分栏+`LogEntryListCellRenderer` 复用+`SqlListSyntaxHighlighter` 只读编辑器+dispose 释放 editor）+gutter 接线（二级 ListPopup/轻通知分支删除，`NOTIFICATION_GROUP_ID` 随退役）+bundle 5 键×2+headless 测试 7 例+CHANGELOG `[Unreleased]` 行 |
+| S3 | `b02e534` | **用户指示：先并 master 再跑测试**——master `1c91b98`（T-SqlToJavaPromote 验收+CHANGELOG）并入，bundle 双方键共处核验过 |
+| S4 | `4eb09f1` | 测试闭环两修（见下「实施偏差」） |
+| S5 | `408bb53` | master 增量 `a84a8e7`（T-MapResultVo 计划，**纯 docs** 2 文件）并入——与已测态零生产码差，读数不失效；最终回并 master 走 ff-only，落地态=已测态 |
 | S6 | — | 定向 66 例 0 失败（RecentExecutionsDialogTest 7＋SqlLogPanelRendererUiTest 33＋EntrySourceMatcherTest 10＋gutter 16）；testFast 冒烟读数见下 |
 
 **定向门禁读数**：定向 66/0（对话框 7＋渲染器回归 33＋matcher 10＋gutter 16）；testFast 冒烟 BUILD SUCCESSFUL（GRADLE_EXIT=0，52s——testFast=纯逻辑快桶，本任务 UI 测试在平台桶已由定向批覆盖；全仓编译+快桶全绿即冒烟口径达成）。
@@ -171,7 +171,7 @@ T-SqlSuppress O-69 交付、经 O-80 拖拽缩放走查定型的成熟形态，�
 | 复制 | 复制**当前编辑器显示文本**（格式化态即格式化版）；反馈写状态行 | `UiTextClipboard`（T-UiNative 收口：进 IDE 复制历史）+ 通用键 `dialog.copy.done` |
 | 空态 | 三控件（打开预览/切换/复制）统一禁用 | 既有 `syncSelectionScopedControls` 联动点 |
 
-- 提交：master `ae59bea`（主分支直改，用户令「在主分支实施」；显式路径暂存，未碰并行会话在改的 `JavaCodeGenerator.kt`）。
+- 提交：master `e610c05`（主分支直改，用户令「在主分支实施」；显式路径暂存，未碰并行会话在改的 `JavaCodeGenerator.kt`）。
 - 读数：**定向 10 例 0 失败**（7 例原用例 + 新 3 例：默认格式化判别性形态断言/切换精确回原文再切回/复制取当前显示文本）。
 - 环境事故（一次，已闭环）：首次跑测试时测试 JVM 原生内存分配失败——`os::commit_memory failed ... 页面文件太小 (DOS error/errno=1455)`，executor 非零退出且无断言报告。根因=**用户 runIde 沙盒 IDE（master 树）+ demo 应用 + 捕获 agent 同时在跑**，commit 水位 71.2/74.7GB、free 仅 3.5GB（R16 定例的用户真机在跑变体）。处置：不杀任何进程（用户真机会话），改用降足迹参数 `-PtestHeapSize=384m -PtestTieredStop=true -PtestCiCount=2 -PtestGcThreads=2` 重试即绿（27s）。事故产物 `hs_err_pid14876.log` 已清（另两个 `hs_err_pid19280/replay_pid19280` 属并行会话，未动）。
 - 遗留：V118 走查清单追加两项——格式化默认态视觉、切换/复制手感。

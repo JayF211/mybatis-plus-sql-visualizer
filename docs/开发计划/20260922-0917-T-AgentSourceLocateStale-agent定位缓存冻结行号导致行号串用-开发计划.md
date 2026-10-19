@@ -210,12 +210,12 @@ agent 的 KDoc 自称「框架帧过滤规则与 IDE 侧 `CallerSourceLocator` �
 
 ### 一、车道与提交（2026-09-22）
 
-车道 C（分支 `t-agent-locate` / 工作树 `mpsv-agent-locate`），两个提交均已合入集成分支（`8a88504`）：
+车道 C（分支 `t-agent-locate` / 工作树 `mpsv-agent-locate`），两个提交均已合入集成分支（`cfc6793`）：
 
 | 提交 | 内容 |
 |---|---|
-| `30f4943` | agent 侧：T-01 判定缓存化（`CACHE` 与 `SAFETY_DECISIONS` 合并为 `DECISIONS=[via,主位置class,主位置method]`，命中经「身份在场」校验后按当前 pool 现算行号/候选）、T-02 补 `com.github.yulichang.`、T-05 入口键一次性摘要、KDoc 订正、新增 `StackLocatorCacheStalenessTest`（5 例） |
-| `344bf65` | IDE 侧：`CallerSourceLocator` 前缀与事实化 KDoc、`LocatorSkipPrefixSyncTest`（3 例，保守选项＝两份实现 + 差异登记 + 源码扫描守卫）、`docs/instrumentation/SqlSourceInterceptor.kt` 同步（模板确实内嵌跳过规则副本与失实「对齐」声明） |
+| `ac2c508` | agent 侧：T-01 判定缓存化（`CACHE` 与 `SAFETY_DECISIONS` 合并为 `DECISIONS=[via,主位置class,主位置method]`，命中经「身份在场」校验后按当前 pool 现算行号/候选）、T-02 补 `com.github.yulichang.`、T-05 入口键一次性摘要、KDoc 订正、新增 `StackLocatorCacheStalenessTest`（5 例） |
+| `1d90da3` | IDE 侧：`CallerSourceLocator` 前缀与事实化 KDoc、`LocatorSkipPrefixSyncTest`（3 例，保守选项＝两份实现 + 差异登记 + 源码扫描守卫）、`docs/instrumentation/SqlSourceInterceptor.kt` 同步（模板确实内嵌跳过规则副本与失实「对齐」声明） |
 
 ### 二、读数
 

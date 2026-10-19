@@ -4,7 +4,7 @@
 **任务**：T-FidelityEval（第七轮建议 N-27，P2，评估先行）
 **来源**：第七轮报告 §7 zMyBatis 精华清单 Z-1（真 MyBatis 引擎求值）+ Z-10（classloader 隔离防全局污染）
 **性质**：评估型——本文是结论与建议，不是实施。四问各有量化结论，最终 go/no-go 交用户定案。
-**基线**：分支 `t-fidelity-eval`，基线提交 8a3a6ff（dev 合流后）。
+**基线**：分支 `t-fidelity-eval`，基线提交 a842b47（dev 合流后）。
 **方法**：源码精读（xml 求值管线 16 文件 / 2284 行 + 三处先例文件）+ git 全分支历史归因 + 变更记录与开发计划回溯 + headless 隔离 classloader spike 实录。
 
 ---
@@ -31,21 +31,21 @@ spike 结果是跑通的（隔离 `URLClassLoader` + 纯反射驱动 `getBoundSq
 
 | # | 提交 | 条目 | 归因面 | 真引擎能否自动避免 |
 |---|------|------|--------|--------------------|
-| 1 | `d5dcd55` | T-M25.1 官方 DOCTYPE 被自建 DOM 解析器拒绝（`disallow-doctype-decl`），改三重 XXE 防护 | 解析器自建 | 可避免——真引擎 `XMLMapperEntityResolver` 从 jar 内 DTD 本地解析，spike 实证无联网 |
-| 2 | `18fadbe` | T-M25.2 OGNL 静态字段引用 `@class@field`（用户实测） | 表达式语义 | 可避免——真 OGNL 原生支持，spike 实证 `@demo.Const@FLAG` 直接取到值 |
-| 3 | `0e2eb2c` | T-M25.2 两套判真（ExpressionEvaluator vs OgnlOps）+ or/and 返回值语义对齐 + `\|\|X\|\|` 剥壳 | 表达式语义 | 部分——判真与 or/and 真引擎天然正确；但 `\|\|X\|\|` 真引擎抛 `ExpressionSyntaxException: Malformed OGNL expression`（spike 实证），我方宽容是超集，换成真引擎反而少一个能力 |
-| 4 | `b17d691` | T-M25.2 预览入口漏传 `project` 致静态常量解析跳过 | 插件接线 | 不可避免（真引擎同样需要 classpath 上下文） |
-| 5 | `a19b3bd` | T-M25.4 foreach 参数回填（`__frch_` 名不过滤） | 面板回填 | 不可避免 |
-| 6 | `a60bf4a` | T-M25.4 foreach 集合值输入（`2,3` → `IN (2, 3)`） | 面板 UX | 不可避免 |
-| 7 | `06ebb9a` | T-M25.4 逐字符输入时集合回填漏填 | 面板 UX | 不可避免 |
-| 8 | `3a35139` | T-M25.5 foreach 迭代内容 trim（IN 单行）+ bind 自动求值回显 | 显示形态 / mock 回显 | 不可避免——真引擎原样保留换行缩进（spike 嵌套 foreach 输出空白噪声实证），trim 是我方产品偏好；bind 回显真引擎不提供 |
-| 9 | `347d162` | T-M26.4 删 bind 分区 + T-M26.5 foreach 行精简 + LIKE 参数引号（数字启发式误判） | 面板 + mock 值语义 | 引号部分不可避免（mock 策略两套引擎都要自己定） |
-| 10 | `70f8383` / `80f1be9` | IN 子句参数标记 `inList`（面板逗号分割回填） | 面板回填 | 不可避免 |
-| 11 | `c322f32` | T-M29.4 XML 参数回填默认引号（用户实测日期列比较失效） | mock 值语义 | 不可避免——真引擎按参数 Java 类型绑定，但「用什么值」仍由我方决定 |
-| 12 | `9b6af09` | T-M29.5 参数类型感知（`XmlParamTypeResolver`） | mock 值语义 | 不可避免——真引擎要真实类型对象，同一工程量；且拿 mock 字符串喂真引擎，分支判定照样与真实运行时分叉（spike §1.3 实证） |
-| 13 | `c3ee1bd` | T-Perf-04 击键防抖 + OGNL 解析缓存 | 性能 | 不可避免——真引擎每次重建 Configuration / 重解析 mapper 更重 |
-| 14 | `aa607c4` | T-DollarInjectMark `${}` 直替计数在 foreach/trim 过滤上下文丢失 | 自研上下文结构 | 半——真引擎无此计数功能（需自建），但其直替语义天然正确 |
-| 15 | `3959a8e` | M26-B `${ew.customSqlSegment}` MP 占位展开 | MP 生态 | 不可避免——真引擎需要 wrapper 对象，非引擎能力 |
+| 1 | `3dcb35f` | T-M25.1 官方 DOCTYPE 被自建 DOM 解析器拒绝（`disallow-doctype-decl`），改三重 XXE 防护 | 解析器自建 | 可避免——真引擎 `XMLMapperEntityResolver` 从 jar 内 DTD 本地解析，spike 实证无联网 |
+| 2 | `f2edfdc` | T-M25.2 OGNL 静态字段引用 `@class@field`（用户实测） | 表达式语义 | 可避免——真 OGNL 原生支持，spike 实证 `@demo.Const@FLAG` 直接取到值 |
+| 3 | `9dcc0c3` | T-M25.2 两套判真（ExpressionEvaluator vs OgnlOps）+ or/and 返回值语义对齐 + `\|\|X\|\|` 剥壳 | 表达式语义 | 部分——判真与 or/and 真引擎天然正确；但 `\|\|X\|\|` 真引擎抛 `ExpressionSyntaxException: Malformed OGNL expression`（spike 实证），我方宽容是超集，换成真引擎反而少一个能力 |
+| 4 | `0ddf760` | T-M25.2 预览入口漏传 `project` 致静态常量解析跳过 | 插件接线 | 不可避免（真引擎同样需要 classpath 上下文） |
+| 5 | `1918c0f` | T-M25.4 foreach 参数回填（`__frch_` 名不过滤） | 面板回填 | 不可避免 |
+| 6 | `9c2965c` | T-M25.4 foreach 集合值输入（`2,3` → `IN (2, 3)`） | 面板 UX | 不可避免 |
+| 7 | `9cc8033` | T-M25.4 逐字符输入时集合回填漏填 | 面板 UX | 不可避免 |
+| 8 | `252286b` | T-M25.5 foreach 迭代内容 trim（IN 单行）+ bind 自动求值回显 | 显示形态 / mock 回显 | 不可避免——真引擎原样保留换行缩进（spike 嵌套 foreach 输出空白噪声实证），trim 是我方产品偏好；bind 回显真引擎不提供 |
+| 9 | `5f3bb98` | T-M26.4 删 bind 分区 + T-M26.5 foreach 行精简 + LIKE 参数引号（数字启发式误判） | 面板 + mock 值语义 | 引号部分不可避免（mock 策略两套引擎都要自己定） |
+| 10 | `4d2703d` / `c038f14` | IN 子句参数标记 `inList`（面板逗号分割回填） | 面板回填 | 不可避免 |
+| 11 | `d7b3a38` | T-M29.4 XML 参数回填默认引号（用户实测日期列比较失效） | mock 值语义 | 不可避免——真引擎按参数 Java 类型绑定，但「用什么值」仍由我方决定 |
+| 12 | `a57797b` | T-M29.5 参数类型感知（`XmlParamTypeResolver`） | mock 值语义 | 不可避免——真引擎要真实类型对象，同一工程量；且拿 mock 字符串喂真引擎，分支判定照样与真实运行时分叉（spike §1.3 实证） |
+| 13 | `d299dab` | T-Perf-04 击键防抖 + OGNL 解析缓存 | 性能 | 不可避免——真引擎每次重建 Configuration / 重解析 mapper 更重 |
+| 14 | `e87a377` | T-DollarInjectMark `${}` 直替计数在 foreach/trim 过滤上下文丢失 | 自研上下文结构 | 半——真引擎无此计数功能（需自建），但其直替语义天然正确 |
+| 15 | `0f42a80` | M26-B `${ew.customSqlSegment}` MP 占位展开 | MP 生态 | 不可避免——真引擎需要 wrapper 对象，非引擎能力 |
 
 按计划口径二分：
 
@@ -59,7 +59,7 @@ spike 结果是跑通的（隔离 `URLClassLoader` + 纯反射驱动 `getBoundSq
 
 ### 1.3 两条补充证据
 
-其一，foreach / trim / choose 的**标签语义本身零缺陷修复**。`ForeachSqlNode.kt` 自 M24 落地后只被三类提交改过：静态字段支持（`18fadbe`）、显示 trim（`3a35139`）、计数转发（`aa607c4`），加一次 Kotlin→Java 移植（`d32b3d1`）——没有一条是嵌套遮蔽、separator 惰性插入、Map 迭代 index=键 这些最容易出错的地方。`TrimSqlNode.kt` 同样零语义修复。M24 交付时这些算法就是照 MyBatis 3.5.19 逐条复刻并带测试落地的，两年下来没有回修。这直接反驳了「标签语义维护税高」这个立项前提。
+其一，foreach / trim / choose 的**标签语义本身零缺陷修复**。`ForeachSqlNode.kt` 自 M24 落地后只被三类提交改过：静态字段支持（`f2edfdc`）、显示 trim（`252286b`）、计数转发（`e87a377`），加一次 Kotlin→Java 移植（`8a47d63`）——没有一条是嵌套遮蔽、separator 惰性插入、Map 迭代 index=键 这些最容易出错的地方。`TrimSqlNode.kt` 同样零语义修复。M24 交付时这些算法就是照 MyBatis 3.5.19 逐条复刻并带测试落地的，两年下来没有回修。这直接反驳了「标签语义维护税高」这个立项前提。
 
 其二，mock 值语义的分叉是真引擎**无法**解决的问题，spike 有实录：
 
@@ -226,7 +226,7 @@ SPIKE RESULT: PASS
 
 1. spike 为 headless JDK8 环境，**未在 IDE 262 平台验证**——库 URL 收集、读权限、真实插件 classloader 委派、loader 生命周期、真实用户项目解析成功率五项均属「环境受限未验证」（§3.3）。
 2. 人天估算基于源码精读与 spike 实测，未做真实试钻到可运行状态；P3 的零先例面（库收集）是估算中置信度最低的一项，实际可能超出区间。
-3. 缺陷账的归因面分类由本评估人工判定，边界条目（`0e2eb2c` 的 `||` 剥壳、`347d162` 的引号部分）已在清单中标注拆分口径，便于复核。
+3. 缺陷账的归因面分类由本评估人工判定，边界条目（`9dcc0c3` 的 `||` 剥壳、`5f3bb98` 的引号部分）已在清单中标注拆分口径，便于复核。
 4. 面板「条件开关 vs 真引擎按值判定」的模型冲突由源码推断（`XmlPreviewModel.kt:96` 开关是分支唯一真值源），未做真机交互验证。
 
 ---
@@ -247,7 +247,7 @@ SPIKE RESULT: PASS
 | 跨 classloader 反射纪律 | `ui/highlight/DatabaseSchemaResolver.kt:37-40` |
 | 零依赖红线 | `build.gradle.kts:103` |
 | spike 代码（临时目录，未进主树） | `%TEMP%\mpsv-fidelity-spike\`（`src/SpikeMain.java`、`resources/demo/M.xml`、`resources/demo/M2.xml`、`user-src/demo/{User,Const}.java`） |
-| 缺陷账提交 | `d5dcd55` `18fadbe` `0e2eb2c` `b17d691` `a19b3bd` `a60bf4a` `06ebb9a` `3a35139` `347d162` `70f8383` `80f1be9` `c322f32` `9b6af09` `c3ee1bd` `aa607c4` `3959a8e` |
+| 缺陷账提交 | `3dcb35f` `f2edfdc` `9dcc0c3` `0ddf760` `1918c0f` `9c2965c` `9cc8033` `252286b` `5f3bb98` `4d2703d` `c038f14` `d7b3a38` `a57797b` `d299dab` `e87a377` `0f42a80` |
 
 ---
 
@@ -262,6 +262,6 @@ SPIKE RESULT: PASS
 ## 8. 定案（2026-09-19）
 
 - **用户 2026-09-19 定案：采纳「方案 C（语义对照测试集）」**；方案 A（真引擎生产旁路）确认 **no-go**。
-- 方案 B 的实际剩余已归零：O-31（`T-ExprAstPrecheck` `6f3eb2f`）与 N-26（`T-ParamTypeContract` `4d86308`）已随第七轮七计划交付；仅 `foreach` 体内 `if` 求值失败不产 errors 这一条尾款单列（见下）。
+- 方案 B 的实际剩余已归零：O-31（`T-ExprAstPrecheck` `b65f7ec`）与 N-26（`T-ParamTypeContract` `3ff717d`）已随第七轮七计划交付；仅 `foreach` 体内 `if` 求值失败不产 errors 这一条尾款单列（见下）。
 - 落地计划：`docs/开发计划/20260919-0426-T-TailSweep2-二轮收口与真引擎语义对照-开发计划.md` —— G1 = T-FS-01~03（对照基建/协议/场景集），G2 = T-FS-04~10（遗留收口，含 `foreach` 尾款 T-FS-07）。
 - Z-1（真 MyBatis 引擎求值）状态：**评估后定案 = 不进入生产路径**（转为本报告 §4.1 的测试基建形态）。

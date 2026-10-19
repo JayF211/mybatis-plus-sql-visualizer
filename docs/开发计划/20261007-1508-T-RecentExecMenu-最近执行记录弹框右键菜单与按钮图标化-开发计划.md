@@ -163,14 +163,14 @@
 
 | 步 | 提交 | 内容 |
 | --- | --- | --- |
-| S1 | `6432d4c` | 跳转原语收口 `LogEntryJumpOps`（resolveSource/resolveXml/navigate/showToast/showMissingSourceGuide）+ 两面板改委托；历史页顺带清死引用。**闸门**：6 类 41 例 0 失败 |
-| S2 | `0540eec` | `LogEntryTab` 枚举 + `SqlLogManager.onOpenEntryInTab` 通道 + 面板 init 注册/dispose 同一性注销 + `openEntryInTab` 单一落点（原两 Send 动作改委托）+ `jumpToSourceRealtime` 收口（实时页整体策略，弹框同文案同反馈）+ 守卫白名单登记 |
-| S3/S4 | `0f82892` | 弹框右键菜单六件 + D92=A 抑制后行移除 + 两枚按钮图标化（`ReformatCode`/`Copy`）+ 删「查看原文」链路与键 |
-| S5 | `3aac70b` | 守卫红线修复：送页签取管理器改只读入口 `sqlLogManagerIfCreated`（`SqlLogManagerLookupGuardTest` 抓出直接 `getService` 违规） |
+| S1 | `dbc6efb` | 跳转原语收口 `LogEntryJumpOps`（resolveSource/resolveXml/navigate/showToast/showMissingSourceGuide）+ 两面板改委托；历史页顺带清死引用。**闸门**：6 类 41 例 0 失败 |
+| S2 | `064b387` | `LogEntryTab` 枚举 + `SqlLogManager.onOpenEntryInTab` 通道 + 面板 init 注册/dispose 同一性注销 + `openEntryInTab` 单一落点（原两 Send 动作改委托）+ `jumpToSourceRealtime` 收口（实时页整体策略，弹框同文案同反馈）+ 守卫白名单登记 |
+| S3/S4 | `fe8e320` | 弹框右键菜单六件 + D92=A 抑制后行移除 + 两枚按钮图标化（`ReformatCode`/`Copy`）+ 删「查看原文」链路与键 |
+| S5 | `1fba449` | 守卫红线修复：送页签取管理器改只读入口 `sqlLogManagerIfCreated`（`SqlLogManagerLookupGuardTest` 抓出直接 `getService` 违规） |
 
 **读数**：定向批 **234 例 233 过**——弹框 15/0、日志面板族（RendererUi 33/DedupeToggle 6/Filter 24/FocusTab 4/Layout 10/LiveJump 10/RequestFocus 3/SortAndSlowQuery 7/TypePopup 6/XmlJump 4）、LogToSqlPanelTest 19/0、SqlToJavaPanelTest 58/0、HistorySqlLogPanelJumpToSourceTest 6/0；**testFast 3406 例 0 失败**（S5 后复跑）。
 
-**唯一失败＝并行会话既有红（非本改动）**：`BannedApiSourceScanTest.catch_Throwable块必须判fatal或登记豁免` 报 `SqlToJavaPanel.kt` 豁免站点 `expected:<1> but was:<2>`。定性依据：①失败信息只点名 `SqlToJavaPanel.kt`；②本任务 8 个改动文件与该文件零交集（`git status` 该文件干净）；③`git log -1 -- SqlToJavaPanel.kt` = 并行会话已提交笔 `6fecb79`（T-MapResultVo v2 修复，新增 `catch (t: Throwable)` ≒ 977/1239 两处）。**未动其文件**，留给其作者按守卫要求补判定或重登记。
+**唯一失败＝并行会话既有红（非本改动）**：`BannedApiSourceScanTest.catch_Throwable块必须判fatal或登记豁免` 报 `SqlToJavaPanel.kt` 豁免站点 `expected:<1> but was:<2>`。定性依据：①失败信息只点名 `SqlToJavaPanel.kt`；②本任务 8 个改动文件与该文件零交集（`git status` 该文件干净）；③`git log -1 -- SqlToJavaPanel.kt` = 并行会话已提交笔 `f61ed07`（T-MapResultVo v2 修复，新增 `catch (t: Throwable)` ≒ 977/1239 两处）。**未动其文件**，留给其作者按守卫要求补判定或重登记。
 
 **反向验证（守卫纪律）**：临时把「复制时间戳」的置灰条件改成恒可用（`RED PROBE` 注记）→ 门禁用例必红（15/0 → **15/1**，红点精确落在 `test复制时间戳动作_受显示开关门禁`）；探针已还原并 grep 复查零残留。
 

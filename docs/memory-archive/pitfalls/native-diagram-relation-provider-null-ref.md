@@ -14,7 +14,7 @@ metadata:
 
 **修复要点（N6，计划 `docs/开发计划/20260921-1637-N6-JOIN图原生路径连线缺失-开发计划.md`）**：空 refTable 分支要返回「该表作为 FK child 的全部登记」，且 `getRefTable()` 必须是**图里那个 DbTable 实例**（`asDbElement` 对已是 `DbTable` 的对象 `tryCast` 原样返回；`addElementInner` 字节码实证 `myTablesAddedByUser.put(name, (DbTable) element)` 存的就是传入实例，`calculateElementToNodeMap` 直接拿它当 nodeMap 键）。实例来源=登记时手上的 `located: Map<String, DbElement>`，但**不要塞进 `JoinFkRegistry.Entry`**——该注册表是「纯 JVM 零平台依赖」，`JoinFkRegistryTest` 在无 database jar 的 `test` 任务下跑，塞平台类型会污染类加载边界。
 
-**实施状态（2026-09-21，分支 `n6-join-fk-nullref` 提交 `f16017e`，工作树 `../mybatis-plus-sql-visualizer-n6`）**：已实施并验证——语义下沉到 `JoinFkRegistry.selectForCall`（纯函数，provider 内不再有 null 判断）、新增 `JoinFkRefTables` 持有实例、`registerJoinForeignKeys` 成对填充 + 表名小写归一、`LocateCounts` 降级诊断出口。定向 14 例绿；反向验证两路各自命中（还原 `selectForCall` → 2 例红；还原 provider 早退行 → 源码级守卫红）；全量 `test` 491 类/5588 例 0 失败；`testDatabase` 2 例失败已用 HEAD 基线证为既有环境性失败（`DbDriverPipelineTest` 驱动制品索引）。**未闭环：本环境数据源模型为空（`roots=0`）故 B 路径仍未被真跑，画布级须真机走查；分支未 push。**
+**实施状态（2026-09-21，分支 `n6-join-fk-nullref` 提交 `42c4cb3`，工作树 `../mybatis-plus-sql-visualizer-n6`）**：已实施并验证——语义下沉到 `JoinFkRegistry.selectForCall`（纯函数，provider 内不再有 null 判断）、新增 `JoinFkRefTables` 持有实例、`registerJoinForeignKeys` 成对填充 + 表名小写归一、`LocateCounts` 降级诊断出口。定向 14 例绿；反向验证两路各自命中（还原 `selectForCall` → 2 例红；还原 provider 早退行 → 源码级守卫红）；全量 `test` 491 类/5588 例 0 失败；`testDatabase` 2 例失败已用 HEAD 基线证为既有环境性失败（`DbDriverPipelineTest` 驱动制品索引）。**未闭环：本环境数据源模型为空（`roots=0`）故 B 路径仍未被真跑，画布级须真机走查；分支未 push。**
 
 **排障要点（本轮最大障因）**：日志打在 null 守卫之后，导致 idea.log 里只有三参调用（来自 `getExportedKeys`→`computeExported` 的成对回问）显示 `hits=1`，看起来一片健康，而建边链一次都没留痕。**判断 B 路径连线问题必须先确认日志覆盖了建边入口**；`hits=1` 只反证「登记是好的」，不能证明边已建。
 
