@@ -71,9 +71,9 @@ import cn.song.mybatisplus.visualizer.model.wrapperFlagOutcomeTooltip
 // 以同包扩展函数形式搬出——方法体逐字符搬运，被触及的私有成员已按需放宽为 internal。
 
 /** UI-006: keep the safety explanation visible, including unbroken identifiers in errors. */
-private fun fieldFillText(text: String, font: java.awt.Font): String {
+private fun fieldFillText(text: String, font: java.awt.Font, limitPx: Int = JBUI.scale(260)): String {
     val metrics = javax.swing.JLabel().getFontMetrics(font)
-    val limit = JBUI.scale(260)
+    val limit = limitPx
     val lines = mutableListOf<String>()
     var line = StringBuilder()
     for (character in text) {
@@ -88,6 +88,16 @@ private fun fieldFillText(text: String, font: java.awt.Font): String {
         it.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     } + "</html>"
 }
+
+/** 名称单元：字段名/复选框 + [fill=...] 角标同一行（角标不再单独占一行）。 */
+private fun fieldFillNameCell(name: JComponent, fill: String): JBPanel<JBPanel<*>> =
+    JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 6, 0)).apply {
+        alignmentX = java.awt.Component.LEFT_ALIGNMENT
+        add(name)
+        add(JBLabel("[fill=$fill]").apply {
+            toolTipText = MpSqlVisualizerBundle.message("fieldFill.simulation.annotation.tooltip")
+        })
+    }
 
 /** Wrap the control in the same left-anchored row geometry as the other BoxLayout children. */
 private fun fieldFillRow(control: JComponent): JBPanel<JBPanel<*>> =
@@ -120,6 +130,7 @@ internal fun SqlPreviewPanel.rebuildLeftPanel(result: PreviewResult) {
     resetFieldFillSimulation()
     fieldFillPreview = result
     fieldFillFields.clear()
+    fieldFillSimulationComponents.clear()
     fieldFillCheckBox = null
     fieldFillStatus = null
     paramPanel.removeAll()
@@ -191,6 +202,7 @@ internal fun SqlPreviewPanel.rebuildLeftPanel(result: PreviewResult) {
                 toolTipText = MpSqlVisualizerBundle.message("fieldFill.simulation.enabled.tooltip")
                 addActionListener {
                     fieldFillEnabled = isSelected
+                    applyFieldFillSimulationVisibility()
                     renderSql()
                 }
             }
@@ -545,9 +557,16 @@ internal fun SqlPreviewPanel.buildBatchColumnRow(col: BatchColumn, isToggle: Boo
                 renderSql()
             }
         }
-        if (hasFill) checkBox.text = fieldFillText(col.source, checkBox.font)
+        if (hasFill) checkBox.text = fieldFillText(col.source, checkBox.font, JBUI.scale(140))
         batchCheckBoxes += checkBox
-        addCell(checkBox, 0, 0, 2)
+        if (hasFill) {
+            // 角标与字段名同一行（用户定案）：复选框与 [fill=...] 共用名称单元，值输入仍在下一行。
+            addCell(fieldFillNameCell(checkBox, col.fill!!), 0, 0, 2)
+        } else {
+            addCell(checkBox, 0, 0, 2)
+        }
+    } else if (hasFill) {
+        addCell(fieldFillNameCell(paramLabel(col.source, labelWidth), col.fill!!), 0, 0, 2)
     } else {
         addCell(paramLabel(col.source, labelWidth), 0, 0, 2)
     }
@@ -563,35 +582,41 @@ internal fun SqlPreviewPanel.buildBatchColumnRow(col: BatchColumn, isToggle: Boo
     }
     paramFields += field
     addCell(field, 1, if (hasFill) 1 else 0)
-    if (hasFill) {
-        // The source occupies its own line; normal and simulated inputs stay in the same
-        // compact value column instead of extending one FlowLayout row beyond the viewport.
-        addCell(JBLabel("[fill=${col.fill}]").apply {
-            toolTipText = MpSqlVisualizerBundle.message("fieldFill.simulation.annotation.tooltip")
-        }, 0, 1)
-        if (isToggle) {
-            val simulation = JBTextField(8).apply {
-                name = "fieldFill:${col.source}"
-                toolTipText = MpSqlVisualizerBundle.message("fieldFill.simulation.value.tooltip")
-                document.addDocumentListener(object : DocumentListener {
-                    private fun changed() {
-                        if (fieldFillSyncing) return
-                        fieldFillValues[col.source] = text
-                        renderSql()
-                        saveToHistory()
-                    }
-                    override fun insertUpdate(e: DocumentEvent?) = changed()
-                    override fun removeUpdate(e: DocumentEvent?) = changed()
-                    override fun changedUpdate(e: DocumentEvent?) = changed()
-                })
-            }
-            fieldFillFields[col.source] = simulation
-            addCell(JBLabel(MpSqlVisualizerBundle.message("fieldFill.simulation.value.label")), 0, 2)
-            addCell(simulation, 1, 2)
+    if (hasFill && isToggle) {
+        val simulation = JBTextField(8).apply {
+            name = "fieldFill:${col.source}"
+            toolTipText = MpSqlVisualizerBundle.message("fieldFill.simulation.value.tooltip")
+            document.addDocumentListener(object : DocumentListener {
+                private fun changed() {
+                    if (fieldFillSyncing) return
+                    fieldFillValues[col.source] = text
+                    renderSql()
+                    saveToHistory()
+                }
+                override fun insertUpdate(e: DocumentEvent?) = changed()
+                override fun removeUpdate(e: DocumentEvent?) = changed()
+                override fun changedUpdate(e: DocumentEvent?) = changed()
+            })
         }
+        fieldFillFields[col.source] = simulation
+        // 模拟值行默认隐藏，只有勾选「FieldFill 安全模拟」时才出现（用户定案）。
+        val simulationRow = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 8, 0)).apply {
+            add(JBLabel(MpSqlVisualizerBundle.message("fieldFill.simulation.value.label")))
+            add(simulation)
+            isVisible = fieldFillEnabled
+        }
+        addCell(simulationRow, 0, 2, 2)
+        fieldFillSimulationComponents += simulationRow
     }
     row.border = JBUI.Borders.empty(0, 8, 2, 8)
     return row
+}
+
+/** 模拟值行显隐：仅「FieldFill 安全模拟」勾选时显示；开关切换后立即重排。 */
+internal fun SqlPreviewPanel.applyFieldFillSimulationVisibility() {
+    fieldFillSimulationComponents.forEach { it.isVisible = fieldFillEnabled }
+    paramPanel.revalidate()
+    paramPanel.repaint()
 }
 
 /** R92：先清可见输入框再清状态表，并抑制文档监听器回写。 */

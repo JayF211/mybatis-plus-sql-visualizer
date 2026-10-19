@@ -73,6 +73,41 @@ class FieldFillSimulationPanelTest : BasePlatformTestCase() {
 
     fun testEnglishFieldFillControlsFit350PixelViewport() = assertFieldFillLayout("en")
 
+    fun testSimulationRowsHiddenUntilSafetySwitchEnabled() {
+        val p = panel()
+        try {
+            assertFalse(p.fieldFillEnabled)
+            assertTrue("fill 列应创建模拟值行", p.fieldFillSimulationComponents.isNotEmpty())
+            assertTrue("默认关闭时模拟值行必须隐藏", p.fieldFillSimulationComponents.none { it.isVisible })
+            p.fieldFillCheckBox!!.doClick()
+            assertTrue(p.fieldFillEnabled)
+            assertTrue("勾选后模拟值行必须显示", p.fieldFillSimulationComponents.all { it.isVisible })
+            p.fieldFillCheckBox!!.doClick()
+            assertFalse(p.fieldFillEnabled)
+            assertTrue("取消勾选后模拟值行必须再次隐藏", p.fieldFillSimulationComponents.none { it.isVisible })
+        } finally { p.clear() }
+    }
+
+    fun testFillBadgeSharesNameRow() {
+        val p = panel()
+        try {
+            fun labels(component: java.awt.Component): List<javax.swing.JLabel> =
+                (if (component is javax.swing.JLabel) listOf(component) else emptyList()) +
+                    (if (component is java.awt.Container) component.components.flatMap { labels(it) } else emptyList())
+            val badges = labels(p.paramPanel).filter { it.text.startsWith("[fill=") }
+            assertEquals(2, badges.size)
+            badges.forEach { badge ->
+                val cell = badge.parent as? java.awt.Container
+                assertNotNull("fill 角标必须有名称单元父容器", cell)
+                assertEquals("名称单元只应包含字段名与角标", 2, cell!!.componentCount)
+                assertTrue(
+                    "角标必须与字段名/复选框同一行",
+                    cell.components.any { it !is javax.swing.JLabel || !it.text.startsWith("[fill=") },
+                )
+            }
+        } finally { p.clear() }
+    }
+
     private fun assertFieldFillLayout(language: String) {
         val settings = PluginSettings.getInstance().state
         val oldLanguage = settings.language
@@ -103,7 +138,8 @@ class FieldFillSimulationPanelTest : BasePlatformTestCase() {
                     repeat(3) { layout(scroll) }
                     val viewportWidth = scroll.viewport.extentSize.width
                     val controls = listOf(p.fieldFillCheckBox!!, p.fieldFillStatus!!) +
-                        p.batchCheckBoxes + p.paramFields + p.fieldFillFields.values
+                        p.batchCheckBoxes + p.paramFields +
+                        if (p.fieldFillEnabled) p.fieldFillFields.values else emptyList()
                     for (control in controls) {
                         val b = bounds(control)
                         assertTrue("$language ${control.name ?: control.javaClass.simpleName}: $b outside $viewportWidth",
@@ -121,6 +157,7 @@ class FieldFillSimulationPanelTest : BasePlatformTestCase() {
                     assertFalse("350px must not need horizontal scrolling", scroll.horizontalScrollBar.isVisible)
                     assertEquals(MpSqlVisualizerBundle.message("fieldFill.simulation.enabled"), visibleText(p.fieldFillCheckBox!!.text))
                     for (simulation in p.fieldFillFields.values) {
+                        if (!p.fieldFillEnabled) continue
                         val ordinary = p.paramFields.single { it.getClientProperty(SqlPreviewPanel.PROP_FIELD_SOURCE) == simulation.name.removePrefix("fieldFill:") }
                         assertTrue("Simulation input has its own row", bounds(simulation).y >= bounds(ordinary).y + ordinary.height)
                     }
@@ -128,6 +165,7 @@ class FieldFillSimulationPanelTest : BasePlatformTestCase() {
                     rows.zipWithNext().forEach { (a, b) -> assertTrue("Rows must not overlap", a.y + a.height <= b.y) }
                     // Vertical scrolling reaches every input even when wrapped error text grows.
                     p.fieldFillFields.values.forEach { input ->
+                        if (!p.fieldFillEnabled) return@forEach
                         scroll.viewport.viewPosition = java.awt.Point(0, 0)
                         val b = bounds(input)
                         (scroll.viewport.view as javax.swing.JComponent).scrollRectToVisible(b)

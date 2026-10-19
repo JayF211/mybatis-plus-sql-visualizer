@@ -333,6 +333,8 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
     internal var fieldFillPreview: PreviewResult? = null
     internal val fieldFillValues = linkedMapOf<String, String>()
     internal val fieldFillFields = linkedMapOf<String, JBTextField>()
+    /** 模拟值行（标签+输入框）；仅在「FieldFill 安全模拟」勾选时可见。 */
+    internal val fieldFillSimulationComponents = mutableListOf<JComponent>()
     internal var fieldFillCheckBox: JCheckBox? = null
     internal var fieldFillStatus: JBLabel? = null
 
