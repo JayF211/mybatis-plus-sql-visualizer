@@ -705,6 +705,33 @@ class SqlLogPanelLayoutTest : BasePlatformTestCase() {
             panel.dispose()
         }
     }
+
+    /**
+     * T-AgentPauseVisibility（2026-10-19，方案 B）：增强暂停/恢复动作临时全隐藏。
+     * 动作对象仍在工具栏组内（能力代码保留），但 update 恒置不可见/不可用；
+     * 恢复方案 A 时改回条件可见并更新本用例。
+     */
+    @Test
+    fun test增强暂停动作在方案B下始终不可见() {
+        val panel = SqlLogPanel(project, manager)
+        val oldEnabled = PluginSettings.getInstance().state.enhancedCaptureEnabled
+        try {
+            PluginSettings.getInstance().state.enhancedCaptureEnabled = true
+            val event = AnActionEvent.createFromAnAction(
+                panel.agentPauseAction, null, ActionPlaces.TOOLBAR, DataContext.EMPTY_CONTEXT,
+            )
+            panel.agentPauseAction.update(event)
+            assertFalse("方案 B：增强开启时也不得显示暂停按钮", event.presentation.isVisible)
+            assertFalse("不可见时同时应不可用", event.presentation.isEnabled)
+            assertTrue(
+                "动作对象仍应留在工具栏组内（能力代码保留，恢复方案 A 时复用）",
+                panel.toolbarGroup.childActionsOrStubs.contains(panel.agentPauseAction),
+            )
+        } finally {
+            PluginSettings.getInstance().state.enhancedCaptureEnabled = oldEnabled
+            panel.dispose()
+        }
+    }
 }
 
 /** 用户日常侧边栏宽度（2026-09-21 真机截图量测：内容区约 460px）——单行契约的主验宽度。 */

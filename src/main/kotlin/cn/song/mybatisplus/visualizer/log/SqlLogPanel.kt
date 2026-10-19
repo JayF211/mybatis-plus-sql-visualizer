@@ -1093,24 +1093,21 @@ class SqlLogPanel(
 
     /**
      * R53：增强捕获暂停/恢复（工具窗入口）。
-     * - 增强未开启（总开关关）→ 隐藏（暂停对「增强不开」无意义，V80③ 三态不冲突）；
-     * - 开启 → 按 [AgentManager.userPaused] 输出暂停/恢复图标与文案；
-     * - 切换后经 [AgentManager.setUserPaused] 即时重算桥闸门并广播（状态栏 2s 轮询跟上）。
+     *
+     * T-AgentPauseVisibility（2026-10-19，用户拍板方案 B）：**临时全隐藏**。
+     * 增强捕获已默认开启且无提示，该按钮在应用未运行时没有可暂停对象，并与捕捉按钮形成
+     * 「播放/暂停」误读；先整体隐藏，动作对象仍保留在工具栏组内（不删能力代码）。
+     * 代价：暂停 agent 通道的 UI 入口暂时不可达（关闭总开关仍会回落控制台）。
+     * 恢复条件：方案 A（agent 已挂载或暂停态才显示）落地，或新增状态栏/右键菜单入口。
+     *
+     * 历史语义（保留在 [actionPerformed]）：暂停只停 agent 通道（事件在入队点丢弃）、
+     * 控制台通道照常；暂停≠关闭——连接/心跳/CONFIG 链不动。
      */
     private inner class AgentPauseAction : AnAction() {
         override fun update(e: AnActionEvent) {
-            val am = runCatching { AgentManager.getInstance(project) }.getOrNull()
-            val enabled = am?.isEnhancedEnabled() == true
-            e.presentation.isVisible = enabled
-            e.presentation.isEnabled = enabled
-            if (!enabled) return
-            if (am!!.userPaused) {
-                e.presentation.icon = MpvsIcons.AgentResume
-                e.presentation.text = MpSqlVisualizerBundle.message("log.panel.agentResume")
-            } else {
-                e.presentation.icon = MpvsIcons.AgentPause
-                e.presentation.text = MpSqlVisualizerBundle.message("log.panel.agentPause")
-            }
+            // 方案 B：无条件隐藏。不要改回 isEnhancedEnabled()——恢复时必须走方案 A 的条件可见。
+            e.presentation.isVisible = false
+            e.presentation.isEnabled = false
         }
 
         override fun actionPerformed(e: AnActionEvent) {

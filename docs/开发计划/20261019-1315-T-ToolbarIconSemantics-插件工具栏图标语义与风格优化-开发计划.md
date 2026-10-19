@@ -27,7 +27,7 @@
 | 序 | 动作 | 代码位置 | 当前图标 | 可见条件 | 第一眼语义 | 判断 |
 |---|---|---|---|---|---|---|
 | 1 | 捕捉 / 停止 | `SqlLogPanel.kt:1071-1092` | `Actions.Execute` 绿三角 / `Actions.Suspend` 红方块 | 恒可见 | "运行程序" / "停止" | 有歧义 |
-| 2 | 暂停 / 恢复增强捕获 | `SqlLogPanel.kt:1100-1120` | `Actions.Pause` 双竖条 / `Actions.Resume` | 仅增强捕获开启时可见 | "暂停捕捉" | 有歧义 |
+| 2 | 暂停 / 恢复增强捕获 | `SqlLogPanel.kt:1100-1120` | `Actions.Pause` 双竖条 / `Actions.Resume` | 方案 B 临时全隐藏（不出现） | "暂停捕捉" | 有歧义 |
 | 3 | 清空 | `SqlLogPanel.kt:1122-1132` | `Actions.GC` 垃圾桶 | 恒可见 | "清空/删除" | 清楚 |
 | 4 | 设置 | `SqlLogPanel.kt:1152-1163` | `General.Settings` 齿轮 | 恒可见 | "设置" | 清楚 |
 | 5 | 屏蔽规则管理 | `SqlLogPanel.kt:1170-1179` | `General.Filter` 漏斗 | 恒可见 | "过滤" | 有歧义 |
@@ -405,7 +405,7 @@
 4. 自绘 `eyeOff` 的眼睛轮廓取自 expui `inspectionsEye.svg`（Apache 2.0），斜线为后加；16px 下斜线是否会糊住瞳孔、红色斜线在暗色主题的对比度是否足够，需双版本截图确认。
 5. 自绘 `eyeOff_dark.svg` 的自动切换需在 ActionToolbar 的 `presentation.icon` 路径上实测（仓内 `communityChat_dark.svg` 只在直接 `IconLoader` 场景验证过）。
 6. 262 的 `AllIcons.General.ArrowDown` 渲染为 chevron（用户截图已证），243 为实心三角；本计划不再用它做滚动到底，若实施中改回，需接受跨版本形态差异。
-7. 增强暂停按钮只在增强捕获开启时可见；未开启时工具栏只有 10 个按钮，图标冲突检查要按"可见集合"而不是"动作集合"做。
+7. 增强暂停按钮按 T-AgentPauseVisibility 方案 B（2026-10-19）临时全隐藏；工具栏恒 10 个可见动作，图标冲突检查按"可见集合"而不是"动作集合"做。恢复方案 A 时再改为「agent 挂载或暂停态可见」。
 8. 窄宽溢出菜单里 ActionToolbar 是否同时显示图标与文字，需在 243/262 各截一次图确认；若只显示图标，`description` 必须逐项补齐。
 
 ## 九、需要用户拍板的点
@@ -437,8 +437,8 @@
 |---|---|---|---|---|
 | 1 | 捕捉开始 | `AllIcons.Actions.Execute` 绿三角 | `MpvsIcons.CaptureStart` 绿三角（克隆 `run.svg`） | 未捕捉态全栏 |
 | 2 | 捕捉停止 | `AllIcons.Actions.Suspend` 红方块 | `MpvsIcons.CaptureStop` 红方块（克隆 `stop.svg`） | 点击捕捉后按钮变红方块 |
-| 3 | 增强暂停 | `AllIcons.Actions.Pause` 双竖条 | `MpvsIcons.AgentPause`（克隆 `pause.svg`） | 增强捕获开启时可见 |
-| 4 | 增强恢复 | `AllIcons.Actions.Resume` 绿三角带竖条 | `MpvsIcons.AgentResume`（克隆 `resume.svg`） | 点击暂停后变恢复 |
+| 3 | 增强暂停 | `AllIcons.Actions.Pause` 双竖条 | `MpvsIcons.AgentPause`（克隆 `pause.svg`） | 方案 B 临时全隐藏（不出现） |
+| 4 | 增强恢复 | `AllIcons.Actions.Resume` 绿三角带竖条 | `MpvsIcons.AgentResume`（克隆 `resume.svg`） | 方案 B 临时全隐藏（不出现） |
 | 5 | 清空 | `AllIcons.Actions.GC` 垃圾桶 | `MpvsIcons.Clear`（克隆 `clear.svg`） | 有数据时点击清空 |
 | 6 | 设置 | `AllIcons.General.Settings`（243 扳手/262 齿轮） | `MpvsIcons.Settings` 齿轮（克隆 `settings.svg`，两版统一） | 点击打开设置页 |
 | 7 | 屏蔽规则 | `AllIcons.General.Filter` 漏斗 | `MpvsIcons.Suppress` 眼睛 + 红斜线（自绘） | 点击打开屏蔽规则对话框 |

@@ -27,6 +27,7 @@
 - **阶段二合并批六件**：**R45** EXPLAIN 执行计划体检（rows 估算独立规则＋体检规则清单）／**R48** MetaObjectHandler 自动填充仿真（`@TableField(fill=…)` 经 CRUD 生成链贯通到角标数据面；填充列默认勾选态不变）／**R52** 方言能力矩阵＋执行前自检（矩阵读 `Dialect` 接口真值防伪能力，确认弹窗按缺口追加发现行）／**R46** 执行前 Schema 校验（未识别列＋did-you-mean；表存在性不可零成本判定故只校验已预热表列，fail-open 不误报）／**R42** DML 影响面预演（UPDATE/DELETE 执行前只读 COUNT 试算，MCP 写护栏联动）／**R50** 一键诊断报告（五段：SQL+参数/性能规则/EXPLAIN 建议/无界写/回滚预案＋方言能力，Markdown 复制与自包含 HTML 导出）
 
 ### Changed
+- **增强捕获暂停按钮临时隐藏（T-AgentPauseVisibility，方案 B）**：增强捕获已默认开启，暂停/恢复按钮在应用未运行时没有可暂停对象，并与捕捉按钮形成播放/暂停误读；先整体隐藏，动作对象保留在工具栏组内（能力代码不删）。暂停 agent 通道的 UI 入口暂时不可达，关闭总开关仍回落控制台；恢复路径为方案 A（agent 挂载或暂停态才显示）或状态栏/右键菜单入口。
 - **增强捕获默认开启且不再弹注入确认（T-EnhancedCaptureDefaultOn）**：总开关默认开启，打开即授权——项目打开、首次 Run、进程出现、设置页勾选、缺源码引导五条路径均不再弹确认框；移除 24 小时拒绝冷却、重新授权按钮与「未授权」状态行。旧配置里的 `confirmed=false` / 拒绝时刻在加载时静默归一，用户显式关闭的开关保持关闭。设置页开关与 tooltip 继续说明采集范围、数据留本机与可随时关闭；JDK 21+ 动态挂载告警仍属预期。
 - **Wrapper 与 JPA/HQL 预览按来源文件推断方言（O-145）**：Wrapper 在没有真实 SQL 注入时仍参考宿主文件的 IDEA 有效方言，同一方言贯穿分页 COUNT 与主 SQL；Java JPQL/HQL 命名查询按定义处文件取来源，同名定义歧义不猜；Criteria、native、hbm XML、Specification、QBE 与 Procedure 也以真实宿主文件作不含 URL 的来源快照，hbm 同名异文时拒绝任取第一条 SQL。旧日志/历史不含精确 JDBC URL，不能由脱敏库标反推执行时方言；真实 IDE/数据库验证仍待完成。
 - **XML mapper 预览按语句来源判方言（O-145 W1/W2）**：动作与 gutter 把原 XML 文件、当前语句和有效光标交给瞬态来源解析；只采纳真正 DatabaseTools SQL 注入，自研 MpSqlMapper 不冒充。多注入不取首个，按来源作用域的有效方言渲染并模拟分页；纯文本预览及无来源时保持原回退。
