@@ -190,6 +190,8 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
 
     /** 导航工具栏引用（层级切换后即时刷新 Back 可见性；T-UN-10）。 */
     private var _navToolbarRef: ActionToolbar? = null
+    /** 导航动作原始清单：测试直接读它，避免调用 override-only 的 getChildren。 */
+    private var _navActionsForTest: List<AnAction> = emptyList()
     internal val previewToggleAction: ToggleAction = object : ToggleAction(
         MpSqlVisualizerBundle.message("log.dockedPreview.toggle"),
         MpSqlVisualizerBundle.message("log.dockedPreview.toggle.tip"),
@@ -261,7 +263,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     }
 
     internal val navigationActionsForTest: List<AnAction>
-        get() = _navToolbarRef?.actionGroup?.getChildren(null)?.toList().orEmpty()
+        get() = _navActionsForTest
 
     /** 层级切换后即时刷新导航工具栏（Back 可见性走 update；组件不可见时平台跳过，无副作用）。 */
     private fun refreshNavToolbar() {
@@ -386,8 +388,10 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     private fun buildUI() {
         // 顶部工具栏：返回（仅二级可见）+ 刷新 + 搜索
         // T-UiNative T-UN-10：手摆按钮 → 平台 ActionToolbar（Back 可见性由 BackAction.update 按当前层级输出）
+        val navActions = listOf(BackAction(), RefreshAction(), scrollToEndAction, previewToggleAction)
+        _navActionsForTest = navActions
         val navToolbar = ActionManager.getInstance()
-            .createActionToolbar("mpvs.history.nav", DefaultActionGroup(BackAction(), RefreshAction(), scrollToEndAction, previewToggleAction), true)
+            .createActionToolbar("mpvs.history.nav", DefaultActionGroup(*navActions.toTypedArray()), true)
             .apply { targetComponent = this@HistorySqlLogPanel }
         _navToolbarRef = navToolbar
         val toolbar = JPanel(FlowLayout(FlowLayout.LEFT, 4, 0))
