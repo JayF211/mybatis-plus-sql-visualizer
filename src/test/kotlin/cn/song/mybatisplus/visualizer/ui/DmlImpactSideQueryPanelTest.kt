@@ -59,6 +59,20 @@ class DmlImpactSideQueryPanelTest : BasePlatformTestCase() {
         }
     }
 
+    fun testNotApplicableReplacesStaleInlineResult() {
+        val sql = "SELECT * FROM t_order WHERE id = 1"
+        val p = panel(sql)
+        try {
+            p.estimateDmlImpact()
+            assertEquals(sql, p.currentEditorSql())
+            val label = p.impactResultLabel!!
+            assertTrue("不可试算原因应覆盖旧结果：${label.text}", label.text.contains("UPDATE/DELETE"))
+            assertEquals(com.intellij.ui.JBColor.RED, label.foreground)
+        } finally {
+            p.clear()
+        }
+    }
+
     fun testEstimateFailureShowsInlineErrorWithoutTouchingEditor() {
         val sql = "UPDATE t_order SET status = 1 WHERE id = 1111"
         val p = panel(sql)

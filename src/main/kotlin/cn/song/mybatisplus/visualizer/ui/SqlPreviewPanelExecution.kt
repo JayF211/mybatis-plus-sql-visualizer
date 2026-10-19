@@ -162,6 +162,8 @@ internal fun SqlPreviewPanel.showRollbackSql() {
                     MpSqlVisualizerBundle.message("dml.impact.notApplicable.title"),
                     MpSqlVisualizerBundle.message(plan.reasonKey),
                 )
+                // 覆盖上一次的内联结果，避免 SQL 已不可试算时仍显示旧行数。
+                showDmlImpactResult(MpSqlVisualizerBundle.message(plan.reasonKey), true)
             }
 
             is cn.song.mybatisplus.visualizer.execute.DmlImpactEstimator.Plan.Applicable -> {
