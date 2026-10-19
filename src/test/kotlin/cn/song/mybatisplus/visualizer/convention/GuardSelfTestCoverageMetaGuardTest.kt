@@ -681,6 +681,16 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "offenders 列表在用例内联累积，无独立「返回违规点集合」的具名判定函数，故 decisionFns 留空；" +
                     "灵敏度=按用例内合成样本自证（含合法/违规两向样本），实施轮已实测。",
             ),
+            GuardEntry(
+                "convention/EnhancedCaptureDefaultOnGuardTest.kt",
+                emptyList(),
+                "增强捕获默认开启/确认流删除守卫（T-EnhancedCaptureDefaultOn）：判定内核内联于三个用例——" +
+                    "扫 src/main 全量 .kt/.java（先剥注释）断言确认流符号零命中；扫中英 bundle 断言确认/" +
+                    "重新授权/未授权键零命中且 enableDone/tip 键在场；断言默认值与 loadState 归一在场。" +
+                    "无独立「返回违规点集合」的具名判定函数，故 decisionFns 留空；" +
+                    "灵敏度=反向三组各恰 1 红（恢复 confirmed 闸门 / 恢复 requestReauthorization 符号 / " +
+                    "摘 loadState 归一）已实测。",
+            ),
             // ---- 判定内核类（有可注入合成样本的判定函数） ----
             GuardEntry(
                 "convention/BannedApiScanSupport.kt",
