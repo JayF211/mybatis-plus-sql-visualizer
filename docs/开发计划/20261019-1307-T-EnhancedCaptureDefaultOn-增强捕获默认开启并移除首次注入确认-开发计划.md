@@ -2,7 +2,7 @@
 
 - 立项时间：2026-10-19 13:07
 - 基线：`dev` `087c336d`（工作树 `F:/code/Java/Gitee/SongRenShuo/mybatis-plus-sql-visualizer-dev`）
-- 状态：已实施（2026-10-19，dev 工作树）。定向 17 类 **148/0/0/0**；反向三组各恰 1 红（G2 恢复 confirmed 闸门 / G1 恢复 `requestReauthorization` 符号 / G3 摘 `loadState` 归一）。真机验收由用户执行；未跑全量门禁、未合并 master、未推送。
+- 状态：已实施（2026-10-19，dev 工作树，提交 `5b4fb4e0` + 守卫修复 `c00b8827`/`a1a4da47`）。定向 17 类 **148/0/0/0**；反向三组各恰 1 红（G2 恢复 confirmed 闸门 / G1 恢复 `requestReauthorization` 符号 / G3 摘 `loadState` 归一）。隔离工作树 `a1a4da47` 权威 `testShards` **7892/0/0/9** + testExternal **31/0/0/1** + agent **164/0/0/0**，parity 720 类全覆盖；shard2 有 +40% 权重告警（画像过期/新类缺权，非失败）。真机验收由用户执行；未合并 master、未推送。
 - 编号：不预占 O/R/D/V，实施前按台账登记。
 - 关联：`T-FirstUsePremainConsent`、`T-FirstUseFreshInstallConsent`、`T-ConsentTruth`、`T-CaptureTruth`、`T-PS4-01`；`docs/设计规范-弹窗克制红线.md`；`20261015-T-Jdk8RedisAgentStartupCrash-JDK8接入Redis后增强捕获启动崩溃排查-开发计划.md`。
 
