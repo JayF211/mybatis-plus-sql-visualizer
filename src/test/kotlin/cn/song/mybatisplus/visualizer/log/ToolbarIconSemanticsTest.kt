@@ -82,6 +82,8 @@ class ToolbarIconSemanticsTest : BasePlatformTestCase() {
                     action, null, ActionPlaces.TOOLBAR, DataContext.EMPTY_CONTEXT,
                 )
                 action.update(event)
+                // 增强暂停在关闭态置 isVisible=false 且不设图标（不会渲染），只校验实际可见动作
+                if (!event.presentation.isVisible) return@forEach
                 val icon = event.presentation.icon
                 assertNotNull("动作「${action.templatePresentation.text}」必须带图标", icon)
                 assertEquals("动作「${action.templatePresentation.text}」图标宽度", 16, icon!!.iconWidth)

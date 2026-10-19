@@ -199,16 +199,16 @@
 | B | `General.InspectionsEye` 眼睛 | 平台只有纯眼睛，没有斜线；"隐藏/屏蔽"可读，但不如斜线直接 |
 | C | 自绘"眼睛 + 斜线"（用户定稿：expui 眼 + 红斜线） | 复用 expui `inspectionsEye` 的眼睛轮廓，加一条贯穿斜线；平台图标集无现成字段 |
 
-推荐：**C（已定稿）**。平台图标集里没有"眼睛 + 斜线"的字段（`toggleVisibility` 是眼睛+列表，`hide` 是横线，`hidePassed` 是漏斗+彩点），所以这一项必须自绘。眼睛轮廓直接沿用 expui `inspectionsEye` 的路径，保证与邻居同风格；斜线用红色（`DB5860`/`DB5C5C`），即对照图里 expui 眼睛 + 红斜线的第一版。粗眼版本与灰斜线版本均不采用。
+推荐：**C（已定稿）**。平台图标集里没有"眼睛 + 斜线"的字段（`toggleVisibility` 是眼睛+列表，`hide` 是横线，`hidePassed` 是漏斗+彩点），所以这一项必须自绘。眼睛轮廓直接沿用 expui `inspectionsEye` 的路径，保证与邻居同风格；斜线用红色（`DB5860`/`DB5C5C`）。首版按 expui 原尺寸落在工具栏里偏小，实施后整体放大约 15%（眼睛横向 10.94→12.58、纵向 7→8.05，描边 1.4，斜线 1.6），与搜索/漏斗/设置并排时体量一致。
 
 自绘参考（亮色版；暗色把主色换 `#CED0D6`、斜线换 `#DB5C5C`）：
 
 ```svg
-<!-- 眼睛轮廓取自 IntelliJ expui inspectionsEye.svg（Apache 2.0） -->
+<!-- 眼睛轮廓取自 IntelliJ expui inspectionsEye.svg（Apache 2.0），斜线为屏蔽语义后加；图形放大约 15% -->
 <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <circle cx="8" cy="8" r="1.5" stroke="#6C707E"/>
-  <path d="M8 11.5C5.62351 11.5 3.2737 9.94494 2.53088 8C3.2737 6.05506 5.62351 4.5 8 4.5C10.3765 4.5 12.7263 6.05506 13.4691 8C12.7263 9.94494 10.3765 11.5 8 11.5Z" stroke="#6C707E"/>
-  <path d="M3.2 12.8L12.8 3.2" stroke="#DB5860" stroke-width="1.5" stroke-linecap="round"/>
+  <circle cx="8" cy="8" r="1.72" stroke="#6C707E" stroke-width="1.4"/>
+  <path d="M8.0000 12.0250C5.2670 12.0250 2.5648 10.2367 1.7105 8.0000C2.5648 5.7633 5.2670 3.9750 8.0000 3.9750C10.7330 3.9750 13.4352 5.7633 14.2895 8.0000C13.4352 10.2367 10.7330 12.0250 8.0000 12.0250Z" stroke="#6C707E" stroke-width="1.4"/>
+  <path d="M2.250 13.750L13.750 2.250" stroke="#DB5860" stroke-width="1.6" stroke-linecap="round"/>
 </svg>
 ```
 
