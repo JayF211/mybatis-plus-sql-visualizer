@@ -35,6 +35,7 @@ import java.awt.BorderLayout
 import javax.swing.event.DocumentEvent
 import javax.swing.event.DocumentListener
 // T-M53-II：扩展函数看不见接收者类的 companion 成员（Kotlin 规则），须逐项显式导入。
+import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel.Companion.DEGRADED_GRACE_MS
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel.Companion.PREWARM_WAIT_MS
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel.Companion.PREVIEW_DIR_MAX_FILES
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel.Companion.STALE_PREVIEW_MAX_AGE_MS
@@ -89,7 +90,7 @@ internal fun SqlPreviewPanel.prewarmPreviewTempFile() {
             // 预览路径此前未跟进；旧实现 09:34:40 起持续预热失败后回退裸文档，补全/注释全灭）。
             val io = projectPreviewFile() ?: run {
                 prewarmFailed = true
-                await.fail(IllegalStateException("project preview file unavailable"))
+                await.fail(PreviewPrewarmException(PreviewDegradationReason.FILE_UNAVAILABLE, "project preview file unavailable"))
                 LOG.warn("[M36] prewarm FAILED in ${prewarmElapsedMs(prewarmStartedAt)}ms: project preview file unavailable (project/basePath null or mkdirs false)")
                 return@executeOnPooledThread
             }
@@ -106,7 +107,7 @@ internal fun SqlPreviewPanel.prewarmPreviewTempFile() {
             }
             if (vf == null) {
                 prewarmFailed = true
-                await.fail(IllegalStateException("VFS refresh null after ${retries + 1} tries"))
+                await.fail(PreviewPrewarmException(PreviewDegradationReason.VFS_UNAVAILABLE, "VFS refresh null after ${retries + 1} tries"))
                 LOG.warn("[M36] prewarm FAILED in ${prewarmElapsedMs(prewarmStartedAt)}ms: VFS refresh null after ${retries + 1} tries (${io.path}, exists=${io.exists()})")
                 return@executeOnPooledThread
             }
@@ -142,7 +143,7 @@ internal fun SqlPreviewPanel.prewarmPreviewTempFile() {
                     return@executeOnPooledThread
                 }
                 prewarmFailed = true
-                await.fail(IllegalStateException("PsiManager.findFile null for ${vf.name}"))
+                await.fail(PreviewPrewarmException(PreviewDegradationReason.PSI_UNAVAILABLE, "PsiManager.findFile null for ${vf.name}"))
                 LOG.warn("[M36] prewarm FAILED in ${prewarmElapsedMs(prewarmStartedAt)}ms: PsiManager.findFile null for ${vf.name}")
                 return@executeOnPooledThread
             }
@@ -417,6 +418,8 @@ internal fun SqlPreviewPanel.resolvePreviewEditorSource(sql: String): Pair<Boole
             if (!previewDisposed) assemblePreviewEditor(sql, pair)
         },
         onFallback = {
+            // T-DegradedPreviewUx P0：超时（产物在途）与硬失败在此分流——前者走宽限期静默，
+            // 后者立即披露。原因由 await 的终态翻译，不再靠调用方传字符串。
             if (!previewDisposed) assemblePreviewEditor(sql, null)
         },
     )
@@ -494,7 +497,11 @@ internal fun SqlPreviewPanel.showPreparingPlaceholderForTest() = showPreviewPrep
  *   与原 await 一次性语义一致地走降级。
  */
 
-internal fun SqlPreviewPanel.assemblePreviewEditor(sql: String, prewarmed: Pair<com.intellij.openapi.vfs.VirtualFile, PsiFile>?) {
+internal fun SqlPreviewPanel.assemblePreviewEditor(
+    sql: String,
+    prewarmed: Pair<com.intellij.openapi.vfs.VirtualFile, PsiFile>?,
+    reason: PreviewDegradationReason? = null,
+) {
     val proj = project
     val sqlFileType = com.intellij.openapi.fileTypes.FileTypeManager.getInstance()
         .getStdFileType("SQL")
@@ -513,6 +520,9 @@ internal fun SqlPreviewPanel.assemblePreviewEditor(sql: String, prewarmed: Pair<
                 // T-PreviewUx-Pack #2：主路径成功（项目内文件 + PSI 就绪）——清除降级横幅
                 // T-PrewarmLateRecover F2：动作一并摘除（横幅已清，留着会被后续 RENDER_WARNING 继承）
                 degradationBanner.onRetry = null
+                // T-DegradedPreviewUx P1：主路径装配成功 = 降级已恢复——宽限定时器必须取消，
+                // 否则到点还会把过期横幅弹出来（瞬时超时场景的横幅一次都不该出现）
+                cancelDegradedGraceTimer()
                 degradationBanner.clear(DegradationBanner.Kind.DEGRADED)
                 // T-PrewarmLateRecover F1：主路径装配 → 当前文档不再属于降级态
                 degradedPreviewDocument = null
@@ -542,9 +552,21 @@ internal fun SqlPreviewPanel.assemblePreviewEditor(sql: String, prewarmed: Pair<
                     }
                 }
                 d
-            }.getOrElse { fallbackPreviewDocument(sql, it.message ?: it.javaClass.simpleName) }
+            }.getOrElse {
+                // T-DegradedPreviewUx P0：主路径产物在途失败（文档解析/写入异常）——真实原因是 PSI 侧，
+                // 不沿用 await 的终态（此刻 await 可能已成功）
+                fallbackPreviewDocument(
+                    sql,
+                    PreviewDegradationReason.PSI_UNAVAILABLE,
+                    it.message ?: it.javaClass.simpleName,
+                )
+            }
         } else {
-            fallbackPreviewDocument(sql, "prewarmed product unavailable (timeout/failed/consumed)")
+            fallbackPreviewDocument(
+                sql,
+                reason ?: prewarmAwait?.degradationReasonOrNull() ?: PreviewDegradationReason.PRODUCT_CONSUMED,
+                "prewarmed product unavailable (timeout/failed/consumed)",
+            )
         }
     } else {
         null
@@ -623,10 +645,14 @@ internal fun SqlPreviewPanel.assemblePreviewEditor(sql: String, prewarmed: Pair<
  * F2：横幅挂上「重试」动作。
  */
 
-internal fun SqlPreviewPanel.fallbackPreviewDocument(sql: String, msg: String): com.intellij.openapi.editor.Document {
+internal fun SqlPreviewPanel.fallbackPreviewDocument(
+    sql: String,
+    reason: PreviewDegradationReason,
+    msg: String,
+): com.intellij.openapi.editor.Document {
     // 第二级：内存 PSI（保留补全上下文载体）
     createInMemoryPreviewPsi(sql)?.let { memoryPsiDoc ->
-        showDegradedBanner("panel.banner.degradedPsi")
+        showDegradedBanner(reason)
         degradedPreviewDocument = memoryPsiDoc
         return memoryPsiDoc
     }
@@ -634,23 +660,67 @@ internal fun SqlPreviewPanel.fallbackPreviewDocument(sql: String, msg: String): 
     com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
         .warn("[M36] preview temp file unavailable, fall back to bare in-memory editor: $msg")
     psiFile = null
-    showDegradedBanner("panel.banner.degradedPlain")
+    showDegradedBanner(PreviewDegradationReason.MEMORY_PSI_FAILED)
     return EditorFactory.getInstance().createDocument(sql).also { degradedPreviewDocument = it }
 }
 
 /**
- * T-PrewarmLateRecover F2：挂降级横幅并接上「重试」动作。
+ * T-DegradedPreviewUx P1：降级横幅按原因分档披露。
  *
- * 动作覆盖的是 F1 够不到的那一类——预热**硬失败**（VFS refresh 失败 / findFile null /
- * 项目内目录建不出来）：没有产物可等，只能由用户点一次重新臂预热。
+ *  - **超时**（产物仍在途）：先不显示，挂 [DEGRADED_GRACE_MS] 宽限定时器；产物在此期间到达，
+ *    主路径装配会取消定时器并清横幅——瞬时降级全程不打扰。
+ *  - **硬失败**：立即显示（原因短句 + 「重试」），不延迟。
+ *
+ * 动作仍由 [retryPrewarm] 承接（T-PrewarmLateRecover F2 语义不变）。
  */
 
-internal fun SqlPreviewPanel.showDegradedBanner(messageKey: String) {
+internal fun SqlPreviewPanel.showDegradedBanner(reason: PreviewDegradationReason) {
+    // 新一次降级判定：上一轮宽限定时器作废（避免旧 reason 到点弹出）
+    cancelDegradedGraceTimer()
     degradationBanner.onRetry = { retryPrewarm() }
-    degradationBanner.show(
-        DegradationBanner.Kind.DEGRADED,
-        MpSqlVisualizerBundle.message(messageKey),
-    )
+    if (reason == PreviewDegradationReason.TIMEOUT) {
+        // 面板复用（clear → showResult）时上一轮的降级横幅可能还挂着：本轮是「待披露」态，
+        // 先收掉旧横幅，宽限期内保持静默，到点再按超时型显示。
+        degradationBanner.clear(DegradationBanner.Kind.DEGRADED)
+        degradedGraceReason = reason
+        val timer = javax.swing.Timer(DEGRADED_GRACE_MS.toInt()) { flushDegradedGrace() }.apply { isRepeats = false }
+        degradedGraceTimer = timer
+        timer.start()
+        return
+    }
+    showDegradedBannerNow(reason)
+}
+
+/** 立即显示降级横幅（硬失败路径与宽限期到点的共同收口）。 */
+internal fun SqlPreviewPanel.showDegradedBannerNow(reason: PreviewDegradationReason) {
+    val cause = reason.causeKey()?.let { MpSqlVisualizerBundle.message(it) }
+    val text = if (cause == null) {
+        MpSqlVisualizerBundle.message(reason.bannerKey())
+    } else {
+        MpSqlVisualizerBundle.message(reason.bannerKey(), cause)
+    }
+    // 宽度不足时正文会被裁——完整文案 + 降级期操作提示放 tooltip（不新造「详情」控件）
+    // UI-022：headless 下改参数/勾选条件重渲染正常（见 SqlPreviewPanelDegradedUxTest），
+    // 真实 GUI 表现仍待沙盒定位，故把「未生效时点重试」这条出路放在悬停提示里，不写进单行正文。
+    val tooltip = text + "\n" + MpSqlVisualizerBundle.message("panel.banner.degradedHint")
+    degradationBanner.show(DegradationBanner.Kind.DEGRADED, text, tooltip = tooltip)
+}
+
+/** 宽限期到点：停表并显示超时型横幅（幂等；测试后门与 Timer 动作共用）。 */
+internal fun SqlPreviewPanel.flushDegradedGrace() {
+    val pending = degradedGraceReason ?: return
+    cancelDegradedGraceTimer()
+    if (previewDisposed) return
+    // 宽限期内预热可能已经硬失败（VFS 重试走完仍 null 等）：重取一次终态，
+    // 避免把「永久失败」继续描述成「稍后会自动切换」。
+    showDegradedBannerNow(prewarmAwait?.degradationReasonOrNull() ?: pending)
+}
+
+/** T-DegradedPreviewUx P1：停止并丢弃宽限定时器（幂等，四个收口点共用）。 */
+internal fun SqlPreviewPanel.cancelDegradedGraceTimer() {
+    degradedGraceTimer?.stop()
+    degradedGraceTimer = null
+    degradedGraceReason = null
 }
 
 /**
@@ -858,6 +928,8 @@ internal fun SqlPreviewPanel.bindAutoPopup(created: Editor) {
  */
 
 internal fun SqlPreviewPanel.disposeCurrentEditorOnly() {
+    // T-DegradedPreviewUx P1：编辑器被释放 = 当前降级装配作废，宽限定时器一并停（幂等）
+    cancelDegradedGraceTimer()
     editor?.let {
         // UI025：先摘编辑器级错列标注通道（监听 + RangeHighlighter），再释放编辑器
         cn.song.mybatisplus.visualizer.ui.annotate.PreviewSchemaHighlighter.uninstall(it)

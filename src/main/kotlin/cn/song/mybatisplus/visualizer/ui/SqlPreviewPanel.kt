@@ -327,6 +327,17 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
      */
     internal var lastRenderedSql: String? = null
 
+    /**
+     * T-DegradedPreviewUx P1：瞬时降级的宽限定时器。
+     *
+     * 预热超时（产物仍在途）时不立刻挂横幅——[DEGRADED_GRACE_MS] 内产物到达会由主路径装配
+     * 取消本定时器，横幅一次都不出现；到点仍未恢复才显示超时型横幅。硬失败不走这条路。
+     */
+    internal var degradedGraceTimer: javax.swing.Timer? = null
+
+    /** 宽限定时器到点后要披露的原因（[cancelDegradedGraceTimer] 一并清空）。 */
+    internal var degradedGraceReason: PreviewDegradationReason? = null
+
     // R92: preview-only overlay; never mixed into paramValues or real handler state.
     internal var fieldFillEnabled = false
     internal var fieldFillSyncing = false
@@ -889,6 +900,8 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
         // T-Perf-04：防抖/历史 Timer 随面板停止（防晚到 flush 触碰已销毁面板状态）
         renderDebounceTimer.stop()
         pendingRender = null
+        // T-DegradedPreviewUx P1：降级宽限定时器同样随面板停止（到点不得再弹横幅）
+        cancelDegradedGraceTimer()
         historyAlarm.stop()
         // T-Perf-16：释放 DataSourceSelector 单例滞留引用（弹窗关闭此前不走 clear 按钮路径——
         // prepared/shared/pendingOnConsole 强引用已关闭面板与原生控制台，堆转储滞留整棵面板树）
@@ -974,6 +987,15 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
 
     /** T-PrewarmLateRecover F2：横幅「重试」动作入口（等价于点击横幅上的动作）。 */
     internal fun retryPrewarmForTest() = retryPrewarm()
+
+    /** T-DegradedPreviewUx P1：宽限定时器是否在途（瞬时降级的「尚未披露」态）。 */
+    internal fun degradedGracePendingForTest(): Boolean = degradedGraceTimer?.isRunning == true
+
+    /** T-DegradedPreviewUx P1：模拟宽限期到点（headless 无真实 3s 等待）。 */
+    internal fun fireDegradedGraceForTest() = flushDegradedGrace()
+
+    /** T-DegradedPreviewUx P1/P2：按原因披露横幅的入口（等价于装配降级链的调用）。 */
+    internal fun showDegradedBannerForTest(reason: PreviewDegradationReason) = showDegradedBanner(reason)
 
     internal fun currentForTest(): PreviewResult? = current
     internal fun compactForTest(): Boolean = compactMode
@@ -1408,6 +1430,16 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
          * 抬高预算的代价是等待期变长，已由 [showPreviewPreparingPlaceholder] 的占位覆盖观感。
          */
         const val PREWARM_WAIT_MS = 500L
+
+        /**
+         * T-DegradedPreviewUx P1：预热超时后的降级横幅宽限期（毫秒）。
+         *
+         * 超时只代表「预热还没回来」，T-PrewarmLateRecover F1 的迟到产物通常数秒内到达并自动换装。
+         * 取值 3000 的依据：既有实测样本里冷启首开 233~360ms、重负载约 1s、最坏一次 3016ms
+         * （`docs/验收文档/20260920-预热耗时采样与预算建议.md`），3000ms 覆盖到观测尾部；
+         * 到点仍未恢复才披露，避免把「慢」呈现成「故障」。硬失败不走本宽限期（立即显示）。
+         */
+        internal const val DEGRADED_GRACE_MS = 3000L
 
         /**
          * T-PerfSweep6 T-PS6-04（性能报告发现 4）：预热目录残留清扫的**年龄**上限（7 天）。
