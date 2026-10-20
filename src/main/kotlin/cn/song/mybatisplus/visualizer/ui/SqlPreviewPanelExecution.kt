@@ -716,17 +716,24 @@ internal fun SqlPreviewPanel.showDialectGateError(
         return
     }
     val settingsAvailable = runCatching { findSqlDialectConfigurable(proj) != null }.getOrDefault(false)
-    resultPanel.showErrorWithActions(
-        message,
-        fixLabel = MpSqlVisualizerBundle.message("execute.dialectGate.action.switchDataSource"),
-        fixTooltip = MpSqlVisualizerBundle.message("execute.dialectGate.action.switchDataSource.tip"),
-        fix = { executeSql(forceChoose = true) },
-        settingsLabel = if (settingsAvailable) {
-            MpSqlVisualizerBundle.message("execute.dialectGate.action.openSettings")
-        } else null,
-        settingsTooltip = MpSqlVisualizerBundle.message("execute.dialectGate.action.openSettings.tip"),
-        settings = { openSqlDialectSettings(proj) },
-    )
+    // T-DialectGateUx：闸门在**同一次调用栈**里还会经旧 onError 通道再投一次纯文案
+    // （DataSourceSelector.allowDialectGate 先 onDialectGate 再 onError），后者会把刚挂上的
+    // 动作清掉（沙盒实证：红条只有复制、没有两个入口）。把带动作的最终呈现放到下一拍 EDT，
+    // 保证它是这次阻断的最终状态。
+    com.intellij.openapi.application.ApplicationManager.getApplication().invokeLater {
+        if (previewDisposed) return@invokeLater
+        resultPanel.showErrorWithActions(
+            message,
+            fixLabel = MpSqlVisualizerBundle.message("execute.dialectGate.action.switchDataSource"),
+            fixTooltip = MpSqlVisualizerBundle.message("execute.dialectGate.action.switchDataSource.tip"),
+            fix = { executeSql(forceChoose = true) },
+            settingsLabel = if (settingsAvailable) {
+                MpSqlVisualizerBundle.message("execute.dialectGate.action.openSettings")
+            } else null,
+            settingsTooltip = MpSqlVisualizerBundle.message("execute.dialectGate.action.openSettings.tip"),
+            settings = { openSqlDialectSettings(proj) },
+        )
+    }
 }
 
 /** 方言设置页的 Configurable EP id（Database 插件注册，见 SqlPlugin.xml）。 */
