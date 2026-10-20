@@ -243,11 +243,26 @@ fun WrapperArg?.asSqlFragment(): String? = when (val v = (this as? WrapperArg.Va
 
 改 `Placeholder` 写法后，**未重编译的旧测试类成片 `NoSuchMethodError: Placeholder.<init>(String)`**（19 例，集中在 converter/psi 包）。这是「回归假失败清单第 0 条」的第四次命中，按定例 `./gradlew compileTestKotlin --rerun-tasks` 后复跑即恢复。以后凡是给带默认参数的数据类加字段，收口前必须先做这一步。
 
-### 11.5 遗留
+### 11.5 后续收口（原遗留项已关闭）
 
-- `last("LIMIT " + n)`、`select(String... )` / `orderByStr` 的字符串列表达式、xbatis/easy-query 等第三方链的片段位仍未换口（值/标识符位置本就不该换，是否属于片段位需各自评估）。
-- `select(String...)` 表达式、`rawFirst`、`rawAround`、UNION 子句（`SqlGenerator.generate` 无参数收集）、MPJ fill 子句里的占位符仍不登记来源——它们与条件的相对顺序同样会错位，但载荷多为提示/窗口/派生片段，待后续统一（同类问题的完整清单见本节的四处已修载体）。
-- 真机复验待做（需重建插件包后在 demo 的 `discount` 上点预览）。
+原列的五项在本轮全部处理，`fragmentFixtures()` 矩阵各补一行：
+
+| 入口 | 做法 |
+| --- | --- |
+| `select(String...)` 表达式 | `ColumnRef.rawParams` + `selectColumnArgs`（**只换 SELECT 列表**；条件/排序/分组仍是标识符位置，保持 `Literal` 口径）+ `renderColumnRef` 在列列表渲染点按序登记 |
+| `rawFirst` | `SelectStatement.rawFirstParams`，生成器在 SELECT 之前登记（`around` 合并 first 时来源同序拼接） |
+| `rawAround` | `SelectStatement.rawAroundParams`；`parseAround` 改为携带来源的 `AroundFragment`（双字面量形态分别带，模板形态走 `renderSqlFragment`） |
+| UNION 子查询 | `UnionClause.params`；构建改用 `SqlGenerator.generateWithParams` 带出子语句来源，生成器在 UNION 渲染点登记 |
+| `last("LIMIT " + n)` | `parseLimit` 支持占位形态（`limit ?` / `limit ?, ?` / `limit ? offset ?`，含数字与占位混排）；`LimitClause` 本就持有 `SqlValue`，limit 渲染点已登记来源 |
+| MPJ fill 子句 | **显式关闭（不登记）**：fill 段的 `IN (?)` 是运行时收集键集合的**合成占位符**，没有可命名来源；且它由面板在主 SQL 回填**之后**追加（`appendFillSection`），不可能让主语句来源前移。改为在 `MpjFillConverterTest.fill_结合主查询join` 钉住两条性质：主语句参数表只有主查询来源、主 SQL 占位符数与来源数相等、fill 段不混入主 SQL |
+
+顺带修了一个前置缺陷：片段来源必须**注释/引号感知**地收集——`first("/*+ MAX_EXECUTION_TIME(" + ms + ") */")` 的 `?` 落在块注释里，旧实现会凭空多出一个来源。`fragmentOf` 与 `renderSqlFragment` 改为「先记标记位点、再按真实占位符位点过滤」。
+
+仍未换口（位置本身不是片段，不该换）：`orderByStr` / `groupBy` 的字符串列（标识符位置）、xbatis/easy-query 等第三方链的片段位（各自语义待评估）。
+
+真机复验由用户承接（本轮已跑过一轮 243 沙盒验收，见第十三节）。
+
+读数（本轮收口）：`SqlFragmentConcatTest` 24/0/0（矩阵 15 个入口）+ `MpjFillConverterTest` 12/0/0；定向回归（converter/psi/ui 三包）**1467/0/0/0**（97 个类）；全量门禁（`testShards --no-configuration-cache --continue`，单路）**7973/3/8**，三条失败仍是 `InjectionGateTest`×2 与 `UnknownParamGateTest`×1（已在干净 dev HEAD 上基线复现，环境相关既有失败，见 11.6）。
 
 ### 11.6 用户验收追加：参数按位置错位（UI-039）
 
@@ -298,6 +313,8 @@ fun WrapperArg?.asSqlFragment(): String? = when (val v = (this as? WrapperArg.Va
 | 6 条参数顺序用例 + `testMpjStringJoinIndexedParamOrder` | 来源顺序 == SQL 文本顺序（含 `{0}` 插在拼接中间、尾缀在 WHERE 之后、join 在 WHERE 之前） | 顺序错必红 |
 | `testSetValuePositionConcatStaysSinglePlaceholder` | 值位置只能一个 `?` | 修片段位时改坏值位置必红 |
 | `fragmentFixtures()` 矩阵夹具 | 新增片段入口只需加一行 | 降低下次复制整套断言的成本 |
+
+矩阵当前覆盖 **15 个片段入口**：setSql 拼接 / setSql `{0}` / setIncrBy / last 尾缀 / apply / having / inSql / eqSql / 值位置（反向）/ MPJ 字符串 join / select 表达式 / first / `last("LIMIT "+n)` 占位 / MPJ around / UNION 子查询。`fill` 不在矩阵内（不是片段位，改由 `MpjFillConverterTest` 钉住合成占位符的性质，见 11.5）。
 
 ### 12.5 两条护栏的判别力实测（反向验证）
 

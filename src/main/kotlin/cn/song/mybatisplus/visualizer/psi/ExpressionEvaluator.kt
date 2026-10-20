@@ -94,37 +94,47 @@ object ExpressionEvaluator {
      *
      * 例：`"amount = amount * " + rate` → 文本 `amount = amount * ?`、来源 `[rate]`。
      *
+     * 来源按**真实占位符位点**收敛：字符串字面量/注释内的 `?` 不计（`first("/*+ ...(" + ms + ") */")`
+     * 的 `?` 在块注释里，不能凭空多出一个来源——那会让面板把后面的值填错位）。
+     *
      * 只在整体是字符串拼接时才给值——数值算术（`1 + n`）不是 SQL 片段，给 null 以免拼出 `1?`。
      */
     private fun fragmentOf(expr: PsiPolyadicExpression): SqlFragment? {
         if (expr.operationTokenType != JavaTokenType.PLUS) return null
         if (!isStringConcat(expr)) return null
         val text = StringBuilder()
-        val params = mutableListOf<String>()
+        // 文本位点 → 来源（仅用于最终按真实占位符位点过滤；注释/引号内的会被丢弃）
+        val marks = mutableListOf<Pair<Int, String>>()
+        fun appendRuntime(source: String) {
+            marks += text.length to source
+            text.append('?')
+        }
         for (operand in expr.operands) {
             when (val v = evaluate(operand)) {
                 is SqlValue.Literal -> {
+                    // 字面量里用户自写的 `?` 也是一次占位（注释/引号内的会被最终过滤掉）
+                    v.unquoted.forEachIndexed { index, ch ->
+                        if (ch == '?') marks += (text.length + index) to UNKNOWN_PARAM
+                    }
                     text.append(v.unquoted)
-                    // 字面量里用户自写的 `?` 同样是占位符，必须占位，否则后续来源整体前移
-                    repeat(placeholderPositions(v.unquoted).size) { params += UNKNOWN_PARAM }
                 }
                 is SqlValue.Placeholder -> {
-                    // 嵌套拼接已带自己的文本与来源（多级 `"a = " + x + " + " + y`）
                     val nested = v.fragment
                     if (nested != null) {
-                        text.append(nested.text)
-                        params += nested.params
-                        repeat(placeholderPositions(nested.text).size - nested.params.size) {
-                            params += UNKNOWN_PARAM
+                        // 嵌套拼接：按嵌套文本的**真实占位符位点**逐位对齐来源（引号/注释内的 `?` 不参与）
+                        val realOffsets = placeholderPositions(nested.text)
+                        nested.params.forEachIndexed { i, source ->
+                            realOffsets.getOrNull(i)?.let { at -> marks += (text.length + at) to source }
                         }
+                        text.append(nested.text)
                     } else {
-                        text.append('?')
-                        params += v.source
+                        appendRuntime(v.source)
                     }
                 }
             }
         }
-        return SqlFragment(text.toString(), params)
+        val effective = placeholderPositions(text.toString()).toSet()
+        return SqlFragment(text.toString(), marks.filter { it.first in effective }.map { it.second })
     }
 
     /**

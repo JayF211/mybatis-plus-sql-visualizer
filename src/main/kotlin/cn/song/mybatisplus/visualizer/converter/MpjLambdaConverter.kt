@@ -147,8 +147,11 @@ object MpjLambdaConverter : WrapperConverter {
             joins = joins,
             unions = unions,
             fromSubQuery = fromSubQuery,
-            rawAround = around?.second,
+            rawAround = around?.last,
+            rawAroundParams = around?.lastParams.orEmpty(),
             rawFirst = around?.first?.let { listOfNotNull(base.rawFirst, it).joinToString(" ") } ?: base.rawFirst,
+            // T-UpdateSetSqlConcat：first 片段合并后来源同序拼接（base 的在前）
+            rawFirstParams = if (around?.first != null) base.rawFirstParams + around.firstParams else base.rawFirstParams,
             fillClauses = fillClauses,
         )
     }
@@ -162,7 +165,9 @@ object MpjLambdaConverter : WrapperConverter {
         val nested = call.args.getOrNull(1) as? WrapperArg.NestedArg ?: return null
         val subStatement = QueryWrapperParser(subTable).parse(nested.chain)
         val keyword = if (call.methodName == "unionAll") "UNION ALL" else "UNION"
-        return UnionClause(keyword, SqlGenerator.generate(subStatement, compact = true))
+        // T-UpdateSetSqlConcat：子语句的占位符来源随子句一起带出（渲染点按序登记，否则主语句后面的参数错位）
+        val generated = SqlGenerator.generateWithParams(subStatement, compact = true)
+        return UnionClause(keyword, generated.sql, generated.unresolvedParams)
     }
 
     /**
@@ -198,19 +203,29 @@ object MpjLambdaConverter : WrapperConverter {
      *  - 模板形态 `around("sql {0}", v, ...)`（任务规约兼容）：模板 + `{i}` 绑定参数替换
      *    （复用 [renderJoinSql] 思路），first=null、second=替换结果。
      *
-     * @return Pair(firstSql?, lastSql)——firstSql 并入 rawFirst（可与 first(...) 并存），lastSql 为 rawAround
+     * @return [AroundFragment]（first 并入 rawFirst、last 为 rawAround，各带占位符来源）
      */
-    private fun parseAround(call: WrapperCall): Pair<String?, String>? {
-        // T-UpdateSetSqlConcat：片段位取 asSqlFragment（模板含运行期段时静态段保留、运行期段写 `?`）
-        // 注：rawAround/rawFirst 无参数来源位（片段里的 `?` 不登记），典型载荷是窗口/提示片段
+    private fun parseAround(call: WrapperCall): AroundFragment? {
+        // T-UpdateSetSqlConcat：片段位取 asSqlFragment；来源随片段带出（渲染点按序登记）
         val first = call.args.getOrNull(0).asSqlFragment() ?: return null
         // 双字符串字面量形态：模板不含 {i} 占位、双参且第二参为 SQL 片段
         if (!first.text.contains("{") && call.args.size == 2) {
-            call.args.getOrNull(1).asSqlFragment()?.let { return first.text to it.text }
+            call.args.getOrNull(1).asSqlFragment()?.let {
+                return AroundFragment(first.text, first.params, it.text, it.params)
+            }
         }
         // 模板形态：模板 + {i} 绑定参数替换
-        return null to renderJoinSql(first, call.args.drop(1)).text
+        val rendered = renderJoinSql(first, call.args.drop(1))
+        return AroundFragment(null, emptyList(), rendered.text, rendered.params)
     }
+
+    /** `around` 解析产物（T-UpdateSetSqlConcat：文本与占位符来源成对携带）。 */
+    private data class AroundFragment(
+        val first: String?,
+        val firstParams: List<String>,
+        val last: String,
+        val lastParams: List<String>,
+    )
 
     /**
      * T-MpjFill：解析 fill 调用 → FillClause（MPJ 1.5.1+）。

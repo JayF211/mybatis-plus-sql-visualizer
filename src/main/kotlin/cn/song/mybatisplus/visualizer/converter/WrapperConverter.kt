@@ -124,14 +124,16 @@ fun WrapperArg?.asSqlFragment(): SqlFragment? = when (val value = (this as? Wrap
  *
  * - `{i}`：替换为第 i 个绑定值（字面量取 `raw`、运行期值写 `?` 并登记来源）；
  *   绑定值缺失（null）时保留 `{i}` 原样（与既有 `replace` 跳过语义一致）
- * - 其余 `?`（字符串字面量/注释内的不算）：按顺序消耗 [fragment] 自带的来源；
- *   自带来源不足时补中性来源 [UNKNOWN_PARAM]，**宁可名字含糊也不能让参数表整体错位**
+ * - 模板自带的 `?`：按顺序消耗 [fragment] 的来源，**只认真实占位符位点**
+ *   （字符串字面量/注释内的 `?` 不消耗、不登记——`first("/*+ ...(" + ms + ") */")` 这类不能凭空多出来源）
+ * - 自带来源不足时补中性来源 [UNKNOWN_PARAM]，**宁可名字含糊也不能让参数表整体错位**
  */
 internal fun renderSqlFragment(fragment: SqlFragment, values: List<SqlValue?>): SqlFragment {
     val template = fragment.text
-    val placeholderOffsets = placeholderPositions(template).toSet()
+    val templatePlaceholders = placeholderPositions(template).toSet()
     val text = StringBuilder(template.length + 8)
-    val params = mutableListOf<String>()
+    // 输出文本位点 → 来源；最后按输出的真实占位符位点过滤（`{i}` 插进注释/引号时不留痕）
+    val marks = mutableListOf<Pair<Int, String>>()
     var index = 0
     var paramIndex = 0
     while (index < template.length) {
@@ -141,26 +143,30 @@ internal fun renderSqlFragment(fragment: SqlFragment, values: List<SqlValue?>): 
             if (binding != null && binding < values.size) {
                 when (val value = values[binding]) {
                     null -> text.append(template, index, close + 1)
-                    is SqlValue.Literal -> text.append(value.raw)
+                    is SqlValue.Literal -> {
+                        value.raw.forEachIndexed { i, ch ->
+                            if (ch == '?') marks += (text.length + i) to UNKNOWN_PARAM
+                        }
+                        text.append(value.raw)
+                    }
                     is SqlValue.Placeholder -> {
+                        marks += text.length to value.source
                         text.append('?')
-                        params += value.source
                     }
                 }
                 index = close + 1
                 continue
             }
         }
-        if (template[index] == '?' && index in placeholderOffsets) {
-            text.append('?')
-            params += fragment.params.getOrNull(paramIndex) ?: UNKNOWN_PARAM
+        if (template[index] == '?' && index in templatePlaceholders) {
+            marks += text.length to (fragment.params.getOrNull(paramIndex) ?: UNKNOWN_PARAM)
             paramIndex++
-        } else {
-            text.append(template[index])
         }
+        text.append(template[index])
         index++
     }
-    return SqlFragment(text.toString(), params)
+    val effective = placeholderPositions(text.toString()).toSet()
+    return SqlFragment(text.toString(), marks.filter { it.first in effective }.map { it.second })
 }
 
 /** 片段中无来源可追溯的占位符所用的中性来源名。 */

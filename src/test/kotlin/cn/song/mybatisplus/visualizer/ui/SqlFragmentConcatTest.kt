@@ -94,8 +94,12 @@ class SqlFragmentConcatTest : BasePlatformTestCase() {
             "    }\n" +
             "}"
 
-    /** MPJ 夹具：`chain` 为 `.leftJoin(...).eq(...)` 形态的单行链。 */
-    private fun mpjDemo(params: String, chain: String): String =
+    /** MPJ 夹具：`chain` 为 `.leftJoin(...).eq(...)` 形态的单行链；`entities` 为内部类声明（可多类）。 */
+    private fun mpjDemo(
+        params: String,
+        chain: String,
+        entities: String = "static class OrderEntity { private Long id; }",
+    ): String =
         "public class Demo {\n" +
             "    public void query($params) {\n" +
             "        MPJLambdaWrapper<OrderEntity> w = new MPJLambdaWrapper<OrderEntity>()\n" +
@@ -103,9 +107,7 @@ class SqlFragmentConcatTest : BasePlatformTestCase() {
             "            $chain;\n" +
             "    }\n" +
             "\n" +
-            "    static class OrderEntity {\n" +
-            "        private Long id;\n" +
-            "    }\n" +
+            "    $entities\n" +
             "}"
 
     /**
@@ -180,6 +182,36 @@ class SqlFragmentConcatTest : BasePlatformTestCase() {
                 ".leftJoin(\"(select * from station where station_id = {0}) st\", stationId).eq(OrderEntity::getId, id)",
             ),
             "LEFT JOIN (select * from station where station_id = ?) st",
+        ),
+        Fixture(
+            "select 表达式拼接",
+            queryDemo("String x", "qw.select(\"amount * \" + x + \" AS v\");", "qw.eq(\"status\", 1);"),
+            "SELECT amount * ? AS v",
+        ),
+        Fixture(
+            "first 片段（? 在注释外）",
+            queryDemo("Integer ms", "qw.first(\"/* hint */ \" + ms);", "qw.eq(\"status\", 1);"),
+            "/* hint */ ? SELECT",
+        ),
+        Fixture(
+            "last LIMIT 占位",
+            queryDemo("Integer n", "qw.eq(\"status\", 1);", "qw.last(\"LIMIT \" + n);"),
+            "LIMIT ?",
+        ),
+        Fixture(
+            "MPJ around 片段",
+            mpjDemo("Integer n", ".around(\"/* a */\", \"/* b */ \" + n).eq(OrderEntity::getId, 1L)"),
+            "/* b */ ?",
+        ),
+        Fixture(
+            "UNION 子查询",
+            mpjDemo(
+                "Long subId",
+                ".union(SubEntity.class, sub -> sub.selectAll().eq(SubEntity::getId, subId))" +
+                    ".eq(OrderEntity::getId, 1L)",
+                entities = "static class OrderEntity { private Long id; } static class SubEntity { private Long id; }",
+            ),
+            "UNION (SELECT",
         ),
     )
 
