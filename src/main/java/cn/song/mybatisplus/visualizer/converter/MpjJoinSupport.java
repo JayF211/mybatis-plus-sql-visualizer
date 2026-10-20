@@ -4,6 +4,7 @@ import cn.song.mybatisplus.visualizer.model.ColumnRef;
 import cn.song.mybatisplus.visualizer.model.Condition;
 import cn.song.mybatisplus.visualizer.model.JoinClause;
 import cn.song.mybatisplus.visualizer.model.JoinType;
+import cn.song.mybatisplus.visualizer.model.SqlFragment;
 import cn.song.mybatisplus.visualizer.model.SqlValue;
 import cn.song.mybatisplus.visualizer.model.TableInfo;
 import cn.song.mybatisplus.visualizer.model.WrapperArg;
@@ -65,24 +66,35 @@ public final class MpjJoinSupport {
             SqlValue kw = WrapperConverterKt.asValue(argAt(args, 0));
             String keyword = kw instanceof SqlValue.Literal lit ? lit.getUnquoted() : null;
             if (keyword == null) return null;
-            SqlValue js = WrapperConverterKt.asValue(argAt(args, 2));
-            String joinSql = js instanceof SqlValue.Literal lit ? lit.getUnquoted() : null;
+            // T-UpdateSetSqlConcat：片段位取 asSqlFragment（模板含运行期段时静态段保留、运行期段写 `?`）
+            SqlFragment joinSql = WrapperConverterKt.asSqlFragment(argAt(args, 2));
             if (joinSql == null) return null;
-            return new JoinClause(type, "", "", List.of(), renderJoinSql(joinSql, args.size() > 3 ? args.subList(3, args.size()) : java.util.List.of()), keyword, null, null);
+            List<SqlValue> bindings = new ArrayList<>();
+            for (int i = 3; i < args.size(); i++) {
+                bindings.add(WrapperConverterKt.asValue(args.get(i)));
+            }
+            SqlFragment rendered = WrapperConverterKt.renderSqlFragment(joinSql, bindings);
+            return new JoinClause(type, "", "", List.of(), rendered.getText(), keyword, null, null, rendered.getParams());
         }
 
+        // 5. 字符串 SQL join：leftJoin("address t1 on t1.user_id = t.id"[, args])——
+        //    首参为含 SQL 结构（空格/括号/{i} 占位）的 SQL 片段；纯类名（CamelCase，无空格）走类名形态
         WrapperArg first = argAt(args, 0);
-        if (first instanceof WrapperArg.ValueArg va) {
-            SqlValue litValue = va.getValue();
-            if (litValue instanceof SqlValue.Literal literal) {
-                String text = literal.getUnquoted();
-                if (!text.trim().endsWith(".class") && (text.contains(" ") || text.contains("(") || text.contains("{"))) {
-                    int startIndex = (args.size() >= 2 && isFlagArgument(args.get(0))) ? 1 : 0;
-                    SqlValue s = WrapperConverterKt.asValue(argAt(args, startIndex));
-                    String sql = s instanceof SqlValue.Literal lit ? lit.getUnquoted() : null;
-                    if (sql == null) return null;
-                    return new JoinClause(type, "", "", List.of(), renderJoinSql(sql, args.size() > startIndex + 1 ? args.subList(startIndex + 1, args.size()) : java.util.List.of()), null, null, null);
+        if (first instanceof WrapperArg.ValueArg) {
+            // T-UpdateSetSqlConcat：首参含运行期段时静态结构仍在，不再整段丢弃
+            SqlFragment firstFragment = WrapperConverterKt.asSqlFragment(first);
+            String text = firstFragment != null ? firstFragment.getText() : null;
+            if (text == null) return null;
+            if (!text.stripTrailing().endsWith(".class") && (text.contains(" ") || text.contains("(") || text.contains("{"))) {
+                int startIndex = (args.size() >= 2 && isFlagArgument(args.get(0))) ? 1 : 0;
+                SqlFragment sql = WrapperConverterKt.asSqlFragment(argAt(args, startIndex));
+                if (sql == null) return null;
+                List<SqlValue> bindings = new ArrayList<>();
+                for (int i = startIndex + 1; i < args.size(); i++) {
+                    bindings.add(WrapperConverterKt.asValue(args.get(i)));
                 }
+                SqlFragment rendered = WrapperConverterKt.renderSqlFragment(sql, bindings);
+                return new JoinClause(type, "", "", List.of(), rendered.getText(), null, null, null, rendered.getParams());
             }
         }
 
@@ -189,10 +201,10 @@ public final class MpjJoinSupport {
                     }
                 }
                 case "apply" -> {
-                    SqlValue raw = WrapperConverterKt.asValue(argAt(call.getArgs(), 0));
-                    if (raw instanceof SqlValue.Literal lit && lit.getUnquoted() != null) {
-                        result.add(new Condition.Raw(lit.getUnquoted(), null));
-                    }
+                    // T-UpdateSetSqlConcat：片段位取 asSqlFragment 并带来源（ON 里的 `?` 须按序登记）
+                    SqlFragment frag = WrapperConverterKt.asSqlFragment(argAt(call.getArgs(), 0));
+                    if (frag == null) continue;
+                    result.add(new Condition.Raw(frag.getText(), null, frag.getParams()));
                 }
                 default -> { /* ignore */ }
             }
@@ -200,28 +212,13 @@ public final class MpjJoinSupport {
         return result;
     }
 
-    /** 字符串 join 的 {i} 绑定参数替换。 */
-    private String renderJoinSql(String template, List<WrapperArg> values) {
-        String sql = template;
-        for (int index = 0; index < values.size(); index++) {
-            SqlValue v = WrapperConverterKt.asValue(values.get(index));
-            if (v == null) continue;
-            sql = sql.replace("{" + index + "}", renderJoinValue(v));
-        }
-        return sql;
-    }
-
-    /** join 绑定参数渲染：字面量原样（raw），运行时值渲染为 ?。 */
-    private static String renderJoinValue(SqlValue value) {
-        if (value instanceof SqlValue.Literal lit) return lit.getRaw();
-        if (value instanceof SqlValue.Placeholder) return "?";
-        return "";
-    }
-
     /** 首参是否为布尔条件前缀。 */
     private static boolean isFlagArgument(WrapperArg arg) {
         if (arg instanceof WrapperArg.ColumnArg) return false;
         SqlValue value = WrapperConverterKt.asValue(arg);
+        // T-UpdateSetSqlConcat：带片段形态的运行期实参是 SQL 片段（`leftJoin("... " + x, ...)`），
+        // 不是布尔前缀——否则片段会被当 flag 吞掉，真正的片段位被错取成第二参
+        if (value instanceof SqlValue.Placeholder && WrapperConverterKt.asSqlFragment(arg) != null) return false;
         if (value instanceof SqlValue.Literal lit) {
             return "true".equals(lit.getUnquoted()) || "false".equals(lit.getUnquoted());
         }
