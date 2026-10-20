@@ -148,6 +148,37 @@ public final class DatabaseSchemaResolver {
     }
 
     /**
+     * UI023：只读精确对象与库的既有缓存；不遍历、不跨源回退、不取未知库条目。
+     */
+    public static Map<String, Set<String>> columnNamesCachedForTarget(Object dataSource, String database,
+                                                                     Collection<String> tableNames) {
+        if (database == null || database.isBlank()) {
+            return Map.of();
+        }
+        synchronized (metaCache) {
+            // 用身份而非 equals 匹配：目标对象更换后宁可冷缓存，不借旧连接的结构。
+            Map<String, TableMeta> cached = null;
+            for (Map.Entry<Object, Map<String, TableMeta>> entry : metaCache.entrySet()) {
+                if (entry.getKey() == dataSource) {
+                    cached = entry.getValue();
+                    break;
+                }
+            }
+            if (cached == null) {
+                return Map.of();
+            }
+            Map<String, Set<String>> out = new java.util.LinkedHashMap<>();
+            for (String name : tableNames) {
+                TableMeta meta = cached.get(cacheKeyOf(database, name));
+                if (meta != null && meta.allColumnNames() != null && !meta.allColumnNames().isEmpty()) {
+                    out.put(name, meta.allColumnNames());
+                }
+            }
+            return out;
+        }
+    }
+
+    /**
      * O-58：多表的<b>全列名</b>集合（<b>只读缓存，不触发遍历</b>）。
      *
      * <p>与 {@link #columnsCached} 同源同口径——同一 {@code metaCache}、同 P7 库名维度、同「首个持有者」

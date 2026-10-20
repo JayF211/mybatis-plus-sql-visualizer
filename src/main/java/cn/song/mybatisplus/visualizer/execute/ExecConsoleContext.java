@@ -116,6 +116,49 @@ public final class ExecConsoleContext {
     }
 
     /**
+     * UI023：仅在 MySQL/MariaDB 的当前库读回与 URL 库一致时给预检提供目标。
+     * PG/Oracle 等的 URL 库不能证明 schema/search_path，本轮明确不猜。
+     * 只读 IDE 会话状态，绝不 switchSchema 或发数据库查询。
+     */
+    @Nullable
+    static SchemaValidationGate.Target schemaValidationTarget(@Nullable Object console) {
+        try {
+            if (!(console instanceof JdbcConsole c)) {
+                return null;
+            }
+            com.intellij.database.dataSource.LocalDataSource ds = c.getDataSource();
+            if (ds == null) {
+                return null;
+            }
+            String database = schemaValidationDatabase(ds.getUrl(), nameOrNull(c));
+            if (database == null) {
+                return null;
+            }
+            return new SchemaValidationGate.Target(ds, database);
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    static String schemaValidationDatabase(@Nullable String url, @Nullable String current) {
+        if (url == null || !(startsWithIgnoreCase(url, "jdbc:mysql:") || startsWithIgnoreCase(url, "jdbc:mariadb:"))) {
+            return null;
+        }
+        String database = JdbcUrlDatabase.nameFromUrl(url);
+        if (database == null) {
+            return null;
+        }
+        if (!database.equalsIgnoreCase(current)) {
+            return null;
+        }
+        return database;
+    }
+
+    private static boolean startsWithIgnoreCase(String value, String prefix) {
+        return value.regionMatches(true, 0, prefix, 0, prefix.length());
+    }
+
+    /**
      * T-MysqlGStrip：控制台数据源的 JDBC URL（{@code \G} 剥离的方言判定输入）；取不到返回 null。
      * 走的是本对象既有的 {@code JdbcConsole.getDataSource().getUrl()} 面（{@link #alignToDataSourceDatabase}
      * 同源 API），失败一律 null → 调用方按「方言不可得 → 默认剥离」处理。

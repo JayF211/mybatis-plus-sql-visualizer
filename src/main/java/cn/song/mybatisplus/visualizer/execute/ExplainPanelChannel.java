@@ -42,6 +42,14 @@ public final class ExplainPanelChannel {
     private static final Set<ExplainOutputFormat> STRUCTURED_FORMATS =
             Set.of(ExplainOutputFormat.TABLE, ExplainOutputFormat.JSON);
 
+    /**
+     * T-UI030：该输出格式是否有结构化渲染面（TEXT/XML/未知一律无——不硬解析红线）。
+     * 供「开关关闭时是否值得提示启用」复用同一份格式白名单，避免第二处硬编码。
+     */
+    public static boolean supportsStructuredFormat(@Nullable ExplainOutputFormat format) {
+        return format != null && STRUCTURED_FORMATS.contains(format);
+    }
+
     /** 通道判定结果（三类可区分——提示文案不同，合并会让用户拿到错的解释，ExplainGate 同款口径）。 */
     public sealed interface Decision permits Decision.Structured, Decision.DirectSilent, Decision.DirectFallback {
 
@@ -130,6 +138,14 @@ public final class ExplainPanelChannel {
     ) {
     }
 
+    /** 测试缝：headless 不连真库；生产为 null 走池线程真链。 */
+    public interface StructuredRunner {
+        void run(Project project, Object dataSource, String explainSql, int timeoutSeconds,
+                 Consumer<StructuredOutcome> onPlan, Consumer<String> onFailed);
+    }
+
+    public static volatile StructuredRunner structuredRunnerForTest = null;
+
     /**
      * 结构化执行（JDBC 全程 pooled 线程，禁 EDT）。
      *
@@ -148,6 +164,11 @@ public final class ExplainPanelChannel {
                                          int timeoutSeconds,
                                          Consumer<StructuredOutcome> onPlan,
                                          Consumer<String> onFailed) {
+        StructuredRunner testRunner = structuredRunnerForTest;
+        if (testRunner != null) {
+            testRunner.run(project, dataSource, explainSql, timeoutSeconds, onPlan, onFailed);
+            return;
+        }
         ApplicationManager.getApplication().executeOnPooledThread(() -> {
             final long[] elapsedMs = {-1L};
             final String[] dataSourceName = {null};
