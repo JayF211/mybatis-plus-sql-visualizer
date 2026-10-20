@@ -32,9 +32,11 @@ import java.time.ZoneId
  * 来源位置/耗时/落盘文件）+ 命中计数；**不返回全文**——agent 需要更多上下文时自行缩小关键词
  * 再查。`maxResults` 越界钳制不抛错；命中按时间戳**最新在前**，超限置 `truncated`。
  *
- * **性能预算**：读取走 Reader 的流式逐行解析（峰值≈单条 SQL，T-SqlHistoryFull 先例）；
- * 扫描条目封顶 [MAX_SCAN_ENTRIES]，超限置 `scanTruncated` 不再读后续文件——目录被
- * 保留上限失控（maxFiles=0 全量保留）时检索仍有时界。目录不存在/空目录 = 合法零命中
+ * **性能预算（F55/F56/F65 三合一后）**：目录扫描走 [SqlLogFileReader.forEachEntry] 条目粒度
+ * 流式解析（单条 SQL 级峰值）＋边读边滤只留命中（内存只驻命中集）＋文件名倒序（封顶截断丢的
+ * 是最旧侧，最新数据永远先入）＋名日期/mtime 双旧的文件零 IO 预跳过（默认「今日」不再读全目录）；
+ * 扫描条目封顶 [MAX_SCAN_ENTRIES]（条目粒度计数，解析条目数恒 ≤ 上限），超限置 `scanTruncated`
+ * 即停——目录被保留上限失控（maxFiles=0 全量保留）时检索仍有时界。目录不存在/空目录 = 合法零命中
  * （自动保存开关默认关，历史可能确实不存在——零命中是正常结果不是错误）。
  *
  * **排序兜底（V14b）**：多文件读取顺序与滚动块排序语义不做保证，命中输出前按
@@ -110,29 +112,57 @@ object HistorySearchService {
     )
 
     /**
-     * 文件目录入口：扫目录下全部 .sql（大小写不敏感，文件名序），逐文件流式解析后进入纯逻辑核。
+     * 文件目录入口（F55/F56/F65 三合一重写，D31 道 A）：扫目录下全部 .sql（大小写不敏感），
+     * **文件名倒序（新→旧）**逐文件**条目粒度**流式解析（[SqlLogFileReader.forEachEntry]），
+     * 边读边滤只留命中——一次改动同收三发现：
+     *  - F55 截断丢旧不丢新：旧环升序读盘，封顶截掉的恰是最新文件（默认「今日」极端情形
+     *    旧文件耗尽预算读不到今天的文件，与「默认当日防倾泻」意图相悖）；
+     *  - F56 封顶前不再整文件驻留：旧环 readFromFile 全量物化后 perFile 持有全部已读条目
+     *    （最坏峰值＝200k 条+最后文件全量），现内存只驻命中条目（峰值≈命中集）；
+     *  - F65 默认今日省 IO：名日期与 mtime 均早于范围起点的文件零 IO 预跳过（[preSkippable]），
+     *    旧环 allDates=false 仍要读全目录才能按 timestamp 筛。
+     *
+     * @param scanEntryCap 扫描条目封顶（默认 [MAX_SCAN_ENTRIES]；测试缝）——**条目粒度**计数，
+     *   解析条目数恒 ≤ cap，超限置 scanTruncated 即停（后续文件/条目都不再读）
      */
-    fun search(dir: String, query: Query, nowMs: Long = System.currentTimeMillis()): Result {
+    fun search(
+        dir: String,
+        query: Query,
+        nowMs: Long = System.currentTimeMillis(),
+        scanEntryCap: Int = MAX_SCAN_ENTRIES,
+    ): Result {
+        val compiled = CompiledFilters.of(query, nowMs)
         val directory = File(dir)
         val files = directory
             .listFiles { f -> f.isFile && f.extension.equals("sql", ignoreCase = true) }
-            ?.sortedBy { it.name }
+            ?.sortedByDescending { it.name } // F55：新→旧（默认日期命名下即最新文件优先）
             ?: emptyList()
         var scannedEntries = 0
         var scanTruncated = false
-        val perFile = files.map { f ->
-            if (scannedEntries >= MAX_SCAN_ENTRIES) {
+        val matched = mutableListOf<Pair<String, LogSqlEntry>>()
+        for (f in files) {
+            // F65：预跳过先于封顶判定——范围外的文件零 IO 跳过，不占扫描预算也不触发截断标记
+            // （「截断」语义＝可能有相关数据未读；预跳过文件按判据不含范围内数据）
+            if (preSkippable(f, compiled.scopeFrom)) continue
+            if (scannedEntries >= scanEntryCap) {
                 scanTruncated = true
-                f.name to emptyList<LogSqlEntry>()
-            } else {
-                val entries = SqlLogFileReader.readFromFile(f)
-                scannedEntries += entries.size
-                if (scannedEntries > MAX_SCAN_ENTRIES) scanTruncated = true
-                f.name to entries
+                break
             }
+            var stop = false
+            SqlLogFileReader.forEachEntry(f) { e ->
+                if (scannedEntries >= scanEntryCap) { // F56：条目粒度封顶（下一条都不再解析）
+                    scanTruncated = true
+                    stop = true
+                    return@forEachEntry false
+                }
+                scannedEntries++
+                if (compiled.matches(e)) matched.add(f.name to e) // 边读边滤只留命中
+                true
+            }
+            if (stop) break
         }
-        return search(
-            perFile, query, nowMs,
+        return buildResult(
+            matched, compiled,
             scannedFiles = files.size,
             scannedEntries = scannedEntries,
             scanTruncated = scanTruncated,
@@ -141,6 +171,8 @@ object HistorySearchService {
 
     /**
      * 纯逻辑核（域中立测试缝）：已在内存的「落盘文件名 → 条目」清单上执行四维过滤。
+     * F55 三合一后与目录扫描环共用 [CompiledFilters]（一次编译逐条匹配）与 [buildResult]
+     * （排序/截断/摘要收口）——两入口的过滤与输出语义单一实现源。
      */
     fun search(
         perFile: List<Pair<String, List<LogSqlEntry>>>,
@@ -150,56 +182,89 @@ object HistorySearchService {
         scannedEntries: Int = perFile.sumOf { (_, entries) -> entries.size },
         scanTruncated: Boolean = false,
     ): Result {
-        val maxResults = query.maxResults.coerceIn(1, HARD_MAX_RESULTS)
-        val keyword = query.keyword?.trim()?.takeIf { it.isNotEmpty() }
-        val regex = query.regex?.trim()?.takeIf { it.isNotEmpty() }?.let { pattern ->
-            runCatching { Regex(pattern, RegexOption.IGNORE_CASE) }.getOrElse { e ->
-                throw InvalidQueryException("invalid regex '$pattern': ${e.message}")
-            }
-        }
-        val sourceFileFilter = query.sourceFile?.trim()?.takeIf { it.isNotEmpty() }
-        if (query.fromMs != null && query.toMs != null && query.fromMs > query.toMs) {
-            throw InvalidQueryException("invalid time range: fromMs (${query.fromMs}) > toMs (${query.toMs})")
-        }
-        // D1=A：默认范围下界 = 当日本地零点；allDates 或显式更晚的 fromMs 才放宽
-        val todayStart = startOfLocalDay(nowMs)
-        val scopeFrom = when {
-            query.allDates -> query.fromMs
-            else -> maxOf(todayStart, query.fromMs ?: Long.MIN_VALUE)
-        }
-
-        fun inScope(ts: Long): Boolean =
-            (scopeFrom == null || ts >= scopeFrom) && (query.toMs == null || ts <= query.toMs)
-
-        fun textMatches(e: LogSqlEntry): Boolean {
-            val keywordHit = keyword == null ||
-                e.rawSql.contains(keyword, ignoreCase = true) ||
-                e.restoredSql.contains(keyword, ignoreCase = true) ||
-                e.mapperStatement?.contains(keyword, ignoreCase = true) == true
-            if (!keywordHit) return false
-            val regexHit = regex == null ||
-                regex.containsMatchIn(e.rawSql) ||
-                regex.containsMatchIn(e.restoredSql)
-            return regexHit
-        }
-
+        val compiled = CompiledFilters.of(query, nowMs)
         val matched = perFile.flatMap { (fileName, entries) ->
             entries.asSequence()
-                .filter { inScope(it.timestamp) }
-                .filter(::textMatches)
-                .filter { sourceFileFilter == null || it.sourceFile?.contains(sourceFileFilter, ignoreCase = true) == true }
+                .filter(compiled::matches)
                 .map { fileName to it }
-        }.toList()
+        }
+        return buildResult(
+            matched, compiled,
+            scannedFiles = scannedFiles,
+            scannedEntries = scannedEntries,
+            scanTruncated = scanTruncated,
+        )
+    }
 
-        // V14b：输出前自行按时间戳排序（最新在前，稳定序：同毫秒按落盘文件名 + 文件内序号）
-        val ordered = matched
-            .sortedWith(
-                compareByDescending<Pair<String, LogSqlEntry>> { (_, e) -> e.timestamp }
-                    .thenBy { (fileName, _) -> fileName }
-                    .thenBy { (_, e) -> e.sequenceNumber },
-            )
+    /**
+     * 编译后的过滤条件（目录扫描环与纯逻辑核共用）——入参校验（非法正则/时间倒置抛
+     * [InvalidQueryException]）与条件编译只做一次，扫描环内逐条 O(1) 匹配。
+     */
+    private class CompiledFilters(
+        val maxResults: Int,
+        val keyword: String?,
+        val regex: Regex?,
+        val sourceFileFilter: String?,
+        val scopeFrom: Long?,
+        val toMs: Long?,
+    ) {
+        /** 四维匹配（范围/关键词/正则/来源文件）——语义与旧纯核的 inScope+textMatches+sourceFilter 逐字一致。 */
+        fun matches(e: LogSqlEntry): Boolean {
+            if (scopeFrom != null && e.timestamp < scopeFrom) return false
+            if (toMs != null && e.timestamp > toMs) return false
+            if (keyword != null) {
+                val keywordHit = e.rawSql.contains(keyword, ignoreCase = true) ||
+                    e.restoredSql.contains(keyword, ignoreCase = true) ||
+                    e.mapperStatement?.contains(keyword, ignoreCase = true) == true
+                if (!keywordHit) return false
+            }
+            if (regex != null && !regex.containsMatchIn(e.rawSql) && !regex.containsMatchIn(e.restoredSql)) return false
+            if (sourceFileFilter != null && e.sourceFile?.contains(sourceFileFilter, ignoreCase = true) != true) return false
+            return true
+        }
 
-        val hits = ordered.take(maxResults).map { (fileName, e) ->
+        companion object {
+            fun of(query: Query, nowMs: Long): CompiledFilters {
+                val maxResults = query.maxResults.coerceIn(1, HARD_MAX_RESULTS)
+                val keyword = query.keyword?.trim()?.takeIf { it.isNotEmpty() }
+                val regex = query.regex?.trim()?.takeIf { it.isNotEmpty() }?.let { pattern ->
+                    runCatching { Regex(pattern, RegexOption.IGNORE_CASE) }.getOrElse { e ->
+                        throw InvalidQueryException("invalid regex '$pattern': ${e.message}")
+                    }
+                }
+                val sourceFileFilter = query.sourceFile?.trim()?.takeIf { it.isNotEmpty() }
+                if (query.fromMs != null && query.toMs != null && query.fromMs > query.toMs) {
+                    throw InvalidQueryException("invalid time range: fromMs (${query.fromMs}) > toMs (${query.toMs})")
+                }
+                // D1=A：默认范围下界 = 当日本地零点；allDates 或显式更晚的 fromMs 才放宽
+                val todayStart = startOfLocalDay(nowMs)
+                val scopeFrom = when {
+                    query.allDates -> query.fromMs
+                    else -> maxOf(todayStart, query.fromMs ?: Long.MIN_VALUE)
+                }
+                return CompiledFilters(maxResults, keyword, regex, sourceFileFilter, scopeFrom, query.toMs)
+            }
+        }
+    }
+
+    /**
+     * 命中排序（V14b：输出前按时间戳自行排——最新在前，稳定序：同毫秒按落盘文件名 + 文件内序号）
+     * + 截断 + 摘要组装（目录扫描环与纯逻辑核共用收口）。
+     */
+    private fun buildResult(
+        matched: List<Pair<String, LogSqlEntry>>,
+        compiled: CompiledFilters,
+        scannedFiles: Int,
+        scannedEntries: Int,
+        scanTruncated: Boolean,
+    ): Result {
+        val ordered = matched.sortedWith(
+            compareByDescending<Pair<String, LogSqlEntry>> { (_, e) -> e.timestamp }
+                .thenBy { (fileName, _) -> fileName }
+                .thenBy { (_, e) -> e.sequenceNumber },
+        )
+
+        val hits = ordered.take(compiled.maxResults).map { (fileName, e) ->
             Hit(
                 timestamp = e.timestamp,
                 sqlPreview = preview(e.restoredSql),
@@ -220,9 +285,37 @@ object HistorySearchService {
             scannedFiles = scannedFiles,
             scannedEntries = scannedEntries,
             scanTruncated = scanTruncated,
-            scopeStartMs = scopeFrom,
+            scopeStartMs = compiled.scopeFrom,
             hits = hits,
         )
+    }
+
+    /** 文件名携带的日期（yyyy-MM-dd 首个匹配；滚动块 `.2.sql` 后缀不影响）——无日期返回 null。 */
+    private val FILE_NAME_DAY_REGEX = Regex("""(\d{4})-(\d{2})-(\d{2})""")
+
+    private fun fileNameDayStartMs(name: String): Long? {
+        val mr = FILE_NAME_DAY_REGEX.find(name) ?: return null
+        return runCatching {
+            java.time.LocalDate.of(mr.groupValues[1].toInt(), mr.groupValues[2].toInt(), mr.groupValues[3].toInt())
+                .atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+        }.getOrNull()
+    }
+
+    /**
+     * F65 预跳过判据（internal＝测试直测缝）：文件可整体跳过不读盘，当且仅当——范围下界存在，
+     * 且文件**名日期日**与 **mtime** 都早于该起点。
+     *
+     * 为什么必须 mtime 兜底（对「仅凭名日期」的收敛，防跨天追加误伤）：滚动块按体积滚动、
+     * 名字是**开块日**——名为昨日但今日凌晨仍被追加的文件真实存在（D1=A 当年正因此选择按条目
+     * 时间戳过滤而非按文件名挑当日文件）。mtime 早于范围起点 ⇒ 起点后从未写入 ⇒ 全部条目
+     * 时间戳 < 起点，跳过零误伤；名日期判据覆盖默认模板主场景（旧日期文件且未被追加＝两名双旧
+     * 即跳）。名字无日期（自定义模板）不跳——正确性优先于优化面。
+     */
+    internal fun preSkippable(file: File, scopeFrom: Long?): Boolean {
+        if (scopeFrom == null) return false
+        if (file.lastModified() >= scopeFrom) return false
+        val nameDay = fileNameDayStartMs(file.name) ?: return false
+        return nameDay < startOfLocalDay(scopeFrom)
     }
 
     /** 当日本地零点（epoch 毫秒）。 */

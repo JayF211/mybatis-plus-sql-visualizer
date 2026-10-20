@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.ui
 
+import cn.song.mybatisplus.visualizer.config.PluginSettings
 import com.intellij.psi.PsiMethod
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
@@ -224,6 +225,54 @@ class SqlPreviewServiceJpaTest : BasePlatformTestCase() {
         )
         // columns 非空
         assertTrue("columns 不应为空", result.columns.isNotEmpty())
+    }
+
+    fun testOracleCriteriaPageableUsesResolvedDialectAtFinalGeneration() {
+        val settings = PluginSettings.getInstance()
+        val snapshot = settings.getState().copy()
+        try {
+            settings.state.dialectAuto = true
+            myFixture.configureByText(
+                "CriteriaDemo.java",
+                """
+                public class CriteriaDemo {
+                    public void query(EntityManager em, Pageable pageable) {
+                        CriteriaBuilder cb = em.getCriteriaBuilder();
+                        CriteriaQuery<UserEntity> cq = cb.createQuery(UserEntity.class);
+                        Root<UserEntity> root = cq.from(UserEntity.class);
+                        cq.select(root);
+                    }
+                }
+                class Pageable {}
+                class EntityManager { CriteriaBuilder getCriteriaBuilder() { return null; } }
+                class CriteriaBuilder { <T> CriteriaQuery<T> createQuery(Class<T> type) { return null; } }
+                class CriteriaQuery<T> {
+                    <X> Root<X> from(Class<X> type) { return null; }
+                    CriteriaQuery<T> select(jakarta.persistence.criteria.Selection<? extends T> s) { return this; }
+                }
+                class Root<T> {}
+                class UserEntity { private Long id; }
+                """.trimIndent(),
+            )
+            val call = PsiTreeUtil.collectElementsOfType(myFixture.file,
+                com.intellij.psi.PsiMethodCallExpression::class.java)
+                .first { it.methodExpression.referenceName == "createQuery" }
+            val source = myFixture.file.virtualFile
+            cn.song.mybatisplus.visualizer.sql.IdeaSourceDialectProbe.languageIdForTest = { _, file ->
+                assertEquals(source, file)
+                "Oracle"
+            }
+            val result = newService().previewCriteriaQuery(call)
+            assertNotNull(result)
+            assertEquals("Oracle", result!!.renderedDialect?.name)
+            assertEquals("Oracle", result.dialectDecision?.dialectName)
+            assertTrue("Criteria 的 Oracle 分页必须按宿主文件方言生成：${result.sql}",
+                result.sql.contains("OFFSET ? ROWS FETCH NEXT ? ROWS ONLY"))
+            assertTrue("Oracle 不能残留 MySQL LIMIT：${result.sql}", !result.sql.contains("LIMIT ?"))
+        } finally {
+            cn.song.mybatisplus.visualizer.sql.IdeaSourceDialectProbe.languageIdForTest = null
+            settings.loadState(snapshot)
+        }
     }
 
     // ------------------------------------------------------------------

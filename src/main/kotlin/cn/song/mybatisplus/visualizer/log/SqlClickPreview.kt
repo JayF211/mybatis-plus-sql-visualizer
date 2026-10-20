@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.log
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlHighlightColors
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlListSyntaxHighlighter
+import cn.song.mybatisplus.visualizer.util.DisplayMasker
 import cn.song.mybatisplus.visualizer.util.EditorCopyShortcuts
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.icons.AllIcons
@@ -34,9 +35,15 @@ internal class SqlClickPreviewContent(val component: JComponent, val editor: Edi
  * （logFormatSql，默认开=默认格式化显示）决定是否 [SqlFormatter.format] 多行展开。
  * 与双击弹窗 `toPreviewResult` 的 `formatIfNeeded(withTerminator(...))` 同序——
  * 先补分号再格式化（生产已验证的分号处理路径）。纯函数，开关由调用方读设置传入。
+ *
+ * R60（T-LaneB D96）：[maskSql] 开时先脱敏（[DisplayMasker.maskDisplay]，展示层文本级）再走
+ * 分号/格式化——脱敏只动浮层展示文本，条目数据层（restoredSql/params）不动；复制按钮复制
+ * 的是脱敏后文本（安全分享语义）。
  */
-internal fun clickPreviewSql(sql: String, formatSql: Boolean): String =
-    if (formatSql) SqlFormatter.format(withTerminator(sql)) else withTerminator(sql)
+internal fun clickPreviewSql(sql: String, formatSql: Boolean, maskSql: Boolean = false): String {
+    val display = DisplayMasker.maskDisplay(sql, maskSql)
+    return if (formatSql) SqlFormatter.format(withTerminator(display)) else withTerminator(display)
+}
 
 /**
  * 修饰键是否表达列表多选意图（T-ClickPreviewCopyRestore）：Ctrl/Shift 单击是选择的开始或扩展，

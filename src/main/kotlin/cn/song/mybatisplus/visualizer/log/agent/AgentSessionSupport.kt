@@ -1,6 +1,5 @@
 package cn.song.mybatisplus.visualizer.log.agent
 
-import cn.song.mybatisplus.visualizer.config.EnhancedCaptureConsent
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.log.LogSqlEntry
 import cn.song.mybatisplus.visualizer.log.LogTimeCorrelator
@@ -42,8 +41,6 @@ import java.util.concurrent.atomic.AtomicLong
 /** T-CaptureTruth T-CT-01：增强捕获状态行输入快照（纯数据，[agentStatusText] 入参，零平台依赖）。 */
 internal data class AgentStatusSnapshot(
     val enabled: Boolean,
-    val confirmed: Boolean,
-    val rejectCooldownRemainingMs: Long,
     val livePids: List<Long>,
     val everAttached: Boolean,
     /** T-ReachAudit T-RA-01：最近一次摘除是否因心跳过期（应用侧无响应，而非连接断开）。 */
@@ -65,15 +62,15 @@ internal data class AgentStatusSnapshot(
  * 分支**，设置页状态行渲染成空白而复选框仍显示勾选，用户读作「开着且没事」，实际一条都捕不到
  * （T-CaptureTruth 根因之三；旧守卫断言「无会话应返回 null」把该行为钉死，本次一并改）。
  *
+ * T-EnhancedCaptureDefaultOn（2026-10-19）：注入确认与拒绝冷却已移除，状态行不再有「未授权」类叙事。
+ *
  * 各态：
  *  1. 关闭（!enabled）→ null（复选框未勾选，无需叙事）；
  *  2. 有活会话 →「已挂载 pid=…」；
- *  3. 未授权 + 冷却中 → 含剩余小时与「重新授权」指引（冷却原本静默，用户无从得知被拒过）；
- *  4. 未授权 + 无冷却 → 下次启动主配置时会询问；
- *  5. 已授权 + 曾挂载 + 心跳过期 → 带窗口秒数的可核实表述（T-AgentHeartbeat T-05 去因果断言）；
- *  6. 已授权 + 曾挂载 + 首条心跳未到 → 中性等待叙述（T-AgentHeartbeat T-05 新增）；
- *  7. 已授权 + 曾挂载 + 其余 → 连接中断回落；
- *  8. 已授权 + 从未挂载 → 等待应用进程启动后挂载。
+ *  3. 曾挂载 + 心跳过期 → 带窗口秒数的可核实表述（T-AgentHeartbeat T-05 去因果断言）；
+ *  4. 曾挂载 + 首条心跳未到 → 中性等待叙述（T-AgentHeartbeat T-05 新增）；
+ *  5. 曾挂载 + 其余 → 连接中断回落；
+ *  6. 从未挂载 → 等待应用进程启动后挂载。
  */
 internal fun agentStatusText(s: AgentStatusSnapshot): String? {
     if (!s.enabled) return null
@@ -82,14 +79,6 @@ internal fun agentStatusText(s: AgentStatusSnapshot): String? {
             "settings.enhancedCapture.status.attached",
             s.livePids.joinToString(",") { "pid=$it" },
         )
-    }
-    if (!s.confirmed) {
-        if (s.rejectCooldownRemainingMs > 0) {
-            // 小时向上取整（不足 1 小时也显示 1，避免「剩 0 小时」的歧义）
-            val hours = ((s.rejectCooldownRemainingMs + 3_599_999L) / 3_600_000L).coerceAtLeast(1L)
-            return MpSqlVisualizerBundle.message("settings.enhancedCapture.status.unauthorizedCooldown", hours)
-        }
-        return MpSqlVisualizerBundle.message("settings.enhancedCapture.status.unauthorizedPending")
     }
     if (s.everAttached) {
         // T-ReachAudit T-RA-01：心跳过期 = socket 未断而帧停，与真断连分开叙述。
@@ -255,6 +244,12 @@ internal class AgentSession(
      * `AgentManager.captureConfirmedActive`）。
      */
     private val onCaptureConfirmationChanged: () -> Unit = {},
+    /**
+     * R53：用户暂停闸门（默认 false = 不暂停）。生产由 [AgentManager] 注入 `{ userPaused }`——
+     * 暂停只停 agent 通道（EVENT 在入队点丢弃），连接/心跳/CONFIG ACK 链不动（暂停≠关闭）。
+     * internal 可注入为同模块守护测试缝（照 [listenActiveProvider] 先例）。
+     */
+    internal var pausedProvider: () -> Boolean = { false },
 ) {
 
     private val LOG = Logger.getInstance(AgentSession::class.java)
@@ -275,6 +270,13 @@ internal class AgentSession(
      * 单调递增——它是「控制通道可能失效」的量化证据（应用侧仍在采集投递），不只丢弃了事。
      */
     internal val intakeDropped = AtomicLong()
+
+    /**
+     * R53：用户暂停态丢弃计数（暂停期间投递的 EVENT 条数）。单调递增——「暂停中」不是「通道断了」：
+     * 计数在涨 = agent 通道仍活着、只是被用户停掉展示；结合 [AgentEventAdapter.receivedEvents]
+     * （两者同帧同增）可区分「暂停拦截」与「通道失效」。
+     */
+    internal val pausedDropped = AtomicLong()
 
     /** T-AgentConfigChannel T-03：入队闸门判据（可注入测试缝；默认读 [SqlLogManager.capturing]）。 */
     internal var listenActiveProvider: () -> Boolean = {
@@ -503,6 +505,19 @@ internal class AgentSession(
                     // 宿主有、IDE 无=传输；两侧都有而面板空=消费链（去重/屏蔽/过滤/暂停）。
                     if (AgentEventAdapter.receivedEvents() == 1L) {
                         LOG.info("增强通道首条事件已到达并进入消费链（pid=$pid）——若面板仍零产出，查消费链（去重窗口/屏蔽/过滤），不再疑 agent 侧")
+                    }
+                    // R53：用户暂停闸门（在收到计数**之后**——暂停中「已收事件 N」照常增长，
+                    // 状态栏据此显示「暂停中且通道活着」而非「通道断了」）。只丢入列表，
+                    // 连接/心跳/CONFIG ACK 链一概不动（暂停≠关闭，V80② 自洽）。
+                    if (pausedProvider()) {
+                        val n = pausedDropped.incrementAndGet()
+                        if (n == 1L || n % AgentManager.INTAKE_DROP_WARN_STEP == 0L) {
+                            LOG.info(
+                                "增强通道在用户暂停态收到 $n 条事件——丢弃不入队（暂停只停 agent 通道，" +
+                                    "控制台通道照常；恢复即续采）",
+                            )
+                        }
+                        return
                     }
                     // T-AgentDialectLoop / T-AgentLogTime：接管期间控制台嗅探暂存的「日志行原始时间」
                     // 按 [logTimeKey]（占位符版 SQL 指纹）取回，参数值序列作次级判别（[stampLogTime]）。

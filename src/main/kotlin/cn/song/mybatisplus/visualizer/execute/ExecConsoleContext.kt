@@ -91,6 +91,26 @@ object ExecConsoleContext {
     }.getOrNull()
 
     /**
+     * UI023：仅在 MySQL/MariaDB 的当前库读回与 URL 库一致时给预检提供目标。
+     * PG/Oracle 等的 URL 库不能证明 schema/search_path，本轮明确不猜。
+     * 只读 IDE 会话状态，绝不 switchSchema 或发数据库查询。
+     */
+    internal fun schemaValidationTarget(console: Any?): SchemaValidationGate.Target? = runCatching {
+        val c = console as? JdbcConsole ?: return@runCatching null
+        val ds = c.dataSource ?: return@runCatching null
+        val database = schemaValidationDatabase(ds.url, c.searchPath?.current?.name)
+            ?: return@runCatching null
+        SchemaValidationGate.Target(ds, database)
+    }.getOrNull()
+
+    internal fun schemaValidationDatabase(url: String?, current: String?): String? {
+        if (url == null || !(url.startsWith("jdbc:mysql:", true) || url.startsWith("jdbc:mariadb:", true))) return null
+        val database = JdbcUrlDatabase.nameFromUrl(url) ?: return null
+        if (!database.equals(current, ignoreCase = true)) return null
+        return database
+    }
+
+    /**
      * T-SI-03 ②：读回校验（纯函数，默认 test 通道可覆盖）——切换/强设之后 searchPath 的当前
      * 节点必须等于目标库，否则返回不一致描述（一致返回 null）。大小写不敏感：MySQL 库名在
      * 不同平台的回读大小写不保证（Linux 服务端按库名大小写敏感，回读可能与 URL 写法不同）。

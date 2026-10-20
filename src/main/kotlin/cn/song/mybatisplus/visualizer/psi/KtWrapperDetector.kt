@@ -108,6 +108,43 @@ object KtWrapperDetector {
     }
 
     /**
+     * 主动快捷入口的精确降级判据：只认光标所在行，避免文件内别处存在 Kotlin Wrapper 时误提示。
+     * 这里仍不承诺生成 SQL；命中只表示“用户确实压在当前 MVP 能识别的 Kotlin Wrapper 链上”。
+     */
+    fun detectAt(psiFile: PsiFile, offset: Int): Boolean {
+        val text = kotlinTextOrNull(psiFile) ?: return false
+        if (offset !in 0..text.length) return false
+        val lineStart = if (offset <= 0) 0 else
+            text.lastIndexOf('\n', offset - 1).let { if (it < 0) 0 else it + 1 }
+        val lineEnd = text.indexOf('\n', offset.coerceAtMost(text.length)).let { if (it < 0) text.length else it }
+        return isWrapperLine(text.substring(lineStart, lineEnd))
+    }
+
+    /** 选择区主动预览同款判据；只检查与选区相交的行，不把文件其他位置的链冒充本次命中。 */
+    fun detectInRange(psiFile: PsiFile, startOffset: Int, endOffset: Int): Boolean {
+        val text = kotlinTextOrNull(psiFile) ?: return false
+        val start = startOffset.coerceIn(0, text.length)
+        val end = endOffset.coerceIn(start, text.length)
+        val lineStart = if (start <= 0) 0 else
+            text.lastIndexOf('\n', start - 1).let { if (it < 0) 0 else it + 1 }
+        val lineEnd = text.indexOf('\n', end).let { if (it < 0) text.length else it }
+        return text.substring(lineStart, lineEnd).lineSequence().any(::isWrapperLine)
+    }
+
+    private fun kotlinTextOrNull(psiFile: PsiFile): String? {
+        val extension = psiFile.virtualFile?.extension ?: ""
+        if (extension != "kt" && extension != "kts") return null
+        return psiFile.text
+    }
+
+    private fun isWrapperLine(line: String): Boolean {
+        val trimmed = line.trim()
+        if (trimmed.isEmpty() || trimmed.startsWith("//")) return false
+        detectLineExtensionChain(trimmed) ?: detectLineConstructorChain(trimmed) ?: return false
+        return extractChainCalls(trimmed).isNotEmpty()
+    }
+
+    /**
      * 检测单行是否包含 ktQuery()/ktUpdate() 扩展函数链起点。
      * 匹配模式：`xxx.ktQuery()...` 或 `xxx.ktUpdate()...`
      */

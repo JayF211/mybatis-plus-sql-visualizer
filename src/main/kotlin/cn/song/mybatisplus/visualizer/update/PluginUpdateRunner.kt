@@ -21,15 +21,25 @@ object PluginUpdateRunner {
 
     /** 检查结果。 */
     sealed interface CheckResult {
-        /** 已是最新（清单缺失/解析失败/比较异常等一切降级，不打扰用户）。 */
+        /** 已是最新（清单获取/解析成功且版本不高于当前）。 */
         data object UpToDate : CheckResult
 
         /** 发现新版本。 */
         data class Available(val manifest: UpdateManifest) : CheckResult
 
-        /** 明确失败（网络不可达等），message 面向用户展示。 */
-        data class Failure(val message: String) : CheckResult
+        /**
+         * 明确失败（R62 三态可诊断化）：[kind] 区分网络不通 / 通道 404 / 清单损坏 / 版本不可读，
+         * [message] 面向用户展示（网络态含原始描述或 HTTP 状态码）。
+         */
+        data class Failure(val kind: FailureKind, val message: String) : CheckResult
     }
+
+    /**
+     * 失败分类（R62，V121.3）：NETWORK=网络不通（含非 404 HTTP 错误的诚实降级，消息带状态码）；
+     * CHANNEL_MISSING=更新通道缺失（HTTP 404/410——清单 URL 断链，用户应走兜底链接手动下载）；
+     * MANIFEST_MALFORMED=取到响应但清单解析失败；VERSION_UNREADABLE=当前插件版本不可读。
+     */
+    enum class FailureKind { NETWORK, CHANNEL_MISSING, MANIFEST_MALFORMED, VERSION_UNREADABLE }
 
     /** 安装结果（T-DynUpdate 扩容：热生效 / 回退重启 / 失败三分支）。 */
     sealed interface InstallResult {
@@ -45,24 +55,40 @@ object PluginUpdateRunner {
     /**
      * 检查更新：拉取清单 → 解析 → 与当前版本比较。
      *
+     * R62：fetch seam 改 [UpdateApi.FetchOutcome]（网络/HTTP 状态分层），失败按 [FailureKind]
+     * 映射——404/410 → CHANNEL_MISSING（通道缺失，设置页给兜底链接），其余 HTTP 错误 →
+     * NETWORK（消息带状态码，诚实降级不冒充通道缺失）。
+     *
      * @param currentVersion 当前插件版本（[PluginVersion.current]）；不可读视为失败。
-     * @param fetch 清单获取 seam（默认 [UpdateApi.fetchManifest]）。
+     * @param fetch 清单获取 seam（默认 [UpdateApi.fetchOutcome]）。
      */
     fun check(
         currentVersion: String?,
-        fetch: (String) -> String? = { UpdateApi.fetchManifest(it) },
+        fetch: (String) -> UpdateApi.FetchOutcome = { UpdateApi.fetchOutcome(it) },
     ): CheckResult {
         if (!VersionComparator.isRecognizable(currentVersion)) {
-            return CheckResult.Failure("current version unavailable")
+            return CheckResult.Failure(FailureKind.VERSION_UNREADABLE, "current version unavailable")
         }
         val url = UpdateSource.manifestUrl()
         UpdateSource.logOverrideIfAny(url)
-        val json = fetch(url) ?: return CheckResult.Failure("network unavailable")
-        val manifest = parseManifest(json) ?: return CheckResult.Failure("manifest malformed")
-        return if (VersionComparator.compare(manifest.version, currentVersion) > 0) {
-            CheckResult.Available(manifest)
-        } else {
-            CheckResult.UpToDate
+        return when (val outcome = fetch(url)) {
+            is UpdateApi.FetchOutcome.NetworkError ->
+                CheckResult.Failure(FailureKind.NETWORK, outcome.description)
+            is UpdateApi.FetchOutcome.HttpError ->
+                if (outcome.status == 404 || outcome.status == 410) {
+                    CheckResult.Failure(FailureKind.CHANNEL_MISSING, "HTTP ${outcome.status}")
+                } else {
+                    CheckResult.Failure(FailureKind.NETWORK, "HTTP ${outcome.status}")
+                }
+            is UpdateApi.FetchOutcome.Success -> {
+                val manifest = parseManifest(outcome.text)
+                    ?: return CheckResult.Failure(FailureKind.MANIFEST_MALFORMED, "manifest malformed")
+                if (VersionComparator.compare(manifest.version, currentVersion) > 0) {
+                    CheckResult.Available(manifest)
+                } else {
+                    CheckResult.UpToDate
+                }
+            }
         }
     }
 

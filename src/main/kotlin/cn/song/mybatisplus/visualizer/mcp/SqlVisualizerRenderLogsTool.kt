@@ -4,6 +4,7 @@ import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.log.HibernateLogParser
 import cn.song.mybatisplus.visualizer.log.JdbcTemplateLogParser
 import cn.song.mybatisplus.visualizer.log.LogSqlEntry
+import cn.song.mybatisplus.visualizer.log.LogThreadRouter
 import cn.song.mybatisplus.visualizer.log.MyBatisLogParser
 import cn.song.mybatisplus.visualizer.log.ShardingSphereLogParser
 import com.intellij.mcpserver.annotations.McpDescription
@@ -31,7 +32,10 @@ open class SqlVisualizerRenderLogsTool : McpToolsetSupport("sqlv_render_logs") {
             "hibernateSqlPrefix/hibernateParamPrefix) and 'mixedPrefixMatching' are optional and default to " +
             "the plugin's log-capture settings. Each restored statement is prefixed with a '-- SQL #N' " +
             "comment line carrying its source format. Deterministic restoration, not validation — pair with " +
-            "sqlv_check_sql to assess write risk before executing. Read-only: never executes SQL.",
+            "sqlv_check_sql to assess write risk before executing. Read-only: never executes SQL. " +
+            "Masking (R60): when the plugin's 'MCP output masking' setting is enabled, sensitive literals " +
+            "(password-like columns, ID-card/mobile shapes) are masked as '***' in the restored statements " +
+            "to keep real production values out of the AI context; disabled by default for diagnosability.",
     )
     @McpToolHints(
         readOnlyHint = McpToolHintValue.TRUE,
@@ -60,6 +64,8 @@ open class SqlVisualizerRenderLogsTool : McpToolsetSupport("sqlv_render_logs") {
         hibernateParamPrefix: String = "",
         mixedPrefixMatching: Boolean? = null,
         defaults: LogPrefixDefaults? = null,
+        /** R60（T-LaneB D96/D97）：MCP 面脱敏——null 读设置 mcpMaskEnabled（默认关，审计册口径）。 */
+        maskLiterals: Boolean? = null,
     ): String {
         if (logText.isBlank()) {
             throwExpected(McpToolErrors.code(McpToolErrors.INVALID_ARGUMENT, "logText is empty."))
@@ -89,6 +95,10 @@ open class SqlVisualizerRenderLogsTool : McpToolsetSupport("sqlv_render_logs") {
                 "parameters on adjacent lines. Check the prefixes or pass explicit overrides."
         }
         return buildString {
+            // R60（T-LaneB D96/D97）：MCP 面脱敏——null 读设置（服务未注册兜底关），只打码输出文本
+            val maskOn = maskLiterals ?: runCatching {
+                PluginSettings.getInstance().state.mcpMaskEnabled
+            }.getOrDefault(false)
             append("Restored ").append(entries.size).append(" statement(s):\n\n")
             entries.forEachIndexed { index, entry ->
                 append("-- SQL #").append(index + 1)
@@ -98,7 +108,8 @@ open class SqlVisualizerRenderLogsTool : McpToolsetSupport("sqlv_render_logs") {
                 // T-StatementNaming（O-19）：语句前导注释名附注（无注释零差异）
                 cn.song.mybatisplus.visualizer.util.SqlStatementNamer.nameOf(entry.restoredSql)
                     ?.let { append(" [").append(it).append("]") }
-                append("\n").append(entry.restoredSql)
+                append("\n")
+                    .append(cn.song.mybatisplus.visualizer.util.DisplayMasker.maskDisplay(entry.restoredSql, maskOn))
                 if (index < entries.size - 1) append("\n\n")
             }
         }
@@ -151,10 +162,12 @@ open class SqlVisualizerRenderLogsTool : McpToolsetSupport("sqlv_render_logs") {
                 maxParseLength = defaults.maxParseLength,
             )
             logText.lineSequence().forEach { line ->
-                myBatis.feed(line)
-                hibernate.feed(line)
-                jdbc.feed(line)
-                if (defaults.shardingEnabled) sharding.feed(line)
+                // F58（T-PerfSweep18 压轴）：同一行喂四解析器——线程 token 每行只提一次下传
+                val threadToken = LogThreadRouter.threadTokenOf(line)
+                myBatis.feed(line, threadToken)
+                hibernate.feed(line, threadToken)
+                jdbc.feed(line, threadToken)
+                if (defaults.shardingEnabled) sharding.feed(line, threadToken)
             }
             myBatis.closePending()
             hibernate.closePending()

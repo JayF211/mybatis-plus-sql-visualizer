@@ -76,7 +76,15 @@ class HibernateLogParser(
 
     /** 喂入一行控制台输出（任意线程；按线程 token 路由到独立桶——解析器实例按 console 隔离）。 */
     fun feed(line: String) {
-        val bucket = router.bucketFor(line)
+        feed(line, LogThreadRouter.threadTokenOf(line))
+    }
+
+    /**
+     * F58（T-PerfSweep18 压轴）：喂入一行＋**已提取**的线程 token（热路径每行一次下传，
+     * 语义与 [feed] 自提逐字等价；token=null 走 fail-open 回退）。
+     */
+    fun feed(line: String, threadToken: String?) {
+        val bucket = router.bucketForToken(threadToken)
         if (bucket.collecting) {
             feedCollecting(bucket, line)
         } else {

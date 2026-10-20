@@ -40,6 +40,8 @@ data class JoinClause(
     val customKeyword: String? = null,
     val logicDeleteColumn: String? = null,
     val tableInfo: TableInfo? = null,
+    /** [rawSql] 中占位符 `?` 的来源（按出现顺序，T-UpdateSetSqlConcat）：渲染时按序登记进参数表。 */
+    val rawParams: List<String> = emptyList(),
 )
 
 /**
@@ -81,7 +83,11 @@ data class SelectStatement(
     val orderBy: List<OrderByItem> = emptyList(),
     val limit: LimitClause? = null,
     val rawFirst: String? = null,
+    /** [rawFirst] 中占位符 `?` 的来源（按出现顺序，T-UpdateSetSqlConcat）。 */
+    val rawFirstParams: List<String> = emptyList(),
     val rawAround: String? = null,
+    /** [rawAround] 中占位符 `?` 的来源（按出现顺序，T-UpdateSetSqlConcat）。 */
+    val rawAroundParams: List<String> = emptyList(),
     val comment: String? = null,
     val unions: List<UnionClause> = emptyList(),
     val fromSubQuery: Pair<String, String>? = null,
@@ -93,10 +99,12 @@ data class SelectStatement(
  *
  * @param keyword UNION / UNION ALL
  * @param sql     子查询 SQL（compact 单行渲染）
+ * @param params   [sql] 中占位符 `?` 的来源（按出现顺序，T-UpdateSetSqlConcat）：子语句在渲染点按序登记
  */
 data class UnionClause(
     val keyword: String,
     val sql: String,
+    val params: List<String> = emptyList(),
 )
 
 /**

@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.update
 
 import cn.song.mybatisplus.visualizer.acp.SignatureDistroDiscovery
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Test
 import java.io.File
@@ -31,9 +32,124 @@ import java.util.concurrent.Executors
  * javap 实证同形态）；顺带 INFO 打印三代 SQL 注入器在场实况（SqlLanguageInjector 243+ 已移除、
  * SqlTypeBasedInjector 代际改名——探测经 EP 枚举对改名免疫，INFO 不计缺失）。
  *
+ * O-145 W0/W1 追加实际 SQL PSI 与模块身份入口：InjectedLanguageManager 精确命中/owner 候选 API、
+ * 反射类型 `com.intellij.sql.psi.SqlFile`、ModuleUtilCore.moduleContainsFile，以及
+ * ExternalSystemModulePropertyManager 的 linked project id/path。生产不直接链接 SqlFile。
+ *
  * 发行版缺失时按 Assume 跳过对应家族（CI 机器可能只装部分版本）；一个家族都没有则整类跳过。
  */
 class PlatformSignatureCrossVersionTest {
+
+    /** 直接调用跨版本运行器使用的登记方法，覆盖形态漂移而不是重复实现解析器。 */
+    @Test
+    fun attachTargetCommandLineSignatureIsExact() {
+        fun check(type: Class<*>): Int = PlatformSignatureChecker.checkAttachTargetCommandLine(type)
+        assertEquals("公共实例零参String应通过", 0, check(CommandLinePublic::class.java))
+        assertEquals("继承的公共方法也应通过", 0, check(CommandLineInherited::class.java))
+        for (wrong in listOf(CommandLineWrongReturn::class.java, CommandLineWithArgument::class.java,
+            CommandLineStatic::class.java, CommandLinePrivate::class.java, CommandLineMissing::class.java)) {
+            assertEquals("签名漂移必须拒绝：${wrong.simpleName}", 1, check(wrong))
+        }
+        val emptyLoader = object : ClassLoader(null) {}
+        assertEquals("平台类缺失必须拒绝", 1, PlatformSignatureChecker.checkAttachTargetApis(emptyLoader))
+    }
+
+    open class CommandLinePublic { fun getCommandLine(): String = "unused" }
+    class CommandLineInherited : CommandLinePublic()
+    class CommandLineWrongReturn { fun getCommandLine(): Any = "unused" }
+    class CommandLineWithArgument { fun getCommandLine(unused: String): String = unused }
+    class CommandLineStatic { companion object { @JvmStatic fun getCommandLine(): String = "unused" } }
+    class CommandLinePrivate { private fun getCommandLine(): String = "unused" }
+    class CommandLineMissing
+
+    @Test
+    fun previewEditorPopupSignatureIsExact() {
+        fun check(type: Class<*>) = PlatformSignatureChecker.checkPreviewEditorPopupSignatures(type)
+        assertEquals(0, check(PopupPublic::class.java))
+        assertEquals(0, check(PopupInherited::class.java))
+        assertEquals(1, check(PopupWrongReturn::class.java))
+        assertEquals(1, check(PopupWrongArgument::class.java))
+        assertEquals(1, check(PopupStatic::class.java))
+        assertEquals(2, check(PopupMissing::class.java))
+        assertEquals(1, PlatformSignatureChecker.checkPreviewEditorPopupApis(object : ClassLoader(null) {}))
+    }
+
+    /**
+     * UI025：ExternalAnnotator 四段调度签名 + AnnotationBuilder 落点 API。
+     * 空 ClassLoader 必须整体拒绝（证明本项真的在核平台类，而不是空绿）。
+     */
+    @Test
+    fun externalAnnotatorSignatureIsExact() {
+        assertEquals(0, PlatformSignatureChecker.checkExternalAnnotatorApis(javaClass.classLoader))
+        assertEquals(
+            "平台类缺失必须拒绝",
+            1,
+            PlatformSignatureChecker.checkExternalAnnotatorApis(object : ClassLoader(null) {}),
+        )
+    }
+
+    open class PopupPublic {
+        fun setContextMenuGroupId(id: String) {}
+        fun getContextMenuGroupId(): String = "unused"
+    }
+    class PopupInherited : PopupPublic()
+    class PopupWrongReturn {
+        fun setContextMenuGroupId(id: String): String = id
+        fun getContextMenuGroupId(): String = "unused"
+    }
+    class PopupWrongArgument {
+        fun setContextMenuGroupId(id: Int) {}
+        fun getContextMenuGroupId(): String = "unused"
+    }
+    class PopupStatic {
+        companion object { @JvmStatic fun setContextMenuGroupId(id: String) {} }
+        fun getContextMenuGroupId(): String = "unused"
+    }
+    class PopupMissing
+
+    @Test
+    fun nativeConsoleLifetimeSignatureIsExact() {
+        fun check(type: Class<*>) = PlatformSignatureChecker.checkNativeConsoleViewLifetimeSignatures(
+            type, LifetimeClient::class.java, LifetimeView::class.java)
+        assertEquals(0, check(LifetimeService::class.java))
+        assertEquals(1, check(LifetimeWrongReturn::class.java))
+        assertEquals(1, check(LifetimeStaticLookup::class.java))
+        assertEquals(2, check(LifetimeMissing::class.java))
+        assertEquals(1, PlatformSignatureChecker.checkNativeConsoleViewLifetimeApis(object : ClassLoader(null) {}, true))
+    }
+
+    class LifetimeClient
+    class LifetimeView
+    class LifetimeService {
+        companion object { @JvmStatic fun getInstance(): LifetimeService = LifetimeService() }
+        fun getClientViewIfAny(client: LifetimeClient): LifetimeView? = null
+    }
+    class LifetimeWrongReturn {
+        companion object { @JvmStatic fun getInstance(): LifetimeWrongReturn = LifetimeWrongReturn() }
+        fun getClientViewIfAny(client: LifetimeClient): Any? = null
+    }
+    class LifetimeStaticLookup {
+        companion object {
+            @JvmStatic fun getInstance(): LifetimeStaticLookup = LifetimeStaticLookup()
+            @JvmStatic fun getClientViewIfAny(client: LifetimeClient): LifetimeView? = null
+        }
+    }
+    class LifetimeMissing
+
+    @Test
+    fun sessionOutputSignatureIsExact() {
+        fun check(service: Class<*>, client: Class<*>) = PlatformSignatureChecker.checkSessionOutputSignatures(
+            service, client, SessionType::class.java, SessionType::class.java, LifetimeView::class.java)
+        assertEquals(0, check(SessionLookup::class.java, SessionClient::class.java))
+        assertEquals(1, check(SessionLookupWrong::class.java, SessionClient::class.java))
+        assertEquals(1, check(SessionLookup::class.java, SessionClientWrong::class.java))
+        assertEquals(2, check(LifetimeMissing::class.java, LifetimeMissing::class.java))
+    }
+    class SessionType
+    class SessionClient { fun getSession(): SessionType = SessionType() }
+    class SessionClientWrong { fun getSession(): Any = SessionType() }
+    class SessionLookup { fun getViewIfAny(session: SessionType): LifetimeView? = null }
+    class SessionLookupWrong { fun getViewIfAny(session: SessionType): Any? = null }
 
     @Test
     fun dynamicInstallApisResolveOnAllLocalTargetPlatforms() {
@@ -61,6 +177,20 @@ class PlatformSignatureCrossVersionTest {
             covered.add(family)
             if (result.exitCode != 0) {
                 failures.add("IU-$family (${root.path}):\n${result.output}")
+            }
+            assertTrue("IU-$family 必须实际执行UI-007签名登记，不能仅凭RESULT OK空绿：\n${result.output}",
+                result.output.lineSequence().any { it.startsWith("OK   BaseProcessHandler.getCommandLine[] -> ") })
+            for (signature in listOf(
+                "EditorEx.setContextMenuGroupId[class java.lang.String]",
+                "EditorEx.getContextMenuGroupId[]",
+                "DatabaseSessionViewService.getInstance[]",
+                "DatabaseSessionViewService.getClientViewIfAny[DatabaseSessionClientWithFile]",
+                "DatabaseSessionClientWithFile.getSession[]",
+                "DatabaseSessionViewService.getViewIfAny[DatabaseSession]",
+                "BaseLogView.getConsoleView[]",
+            )) {
+                assertTrue("IU-$family 必须实际执行UI015签名登记：$signature\n${result.output}",
+                    result.output.lineSequence().any { it.startsWith("OK   $signature -> ") })
             }
         }
         assumeTrue("未发现可运行的目标平台发行版", covered.isNotEmpty())

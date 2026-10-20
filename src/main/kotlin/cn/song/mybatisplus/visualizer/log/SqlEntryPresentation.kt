@@ -29,7 +29,8 @@ internal object SqlEntryPresentation {
         if (showLogDetails) {
             addFragment(formatUpdateCountFragment(entry, selected))
             addFragment(formatErrorFragment(entry))
-            dedupeCounts[entry.dedupeKey]?.takeIf { it > 0 }?.let {
+            // UI013：同键的其他来源可能有丢弃计数，不能把徽章借给未参与去重的 Sharding 执行。
+            dedupeCounts[entry.dedupeKey]?.takeIf { it > 0 && entry.source != SqlSource.SHARDINGSPHERE }?.let {
                 add(SqlTextFragment("⨉$it ", secondaryAttributes))
             }
         }

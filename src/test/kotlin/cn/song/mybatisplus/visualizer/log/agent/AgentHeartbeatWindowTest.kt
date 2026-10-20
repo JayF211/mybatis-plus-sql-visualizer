@@ -36,8 +36,6 @@ class AgentHeartbeatWindowTest : BasePlatformTestCase() {
         manager = AgentManager.getInstance(project)
         val state = PluginSettings.getInstance().state
         state.enhancedCaptureEnabled = true
-        state.enhancedCaptureConfirmed = true
-        state.enhancedCaptureRejectedAtMs = 0
         now = 5_000_000L
         manager.clockMs = { now }
         manager.heartbeatWindowMs = 30_000L
@@ -54,8 +52,6 @@ class AgentHeartbeatWindowTest : BasePlatformTestCase() {
         SqlCaptureGate.paused.set(false)
         val state = PluginSettings.getInstance().state
         state.enhancedCaptureEnabled = false
-        state.enhancedCaptureConfirmed = false
-        state.enhancedCaptureRejectedAtMs = 0
         super.tearDown()
     }
 

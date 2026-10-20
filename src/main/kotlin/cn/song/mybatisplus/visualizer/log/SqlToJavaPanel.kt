@@ -13,6 +13,7 @@ import cn.song.mybatisplus.visualizer.ui.EntitySelectionDialog
 import cn.song.mybatisplus.visualizer.ui.JavaCodeFormatter
 import cn.song.mybatisplus.visualizer.ui.SqlInputEditor
 import cn.song.mybatisplus.visualizer.ui.SqlSelectionDialog
+import cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons
 import cn.song.mybatisplus.visualizer.ui.entityCandidateSubtitle
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.icons.AllIcons
@@ -168,6 +169,7 @@ class SqlToJavaPanel(
         project,
         MpSqlVisualizerBundle.message("reverse.panel.voHint"),
     ) {
+        invalidateRequests()
         if (cacheResult != null) regenerateWithNewFormat()
     }
 
@@ -179,6 +181,55 @@ class SqlToJavaPanel(
     private var cacheResult: SqlReverseResult? = null
     private var cacheCandidates: List<SqlToJavaConverter.EntityCandidate>? = null
     private var cacheSubEntities: Map<String, JavaCodeGenerator.EntityTarget> = emptyMap()
+
+    /** UI010：代次只在 EDT 读写；后台任务只持有不可变快照，不读取输入组件。 */
+    private data class ConversionRequest(
+        val generation: Long,
+        val text: String,
+        val format: ReverseWrapperFormat,
+        val caller: String,
+        val returnType: String,
+    )
+
+    private var requestGeneration = 0L
+
+    private fun invalidateRequests(clearCache: Boolean = false) {
+        requestGeneration++
+        if (clearCache) {
+            cacheText = null
+            cacheResult = null
+            cacheCandidates = null
+            cacheSubEntities = emptyMap()
+        }
+    }
+
+    private fun requestSnapshot() = ConversionRequest(
+        requestGeneration, inputEditor.text, reverseFormat(), callerField.text, voField.text,
+    )
+
+    private fun isCurrent(request: ConversionRequest): Boolean =
+        !disposed && !project.isDisposed && request.generation == requestGeneration &&
+            request.text == inputEditor.text && request.format == reverseFormat() &&
+            request.caller == callerField.text && request.returnType == voField.text
+
+    // 测试仅替换调度/弹窗宿主；解析、实体查询、缓存回填和渲染仍走同一生产闭包。
+    internal var backgroundDispatcherForTest: ((() -> Unit) -> Unit)? = null
+    internal var uiDispatcherForTest: ((() -> Unit) -> Unit)? = null
+    internal var entityDialogForTest:
+        ((List<EntitySelectionDialog.TableRow>, (Map<String, PsiClass?>) -> Unit) -> Unit)? = null
+
+    private fun dispatchBackground(block: () -> Unit) {
+        val dispatcher = backgroundDispatcherForTest
+        if (dispatcher != null) dispatcher(block)
+        else ApplicationManager.getApplication().executeOnPooledThread { block() }
+    }
+
+    private fun dispatchUi(request: ConversionRequest, block: () -> Unit) {
+        val guarded = { if (isCurrent(request)) block() }
+        val dispatcher = uiDispatcherForTest
+        if (dispatcher != null) dispatcher(guarded)
+        else ApplicationManager.getApplication().invokeLater({ guarded() }, ModalityState.nonModal())
+    }
 
     /** 调用类 MPJ 能力（后台 ReadAction 继承链实证；QUERY 形态/未解析默认 false）。 */
     private var callerMpj = false
@@ -222,6 +273,7 @@ class SqlToJavaPanel(
         // 空态提示显隐跟随文档内容
         inputEditor.editor.document.addDocumentListener(object : DocumentListener {
             override fun documentChanged(e: DocumentEvent) {
+                invalidateRequests(clearCache = true)
                 inputHintLabel.isVisible = inputEditor.text.isBlank()
             }
         }, this)
@@ -292,7 +344,7 @@ class SqlToJavaPanel(
     /** 转换：parse（EDT 纯函数）→ 实体查找（后台 ReadAction）→ 分发（设置形态）。 */
     private inner class ConvertAction : AnAction() {
         override fun update(e: AnActionEvent) {
-            e.presentation.icon = AllIcons.Actions.Execute
+            e.presentation.icon = MpvsIcons.Convert
             e.presentation.text = MpSqlVisualizerBundle.message("reverse.panel.convert")
         }
 
@@ -304,7 +356,7 @@ class SqlToJavaPanel(
     /** 格式化输入区 SQL（SqlFormatter 幂等；程序性写入不触发补全）。 */
     private inner class FormatAction : AnAction() {
         override fun update(e: AnActionEvent) {
-            e.presentation.icon = AllIcons.Actions.ReformatCode
+            e.presentation.icon = MpvsIcons.Format
             e.presentation.text = MpSqlVisualizerBundle.message("reverse.panel.format")
         }
 
@@ -317,7 +369,7 @@ class SqlToJavaPanel(
 
     private inner class ClearInputAction : AnAction() {
         override fun update(e: AnActionEvent) {
-            e.presentation.icon = AllIcons.Actions.GC
+            e.presentation.icon = MpvsIcons.Clear
             e.presentation.text = MpSqlVisualizerBundle.message("reverse.panel.clearInput")
         }
 
@@ -328,7 +380,7 @@ class SqlToJavaPanel(
 
     private inner class CopyAction : AnAction() {
         override fun update(e: AnActionEvent) {
-            e.presentation.icon = AllIcons.Actions.Copy
+            e.presentation.icon = MpvsIcons.Copy
             e.presentation.text = MpSqlVisualizerBundle.message("reverse.panel.copy")
             e.presentation.isEnabled = resultEditor.document.text.isNotBlank()
         }
@@ -343,7 +395,7 @@ class SqlToJavaPanel(
     /** T-M45：直接格式化结果区 Java 代码（对齐输入区「格式化 SQL」交互——格式化当前框内内容）。 */
     private inner class FormatCodeAction : AnAction() {
         override fun update(e: AnActionEvent) {
-            e.presentation.icon = AllIcons.Actions.ReformatCode
+            e.presentation.icon = MpvsIcons.Format
             e.presentation.text = MpSqlVisualizerBundle.message("reverse.panel.formatCode")
             e.presentation.isEnabled = resultEditor.document.text.isNotBlank()
         }
@@ -355,11 +407,12 @@ class SqlToJavaPanel(
 
     private inner class ClearResultAction : AnAction() {
         override fun update(e: AnActionEvent) {
-            e.presentation.icon = AllIcons.Actions.GC
+            e.presentation.icon = MpvsIcons.Clear
             e.presentation.text = MpSqlVisualizerBundle.message("reverse.panel.clearResult")
         }
 
         override fun actionPerformed(e: AnActionEvent) {
+            invalidateRequests(clearCache = true)
             setResultText("")
             status(" ", error = false)
         }
@@ -1047,7 +1100,10 @@ class SqlToJavaPanel(
 
     @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
     private fun convert() {
-        val text = inputEditor.text
+        if (disposed || project.isDisposed) return
+        invalidateRequests(clearCache = true)
+        val request = requestSnapshot()
+        val text = request.text
         if (text.isBlank()) {
             status(MpSqlVisualizerBundle.message("reverse.panel.empty"), error = true)
             return
@@ -1055,7 +1111,7 @@ class SqlToJavaPanel(
         // T-BatchSql：顶层分号拆分 → 多语句走批量路径
         val statements = SqlToJavaConverter.splitStatements(text)
         if (statements.size > 1) {
-            convertBatch(statements)
+            convertBatch(statements, request)
             return
         }
         // 单条 SQL：尝试快速 parse 提供精确错误提示（保持既有单条错误行号定位体验）
@@ -1072,22 +1128,22 @@ class SqlToJavaPanel(
         // T-M36.6：缓存成功解析（输入文本未变时切换形态复用）
         cacheText = text
         cacheResult = result
-        val format = reverseFormat()
+        val format = request.format
         if (format == ReverseWrapperFormat.QUERY) {
             cacheCandidates = null
-            render(result, emptyList(), format)
+            render(result, emptyList(), format, request = request)
             return
         }
-        ApplicationManager.getApplication().executeOnPooledThread {
+        dispatchBackground {
             val payload = try {
                 ReadAction.compute<Triple<List<SqlToJavaConverter.EntityCandidate>, Map<String, List<SqlToJavaConverter.EntityCandidate>>, Pair<Boolean, Set<String>>>, Throwable> {
                     val candidates = SqlToJavaConverter.findCandidates(project, result.tableName)
                     // T-M37 P1：副表**全部**候选（alias → 列表；零/无别名 → 空），EDT 层按 joins 顺序分发
                     val subCandidates = SqlToJavaConverter.findSubEntityCandidates(project, result.joins)
                     // 调用类 MPJ 能力（继承链实证）——VO 查询/多表生成据此选合法方法
-                    val callerMpj = SqlToJavaConverter.invocationHasMpj(project, callerField.text)
+                    val callerMpj = SqlToJavaConverter.invocationHasMpj(project, request.caller)
                     // T-M44：调用类真实方法集（继承链）——生成器按真实 API 选择调用方法（selectPage 缺失回落 selectJoinPage 族）
-                    val callerMethods = SqlToJavaConverter.invocationMethods(project, callerField.text)
+                    val callerMethods = SqlToJavaConverter.invocationMethods(project, request.caller)
                     Triple(candidates, subCandidates, callerMpj to callerMethods)
                 }
             } catch (t: Throwable) {
@@ -1095,7 +1151,7 @@ class SqlToJavaPanel(
                 if (FatalErrors.isFatal(t)) throw t
                 Triple(emptyList<SqlToJavaConverter.EntityCandidate>(), emptyMap(), false to emptySet())
             }
-            ApplicationManager.getApplication().invokeLater {
+            dispatchUi(request) {
                 cacheCandidates = payload.first
                 callerMpj = payload.third.first
                 callerMethods = payload.third.second
@@ -1115,23 +1171,24 @@ class SqlToJavaPanel(
                         cacheSubEntities = subEntities
                         // T-TS-03：写体显式过闸——render 内的 setResultText 写结果区文档；本拍由 BGT 派发
                         DocWriteContext.runWriteSafe(project, "reverse render dispatch (auto infer)") {
-                            render(result, payload.first, format, subEntities)
+                            render(result, payload.first, format, subEntities, request)
                         }
                     } else {
-                        showEntitySelection(result, payload.first, payload.second, format)
+                        showEntitySelection(result, payload.first, payload.second, format, request)
                     }
-                    return@invokeLater
+                    return@dispatchUi
                 }
                 if (manualEnabled && payload.first.isEmpty()) {
-                    showEntitySelection(result, payload.first, payload.second, format)
-                    return@invokeLater
+                    showEntitySelection(result, payload.first, payload.second, format, request)
+                    return@dispatchUi
                 }
                 // 现状：副表候选逐表处理（开关关闭时多候选不弹窗，取第一个）
-                resolveSubEntities(payload.second, result.joins) { subEntities ->
+                resolveSubEntities(payload.second, result.joins, request) { subEntities ->
+                    if (!isCurrent(request)) return@resolveSubEntities
                     cacheSubEntities = subEntities
                     // T-TS-03：同上一处——本回调可能由模态选择弹窗关闭后触发，写体统一过闸
                     DocWriteContext.runWriteSafe(project, "reverse render dispatch (sub entities)") {
-                        render(result, payload.first, format, subEntities)
+                        render(result, payload.first, format, subEntities, request)
                     }
                 }
             }
@@ -1152,18 +1209,18 @@ class SqlToJavaPanel(
      *  - 超过 20 条时状态行提示「语句较多，实体查找可能耗时较长」。
      */
     @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
-    private fun convertBatch(statements: List<String>) {
+    private fun convertBatch(statements: List<String>, request: ConversionRequest) {
         // 1. 批量解析（EDT 纯函数；错误隔离——失败项 error 非 null）
         val parseResults = SqlToJavaConverter.parseBatch(statements)
         val successCount = parseResults.count { it.result != null }
         // 2. 后台单次 ReadAction 实体查找（所有语句共享）
-        ApplicationManager.getApplication().executeOnPooledThread {
+        dispatchBackground {
             val (mainCandidates, subCandidates) = ReadAction.compute<Pair<Map<Int, List<SqlToJavaConverter.EntityCandidate>>, Map<Int, Map<String, List<SqlToJavaConverter.EntityCandidate>>>>, Throwable> {
                 SqlToJavaConverter.findCandidatesBatch(project, parseResults)
             }
             // 3. EDT 生成 + 拼接
-            ApplicationManager.getApplication().invokeLater {
-                val format = reverseFormat()
+            dispatchUi(request) {
+                val format = request.format
                 val code = SqlToJavaConverter.generateBatchCode(
                     parseResults,
                     mainCandidates,
@@ -1173,7 +1230,7 @@ class SqlToJavaPanel(
                 )
                 // T-TS-03：写体显式过闸（[setResultText] 内同样过闸，这里是「哪次活动在写」的语义
                 // 声明点：本拍由 BGT 派发，模态进度下 defaultModalityState 可能取到写不安全模态）
-                DocWriteContext.runWriteSafe(project, "reverse batch result write") { setResultText(code) }
+                setResultText(code, request)
                 val finalSuccess = parseResults.count { it.result != null }
                 val failed = statements.size - finalSuccess
                 val msg = if (failed > 0) {
@@ -1209,9 +1266,11 @@ class SqlToJavaPanel(
         mainCandidates: List<SqlToJavaConverter.EntityCandidate>,
         subCandidates: Map<String, List<SqlToJavaConverter.EntityCandidate>>,
         format: ReverseWrapperFormat,
+        request: ConversionRequest,
     ) {
+        if (!isCurrent(request)) return
         // 先回落显示（弹窗取消 → 保持字符串列名结果）
-        setResultText(generateCode(result, null, format))
+        setResultText(generateCode(result, null, format), request)
         status(joinStatus(result, MpSqlVisualizerBundle.message("reverse.panel.status.noEntity")), error = false)
         val rows = buildList {
             add(
@@ -1235,11 +1294,12 @@ class SqlToJavaPanel(
                 }
             }
         }
-        EntitySelectionDialog(project, rows) { selections ->
+        val onConfirm: (Map<String, PsiClass?>) -> Unit = confirm@{ selections ->
+            if (!isCurrent(request)) return@confirm
             // T-Perf-08：实体确认回调解析移后台——candidateOf 的 EntityResolver.resolve 遍历继承链
             // 全部字段 + 每字段注解 resolve，大实体（50+ 字段）耗时线性，EDT 直解析构成确认停顿；
             // 后台 ReadAction 解析后回 EDT 回填缓存并渲染（对齐 convert 的既有异步模式）。
-            ApplicationManager.getApplication().executeOnPooledThread {
+            dispatchBackground {
                 @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
                 val resolved = ReadAction.compute<Triple<SqlToJavaConverter.EntityCandidate?, Map<String, JavaCodeGenerator.EntityTarget>, List<SqlToJavaConverter.EntityCandidate>>, Throwable> {
                     val main = selections[EntitySelectionDialog.MAIN_KEY]?.let { SqlToJavaConverter.candidateOf(it) }
@@ -1254,14 +1314,16 @@ class SqlToJavaPanel(
                 }
                 // T-WSC-02：render → setResultText → WriteCommandAction 写结果区文档，属文档写入回调，
                 // 不能用 any()（恒 write-unsafe，见 DocWriteContext KDoc）——改 nonModal。
-                ApplicationManager.getApplication().invokeLater({
-                    if (project.isDisposed) return@invokeLater
+                dispatchUi(request) {
                     cacheCandidates = resolved.third
                     cacheSubEntities = resolved.second
-                    render(result, resolved.third, format, resolved.second)
-                }, ModalityState.nonModal())
+                    render(result, resolved.third, format, resolved.second, request)
+                }
             }
-        }.show()
+        }
+        val dialogHost = entityDialogForTest
+        if (dialogHost != null) dialogHost(rows, onConfirm)
+        else EntitySelectionDialog(project, rows, onConfirm).show()
     }
 
     /**
@@ -1276,6 +1338,7 @@ class SqlToJavaPanel(
     private fun resolveSubEntities(
         subCandidates: Map<String, List<SqlToJavaConverter.EntityCandidate>>,
         joins: List<ReverseJoin>,
+        request: ConversionRequest,
         onComplete: (Map<String, JavaCodeGenerator.EntityTarget>) -> Unit,
     ) {
         // 按 joins 顺序的别名列表（无别名的 join 无候选，直接跳过）
@@ -1283,6 +1346,7 @@ class SqlToJavaPanel(
         val subEntities = mutableMapOf<String, JavaCodeGenerator.EntityTarget>()
         var index = 0
         fun next() {
+            if (!isCurrent(request)) return
             while (index < aliases.size) {
                 val alias = aliases[index]
                 index++
@@ -1310,6 +1374,7 @@ class SqlToJavaPanel(
                             }
                         }
                         SqlSelectionDialog(project, candidates, displayTexts) { selected ->
+                            if (!isCurrent(request)) return@SqlSelectionDialog
                             toSubEntity(selected)?.let { subEntities[alias] = it }
                             next()
                         }.show()
@@ -1338,6 +1403,7 @@ class SqlToJavaPanel(
      * （不自动触发转换——用户点「转换」或切换形态后生成）。
      */
     fun setInputSql(sql: String) {
+        invalidateRequests(clearCache = true)
         inputEditor.setSql(sql)
         setResultText("")
         status(" ", error = false)
@@ -1348,7 +1414,10 @@ class SqlToJavaPanel(
      * 无缓存（QUERY 路径未查过实体）或输入已变化 → 走完整转换流程。
      */
     private fun regenerateWithNewFormat() {
-        val text = inputEditor.text
+        if (disposed || project.isDisposed) return
+        invalidateRequests()
+        val request = requestSnapshot()
+        val text = request.text
         if (text.isBlank()) return
         if (cacheText != text || cacheResult == null) {
             convert()
@@ -1359,13 +1428,13 @@ class SqlToJavaPanel(
         if (format == ReverseWrapperFormat.QUERY || candidates == null) {
             // QUERY 形态或从未查过实体（QUERY 切换来）→ 重新走完整流程（同步/后台自适应）
             if (format == ReverseWrapperFormat.QUERY) {
-                render(cacheResult!!, emptyList(), format)
+                render(cacheResult!!, emptyList(), format, request = request)
             } else {
                 convert()
             }
             return
         }
-        render(cacheResult!!, candidates, format, cacheSubEntities)
+        render(cacheResult!!, candidates, format, cacheSubEntities, request)
     }
 
     /** T-M37：多表 JOIN 状态提示（生成 MPJ 形态说明）。 */
@@ -1383,14 +1452,17 @@ class SqlToJavaPanel(
      * 断言），完成后 EDT 派发重生成；特殊值 this/baseMapper 恒 MPJ 能力（与反查同语义，同步分支）。
      */
     private fun refreshCallerCapabilityThenRegenerate() {
-        val caller = callerField.text.trim()
+        if (disposed || project.isDisposed) return
+        invalidateRequests()
+        val request = requestSnapshot()
+        val caller = request.caller.trim()
         if (caller.isEmpty() || caller == "this" || caller == "baseMapper") {
             callerMpj = caller.isNotEmpty()
             callerMethods = emptySet()
             if (cacheResult != null) regenerateWithNewFormat()
             return
         }
-        ApplicationManager.getApplication().executeOnPooledThread {
+        dispatchBackground {
             val pair = try {
                 ReadAction.compute<Pair<Boolean, Set<String>>, Throwable> {
                     SqlToJavaConverter.invocationHasMpj(project, caller) to
@@ -1401,7 +1473,7 @@ class SqlToJavaPanel(
                 if (FatalErrors.isFatal(t)) throw t
                 false to emptySet<String>()
             }
-            ApplicationManager.getApplication().invokeLater {
+            dispatchUi(request) {
                 callerMpj = pair.first
                 callerMethods = pair.second
                 if (cacheResult != null) regenerateWithNewFormat()
@@ -1418,8 +1490,10 @@ class SqlToJavaPanel(
      * [convertBatch]）与模态选择弹窗的回调，这些活动不保证 write-safe；闸门判为不可写时转 nonModal
      * 投递一拍。写体幂等（重投递写入的是同一份文本，文档内容不变），重跑无害。
      */
-    private fun setResultText(text: String) {
+    private fun setResultText(text: String, request: ConversionRequest = requestSnapshot()) {
         DocWriteContext.runWriteSafe(project, "reverse panel result write") {
+            // 写安全闸门也可能再派发一拍，必须在真正写文档时复查，不能只守上游回调。
+            if (!isCurrent(request)) return@runWriteSafe
             WriteCommandAction.runWriteCommandAction(project) {
                 resultEditor.document.setText(text)
             }
@@ -1435,10 +1509,11 @@ class SqlToJavaPanel(
      * 结果回 EDT 写回——批量转换 20+ 条语句拼大代码块时 EDT 不再随体积线性冻结。
      */
     private fun formatResult() {
+        val request = requestSnapshot()
         val code = resultEditor.document.text
         JavaCodeFormatter.formatAsync(project, code) { formatted ->
-            if (formatted != resultEditor.document.text) {
-                setResultText(formatted)
+            if (isCurrent(request) && code == resultEditor.document.text && formatted != code) {
+                setResultText(formatted, request)
             }
         }
     }
@@ -1463,17 +1538,19 @@ class SqlToJavaPanel(
         candidates: List<SqlToJavaConverter.EntityCandidate>,
         format: ReverseWrapperFormat,
         subEntities: Map<String, JavaCodeGenerator.EntityTarget> = emptyMap(),
+        request: ConversionRequest = requestSnapshot(),
     ) {
+        if (!isCurrent(request)) return
         when (candidates.size) {
             0 -> {
                 // T-PickMpjErr：生成期业务拒绝（如无 MPJ 能力）走状态栏提示，结果区保留上次内容
                 val code = generateCodeOrReport(result, null, format) ?: return
-                setResultText(code)
+                setResultText(code, request)
                 status(joinStatus(result, MpSqlVisualizerBundle.message("reverse.panel.status.noEntity")), error = false)
             }
             1 -> {
                 val code = generateCodeOrReport(result, candidates[0], format, subEntities) ?: return
-                setResultText(code)
+                setResultText(code, request)
                 status(
                     joinStatus(
                         result,
@@ -1486,7 +1563,7 @@ class SqlToJavaPanel(
                 // 开关关闭 → 不弹任何选择框，取第一个（纯自动推断）
                 if (!manualEntitySelectionEnabled()) {
                     val code = generateCodeOrReport(result, candidates[0], format, subEntities) ?: return
-                    setResultText(code)
+                    setResultText(code, request)
                     // T-FixEntityAmbiguity：多候选静默取首须明示——真机实证同表多实体（User/UserDO）
                     // 静默取到字段子集实体，用户只见「回落字符串列名」大列表误判为映射缺陷
                     val msg = if (candidates.size > 1) {
@@ -1511,8 +1588,9 @@ class SqlToJavaPanel(
                     }
                 }
                 SqlSelectionDialog(project, candidates, displayTexts) { selected ->
+                    if (!isCurrent(request)) return@SqlSelectionDialog
                     val code = generateCodeOrReport(result, selected, format, subEntities) ?: return@SqlSelectionDialog
-                    setResultText(code)
+                    setResultText(code, request)
                     status(
                         MpSqlVisualizerBundle.message("reverse.panel.status.entity", selected.psiClass.name ?: ""),
                         error = false,
@@ -1583,6 +1661,7 @@ class SqlToJavaPanel(
         val current = settingsState().reverseWrapperFormat
         val option = formatOptions().firstOrNull { it.persisted == current } ?: formatOptions().first()
         if ((formatCombo.selectedItem as? FormatOption)?.persisted != option.persisted) {
+            invalidateRequests()
             suppressFormatSync = true
             try {
                 formatCombo.selectedItem = option
@@ -1682,6 +1761,7 @@ class SqlToJavaPanel(
     override fun dispose() {
         if (disposed) return
         disposed = true
+        invalidateRequests(clearCache = true)
         inputEditor.dispose()
         EditorFactory.getInstance().releaseEditor(resultEditor)
     }

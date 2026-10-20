@@ -1,6 +1,13 @@
 package cn.song.mybatisplus.visualizer.actions
 
+import cn.song.mybatisplus.visualizer.config.ProjectPluginSettings
+import cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate
+import cn.song.mybatisplus.visualizer.execute.ExecutionErrorFormatter
+import cn.song.mybatisplus.visualizer.execute.ExecutionErrorInfo
 import cn.song.mybatisplus.visualizer.execute.SqlExecutor
+import cn.song.mybatisplus.visualizer.model.LimitClause
+import cn.song.mybatisplus.visualizer.sql.Dialect
+import cn.song.mybatisplus.visualizer.sql.DialectRegistry
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.util.UiTextClipboard
 import com.intellij.notification.Notification
@@ -18,13 +25,13 @@ import com.intellij.openapi.vfs.VirtualFile
 
 /**
  * `${table}` 快捷模板三动作（T-PreviewUx-Pack #3，吸收 DBX sqlShortcutActions 口径）：
- * mapper 编辑器 / SQL 预览编辑器内**选中文本**（表名或片段）一键套模板送原生 Database 控制台执行——
+ * mapper 编辑器 / SQL 预览编辑器内**经整串校验的表名**一键套模板送原生 Database 控制台执行——
  * EXPLAIN 执行计划 / COUNT 行数 / 抽样 10 行。三动作共享一个 action group 注册 EditorPopupMenu
  * （plugin.xml），与「生成 CRUD SQL」右键入口并存不合并菜单（目标互补：CRUD 生成 vs 诊断三动作）。
  *
- * T-SqlTemplateCaret：目标文本**不再要求先划选区**——有非空选区时原样用选区文本（逐字节不变），
- * 无选区（或选区为空白）时退化为**光标处的标识符**（[identifierAtCaret]，表名/片段），
- * 两路都取不到才禁用。理由是「光标停在表名上就能用」录制与使用都更顺手；光标退化分支
+ * T-SqlTemplateCaret：目标文本**不再要求先划选区**——有非空选区时优先取选区，
+ * 无选区（或选区为空白）时退化为**光标处的标识符**（[identifierAtCaret]）；
+ * 两路都须通过单个表标识符整串校验，否则动作禁用且点击时再次拒绝。理由是「光标停在表名上就能用」录制与使用都更顺手；光标退化分支
  * 只做词边界扫描、不依赖具体语言/SQL 注入，故在 mapper XML / `.sql` / Java / 预览弹窗文本区
  * 等任意编辑器里都成立。
  *
@@ -33,22 +40,40 @@ import com.intellij.openapi.vfs.VirtualFile
  * 三动作产物均为查询类语句（EXPLAIN/COUNT/SELECT），免 DML 二次确认（与 EXPLAIN 既有口径一致，
  * SqlTypeClassifier.QUERY 同族）。
  */
+enum class SelectedTableTemplateKind { EXPLAIN, COUNT, SAMPLE }
+
+/** 按本次动作捕获的项目/来源方言渲染模板；null 表示该方言不支持对应形态。 */
+internal fun renderSelectedTableTemplate(
+    kind: SelectedTableTemplateKind,
+    tableName: String,
+    dialect: Dialect,
+    sampleLimit: Int,
+): String? = when (kind) {
+    SelectedTableTemplateKind.EXPLAIN -> dialect.renderExplainStatement("SELECT * FROM $tableName")
+    SelectedTableTemplateKind.COUNT -> "SELECT COUNT(*) FROM $tableName"
+    SelectedTableTemplateKind.SAMPLE ->
+        "SELECT * FROM $tableName ${dialect.renderLimit(LimitClause(count = sampleLimit.coerceIn(1, 10000).toLong()))}"
+}
+
 abstract class SelectedTableSqlTemplateAction(
     private val textKey: String,
-    private val template: (String) -> String,
+    private val templateKind: SelectedTableTemplateKind,
 ) : AnAction() {
 
     override fun update(e: AnActionEvent) {
         e.presentation.text = MpSqlVisualizerBundle.message(textKey)
-        // 非空选区或光标处标识符至少有一即可用；两者都没有即禁用
-        // （不增加低价值打断；右键菜单常态可看不可点）
-        e.presentation.isEnabled = selectedOrCaretText(e) != null
+        e.presentation.isEnabled = validatedTableIdentifier(selectedOrCaretText(e)) != null
     }
 
     override fun actionPerformed(e: AnActionEvent) {
         val project = e.project ?: return
-        val text = selectedOrCaretText(e) ?: return
-        val sql = template(text.trim())
+        val tableName = validatedTableIdentifier(selectedOrCaretText(e)) ?: return
+        val sourceFile = e.getData(CommonDataKeys.VIRTUAL_FILE)
+        val dialect = DialectRegistry.effective(project, sourceFile)
+        val sampleLimit = runCatching {
+            cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.sampleLimit
+        }.getOrDefault(10)
+        val sql = renderSelectedTableTemplate(templateKind, tableName, dialect, sampleLimit)
         // T-SqlTemplateUx P2：失败反馈与预览面板拉平——除气泡外挂「定位到出错语句」「复制错误信息」
         // 两个可操作项（做法②：不新建面板，直接给 Notification 挂 NotificationAction）。
         // 定位锚点在动作触发时（EDT）从**触发编辑器**捕获（用户选中表名处即语句来源）；
@@ -60,12 +85,42 @@ abstract class SelectedTableSqlTemplateAction(
         )?.let { anchor ->
             { OpenFileDescriptor(project, anchor.file, anchor.line0, 0).navigate(true) }
         }
+        if (sql == null) {
+            notifySqlTemplateError(
+                project,
+                MpSqlVisualizerBundle.message("panel.explain.unsupported", dialect.name),
+                locate,
+            )
+            return
+        }
+        val renderMode = if (ProjectPluginSettings.getInstance(project).effectiveDialectAuto()) {
+            ExecutionDialectGate.RenderMode.AUTO
+        } else {
+            ExecutionDialectGate.RenderMode.MANUAL
+        }
+        val request = ExecutionDialectGate.Request(
+            renderMode = renderMode,
+            renderedDialectName = dialect.name,
+            intent = ExecutionDialectGate.Intent.TEMPLATE,
+            // 实际目标只在原生选择器确认后可知，当前执行 API 无法把同一目标固定给二次提交；
+            // 因而目标不一致时诚实阻断，不把“可重新渲染模板”冒充为“可无损重提交通道”。
+            canLosslesslyRerender = false,
+            userTextUntouched = true,
+        )
+        executeTemplate(project, sql, locate, request)
+    }
+
+    protected open fun executeTemplate(
+        project: Project,
+        sql: String,
+        locate: (() -> Unit)?,
+        request: ExecutionDialectGate.Request,
+    ) {
         SqlExecutor.execute(
             project, sql, null, true,
             onError = { errorMsg -> notifySqlTemplateError(project, errorMsg, locate) },
-            // 富通道优先（execute/DataSourceSelector.deliverError 二选一）：与面板同走 onErrorRich，
-            // 只是此处通知面不再需要 positionChar/lineInSql，故取 message 即可。
-            onErrorRich = { info -> notifySqlTemplateError(project, info.message, locate) },
+            onErrorRich = { info -> notifySqlTemplateError(project, info, locate) },
+            dialectGateRequest = request,
         )
     }
 
@@ -104,6 +159,53 @@ internal fun editorTemplateText(editor: Editor): String? {
 internal fun resolveTemplateText(selectedText: String?, caretIdentifier: String?): String? {
     if (selectedText != null && selectedText.isNotBlank()) return selectedText
     return caretIdentifier?.takeIf { it.isNotBlank() }
+}
+
+private val NON_TABLE_KEYWORDS = setOf(
+    "select", "insert", "update", "delete", "drop", "truncate", "alter", "create",
+    "from", "where", "join", "with", "limit", "explain",
+)
+
+/** 只接受一个表名或以点连接的标识符段；不截取候选前缀来掩盖多语句输入。 */
+internal fun validatedTableIdentifier(candidate: String?): String? {
+    val text = candidate?.trim() ?: return null
+    if (text.isEmpty() || text.length > 512 || text.any { Character.isISOControl(it) }) return null
+    if (';' in text || "--" in text || "/*" in text || "*/" in text) return null
+    var index = 0
+    while (index < text.length) {
+        val closer = QUOTE_OPENERS[text[index]]
+        if (closer != null) {
+            index++
+            var content = false
+            var closed = false
+            while (index < text.length) {
+                if (text[index] == closer) {
+                    if (index + 1 < text.length && text[index + 1] == closer) {
+                        content = true
+                        index += 2
+                        continue
+                    }
+                    index++
+                    closed = true
+                    break
+                }
+                content = true
+                index++
+            }
+            if (!content || !closed) return null
+        } else {
+            val start = index
+            while (index < text.length && isIdentifierChar(text[index])) index++
+            if (start == index || text.substring(start, index).lowercase() in NON_TABLE_KEYWORDS) return null
+        }
+        while (index < text.length && text[index].isWhitespace()) index++
+        if (index == text.length) return text
+        if (text[index] != '.') return null
+        index++
+        while (index < text.length && text[index].isWhitespace()) index++
+        if (index == text.length) return null
+    }
+    return null
 }
 
 /** 标识符字符：字母/数字/下划线（与 log/LiteralParamRecovery、sql/ExplainGate 等既有 `isWordChar` 同族）。 */
@@ -291,10 +393,19 @@ internal fun notifySqlTemplateError(project: Project, errorMsg: String, locate: 
     buildSqlTemplateErrorNotification(errorMsg, locate) { UiTextClipboard.copy(errorMsg) }.notify(project)
 }
 
+internal fun buildSqlTemplateErrorNotification(info: ExecutionErrorInfo, locate: (() -> Unit)?): Notification {
+    val text = ExecutionErrorFormatter.format(info)
+    return buildSqlTemplateErrorNotification(text, locate) { UiTextClipboard.copy(text) }
+}
+
+internal fun notifySqlTemplateError(project: Project, info: ExecutionErrorInfo, locate: (() -> Unit)?) {
+    buildSqlTemplateErrorNotification(info, locate).notify(project)
+}
+
 /** EXPLAIN 执行计划：`EXPLAIN SELECT * FROM <选中表>`。 */
 class ExplainSelectedTableAction : SelectedTableSqlTemplateAction(
     "action.cn.song.mybatisplus.visualizer.ExplainSelectedTable.text",
-    { selected -> "EXPLAIN SELECT * FROM $selected" },
+    SelectedTableTemplateKind.EXPLAIN,
 ) {
     companion object {
         /** 动作 ID（plugin.xml 注册 id 与设置页 ShortcutEditor 共用）。 */
@@ -305,7 +416,7 @@ class ExplainSelectedTableAction : SelectedTableSqlTemplateAction(
 /** 行数统计：`SELECT COUNT(*) FROM <选中表>`。 */
 class CountSelectedTableAction : SelectedTableSqlTemplateAction(
     "action.cn.song.mybatisplus.visualizer.CountSelectedTable.text",
-    { selected -> "SELECT COUNT(*) FROM $selected" },
+    SelectedTableTemplateKind.COUNT,
 ) {
     companion object {
         const val ACTION_ID = "cn.song.mybatisplus.visualizer.CountSelectedTable"
@@ -315,12 +426,7 @@ class CountSelectedTableAction : SelectedTableSqlTemplateAction(
 /** 抽样 N 行（R5：LIMIT 值设置页可配，默认 10；范围钳制 1..10000 防 0/负数与误输入全表）：`SELECT * FROM <选中表> LIMIT N`。 */
 class SampleSelectedTableAction : SelectedTableSqlTemplateAction(
     "action.cn.song.mybatisplus.visualizer.SampleSelectedTable.text",
-    { selected ->
-        val limit = runCatching {
-            cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.sampleLimit
-        }.getOrDefault(10).coerceIn(1, 10000)
-        "SELECT * FROM $selected LIMIT $limit"
-    },
+    SelectedTableTemplateKind.SAMPLE,
 ) {
     companion object {
         const val ACTION_ID = "cn.song.mybatisplus.visualizer.SampleSelectedTable"

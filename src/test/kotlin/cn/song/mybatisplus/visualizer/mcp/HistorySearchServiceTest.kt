@@ -365,4 +365,134 @@ class HistorySearchServiceTest {
     }
 
     private fun dir(): File = tmp.root
+
+    // ------------------------------------------------------------------
+    // F55/F56/F65（D31 道 A）：扫描环三合一——文件名倒序/条目粒度封顶/名日期预跳过
+    // ------------------------------------------------------------------
+
+    /** 造数辅助：按时间戳生成 sql-history-yyyy-MM-dd.sql 文件名（默认模板形态，名字序＝日期序）。 */
+    private fun fileNameOf(ts: Long): String =
+        "sql-history-" + DateTimeFormatter.ofPattern("yyyy-MM-dd").withZone(ZoneId.systemDefault())
+            .format(Instant.ofEpochMilli(ts)) + ".sql"
+
+    /** 今日 01:00（恒为今日——锚定当日零点而非 nowMs 偏移，防跨午夜跑测漂移）。 */
+    private val tToday: Long get() = startOfToday(nowMs) + 3_600_000
+
+    /** 昨日 23:00。 */
+    private val tYesterday: Long get() = startOfToday(nowMs) - 3_600_000
+
+    /** 前日 01:00。 */
+    private val tTwoDaysAgo: Long get() = startOfToday(nowMs) - 2 * 86_400_000L + 3_600_000
+
+    /**
+     * F55 主断言：封顶截断丢旧不丢新——文件名倒序（新→旧）读盘，预算耗尽时被丢弃的是
+     * 最旧侧。三个日期文件各 2 条、预算 4：只读今日+昨日两文件，前日文件不读——
+     * **今天的数据必须在场**（旧环升序先读前日+昨日、恰把今日文件截掉 → 本测红）。
+     */
+    @Test
+    fun test三合一_封顶截断_今日最新数据在场() {
+        writeHistoryFile(
+            fileNameOf(tTwoDaysAgo),
+            listOf(entryText(tTwoDaysAgo, "SELECT old_2d_a"), entryText(tTwoDaysAgo + 1, "SELECT old_2d_b")),
+        )
+        writeHistoryFile(
+            fileNameOf(tYesterday),
+            listOf(entryText(tYesterday, "SELECT old_1d_a"), entryText(tYesterday + 1, "SELECT old_1d_b")),
+        )
+        writeHistoryFile(
+            fileNameOf(tToday),
+            listOf(entryText(tToday, "SELECT today_a"), entryText(tToday + 1, "SELECT today_b")),
+        )
+        val r = HistorySearchService.search(
+            dir().absolutePath,
+            HistorySearchService.Query(keyword = "SELECT", allDates = true),
+            nowMs,
+            scanEntryCap = 4,
+        )
+        assertTrue("预算耗尽应置 scanTruncated", r.scanTruncated)
+        assertEquals("解析条目数 ≤ 上限（恰耗尽预算）", 4, r.scannedEntries)
+        assertEquals(
+            "命中只来自最新的两文件（今日+昨日）——读盘新→旧",
+            setOf(fileNameOf(tToday), fileNameOf(tYesterday)),
+            r.hits.map { it.historyFile }.toSet(),
+        )
+        assertTrue("今天的数据在场", r.hits.any { it.sqlPreview.contains("today") })
+    }
+
+    /**
+     * F65 主断言：名日期与 mtime 均早于范围起点的文件**零 IO 预跳过**——扫描预算不被
+     * 旧文件耗尽。预算 1 + 昨日文件（名日期/mtime 双旧）：预跳过后预算留给今日文件
+     * （旧环升序先读昨日文件耗尽预算 → 今日缺席 → 本测红）。
+     */
+    @Test
+    fun test三合一_默认今日_旧文件预跳过不耗预算() {
+        val oldFile = writeHistoryFile(fileNameOf(tYesterday), listOf(entryText(tYesterday, "SELECT old_entry")))
+        oldFile.setLastModified(tYesterday) // mtime 与名日期同旧——起点后未被追加的铁证
+        writeHistoryFile(fileNameOf(tToday), listOf(entryText(tToday, "SELECT today_entry")))
+        val r = HistorySearchService.search(
+            dir().absolutePath,
+            HistorySearchService.Query(keyword = "SELECT"),
+            nowMs,
+            scanEntryCap = 1,
+        )
+        assertEquals("今天的数据在场（旧文件被预跳过、预算未被其耗尽）", 1, r.totalHits)
+        assertTrue(r.hits.single().sqlPreview.contains("today_entry"))
+        assertFalse("预跳过不是截断", r.scanTruncated)
+    }
+
+    /**
+     * F56 主断言：条目粒度增量解析——解析条目数不超上限（同文件中途即停，不再整文件
+     * 物化）。单文件 5 条、预算 3（旧环 readFromFile 整文件解析 scannedEntries=5 → 本测红）。
+     */
+    @Test
+    fun test三合一_条目粒度封顶_单文件中途即停() {
+        writeHistoryFile(
+            fileNameOf(tToday),
+            (1..5).map { entryText(tToday + it.toLong(), "SELECT n$it") },
+        )
+        val r = HistorySearchService.search(
+            dir().absolutePath,
+            HistorySearchService.Query(allDates = true),
+            nowMs,
+            scanEntryCap = 3,
+        )
+        assertTrue(r.scanTruncated)
+        assertEquals("解析条目数 ≤ 上限", 3, r.scannedEntries)
+        assertEquals("封顶内命中 3 条", 3, r.totalHits)
+    }
+
+    /** 方向回归守卫：默认今日范围——今日条目在场、昨日条目缺席（纯过滤面，不涉截断）。 */
+    @Test
+    fun test三合一_默认今日_方向与范围正确性() {
+        val oldFile = writeHistoryFile(fileNameOf(tYesterday), listOf(entryText(tYesterday, "SELECT yesterday_only")))
+        oldFile.setLastModified(tYesterday)
+        writeHistoryFile(fileNameOf(tToday), listOf(entryText(tToday, "SELECT today_only")))
+        val r = search(dir(), HistorySearchService.Query())
+        assertEquals(1, r.totalHits)
+        assertTrue(r.hits.single().sqlPreview.contains("today_only"))
+        assertFalse(r.scanTruncated)
+    }
+
+    /** F65 判据直测：名日期/mtime/范围下界三信号——任一缺失或偏新都不跳（跨天追加防误伤）。 */
+    @Test
+    fun test三合一_预跳过判据_preSkippable直测() {
+        val scope = startOfToday(nowMs)
+        val oldFile = writeHistoryFile(fileNameOf(tYesterday), listOf(entryText(tYesterday, "SELECT x")))
+        val todayFile = writeHistoryFile(fileNameOf(tToday), listOf(entryText(tToday, "SELECT y")))
+        val noDateFile = writeHistoryFile("custom-template.sql", listOf(entryText(tYesterday, "SELECT z")))
+        oldFile.setLastModified(tYesterday)
+        noDateFile.setLastModified(tYesterday)
+        assertFalse("无范围下界（allDates 且无 fromMs）永不跳", HistorySearchService.preSkippable(oldFile, null))
+        assertTrue("名日期+mtime 双旧必跳", HistorySearchService.preSkippable(oldFile, scope))
+        assertFalse(
+            "名字无日期（自定义模板）不跳——按名日期预跳过的登记形态，正确性优先",
+            HistorySearchService.preSkippable(noDateFile, scope),
+        )
+        oldFile.setLastModified(nowMs)
+        assertFalse(
+            "mtime 偏新（起点后可能仍被追加——跨天滚动块）不跳",
+            HistorySearchService.preSkippable(oldFile, scope),
+        )
+        assertFalse("今日文件不跳", HistorySearchService.preSkippable(todayFile, scope))
+    }
 }

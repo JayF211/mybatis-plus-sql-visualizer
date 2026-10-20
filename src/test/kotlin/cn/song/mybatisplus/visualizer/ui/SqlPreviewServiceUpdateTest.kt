@@ -112,6 +112,42 @@ class SqlPreviewServiceUpdateTest : BasePlatformTestCase() {
         )
     }
 
+    fun testUpdateSetSqlConcatRuntimeValue() {
+        // UI-038（T-UpdateSetSqlConcat）：demo OrderController#discount 真机复现——
+        // setSql 实参是「静态前缀 + 运行期值」的字符串拼接，此前整段 SET 被静默丢弃（产出无 SET 的非法 SQL）
+        myFixture.configureByText(
+            "Demo.java",
+            """
+            import java.math.BigDecimal;
+
+            public class Demo {
+                public int discount(BigDecimal rate, Integer status) {
+                    UpdateWrapper<OrderEntity> updateWrapper = new UpdateWrapper<>();
+                    updateWrapper.setSql("amount = amount * " + rate);
+                    updateWrapper.eq("status", status);
+                    return orderMapper.update(null, updateWrapper);
+                }
+
+                static class OrderEntity {
+                    private Integer id;
+                    private BigDecimal amount;
+                    private Integer status;
+                }
+            }
+            """.trimIndent(),
+        )
+        val result = newService().preview(anchor())
+        assertNotNull("拼接 setSql 应产出预览结果", result)
+        assertEquals(
+            """
+            UPDATE order_entity
+            SET amount = amount * ?
+            WHERE status = ?
+            """.trimIndent(),
+            result!!.sql,
+        )
+    }
+
     fun testUpdateLastRawTailPassthrough() {
         // U05（T-M15-04）：更新 wrapper 上 last("AND (... >= 0)") 防超发兜底（modules/StoreCouponServiceImpl#deduction 真实用例）
         myFixture.configureByText(

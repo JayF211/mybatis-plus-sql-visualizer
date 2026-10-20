@@ -28,6 +28,8 @@ import javax.swing.tree.TreeModel
  *    自动回退走调用方的 fail-closed 链，不经此处）；
  *  - 索引建议条：[hints] 非空才占位（ExplainIndexAdvisor 规则集的面板侧消费位——
  *    T-EI-01 定案的「IDE 面建议条」挂账由本条落地；只提示不执行）；
+ *  - R61 跨次对比条：[diff] 非 null 才占位（同一 SQL 会话级上一次结构化结果的对比——
+ *    节点增删 + rows/cost 变化标注；形态照抄索引建议条，仅提示不执行）；
  *  - CENTER：TABLE 格式 → 只读 [JBTable]（循 buildColumnInfoPanel 既有表格形态）；
  *    JSON 格式 → 可折叠 [JTree]（[ExplainJsonPlanTree] 纯逻辑构建）；其余格式调用方不应到达
  *    （ExplainPanelChannel 判定已挡，兜底给如实占位文案）。
@@ -41,6 +43,10 @@ class ExplainPlanResultView(
     format: ExplainOutputFormat,
     hints: List<ExplainIndexAdvisor.Hint> = emptyList(),
     onBackToConsole: (() -> Unit)? = null,
+    /** R61：与上一次结构化执行的对比（null=无基线/无可比——条不占位；isEmpty=计划无变化，显式告知）。 */
+    diff: ExplainPlanDiff.PlanDiff? = null,
+    baselines: List<cn.song.mybatisplus.visualizer.history.ExplainPlanHistorySession.Baseline> = emptyList(),
+    historyStatus: cn.song.mybatisplus.visualizer.history.ExplainPlanSaveResult? = null,
 ) : JBPanel<ExplainPlanResultView>(BorderLayout()) {
 
     /** TABLE 格式的表格模型（其他格式 null）。 */
@@ -50,8 +56,11 @@ class ExplainPlanResultView(
     private val treeModel: TreeModel?
 
     private val hintsLabel: JBLabel
+    private val compareLabel: JBLabel?
     private val backButton: JButton
     private val headerLabel: JBLabel
+    private val baselineSelector = javax.swing.JComboBox<String>()
+    private val historyStatusLabel = JBLabel()
 
     init {
         border = JBUI.Borders.empty()
@@ -96,6 +105,38 @@ class ExplainPlanResultView(
             isVisible = hints.isNotEmpty()
         }
 
+        // R61 跨次对比条（照抄索引建议条形态；null=无基线不占位——isEmpty 也要显式告知「计划无变化」）
+        compareLabel = if (diff != null || baselines.isNotEmpty()) JBLabel().apply {
+            foreground = JBColor.namedColor("Label.infoForeground", JBColor.GRAY)
+            border = JBUI.Borders.empty(1, 4)
+        } else null
+        fun showComparison(value: ExplainPlanDiff.PlanDiff?) {
+            compareLabel?.text = "<html><b>" + MpSqlVisualizerBundle.message("panel.explain.compare.title") + "</b><br>" +
+                (value?.let { renderCompareLines(it).joinToString("<br>") { line -> escapeHtml(line) } }
+                    ?: MpSqlVisualizerBundle.message("panel.explain.history.notComparable")) + "</html>"
+        }
+        showComparison(diff)
+        baselines.forEach { baselineSelector.addItem(it.label) }
+        baselineSelector.isVisible = baselines.isNotEmpty()
+        baselineSelector.toolTipText = MpSqlVisualizerBundle.message("panel.explain.history.baseline")
+        baselineSelector.addActionListener {
+            baselines.getOrNull(baselineSelector.selectedIndex)?.let {
+                showComparison(ExplainPlanDiff.diff(it.raw, raw, format))
+            }
+        }
+        if (baselines.isNotEmpty()) showComparison(ExplainPlanDiff.diff(baselines.first().raw, raw, format))
+        historyStatusLabel.text = historyStatus?.let {
+            when (it) {
+                cn.song.mybatisplus.visualizer.history.ExplainPlanSaveResult.SAVED -> MpSqlVisualizerBundle.message("panel.explain.history.SAVED")
+                cn.song.mybatisplus.visualizer.history.ExplainPlanSaveResult.SESSION_ONLY -> MpSqlVisualizerBundle.message("panel.explain.history.SESSION_ONLY")
+                cn.song.mybatisplus.visualizer.history.ExplainPlanSaveResult.TOO_LARGE -> MpSqlVisualizerBundle.message("panel.explain.history.TOO_LARGE")
+                cn.song.mybatisplus.visualizer.history.ExplainPlanSaveResult.CLEARED_OR_REMOVED -> MpSqlVisualizerBundle.message("panel.explain.history.CLEARED_OR_REMOVED")
+                cn.song.mybatisplus.visualizer.history.ExplainPlanSaveResult.RETENTION_DISABLED -> MpSqlVisualizerBundle.message("panel.explain.history.RETENTION_DISABLED")
+            }
+        }.orEmpty()
+        historyStatusLabel.isVisible = historyStatus != null
+        historyStatusLabel.border = JBUI.Borders.empty(1, 4)
+
         val north = JBPanel<JBPanel<*>>(BorderLayout()).apply {
             isOpaque = false
             border = JBUI.Borders.empty()
@@ -103,7 +144,20 @@ class ExplainPlanResultView(
             add(hintsLabel, BorderLayout.CENTER)
             add(backButton, BorderLayout.EAST)
         }
-        add(north, BorderLayout.NORTH)
+        // R61：对比条叠在头部块之下（纵向栈——头部/建议条/对比条自上而下）
+        val northStrip = JBPanel<JBPanel<*>>().apply {
+            isOpaque = false
+            border = JBUI.Borders.empty()
+            layout = javax.swing.BoxLayout(this, javax.swing.BoxLayout.Y_AXIS)
+            add(north)
+            if (baselines.isNotEmpty()) {
+                add(JBLabel(MpSqlVisualizerBundle.message("panel.explain.history.baseline")))
+                add(baselineSelector)
+            }
+            add(historyStatusLabel)
+            compareLabel?.let { add(it) }
+        }
+        add(northStrip, BorderLayout.NORTH)
 
         // 中央内容：按格式分派（结构化档只有 TABLE/JSON 会到达——ExplainPanelChannel 判定已挡）
         var table: TableModel? = null
@@ -157,6 +211,34 @@ class ExplainPlanResultView(
         return swing
     }
 
+    /**
+     * R61：对比结果 → 人读行清单（bundle 双语；数值走 [java.util.Locale.ROOT] 格式化——
+     * 防本机 locale 把小数点渲染成逗号污染 SQL 语境）。行序：变更（节点标签 + rows/cost/字段
+     * 变化）→ 新增 → 移除；无任何变化 → 单行「计划无变化」。
+     */
+    internal fun renderCompareLines(d: ExplainPlanDiff.PlanDiff): List<String> {
+        if (d.isEmpty) return listOf(MpSqlVisualizerBundle.message("panel.explain.compare.unchanged"))
+        val lines = mutableListOf<String>()
+        for (change in d.changed) {
+            val parts = mutableListOf<String>()
+            change.rowsDelta?.let { parts += MpSqlVisualizerBundle.message("panel.explain.compare.rows", it.old, it.new) }
+            change.costDelta?.let {
+                parts += MpSqlVisualizerBundle.message(
+                    "panel.explain.compare.cost",
+                    String.format(java.util.Locale.ROOT, "%.1f", it.old),
+                    String.format(java.util.Locale.ROOT, "%.1f", it.new),
+                )
+            }
+            change.fieldChanges.forEach {
+                parts += MpSqlVisualizerBundle.message("panel.explain.compare.field", it.name, it.old, it.new)
+            }
+            if (parts.isNotEmpty()) lines += "${change.label}: ${parts.joinToString(", ")}"
+        }
+        d.added.forEach { lines += MpSqlVisualizerBundle.message("panel.explain.compare.added", it) }
+        d.removed.forEach { lines += MpSqlVisualizerBundle.message("panel.explain.compare.removed", it) }
+        return lines
+    }
+
     private fun escapeHtml(text: String): String =
         text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
@@ -173,4 +255,9 @@ class ExplainPlanResultView(
     internal fun backButtonForTest(): JButton = backButton
 
     internal fun headerTextForTest(): String = headerLabel.text
+
+    /** R61 测试缝：对比条文本（null=无对比条——无基线不占位）。 */
+    internal fun compareTextForTest(): String? = compareLabel?.text
+    internal fun baselineSelectorForTest(): javax.swing.JComboBox<String> = baselineSelector
+    internal fun historyStatusForTest(): String = historyStatusLabel.text
 }

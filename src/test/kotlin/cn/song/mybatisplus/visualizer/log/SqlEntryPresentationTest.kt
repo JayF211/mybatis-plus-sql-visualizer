@@ -7,6 +7,21 @@ import com.intellij.ui.SimpleTextAttributes
 import java.awt.Color
 
 class SqlEntryPresentationTest : BasePlatformTestCase() {
+    fun testUI013同结构计数保留但Sharding不借用其他来源去重徽章() {
+        val entry = LogSqlEntry(rawSql = "SELECT * FROM t WHERE id = ?",
+            restoredSql = "SELECT * FROM t WHERE id = ?", params = emptyList(), source = SqlSource.SHARDINGSPHERE)
+        val templates = structureKeyCounts(List(TEMPLATE_BADGE_MIN_COUNT) { entry.copy(actualSql = "ds_$it ::: SELECT ? ::: [$it]") })
+        val drops = mapOf(entry.dedupeKey to 7)
+        val sharding = SqlEntryPresentation.metadata(entry, false, false, templates, drops, true)
+        val normal = SqlEntryPresentation.metadata(entry.copy(source = SqlSource.MYBATIS), false, false, templates, drops, true)
+        assertFalse(sharding.any { it.text == "⨉7 " })
+        assertTrue(normal.any { it.text == "⨉7 " })
+        val template = formatTemplateCountFragment(entry, templates, false)
+        assertNotNull(template)
+        assertTrue(sharding.any { it.text == template!!.first })
+        assertEquals(TEMPLATE_BADGE_MIN_COUNT, templates[entry.structureKey])
+    }
+
     fun test共同元信息顺序与日志独有字段() {
         val entry = LogSqlEntry(
             rawSql = "SELECT 1",

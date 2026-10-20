@@ -1,6 +1,9 @@
 package cn.song.mybatisplus.visualizer.psi.jpa
 
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService
+import cn.song.mybatisplus.visualizer.sql.IdeaSourceDialectProbe
+import com.intellij.psi.PsiMethodCallExpression
+import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.psi.xml.XmlTag
 import com.intellij.psi.xml.XmlFile
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
@@ -51,6 +54,7 @@ class HbmNamedQueryResolverTest : BasePlatformTestCase() {
 
     override fun tearDown() {
         HbmXmlEntityResolver.clearCache()
+        IdeaSourceDialectProbe.languageIdForTest = null
         super.tearDown()
     }
 
@@ -84,9 +88,15 @@ class HbmNamedQueryResolverTest : BasePlatformTestCase() {
         val file = myFixture.configureByText("LegacyItem.hbm.xml", hbmContent) as XmlFile
         val tag = file.rootTag!!.findSubTags("sql-query").first()
         val service = project.getService(SqlPreviewService::class.java)
+        IdeaSourceDialectProbe.languageIdForTest = { _, source ->
+            assertEquals(file.virtualFile, source)
+            "Oracle"
+        }
         val result = service.previewHbmNamedQueryTag(project, tag)
         assertNotNull(result)
-        assertTrue("命名参数 :deprecated 应替换为 ?", result!!.sql.contains("deprecated = ?"))
+        assertEquals("Oracle", result!!.renderedDialect?.name)
+        assertEquals("Oracle", result.dialectDecision?.dialectName)
+        assertTrue("命名参数 :deprecated 应替换为 ?", result.sql.contains("deprecated = ?"))
         assertEquals(listOf("deprecated"), result.unresolvedParams)
     }
 
@@ -101,6 +111,61 @@ class HbmNamedQueryResolverTest : BasePlatformTestCase() {
         assertFalse("预览 SQL 不得含 CDATA 包裹: ${result!!.sql}", result.sql.contains("<![CDATA["))
         assertFalse("预览 SQL 不得含 CDATA 收尾标记", result.sql.contains("]]>"))
         assertTrue("HQL 实体应可解析渲染", result.sql.isNotBlank())
+    }
+
+    fun testO145NamedHbmUsesDefinitionXmlNotCallingJavaFile() {
+        val xml = myFixture.findFileInTempDir("resources/hbm/LegacyItem.hbm.xml")!!
+        val java = myFixture.configureByText("QueryCaller.java", """
+            class QueryCaller {
+                Object find(Session session) {
+                    return session.createNamedQuery("LegacyItem.findLowStockHql");
+                }
+            }
+            interface Session { Object createNamedQuery(String name); }
+        """.trimIndent())
+        IdeaSourceDialectProbe.languageIdForTest = { _, source ->
+            assertEquals("命名查询须以 XML 定义文件而非 Java 调用文件为 owner", xml, source)
+            "Oracle"
+        }
+        val call = PsiTreeUtil.collectElementsOfType(java, PsiMethodCallExpression::class.java)
+            .first { it.methodExpression.referenceName == "createNamedQuery" }
+        val result = SqlPreviewService(project).previewHql(call)!!
+        assertEquals("Oracle", result.renderedDialect?.name)
+        assertEquals("Oracle", result.dialectDecision?.dialectName)
+        assertTrue(result.sql.contains("legacy_item"))
+    }
+
+    fun testO145SameKindAndNameDifferentTextsMustNotClaimUniqueDefinition() {
+        val name = "LegacyItem.duplicateQuery"
+        val first = myFixture.addFileToProject("resources/hbm/DuplicateOne.hbm.xml", """
+            <hibernate-mapping>
+                <query name="$name">FROM LegacyItem li WHERE li.quantity &gt; :threshold</query>
+            </hibernate-mapping>
+        """.trimIndent())
+        assertNotNull("先查一次唯一查询，防止旧正缓存掩盖后续新重复",
+            HbmXmlEntityResolver.findNamedQuery(name, project))
+        myFixture.addFileToProject("resources/hbm/DuplicateTwo.hbm.xml", """
+            <hibernate-mapping>
+                <query name="$name">FROM LegacyItem li WHERE li.quantity &lt; :threshold</query>
+            </hibernate-mapping>
+        """.trimIndent())
+        // 构造一个与第一份 XML 文本完全相同的查询，钉住 owner 判断不是文本不匹配造成的空绿。
+        val text = cn.song.mybatisplus.visualizer.xml.directTextOf((first as XmlFile).rootTag!!.findFirstSubTag("query")!!)
+        val query = HbmXmlMapping.NamedQuery(name, HbmXmlMapping.QueryKind.HQL, text)
+        assertNull("同 kind/name 即视作重复；文本不同不能令首项虚构唯一 owner",
+            HbmXmlEntityResolver.findNamedQueryDefinition(query, project))
+        assertTrue("两文件命名查询应判歧义", HbmXmlEntityResolver.hasAmbiguousNamedQuery(name, project))
+        assertNull("上游不能首取任意一条 SQL", HbmXmlEntityResolver.findNamedQuery(name, project))
+        val caller = myFixture.configureByText("DuplicateCaller.java", """
+            class DuplicateCaller {
+                Object run(Session session) { return session.createNamedQuery("$name"); }
+            }
+            interface Session { Object createNamedQuery(String value); }
+        """.trimIndent())
+        val call = PsiTreeUtil.collectElementsOfType(caller, PsiMethodCallExpression::class.java)
+            .first { it.methodExpression.referenceName == "createNamedQuery" }
+        assertNull("调用点也不得将查询名或任一 XML 文本降级为猜测 SQL",
+            SqlPreviewService(project).previewHql(call))
     }
 
     fun testClassMapping_stillResolved_alongsideNamedQueries() {

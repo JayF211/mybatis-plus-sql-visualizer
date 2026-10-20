@@ -4,6 +4,7 @@ import cn.song.mybatisplus.visualizer.model.ColumnRef
 import cn.song.mybatisplus.visualizer.model.Condition
 import cn.song.mybatisplus.visualizer.model.JoinClause
 import cn.song.mybatisplus.visualizer.model.JoinType
+import cn.song.mybatisplus.visualizer.model.SqlFragment
 import cn.song.mybatisplus.visualizer.model.SqlStatement
 import cn.song.mybatisplus.visualizer.model.SqlValue
 import cn.song.mybatisplus.visualizer.model.TableInfo
@@ -12,6 +13,7 @@ import cn.song.mybatisplus.visualizer.model.WrapperCall
 import cn.song.mybatisplus.visualizer.model.WrapperChain
 import cn.song.mybatisplus.visualizer.model.WrapperType
 import cn.song.mybatisplus.visualizer.psi.EntityResolver
+import cn.song.mybatisplus.visualizer.sql.placeholderPositions
 import com.intellij.openapi.project.Project
 
 /**
@@ -95,6 +97,82 @@ fun WrapperArg?.asColumn(): ColumnRef? = when (this) {
 fun WrapperArg?.asValue(): SqlValue? = (this as? WrapperArg.ValueArg)?.value
 
 /**
+ * 实参转「原始 SQL 片段」（T-UpdateSetSqlConcat）：文本 + 占位符来源。
+ *
+ * 片段位置（setSql/setApply/apply/exists/last/having/inSql/compareSql/first/comment/applyFunc/selectFunc
+ * /MPJ 字符串 join）的实参在 MP 里是**原样拼进语句的 SQL 文本**，不做 JDBC 参数绑定：静态段必须保留，
+ * 运行期段用 `?` 近似（`"amount = amount * " + rate` → `amount = amount * ?`）。
+ *
+ * 值位置（eq/set 的值实参）**不得**用本函数——那里整个字符串是一个绑定参数，只能渲染 `?`
+ * （`eq("name", "pre" + x)` 是 `name = ?`，不是 `name = pre?`）。
+ *
+ * @return 片段（文本 + 与文本中 `?` 一一对应的来源）；纯运行期片段（无任何静态段）返回 null，
+ *         调用方按既有语义放弃该片段
+ */
+fun WrapperArg?.asSqlFragment(): SqlFragment? = when (val value = (this as? WrapperArg.ValueArg)?.value) {
+    is SqlValue.Literal -> SqlFragment(
+        value.unquoted,
+        // 字面量里用户自写的 `?` 也是一次参数占位，须占位以保持参数表对齐
+        List(placeholderPositions(value.unquoted).size) { UNKNOWN_PARAM },
+    )
+    is SqlValue.Placeholder -> value.fragment
+    else -> null
+}
+
+/**
+ * 片段模板渲染（T-UpdateSetSqlConcat）：`{i}` 绑定参数替换 + 按最终文本顺序收集占位符来源。
+ *
+ * - `{i}`：替换为第 i 个绑定值（字面量取 `raw`、运行期值写 `?` 并登记来源）；
+ *   绑定值缺失（null）时保留 `{i}` 原样（与既有 `replace` 跳过语义一致）
+ * - 模板自带的 `?`：按顺序消耗 [fragment] 的来源，**只认真实占位符位点**
+ *   （字符串字面量/注释内的 `?` 不消耗、不登记——`first("/*+ ...(" + ms + ") */")` 这类不能凭空多出来源）
+ * - 自带来源不足时补中性来源 [UNKNOWN_PARAM]，**宁可名字含糊也不能让参数表整体错位**
+ */
+internal fun renderSqlFragment(fragment: SqlFragment, values: List<SqlValue?>): SqlFragment {
+    val template = fragment.text
+    val templatePlaceholders = placeholderPositions(template).toSet()
+    val text = StringBuilder(template.length + 8)
+    // 输出文本位点 → 来源；最后按输出的真实占位符位点过滤（`{i}` 插进注释/引号时不留痕）
+    val marks = mutableListOf<Pair<Int, String>>()
+    var index = 0
+    var paramIndex = 0
+    while (index < template.length) {
+        if (template[index] == '{') {
+            val close = template.indexOf('}', index)
+            val binding = if (close > index) template.substring(index + 1, close).toIntOrNull() else null
+            if (binding != null && binding < values.size) {
+                when (val value = values[binding]) {
+                    null -> text.append(template, index, close + 1)
+                    is SqlValue.Literal -> {
+                        value.raw.forEachIndexed { i, ch ->
+                            if (ch == '?') marks += (text.length + i) to UNKNOWN_PARAM
+                        }
+                        text.append(value.raw)
+                    }
+                    is SqlValue.Placeholder -> {
+                        marks += text.length to value.source
+                        text.append('?')
+                    }
+                }
+                index = close + 1
+                continue
+            }
+        }
+        if (template[index] == '?' && index in templatePlaceholders) {
+            marks += text.length to (fragment.params.getOrNull(paramIndex) ?: UNKNOWN_PARAM)
+            paramIndex++
+        }
+        text.append(template[index])
+        index++
+    }
+    val effective = placeholderPositions(text.toString()).toSet()
+    return SqlFragment(text.toString(), marks.filter { it.first in effective }.map { it.second })
+}
+
+/** 片段中无来源可追溯的占位符所用的中性来源名。 */
+internal const val UNKNOWN_PARAM = "?"
+
+/**
  * 为列引用补表别名（MPJ 主表场景），已有别名时保持不变。
  */
 fun ColumnRef.withTableAlias(alias: String): ColumnRef =
@@ -142,22 +220,28 @@ internal object MpjJoinSupport {
         // 6. 自定义关键字 join：join("FULL JOIN", condition, "address t1 on ..."[, args])
         if (call.methodName == "join") {
             val keyword = (args.getOrNull(0).asValue() as? SqlValue.Literal)?.unquoted ?: return null
-            val joinSql = (args.getOrNull(2).asValue() as? SqlValue.Literal)?.unquoted ?: return null
-            return JoinClause(type, "", "", emptyList(), rawSql = renderJoinSql(joinSql, args.drop(3)), customKeyword = keyword)
+            // T-UpdateSetSqlConcat：片段位取 asSqlFragment（模板含运行期段时静态段保留、运行期段写 `?`）
+            val joinSql = args.getOrNull(2).asSqlFragment() ?: return null
+            val rendered = renderSqlFragment(joinSql, args.drop(3).map { it.asValue() })
+            return JoinClause(
+                type, "", "", emptyList(),
+                rawSql = rendered.text, rawParams = rendered.params, customKeyword = keyword,
+            )
         }
 
         // 5. 字符串 SQL join：leftJoin("address t1 on t1.user_id = t.id"[, args])——
-        //    首参为含 SQL 结构（空格/括号/{i} 占位）的字符串字面量；纯类名（CamelCase，无空格）走类名形态
+        //    首参为含 SQL 结构（空格/括号/{i} 占位）的 SQL 片段；纯类名（CamelCase，无空格）走类名形态
         val first = args.getOrNull(0)
         if (first is WrapperArg.ValueArg) {
-            val literal = first.value as? SqlValue.Literal ?: return null
-            val text = literal.unquoted
+            // T-UpdateSetSqlConcat：首参含运行期段时静态结构仍在，不再整段丢弃
+            val text = first.asSqlFragment()?.text ?: return null
             if (!text.trimEnd().endsWith(".class") &&
                 (text.contains(' ') || text.contains('(') || text.contains('{'))
             ) {
                 val startIndex = if (args.size >= 2 && isFlagArgument(args[0])) 1 else 0
-                val sql = (args.getOrNull(startIndex).asValue() as? SqlValue.Literal)?.unquoted ?: return null
-                return JoinClause(type, "", "", emptyList(), rawSql = renderJoinSql(sql, args.drop(startIndex + 1)))
+                val sql = args.getOrNull(startIndex).asSqlFragment() ?: return null
+                val rendered = renderSqlFragment(sql, args.drop(startIndex + 1).map { it.asValue() })
+                return JoinClause(type, "", "", emptyList(), rawSql = rendered.text, rawParams = rendered.params)
             }
         }
 
@@ -272,32 +356,21 @@ internal object MpjJoinSupport {
                     }
                 }
                 "apply" -> {
-                    val raw = (call.args.firstOrNull().asValue() as? SqlValue.Literal)?.unquoted
-                    if (raw != null) Condition.Raw(raw) else null
+                    // T-UpdateSetSqlConcat：片段位取 asSqlFragment 并带来源（ON 里的 `?` 须按序登记）
+                    val frag = call.args.firstOrNull().asSqlFragment() ?: return@mapNotNull null
+                    Condition.Raw(frag.text, params = frag.params)
                 }
                 else -> null
             }
         }
 
-    /** 字符串 join 的 `{i}` 绑定参数替换（官方示例：`leftJoin("(select ... where addr.id = {0})", 1)`）。 */
-    private fun renderJoinSql(template: String, values: List<WrapperArg>): String {
-        var sql = template
-        for ((index, value) in values.withIndex()) {
-            sql = sql.replace("{$index}", renderJoinValue(value.asValue() ?: continue))
-        }
-        return sql
-    }
-
-    /** join 绑定参数渲染：字面量原样（raw），运行时值渲染为 `?`。 */
-    private fun renderJoinValue(value: SqlValue): String = when (value) {
-        is SqlValue.Literal -> value.raw
-        is SqlValue.Placeholder -> "?"
-    }
-
     /** 首参是否为布尔条件前缀（true/false 字面量或运行时布尔表达式占位符）；列引用（ColumnArg）恒为列。 */
     private fun isFlagArgument(arg: WrapperArg): Boolean {
         if (arg is WrapperArg.ColumnArg) return false
         val value = arg.asValue()
+        // T-UpdateSetSqlConcat：带片段形态的运行期实参是 SQL 片段（`leftJoin("... " + x, ...)`），
+        // 不是布尔前缀——否则片段会被当 flag 吞掉，真正的片段位被错取成第二参
+        if (value is SqlValue.Placeholder && arg.asSqlFragment() != null) return false
         return when (value) {
             is SqlValue.Literal -> value.unquoted == "true" || value.unquoted == "false"
             is SqlValue.Placeholder -> true

@@ -37,4 +37,30 @@ class RenderLogsToolTest {
         val error = runCatching { SqlVisualizerRenderLogsTool().renderLogs("  ") }.exceptionOrNull()
         assertTrue("空输入应抛 SqlvExpectedToolException", error is SqlvExpectedToolException)
     }
+
+    // ---------- R60（T-LaneB D96/D97）：MCP 面脱敏（独立选项，判别断言两态） ----------
+
+    private val sensitiveLogText = "==>  Preparing: SELECT * FROM t_user WHERE phone = ?\n" +
+        "==> Parameters: 13812345678(String)"
+
+    @Test
+    fun `MCP脱敏开_还原语句打码`() {
+        val out = SqlVisualizerRenderLogsTool().renderLogs(sensitiveLogText, maskLiterals = true)
+        assertTrue(out, out.contains("'***'"))
+        org.junit.Assert.assertFalse(out, out.contains("13812345678"))
+    }
+
+    @Test
+    fun `MCP脱敏关_原文透出`() {
+        val out = SqlVisualizerRenderLogsTool().renderLogs(sensitiveLogText, maskLiterals = false)
+        assertTrue(out, out.contains("13812345678"))
+    }
+
+    @Test
+    fun `MCP脱敏开_非敏感值保留`() {
+        val text = "==>  Preparing: SELECT * FROM t_user WHERE name = ?\n" +
+            "==> Parameters: tom(String)"
+        val out = SqlVisualizerRenderLogsTool().renderLogs(text, maskLiterals = true)
+        assertTrue(out, out.contains("tom"))
+    }
 }

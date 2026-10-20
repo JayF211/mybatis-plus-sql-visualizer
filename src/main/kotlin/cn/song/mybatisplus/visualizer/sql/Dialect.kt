@@ -240,6 +240,30 @@ interface Dialect {
      * （与分页子句的方言渲染策略一致）。
      */
     val supportsDeleteLimit: Boolean get() = false
+
+    /**
+     * R36（V46 证伪①）：**显式事务开始语句**（回放脚本的事务包裹用；不含结尾分号）。
+     *
+     * 语义：非 null = 本方言有「显式开启事务」的语句，回放脚本可用 `<本值>;`（前）+
+     * `COMMIT;`（后）包裹；null = **本方言无显式事务开始语句**——事务随首条 DML 隐式开启，
+     * 中途回退须由客户端持有同一连接/会话执行 ROLLBACK（脚本层无从表达）。此时回放脚本
+     * **诚实省略**包裹，UI 禁用该选项并说明原因（不产出 `.sql` 里必然语法错误的伪包裹）。
+     *
+     * 边界与证据（三档，逐档标级别；核对先例照 O-9 闸门边界）：
+     *  - **本机真引擎实测**（`H2 2.3.232` 六模式 REGULAR/MySQL/MariaDB/PostgreSQL/Oracle/
+     *    MSSQLServer + `SQLite 3.50.3`）：两引擎均取 `BEGIN`，且**语义成立**——`BEGIN` + INSERT +
+     *    `ROLLBACK` → 行不存在；同形 `COMMIT` → 行存在；对照「不开显式事务时 ROLLBACK 对自动
+     *    提交行无效」。两引擎的 `START TRANSACTION` 均为语法错误（H2 报 expected
+     *    SAVEPOINT/SCRIPT/SHUTDOWN），故不取。
+     *  - **官方文法（族/兼容面推定）**：MySQL/MariaDB 与 OceanBase（D1=A 只接 MySQL 模式）取
+     *    `START TRANSACTION`；PostgreSQL 族取 `BEGIN`（官方 `BEGIN [WORK|TRANSACTION]`），
+     *    KingBase / openGauss 随族取 `BEGIN`；SQL Server 取 `BEGIN TRANSACTION`（`BEGIN TRAN` 缩写）。
+     *  - **判无（保守禁用）**：Oracle——`BEGIN` 在 Oracle 是 PL/SQL 块起始，SQL Reference 无
+     *    `BEGIN [TRANSACTION]` 语句形态；DM（达梦）默认 Oracle 兼容模式同形。两款均无本机引擎
+     *    （DBX MCP 拒事务语句、Docker 未启）→ 依据「宁可少包，不可产出语法错误脚本」判无，
+     *    真机核对后增量。
+     */
+    val transactionBegin: String? get() = null
 }
 
 /**
@@ -383,6 +407,9 @@ private fun Dialect.renderPgStyleUpsert(
 object MySqlDialect : Dialect {
     override val name: String = "MySQL"
 
+    /** R36：MySQL 官方 `START TRANSACTION`（`BEGIN` 亦可，取无歧义的长形态；见 [transactionBegin]）。 */
+    override val transactionBegin: String = "START TRANSACTION"
+
     override fun renderLimit(limit: LimitClause): String = renderMySqlStyleLimit(limit)
 
     override val supportsDeleteLimit: Boolean = true
@@ -410,6 +437,9 @@ object MySqlDialect : Dialect {
  */
 object PostgreSQLDialect : Dialect {
     override val name: String = "PostgreSQL"
+
+    /** R36：PG 官方 `BEGIN [WORK|TRANSACTION]`（见 [transactionBegin]）。 */
+    override val transactionBegin: String = "BEGIN"
 
     override fun renderLimit(limit: LimitClause): String = renderPgStyleLimit(limit)
 
@@ -446,6 +476,13 @@ object PostgreSQLDialect : Dialect {
 object OracleDialect : Dialect {
     override val name: String = "Oracle"
 
+    /**
+     * R36 判无（**显式声明**，非遗漏）：`BEGIN` 在 Oracle 是 PL/SQL 块起始而非事务语句，
+     * SQL Reference 无 `BEGIN [TRANSACTION]` 形态——脚本里写 `BEGIN;` 必语法错误，
+     * 故回放脚本不包裹、UI 禁用该选项（[transactionBegin] 三档证据见接口 KDoc）。
+     */
+    override val transactionBegin: String? = null
+
     override fun renderLimit(limit: LimitClause): String = if (limit.offset != null) {
         "OFFSET ${renderLimitValue(limit.offset)} ROWS FETCH NEXT ${renderLimitValue(limit.count)} ROWS ONLY"
     } else {
@@ -480,6 +517,9 @@ object OracleDialect : Dialect {
  */
 object SqlServerDialect : Dialect {
     override val name: String = "SQL Server"
+
+    /** R36：T-SQL 官方 `BEGIN TRANSACTION`（缩写 `BEGIN TRAN`；见 [transactionBegin]）。 */
+    override val transactionBegin: String = "BEGIN TRANSACTION"
 
     override fun renderLimit(limit: LimitClause): String =
         "OFFSET ${renderLimitValue(limit.offset ?: SqlValue.Literal("0"))} ROWS FETCH NEXT ${renderLimitValue(limit.count)} ROWS ONLY"
@@ -549,6 +589,9 @@ private fun Dialect.identityInsertWrapper(
 object H2Dialect : Dialect {
     override val name: String = "H2"
 
+    /** R36：H2 2.3.232 六模式（含 MySQL/PG/Oracle/MSSQLServer 兼容模式）引擎实测取 `BEGIN`。 */
+    override val transactionBegin: String = "BEGIN"
+
     override fun renderLimit(limit: LimitClause): String = renderPgStyleLimit(limit)
 
     override fun quoteIdentifier(identifier: String): String = "\"$identifier\""
@@ -590,6 +633,9 @@ object H2Dialect : Dialect {
 object SqliteDialect : Dialect {
     override val name: String = "SQLite"
 
+    /** R36：SQLite 3.50.3 引擎实测取 `BEGIN`（`START TRANSACTION` 语法错误）。 */
+    override val transactionBegin: String = "BEGIN"
+
     override fun renderLimit(limit: LimitClause): String = renderPgStyleLimit(limit)
 
     override fun quoteIdentifier(identifier: String): String = "\"$identifier\""
@@ -618,6 +664,9 @@ object SqliteDialect : Dialect {
  */
 object MariaDbDialect : Dialect {
     override val name: String = "MariaDB"
+
+    /** R36：MariaDB 同 MySQL 官方 `START TRANSACTION`（见 [transactionBegin]）。 */
+    override val transactionBegin: String = "START TRANSACTION"
 
     override fun renderLimit(limit: LimitClause): String = renderMySqlStyleLimit(limit)
 
@@ -651,6 +700,13 @@ object MariaDbDialect : Dialect {
  */
 object DmDialect : Dialect {
     override val name: String = "DM（达梦）"
+
+    /**
+     * R36 判无（**显式声明**，保守）：DM 默认 Oracle 兼容模式，`BEGIN` 为块起始；
+     * 本机无 DM 引擎（DBX MCP 拒事务语句、Docker 未启）不可实测 → 依据「宁可少包，
+     * 不可产出语法错误脚本」判无，真机核对后增量（见 [transactionBegin]）。
+     */
+    override val transactionBegin: String? = null
 
     override fun renderLimit(limit: LimitClause): String = renderMySqlStyleLimit(limit)
 
@@ -698,6 +754,9 @@ object DmDialect : Dialect {
 object KingBaseDialect : Dialect {
     override val name: String = "KingBase（人大金仓）"
 
+    /** R36：金仓 PG 族兼容，取 PG 形态 `BEGIN`（文档级/族推定，见 [transactionBegin]）。 */
+    override val transactionBegin: String = "BEGIN"
+
     override fun renderLimit(limit: LimitClause): String = renderPgStyleLimit(limit)
 
     override fun quoteIdentifier(identifier: String): String = "\"$identifier\""
@@ -744,6 +803,9 @@ object KingBaseDialect : Dialect {
 object OceanBaseDialect : Dialect {
     override val name: String = "OceanBase"
 
+    /** R36：OceanBase 只接 MySQL 模式（D1=A），取 MySQL 形态 `START TRANSACTION`（文档级，见 [transactionBegin]）。 */
+    override val transactionBegin: String = "START TRANSACTION"
+
     override fun renderLimit(limit: LimitClause): String = renderMySqlStyleLimit(limit)
 
     override val supportsDeleteLimit: Boolean = true
@@ -788,6 +850,9 @@ object OceanBaseDialect : Dialect {
  */
 object OpenGaussDialect : Dialect {
     override val name: String = "openGauss"
+
+    /** R36：openGauss 取 PG 形态 `BEGIN`（族推定；本方言 upsert 曾反族，真机核对后增量，见 [transactionBegin]）。 */
+    override val transactionBegin: String = "BEGIN"
 
     override fun renderLimit(limit: LimitClause): String = renderPgStyleLimit(limit)
 
@@ -857,16 +922,16 @@ object DialectRegistry {
      *     （与 ProjectPluginSettings.State 的「空/未覆盖=跟随全局」语义同构）。此前本函数直读全局
      *     auto，于是「项目 true + 全局 false」组合下项目声明被静默忽略——调用方已按项目级判为 auto
      *     进入本函数，却被全局 false 拉回手动分支返回全局手动值（T-TS-FixC 验证者实测口径缺陷）。
-     *  2. auto=true → 智能推断（[DialectInference.infer]：agent 最近连接 URL > IDE 数据源 URL），
-     *     未命中回退 [MySqlDialect]（与 [byName] 未知回退语义一致）。
+     *  2. auto=true → 项目数据源候选的方言共识；异方言/未知候选不取首个。
+     *     仅能证明是单模块且无候选时才参考最近 agent URL；无结论兼容回退 [MySqlDialect]。
+     *     原始 SQL PSI/模块作用域尚未接线，[decision] 才能区分真实结论与兼容回退。
      *  3. auto=false → 手动值：项目级
      *     [cn.song.mybatisplus.visualizer.config.ProjectPluginSettings.effectiveDialect]
      *     （启用且非空）> 全局 [cn.song.mybatisplus.visualizer.config.PluginSettings.State.dialect]。
      *
-     * 边界（O-93 修订）：[project]=null 时推断链不可用——[cn.song.mybatisplus.visualizer.log.agent.AgentManager]
-     * 与 [DataSourceUrlProbe] 都要求项目上下文。psi 侧 [cn.song.mybatisplus.visualizer.psi.currentDialect]
-     * 的调用点全部为无参调用，因此 PSI 路径 auto 推断不生效；要让 PSI 路径生效，须由调用方传入宿主
-     * PSI 项目。此时 auto=true 落回 [MySqlDialect]（与推断未命中的兜底同源）——**不取全局手动值**：
+     * 边界（O-93 修订）：[project]=null 时推断链不可用——agent 会话与数据源候选均要求项目上下文。
+     * 已接线的 PSI 入口显式传所属项目；尚未传项目的路径仍兼容回退 [MySqlDialect]，
+     * **不取全局手动残值**：
      * 旧实现此处返回 `byName(manualName)`，等于让 auto 模式被手动残值劫持，任何曾设过手动方言又切回
      * 智能推断的环境（生产用户切回 auto、测试前序类泄漏残值）都会把残值泄漏给 psi 渲染链
      * （O-93 实证：PaginationSimTest 泄漏 "Oracle" 致 SqlPreviewServiceBatchTest 5 例方言/引用
@@ -874,22 +939,65 @@ object DialectRegistry {
      *
      * @param project 数据源探测与项目级设置读取用项目（null=无项目上下文，见上「边界」）
      */
-    fun effective(project: com.intellij.openapi.project.Project? = null): Dialect {
+    fun decision(
+        project: com.intellij.openapi.project.Project? = null,
+        sourceFile: com.intellij.openapi.vfs.VirtualFile? = null,
+        sqlPsiFile: com.intellij.psi.PsiFile? = null,
+        moduleKey: String? = null,
+        boundDataSourceDialect: String? = null,
+    ): DialectDecisionEngine.Decision {
         val settings = runCatching {
             cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state
         }.getOrNull()
-        // 手动值只解析一次：auto 分支的兜底与手动分支必须同源，否则两个分支会再次分叉
         val manualName = projectManualDialectName(project) ?: settings?.dialect
         val auto = projectDialectAuto(project) ?: settings?.dialectAuto ?: true
-        if (!auto) return byName(manualName)
-        if (project == null) return MySqlDialect // O-93：无推断通道时 auto 回退 MySQL，手动残值不参与（见 KDoc「边界」）
-        // T-PS5-04：agentUrl 读轻量持有者（不再经 AgentManager.getInstance 触发项目级服务实例化
-        // ——那是「预览一次即驻留 executor+monitor 双守护线程」的根因）；URL 由会话生命周期点回写，
-        // 推断优先级语义（agent URL > 数据源 URL > null 回退）逐字不变。
-        val agentUrl = cn.song.mybatisplus.visualizer.log.agent.AgentUrlRegistry.lastConnectionUrl(project)
-        val inferred = DialectInference.infer(agentUrl, DataSourceUrlProbe.firstUrl(project))
-        return inferred.dialectName?.let { byName(it) } ?: MySqlDialect
+        if (!auto) return DialectDecisionEngine.decide(DialectDecisionEngine.Input(manualDialect = manualName))
+        if (project == null) return DialectDecisionEngine.decide(DialectDecisionEngine.Input())
+        val candidates = DataSourceUrlProbe.candidateDialects(project)
+        val singleModule = runCatching {
+            com.intellij.openapi.module.ModuleManager.getInstance(project).modules.size == 1
+        }.getOrDefault(false)
+        val agentDialect = UrlSubprotocolDialects.dialectName(
+            cn.song.mybatisplus.visualizer.log.agent.AgentUrlRegistry.lastConnectionUrl(project),
+        )
+        val learnedModule = moduleKey?.let {
+            runCatching { ModuleDataSourceBindingStore.getInstance(project).learnedCandidate(project, it) }.getOrNull()
+        }
+        val dialectFile = sqlPsiFile?.virtualFile ?: sourceFile
+        if (sqlPsiFile != null && dialectFile != null) {
+            val snapshot = IdeaSqlContextBridge.resolve(project, sqlPsiFile, dialectFile)
+            if (snapshot.availability != IdeaSqlContextBridge.Availability.DATABASE_TOOLS_UNAVAILABLE) {
+                return IdeaSqlDialectDecision.decide(
+                    snapshot = snapshot,
+                    learnedModule = learnedModule,
+                    fallbackProjectCandidates = candidates,
+                    lastAgentDialect = agentDialect,
+                    singleModuleProven = singleModule,
+                    boundDataSourceDialect = boundDataSourceDialect,
+                )
+            }
+        }
+        return DialectDecisionEngine.decide(DialectDecisionEngine.Input(
+            ideaDialect = sourceFile?.let { IdeaSourceDialectProbe.dialectName(project, it) },
+            ideaDialectSource = DialectDecisionEngine.Source.IDEA_EFFECTIVE_DIALECT,
+            learnedModule = learnedModule,
+            projectCandidates = candidates, lastAgentDialect = agentDialect, singleModuleProven = singleModule,
+            boundDataSourceDialect = boundDataSourceDialect,
+        ))
     }
+
+    fun decision(context: cn.song.mybatisplus.visualizer.context.PreviewSourceContext): DialectDecisionEngine.Decision =
+        decision(context.project, context.hostVirtualFile, context.sqlPsiFile, context.canonicalModuleKey)
+
+    fun effective(context: cn.song.mybatisplus.visualizer.context.PreviewSourceContext): Dialect =
+        decision(context).dialectName?.let { byName(it) } ?: MySqlDialect
+
+    fun effective(
+        project: com.intellij.openapi.project.Project? = null,
+        sourceFile: com.intellij.openapi.vfs.VirtualFile? = null,
+        sqlPsiFile: com.intellij.psi.PsiFile? = null,
+        moduleKey: String? = null,
+    ): Dialect = decision(project, sourceFile, sqlPsiFile, moduleKey).dialectName?.let { byName(it) } ?: MySqlDialect
 
     /**
      * T-TS-FixC：项目级有效方言模式（null=无项目上下文/项目级服务不可用，调用方按全局判定）。

@@ -2,10 +2,12 @@ package cn.song.mybatisplus.visualizer.log
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons
 import com.intellij.openapi.actionSystem.ActionPlaces
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.DataContext
 import com.intellij.openapi.actionSystem.DefaultActionGroup
+import com.intellij.ui.tabs.impl.JBTabsImpl
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -55,13 +57,15 @@ class SqlLogPanelLayoutTest : BasePlatformTestCase() {
             // 故组内不得出现自建 popup 分组；窄宽折叠交给平台 ActionToolbar 自带的溢出。
             assertFalse("工具栏不应再有自建「更多」弹层", main.any { it is DefaultActionGroup })
             assertTrue("捕捉应直达", main.contains(panel.captureToggleAction))
+            assertTrue("增强捕获暂停/恢复应直达", main.contains(panel.agentPauseAction))
+            assertEquals("暂停动作应紧随捕捉动作", 1, main.indexOf(panel.agentPauseAction))
             assertTrue("滚动到底部应直达", main.contains(panel.scrollToEndAction))
             assertTrue("排序应直达（并入左侧动作组）", main.contains(panel.sortActionForTest))
             assertTrue("清空应直达", main.any { it is SqlLogPanel.ClearAction })
             assertTrue("搜索应直达", main.any { it is SqlLogPanel.ShowSearchAction })
             assertTrue("预览应归入左侧动作组", main.contains(panel.previewToggleAction))
             assertSame("预览动作必须带平台图标，不能渲染占位圆圈",
-                com.intellij.icons.AllIcons.Actions.Preview, panel.previewToggleAction.templatePresentation.icon)
+                MpvsIcons.DockedPreview, panel.previewToggleAction.templatePresentation.icon)
             assertEquals(MpSqlVisualizerBundle.message("log.dockedPreview.toggle.tip"),
                 panel.previewToggleAction.templatePresentation.description)
             assertTrue("设置应直达", main.any { it is SqlLogPanel.SettingsAction })
@@ -71,8 +75,12 @@ class SqlLogPanelLayoutTest : BasePlatformTestCase() {
             assertEquals("交流群入口只能出现一次", 1, community.size)
             assertEquals(MpSqlVisualizerBundle.message("log.community.action"), community.single().templatePresentation.text)
             assertNotNull("交流群动作必须显示自有图标", community.single().templatePresentation.icon)
-            assertEquals("十个图标动作应全部在组内（预览随组折叠）",
-                10, main.size)
+            assertEquals(
+                "十一个动作应全部在组内（捕捉/增强暂停/清空/设置/屏蔽/搜索/预览/滚底/排序/交流群/帮助）",
+                11,
+                main.size,
+            )
+            // 用户 2026-10-14 选定「方案 A」：操作在前、工具在后、帮助收尾（溢出从右端折叠，帮助最先让位）。
             assertEquals("帮助应为组内末项（方案 A）", main.last(), main.first { it is SqlLogPanel.HelpAction })
             val sortIndex = main.indexOfFirst { it === panel.sortActionForTest }
             assertEquals("交流群按钮应紧挨排序右侧、帮助左侧", sortIndex + 1, main.indexOf(community.single()))
@@ -108,6 +116,42 @@ class SqlLogPanelLayoutTest : BasePlatformTestCase() {
             )
             assertEquals("搜索条默认隐藏", false, panel.searchFieldVisibleForTest)
             assertEquals("默认无慢查询，计数徽章应隐藏/为空", false, panel.slowQueryLabelForTest?.isVisible ?: false)
+        } finally {
+            panel.dispose()
+        }
+    }
+
+    /**
+     * R53：双通道状态栏 + 暂停/恢复入口在场——工具窗状态可见化交付的结构守卫。
+     * 状态栏两段标签构建即存在；捕捉中刷新一拍后两段均有文案（取数只读内存态，headless 可跑）。
+     * 非捕捉态整条隐藏：只清两段文案会留下分隔符「｜」与一条空白高度。
+     */
+    fun testR53_双通道状态栏与暂停动作在场() {
+        val panel = SqlLogPanel(project, manager)
+        try {
+            waitForEdt()
+            assertTrue(
+                "工具栏组应含增强暂停/恢复动作（R53 暂停入口）",
+                panel.toolbarGroup.childActionsOrStubs.contains(panel.agentPauseAction),
+            )
+            val (console, agent) = panel.statusBarLabelsForTest()
+            assertNotNull("状态栏控制台通道段应存在", console)
+            assertNotNull("状态栏增强通道段应存在", agent)
+            assertNotNull("状态栏宿主面板应存在", panel.statusBarForTest())
+            // 非捕捉态：整条隐藏（构建期即非捕捉，默认就应隐藏）
+            assertFalse("非捕捉态状态栏应整条隐藏", panel.statusBarForTest()!!.isVisible)
+
+            manager.setCapturingForTest(true)
+            manager.entries.paused = false
+            panel.syncStatusBarForTest()
+            assertTrue("捕捉中状态栏应显示", panel.statusBarForTest()!!.isVisible)
+            assertTrue("捕捉中控制台通道段应有文案：${console?.text}", !console!!.text.isNullOrEmpty())
+            assertTrue("捕捉中增强通道段应有文案：${agent?.text}", !agent!!.text.isNullOrEmpty())
+
+            // 停捕捉后回到隐藏态（不留空带）
+            manager.setCapturingForTest(false)
+            panel.syncStatusBarForTest()
+            assertFalse("停捕捉后状态栏应重新整条隐藏", panel.statusBarForTest()!!.isVisible)
         } finally {
             panel.dispose()
         }
@@ -485,6 +529,45 @@ class SqlLogPanelLayoutTest : BasePlatformTestCase() {
         }
     }
 
+    /** V182：只检查真实页签容器的结构与旗位；headless 不把溢出菜单当作视觉验收。 */
+    fun testV182_窄侧栏页签结构与可用时的单行几何() {
+        val panel = SqlLogPanel(project, manager)
+        try {
+            waitForEdt()
+            val tabs = panel.tabsForTest
+            val infos = tabs.tabs
+            assertEquals("主容器恰有四个页签", 4, tabs.tabCount)
+            assertEquals(
+                "页签顺序不得漂移",
+                listOf("log.tab.logs", "log.tab.logToSql", "log.tab.sqlToJava", "log.tab.history")
+                    .map { MpSqlVisualizerBundle.message(it) },
+                infos.map { it.text },
+            )
+            assertSame("初始选中 SQL 日志", infos.first(), tabs.selectedInfo)
+            val implementation = tabs as JBTabsImpl
+            assertTrue("生产容器须开启单行模式", implementation.isSingleRow)
+            assertTrue("生产容器须开启压缩", implementation.supportCompression())
+
+            // 不挂显示窗口也可以布局；只有真实 TabLabel 的四个 raster bounds 均为正才断言行高。
+            // 仅有宿主 preferredSize 或零尺寸占位时，不构成一行/MorePopup 的视觉证据。
+            val holder = JPanel(BorderLayout()).apply { size = Dimension(240, 360) }
+            holder.add(tabs.component, BorderLayout.CENTER)
+            layoutRecursively(holder)
+            waitForEdt()
+            val bounds = infos.map { implementation.getTabLabel(it)?.bounds ?: java.awt.Rectangle() }
+            if (bounds.all { it.width > 0 && it.height > 0 }) {
+                assertEquals("窄栏中四个实际标签的纵向起点应相同：$bounds", 1, bounds.map { it.y }.distinct().size)
+            } else {
+                println("V182 GEOMETRY ENVIRONMENT-LIMITED: headless TabLabel raster bounds=$bounds; only structure/flags/selection verified")
+            }
+            tabs.select(infos[2], true)
+            waitForEdt()
+            assertSame("选择 SQL→Java 后应保留 TabInfo 身份", infos[2], tabs.selectedInfo)
+        } finally {
+            panel.dispose()
+        }
+    }
+
     /** 历史 tab 正常装配：切到该 tab 不抛异常，且挂的是历史面板（兼容性回归）。 */
     fun test切换历史Tab_历史面板正常装配() {
         cleanHistoryDir()
@@ -498,16 +581,78 @@ class SqlLogPanelLayoutTest : BasePlatformTestCase() {
             waitForEdt()
             val history = tabs.selectedInfo?.component as? HistorySqlLogPanel
             assertNotNull("切到历史 tab 后应选中历史面板", history)
-            // headless 下 tabs.select 可能只更新 selectedInfo、没有真实 SHOWING_CHANGED；
-            // 等价模拟历史页实际显示，验证漏掉页签回调时仍能启动首扫。
-            if (history!!.refreshInvocationCountForTest == 0) {
-                history.scheduleInitialScanIfShowing { true }
-                waitForEdt()
-            }
-            assertEquals("真实显示后的首扫保障应恰好发起一次刷新",
-                1, history.refreshInvocationCountForTest)
+            // UI-004：只允许真实 JBTabs.select 触发生产监听，不能用模拟 showing 补刷掩盖接线错误。
+            assertEquals("进入历史页的真实选中回调应恰好发起一次刷新",
+                1, history!!.refreshInvocationCountForTest)
         } finally {
             panel.dispose()
+        }
+    }
+
+    /**
+     * UI-004：设置在隐藏页扫描空目录后，真实页签选择仍须刷新；离开不刷，再进更新。
+     * 不创建窗口，不调用 refresh/refreshForTest/模拟 showing；任务派发和列表应用均走生产路径。
+     */
+    fun testUI004_设置空扫后真实切入刷新_离开不刷_再进入更新() {
+        val settings = PluginSettings.getInstance()
+        val previousState = settings.state.copy()
+        val root = java.nio.file.Files.createTempDirectory("ui004-history-").toFile()
+        val oldDir = java.io.File(root, "old").apply { mkdirs() }
+        val emptyDir = java.io.File(root, "empty").apply { mkdirs() }
+        fun entry(id: Int) = "-- source: Ui004.java:$id | time: 1ms | 2026-10-16 23:43:31.000 --\nSELECT $id;\n\n"
+        java.io.File(oldDir, "previous.sql").writeText(entry(0))
+        settings.state.logAutoSaveEnabled = false
+        settings.state.logAutoSavePath = oldDir.absolutePath
+        val panel = SqlLogPanel(project, manager)
+        try {
+            waitForEdt()
+            val tabs = panel.tabsForTest
+            val logs = tabs.selectedInfo!!
+            val historyInfo = tabs.tabs.single { it.component is HistorySqlLogPanel }
+            val history = historyInfo.component as HistorySqlLogPanel
+            assertFalse("不挂真实窗口；本测试不能被 showing 首扫兜底救绿", history.isShowing)
+            assertEquals("构造不扫描", 0, history.refreshInvocationCountForTest)
+            fun publishSettings() {
+                com.intellij.openapi.application.ApplicationManager.getApplication().messageBus
+                    .syncPublisher(PluginSettings.SETTINGS_CHANGE_TOPIC).settingsChanged()
+                waitForEdt()
+            }
+            fun awaitFiles(message: String, condition: () -> Boolean) {
+                com.intellij.testFramework.PlatformTestUtil.waitWithEventsDispatching(message, { condition() }, 10)
+            }
+            // 先建立非空旧快照：后续变空必须由生产扫描真正应用，不能把初始空模型当作完成。
+            publishSettings()
+            awaitFiles("旧目录扫描应落入模型") { history.fileListEntries.singleOrNull()?.displayName == "previous.sql" }
+            settings.state.logAutoSaveEnabled = true
+            settings.state.logAutoSavePath = emptyDir.absolutePath
+            publishSettings()
+            awaitFiles("新空目录扫描必须替换旧快照") { history.fileListEntries.isEmpty() }
+            assertSame("设置空扫期间仍停留日志页", logs, tabs.selectedInfo)
+            val afterEmptyScan = history.refreshInvocationCountForTest
+            assertEquals("两次设置广播各扫描一次", 2, afterEmptyScan)
+
+            val file = java.io.File(emptyDir, "sql-history-2026-10-16.sql")
+            file.writeText((1..7).joinToString("") { entry(it) })
+            tabs.select(historyInfo, false)
+            waitForEdt()
+            assertSame(historyInfo, tabs.selectedInfo)
+            assertEquals("进入时必须刷新；错误 old/new 顺序会停在空扫计数", afterEmptyScan + 1, history.refreshInvocationCountForTest)
+            awaitFiles("首次切入应读到后来产生的7条，不允许手动刷新") {
+                history.fileListEntries.singleOrNull()?.let { it.displayName == file.name && it.sqlCount == 7 } == true
+            }
+
+            tabs.select(logs, false)
+            waitForEdt()
+            assertEquals("离开历史页不得刷新", afterEmptyScan + 1, history.refreshInvocationCountForTest)
+            file.appendText(entry(8))
+            tabs.select(historyInfo, false)
+            waitForEdt()
+            assertEquals("再次进入必须重新扫描", afterEmptyScan + 2, history.refreshInvocationCountForTest)
+            awaitFiles("再次切入应更新为8条") { history.fileListEntries.singleOrNull()?.sqlCount == 8 }
+        } finally {
+            com.intellij.openapi.util.Disposer.dispose(panel)
+            settings.loadState(previousState)
+            root.deleteRecursively()
         }
     }
 
@@ -557,6 +702,48 @@ class SqlLogPanelLayoutTest : BasePlatformTestCase() {
             }
             assertTrue("未开启自动保存时历史 tab 也应常驻（R19）", found)
         } finally {
+            panel.dispose()
+        }
+    }
+
+    /**
+     * T-AgentPauseVisibility（2026-10-19，方案 B）：增强暂停/恢复动作临时全隐藏。
+     * 动作对象仍在工具栏组内（能力代码保留），但 update 恒置不可见/不可用；
+     * 恢复方案 A 时改回条件可见并更新本用例。
+     */
+    @Test
+    fun test增强暂停动作在方案B下始终不可见() {
+        val panel = SqlLogPanel(project, manager)
+        val state = PluginSettings.getInstance().state
+        val oldEnabled = state.enhancedCaptureEnabled
+        val am = cn.song.mybatisplus.visualizer.log.agent.AgentManager.getInstance(project)
+        val oldPaused = am.userPaused
+        try {
+            for (enabled in listOf(true, false)) {
+                for (paused in listOf(true, false)) {
+                    state.enhancedCaptureEnabled = enabled
+                    am.setUserPaused(paused)
+                    val event = AnActionEvent.createFromAnAction(
+                        panel.agentPauseAction, null, ActionPlaces.TOOLBAR, DataContext.EMPTY_CONTEXT,
+                    )
+                    panel.agentPauseAction.update(event)
+                    assertFalse(
+                        "方案 B：enabled=$enabled paused=$paused 时都不得显示暂停按钮",
+                        event.presentation.isVisible,
+                    )
+                    assertFalse(
+                        "方案 B：enabled=$enabled paused=$paused 时都不得可用",
+                        event.presentation.isEnabled,
+                    )
+                }
+            }
+            assertTrue(
+                "动作对象仍应留在工具栏组内（能力代码保留，恢复方案 A 时复用）",
+                panel.toolbarGroup.childActionsOrStubs.contains(panel.agentPauseAction),
+            )
+        } finally {
+            state.enhancedCaptureEnabled = oldEnabled
+            am.setUserPaused(oldPaused)
             panel.dispose()
         }
     }

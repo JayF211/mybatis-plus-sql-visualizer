@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.psi.jpa
 
 import com.intellij.psi.PsiClass
+import com.intellij.psi.PsiJavaFile
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
@@ -351,6 +352,33 @@ class NamedQueryLocatorTest : BasePlatformTestCase() {
             assertEquals("SELECT u FROM UserEntity u WHERE u.username = :username", found.query)
             assertNotNull("命中时应回填 annotation", found.annotation)
         }
+    }
+
+    fun testO145CrossFileDuplicateNamedQueryDoesNotPickFirstOwner() {
+        val alpha = myFixture.addFileToProject(
+            "alpha/UserEntity.java",
+            """
+            package alpha;
+            @NamedQuery(name = "UserEntity.find", query = "SELECT a FROM UserEntity a")
+            public class UserEntity {}
+            @interface NamedQuery { String name(); String query(); }
+            """.trimIndent(),
+        )
+        val beta = myFixture.addFileToProject(
+            "beta/UserEntity.java",
+            """
+            package beta;
+            @NamedQuery(name = "UserEntity.find", query = "SELECT b FROM UserEntity b")
+            public class UserEntity {}
+            @interface NamedQuery { String name(); String query(); }
+            """.trimIndent(),
+        )
+        val candidates = listOf((alpha as PsiJavaFile).classes.first(), (beta as PsiJavaFile).classes.first())
+        assertEquals("必须真正检出两个跨文件候选，禁止空绿", 2, candidates.size)
+        assertEquals(1, NamedQueryLocator.locate(candidates[0]).size)
+        assertEquals(1, NamedQueryLocator.locate(candidates[1]).size)
+        assertNull("跨文件同名查询无法证明唯一 owner，不能取首项",
+            NamedQueryLocator.uniqueHit(candidates, "UserEntity.find"))
     }
 
     // ------------------------------------------------------------------

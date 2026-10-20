@@ -82,12 +82,37 @@ internal fun SqlPreviewPanel.moreActions(): List<Pair<String, () -> Unit>> = lis
     MpSqlVisualizerBundle.message("panel.compare") to { showSqlDiff() },
     MpSqlVisualizerBundle.message("panel.share") to { showShareDialog() },
     MpSqlVisualizerBundle.message("panel.portableExport") to { exportPortableSql() },
+        // R36：回放脚本导出（参数已填回的可执行 .sql；沿用 O-91 同款入口与写盘/通知链）
+        MpSqlVisualizerBundle.message("panel.replayExport") to { exportReplayScript() },
+        // R37（T-LaneB D95）：安全 AI 上下文交递——脱敏参数化块进剪贴板（未接 MCP 用户的安全出口）
+        MpSqlVisualizerBundle.message("panel.aiContext") to { copyAsAiContext() },
+        // T-AiContextLegibility B：显式含表列名出口（值仍打码，引号内容不复制）
+        MpSqlVisualizerBundle.message("panel.aiContext.identifiers") to { copyAsAiContext(includeIdentifiers = true) },
+        // R42（阶段二合并批）：DML 影响面预演——UPDATE/DELETE 执行前的只读 COUNT 试算
+        MpSqlVisualizerBundle.message("panel.dmlImpact") to { estimateDmlImpact() },
 )
 
 /**
  * F2：弹出「更多」折叠菜单（锚定按钮下方；JBPopupFactory + BaseListPopupStep 路线为本项目
  * 现网先例：SqlClickPreview / DataSourceSelector）。show 依赖真实屏幕，测试只构造 step 不弹层。
  */
+
+    /**
+     * R52：当前方言能力矩阵的 meta 悬停段（呈现层触点一）。
+     *
+     * 悬停而非可见行：meta 可见行受 F3 宽度预算中段省略（[applyMetaTruncation]），把四行矩阵
+     * 塞进可见行会挤掉表名/调用栈摘要——矩阵信息密度高、按需查看即可，故落 tooltip（同仓
+     * 惯例：完整信息进悬停、可见行留摘要）。方言取预览结果的实际生成方言，
+     * 未记录方言时返回空串（不加段落）。
+     */
+    private fun dialectCapabilityTooltipSection(result: PreviewResult): String {
+        val dialect = result.effectiveDialect ?: return ""
+        return "\n\n" + MpSqlVisualizerBundle.message(
+            "panel.meta.dialectCapabilities",
+            dialect.name,
+            cn.song.mybatisplus.visualizer.sql.DialectCapabilities.summaryText(dialect),
+        )
+    }
 
 internal fun SqlPreviewPanel.showMoreActionsPopup() {
     val actions = moreActions()
@@ -130,6 +155,19 @@ internal fun SqlPreviewPanel.moreActionsStep(actions: List<Pair<String, () -> Un
 
 internal fun SqlPreviewPanel.showResult(result: PreviewResult) {
     current = result
+    // O-145 W7：在结果/渲染时冻结 AUTO/MANUAL，执行点击时只读取此快照；设置随后变化不改写历史事实。
+    executionDialectRenderMode = project?.let {
+        if (cn.song.mybatisplus.visualizer.config.ProjectPluginSettings.getInstance(it).effectiveDialectAuto()) {
+            cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.RenderMode.AUTO
+        } else {
+            cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.RenderMode.MANUAL
+        }
+    } ?: cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.RenderMode.UNKNOWN
+    // T-M19-StorageClear：新预览会从结果模型重新初始化全部参数态，此刻才允许旧面板接纳清理后的
+    // 新存储代际；停留在原预览的面板始终保持旧代际，其防抖/管理方案写回全部被拒。
+    paramHistoryCache.adoptCurrentGenerationForFreshPreview()
+    // O-145 W5：渲染方言与临时 PSI 使用同一事实；必须先于 renderSql/createEditor。
+    syncPreviewDialectMapping(result)
     // 参数值按 source 初始化（T-M42：优先取预填初始值——日志识别 `param1` → 日志参数值；
     // 其余空字符串；多条件复用同一 source 共享一个值）
     paramValues.clear()
@@ -181,7 +219,10 @@ internal fun SqlPreviewPanel.showResult(result: PreviewResult) {
     // F-45：更新列信息标签页（仅 <pages> 预览时显示）
     updateColumnInfoTab(result)
     // O-4：缓存当前 SQL 供下次 Compare
-    previousSql = editor?.document?.text
+    // UI-023：首渲染链上 editor 可能尚未创建（控制台/预热抢占），只读 editor 会恒 null——
+    // 「差异对比」于是永远报「无上次预览可对比」。editor 缺失时用本次预览原文兜底（同一语义：
+    // 缓存本次 SQL 供下次对比）。
+    previousSql = editor?.document?.text ?: result.sql.takeIf { it.isNotBlank() }
     // M36.5：默认发起原生控制台准备（Ultimate 即刻展示原生控制台；Community 静默回退）
     prepareDefaultConsole()
 }
@@ -500,6 +541,10 @@ internal fun SqlPreviewPanel.hasTabTitle(tabPane: JTabbedPane, title: String): B
  *  M34 回归修复：原生 SQL 高亮迁移后 Editor/PSI 对象在预览切换间复用（文档不变），
  *  三级回退的 Document→Context 映射需随上下文刷新同步更新，否则落入旧预览的过期表/列。 */
 
+internal fun mergePreviewWarnings(initial: String?, current: List<String>): String? =
+    (listOfNotNull(initial?.takeIf { it.isNotBlank() }) + current.filter { it.isNotBlank() })
+        .distinct().joinToString("；").ifEmpty { null }
+
 internal fun SqlPreviewPanel.updateMeta(result: PreviewResult) {
     val meta = buildList {
         result.wrapperType?.let { add("${MpSqlVisualizerBundle.message("panel.meta.type")}: ${it.name}") }
@@ -510,11 +555,7 @@ internal fun SqlPreviewPanel.updateMeta(result: PreviewResult) {
             xml.parameterType?.let { add("parameterType: $it") }
         }
     }.joinToString("   ")
-    // T-M24-04：XML 渲染期错误并入警示（解析期错误在 PreviewResult.warning）
-    val xmlWarning = result.xmlModel?.let { xml ->
-        (xmlErrors).joinToString("；").ifEmpty { null }
-    }
-    currentWarning = xmlWarning ?: result.warning
+    currentWarning = mergePreviewWarnings(result.warning, if (result.xmlModel != null) xmlErrors else emptyList())
     val warningLine = currentWarning?.let { "   ⚠ $it" } ?: ""
     // T-SourceJumpFunnel P2-2：调用栈快照并入 meta 提示行（截断展示；T-StackHoverUi 起
     // 完整链归悬停弹层）。
@@ -528,15 +569,15 @@ internal fun SqlPreviewPanel.updateMeta(result: PreviewResult) {
     // metaLineDigest）：预算不足时先截摘要、主体仅在自身超预算时才中段省略（复核 20260920 修正
     // ——把摘要直接拼进单段文本会让 F3 的中段省略在窄窗下连主体一起挤掉，只剩「…」+ 栈底帧，
     // 优先级倒挂）。
-    // T-StackHoverUi：完整调用链不再进 tooltip（旧实现把截断摘要+全文重复拼进 tooltip，
-    // 超长单行折成文本墙）——改由 [stackHover] 悬停弹层承接（调试器 Frames 风格）。
-    metaLineHead = meta + warningLine
+    // T-DialectStatusLiveRefresh：方言决策与其余分段分开缓存——执行/绑定后只重组方言段
+    // （recomposeDialectStatusText），不重跑本函数的警示/横幅/错误按钮全链。
+    currentDialectDecision = result.dialectDecision
+    metaCoreText = meta + warningLine
     metaLineDigest = stackInline
-    metaLineText = metaLineHead + metaLineDigest
     metaPerfSegments = buildPerfSegments(result)
-    metaTooltipBase = meta + warningLine +
-        metaPerfSegments.joinToString("；") { it.text }
-    metaLabel.toolTipText = metaTooltipBase
+    metaTooltipCore = metaCoreText + metaPerfSegments.joinToString("；") { it.text }
+    metaTooltipSuffix = dialectCapabilityTooltipSection(result)
+    applyDialectStatusSegment()
     stackHover.updateDigest(result.stackDigest)
     metaLabel.foreground = if (currentWarning != null) {
         // T-DarkTheme：IDE 标准错误前景命名色（亮暗主题自适应；暗色下非亮红不刺眼）

@@ -93,7 +93,8 @@ internal class SqlDockedPreview(
             return
         }
         if (displayedEntry === entry) return
-        val sql = clickPreviewSql(entry.restoredSql, PluginSettings.getInstance().state.logFormatSql)
+        val state = PluginSettings.getInstance().state
+        val sql = clickPreviewSql(entry.restoredSql, state.logFormatSql, state.displayMaskEnabled)
         val current = content ?: SqlClickPreview.buildContent(project, sql, copyText = {
             cn.song.mybatisplus.visualizer.util.UiTextClipboard.copy(it)
         }, close = onClose).also { built ->

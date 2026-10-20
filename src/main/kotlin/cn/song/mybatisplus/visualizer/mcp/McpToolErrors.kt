@@ -35,6 +35,9 @@ object McpToolErrors {
     /** 源码定位失败（文件/行号无可识别 SQL 源）。 */
     const val SOURCE_NOT_FOUND = "SOURCE_NOT_FOUND"
 
+    /** 工具虽仍可被已知名称直接调用，但当前设置已禁用。 */
+    const val TOOL_DISABLED = "TOOL_DISABLED"
+
     /** 项目未就绪（索引未完成或项目关闭中）。 */
     const val PROJECT_NOT_READY = "PROJECT_NOT_READY"
 

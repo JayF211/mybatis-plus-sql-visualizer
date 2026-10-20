@@ -19,6 +19,13 @@ data class ColumnRef(
     val rawExpr: String? = null,
     val entityClass: String? = null,
     val type: String? = null,
+    /**
+     * 表达式内占位符 `?` 的来源（按出现顺序，T-UpdateSetSqlConcat）。
+     *
+     * `select("amount * " + x + " AS v")` 这类片段实参中的运行期段渲染成 `?` 后，须在 SELECT
+     * 列列表的渲染点按序登记，否则面板按位置回填会整体错位。
+     */
+    val rawParams: List<String> = emptyList(),
 ) {
     /** 渲染为带表限定的列表达式，如 `cssm.sort` 或 `sort`。 */
     val qualifiedName: String

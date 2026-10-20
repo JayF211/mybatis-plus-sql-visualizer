@@ -4,6 +4,47 @@
 
 ## [Unreleased]
 
+### Added
+- **DatabaseTools 非 UI 实际链修复（V178）**：纠正 DM 方言扩展的 DBMS 注册与单例实例契约、真实数据源配置的反射类包名。DM语言仍为Generic兼容能力，不宣称原生达梦parser。实际无连接平台fixture验证映射、SqlFile、UUID与session/console；显式scope无法证明缩窄时诚实降级，真实连接与GUI流程另验。
+- **捕获融合的历史升级（O147）**：修复内存已 MERGED 但自动历史仍为首次低信息快照的问题；本次真实 JDK17/JDK8+MyBatis/JDBC/H2 对照先红后绿。采用有界追加修订注释，不原位覆盖文件，不改原始 SQL/参数/序号；处理融合回调先于存储回调、未知/删除文件、载荷预算和四读取入口一致。旧版读取器可能显示额外元数据注释；真实 IDE 控制台接管与源码点击仍待UI验收。
+- **跨会话 EXPLAIN 计划历史（R90）**：复用应用级预览历史 XML 保存有界结构化快照，按项目、稳定数据源 UUID、方言、格式和实际 SQL 指纹隔离，基线选择只读不重跑查询。原始计划可能含业务值与凭据，保留开关独立默认关闭，设置页明示存储/清理边界，提交和结果回调双重检查授权；清历史阻止迟到回写。
+- **AI 上下文 v2（R91）**：真实复制入口输出版本化诊断投影、匹配当前 SQL/实际目标的已取得计划摘要和真实静态表列计数，不主动执行 EXPLAIN、不调用网络/JDBC/MCP。未知或过期计划明确缺失；只保留白名单计划节点与数值，不附原计划条件/NOTICE。默认投影不可执行，也不保证替用户完成机密审查。
+- **FieldFill 安全模拟（R92）**：CRUD/MP批量参数区补填充元信息和逐列模拟字面量输入，默认关闭、不执行用户 Handler。仅适配活跃 INSERT/UPDATE 写列，显式参数优先，WHERE条件/UPSERT不猜填；支持命名预设和独立清理，目标方言重渲染不使控件失联。
+- **诊断审阅后反馈（R94）**：分享窗口新增诊断反馈草稿，默认隐藏 SQL 值、注释、参数名与标识符，不附参数、路径、原始计划或附件；不支持的引号形式省略 SQL，绝不退回原文。用户可删段、编辑最终正文，在目的地与 16 KiB UTF-8 预算明确后逐次同意提交；编辑或失败重试均需重新同意，仍使用既有官网公开需求池接口。仅验证 fake sender 接线，本轮未实际上传诊断。
+- **预览方言来源与执行目标分层校验（O-145，第十九轮续实施）**：注解/mapper XML 在真实 SQL PSI 可用时尝试读取 IDEA provider 与有效方言；真实平台复验表明厂商候选不等于解析作用域，明确配置却无法可靠解析时降级为不可用，不标STRONG、不取第一数据源；预览结果的来源、置信度与候选 UUID 可在面板按需查看。实际选定的数据源在 session attach 前、原生控制台提交前分别核对；手动冲突和未知写/EXPLAIN 阻断，能无损重渲染的自动模式要求先复核再执行。模块绑定只在执行闸通过后学习数据源 UUID，项目页可清除；原始日志查询未知方言须确认。当前只有 headless/跨版签名和定向证据，真实 IDE/数据库行为尚未验收。
+- **本地持久数据分离清理（第十九轮 P1）**：设置页可打开捕获历史目录（不自动删除文件），或分别确认清除预览 SQL 历史与参数历史/预设；参数清理会使已打开面板的旧缓存及迟到写回失效，不会连带删除预览历史的参数快照。
+- **预览执行按数据源方言出 Runner（O-136）**：预览面板点执行时，草稿 SQL 的方言不再写死 MySQL——按目标数据源（上次使用→显示名→默认）路由平台方言（平台 DAS `findSqlDialect` 优先、插件 URL 推断兜底、皆缺诚实保持 MySQL 零回归）；方言匹配集非全部数据源时平台返回的「All」组 Runner 自动展开子项去重（达梦等此前被死组项挡住不可选）；方言与在册数据源不匹配导致执行不可用时给出二分归因文案（方言 id＋可行动清单）。多语句脚本与预览链（高亮/注释前缀）行为零变更
+- **性能快件批二/三道齐落（T-PerfSweep D31）**：**道 A** 历史检索扫描环三合一重写——文件名倒序（截断丢旧不丢新）＋条目粒度封顶边读边滤（内存只驻命中集）＋「名字日期＋mtime 双旧」零 IO 预跳过；为此在 `SqlLogFileReader` 新增 `forEachEntry` 逐条迭代器（V47 前提，旧接口全保）。**道 B** 参数预设缓存改**桶外单把粗锁**保全部 accessOrder LinkedHashMap 桶（禁 CHM/读写锁——读改结构会丢 LRU 语义）＋`activeScheme` 改 `@Volatile`＋方案名列表去除中间分配。**道 C** 杂件包七件（控制台桥 methodCache 容量上限 64／三处现场 Regex 提单例／SqlDiffer LCS 千行护栏超限降级并排（R31「恰两条可用」契约不变）／ShardingSphere 折叠判长改累积长度计数／「日志转 SQL」剪贴板按钮退役 enabled 探针（点击空剪贴板走轻提示）／注册前置 `@Volatile registered` 短路）＋**F58 逐行 token 单次提取**（唯一动逐行热路径件，独立提交可单独回滚）＋搭车九件（绑定指示行取名链 Method 缓存／CriteriaQuery gutter 缓存按 file 键＋体量护栏／WrapperAnchorDetector 行文本一次取／dsName 反射缓存／织入归属链 `getMethod` 按类缓存／StatementRegistry 按 stmt 身份分桶／列表重建补完保留分批／SqlPreviewService 现场 Regex 提常量（附源码守卫）／showFileList 清 pendingEntries）
+- **历史耗时回填结构指纹兜底（R54）**：精确匹配优先、零回退；未命中时落「结构指纹同键中位数」——解 O-108「历史耗时回填默认 `?` 空转」（`?` 占位与实值已归一为同一 token）
+- **展示/导出链字面量脱敏（R60）**：新增 `DisplayMasker`（规则与增强捕获侧采集脱敏逐条等价）覆盖**四链**——SQL 日志列表（含多行片段缓存键补脱敏位）、单击预览浮层、历史/日志导出（CSV/TSV/TXT）、MCP `sqlv_render_logs`；设置页「展示脱敏」与 MCP 面「脱敏字面量」**双开关默认关**（不改既有用户观感）
+- **AI 上下文复制（R37，选择性脱敏）**：预览面板「更多」菜单新增「复制为 AI 上下文」——输出块含来源/方言、按既有规则识别并参数化的敏感字面量与打码计数。非命中规则的普通 SQL 字符串仍可能保留原文（现有测试正对照保留 `name = 'tom'`），因此复制到外部 AI 前必须由用户自行检查和删改；不承诺整个上下文无机密，也不自动上传。
+- **更新失败可诊断化（R62）**：检查更新失败区分「网络不通／更新通道 404／已是最新」三态（HTTP 状态码分层，非 404 错误带状态码诚实降级）；404 态给出 Marketplace＋Gitee Releases 兜底链接行
+- **历史参数快照回预览（R51）**：历史条目落参数键值快照，从历史召回（recall）时把快照回填参数面板（回落链＝参数缓存优先、历史快照兜底；预览 flush 同步回写最新匹配条目）——旧历史文件零迁移（反序列化缺省空 Map），解 O-105 余半「历史无参数快照/无回预览桥」
+- **EXPLAIN 执行计划跨次对比（R61）**：同一会话内两次 EXPLAIN 结果做树对齐 diff（cost/rows 变化标注）；节点稳定标识＝结构路径＋同型节点出现序（兄弟增删不串位）；MySQL/MariaDB 表格族与 PG/KingBase JSON 族可比，Oracle/SQL Server 文本计划诚实降级为不可比
+- **回放脚本导出（R36）**：预览「更多」菜单新增「导出回放脚本」——参数已填回的可执行 `.sql`（语句切分感知 BEGIN/END 与引号内分号，逐条补尾分号）；事务包裹可选，新增 `Dialect.transactionBegin` 能力面（H2/SQLite 真引擎实测 `BEGIN` 语义成立，按官方文法逐方言对齐，Oracle/DM 保守判无并禁用勾选）
+- **捕获双通道状态可见化＋暂停入口（R53）**：SQL 日志面板常驻状态栏展示两通道状态（已挂载/已收事件数/暂停中/总开关关）＋暂停/恢复动作；暂停语义＝「只停增强 agent 入队、控制台通道照常」（暂停≠关闭，连接与 CONFIG 回执链不动），与 24h 冷却/总开关三态互不干扰
+- **Wrapper 布尔条件求值探镜（R49）**：Wrapper 条件行尾标注布尔首参求值三态——字面量 true「恒真」／false「恒假」／运行时占位符「恒真·缺省」（缺省 true 与求值 true 分开，防「缺省当求值」误读）；纯只读探针，渲染零变更
+- **阶段二合并批六件**：**R45** EXPLAIN 执行计划体检（rows 估算独立规则＋体检规则清单）／**R48** MetaObjectHandler 自动填充仿真（`@TableField(fill=…)` 经 CRUD 生成链贯通到角标数据面；填充列默认勾选态不变）／**R52** 方言能力矩阵＋执行前自检（矩阵读 `Dialect` 接口真值防伪能力，确认弹窗按缺口追加发现行）／**R46** 执行前 Schema 校验（未识别列＋did-you-mean；表存在性不可零成本判定故只校验已预热表列，fail-open 不误报）／**R42** DML 影响面预演（UPDATE/DELETE 执行前只读 COUNT 试算，MCP 写护栏联动）／**R50** 一键诊断报告（五段：SQL+参数/性能规则/EXPLAIN 建议/无界写/回滚预案＋方言能力，Markdown 复制与自包含 HTML 导出）
+
+### Changed
+- **增强捕获暂停按钮临时隐藏（T-AgentPauseVisibility，方案 B）**：增强捕获已默认开启，暂停/恢复按钮在应用未运行时没有可暂停对象，并与捕捉按钮形成播放/暂停误读；先整体隐藏，动作对象保留在工具栏组内（能力代码不删）。暂停 agent 通道的 UI 入口暂时不可达，关闭总开关仍回落控制台；恢复路径为方案 A（agent 挂载或暂停态才显示）或状态栏/右键菜单入口。
+- **增强捕获默认开启且不再弹注入确认（T-EnhancedCaptureDefaultOn）**：总开关默认开启，打开即授权——项目打开、首次 Run、进程出现、设置页勾选、缺源码引导五条路径均不再弹确认框；移除 24 小时拒绝冷却、重新授权按钮与「未授权」状态行。旧配置里的 `confirmed=false` / 拒绝时刻在加载时静默归一，用户显式关闭的开关保持关闭。设置页开关与 tooltip 继续说明采集范围、数据留本机与可随时关闭；JDK 21+ 动态挂载告警仍属预期。
+- **Wrapper 与 JPA/HQL 预览按来源文件推断方言（O-145）**：Wrapper 在没有真实 SQL 注入时仍参考宿主文件的 IDEA 有效方言，同一方言贯穿分页 COUNT 与主 SQL；Java JPQL/HQL 命名查询按定义处文件取来源，同名定义歧义不猜；Criteria、native、hbm XML、Specification、QBE 与 Procedure 也以真实宿主文件作不含 URL 的来源快照，hbm 同名异文时拒绝任取第一条 SQL。旧日志/历史不含精确 JDBC URL，不能由脱敏库标反推执行时方言；真实 IDE/数据库验证仍待完成。
+- **XML mapper 预览按语句来源判方言（O-145 W1/W2）**：动作与 gutter 把原 XML 文件、当前语句和有效光标交给瞬态来源解析；只采纳真正 DatabaseTools SQL 注入，自研 MpSqlMapper 不冒充。多注入不取首个，按来源作用域的有效方言渲染并模拟分页；纯文本预览及无来源时保持原回退。
+- **底部快速预览接入展示脱敏（R60，T-SqlListPreviewInteraction 合流）**：已发布的单击选择、底部连续预览与草稿固定交互保留；dev 的日志与历史底部预览继续服从展示脱敏开关，双击完整预览与多选复制保持原样。
+
+### Fixed
+- **预览降级横幅按原因分型与宽限期静默（T-DegradedPreviewUx）**：首开预热仅超 500ms 预算时就挂红色「本次项目内临时文件不可用」横幅，而延迟产物通常数秒内自动换装——现超时改为 3 秒宽限期静默（期间恢复则横幅一次都不出现），只有硬失败才立即披露并写明原因；降级横幅改提示色、单行正文 + 悬停补充说明。降级态改参数/勾选条件的重渲染已在 headless 验证（UI-022 沙盒复验待做）。
+- **Kotlin Wrapper 主动预览不再静默无响应（第十九轮可信预览）**：不可可靠推断实体表、列和值时继续隐藏 gutter 假入口；用户主动使用 Convert to SQL/快捷键压在已识别链上时，改为非模态说明限制并明确不生成猜测 SQL。选择区同样只在实际命中 Kotlin Wrapper 行时提示，文件其他位置的链不会误触发；插件描述同步收窄 Java/Kotlin 通用声明。
+- **Wrapper 服务链实体未知时的提示回归（O-145）**：新增 Kotlin 无表降级分支时误把既有服务链的具体说明缩成通用提示；恢复“无法推断实体表”的原有文案，Kotlin 源码单独给出降级说明，不生成猜测 SQL。五片门禁前置 shard3 曾因此失败，修复后相关两类定向 72/0/0；完整五片需重跑。
+- **MCP 禁用工具的直接调用门（第十九轮 P1）**：除工具列表过滤外，十一项工具共用的执行入口在运行前重新检查总开关和单工具开关；外部会话即使记住工具名也不能绕过禁用设置。禁用返回可读的 `TOOL_DISABLED` 错误，不执行工具逻辑；headless 直接调用测试已先红后绿，真实外部客户端请求待验。
+- **预览方言载体与能力提示（O-145 W4/W5）**：无动态条件的 JPA/XML、普通 CRUD 与批量模型此前已按目标方言生成 SQL，却在面板/EXPLAIN 或临时 PSI 映射时被当成 MySQL；现统一保留生成方言，平台缺对应方言时临时 PSI 退到 GenericSQL。方言能力矩阵原 tooltip 只有无消费的表达式，现实际接入悬停说明；均有定向与反向守卫，真机显示待验。
+- **EasyQuery 侧布尔标志语义与 Wrapper 侧统一（R49 收口）**：`eq(true, …)` 这类字面量 true 此前在 EasyQuery 解析链被折叠成「无标志」（`flagSource=null`），而同一条表达式在 QueryWrapper 链携带 `"true"`——两条链渲染与标注不一致（R49 探镜在 EasyQuery 侧不标注）。现两侧统一为携带源码文本，`null` 归还「非布尔重载」单一语义
+- **「更多」菜单契约守卫同步（R36/R37/R42 增项）**：预览顶栏菜单契约断言从五项补齐为八项（回滚 SQL/导入参数/差异对比/分享/导出可移植 SQL/导出回放脚本/复制为 AI 上下文/DML 影响面），并把新增项一并纳入「不得直显」的折叠断言
+- **源码守卫元登记（F84 配套）**：新增的「函数体内现场 Regex」源码守卫补进守卫元登记表（此前整体脱离自证覆盖率扫描面）
+
+
+
 ## [2026.10.16] - 2026-10-16
 
 ### Added
@@ -35,8 +76,8 @@
 
 | 归档分册 | 覆盖版本 |
 |---|---|
-| [changelog-archive-2026-09.md](./变更记录/changelog-archive-2026-09.md) | 2026-09 发布的版本 |
-| [changelog-archive-2026-08.md](./变更记录/changelog-archive-2026-08.md) | 2026-08 发布的版本 |
+| [changelog-archive-2026-09.md](./docs/变更记录/changelog-archive-2026-09.md) | 2026-09 发布的版本 |
+| [changelog-archive-2026-08.md](./docs/变更记录/changelog-archive-2026-08.md) | 2026-08 发布的版本 |
 
 ---
 
@@ -89,7 +130,7 @@
 
 ### Fixed
 - **增强捕获接管瞬间同一次执行留下两行（T-AgentCaptureProvenance）**：旧接管沿清空整个去重索引，使接管前几毫秒入库的控制台条目与随后到达的 agent 观测无法融合，出现一行可跳转、一行缺源码。现仅清除陈旧键，保留近五秒内的新鲜键用于字段级融合；首批 agent 事件仍不会被旧记录吞掉
-- **历史与 XML 编辑性能收敛（T-PerfSweep25）**：历史日志面板由「打开即后台扫描历史文件」改为首次切入「SQL 历史」页签才触发首扫；空查询的同模板聚合只随条目快照换代重算；resultMap 列补全、XML 高亮共存探针与 SQL 切分器补上病态输入熔断与缓存，避免大文件 / 无配对 BEGIN 等形态拖慢编辑响应
+- **历史与 XML 编辑性能收敛（T-PerfSweep25）**：历史日志面板由「打开即后台扫描历史文件」改为首次切入「SQL 历史」页签才触发首扫；空查询的同模板聚合只随条目快照换代重算；resultMap 列补全加 100K 熔断及双槽 memo、XML 高亮共存探针加宿主弱身份／PSI 修改戳／注入器清单 stamped memo（非 mapper 宿主探测前置跳过，F79）、SQL 切分器前视加 10K 窗上限（F90），resultMap 贡献器补 DumbAware（F93），避免大文件 / 无配对 BEGIN 等形态拖慢编辑响应
 
 - **`@Embedded` 展平列的预览列名丢了嵌入段前缀，与真库列名不符（T-EmbeddedColPrefix）**：实体 `@Embedded private WmsInventoryQty qty;` + HQL `inv.qty.baseQty` 被预览成 `AND inv.base_qty > 0`，而真库列是 `qty_base_qty`（同句 `inv.moveTool.palletNo` 同样被预览成 `inv.pallet_no`）。根因是展平嵌入列时把「列名 = 内层字段名」写死（`@AttributeOverride` > 内层 `@Column(name)` > 驼峰转下划线），而列名怎么拼其实由工程的 Hibernate 隐式命名策略决定——`ImplicitNamingStrategyComponentPathImpl`（配置关键字 `component-path`，Hibernate 4 的 `DefaultComponentSafeNamingStrategy` 同源）会把属性路径并进列名。现已按 hibernate-core 源码核实的语义支持这一约定：默认自动读工程 `application*.yml/properties` 判定（判不出按 JPA 默认「无前缀」），设置页「嵌入列命名」亦可显式指定「无前缀 / 组件路径前缀」；两档都只作用于兜底档，显式 `@AttributeOverride` 与内层 `@Column(name)` 依旧优先。同一处列名推导同时喂 WHERE 段属性映射与 SELECT 子句展开，故一处修正、两处产物同时正确。另补一条不依赖配置的兜底：既有的「按数据源校正列名」此前对嵌入列失效（它按归一化比对，`base_qty` 与 `qty_base_qty` 差的是一整段前缀，必然 0 候选），现对嵌入列在 0 命中后追加「用嵌入段路径的 snake 形态唯一命中」这一档——绑定了数据源时这类场景零设置自愈，0 候选/歧义/当前列名本就是库中真名时一律不改写；嵌入列命名的配置探测按**实体所在模块**取范围（命名策略是每个持久化单元各自的事），多模块工程里兄弟模块的配置不会外溢
 - **用 `StringBuffer`·`StringBuilder` 逐句 `append` 拼出的 SQL 传给自定义 DAO 时无法预览（T-HqlBufConcat）**：把 HQL 累积在 `StringBuffer sb` 里（`sb.append("SELECT …")` …）再经 `sb.toString()` 传给自研 DAO（如 `commonDao.findByQueryMaxNum(sb.toString(), new String[]{}, new Object[]{}, 0, 10)`）时，该行既不亮预览图标、手动触发动作也只弹「未找到可预览 SQL 源」。根因是定位器只认字面量 / `+` 拼接 / 变量引用三种承载，而 `sb.toString()` 是方法调用表达式、落进「无法静态取得字符串」的兜底返回 null，内容启发失败即不认领（与 DAO 实现是否在 jar 里无关——认领走 qualifier 后缀 + 方法名关键字 + 内容正则，全程不解析 DAO 实现体）。现把 JdbcTemplate 通道已在用的 StringBuilder 聚合器 `SqlStringConcatenator` 提为共享入口（并补 `.toString()` / `.append(x).toString()` 解包），自定义 DAO（`CustomDaoHqlLocator`）与 Hibernate `session.createQuery(...)`（`HqlQueryLocator`）两条通道共用；拼接中嵌入的运行时值（`param.get(...)`）沿用既有 `/*运行时值*/` 占位降级。顺带收敛两处同族口径：`HqlQueryLocator` 的兜底不再把表达式源码文本当 HQL（对齐 T-GutterDupFreeze），`handleNewExpression` 只认大写 `NEW` 的问题改为大小写不敏感的单一实现 `NewExpressionStripper`（小写 `new Map(...)` 此前会被原样留在产物里产出非法 SQL，「`RENEW(`」之类不再误命中）

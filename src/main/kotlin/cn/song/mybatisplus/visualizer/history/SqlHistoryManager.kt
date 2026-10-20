@@ -36,6 +36,66 @@ class SqlHistoryManager : PersistentStateComponent<SqlHistoryManager.State> {
     )
 
     private var state = State()
+    private var planGeneration = 0L
+
+    @Synchronized
+    fun explainPlanGeneration(): Long = planGeneration
+
+    /** 提交前固定原条目；异步完成时禁止再按“最新 SQL”回查归属。 */
+    @Synchronized
+    fun beginExplainCapture(projectIdentity: String, previewSql: String, key: ExplainPlanKey, entryId: String? = null): ExplainPlanCapture? {
+        if (key.projectIdentity != projectIdentity) return null
+        val entry = if (entryId != null) findById(entryId)?.takeIf {
+            it.projectIdentity == projectIdentity
+        } else entries.firstOrNull { it.projectIdentity == projectIdentity && it.sql == previewSql }
+        if (entry == null) return null
+        return ExplainPlanCapture(entry.id, planGeneration, key)
+    }
+
+    /** R91 可只读消费此 API：严格同项目/UUID/方言/格式/模板/exact，返回副本。 */
+    @Synchronized
+    fun matchingExplainPlans(key: ExplainPlanKey): List<ExplainPlanSnapshot> {
+        if (!key.persistable) return emptyList()
+        return entries.flatMap { it.explainPlans }.filter { it.key() == key }
+            .sortedByDescending { it.capturedAt }.map { it.copy() }
+    }
+
+    @Synchronized
+    fun saveExplainPlan(capture: ExplainPlanCapture, raw: cn.song.mybatisplus.visualizer.mcp.McpExplainFormatter.RawResult): ExplainPlanSaveResult {
+        if (capture.generation != planGeneration) return ExplainPlanSaveResult.CLEARED_OR_REMOVED
+        val entry = findById(capture.entryId) ?: return ExplainPlanSaveResult.CLEARED_OR_REMOVED
+        if (entry.projectIdentity != capture.key.projectIdentity) return ExplainPlanSaveResult.CLEARED_OR_REMOVED
+        if (!capture.key.persistable) return ExplainPlanSaveResult.SESSION_ONLY
+        val snapshot = ExplainPlanSnapshot.create(capture.key, raw)
+        val newestTime = entries.asSequence().flatMap { it.explainPlans.asSequence() }.maxOfOrNull { it.capturedAt } ?: 0L
+        // 同一毫秒完成的多个回调仍按保存顺序淘汰，不因稳定排序把最新一份丢掉。
+        if (newestTime >= snapshot.capturedAt && newestTime < Long.MAX_VALUE) snapshot.capturedAt = newestTime + 1
+        if (snapshot.serializedBytes() > MAX_PLAN_BYTES) return ExplainPlanSaveResult.TOO_LARGE
+        entry.explainPlans.add(0, snapshot)
+        enforcePlanBounds()
+        return ExplainPlanSaveResult.SAVED
+    }
+
+    /** 计划预算只淘汰计划，绝不删除 SQL（特别是收藏）。加载旧/手改 XML 同样受限。 */
+    private fun enforcePlanBounds() {
+        val all = state.entries + state.favoriteEntries
+        all.forEach { entry ->
+            entry.explainPlans.removeAll {
+                !it.key().persistable || it.projectIdentity != entry.projectIdentity ||
+                    it.raw() == null || it.serializedBytes() > MAX_PLAN_BYTES
+            }
+            entry.explainPlans.sortByDescending { it.capturedAt }
+            while (entry.explainPlans.size > MAX_PLANS_PER_ENTRY) entry.explainPlans.removeAt(entry.explainPlans.lastIndex)
+        }
+        val oldest = all.flatMap { entry -> entry.explainPlans.map { Triple(entry, it, it.serializedBytes()) } }
+            .sortedBy { it.second.capturedAt }
+        var bytes = oldest.sumOf { it.third.toLong() }
+        for ((entry, snapshot, size) in oldest) {
+            if (bytes <= MAX_TOTAL_PLAN_BYTES) break
+            entry.explainPlans.remove(snapshot)
+            bytes -= size
+        }
+    }
 
     /** 历史记录上限（非收藏条目）。默认 200，跟随 [PluginSettings.historyMaxSize] 配置。 */
     var maxSize: Int = DEFAULT_MAX_SIZE
@@ -51,6 +111,7 @@ class SqlHistoryManager : PersistentStateComponent<SqlHistoryManager.State> {
      *
      * @return 添加后的条目（含分配的 id）
      */
+    @Synchronized
     fun add(entry: SqlHistoryEntry): SqlHistoryEntry {
         entry.ensureId()
         if (entry.favorite) {
@@ -60,6 +121,7 @@ class SqlHistoryManager : PersistentStateComponent<SqlHistoryManager.State> {
             insertSorted(state.entries, entry)
             evictIfNeeded()
         }
+        if (entry.explainPlans.isNotEmpty()) enforcePlanBounds()
         return entry
     }
 
@@ -180,16 +242,48 @@ class SqlHistoryManager : PersistentStateComponent<SqlHistoryManager.State> {
         return entries.filter { it.sql.lowercase().contains(q) || it.compactSql.lowercase().contains(q) }
     }
 
+    // ---------- R51：参数快照回写（O-105 余半·主体） ----------
+
+    /**
+     * R51：把参数快照回写到**最新一条**满足 [match] 的条目（[entries] 已按时间倒序——
+     * firstOrNull 即新者权威，同一 SQL 多次预览只更新最近一条，旧条目保留各自时点的快照）。
+     *
+     * 调用方＝面板参数编辑防抖落库链（flushHistoryToCache）：recordHistory 早于参数输入
+     * （预览产物先落历史、参数后填），快照只能在编辑发生时补进。匹配谓词由调用方给定
+     * （缓存键 = tableName/SQL 指纹，见 ParamHistoryCache.computeKey——manager 不依赖 ui 包）。
+     *
+     * @return 是否命中并更新（未命中不抛——面板链路静默容错）
+     */
+    fun updateNewestParamSnapshot(match: (SqlHistoryEntry) -> Boolean, snapshot: Map<String, String>): Boolean {
+        if (snapshot.isEmpty()) return false
+        val entry = entries.firstOrNull(match) ?: return false
+        entry.paramSnapshot.clear()
+        entry.paramSnapshot.putAll(snapshot)
+        return true
+    }
+
+    /**
+     * R51：按匹配谓词取**最新一条**条目的参数快照（recall 链在 ParamHistoryCache 未命中时的
+     * 回落源；快照为空的条目不参与——无快照的历史回落无意义）。
+     */
+    fun newestParamSnapshot(match: (SqlHistoryEntry) -> Boolean): Map<String, String>? {
+        val entry = entries.firstOrNull { match(it) && it.paramSnapshot.isNotEmpty() } ?: return null
+        return entry.paramSnapshot
+    }
+
     // ---------- 删除 / 清空 ----------
 
     /** 按 id 删除条目。 */
+    @Synchronized
     fun remove(id: String) {
         state.entries.removeAll { it.id == id }
         state.favoriteEntries.removeAll { it.id == id }
     }
 
     /** 清空全部历史（含收藏）。 */
+    @Synchronized
     fun clear() {
+        planGeneration++
         state.entries.clear()
         state.favoriteEntries.clear()
     }
@@ -198,12 +292,15 @@ class SqlHistoryManager : PersistentStateComponent<SqlHistoryManager.State> {
 
     override fun getState(): State = state
 
+    @Synchronized
     override fun loadState(state: State) {
+        planGeneration++
         // 防御 null/损坏：任一列表为 null 时置空（XmlSerializer 不会产 null，但外部覆写可能）
         this.state = State(
             entries = state.entries ?: mutableListOf(),
             favoriteEntries = state.favoriteEntries ?: mutableListOf(),
         )
+        enforcePlanBounds()
     }
 
     // ---------- 内部工具 ----------
@@ -224,6 +321,10 @@ class SqlHistoryManager : PersistentStateComponent<SqlHistoryManager.State> {
     }
 
     companion object {
+        const val MAX_PLANS_PER_ENTRY = 5
+        const val MAX_PLAN_BYTES = 256 * 1024
+        const val MAX_TOTAL_PLAN_BYTES = 8 * 1024 * 1024
+
         /** 默认历史记录上限（非收藏条目）。 */
         const val DEFAULT_MAX_SIZE = 200
 

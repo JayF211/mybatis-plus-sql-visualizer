@@ -90,6 +90,8 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
     private var tableSuffixField: JBTextField? = null
     private var inferenceCombo: ComboBox<InferenceOption>? = null
     private var ignoredFieldsField: JBTextField? = null
+    private var moduleBindingLabel: JLabel? = null
+    private var clearModuleBindingsButton: JButton? = null
 
     /** O-58：列名数据源校正开关（null = 跟随全局，与 [replaceParamsCheck] 同范式）。 */
     private var columnCalibrationCheck: JBCheckBox? = null
@@ -147,6 +149,8 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
         lateinit var inferenceCell: Cell<ComboBox<InferenceOption>>
         lateinit var ignoredFieldsCell: Cell<JBTextField>
         lateinit var columnCalibrationCell: Cell<JBCheckBox>
+        lateinit var moduleBindingLabelCell: Cell<JLabel>
+        lateinit var clearModuleBindingsCell: Cell<JButton>
         lateinit var resetCell: Cell<JButton>
         projectValueCells.clear()
         val panel = panel {
@@ -218,6 +222,12 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
                         toolTipText = fieldTip()
                     }
             }
+            row(MpSqlVisualizerBundle.message("settings.project.moduleBindings")) {
+                moduleBindingLabelCell = label(moduleBindingSummary())
+                clearModuleBindingsCell = button(MpSqlVisualizerBundle.message("settings.project.moduleBindings.clear")) {
+                    clearModuleBindings()
+                }
+            }
             row {
                 // T-ProjectSettingsScope P2：形态照抄 PluginSettingsPanel 的「恢复默认颜色」
                 // （JButton + bundle 文案 + tooltip + addActionListener，无双确认弹窗），
@@ -240,6 +250,8 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
         inferenceCombo = inferenceCell.component
         ignoredFieldsField = ignoredFieldsCell.component
         columnCalibrationCheck = columnCalibrationCell.component
+        moduleBindingLabel = moduleBindingLabelCell.component
+        clearModuleBindingsButton = clearModuleBindingsCell.component
         projectValueCells += listOf(
             comboCell,
             replaceParamsCell,
@@ -316,6 +328,27 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
      * T-TS-FixG7：重置后控件按 P1 回灌全局值，但 [apply] 只写回「被用户动过」的项，
      * 故回灌本身不会再把这些项钉成当时的全局快照（详见 [apply] 的 T-TS-FixG7 注释）。
      */
+    private fun moduleBindingSummary(): String {
+        val count = cn.song.mybatisplus.visualizer.sql.ModuleDataSourceBindingStore.getInstance(project)
+            .state.bindings.size
+        return MpSqlVisualizerBundle.message("settings.project.moduleBindings.count", count)
+    }
+
+    private fun clearModuleBindings() {
+        val confirmed = com.intellij.openapi.ui.Messages.showYesNoDialog(
+            project,
+            MpSqlVisualizerBundle.message("settings.project.moduleBindings.clear.confirm"),
+            MpSqlVisualizerBundle.message("settings.project.moduleBindings.clear.title"),
+            com.intellij.openapi.ui.Messages.getWarningIcon(),
+        ) == com.intellij.openapi.ui.Messages.YES
+        if (!confirmed) return
+        cn.song.mybatisplus.visualizer.sql.ModuleDataSourceBindingStore.getInstance(project).clear()
+        moduleBindingLabel?.text = moduleBindingSummary()
+    }
+
+    internal fun clearModuleBindingsButtonForTest(): JButton? = clearModuleBindingsButton
+    internal fun moduleBindingLabelForTest(): JLabel? = moduleBindingLabel
+
     private fun resetToGlobal() {
         val st = projectSettings.state
         st.dialect = ""
@@ -499,6 +532,8 @@ class ProjectPluginSettingsConfigurable(private val project: Project) : Configur
         inferenceCombo = null
         ignoredFieldsField = null
         columnCalibrationCheck = null
+        moduleBindingLabel = null
+        clearModuleBindingsButton = null
         projectValueCells.clear()
     }
 }

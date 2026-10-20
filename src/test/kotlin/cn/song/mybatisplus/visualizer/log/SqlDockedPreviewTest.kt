@@ -145,6 +145,25 @@ class SqlDockedPreviewTest : BasePlatformTestCase() {
         }
     }
 
+    fun test停靠预览跟随展示脱敏开关且不改原条目() {
+        val original = "SELECT * FROM t WHERE phone = '13812345678'"
+        val f = fixture(original)
+        val settings = PluginSettings.getInstance()
+        val before = settings.state
+        try {
+            settings.loadState(before.copy(logFormatSql = false, displayMaskEnabled = true))
+            f.list.selectedIndex = 0
+            f.host.toggle()
+            val displayed = f.preview.displayedSqlForTest.orEmpty()
+            assertTrue("脱敏开时停靠预览应打码", displayed.contains("'***'"))
+            assertFalse("停靠预览不得泄漏原手机号", displayed.contains("13812345678"))
+            assertEquals("展示脱敏不能改写条目数据", original, f.list.selectedValue.restoredSql)
+        } finally {
+            f.preview.dispose()
+            settings.loadState(before)
+        }
+    }
+
     fun test首次单击就地提示只出现一次_双击取消_两页共用标志() {
         val first = fixture("SELECT 1")
         val second = fixture("SELECT 2")

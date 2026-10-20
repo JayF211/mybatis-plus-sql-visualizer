@@ -1,6 +1,8 @@
 package cn.song.mybatisplus.visualizer.ui
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
+import cn.song.mybatisplus.visualizer.sql.IdeaSourceDialectProbe
+import cn.song.mybatisplus.visualizer.context.SqlPsiResolution
 import cn.song.mybatisplus.visualizer.converter.jpa.SpecificationQueryConverter
 import cn.song.mybatisplus.visualizer.ui.gutter.JpaGutterLineMarkerProvider
 import com.intellij.codeInsight.daemon.LineMarkerInfo
@@ -41,6 +43,7 @@ class SqlPreviewServiceJpaQueryTest : BasePlatformTestCase() {
     override fun tearDown() {
         PluginSettings.getInstance().state.injectTenantLine = false
         PluginSettings.getInstance().state.dialect = PluginSettings.DEFAULT_DIALECT
+        IdeaSourceDialectProbe.languageIdForTest = null
         super.tearDown()
     }
 
@@ -65,6 +68,68 @@ class SqlPreviewServiceJpaQueryTest : BasePlatformTestCase() {
     /** gutter 图标判定（锚点快速路径）。 */
     private fun marker(element: com.intellij.psi.PsiElement): LineMarkerInfo<*>? =
         JpaGutterLineMarkerProvider().getLineMarkerInfo(element)
+
+    fun testO145JpqlSourceSnapshotAndNativeQueryKeepOwnerWithoutSqlPsi() {
+        myFixture.configureByText("UserRepository.java", """
+            interface UserRepository {
+                @Query("SELECT u FROM UserEntity u WHERE u.id = :id")
+                Object find(Long id);
+                @Query(value = "SELECT * FROM t_user WHERE id = :id", nativeQuery = true)
+                Object nativeFind(Long id);
+            }
+            @interface Query { String value(); boolean nativeQuery() default false; }
+            class UserEntity {}
+        """.trimIndent())
+        val service = newService()
+        val method = method("find")
+        val context = service.jpaSourceContext(method)
+        assertEquals(myFixture.file, context.hostPsiFile)
+        assertEquals("JPQL 字符串并非实际 SqlFile", SqlPsiResolution.None, context.sqlPsiResolution)
+        val result = service.previewJpql(method)!!
+        val native = service.previewJpql(method("nativeFind"))!!
+        for (preview in listOf(result, native)) {
+            assertNotNull("方言非 URL 决策快照必须透传 UI", preview.dialectDecision)
+            assertEquals(preview.renderedDialect?.name,
+                preview.dialectDecision?.dialectName ?: "MySQL")
+        }
+    }
+
+    fun testO145HqlOrdinarySourceSnapshot() {
+        myFixture.configureByText("UserDao.java", """
+            class UserDao {
+                Object find(EntityManager session) {
+                    return session.createQuery("SELECT u FROM UserEntity u");
+                }
+            }
+            interface EntityManager { Object createQuery(String hql); }
+            class UserEntity {}
+        """.trimIndent())
+        val service = newService()
+        val result = service.previewHql(call("createQuery"))!!
+        assertEquals(SqlPsiResolution.None, service.jpaSourceContext(call("createQuery")).sqlPsiResolution)
+        assertNotNull(result.dialectDecision)
+        assertEquals(result.renderedDialect?.name, result.dialectDecision?.dialectName ?: "MySQL")
+    }
+
+    fun testO145NativeHqlUsesCallingJavaFileDialect() {
+        myFixture.configureByText("NativeDao.java", """
+            class NativeDao {
+                Object search(EntityManager em) {
+                    return em.createNativeQuery("SELECT * FROM t_user WHERE id = :id");
+                }
+            }
+            interface EntityManager { Object createNativeQuery(String sql); }
+        """.trimIndent())
+        val source = myFixture.file.virtualFile
+        IdeaSourceDialectProbe.languageIdForTest = { _, file ->
+            assertEquals(source, file)
+            "Oracle"
+        }
+        val result = newService().previewHql(call("createNativeQuery"))!!
+        assertTrue(result.sql.contains("id = ?"))
+        assertEquals("Oracle", result.renderedDialect?.name)
+        assertEquals("Oracle", result.dialectDecision?.dialectName)
+    }
 
     // ------------------------------------------------------------------
     // T-J10：Pageable / Sort / Limit 全路径
@@ -201,6 +266,104 @@ class SqlPreviewServiceJpaQueryTest : BasePlatformTestCase() {
     /**
      * T-J10 负例：无分页/排序参数的派生查询不追加 LIMIT/ORDER BY（存量行为零变化）。
      */
+    fun testOracleDerivedLimitUsesResolvedDialectAtFinalGeneration() {
+        val settings = PluginSettings.getInstance()
+        val snapshot = settings.getState().copy()
+        try {
+            settings.state.dialectAuto = false
+            settings.state.dialect = "Oracle"
+            myFixture.configureByText(
+                "UserRepository.java",
+                """
+                public interface UserRepository extends JpaRepository<UserEntity, Long> {
+                    java.util.List<UserEntity> findTop3ByStatus(Integer status, Limit limit);
+                }
+                interface JpaRepository<T, ID> {}
+                class Limit {}
+                @javax.persistence.Entity
+                @javax.persistence.Table(name = "t_user")
+                class UserEntity {
+                    @javax.persistence.Id private Long id;
+                    private Integer status;
+                }
+                """.trimIndent(),
+            )
+            val result = newService().previewDerivedQuery(method("findTop3ByStatus"))
+            assertNotNull(result)
+            assertTrue("手动 Oracle 方言必须走生成器而非仅增强器：${result!!.sql}",
+                result.sql.contains("FETCH FIRST ? ROWS ONLY"))
+            assertTrue("Oracle 不得残留 MySQL LIMIT：${result.sql}", !result.sql.contains("LIMIT ?"))
+        } finally {
+            settings.loadState(snapshot)
+        }
+    }
+
+    fun testDerivedQueryUsesExplicitIdeaDialectOnItsSourceFile() {
+        val settings = PluginSettings.getInstance()
+        val snapshot = settings.getState().copy()
+        try {
+            settings.state.dialectAuto = true
+            myFixture.configureByText(
+                "MappedRepository.java",
+                """
+                public interface MappedRepository extends JpaRepository<UserEntity, Long> {
+                    java.util.List<UserEntity> findTop3ByStatus(Integer status);
+                }
+                interface JpaRepository<T, ID> {}
+                @javax.persistence.Entity
+                @javax.persistence.Table(name = "t_user")
+                class UserEntity {
+                    @javax.persistence.Id private Long id;
+                    private Integer status;
+                }
+                """.trimIndent(),
+            )
+            val source = myFixture.file.virtualFile
+            IdeaSourceDialectProbe.languageIdForTest = { p, file ->
+                assertEquals(project, p)
+                assertEquals(source, file)
+                "Oracle"
+            }
+            val result = newService().previewDerivedQuery(method("findTop3ByStatus"))
+            assertNotNull(result)
+            assertTrue("源文件的 Oracle 方言须进入生成器：${result!!.sql}", result.sql.contains("FETCH FIRST 3 ROWS ONLY"))
+            assertTrue("不得回退 MySQL LIMIT：${result.sql}", !result.sql.contains("LIMIT 3"))
+            assertNull("静态条件没有开关时不应虚构动态模型", result.previewModel)
+            assertEquals("无动态模型仍须保留生成方言供 EXPLAIN 使用", "Oracle", result.effectiveDialect?.name)
+        } finally {
+            IdeaSourceDialectProbe.languageIdForTest = null
+            settings.loadState(snapshot)
+        }
+    }
+
+    fun testExplicitManualDialectDoesNotReadIdeaSourceMapping() {
+        val settings = PluginSettings.getInstance()
+        val snapshot = settings.getState().copy()
+        try {
+            settings.state.dialectAuto = false
+            settings.state.dialect = "MySQL"
+            myFixture.configureByText("ManualRepository.java", "interface ManualRepository {}")
+            IdeaSourceDialectProbe.languageIdForTest = { _, _ -> error("手动方言不应探测 IDE 映射") }
+            assertEquals("MySQL", cn.song.mybatisplus.visualizer.sql.DialectRegistry
+                .effective(project, myFixture.file.virtualFile).name)
+        } finally {
+            IdeaSourceDialectProbe.languageIdForTest = null
+            settings.loadState(snapshot)
+        }
+    }
+
+    fun testGenericIdeaMappingDoesNotClaimKnownDialect() {
+        myFixture.configureByText("GenericRepository.java", "interface GenericRepository {}")
+        try {
+            IdeaSourceDialectProbe.languageIdForTest = { _, _ -> "GenericSQL" }
+            assertNull(IdeaSourceDialectProbe.dialectName(project, myFixture.file.virtualFile))
+            IdeaSourceDialectProbe.languageIdForTest = { _, _ -> "TSQL" }
+            assertEquals("SQL Server", IdeaSourceDialectProbe.dialectName(project, myFixture.file.virtualFile))
+        } finally {
+            IdeaSourceDialectProbe.languageIdForTest = null
+        }
+    }
+
     fun testJ10NoPageParamsKeepsSqlUnchanged() {
         myFixture.configureByText(
             "UserRepository.java",
@@ -468,8 +631,15 @@ class SqlPreviewServiceJpaQueryTest : BasePlatformTestCase() {
             }
             """.trimIndent(),
         )
-        val result = newService().preview(call("findAll"))
+        val source = myFixture.file.virtualFile
+        IdeaSourceDialectProbe.languageIdForTest = { _, file ->
+            assertEquals(source, file)
+            "PostgreSQL"
+        }
+        val result = newService().previewSpecification(call("findAll"))
         assertNotNull("Specification 查询应产出预览", result)
+        assertEquals("PostgreSQL", result!!.renderedDialect?.name)
+        assertEquals("PostgreSQL", result.dialectDecision?.dialectName)
         assertEquals("t_user", result!!.tableName)
         assertEquals(
             """

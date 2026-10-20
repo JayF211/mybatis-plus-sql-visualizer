@@ -4,6 +4,7 @@ import cn.song.mybatisplus.visualizer.model.BatchColumn
 import cn.song.mybatisplus.visualizer.model.BatchKind
 import cn.song.mybatisplus.visualizer.model.BatchModel
 import cn.song.mybatisplus.visualizer.model.ColumnInfo
+import cn.song.mybatisplus.visualizer.model.LimitClause
 import cn.song.mybatisplus.visualizer.model.SqlValue
 import cn.song.mybatisplus.visualizer.model.TableInfo
 import cn.song.mybatisplus.visualizer.psi.ExpressionEvaluator
@@ -223,7 +224,7 @@ object JpaCrudOperationConverter {
             val entityClass = resolveRepositoryEntityFromClass(iface) ?: return@runCatching null
             val table = JpaEntityResolver().resolve(entityClass)
             if (table.entityClassName.isBlank()) return@runCatching null
-            val dialect = currentDialect()
+            val dialect = currentDialect(method.project)
             val idColumn = table.columns.firstOrNull { it.isId }
             val build = buildRepositoryMethod(
                 methodName, table, idColumn, emptyArray(), "", dialect, resolveVariables,
@@ -329,7 +330,7 @@ object JpaCrudOperationConverter {
         val entityClass = resolveRepositoryEntity(call) ?: return null
         val table = JpaEntityResolver().resolve(entityClass)
         if (table.entityClassName.isBlank()) return null
-        val dialect = currentDialect()
+        val dialect = currentDialect(call.project)
         val idColumn = table.columns.firstOrNull { it.isId }
         val args = call.argumentList.expressions
         val prefix = columnParamPrefix(call)
@@ -402,9 +403,9 @@ object JpaCrudOperationConverter {
                 idColumn ?: return null
                 val (where, params) = idCondition(args.firstOrNull(), idColumn, null, resolveVariables, dialect)
                 Build(
-                    sql = "SELECT 1\nFROM ${dialect.quoteIfKeyword(table.tableName)}\nWHERE $where\nLIMIT 1",
+                    sql = "SELECT 1\nFROM ${dialect.quoteIfKeyword(table.tableName)}\nWHERE $where\n${dialect.renderLimit(LimitClause(count = 1))}",
                     params = params,
-                    notes = listOf("existsById：命中即真语义（Spring Data 运行时渲染 SELECT 1 ... LIMIT 1 形态）"),
+                    notes = listOf("existsById：命中即真语义（按当前方言只取首行，运行时语句以实际日志为准）"),
                 )
             }
             "count" -> Build(sql = "SELECT COUNT(*)\nFROM ${dialect.quoteIfKeyword(table.tableName)}")
@@ -496,7 +497,7 @@ object JpaCrudOperationConverter {
         resolveVariables: Boolean,
     ): JpaCrudPreview? {
         if (methodName !in ENTITY_MANAGER_METHODS) return null
-        val dialect = currentDialect()
+        val dialect = currentDialect(call.project)
         val args = call.argumentList.expressions
 
         // 存储过程（T-J16 基础形态）：过程名直传 + ? 占位（@StoredProcedureParameter 静态不可得）
@@ -588,7 +589,7 @@ object JpaCrudOperationConverter {
         // HQL / NAMED_QUERY 字符串承载 → 交回 previewCustomDaoHql 管道（本转换器不认领）
         if (kind != DaoQueryKind.ENTITY_OP) return null
 
-        val dialect = currentDialect()
+        val dialect = currentDialect(call.project)
         val args = call.argumentList.expressions
 
         // 实体操作均需实体（Class 字面量实参或实体类型实参，isJpaMappedEntity 负例守卫）

@@ -96,13 +96,27 @@ object HbmXmlEntityResolver {
         queryName: String,
         project: Project,
         context: com.intellij.psi.PsiElement? = null,
-    ): HbmXmlMapping.NamedQuery? {
-        if (queryName.isBlank() || com.intellij.openapi.project.DumbService.isDumb(project)) return null
+    ): HbmXmlMapping.NamedQuery? =
+        namedQueryMatches(queryName, project, context).singleOrNull()?.takeIf { it.queryText.isNotBlank() }
+
+    /** 调用点区分「未找到」与「重名歧义」，后者禁止把名字再当 HQL 字面量预览。 */
+    fun hasAmbiguousNamedQuery(
+        queryName: String,
+        project: Project,
+        context: com.intellij.psi.PsiElement? = null,
+    ): Boolean = namedQueryMatches(queryName, project, context).size > 1
+
+    private fun namedQueryMatches(
+        queryName: String,
+        project: Project,
+        context: com.intellij.psi.PsiElement?,
+    ): List<HbmXmlMapping.NamedQuery> {
+        if (queryName.isBlank() || com.intellij.openapi.project.DumbService.isDumb(project)) return emptyList()
         return try {
             val scope = cn.song.mybatisplus.visualizer.psi.EntityClassResolver.searchScope(project, context)
             val cache = cacheFor(project).queries
             val key = LookupKey(queryName, scope)
-            cache[key]?.let { return it.singleOrNull() }
+            cache[key]?.let { return it }
             val matches = mutableListOf<HbmXmlMapping.NamedQuery>()
             for (file in findHbmXmlFiles(project, scope)) {
                 com.intellij.openapi.progress.ProgressManager.checkCanceled()
@@ -117,12 +131,45 @@ object HbmXmlEntityResolver {
                     val name = tag.getAttributeValue("name") ?: continue
                     if (name != queryName) continue
                     val text = extractNamedQueryText(tag)
-                    if (text.isNotBlank()) matches += HbmXmlMapping.NamedQuery(name, kind, text)
+                    // 空文本定义也参与消歧，不能过滤后把另一份同名定义虚构成唯一 owner。
+                    matches += HbmXmlMapping.NamedQuery(name, kind, text)
                 }
             }
             if (cache.size >= NEGATIVE_CACHE_MAX) cache.clear()
             cache[key] = matches
-            matches.singleOrNull()
+            matches
+        } catch (_: com.intellij.openapi.project.IndexNotReadyException) {
+            emptyList()
+        }
+    }
+
+    /** 仅为预览决策查找定义标签；不缓存 PSI/URI，避免把调用点误认成 XML owner。 */
+    fun findNamedQueryDefinition(
+        query: HbmXmlMapping.NamedQuery,
+        project: Project,
+        context: com.intellij.psi.PsiElement? = null,
+    ): XmlTag? {
+        if (com.intellij.openapi.project.DumbService.isDumb(project)) return null
+        return try {
+            val scope = cn.song.mybatisplus.visualizer.psi.EntityClassResolver.searchScope(project, context)
+            var owner: XmlTag? = null
+            for (file in findHbmXmlFiles(project, scope)) {
+                com.intellij.openapi.progress.ProgressManager.checkCanceled()
+                val root = file.rootTag ?: continue
+                if (root.name != "hibernate-mapping") continue
+                for (tag in root.subTags) {
+                    val kind = when (tag.name) {
+                        "query" -> HbmXmlMapping.QueryKind.HQL
+                        "sql-query" -> HbmXmlMapping.QueryKind.NATIVE
+                        else -> continue
+                    }
+                    if (kind == query.kind && tag.getAttributeValue("name") == query.name) {
+                        if (owner != null || directTextOf(tag) != query.queryText) return null
+                        owner = tag
+                    }
+                }
+            }
+            owner
         } catch (_: com.intellij.openapi.project.IndexNotReadyException) {
             null
         }
@@ -250,9 +297,7 @@ object HbmXmlEntityResolver {
         return tag.getAttributeValue("column")
     }
 
-    /**
-     * 清除缓存（含负命中缓存与命名查询索引；PluginCacheManager.clearAll 接线，项目关闭时调用）。
-     */
+    /** 清除实体与命名查询正/负缓存；PSI 或项目根变更也会自动失效，新增重复定义不会沿用旧首项。 */
     fun clearCache() {
         generation.incrementAndGet()
     }

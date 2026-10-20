@@ -1,5 +1,8 @@
 package cn.song.mybatisplus.visualizer.config
 
+import cn.song.mybatisplus.visualizer.history.SqlHistoryEntry
+import cn.song.mybatisplus.visualizer.history.SqlHistoryManager
+import cn.song.mybatisplus.visualizer.ui.ParamHistoryCache
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import com.intellij.ui.TitledSeparator
 import com.intellij.ui.components.JBCheckBox
@@ -9,6 +12,7 @@ import com.intellij.util.ui.UIUtil
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import java.awt.Component
 import java.awt.Container
@@ -26,12 +30,87 @@ import javax.swing.JComboBox
  *  - 真实交互：勾选「启动自动监听」→ isModified 翻转（Apply 按钮可点击）；切换语言 → 写穿 + 重建不崩、
  *    控件仍存活（验证 M19 写穿式语言切换在真实 Settings 链路下的稳定性）。
  *
- * 注：headless 环境无 realized peer，`doLayout()` 会把 GridBag 子控件尺寸算成 0，故布局断言改用
- * `preferredSize`（与具体布局无关、由字体/文本决定），更稳且同样能暴露「控件不渲染」类缺陷。
+ * UI-001 补充：给真实滚动宿主设定尺寸，再递归 doLayout 即可在 headless 下验证实际 bounds。
+ * preferredSize 冒烟仅证明控件有内容，不能证明常规宽度下文本未被推离视口。
  */
 class PluginSettingsPanelUiTest : BasePlatformTestCase() {
 
     private fun waitForEdt() = UIUtil.dispatchAllInvocationEvents()
+
+    fun testPreviewChineseControlsAndPrivacyFitDefaultSettingsWidth() = assertPreviewLayout("zh", 700)
+
+    fun testPreviewEnglishControlsAndPrivacyFitDefaultSettingsWidth() = assertPreviewLayout("en", 700)
+
+    fun testPreviewChineseNarrowSettingsKeepsScrollAccess() = assertPreviewLayout("zh", 360)
+
+    fun testPreviewEnglishNarrowSettingsKeepsScrollAccess() = assertPreviewLayout("en", 360)
+
+    /** Set real bounds before layout; a headless hierarchy does not need a native window peer. */
+    private fun layoutTree(component: Component) {
+        if (component is Container) {
+            component.doLayout()
+            component.components.forEach(::layoutTree)
+        }
+    }
+
+    private fun assertPreviewLayout(language: String, width: Int) {
+        val settings = PluginSettings.getInstance()
+        val before = settings.state.copy()
+        val configurable = SqlPreviewConfigurable()
+        try {
+            settings.state.language = language
+            val root = configurable.createComponent()
+            val panel = configurable.panelForTest()
+            // Match Settings' scroll host rather than forcing only the inner grid to an artificial size.
+            val scroll = com.intellij.ui.components.JBScrollPane(root)
+            scroll.setSize(width, 600)
+            repeat(3) { layoutTree(scroll) }
+            val viewport = scroll.viewport
+            val controls = allComponents(root).filter {
+                it.isVisible && (it is JBCheckBox || it is JComboBox<*> || it is JBTextField ||
+                    it is javax.swing.JRadioButton || (it is javax.swing.JLabel && !it.text.isNullOrBlank()))
+            }
+            assertTrue("Must exercise the actual preview controls", controls.size > 25)
+            val contentWidth = if (width >= 700) viewport.extentSize.width else root.width
+            for (control in controls) {
+                val bounds = javax.swing.SwingUtilities.convertRectangle(control.parent, control.bounds, root)
+                assertTrue("$language/$width ${control.javaClass.simpleName}: $bounds outside $contentWidth text=${(control as? javax.swing.JLabel)?.text} html=${(control as? javax.swing.JComponent)?.getClientProperty(javax.swing.plaf.basic.BasicHTML.propertyKey)}",
+                    bounds.width > 0 && bounds.height > 0 && bounds.x >= 0 && bounds.x + bounds.width <= contentWidth)
+                if (control is JBCheckBox || control is javax.swing.JLabel) {
+                    val html = (control as javax.swing.JComponent).getClientProperty(javax.swing.plaf.basic.BasicHTML.propertyKey) as? javax.swing.text.View
+                    if (html != null) {
+                        assertTrue("HTML text must not be clipped horizontally: $bounds",
+                            html.getPreferredSpan(javax.swing.text.View.X_AXIS) <= control.width)
+                        assertTrue("Wrapped text must get its full row height: $bounds",
+                            html.getPreferredSpan(javax.swing.text.View.Y_AXIS) <= control.height)
+                    }
+                }
+            }
+            val disclosure = panel.explainPlanRetentionDisclosure
+            val text = disclosure.text
+            assertTrue(text.contains("mp-sql-visualizer.xml"))
+            assertTrue(text.contains("APP") || text.contains("application-level"))
+            assertTrue(text.contains("未经脱敏") || text.contains("unmasked"))
+            assertTrue(text.contains("凭据") || text.contains("credentials"))
+            assertTrue(text.contains("清除预览历史") || text.contains("Clear preview history"))
+            assertTrue(text.contains("不删除已有计划") || text.contains("does not delete existing plans"))
+            assertNull("Privacy disclosure must be visible without hovering", disclosure.toolTipText)
+            assertTrue("Disclosure must wrap, not become a one-line label", disclosure.height >= disclosure.getFontMetrics(disclosure.font).height * 3)
+            assertTrue("Vertical scrolling remains available", scroll.verticalScrollBar.isVisible)
+            if (width >= 700) {
+                assertFalse("Default Settings content must not require horizontal scrolling ($language)", scroll.horizontalScrollBar.isVisible)
+            } else {
+                assertTrue("Narrow Settings must keep horizontal access rather than truncate", scroll.horizontalScrollBar.isVisible)
+                scroll.horizontalScrollBar.value = scroll.horizontalScrollBar.maximum
+                scroll.verticalScrollBar.value = scroll.verticalScrollBar.maximum
+                assertTrue("Can reach the rightmost content", viewport.viewPosition.x > 0)
+                assertTrue("Can reach the bottom rows", viewport.viewPosition.y > 0)
+            }
+        } finally {
+            configurable.disposeUIResources()
+            settings.loadState(before)
+        }
+    }
 
     /** 递归收集容器内所有组件（含嵌套）。 */
     private fun allComponents(c: Component): List<Component> {
@@ -144,6 +223,82 @@ class PluginSettingsPanelUiTest : BasePlatformTestCase() {
         } finally {
             // 复位语言配置（pending 标记随面板实例 GC，不影响其他测试）
             settings.state.language = oldLang
+        }
+    }
+
+    fun test捕获历史动作_只打开当前自定义目录且不删除文件() {
+        val settings = PluginSettings.getInstance()
+        val oldPath = settings.state.logAutoSavePath
+        val dir = java.nio.file.Files.createTempDirectory("mpsv-storage-open-").toFile()
+        val sentinel = dir.resolve("user-owned.sql").apply { writeText("SELECT 1") }
+        try {
+            settings.state.logAutoSavePath = dir.absolutePath
+            val panel = PluginSettingsPanel(settings, setOf(PluginSettingsPanel.SECTION_SQL_LOG))
+            var opened: java.io.File? = null
+            panel.captureDirectoryOpener = { opened = it }
+
+            panel.openCaptureDirectoryButtonForTest().doClick()
+
+            assertEquals("应打开设置中的自定义目录", dir.canonicalFile, opened?.canonicalFile)
+            assertTrue("打开目录动作不得删除自定义目录", dir.isDirectory)
+            assertTrue("打开目录动作不得删除目录内用户文件", sentinel.isFile)
+            assertTrue("动作结果应有诚实反馈", panel.storageActionStatusForTest().text.isNotBlank())
+        } finally {
+            settings.state.logAutoSavePath = oldPath
+            sentinel.delete()
+            dir.delete()
+        }
+    }
+
+    fun test两类清理动作_分别确认分别清理且不删除共享设置() {
+        val settings = PluginSettings.getInstance()
+        val state = settings.state
+        val oldLanguage = state.language
+        val history = SqlHistoryManager.getInstance()
+        val cache = ParamHistoryCache()
+        try {
+            history.clear()
+            cache.clear()
+            state.language = "storage-clear-sentinel"
+
+            history.add(SqlHistoryEntry(
+                sql = "SELECT * FROM user WHERE id = ?",
+                compactSql = "SELECT * FROM user WHERE id = ?",
+                favorite = true,
+                tags = mutableListOf("保留标签"),
+                paramSnapshot = linkedMapOf("id" to "history-secret"),
+            ))
+            val key = cache.computeKey("user", "SELECT * FROM user WHERE id = ?")!!
+            cache.save(key, mapOf("id" to "param-secret"))
+            cache.saveAsScheme("命名方案", key, mapOf("id" to "scheme-secret"))
+
+            val panel = PluginSettingsPanel(settings, setOf(PluginSettingsPanel.SECTION_SQL_LOG))
+            assertFalse(
+                "预览历史与参数历史必须是两个标签明确不同的动作",
+                panel.clearPreviewHistoryButtonForTest().text == panel.clearParamHistoryButtonForTest().text,
+            )
+            panel.storageClearConfirmation = { false }
+            panel.clearPreviewHistoryButtonForTest().doClick()
+            assertEquals("取消确认不得清预览历史", 1, history.entries.size)
+
+            panel.storageClearConfirmation = { true }
+            panel.clearPreviewHistoryButtonForTest().doClick()
+            assertTrue("预览历史应连同收藏/标签/参数快照整条清空", history.entries.isEmpty())
+            assertEquals("预览历史动作不得越界清参数方案", mapOf("id" to "scheme-secret"), cache.recall(key))
+
+            history.add(SqlHistoryEntry(sql = "SELECT 2", compactSql = "SELECT 2"))
+            panel.clearParamHistoryButtonForTest().doClick()
+            assertNull("已打开缓存实例不得继续召回旧参数", cache.recall(key))
+            assertEquals("参数动作不得越界清预览历史", 1, history.entries.size)
+            assertEquals("不得删除共享 XML 中的无关设置", "storage-clear-sentinel", state.language)
+            assertEquals("默认参数历史字段应写空", "", state.paramHistoryJson)
+            assertEquals("命名方案字段应写空", "", state.paramSchemesJson)
+            assertEquals("激活方案字段应写空", "", state.paramActiveScheme)
+            assertEquals("按键激活指针字段应写空", "", state.paramActiveSchemeByKey)
+        } finally {
+            history.clear()
+            cache.clear()
+            state.language = oldLanguage
         }
     }
 }

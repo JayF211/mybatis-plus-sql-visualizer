@@ -121,10 +121,28 @@ object NamedQueryLocator {
             // 命名查询宿主不一定是查询根实体，也不一定标了 @Entity；只按宿主名取类，不借实体规则误删。
             val classes = if ('.' in ownerName) JavaPsiFacade.getInstance(project).findClasses(ownerName, scope).toList()
             else com.intellij.psi.search.PsiShortNamesCache.getInstance(project).getClassesByName(ownerName, scope).toList()
-            classes.distinct().flatMap { locate(it) }.filter { it.name == queryName }
+            queryHits(classes.distinct(), queryName)
         } catch (_: com.intellij.openapi.project.IndexNotReadyException) {
             emptyList()
         }
+    }
+
+    /** 索引候选收口独立于测试框架的项目索引：跨文件歧义不能被空索引假绿掩盖。 */
+    internal fun uniqueHit(classes: Iterable<PsiClass>, queryName: String): NamedQueryInfo? =
+        queryHits(classes, queryName).singleOrNull()
+
+    /** 与生产索引入口共用消歧内核；第二个命中即可判歧义，不再枚举后续注解。 */
+    private fun queryHits(classes: Iterable<PsiClass>, queryName: String): List<NamedQueryInfo> {
+        val matches = mutableListOf<NamedQueryInfo>()
+        for (cls in classes) {
+            com.intellij.openapi.progress.ProgressManager.checkCanceled()
+            for (hit in locate(cls)) {
+                if (hit.name != queryName) continue
+                matches += hit
+                if (matches.size == 2) return matches
+            }
+        }
+        return matches
     }
 
     // ------------------------------------------------------------------

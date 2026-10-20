@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.ui
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
+import cn.song.mybatisplus.visualizer.config.ProjectPluginSettings
 import cn.song.mybatisplus.visualizer.psi.WrapperAnchorDetector
 import cn.song.mybatisplus.visualizer.psi.WrapperLocator
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
@@ -525,5 +526,41 @@ class SqlPreviewServiceBatchTest : BasePlatformTestCase() {
             """.trimIndent(),
             result!!.sql,
         )
+    }
+
+    fun testProjectPostgreSqlOverridesGlobalAutoForBatchUpsert() {
+        val global = PluginSettings.getInstance()
+        val savedGlobal = global.getState().copy()
+        val settings = ProjectPluginSettings.getInstance(project)
+        val savedProject = settings.state.copy()
+        try {
+            global.state.dialectAuto = true
+            settings.state.useProjectSettings = true
+            settings.state.dialectAuto = false
+            settings.state.dialect = "PostgreSQL"
+            myFixture.configureByText(
+                "Demo.java",
+                """
+                public class Demo {
+                    private StoreService service;
+                    public void save() { service.saveOrUpdate(new StoreEntity()); }
+                    static class StoreEntity {
+                        @com.baomidou.mybatisplus.annotation.TableId private Long id;
+                        private String status;
+                    }
+                    static class StoreService { void saveOrUpdate(StoreEntity entity) {} }
+                }
+                """.trimIndent(),
+            )
+            val result = newService().preview(anchor())
+            assertNotNull(result)
+            assertTrue("项目级 PG 方言应渲染冲突子句：${result!!.sql}",
+                result.sql.contains("ON CONFLICT (id) DO UPDATE"))
+            assertTrue("PG 不得输出 MySQL upsert：${result.sql}",
+                !result.sql.contains("ON DUPLICATE KEY UPDATE"))
+        } finally {
+            settings.loadState(savedProject)
+            global.loadState(savedGlobal)
+        }
     }
 }

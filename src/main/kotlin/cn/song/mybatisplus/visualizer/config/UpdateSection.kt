@@ -50,6 +50,9 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
 
     private var failureReason: String? = null
 
+    /** R62：最近一次检查失败的分类（渲染文案与兜底链接可见性分流）。 */
+    private var failureKind: PluginUpdateRunner.FailureKind? = null
+
     /**
      * 检查编排 seam（T-M28.1）：测试注入 fake 不触网；默认走 [PluginUpdateRunner.check] 真实实现。
      * 与按钮绑定配套——交互测试经 doClick 驱动全链路。
@@ -112,6 +115,27 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
         add(feedbackPoolLink)
     }
 
+    /**
+     * R62：通道 404 态兜底链接行（Marketplace + Gitee Releases，SafeBrowser 打开）。
+     * 仅 `Failure(CHANNEL_MISSING)` 且检查失败时可见——网络态不给（通道本身没断，
+     * 给链接是误导）；常量复用 [UpdateSource.MARKETPLACE_URL]（本任务新增）与
+     * [UpdateSource.GITEE_RELEASES_URL]（既有）。
+     */
+    internal val fallbackLinksContainer = JPanel(FlowLayout(FlowLayout.LEFT, 8, 0)).apply {
+        isOpaque = false
+        isVisible = false
+        add(
+            LinkLabel<Any>(MpSqlVisualizerBundle.message("settings.update.fallback.marketplace"), null) { _, _ ->
+                SafeBrowser.browse(UpdateSource.MARKETPLACE_URL)
+            },
+        )
+        add(
+            LinkLabel<Any>(MpSqlVisualizerBundle.message("settings.update.fallback.gitee"), null) { _, _ ->
+                SafeBrowser.browse(UpdateSource.GITEE_RELEASES_URL)
+            },
+        )
+    }
+
     init {
         notesArea.isEditable = false
         notesArea.lineWrap = true
@@ -161,6 +185,8 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
         row(progressBar)
         row(notesContainer)
         row(doneContainer)
+        // R62：通道 404 兜底链接行（仅该态可见）
+        row(fallbackLinksContainer)
         // T-ErrReport：需求池报告入口（报告问题按钮 + 需求池网页链接）
         row(feedbackContainer)
         // 底部占位（与设置页整体一致：内容顶置）
@@ -190,6 +216,7 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
                 pendingManifest = null
                 state = State.Failed
                 failureReason = result.message
+                failureKind = result.kind
             }
         }
         renderState()
@@ -242,12 +269,25 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
             State.Downloading -> statusLabel.text = MpSqlVisualizerBundle.message("settings.update.downloading")
             State.Installed -> statusLabel.text = MpSqlVisualizerBundle.message("settings.update.installed")
             State.InstalledLive -> statusLabel.text = MpSqlVisualizerBundle.message("settings.update.installedLive")
-            State.Failed -> statusLabel.text = MpSqlVisualizerBundle.message(
-                "settings.update.${if (pendingManifest == null) "checkFailed" else "installFailed"}",
-                failureReason ?: "?",
-            )
+            State.Failed -> statusLabel.text = if (pendingManifest == null) {
+                // R62：检查失败按 [PluginUpdateRunner.FailureKind] 分流文案（三态可诊断）；
+                // 安装失败（pendingManifest 非空）维持原文案
+                when (failureKind) {
+                    PluginUpdateRunner.FailureKind.CHANNEL_MISSING ->
+                        MpSqlVisualizerBundle.message("settings.update.fail.channel404", failureReason ?: "?")
+                    PluginUpdateRunner.FailureKind.NETWORK ->
+                        MpSqlVisualizerBundle.message("settings.update.fail.network", failureReason ?: "?")
+                    else ->
+                        MpSqlVisualizerBundle.message("settings.update.checkFailed", failureReason ?: "?")
+                }
+            } else {
+                MpSqlVisualizerBundle.message("settings.update.installFailed", failureReason ?: "?")
+            }
             State.Idle -> statusLabel.text = " "
         }
+        // R62：兜底链接行只在「检查失败且通道缺失」态可见（网络态/安装失败/其他态一律隐藏）
+        fallbackLinksContainer.isVisible =
+            s == State.Failed && pendingManifest == null && failureKind == PluginUpdateRunner.FailureKind.CHANNEL_MISSING
     }
 
     /** 版本行/开关/日志与按钮文本刷新（语言切换 rebuild 时调用，仿 ShortcutEditor.updateTexts）。 */
@@ -272,6 +312,7 @@ class UpdateSection(private val settings: PluginSettings) : JPanel(GridBagLayout
         autoCheckCheck.isSelected = settings.state.autoCheckUpdate
         pendingManifest = null
         failureReason = null
+        failureKind = null
         state = State.Idle
         renderState()
     }

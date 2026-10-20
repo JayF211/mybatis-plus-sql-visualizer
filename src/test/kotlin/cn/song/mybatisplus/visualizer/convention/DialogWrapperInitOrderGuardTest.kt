@@ -15,9 +15,10 @@ import java.io.File
  * **不是声明初值**。非空类型不拦（编译期静默通过），平台对 null 也常常容忍，于是表现为静默失效。
  *
  * 真机实证（T-CT-07）：243 平台 `com/intellij/openapi/ui/DialogWrapper` 字节码直证 `init()` 方法体
- * 内调用 `createActions()`；`EnhancedCaptureConfirmDialog` 把 `init()` 写在 Kotlin `init {}` 块里，
- * 而第三动作 `disableCaptureAction` 声明在其后 → 传进动作数组的是 null → 平台**静默不渲染该按钮**
- * （沙盒日志无「确认框异常」为证：平台容忍 null 而非抛错），用户真机看不到按钮，误以为功能没做。
+ * 内调用 `createActions()`；历史案例 `EnhancedCaptureConfirmDialog`（已随 T-EnhancedCaptureDefaultOn
+ * 删除）把 `init()` 写在 Kotlin `init {}` 块里，而第三动作 `disableCaptureAction` 声明在其后 →
+ * 传进动作数组的是 null → 平台**静默不渲染该按钮**（沙盒日志无「确认框异常」为证：平台容忍 null
+ * 而非抛错），用户真机看不到按钮，误以为功能没做。
  *
  * 运行期测试覆盖不到本陷阱：平台不保存 createActions 的返回数组（243 字节码核实无 Action[] 字段，
  * 数组直接进 createSouthPanel），构造完成后反射读到的永远是「已初始化」的字段值——只能源码级把关。
@@ -105,37 +106,6 @@ class DialogWrapperInitOrderGuardTest {
             if (m.range.first == 0) decls.putIfAbsent(m.groupValues[3], i)
         }
         return decls
-    }
-
-    /** 平台 `init()` 调用行号（`init {}` 块本身不算）。 */
-    private fun platformInitCallLine(lines: List<String>): Int? =
-        lines.indexOfFirst { Regex("^\\s*init\\(\\)\\s*$").matches(it) }.takeIf { it >= 0 }
-
-    /** `createActions` 覆写体文本（表达式体读到括号配平；块体读到函数收尾）。 */
-    private fun createActionsBody(lines: List<String>): Pair<Int, String>? {
-        val start = lines.indexOfFirst { it.contains("fun createActions") }
-        if (start < 0) return null
-        val head = lines[start]
-        if (head.contains("= arrayOf(") || head.contains("= listOf(") || head.contains("=")) {
-            val sb = StringBuilder()
-            var depth = 0
-            var i = start
-            while (i < lines.size) {
-                sb.append(lines[i]).append('\n')
-                depth += lines[i].count { it == '(' } - lines[i].count { it == ')' }
-                if (i > start && depth <= 0) break
-                i++
-            }
-            return start to sb.toString()
-        }
-        val sb = StringBuilder()
-        var i = start
-        while (i < lines.size) {
-            sb.append(lines[i]).append('\n')
-            if (i > start && Regex("^ {4}\\}").containsMatchIn(lines[i])) break
-            i++
-        }
-        return start to sb.toString()
     }
 
     /** 每行「进入时」的大括号深度（用于界定 init 块范围与类级成员层级）。 */
@@ -339,54 +309,6 @@ class DialogWrapperInitOrderGuardTest {
                         "修法：把声明上移到 init 块之前，或让初值与 JVM 默认值等值"
                 },
             result.violations.isEmpty(),
-        )
-    }
-
-    @Test
-    fun test_增强捕获确认框第三动作已就位且早于init块() {
-        val (_, lines) = dialogSources().firstOrNull { it.first.endsWith("EnhancedCaptureConfirmDialog.kt") }
-            ?: error("未找到 EnhancedCaptureConfirmDialog.kt")
-        val initLine = platformInitCallLine(lines) ?: error("未找到平台 init() 调用")
-        val declLine = lines.indexOfFirst { it.contains("val disableCaptureAction") }
-        assertTrue("disableCaptureAction 应存在（第三动作「关闭增强捕获并不再询问」）", declLine >= 0)
-        assertTrue(
-            "disableCaptureAction 必须声明在 init() 调用之前（当前 声明@${declLine + 1} vs init()@${initLine + 1}）",
-            declLine < initLine,
-        )
-        val body = createActionsBody(lines) ?: error("未找到 createActions")
-        assertTrue(
-            "createActions 应包含 disableCaptureAction（三动作：同意/关闭增强/取消）",
-            body.second.contains("disableCaptureAction"),
-        )
-    }
-
-    /**
-     * T-ConsentTruth T-CN-02：**状态可达性守卫**——确认框枚举的每个常量都必须存在写入点。
-     *
-     * 现场：T-PS4-01 三态化把 `showAndGet()` 换成 `show()` + 读 outcome，只接上 DISABLE_CAPTURE，
-     * `ACCEPTED` 全仓无赋值 → `confirm()` 恒 false → 增强捕获经 UI 完全不可达（用户报障
-     * 「点确认但开启标识没变且不生效」）。
-     *
-     * 守卫数据驱动（遍历枚举 values），因此**将来新增状态而忘了接线，本守卫自动红**——
-     * 不必为每个状态各写一条断言。豁免：字段初值本身就是产出点的那一态（REJECTED = X 关闭按拒绝）。
-     */
-    @Test
-    fun test_确认框每个结果态都必须存在写入点() {
-        val (_, lines) = dialogSources().firstOrNull { it.first.endsWith("EnhancedCaptureConfirmDialog.kt") }
-            ?: error("未找到 EnhancedCaptureConfirmDialog.kt")
-        val src = lines.joinToString("\n")
-        val initializer = Regex("var outcome: EnhancedCaptureConsent = EnhancedCaptureConsent\\.(\\w+)")
-            .find(src)?.groupValues?.get(1)
-        assertTrue("应能从字段初值读出默认态（正则失效？）", initializer != null)
-
-        val unreachable = cn.song.mybatisplus.visualizer.config.EnhancedCaptureConsent.values()
-            .filter { it.name != initializer }
-            .filterNot { src.contains("outcome = EnhancedCaptureConsent.${it.name}") }
-            .map { it.name }
-        assertTrue(
-            "确认框存在不可达结果态（枚举加了状态却忘了接线）：$unreachable——" +
-                "默认态（$initializer）之外的每一态都必须有 `outcome = EnhancedCaptureConsent.X` 写入点",
-            unreachable.isEmpty(),
         )
     }
 

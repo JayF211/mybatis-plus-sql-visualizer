@@ -695,6 +695,12 @@ open class SqlLogConsoleBridge(
          */
         private val methodCache = java.util.concurrent.ConcurrentHashMap<String, java.util.Optional<java.lang.reflect.Method>>()
 
+        /** F57（T-PerfSweep18）：methodCache 容量上限——键含 ClassLoader 身份，多 run 配置/动态卸载场景键空间无界，照 DESCRIPTOR_CACHE_MAX 先例超限整体代际失效（重付一次 getMethod 换有界）。 */
+        private const val METHOD_CACHE_MAX = 64
+
+        /** F57：测试观察缝——代际失效行为断言用（生产代码勿调用）。 */
+        internal fun methodCacheSize(): Int = methodCache.size
+
         /** F50：记忆化键（纯函数可测）——类名 + ClassLoader 身份 + 方法名三元组。 */
         internal fun methodCacheKey(className: String, loader: ClassLoader?, name: String): String =
             "${className}@${System.identityHashCode(loader)}#$name"
@@ -708,6 +714,8 @@ open class SqlLogConsoleBridge(
                 null
             }
             methodCache[key] = java.util.Optional.ofNullable(method)
+            // F57：超限整体代际失效（与 descriptorConsoleCache 同范式——清后本条目不回填，下次查询重付一次 getMethod）
+            if (methodCache.size > METHOD_CACHE_MAX) methodCache.clear()
             return method
         }
 
@@ -911,10 +919,13 @@ internal fun processConsoleLine(
         !line.isBlank() -> ctx.pendingError = null
     }
     // 2) 喂行到四个解析器（各自忽略不匹配的行；配置快照随设置变更事件刷新，逐行零同步成本）
-    ctx.myBatisParser.feed(line)
-    if (ctx.hibernateEnabled) ctx.hibernateParser.feed(line)
-    ctx.jdbcParser.feed(line)
-    if (ctx.shardingEnabled) ctx.shardingParser.feed(line)
+    // F58（T-PerfSweep18 压轴）：线程 token 每行只提一次下传——原四解析器各自 bucketFor(line)
+    // 重提同一 token（同一行最多 4 次 substring 窗口+级别锚正则+方括号扫描）。
+    val threadToken = LogThreadRouter.threadTokenOf(line)
+    ctx.myBatisParser.feed(line, threadToken)
+    if (ctx.hibernateEnabled) ctx.hibernateParser.feed(line, threadToken)
+    ctx.jdbcParser.feed(line, threadToken)
+    if (ctx.shardingEnabled) ctx.shardingParser.feed(line, threadToken)
     // 2.5) T-ConsolePendingFlush：喂行后冲刷**已静默**桶的待产出条目。放在喂行之后是有意的——本行刚
     // 触达它自己的桶（活动时间刷新），该桶因此不会出现在冲刷名单里，本行所属语句的参数行不会被截断；
     // 被冲刷的只有「别的线程静默 ≥1s 的语句」（JdbcTemplate 无 TRACE 参数行 + 线程按请求新建时，
@@ -955,19 +966,23 @@ internal fun processConsoleLine(
 /**
  * T-AgentDialectLoop / T-AgentLogTime：增强接管期间的日志时间嗅探——复用既有三解析器的配对/时间解析
  * （零新解析逻辑），产出的条目不进面板、仅把「[logTimeKey] → 日志时间」暂存 [LogTimeCorrelator]
- * （参数值序列作次级判别签名）。
+ * （参数值序列必须匹配；没有真实日志时间的行不入册）。
  * 成本口径：每行 3 次 contains 门控（解析器既有门），每条 SQL 一次条目构造 + 指纹，
  * 条目即弃零驻留；源码标记行跳过（条目已弃，无需归属）。
  */
 private fun sniffLogTimestamp(line: String, ctx: BridgeLineContext) {
-    ctx.myBatisParser.feed(line)
-    if (ctx.hibernateEnabled) ctx.hibernateParser.feed(line)
-    ctx.jdbcParser.feed(line)
-    if (ctx.shardingEnabled) ctx.shardingParser.feed(line)
+    // F58：同款每行一次 token 下传（嗅探路径同喂四解析器）
+    val threadToken = LogThreadRouter.threadTokenOf(line)
+    ctx.myBatisParser.feed(line, threadToken)
+    if (ctx.hibernateEnabled) ctx.hibernateParser.feed(line, threadToken)
+    ctx.jdbcParser.feed(line, threadToken)
+    if (ctx.shardingEnabled) ctx.shardingParser.feed(line, threadToken)
     val taken = ctx.myBatisParser.takeEntries() + ctx.hibernateParser.takeEntries() +
         ctx.jdbcParser.takeEntries() + ctx.shardingParser.takeEntries()
     for (e in taken) {
-        LogTimeCorrelator.put(logTimeKey(e), e.logTimestamp ?: e.timestamp, logTimeParamSignature(e.params))
+        // 无时间 StdOut 的 timestamp 是 IDE 解析时刻，不能冒充应用日志时间。
+        val logTime = e.logTimestamp ?: continue
+        LogTimeCorrelator.put(logTimeKey(e), logTime, logTimeParamSignature(e.params))
     }
 }
 

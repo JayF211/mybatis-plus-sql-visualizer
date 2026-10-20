@@ -1,5 +1,11 @@
 package cn.song.mybatisplus.visualizer.ui
 import cn.song.mybatisplus.visualizer.config.PluginSettings
+import cn.song.mybatisplus.visualizer.context.ActualSqlPsiResolver
+import cn.song.mybatisplus.visualizer.context.ModuleIdentityResolution
+import cn.song.mybatisplus.visualizer.context.ModuleIdentityResolver
+import cn.song.mybatisplus.visualizer.context.PreviewSourceContext
+import cn.song.mybatisplus.visualizer.context.PreviewSourceOrigin
+import cn.song.mybatisplus.visualizer.context.SqlPsiResolution
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.psi.XmlCrossNsFragmentResolver
 import cn.song.mybatisplus.visualizer.sql.DialectRegistry
@@ -14,9 +20,12 @@ import cn.song.mybatisplus.visualizer.xml.XmlParseException
 import cn.song.mybatisplus.visualizer.xml.XmlPreviewModel
 import cn.song.mybatisplus.visualizer.xml.XmlScriptException
 import cn.song.mybatisplus.visualizer.xml.XmlStatementKind
+import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.project.Project
 import com.intellij.psi.JavaPsiFacade
 import com.intellij.psi.search.GlobalSearchScope
+import com.intellij.psi.xml.XmlFile
+import com.intellij.psi.xml.XmlTag
 
 /**
  * XML 预览服务（T-M24-04）：mapper 文件文本 → 语句 → 预览模型 → [PreviewResult]。
@@ -36,11 +45,37 @@ import com.intellij.psi.search.GlobalSearchScope
  */
 object XmlPreviewService {
 
+    /**
+     * O-145 W1：只在选定的 mapper 语句域解析实际 SQL 注入；文件内其他语句不能充当 owner。
+     * 光标不在该语句内时不传精确偏移，由解析器完整扫描 owner 并对多注入返回歧义。
+     * 仅在本次预览中携带 PSI，不写入模型、面板或历史。
+     */
+    @Suppress("DEPRECATION")
+    fun resolveSourceContext(file: XmlFile, tag: XmlTag, caretOffset: Int? = null): PreviewSourceContext {
+        val project = file.project
+        return ReadAction.compute<PreviewSourceContext, RuntimeException> {
+            val validOwner = tag.isValid && tag.containingFile == file &&
+                tag.parentTag?.name == "mapper" && tag.name in setOf("select", "insert", "update", "delete")
+            val offset = caretOffset?.takeIf { validOwner && it in tag.textRange.startOffset until tag.textRange.endOffset }
+            val resolution = if (validOwner) ActualSqlPsiResolver.resolve(file, tag, offset) else SqlPsiResolution.None
+            val module = file.virtualFile?.let { ModuleIdentityResolver.resolve(project, it) }
+                ?: ModuleIdentityResolution.None
+            PreviewSourceContext(
+                project = project,
+                origin = PreviewSourceOrigin.XML,
+                hostPsiFile = file,
+                sqlPsiResolution = resolution,
+                moduleResolution = module,
+            )
+        }
+    }
+
     fun preview(
         fileText: String,
         statementId: String?,
         project: Project? = null,
         entityContext: SqlCompletionContext? = null,
+        sourceContext: PreviewSourceContext? = null,
     ): PreviewResult {
         // R12 T-PaginationSim：解析产物三元组（namespace/语句 id/语句类型）透出 try 块——分页模拟后处理用
         var parsedRef: Triple<String?, String, XmlStatementKind>? = null
@@ -68,10 +103,20 @@ object XmlPreviewService {
         } catch (e: XmlScriptException) {
             return emptyResult(e.message ?: "SQL 脚本解析失败。")
         }
-        val ref = parsedRef ?: return toResult(model, staticWarnings, entityContext)
+        val result = toResult(model, staticWarnings, entityContext).let { preview ->
+            if (project == null) preview else {
+                val decision = sourceContext?.takeIf { it.project == project }
+                    ?.let { DialectRegistry.decision(it) } ?: DialectRegistry.decision(project)
+                preview.copy(
+                    renderedDialect = DialectRegistry.byName(decision.dialectName),
+                    dialectDecision = decision,
+                )
+            }
+        }
+        val ref = parsedRef ?: return result
 
         return applyPagination(
-            toResult(model, staticWarnings, entityContext),
+            result,
             project = project,
             namespace = ref.first,
             statementId = ref.second,
@@ -120,7 +165,7 @@ object XmlPreviewService {
         if (kind != XmlStatementKind.SELECT) return@runCatching result
         if (PaginationSimulator.hasExistingLimit(result.sql)) return@runCatching result
         val limitClause = PaginationSimulator.placeholderLimitClause(pageParamName)
-        val limitLine = DialectRegistry.effective(project = project).renderLimit(limitClause)
+        val limitLine = (result.effectiveDialect ?: DialectRegistry.effective(project = project)).renderLimit(limitClause)
         val countSql = if (paginationCountEnabled()) {
             PaginationSimulator.wrapCountSql(result.sql.replace(WHITESPACE_REGEX, " ").trim())
         } else {
@@ -135,6 +180,7 @@ object XmlPreviewService {
             paramHints = result.paramHints + extraSources.map { ParamHint(quote = false) },
             countSql = countSql,
             paginationLimitLine = limitLine,
+            paginationParamSources = extraSources,
         )
     }.getOrDefault(result)
 

@@ -43,6 +43,9 @@ class CriteriaQueryGutterLineMarkerProvider : LineMarkerProvider {
         // daemon 每趟对本 provider 传入打开文件的每个方法名 identifier，无门控时每个方法
         // 定义都要付一次 locate 全代码块 PSI 扫描（分析 P1-1 在 dev 的唯一残留）。
         if (!fileMayContainCriteria(element.containingFile)) return null
+        // F70：locate 前体量护栏——超大文件跳过全代码块扫描（不标 icon）
+        val gateFile = element.containingFile
+        if (gateFile != null && gateFile.textLength > LOCATE_MAX_FILE_CHARS) return null
         // 【去重关键】锚定在包含 CriteriaQuery 调用的方法名上——仅当 element 是方法名 token 时才创建 marker，
         // 避免方法体内每个 PsiIdentifier（变量名、字段名等）都产生重复图标。
         val method = PsiTreeUtil.getParentOfType(element, PsiMethod::class.java) ?: return null
@@ -79,16 +82,22 @@ class CriteriaQueryGutterLineMarkerProvider : LineMarkerProvider {
         /** criteria API 特征子串：覆盖 CriteriaBuilder / CriteriaQuery / criteria 变量名与 import。 */
         private const val CRITERIA_MARKER_SUBSTRING = "riteria"
 
-        // T-PerfSweep F4：门控单条目缓存——daemon 逐文件回调，单条目即免掉逐叶子重算；
-        // 非 daemon 多线程并发最坏重复计算一次子串匹配，无正确性影响，故不加锁。
-        @Volatile
-        private var gatedFile: PsiFile? = null
+        /**
+         * F70（T-PerfSweep22）：门控缓存单条目 → **按 file 键小容量弱表**——多文件并发
+         * daemon（分头扫不同文件）时单条目缓存互相驱逐、退化逐 leaf 重算子串匹配；
+         * WeakHashMap 弱键不钉 PsiFile 生命周期，容量超限整体代际失效（有界）。
+         * 修改戳仍参与命中判定（同文件编辑后重算）。
+         */
+        private val gatedFiles = java.util.WeakHashMap<PsiFile, Pair<Long, Boolean>>()
 
-        @Volatile
-        private var gatedStamp: Long = -1
+        private const val GATED_FILES_MAX = 64
 
-        @Volatile
-        private var gatedVerdict: Boolean = false
+        /**
+         * F70：locate 前体量护栏（字符）——照 StringSqlMethod 方法体 200k 护栏先例放宽到
+         * 文件级 500k：超大文件跳过 locate（不标 icon），点击面本就靠 previewAsync 兜底，
+         * daemon 快速路径不再随文件体量线性付全代码块扫描。
+         */
+        private const val LOCATE_MAX_FILE_CHARS = 500_000
 
         /**
          * 文件是否可能含 CriteriaQuery 链（保守超集：宁可放行）。判定 = 文本含
@@ -98,11 +107,14 @@ class CriteriaQueryGutterLineMarkerProvider : LineMarkerProvider {
         private fun fileMayContainCriteria(file: PsiFile?): Boolean {
             if (file == null) return true
             val stamp = file.modificationStamp
-            if (file === gatedFile && stamp == gatedStamp) return gatedVerdict
+            synchronized(gatedFiles) {
+                gatedFiles[file]?.takeIf { it.first == stamp }?.let { return it.second }
+            }
             val verdict = runCatching { file.text.contains(CRITERIA_MARKER_SUBSTRING) }.getOrDefault(true)
-            gatedFile = file
-            gatedStamp = stamp
-            gatedVerdict = verdict
+            synchronized(gatedFiles) {
+                if (gatedFiles.size > GATED_FILES_MAX) gatedFiles.clear()
+                gatedFiles[file] = stamp to verdict
+            }
             return verdict
         }
     }

@@ -23,6 +23,7 @@ class SqlPreviewDialog(
     private val project: Project?,
     private val result: PreviewResult,
     private val sourceLocation: String? = null,
+    sourceContext: cn.song.mybatisplus.visualizer.context.PreviewSourceContext? = null,
 ) : DialogWrapper(project, false, DialogWrapper.IdeModalityType.MODELESS) {
 
     private val panel = SqlPreviewPanel(project)
@@ -30,6 +31,7 @@ class SqlPreviewDialog(
     init {
         title = MpSqlVisualizerBundle.message("dialog.preview.title")
         panel.setSourceLocation(sourceLocation)
+        panel.setSourceContext(sourceContext)
         panel.showResult(result)
         // 注册面板到弹窗 Disposer 树：弹窗 dispose 时级联释放面板及其 messageBus 连接
         Disposer.register(disposable, panel)
@@ -59,6 +61,16 @@ class SqlPreviewDialog(
     /** T-M23.6：internal 测试访问器（面板「关闭 SQL 面板」回调链路断言，仿 SqlPreviewPanel.editorForTest）。 */
     internal fun panelForTest(): SqlPreviewPanel? = panel
 
+    /** T-DmlImpactProminence：底部蓝色主行动——复制 SQL 并关闭（复制成功提示随之关闭面板）。 */
+    private val copyAndCloseAction = object : DialogWrapperAction(
+        MpSqlVisualizerBundle.message("panel.copySqlAndClose"),
+    ) {
+        override fun doAction(actionEvent: java.awt.event.ActionEvent?) {
+            panel.copySql()
+            doDispose()
+        }
+    }
+
     override fun createActions(): Array<Action> = arrayOf(
         // 执行 SQL（M17：选择数据源 → 临时文件 → 可执行；提示由面板/支持层统一处理）
         object : DialogWrapperAction(MpSqlVisualizerBundle.message("panel.executeSql")) {
@@ -72,9 +84,20 @@ class SqlPreviewDialog(
                 panel.copySql()
             }
         },
+        copyAndCloseAction,
         // 关闭
         cancelAction,
     )
+
+    /** 复制并关闭按钮按主行动样式渲染（蓝色实底）；其余按钮保持平台默认。 */
+    override fun createJButtonForAction(action: Action): javax.swing.JButton {
+        val button = super.createJButtonForAction(action)
+        if (action === copyAndCloseAction) applyPrimaryButtonStyle(button)
+        return button
+    }
+
+    /** T-DmlImpactProminence：测试访问器（createActions 在 DialogWrapper 内为 protected）。 */
+    internal fun actionsForTest(): Array<Action> = createActions()
 
     /** 尺寸记忆 key（非 null → DialogWrapper 经 DimensionService 记忆用户拉伸尺寸，下次打开保持）。 */
     override fun getDimensionServiceKey(): String = DIMENSION_KEY

@@ -244,6 +244,7 @@ internal fun SqlPreviewService.buildJpaPreviewResult(
     method: PsiMethod?,
     inClauseParams: Set<String> = emptySet(),
     dialectOverride: Dialect? = null,
+    dialectDecision: cn.song.mybatisplus.visualizer.sql.DialectDecisionEngine.Decision? = null,
     placeholderParamNames: List<String> = emptyList(),
     duplicateParamNames: Set<String> = emptySet(),
     initialParamValues: Map<String, String> = emptyMap(),
@@ -280,6 +281,8 @@ internal fun SqlPreviewService.buildJpaPreviewResult(
         warning = buildJpaWarning(statement),
         columns = (statement.table as? TableInfo)?.allColumnNames ?: emptyList(),
         previewModel = if (views.isEmpty()) null else SqlPreviewModel(statement, dialect, formatSql(), views),
+        renderedDialect = dialect,
+        dialectDecision = dialectDecision,
         // F-1 修复：JPA 联表派生查询同款缺口——图 Tab 判据与 previewModel 解耦
         diagramStatement = (statement as? SelectStatement)?.takeIf { it.joins.isNotEmpty() },
         placeholderParamNames = usableNamedSources,
@@ -302,8 +305,9 @@ internal fun SqlPreviewService.buildPreviewResult(
     countSql: String? = null,
     /** 注入前语句文本（参数历史键指纹种子）；null = 面板回落用 result.sql 算键。 */
     historyFingerprintSeed: String? = null,
+    dialect: cn.song.mybatisplus.visualizer.sql.Dialect = currentDialect(),
+    dialectDecision: cn.song.mybatisplus.visualizer.sql.DialectDecisionEngine.Decision? = null,
 ): PreviewResult {
-    val dialect = currentDialect()
     val compact = !formatSql()
     val generated = SqlGenerator.generateWithParams(statement, compact = compact, dialect = dialect)
     // 动态条件视图（扁平化，含嵌套组内）；无动态条件时 previewModel 为 null → 面板走旧文本渲染路径
@@ -323,11 +327,13 @@ internal fun SqlPreviewService.buildPreviewResult(
         }.toMap(),
         tableComment = table.comment,
         previewModel = if (views.isEmpty()) null else SqlPreviewModel(statement, dialect, formatSql(), views),
+        renderedDialect = dialect,
+        dialectDecision = dialectDecision,
         // F-1 修复：JOIN 图判据独立于 previewModel（无条件联表链 previewModel 为 null，但仍含 JOIN 可画图）
         diagramStatement = (statement as? SelectStatement)?.takeIf { it.joins.isNotEmpty() },
         paramHints = generated.paramHints,
         // F-2：SQL 性能分析（仅 SELECT）：委托 [SqlPerfAnalyzer]；UPDATE/DELETE 走既有 buildWarning 路径
-        perfWarnings = analyzePerf(generated.sql, statement),
+        perfWarnings = analyzePerf(generated.sql, statement, dialect),
         // T-MpjFill：fill 附加查询子句（MPJ 1.5.1+）——透传至面板追加渲染
         fillClauses = (statement as? SelectStatement)?.fillClauses,
         // R12 T-PaginationSim：分页 COUNT 包裹（面板在主 SQL 后并列渲染第二条语句）

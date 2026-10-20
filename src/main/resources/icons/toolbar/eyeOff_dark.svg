@@ -1,0 +1,6 @@
+<!-- 眼睛轮廓取自 IntelliJ expui inspectionsEye.svg（Apache 2.0），斜线为屏蔽语义后加；图形放大约 15% -->
+<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <circle cx="8" cy="8" r="1.72" stroke="#CED0D6" stroke-width="1.4"/>
+  <path d="M8.0000 12.0250C5.2670 12.0250 2.5648 10.2367 1.7105 8.0000C2.5648 5.7633 5.2670 3.9750 8.0000 3.9750C10.7330 3.9750 13.4352 5.7633 14.2895 8.0000C13.4352 10.2367 10.7330 12.0250 8.0000 12.0250Z" stroke="#CED0D6" stroke-width="1.4"/>
+  <path d="M2.250 13.750L13.750 2.250" stroke="#DB5C5C" stroke-width="1.6" stroke-linecap="round"/>
+</svg>

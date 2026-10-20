@@ -4,6 +4,7 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import cn.song.mybatisplus.visualizer.util.DisplayMasker
 
 /**
  * R4（W3 历史工作流包）：SQL 导出服务——历史/日志面板行集导出为 CSV / TSV / 纯文本 / SQL 脚本文件。
@@ -41,12 +42,21 @@ object SqlExportService {
             "\"" + value.replace("\"", "\"\"") + "\""
         } else value
 
-    /** 行集格式化（四格式分发）。 */
-    fun format(rows: List<SqlExportRow>, format: SqlExportFormat): String = when (format) {
-        SqlExportFormat.CSV -> formatCsv(rows)
-        SqlExportFormat.TSV -> formatTsv(rows)
-        SqlExportFormat.TXT -> formatTxt(rows)
-        SqlExportFormat.SQL -> formatSql(rows)
+    /**
+     * 行集格式化（四格式分发）。
+     *
+     * R60（T-LaneB D96）：[mask] 开时对行集 sql 字段做**投影级**脱敏（[DisplayMasker.maskDisplay]，
+     * 与采集侧 Desensitizer 双条件同规则）——只改本次导出文本，调用方行集与数据层条目不动；
+     * 开关值由调用方读设置传入（本类纯逻辑不触平台设置）。
+     */
+    fun format(rows: List<SqlExportRow>, format: SqlExportFormat, mask: Boolean = false): String {
+        val effective = if (mask) rows.map { it.copy(sql = DisplayMasker.maskDisplay(it.sql, true)) } else rows
+        return when (format) {
+            SqlExportFormat.CSV -> formatCsv(effective)
+            SqlExportFormat.TSV -> formatTsv(effective)
+            SqlExportFormat.TXT -> formatTxt(effective)
+            SqlExportFormat.SQL -> formatSql(effective)
+        }
     }
 
     /** 写盘（调用方保证后台线程）。 */
@@ -158,17 +168,23 @@ object SqlExportService {
      * [PortableSqlExport.collectRows] 串联：CRUD 行 + 回滚链产物行）。语句本体不改写；
      * TXT 每条语句前带注释头（`-- dialect: X | kind: Y | upsert: Z`），CSV/TSV 把同三字段
      * 作列（机器可读形态），SQL 字段沿用既有转义/扁平化口径。
+     *
+     * R60（T-LaneB D96）：[mask] 开时行集 sql 投影级脱敏（同 [format] 口径）。
      */
-    fun formatPortable(rows: List<PortableSqlRow>, format: SqlExportFormat): String = when (format) {
-        SqlExportFormat.CSV -> formatPortableFlat(rows, ",") { csvField(it) }
-        SqlExportFormat.TSV -> formatPortableFlat(rows, "\t") { v ->
-            v.replace('\t', ' ').replace('\n', ' ').replace('\r', ' ')
+    fun formatPortable(rows: List<PortableSqlRow>, format: SqlExportFormat, mask: Boolean = false): String {
+        val effective =
+            if (mask) rows.map { it.copy(sql = DisplayMasker.maskDisplay(it.sql, true)) } else rows
+        return when (format) {
+            SqlExportFormat.CSV -> formatPortableFlat(effective, ",") { csvField(it) }
+            SqlExportFormat.TSV -> formatPortableFlat(effective, "\t") { v ->
+                v.replace('\t', ' ').replace('\n', ' ').replace('\r', ' ')
+            }
+            SqlExportFormat.TXT -> formatPortableTxt(effective)
+            // T-ExportSqlFormat 枚举扩员波及此 when：可移植导出是 O-91 独立通道（预览面板自己的
+            // 三选对话框，不提供 SQL 选项），与历史/日志导出的 SQL 格式不合并互不替代（计划 §三
+            // 边界写死防顺手统一）——UI 不可能传入 SQL，防御性显式失败而非静默伪装成 TXT。
+            SqlExportFormat.SQL -> error("formatPortable: SQL format is not offered (O-91 portable export keeps CSV/TSV/TXT)")
         }
-        SqlExportFormat.TXT -> formatPortableTxt(rows)
-        // T-ExportSqlFormat 枚举扩员波及此 when：可移植导出是 O-91 独立通道（预览面板自己的
-        // 三选对话框，不提供 SQL 选项），与历史/日志导出的 SQL 格式不合并互不替代（计划 §三
-        // 边界写死防顺手统一）——UI 不可能传入 SQL，防御性显式失败而非静默伪装成 TXT。
-        SqlExportFormat.SQL -> error("formatPortable: SQL format is not offered (O-91 portable export keeps CSV/TSV/TXT)")
     }
 
     private fun formatPortableFlat(rows: List<PortableSqlRow>, sep: String, escape: (String) -> String): String {

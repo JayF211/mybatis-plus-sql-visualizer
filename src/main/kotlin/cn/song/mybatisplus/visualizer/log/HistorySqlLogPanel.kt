@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.log
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService
+import cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons
 import cn.song.mybatisplus.visualizer.ui.diff.SqlDiffer
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.util.MpvsUiColors
@@ -193,7 +194,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     internal val previewToggleAction: ToggleAction = object : ToggleAction(
         MpSqlVisualizerBundle.message("log.dockedPreview.toggle"),
         MpSqlVisualizerBundle.message("log.dockedPreview.toggle.tip"),
-        AllIcons.Actions.Preview,
+        MpvsIcons.DockedPreview,
     ) {
         override fun isSelected(e: AnActionEvent): Boolean = dockedPreview.isOpen
 
@@ -210,7 +211,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     /** 返回一级（原 backButton）：图标 Back、tooltip 沿用 log.history.back.tip；可见性 = 二级列表（update 输出）。 */
     private inner class BackAction : AnAction() {
         override fun update(e: AnActionEvent) {
-            e.presentation.icon = AllIcons.Actions.Back
+            e.presentation.icon = MpvsIcons.Back
             e.presentation.description = MpSqlVisualizerBundle.message("log.history.back.tip")
             e.presentation.isVisible = !isShowingFiles
         }
@@ -223,7 +224,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     /** 刷新（原 refreshButton）：图标 Refresh、tooltip 沿用 log.history.refresh.tip。 */
     private inner class RefreshAction : AnAction() {
         override fun update(e: AnActionEvent) {
-            e.presentation.icon = AllIcons.Actions.Refresh
+            e.presentation.icon = MpvsIcons.Refresh
             e.presentation.description = MpSqlVisualizerBundle.message("log.history.refresh.tip")
         }
 
@@ -231,6 +232,37 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
             refresh()
         }
     }
+
+    /** 与日志页同款直接动作；历史只跳转，不引入实时尾部跟随。 */
+    internal val scrollToEndAction: AnAction = object : AnAction() {
+        override fun update(e: AnActionEvent) {
+            e.presentation.icon = MpvsIcons.ScrollToEnd
+            e.presentation.text = MpSqlVisualizerBundle.message("log.panel.scrollBottom")
+            // 日志页的 tip 描述实时跟随，历史使用同一中性动作文案，避免误导。
+            e.presentation.description = MpSqlVisualizerBundle.message("log.panel.scrollBottom")
+            e.presentation.isVisible = !isShowingFiles
+            e.presentation.isEnabled = !isShowingFiles && !sqlListModel.isEmpty && !project.isDisposed
+        }
+
+        override fun actionPerformed(e: AnActionEvent) {
+            if (isShowingFiles || project.isDisposed || sqlListModel.isEmpty) return
+            val generation = bgGeneration
+            if (pendingAppendGen == generation && pendingAppendIndex < pendingEntries.size) {
+                val remaining = pendingEntries.subList(pendingAppendIndex, pendingEntries.size)
+                // 一次批量模型事件；先清待写状态，防滚动/布局监听重入重复追加。
+                pendingEntries = emptyList()
+                pendingAppendIndex = 0
+                sqlListModel.addAll(remaining)
+            }
+            // 同步完成，不留下会滚动到新文件/新过滤结果的 invokeLater 请求。
+            if (generation != bgGeneration || isShowingFiles || sqlListModel.isEmpty) return
+            sqlList.ensureIndexIsVisible(sqlListModel.size() - 1)
+            sqlScrollPane.verticalScrollBar.let { it.value = it.maximum }
+        }
+    }
+
+    internal val navigationActionsForTest: List<AnAction>
+        get() = _navToolbarRef?.actionGroup?.getChildren(null)?.toList().orEmpty()
 
     /** 层级切换后即时刷新导航工具栏（Back 可见性走 update；组件不可见时平台跳过，无副作用）。 */
     private fun refreshNavToolbar() {
@@ -356,7 +388,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         // 顶部工具栏：返回（仅二级可见）+ 刷新 + 搜索
         // T-UiNative T-UN-10：手摆按钮 → 平台 ActionToolbar（Back 可见性由 BackAction.update 按当前层级输出）
         val navToolbar = ActionManager.getInstance()
-            .createActionToolbar("mpvs.history.nav", DefaultActionGroup(BackAction(), RefreshAction(), previewToggleAction), true)
+            .createActionToolbar("mpvs.history.nav", DefaultActionGroup(BackAction(), RefreshAction(), scrollToEndAction, previewToggleAction), true)
             .apply { targetComponent = this@HistorySqlLogPanel }
         _navToolbarRef = navToolbar
         val toolbar = JPanel(FlowLayout(FlowLayout.LEFT, 4, 0))
@@ -369,6 +401,8 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
             override fun removeUpdate(e: javax.swing.event.DocumentEvent) = scheduleSearch()
             override fun changedUpdate(e: javax.swing.event.DocumentEvent) = scheduleSearch()
         })
+        // 原生按钮只修改 FindModel，不触发 DocumentListener；切旗必须同步重验并清除过期错误。
+        nativeSearch.findModel.addObserver { applySearch() }
         // T-HistorySearchToggles：搜索框外包宿主容器（CENTER 搜索框 + EAST 正则/大小写两枚开关）
         toolbar.add(searchBar)
         // O-90：同模板聚焦提示 chip（聚焦时显示；点击清除）
@@ -451,6 +485,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         currentFile = null
         currentFileStamp = null
         currentEntries = emptyList()
+        pendingEntries = emptyList() // F85（T-PerfSweep24）：返回一级清挂起批次（有 showing 守卫不误消费，清掉免滞留）
         if (dockedPreview.isOpen) previewHost.toggle()
         dockedPreview.resetContext()
         previewHost.hideHint()
@@ -599,6 +634,10 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     private fun updateFilesEmptyText() {
         val status = fileList.emptyText
         status.clear()
+        if (allFiles.isNotEmpty()) {
+            status.text = MpSqlVisualizerBundle.message("log.history.search.noMatches")
+            return
+        }
         MpSqlVisualizerBundle.message("log.history.files.empty").split("\n").forEach { line ->
             status.appendLine(line)
         }
@@ -678,7 +717,10 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         } else {
             allFiles.filter { it.displayName.contains(query, ignoreCase = !matchCaseEnabled) }
         }
-        filtered.forEach { fileListModel.addElement(it) } 
+        filtered.forEach { fileListModel.addElement(it) }
+        // 一级仍为文件名子串搜索；从二级返回时清掉与此层无关的正则错误。
+        nativeSearch.setSearchError(null)
+        updateFilesEmptyText()
         // T-SearchToggleNativeLook：原生状态区读数（对齐 IDEA 搜索条「N results」位）
         nativeSearch.setStatusText(
             if (query.isEmpty()) "" else MpSqlVisualizerBundle.message("log.history.search.results", filtered.size),
@@ -709,9 +751,17 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
                 matchCase = matchCaseEnabled,
                 memo = regexMemo,
             )
-        // T-SearchToggleNativeLook：原生状态区读数（对齐 IDEA 搜索条「N results」位）
+        val query = searchField.text.trim()
+        val invalidRegex = query.isNotEmpty() &&
+            (regexEnabled || query.startsWith(HISTORY_REGEX_PREFIX)) && regexMemo.compiled == null
+        val error = if (invalidRegex) MpSqlVisualizerBundle.message("log.history.search.invalidRegex") else null
+        // 过滤仍保留既有非法正则子串回退，但不能让「0 条」掩盖输入错误。
+        nativeSearch.setSearchError(error)
         nativeSearch.setStatusText(
-            if (searchField.text.trim().isEmpty()) "" else MpSqlVisualizerBundle.message("log.history.search.results", filteredEntries.size),
+            error ?: if (query.isEmpty()) "" else MpSqlVisualizerBundle.message("log.history.search.results", filteredEntries.size),
+        )
+        sqlList.emptyText.text = error ?: MpSqlVisualizerBundle.message(
+            if (currentEntries.isEmpty()) "log.history.entries.empty" else "log.history.search.noMatches",
         )
         showSqlEntries(filteredEntries)
     }
@@ -896,7 +946,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
      */
     internal inner class CompareSelectedAction(private val entries: List<LogSqlEntry>) : AnAction() {
         override fun update(e: AnActionEvent) {
-            e.presentation.icon = AllIcons.Actions.Diff
+            e.presentation.icon = MpvsIcons.Diff
             e.presentation.text = MpSqlVisualizerBundle.message("log.history.compare")
             e.presentation.description = MpSqlVisualizerBundle.message("log.history.compare.tip")
             e.presentation.isEnabled = entries.size == 2
@@ -936,7 +986,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
 
     private inner class ExportSqlAction(private val entries: List<LogSqlEntry>) : AnAction() {
         override fun update(e: AnActionEvent) {
-            e.presentation.icon = AllIcons.Actions.EditSource
+            e.presentation.icon = MpvsIcons.Export
             e.presentation.text = MpSqlVisualizerBundle.message("log.history.export")
         }
 
@@ -983,7 +1033,10 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         val target = saved.file
         com.intellij.openapi.application.ApplicationManager.getApplication().executeOnPooledThread {
             runCatching {
-                SqlExportService.exportToFile(target, SqlExportService.format(rows, format))
+                SqlExportService.exportToFile(
+                    target,
+                    SqlExportService.format(rows, format, PluginSettings.getInstance().state.displayMaskEnabled),
+                )
             }.onSuccess {
                 com.intellij.notification.NotificationGroupManager.getInstance()
                     .getNotificationGroup(NOTIFICATION_GROUP_ID)
@@ -1010,7 +1063,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
             project,
             MpSqlVisualizerBundle.message("log.history.export.choose"),
             MpSqlVisualizerBundle.message("log.history.export"),
-            com.intellij.icons.AllIcons.Actions.EditSource,
+            MpvsIcons.Export,
             names,
             names[3],
         )
@@ -1028,7 +1081,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
 
     private inner class CopySqlAction(private val entries: List<LogSqlEntry>) : AnAction() {
         override fun update(e: AnActionEvent) {
-            e.presentation.icon = AllIcons.Actions.Copy
+            e.presentation.icon = MpvsIcons.Copy
             e.presentation.text = copyMenuText("log.history.copy", "log.history.copySelected", entries.size)
         }
 
@@ -1039,7 +1092,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
 
     private inner class CopyTimestampAction(private val entries: List<LogSqlEntry>, private val clip: String) : AnAction() {
         override fun update(e: AnActionEvent) {
-            e.presentation.icon = AllIcons.Actions.Copy
+            e.presentation.icon = MpvsIcons.Copy
             e.presentation.text = copyMenuText("log.history.copyTimestamp", "log.history.copyTimestampSelected", entries.size)
             e.presentation.isEnabled = clip.isNotEmpty()
         }
@@ -1054,7 +1107,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     /** 跳转到 Java 调用方（T-M55-01：与「跳转到 XML」拆分为双目标，与日志页同套）。 */
     private inner class JumpToSourceAction(private val entry: LogSqlEntry) : AnAction() {
         override fun update(e: AnActionEvent) {
-            e.presentation.icon = AllIcons.Actions.EditSource
+            e.presentation.icon = MpvsIcons.EditSource
             e.presentation.text = MpSqlVisualizerBundle.message("log.history.jumpToJava")
         }
 
@@ -1087,11 +1140,11 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
      * T-M55-01：跳转到 mapper XML 语句节点。mapperStatement 非空且定位成功才显示
      * （update 内解析一次并存引用）；定位失败不显示，「跳转到 Java」承担回退，不劣化。
      */
-    private inner class JumpToMapperXmlAction(private val entry: LogSqlEntry) : AnAction() {
+    internal inner class JumpToMapperXmlAction(private val entry: LogSqlEntry) : AnAction() {
         private var resolved: HistoryJumpTarget.MapperXml? = null
 
         override fun update(e: AnActionEvent) {
-            e.presentation.icon = AllIcons.FileTypes.Xml
+            e.presentation.icon = MpvsIcons.MapperXml
             e.presentation.text = MpSqlVisualizerBundle.message("log.history.jumpToXml")
             resolved = resolveXmlJumpTarget(entry)
             e.presentation.isEnabledAndVisible = resolved != null
@@ -1466,15 +1519,18 @@ internal class HistoryCellRenderer : JPanel(BorderLayout()), javax.swing.ListCel
      */
     private fun sqlLineFragmentsFor(entry: LogSqlEntry): List<List<SqlTextFragment>> {
         val mode = PluginSettings.getInstance().sqlListDisplayMode()
-        val sql = withTerminator(if (mode == SqlListDisplayMode.FORMATTED) entry.restoredSql else entry.summary)
+        // R60：只在展示投影脱敏；FORMATTED 使用完整 SQL，其他模式沿用摘要。
+        val maskOn = PluginSettings.getInstance().state.displayMaskEnabled
+        val sql = withTerminator(displaySqlForList(entry, mode, maskOn))
         if (mode == SqlListDisplayMode.SINGLE_LINE) {
             return listOf(SqlListFragmentRenderer.renderFragments(sql))
         }
         val semantics = entry.cachedListLineFragments
-            ?.takeIf { entry.cachedListLineFragmentsMode == mode }
+            ?.takeIf { entry.cachedListLineFragmentsMode == mode && entry.cachedListLineFragmentsMasked == maskOn }
             ?: SqlListFragmentRenderer.semanticLineFragments(sql, mode).also {
                 entry.cachedListLineFragments = it
                 entry.cachedListLineFragmentsMode = mode
+                entry.cachedListLineFragmentsMasked = maskOn
             }
         return visibleSqlLines(SqlListFragmentRenderer.projectLineFragments(semantics), mode)
     }

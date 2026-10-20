@@ -3,6 +3,10 @@ package cn.song.mybatisplus.visualizer.ui
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.model.WrapperType
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import cn.song.mybatisplus.visualizer.xml.StaticTextSqlNode
+import cn.song.mybatisplus.visualizer.xml.XmlPreviewModel
+import cn.song.mybatisplus.visualizer.xml.XmlStatement
+import cn.song.mybatisplus.visualizer.xml.XmlStatementKind
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import com.intellij.util.ui.UIUtil
 import org.junit.Assert.assertEquals
@@ -51,6 +55,65 @@ class SqlPreviewPanelMetaHintTooltipTest : BasePlatformTestCase() {
         val sb = StringBuilder()
         while (sb.length < 200) sb.append(unit)
         return sb.substring(0, 200)
+    }
+
+    fun test方言冲突的回退在可见行且候选证据可查看() {
+        val panel = SqlPreviewPanel(project)
+        try {
+            val decision = cn.song.mybatisplus.visualizer.sql.DialectDecisionEngine.Decision(
+                cn.song.mybatisplus.visualizer.sql.DialectDecisionEngine.Status.CONFLICT,
+                null,
+                cn.song.mybatisplus.visualizer.sql.DialectDecisionEngine.Confidence.FALLBACK,
+                cn.song.mybatisplus.visualizer.sql.DialectDecisionEngine.Source.IDEA_CONFIGURED_SCOPE,
+                dataSourceIds = listOf("uuid-pg", "uuid-my"),
+            )
+            panel.showResult(makeResult("").copy(dialectDecision = decision))
+            waitForEdt()
+            val visible = panel.metaLabelForTest()
+            assertTrue("冲突预览不能只显示 MySQL 而不说兼容回退：$visible",
+                visible.contains("MySQL") && (visible.contains("未验证") || visible.contains("unverified")))
+            val tooltip = panel.metaTooltipForTest().orEmpty()
+            assertTrue("候选 UUID 集合须在按需查看的证据面保留：$tooltip",
+                tooltip.contains("uuid-pg") && tooltip.contains("uuid-my"))
+            assertFalse("元信息不能保存 JDBC URL", tooltip.contains("jdbc:"))
+        } finally {
+            panel.clear()
+        }
+    }
+
+    fun test实际方言能力悬停段有消费方而非空表达式() {
+        val panel = SqlPreviewPanel(project)
+        try {
+            panel.showResult(makeResult("").copy(
+                renderedDialect = cn.song.mybatisplus.visualizer.sql.OracleDialect,
+            ))
+            waitForEdt()
+            val tooltip = panel.metaTooltipForTest().orEmpty()
+            assertTrue("方言能力段须实际进入 tooltip：$tooltip", tooltip.contains("Oracle"))
+        } finally {
+            panel.clear()
+        }
+    }
+
+    fun testXML解析警示与后续求值警示同时可见() {
+        val panel = SqlPreviewPanel(project)
+        try {
+            val xml = XmlPreviewModel.from(
+                XmlStatement("s", XmlStatementKind.SELECT, StaticTextSqlNode("SELECT 1"), null),
+                emptyList(),
+            )
+            val result = PreviewResult(
+                sql = "SELECT 1", compactSql = "SELECT 1", unresolvedParams = emptyList(),
+                paramTable = null, wrapperType = null, tableName = null,
+                xmlModel = xml, warning = "初始解析警示",
+            )
+            panel.xmlErrors = listOf("后续求值警示", "后续求值警示")
+            panel.updateMeta(result)
+            assertEquals("初始解析警示；后续求值警示", panel.currentWarning)
+            assertTrue((panel.metaTooltipForTest() ?: "").contains("初始解析警示；后续求值警示"))
+        } finally {
+            panel.clear()
+        }
     }
 
     fun test空剪贴板提示_可见行显提示且tooltip保留基线() {

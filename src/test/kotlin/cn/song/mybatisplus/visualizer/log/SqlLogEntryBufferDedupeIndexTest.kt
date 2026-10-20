@@ -16,6 +16,118 @@ import org.junit.Test
  */
 class SqlLogEntryBufferDedupeIndexTest {
 
+    private fun shardingExecutions(): List<LogSqlEntry> {
+        val parser = ShardingSphereLogParser()
+        // UI013：真实 5.5.2/H2 fixture 的 100/101 日志原文；只显式闭合，不改变静默冲刷协议。
+        listOf(
+            "18:32:08.911 INFO  [main] ShardingSphere-SQL - Logic SQL: SELECT order_id, reference_code FROM ui_order WHERE order_id = ? AND reference_code = ?",
+            "18:32:08.914 INFO  [main] ShardingSphere-SQL - Actual SQL: ds_0 ::: SELECT order_id, reference_code FROM ui_order_0 WHERE order_id = ? AND reference_code = ? ::: [100, BOOK,100]",
+            "18:32:08.949 INFO  [main] ShardingSphere-SQL - Logic SQL: SELECT order_id, reference_code FROM ui_order WHERE order_id = ? AND reference_code = ?",
+            "18:32:08.949 INFO  [main] ShardingSphere-SQL - Actual SQL: ds_1 ::: SELECT order_id, reference_code FROM ui_order_1 WHERE order_id = ? AND reference_code = ? ::: [101, BOOK,101]",
+        ).forEach(parser::feed)
+        parser.closePending()
+        return parser.takeEntries().mapIndexed { i, entry -> entry.copy(timestamp = 1000L + i,
+            captureProvenance = CaptureProvenance.CONSOLE_EP) }
+    }
+
+    @Test
+    fun `UI013自动去重保留100与101每次原配对并逐次保存历史`() {
+        val b = SqlLogEntryBuffer(maxEntries = 10)
+        val stored = mutableListOf<LogSqlEntry>()
+        var accepted = 0
+        var merged = 0
+        b.onEntryStored = { stored += it }
+        b.onEntryAccepted = { accepted++ }
+        b.onEntryMerged = { _, _ -> merged++ }
+        val pair = shardingExecutions()
+        assertEquals(pair[0].dedupeKey, pair[1].dedupeKey)
+        pair.forEach { assertTrue(b.addEntry(it)) }
+        // 即使原文也相同，仍不能证明同一次执行，不丢第三次配对。
+        assertTrue(b.addEntry(pair[0].copy(timestamp = 1002)))
+        val rows = b.snapshot()
+        assertEquals(3, rows.size)
+        assertEquals(listOf(1L, 2L, 3L), rows.map { it.sequenceNumber })
+        assertEquals(listOf(pair[0].actualSql, pair[1].actualSql, pair[0].actualSql), rows.map { it.actualSql })
+        assertEquals(rows, stored)
+        assertEquals(3, accepted)
+        assertEquals(0, merged)
+        assertTrue(b.dedupeCountsSnapshot().isEmpty())
+        assertEquals(3, structureKeyCounts(rows)[pair[0].structureKey])
+    }
+
+    @Test
+    fun `UI013手动裁剪与重建不丢Sharding且不豁免其他三族`() {
+        val pair = shardingExecutions()
+        for (source in listOf(SqlSource.MYBATIS, SqlSource.HIBERNATE, SqlSource.JDBC)) {
+            val b = SqlLogEntryBuffer(maxEntries = 20)
+            b.dedupeEnabled = false
+            val plain = pair[0].copy(source = source, actualSql = null)
+            listOf(pair[0], plain, pair[1], plain.copy(timestamp = 1003)).forEach { assertTrue(b.addEntry(it)) }
+            b.dedupeEnabled = true
+            assertEquals(1, b.dedupeExisting())
+            assertEquals(2, b.snapshot().count { it.source == SqlSource.SHARDINGSPHERE })
+            assertEquals(listOf(pair[0].actualSql, pair[1].actualSql),
+                b.snapshot().filter { it.source == SqlSource.SHARDINGSPHERE }.map { it.actualSql })
+            assertFalse(b.addEntry(plain.copy(timestamp = 1004)))
+            assertTrue(b.addEntry(pair[1].copy(timestamp = 1005)))
+            b.rebuildDedupeIndexAfterHandoff(nowMs = 1006)
+            assertTrue(b.addEntry(pair[0].copy(timestamp = 1007)))
+            assertFalse(b.addEntry(plain.copy(timestamp = 1008)))
+        }
+    }
+
+    @Test
+    fun `UI013跨通道同键不吞Sharding也不污染其他三族融合`() {
+        for (source in listOf(SqlSource.MYBATIS, SqlSource.HIBERNATE, SqlSource.JDBC)) {
+            for (shardingFirst in listOf(true, false)) {
+                val b = SqlLogEntryBuffer(maxEntries = 10)
+                val sharding = shardingExecutions().first()
+                val bridge = sharding.copy(source = source, actualSql = null)
+                val agent = bridge.copy(timestamp = 1002, captureProvenance = CaptureProvenance.AGENT,
+                    sourceFile = "OrderService.java", sourceLine = 42, executionTimeMs = 7)
+                val firstTwo = if (shardingFirst) listOf(sharding, bridge) else listOf(bridge, sharding)
+                firstTwo.forEach { assertTrue(b.addEntry(it)) }
+                assertFalse(b.addEntry(agent))
+                val rows = b.snapshot()
+                assertEquals(2, rows.size)
+                assertEquals(sharding.actualSql, rows.single { it.source == SqlSource.SHARDINGSPHERE }.actualSql)
+                val merged = rows.single { it.source == source }
+                assertEquals(CaptureProvenance.MERGED, merged.captureProvenance)
+                assertEquals("OrderService.java", merged.sourceFile)
+                assertEquals(42, merged.sourceLine)
+                assertEquals(7L, merged.executionTimeMs)
+                // 重开/删除/淘汰回扫不得把 Sharding 放回索引，吞掉下一次其他族观察。
+                b.dedupeEnabled = false
+                b.dedupeEnabled = true
+                b.removeEntry(merged)
+                assertTrue(b.addEntry(agent.copy(timestamp = 1003)))
+                assertEquals(1, b.dedupeCount(bridge.restoredSql))
+            }
+        }
+    }
+
+    @Test
+    fun `UI013淘汰回扫不把Sharding重新装进其他来源索引`() {
+        val sharding = shardingExecutions().first()
+        val normal = sharding.copy(source = SqlSource.JDBC, actualSql = null)
+        val b = SqlLogEntryBuffer(maxEntries = 2)
+        assertTrue(b.addEntry(normal))
+        assertTrue(b.addEntry(sharding.copy(timestamp = 1001)))
+        assertTrue(b.addEntry(entry("SELECT unrelated", 1002))) // 淘汰 normal，同键只剩 Sharding。
+        assertTrue(b.addEntry(normal.copy(timestamp = 1003)))
+        assertFalse(b.addEntry(normal.copy(timestamp = 1004)))
+    }
+
+    @Test
+    fun `UI013缺失Actual也不据Logic推定重复`() {
+        val b = SqlLogEntryBuffer(maxEntries = 10)
+        val missing = shardingExecutions().first().copy(actualSql = null)
+        assertTrue(b.addEntry(missing))
+        assertTrue(b.addEntry(missing.copy(timestamp = 1002)))
+        assertEquals(0, b.dedupeExisting())
+        assertEquals(2, b.size())
+    }
+
     /** 窗口内同键重复必丢且计数；超窗重入必收（索引 upsert 面 + 窗口语义基线）。 */
     @Test
     fun `窗口内重复丢弃计数_超窗重入允许`() {

@@ -85,19 +85,7 @@ data class LogSqlEntry(
      * 摘要（列表展示用，智能截断：在第一行末尾或 MAX_SUMMARY_LENGTH 处取较小值，
      * 避免 mid-line 截断导致 multiline SQL 列表展示不完整）。
      */
-    val summary: String = run {
-        val newlineIdx = restoredSql.indexOf('\n')
-        val endIdx = when {
-            newlineIdx in 0 until MAX_SUMMARY_LENGTH -> newlineIdx  // 在第一行末尾截断
-            else -> minOf(restoredSql.length, MAX_SUMMARY_LENGTH)
-        }
-        // 160 UTF-16 code unit 边界可能落在 emoji 的代理对中间；只在此情形前移，避免输出半个字符。
-        val safeEndIdx = if (endIdx in 1 until restoredSql.length &&
-            Character.isHighSurrogate(restoredSql[endIdx - 1]) && Character.isLowSurrogate(restoredSql[endIdx])) {
-            endIdx - 1
-        } else endIdx
-        if (safeEndIdx < restoredSql.length) restoredSql.substring(0, safeEndIdx) + "…" else restoredSql
-    },
+    val summary: String = summarizeSql(restoredSql),
     /** 条目来源（MyBatis / Hibernate / 未知）。 */
     val source: SqlSource = SqlSource.UNKNOWN,
     /**
@@ -234,8 +222,30 @@ data class LogSqlEntry(
     /** 缓存对应的显示模式——读取处按当前模式比对，模式变更自动失效（无需显式清缓存）。 */
     var cachedListLineFragmentsMode: SqlListDisplayMode? = null
 
+    /**
+     * 缓存对应的脱敏态（R60 T-LaneB D96）：读取处按当前 displayMaskEnabled 比对——脱敏开关
+     * 翻转后旧缓存（打码/未打码形态）自动失效重渲染，防脏缓存（V112.3 附带发现）。
+     */
+    var cachedListLineFragmentsMasked: Boolean = false
+
+    /** 脱敏展示前先处理完整 SQL，避免旧摘要在字面量引号中间截断后漏打码。 */
+    var cachedMaskedSummary: String? = null
+
     companion object {
         private const val MAX_SUMMARY_LENGTH = 160
+
+        internal fun summarizeSql(sql: String): String {
+            val newlineIdx = sql.indexOf('\n')
+            val endIdx = when {
+                newlineIdx in 0 until MAX_SUMMARY_LENGTH -> newlineIdx
+                else -> minOf(sql.length, MAX_SUMMARY_LENGTH)
+            }
+            val safeEndIdx = if (endIdx in 1 until sql.length &&
+                Character.isHighSurrogate(sql[endIdx - 1]) && Character.isLowSurrogate(sql[endIdx])) {
+                endIdx - 1
+            } else endIdx
+            return if (safeEndIdx < sql.length) sql.substring(0, safeEndIdx) + "…" else sql
+        }
     }
 }
 
@@ -362,9 +372,9 @@ private val WHITESPACE_RUN_REGEX = Regex("""\s+""")
 internal fun logTimeKey(entry: LogSqlEntry): String = sqlFingerprint(normalizeSqlWhitespace(entry.rawSql))
 
 /**
- * T-AgentLogTime：日志时间配对的次级判别——参数**值**序列签名。
- * 同键（同一条 SQL 多次执行）时用它挑参数一致的那条；两侧渲染口径若分叉则退化为队首配对
- * （近似但不错失），故不做强制相等断言。无参语句两侧都是空串，天然相等。
+ * T-AgentLogTime：日志时间配对的参数**值**序列签名。
+ * 同键多次执行只消费签名相同的候选；两侧口径分叉则未命中，不借其他执行的时间。
+ * 无参语句两侧都是空串，天然相等，仍可按 FIFO 配对。
  * T-PS4-05：join 前逐值截断 [PARAM_SIGNATURE_MAX_CHARS]——超长 blob/JSON 参数不再整串进签名，
  * 相关器驻留有界（桥嗅探 put 与 agent take 共用本函数，截断天然等价）。
  */
@@ -470,7 +480,7 @@ internal fun isConsoleFallbackWithoutSource(entry: LogSqlEntry): Boolean =
 
 /**
  * T-PS4-05：签名单值截断上限（256 字符）。两侧（桥嗅探 put 与 agent take）走同一函数天然等价；
- * 次级判别失配本就设计为退化为队首配对（LogTimeCorrelator 注释），语义风险可控。
+ * 截断签名不同则拒绝配对；相同前缀的碰撞风险仍属于既有签名表示边界，本次不改编码。
  */
 internal const val PARAM_SIGNATURE_MAX_CHARS = 256
 

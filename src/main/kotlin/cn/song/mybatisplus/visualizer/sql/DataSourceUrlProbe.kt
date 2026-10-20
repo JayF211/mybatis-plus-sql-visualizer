@@ -31,6 +31,12 @@ internal object DataSourceUrlProbe {
         val atMs: Long,
     )
 
+    private class CandidateSlot(
+        val project: java.lang.ref.WeakReference<Project>,
+        val candidates: List<DialectDecisionEngine.Candidate>,
+        val atMs: Long,
+    )
+
     /** T-DialectQuoteWarn §十二：**按名**探测的单槽缓存（键＝项目身份 + 数据源名）。 */
     private class NamedUrlSlot(
         val project: java.lang.ref.WeakReference<Project>,
@@ -51,6 +57,8 @@ internal object DataSourceUrlProbe {
     /** T-DialectQuoteWarn §十二测试缝：按名探测替身（默认 null = 走真实反射链）。 */
     internal var probeByNameForTest: ((Project, String) -> String?)? = null
 
+    internal var probeCandidatesForTest: ((Project) -> List<DialectDecisionEngine.Candidate>)? = null
+
     /** T-PS5-03 测试缝：真实探测调用计数（断言 TTL 窗口内只探测一次）。 */
     internal val probeCount = java.util.concurrent.atomic.AtomicInteger(0)
 
@@ -59,6 +67,9 @@ internal object DataSourceUrlProbe {
 
     @Volatile
     private var namedSlot: NamedUrlSlot? = null
+
+    @Volatile
+    private var candidateSlot: CandidateSlot? = null
 
     /**
      * 取项目数据源列表中首个非空 URL（多数据源取列表序首个——DataSourceManager 列表序即
@@ -74,6 +85,18 @@ internal object DataSourceUrlProbe {
         val url = probeFirstUrl(project)
         slot = UrlSlot(java.lang.ref.WeakReference(project), url, now)
         return url
+    }
+
+    /** 多数据源只返回候选方言与会话内身份，不把连接 URL 留在决策模型中。 */
+    fun candidateDialects(project: Project?): List<DialectDecisionEngine.Candidate> {
+        if (project == null) return emptyList()
+        val now = clockMs()
+        candidateSlot?.let { cached ->
+            if (cached.project.get() === project && now - cached.atMs <= ttlMs) return cached.candidates
+        }
+        val candidates = probeCandidateDialects(project)
+        candidateSlot = CandidateSlot(java.lang.ref.WeakReference(project), candidates, now)
+        return candidates
     }
 
     /**
@@ -110,12 +133,43 @@ internal object DataSourceUrlProbe {
         if (cached != null && (project == null || cached.project.get() === project)) slot = null
         val named = namedSlot
         if (named != null && (project == null || named.project.get() === project)) namedSlot = null
+        val candidates = candidateSlot
+        if (candidates != null && (project == null || candidates.project.get() === project)) candidateSlot = null
     }
 
     /** T-PS5-03 测试缝：无条件清槽（用例隔离）。 */
     internal fun invalidateAllForTest() {
         slot = null
         namedSlot = null
+        candidateSlot = null
+    }
+
+    private fun probeCandidateDialects(project: Project): List<DialectDecisionEngine.Candidate> {
+        probeCandidatesForTest?.let {
+            probeCount.incrementAndGet()
+            return it(project)
+        }
+        probeForTest?.let {
+            val name = UrlSubprotocolDialects.dialectName(firstUrl(project)) ?: return emptyList()
+            return listOf(DialectDecisionEngine.Candidate("test-first-url", name))
+        }
+        probeCount.incrementAndGet()
+        return runCatching {
+            if (project.isDisposed) return emptyList()
+            val candidates = mutableListOf<DialectDecisionEngine.Candidate>()
+            dataSourceManagers(project).orEmpty().forEachIndexed managerLoop@ { managerIndex, manager ->
+                val dataSources = invoke(manager, "getDataSources") as? List<*> ?: return@managerLoop
+                dataSources.forEachIndexed sourceLoop@ { sourceIndex, source ->
+                    if (source == null) return@sourceLoop
+                    val config = invoke(source, "getConnectionConfig")
+                    val url = config?.let { invoke(it, "getUrl") as? String }
+                    candidates += DialectDecisionEngine.Candidate(
+                        "session-$managerIndex-$sourceIndex", UrlSubprotocolDialects.dialectName(url),
+                    )
+                }
+            }
+            candidates
+        }.getOrDefault(emptyList())
     }
 
     /** 真实探测（反射链，失败静默 null）；[probeForTest] 注入时走替身。 */

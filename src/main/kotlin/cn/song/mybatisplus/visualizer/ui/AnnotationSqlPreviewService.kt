@@ -1,6 +1,12 @@
 package cn.song.mybatisplus.visualizer.ui
 
+import cn.song.mybatisplus.visualizer.context.ActualSqlPsiResolver
+import cn.song.mybatisplus.visualizer.context.ModuleIdentityResolver
+import cn.song.mybatisplus.visualizer.context.PreviewSourceContext
+import cn.song.mybatisplus.visualizer.context.PreviewSourceOrigin
+import cn.song.mybatisplus.visualizer.context.SqlPsiResolution
 import cn.song.mybatisplus.visualizer.model.PreviewResult
+import cn.song.mybatisplus.visualizer.sql.DialectRegistry
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.xml.AnnotationSqlParser
 import cn.song.mybatisplus.visualizer.xml.ParamTypeInfo
@@ -70,20 +76,48 @@ object AnnotationSqlPreviewService {
     }
 
     /** 预览注解 SQL（解析失败/降级场景返回带 warning 的空结果，不抛异常）。 */
-    fun preview(annotation: PsiAnnotation, project: Project?): PreviewResult {
+    fun preview(annotation: PsiAnnotation, project: Project?, sourceContext: PreviewSourceContext? = null): PreviewResult {
         val shortName = annotation.qualifiedName?.substringAfterLast('.') ?: return nullResult()
+        val context = sourceContext ?: project?.let { resolveSourceContext(annotation, it) }
         return if (shortName in PROVIDER_ANNOTATIONS) {
-            previewProvider(annotation, shortName, project)
+            previewProvider(annotation, shortName, project, context)
         } else {
-            previewLiteral(annotation, shortName, project)
+            previewLiteral(annotation, shortName, project, context)
         }
+    }
+
+    internal fun resolveSourceContext(annotation: PsiAnnotation, project: Project): PreviewSourceContext {
+        val shortName = annotation.qualifiedName?.substringAfterLast('.')
+        val owner: com.intellij.psi.PsiElement = if (shortName in PROVIDER_ANNOTATIONS) {
+            val providerClass = resolveProviderClass(annotation, project)
+            val mapperMethod = PsiTreeUtil.getParentOfType(annotation, PsiMethod::class.java)
+            val methodName = constantString(annotation.findDeclaredAttributeValue("method"), project, mutableListOf())
+                ?: mapperMethod?.name ?: FALLBACK_METHOD_NAME
+            providerClass?.findMethodsByName(methodName, false)?.firstOrNull() ?: annotation
+        } else annotation
+        val host = owner.containingFile
+        val sqlResolution = if (host == null) SqlPsiResolution.None else runCatching {
+            com.intellij.openapi.application.ReadAction.compute<SqlPsiResolution, RuntimeException> {
+                ActualSqlPsiResolver.resolve(host, owner, owner.textOffset)
+            }
+        }.getOrDefault(SqlPsiResolution.None)
+        val moduleResolution = host?.virtualFile?.let { ModuleIdentityResolver.resolve(project, it) }
+            ?: cn.song.mybatisplus.visualizer.context.ModuleIdentityResolution.None
+        return PreviewSourceContext(
+            project = project,
+            origin = PreviewSourceOrigin.PSI,
+            hostPsiFile = host,
+            sqlPsiResolution = sqlResolution,
+            moduleResolution = moduleResolution,
+        )
     }
 
     // ------------------------------------------------------------------
     // 字面量注解
     // ------------------------------------------------------------------
 
-    private fun previewLiteral(annotation: PsiAnnotation, shortName: String, project: Project?): PreviewResult {
+    private fun previewLiteral(annotation: PsiAnnotation, shortName: String, project: Project?,
+                               sourceContext: PreviewSourceContext?): PreviewResult {
         val warnings = mutableListOf<String>()
         checkLanguageDriver(annotation, warnings)
 
@@ -99,14 +133,15 @@ object AnnotationSqlPreviewService {
         }
         val sql = values.joinToString(" ").trim()
         val method = PsiTreeUtil.getParentOfType(annotation, PsiMethod::class.java)
-        return buildResult(sql, shortName, previewParamTypes(method), warnings, project, method)
+        return buildResult(sql, shortName, previewParamTypes(method), warnings, project, method, sourceContext)
     }
 
     // ------------------------------------------------------------------
     // Provider 注解（L1 常量折叠）
     // ------------------------------------------------------------------
 
-    private fun previewProvider(annotation: PsiAnnotation, shortName: String, project: Project?): PreviewResult {
+    private fun previewProvider(annotation: PsiAnnotation, shortName: String, project: Project?,
+                                sourceContext: PreviewSourceContext?): PreviewResult {
         val warnings = mutableListOf<String>()
         checkLanguageDriver(annotation, warnings)
 
@@ -129,7 +164,7 @@ object AnnotationSqlPreviewService {
         if (sql == null) {
             return nullResult(MpSqlVisualizerBundle.message("annotation.provider.notSupported"))
         }
-        return buildResult(sql, shortName, previewParamTypes(mapperMethod), warnings, project, mapperMethod)
+        return buildResult(sql, shortName, previewParamTypes(mapperMethod), warnings, project, mapperMethod, sourceContext)
     }
 
     /** Provider type 解析：value/type 属性（PsiClassObjectAccessExpression）→ PsiClass。 */
@@ -237,6 +272,7 @@ object AnnotationSqlPreviewService {
         warnings: MutableList<String>,
         project: Project?,
         method: PsiMethod? = null,
+        sourceContext: PreviewSourceContext? = null,
     ): PreviewResult {
         val kind = when (shortName.removeSuffix("Provider")) {
             "Select" -> XmlStatementKind.SELECT
@@ -247,8 +283,12 @@ object AnnotationSqlPreviewService {
         return try {
             val staticValues = XmlPreviewService.resolveStaticFields(sql, project, warnings)
             val model = AnnotationSqlParser().parse(sql, kind, paramTypes.keys.toList(), staticValues, paramTypes)
+            val dialectDecision = sourceDecision(project, sourceContext)
             XmlPreviewService.applyPaginationShared(
-                XmlPreviewService.toResult(model, warnings),
+                XmlPreviewService.toResult(model, warnings).copy(
+                    renderedDialect = dialectDecision?.let { DialectRegistry.byName(it.dialectName) },
+                    dialectDecision = dialectDecision,
+                ),
                 project = project,
                 pageParamName = if (XmlPreviewService.paginationSimEnabled()) {
                     MapperPageParamLocator.fromMethod(method)
@@ -262,6 +302,12 @@ object AnnotationSqlPreviewService {
         } catch (e: XmlScriptException) {
             nullResult(e.message ?: "SQL 脚本解析失败。")
         }
+    }
+
+    private fun sourceDecision(project: Project?, context: PreviewSourceContext?):
+        cn.song.mybatisplus.visualizer.sql.DialectDecisionEngine.Decision? {
+        if (project == null) return null
+        return context?.let { DialectRegistry.decision(it) } ?: DialectRegistry.decision(project)
     }
 
     private fun nullResult(message: String? = null): PreviewResult = PreviewResult(

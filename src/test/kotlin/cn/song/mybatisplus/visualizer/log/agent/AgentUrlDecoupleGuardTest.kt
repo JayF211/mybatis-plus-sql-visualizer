@@ -45,7 +45,11 @@ class AgentUrlDecoupleGuardTest {
             "sql/Dialect.kt 读 agentUrl 必须走 AgentUrlRegistry（不得再经 AgentManager.getInstance 实例化服务）",
             !dialect.contains("AgentManager"),
         )
-        assertTrue("sql/Dialect.kt 应经持有者读取", dialect.contains("AgentUrlRegistry.lastConnectionUrl"))
+        val decisionBody = dialect.substring(
+            dialect.indexOf("fun decision("),
+            dialect.indexOf("fun effective("),
+        )
+        assertTrue("方言决策器必须直接从轻量持有者读取", decisionBody.contains("AgentUrlRegistry.lastConnectionUrl"))
 
         // 设置页：**仅推断状态行**不得实例化 AgentManager——该文件另有增强捕获状态行，读
         // AgentManager.statusSummary() 是其正当职责（设置页展示增强捕获状态），故按函数体收窄。
@@ -58,7 +62,9 @@ class AgentUrlDecoupleGuardTest {
             "设置页推断状态行不得实例化 AgentManager（仅展示状态不该带起守护线程）",
             !inferredBody.contains("AgentManager"),
         )
-        assertTrue("设置页推断状态行应经持有者读取", inferredBody.contains("AgentUrlRegistry.lastConnectionUrl"))
+        assertTrue("设置页必须以项目为单位取得方言决策", inferredBody.contains("DialectRegistry.decision(it)"))
+        assertTrue("设置页必须将同一决策交给状态文案层",
+            inferredBody.contains("DialectSettingsStatusText.describe(projects.size, decision)"))
     }
 
     @Test

@@ -98,4 +98,51 @@ class ExplainJsonPlanTreeTest {
         val roots = ExplainJsonPlanTree.build(listOf(listOf("  ", "")))
         assertNull(roots)
     }
+
+    // ---------- R61（V113①）：计划节点稳定标识 flattenPlanNodes ----------
+
+    @Test
+    fun `R61_扁平化提取节点_路径与对齐键`() {
+        val json = """
+            [{"Plan": {"Node Type": "Limit", "Total Cost": 12.5, "Plans": [
+                {"Node Type": "Seq Scan", "Relation Name": "t", "Plan Rows": 100, "Filter": "(a > 1)"}
+            ]}}]
+        """.trimIndent()
+        val nodes = ExplainJsonPlanTree.flattenPlanNodes(listOf(listOf(json)))
+        assertEquals(2, nodes.size)
+        assertEquals("0", nodes[0].path)
+        assertEquals("Limit#0", nodes[0].matchKey)
+        assertEquals("1", nodes[1].path)
+        assertEquals("Seq Scan on t#0", nodes[1].matchKey)
+        assertEquals(100L, nodes[1].rows)
+        assertEquals(12.5, nodes[0].cost!!, 0.0001)
+        assertNull(nodes[1].cost)
+        assertEquals(mapOf("Filter" to "(a > 1)"), nodes[1].extras)
+    }
+
+    @Test
+    fun `R61_同键兄弟节点按出现序消歧`() {
+        val json = """
+            [{"Plan": {"Node Type": "Nested Loop", "Plans": [
+                {"Node Type": "Seq Scan", "Relation Name": "t", "Plan Rows": 1},
+                {"Node Type": "Seq Scan", "Relation Name": "t", "Plan Rows": 2},
+                {"Node Type": "Seq Scan", "Relation Name": "u", "Plan Rows": 3}
+            ]}}]
+        """.trimIndent()
+        val nodes = ExplainJsonPlanTree.flattenPlanNodes(listOf(listOf(json)))
+        assertEquals(
+            listOf("Nested Loop#0", "Seq Scan on t#0", "Seq Scan on t#1", "Seq Scan on u#0"),
+            nodes.map { it.matchKey },
+        )
+        // 兄弟增删只挪 path，不影响同键配对（对齐键不随位置漂移）
+        assertEquals(listOf("0", "1", "2", "3"), nodes.map { it.path })
+    }
+
+    @Test
+    fun `R61_解析失败或非计划对象_空清单`() {
+        assertTrue(ExplainJsonPlanTree.flattenPlanNodes(listOf(listOf("not json"))).isEmpty())
+        assertTrue(ExplainJsonPlanTree.flattenPlanNodes(emptyList()).isEmpty())
+        // 非计划对象（无 Node Type）不下钻产出
+        assertTrue(ExplainJsonPlanTree.flattenPlanNodes(listOf(listOf("""[{"x": 1}]"""))).isEmpty())
+    }
 }

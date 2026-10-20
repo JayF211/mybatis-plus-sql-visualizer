@@ -60,6 +60,79 @@ import javax.swing.KeyStroke
  */
 class SqlPreviewPanelTest : BasePlatformTestCase() {
 
+    fun testShardingRouteAnnotationReadOnlyCollapsedAndCleared() {
+        cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state.displayMaskEnabled = false
+        val panel = SqlPreviewPanel(project)
+        com.intellij.openapi.util.Disposer.register(testRootDisposable, panel)
+        val actual = "ds_0 ::: SELECT * FROM ui_order_0 WHERE id = ? ::: [100]\n" +
+            "ds_1 ::: SELECT * FROM ui_order_1 WHERE id = ? ::: [100]"
+        // 无参数早退也必须可见；控件与执行文本分离，切换条目不留旧路由。
+        panel.showResult(result().copy(actualSql = actual))
+        val fold = UIUtil.uiTraverser(panel).filter(com.intellij.ui.HideableTitledPanel::class.java)
+            .toList().single { it.name == "shardingActualSqlFold" }
+        assertFalse(fold.isExpanded())
+        fold.setOn(true)
+        val text = UIUtil.uiTraverser(panel).filter(javax.swing.JTextArea::class.java)
+            .toList().single { it.name == "shardingActualSqlText" }
+        assertEquals(actual, text.text)
+        assertFalse(text.isEditable)
+        assertNotNull(panel.lastRenderedSqlForTest())
+        assertFalse(panel.lastRenderedSqlForTest()!!.contains("ds_0"))
+        panel.showResult(result())
+        assertTrue(UIUtil.uiTraverser(panel).filter(com.intellij.ui.HideableTitledPanel::class.java)
+            .toList().none { it.name == "shardingActualSqlFold" })
+        panel.clear()
+    }
+
+    fun testShardingRouteDisplayMaskOnOffAndLiveSettingsChange() {
+        val settings = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().state
+        val original = settings.displayMaskEnabled
+        val actual = "private_ds ::: SELECT * FROM physical_order WHERE code = ? ::: [Secret001, BOOK,100]"
+        val preview = result().copy(actualSql = actual)
+        try {
+            for (initialMask in listOf(true, false)) {
+                settings.displayMaskEnabled = initialMask
+                val panel = SqlPreviewPanel(project)
+                com.intellij.openapi.util.Disposer.register(testRootDisposable, panel)
+                panel.showResult(preview)
+                val fold = UIUtil.uiTraverser(panel).filter(com.intellij.ui.HideableTitledPanel::class.java)
+                    .toList().single { it.name == "shardingActualSqlFold" }
+                fold.setOn(true)
+                val text = UIUtil.uiTraverser(panel).filter(javax.swing.JTextArea::class.java)
+                    .toList().single { it.name == "shardingActualSqlText" }
+                fun assertProjection(mask: Boolean) {
+                    val expected = if (mask) MpSqlVisualizerBundle.message("log.preview.shardingRoutesMasked") else actual
+                    assertEquals(expected, text.text)
+                    assertFalse(text.isEditable)
+                    text.selectAll()
+                    assertEquals(expected, text.selectedText)
+                    if (mask) {
+                        for (secret in listOf("Secret001", "BOOK,100", "private_ds", "physical_order")) {
+                            assertFalse(text.text.contains(secret))
+                            assertFalse(text.selectedText.contains(secret))
+                            assertFalse(text.toolTipText.orEmpty().contains(secret))
+                        }
+                    }
+                    assertEquals("展示投影不得改原始预览数据", actual, preview.actualSql)
+                }
+                assertProjection(initialMask)
+                // 同一个已展开面板/同一个文本组件：开关变更即时清掉旧选区及可复制原文。
+                for (mask in listOf(!initialMask, initialMask, true)) {
+                    settings.displayMaskEnabled = mask
+                    com.intellij.openapi.application.ApplicationManager.getApplication().messageBus
+                        .syncPublisher(cn.song.mybatisplus.visualizer.config.PluginSettings.SETTINGS_CHANGE_TOPIC)
+                        .settingsChanged()
+                    assertNull(text.selectedText)
+                    assertProjection(mask)
+                    assertTrue(fold.isExpanded())
+                }
+                panel.clear()
+            }
+        } finally {
+            settings.displayMaskEnabled = original
+        }
+    }
+
     /** T-ClipboardIso：内存剪贴板（测试全程不碰系统剪贴板——原快照/还原写法在用户复制或
      *  并行会话占用剪贴板时会在 setUp 抛 cannot open system clipboard，且还原失败会污染用户剪贴板）。 */
     private lateinit var clipboard: FakeClipboardManager

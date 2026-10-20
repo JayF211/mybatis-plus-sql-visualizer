@@ -1,10 +1,11 @@
 package cn.song.mybatisplus.visualizer.log
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
+import cn.song.mybatisplus.visualizer.ui.SqlResultPanel
+import cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.util.UiTextClipboard
-import com.intellij.icons.AllIcons
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.actionSystem.ActionManager
 import com.intellij.openapi.actionSystem.AnAction
@@ -60,6 +61,9 @@ class LogToSqlPanel(
     private val statusLabel = JBLabel(" ").apply {
         border = JBUI.Borders.empty(2, 6, 2, 6)
     }
+
+    // 执行失败复用预览结果面板的完整错误/复制动作；日志无 mapper 源锚点，不提供定位动作。
+    private val executionErrorPanel = SqlResultPanel()
 
     // T-PreviewUx-Pack #2：诚实降级横幅（面板内嵌非模态提示，不算弹窗）——还原失败/参数缺失
     // 不再仅靠单行状态红字，横幅承载三要素（哪段没还原/为什么/用户能做什么）
@@ -122,6 +126,7 @@ class LogToSqlPanel(
         // 恢复即隐藏（不占高度），状态行语义不变
         val southHost = JPanel(BorderLayout())
         southHost.add(degradationBanner, BorderLayout.NORTH)
+        southHost.add(executionErrorPanel, BorderLayout.CENTER)
         southHost.add(statusLabel, BorderLayout.SOUTH)
         add(southHost, BorderLayout.SOUTH)
 
@@ -182,7 +187,7 @@ class LogToSqlPanel(
 
     private inner class ConvertAction : AnAction() {
         override fun update(e: AnActionEvent) {
-            e.presentation.icon = AllIcons.Actions.Execute
+            e.presentation.icon = MpvsIcons.Convert
             e.presentation.text = MpSqlVisualizerBundle.message("logToSql.panel.convert")
         }
 
@@ -195,16 +200,17 @@ class LogToSqlPanel(
      * O-92：从剪贴板读取日志文本填入输入区——「新增 UI 交互须照抄既有同类实现」定例：
      * 同族工具栏动作形态（update 设图标/文案 + actionPerformed 直调面板方法，同
      * [ConvertAction] / [CopyAction]）；填入即转照抄 [loadFromEntry]（列表「发送到日志转 SQL」
-     * 的既有同语义链路）。「有内容才启用」在 update 内探测剪贴板（同平台粘贴动作惯例；
-     * 工具窗工具栏刷新频度低，探测成本可忽略），剪贴板空点击给状态行轻提示（不弹窗，
-     * 弹窗克制红线）。图标 MenuPaste：243 基线 AllIcons$Actions javap 204 字段核实
+     * 的既有同语义链路）。F64（T-PerfSweep18，修法修正＝删 update 探针而非缓存）：
+     * 原「有内容才启用」在 update 内探测剪贴板＝每次工具栏刷新都 EDT 读剪贴板——
+     * 按钮改为常 enabled，剪贴板空点击走 O-92 既有状态行轻提示（[readFromClipboard]
+     * 空文本分支，零写入零弹窗），零 EDT 读剪贴板、少一个缓存失效面。
+     * 图标 MenuPaste：243 基线 AllIcons$Actions javap 204 字段核实
      * **无 Paste 字段**（MenuPaste/Menu_paste 在），自家动作同族取用防 NoSuchFieldError。
      */
     private inner class ReadClipboardAction : AnAction() {
         override fun update(e: AnActionEvent) {
-            e.presentation.icon = AllIcons.Actions.MenuPaste
+            e.presentation.icon = MpvsIcons.Paste
             e.presentation.text = MpSqlVisualizerBundle.message("logToSql.panel.readClipboard")
-            e.presentation.isEnabled = !UiTextClipboard.readText().isNullOrBlank()
         }
 
         override fun actionPerformed(e: AnActionEvent) {
@@ -214,7 +220,7 @@ class LogToSqlPanel(
 
     private inner class ClearInputAction : AnAction() {
         override fun update(e: AnActionEvent) {
-            e.presentation.icon = AllIcons.Actions.GC
+            e.presentation.icon = MpvsIcons.Clear
             e.presentation.text = MpSqlVisualizerBundle.message("logToSql.panel.clearInput")
         }
 
@@ -225,7 +231,7 @@ class LogToSqlPanel(
 
     private inner class CopyAction : AnAction() {
         override fun update(e: AnActionEvent) {
-            e.presentation.icon = AllIcons.Actions.Copy
+            e.presentation.icon = MpvsIcons.Copy
             e.presentation.text = MpSqlVisualizerBundle.message("logToSql.panel.copy")
             e.presentation.isEnabled = resultEditor.document.text.isNotBlank()
         }
@@ -239,7 +245,7 @@ class LogToSqlPanel(
     /** 压缩/多行切换：立即用当前输入重转（空输入不动作）。 */
     private inner class ToggleFormatAction : AnAction() {
         override fun update(e: AnActionEvent) {
-            e.presentation.icon = AllIcons.Actions.ReformatCode
+            e.presentation.icon = MpvsIcons.Format
             e.presentation.text = MpSqlVisualizerBundle.message("logToSql.panel.toggleFormat")
         }
 
@@ -251,7 +257,7 @@ class LogToSqlPanel(
 
     private inner class ClearResultAction : AnAction() {
         override fun update(e: AnActionEvent) {
-            e.presentation.icon = AllIcons.Actions.GC
+            e.presentation.icon = MpvsIcons.Clear
             e.presentation.text = MpSqlVisualizerBundle.message("logToSql.panel.clearResult")
         }
 
@@ -272,7 +278,7 @@ class LogToSqlPanel(
      */
     private inner class ExecuteResultAction : AnAction() {
         override fun update(e: AnActionEvent) {
-            e.presentation.icon = AllIcons.Actions.Execute
+            e.presentation.icon = MpvsIcons.Execute
             e.presentation.text = MpSqlVisualizerBundle.message("logToSql.panel.execute")
             e.presentation.isEnabled = resultEditor.document.text.isNotBlank()
         }
@@ -292,7 +298,7 @@ class LogToSqlPanel(
             return
         }
         if (statements.size == 1) {
-            executeStatement(statements[0])
+            executeSql(statements[0])
             return
         }
         // 多条：候选勾选浮层（CrudSqlPreviewFlow.showCandidates 同款范式——无按钮、
@@ -313,7 +319,7 @@ class LogToSqlPanel(
                 // 执行延后到选择浮层关闭之后（T-CrudSql 真机修复同款：不在选择 UI 的事件栈内
                 // 同步开 modeless 链路，262 实测会被吞且零异常零日志）
                 ApplicationManager.getApplication().invokeLater {
-                    executeStatement(selected.sql)
+                    executeSql(selected.sql)
                 }
             }
             .apply {
@@ -330,23 +336,49 @@ class LogToSqlPanel(
      *  列出发现（不新增弹窗形态/步骤），无发现时文案逐字节不变。
      *  弹窗白名单依据（BannedApiSourceScanTest「模态弹窗只允许白名单内既有场景」）：非查询提交前
      *  的 YesNo 确认属「用户必须做选择」场景，与 SqlPreviewPanel 执行确认同类。 */
-    private fun executeStatement(sql: String) {
+    private fun executeSql(sql: String) {
         val isQuery = cn.song.mybatisplus.visualizer.execute.SqlTypeClassifier.isQuery(sql)
         if (!isQuery) {
             val keyword = cn.song.mybatisplus.visualizer.execute.SqlTypeClassifier.getFirstKeyword(sql) ?: "SQL"
             val confirm = com.intellij.openapi.ui.Messages.showYesNoDialog(
                 project,
-                cn.song.mybatisplus.visualizer.execute.ExecuteConfirmMessages.build(sql, keyword),
+                cn.song.mybatisplus.visualizer.execute.ExecuteConfirmMessages.build(
+                    sql,
+                    keyword,
+                    // R52：日志还原链无预览会话方言，取当前生效方言（与渲染/执行链同源函数）
+                    cn.song.mybatisplus.visualizer.sql.DialectRegistry.effective(project),
+                ),
                 MpSqlVisualizerBundle.message("execute.confirm.dml"),
                 com.intellij.openapi.ui.Messages.getWarningIcon(),
             )
             if (confirm != com.intellij.openapi.ui.Messages.YES) return
         }
-        status(MpSqlVisualizerBundle.message("logToSql.execute.submitted"), error = false)
+        val dialectGateRequest = cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.rawSqlRequest(sql)
+        status(MpSqlVisualizerBundle.message("logToSql.execute.pending"), error = false)
         cn.song.mybatisplus.visualizer.execute.SqlExecutor.execute(
             project, sql, null, isQuery,
-            onError = { errorMsg -> status(errorMsg, error = true) },
+            onError = { errorMsg -> showExecutionError(errorMsg) },
+            onErrorRich = { info -> showExecutionErrorRich(info) },
+            dialectGateRequest = dialectGateRequest,
+            onSubmission = ::showSubmission,
         )
+    }
+
+    private fun showSubmission(outcome: cn.song.mybatisplus.visualizer.execute.ExecutionSubmission) {
+        if (!ApplicationManager.getApplication().isDispatchThread) {
+            ApplicationManager.getApplication().invokeLater(
+                { showSubmission(outcome) }, com.intellij.openapi.application.ModalityState.any(),
+            )
+            return
+        }
+        when (outcome) {
+            cn.song.mybatisplus.visualizer.execute.ExecutionSubmission.SUBMITTED ->
+                status(MpSqlVisualizerBundle.message("logToSql.execute.submitted"), error = false)
+            cn.song.mybatisplus.visualizer.execute.ExecutionSubmission.CANCELLED ->
+                status(MpSqlVisualizerBundle.message("logToSql.execute.cancelled"), error = false)
+            cn.song.mybatisplus.visualizer.execute.ExecutionSubmission.BLOCKED ->
+                showExecutionError(MpSqlVisualizerBundle.message("logToSql.execute.blocked"))
+        }
     }
 
     /** T-Perf-14：后台转换进行中标志（防重入）。 */
@@ -453,10 +485,12 @@ class LogToSqlPanel(
         parsers: LogParsers,
     ): ConversionOutput {
         text.lineSequence().forEach { line ->
-            parsers.myBatis.feed(line)
-            parsers.hibernate.feed(line)
-            parsers.jdbc.feed(line)
-            if (parsers.shardingEnabled) parsers.sharding.feed(line)
+            // F58（T-PerfSweep18 压轴）：同一行喂四解析器——线程 token 每行只提一次下传
+            val threadToken = LogThreadRouter.threadTokenOf(line)
+            parsers.myBatis.feed(line, threadToken)
+            parsers.hibernate.feed(line, threadToken)
+            parsers.jdbc.feed(line, threadToken)
+            if (parsers.shardingEnabled) parsers.sharding.feed(line, threadToken)
         }
         parsers.myBatis.closePending()
         parsers.hibernate.closePending()
@@ -540,8 +574,37 @@ class LogToSqlPanel(
         }
     }
 
-    /** 状态行（错误红字 / 提示主题色）。 */
+    /** 日志没有 mapper 来源锚点：保留富错误与复制，但不提供虚假的定位动作。 */
+    private fun showExecutionErrorRich(info: cn.song.mybatisplus.visualizer.execute.ExecutionErrorInfo) {
+        if (!ApplicationManager.getApplication().isDispatchThread) {
+            ApplicationManager.getApplication().invokeLater({ showExecutionErrorRich(info) },
+                com.intellij.openapi.application.ModalityState.any())
+            return
+        }
+        if (disposed || project.isDisposed) return
+        val text = cn.song.mybatisplus.visualizer.execute.ExecutionErrorFormatter.format(info)
+        status(text, error = true)
+        statusLabel.isVisible = false
+        executionErrorPanel.showErrorRich(info, null)
+    }
+
+    /** 执行链回调有 EDT 与后台两条路径；只在 EDT 更新面板，不弹窗。 */
+    private fun showExecutionError(message: String) {
+        if (!ApplicationManager.getApplication().isDispatchThread) {
+            ApplicationManager.getApplication().invokeLater({ showExecutionError(message) },
+                com.intellij.openapi.application.ModalityState.any())
+            return
+        }
+        if (disposed || project.isDisposed) return
+        status(message, error = true)
+        statusLabel.isVisible = false
+        executionErrorPanel.showError(message)
+    }
+
+    /** 状态行（错误红字 / 提示主题色）；普通状态恢复时撤销上次执行错误动作。 */
     private fun status(message: String, error: Boolean) {
+        executionErrorPanel.showEmpty()
+        statusLabel.isVisible = true
         statusLabel.foreground = if (error) {
             // IDE 标准错误前景命名色（亮暗主题自适应；243 HighlighterColors 无 ERROR 常量）
             JBColor.namedColor("ErrorForeground", JBColor.RED)
@@ -625,6 +688,9 @@ class LogToSqlPanel(
 
     /** O-92：等价点击「从剪贴板读取」。 */
     internal fun readClipboardForTest() = readFromClipboard()
+
+    /** F64：剪贴板动作本体（update 常 enabled 断言用，测试观察缝）。 */
+    internal fun readClipboardActionForTest() = readClipboardAction as AnAction
 
     internal fun toggleFormatForTest() {
         formatToggled = !formatToggled

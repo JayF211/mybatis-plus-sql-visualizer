@@ -200,6 +200,50 @@ object OgnlEvaluator {
         return out
     }
 
+    /** 只识别无法静态读取的对象属性载体，不反射执行用户 getter。 */
+    fun unsupportedPropertyPaths(text: String, bindings: Map<String, Any?>): Set<String> {
+        val parsed = parse(text) as? ParseResult.Ok ?: return emptySet()
+        val paths = linkedSetOf<String>()
+        fun walk(expr: OgnlExpr) {
+            when (expr) {
+                is OgnlExpr.Chain -> {
+                    walk(expr.base)
+                    var value: Any? = (expr.base as? OgnlExpr.RootRef)?.let { bindings[it.name] }
+                    var path = (expr.base as? OgnlExpr.RootRef)?.name.orEmpty()
+                    for (step in expr.steps) {
+                        when (step) {
+                            is ChainStep.Property -> {
+                                path = if (path.isEmpty()) step.name else "$path.${step.name}"
+                                if (value != null && value !is MockObject && value !is Map<*, *> &&
+                                    value !is Collection<*> && value !is Array<*> && value !is CharSequence) {
+                                    paths += path
+                                }
+                                value = property(value, step.name)
+                            }
+                            is ChainStep.Method -> {
+                                step.args.forEach(::walk)
+                                value = null
+                            }
+                            is ChainStep.Index -> {
+                                walk(step.expr)
+                                value = null
+                            }
+                        }
+                    }
+                }
+                is OgnlExpr.Unary -> walk(expr.operand)
+                is OgnlExpr.Binary -> {
+                    walk(expr.left)
+                    walk(expr.right)
+                }
+                is OgnlExpr.ListLiteral -> expr.items.forEach(::walk)
+                is OgnlExpr.Literal, is OgnlExpr.RootRef, is OgnlExpr.StaticFieldRef -> Unit
+            }
+        }
+        walk(parsed.expr)
+        return paths
+    }
+
     private fun collectStaticRefs(expr: OgnlExpr, out: MutableSet<String>) {
         when (expr) {
             is OgnlExpr.StaticFieldRef -> out += "${expr.className}@${expr.fieldName}"

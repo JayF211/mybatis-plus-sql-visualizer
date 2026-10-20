@@ -102,6 +102,7 @@ class ErrorReportDialog(
     private val fingerprint: String?,
     private val ideVersion: String?,
     private val pluginVersion: String?,
+    private val diagnosticDraft: cn.song.mybatisplus.visualizer.share.DiagnosticShareDraft? = null,
     /**
      * 用户点击提交后回调：携带最终请求/附件与勾选后的批次条目，以及提交结束回调；
      * 调用方拿到结果后必须回调它（成功/失败都要），对话框据此恢复按钮、渲染状态行、成功时自行关闭。
@@ -114,6 +115,8 @@ class ErrorReportDialog(
 ) : DialogWrapper(true) {
 
     internal val fields = ReportFormFields()
+    internal var diagnosticReview: cn.song.mybatisplus.visualizer.share.ui.DiagnosticReviewPanel? = null
+        private set
 
     /**
      * 上一次由预填分级写入的标题/描述（T-ErrorReportRedact）：勾选切换只在字段内容仍等于
@@ -205,11 +208,37 @@ class ErrorReportDialog(
         fields.anonymousCheck.isSelected = fields.nameField.text.isBlank()
 
         fields.browserLink.text = MpSqlVisualizerBundle.message("error.report.dialog.browser")
+        diagnosticDraft?.let { draft ->
+            require(prefill == null && stackText == null && fingerprint == null)
+            fields.titleField.text = MpSqlVisualizerBundle.message("share.review.title")
+            fields.attachStackCheck.isVisible = false
+            fields.attachStackCheck.isSelected = false
+            fields.attachMessageCheck.isVisible = false
+            diagnosticReview = cn.song.mybatisplus.visualizer.share.ui.DiagnosticReviewPanel(draft, fields.descriptionArea)
+            val revokeOnEdit = object : javax.swing.event.DocumentListener {
+                override fun insertUpdate(e: javax.swing.event.DocumentEvent) { diagnosticReview?.revokeConsent() }
+                override fun removeUpdate(e: javax.swing.event.DocumentEvent) { diagnosticReview?.revokeConsent() }
+                override fun changedUpdate(e: javax.swing.event.DocumentEvent) { diagnosticReview?.revokeConsent() }
+            }
+            listOf(fields.titleField, fields.nameField, fields.emailField).forEach {
+                it.document.addDocumentListener(revokeOnEdit)
+            }
+            fields.typeCombo.addActionListener { diagnosticReview?.revokeConsent() }
+            fields.categoryCombo.addActionListener { diagnosticReview?.revokeConsent() }
+            fields.anonymousCheck.addActionListener { diagnosticReview?.revokeConsent() }
+        }
 
         init()
     }
 
-    override fun createCenterPanel(): JComponent = buildCenterPanel(fields)
+    override fun createCenterPanel(): JComponent {
+        val form = buildCenterPanel(fields)
+        val review = diagnosticReview ?: return form
+        return JPanel(BorderLayout()).apply {
+            add(review, BorderLayout.NORTH)
+            add(form, BorderLayout.CENTER)
+        }
+    }
 
     override fun isResizable(): Boolean = true
 
@@ -281,7 +310,8 @@ class ErrorReportDialog(
     }
 
     override fun doValidate(): ValidationInfo? {
-        val key = validateForm(fields.titleField.text, fields.descriptionArea.text) ?: return null
+        val key = validateForm(fields.titleField.text, fields.descriptionArea.text)
+            ?: diagnosticReview?.validationKey() ?: return null
         val component = if (key == VALIDATION_TITLE_KEY) fields.titleField else fields.descriptionArea
         return ValidationInfo(MpSqlVisualizerBundle.message(key), component)
     }
@@ -309,6 +339,7 @@ class ErrorReportDialog(
      * （用户自行粘贴，T-FeedbackDlg3）——勾选但内容为空视同不附带。
      */
     internal fun collectStackAttachment(): FeedbackApi.StackAttachment? {
+        if (diagnosticDraft != null) return null
         if (!fields.attachStackCheck.isSelected) return null
         val stack = if (prefill != null) stackText else fields.stackPreview.text?.takeIf { it.isNotBlank() }
         if (stack == null) return null
@@ -326,13 +357,25 @@ class ErrorReportDialog(
             return
         }
         if (isSubmitting) return
+        diagnosticReview?.validationKey()?.let { key ->
+            finishSubmitting(FeedbackApi.SubmissionOutcome(
+                FeedbackApi.SubmitResult.Failure(MpSqlVisualizerBundle.message(key)),
+            ))
+            return
+        }
         // T-ErrReportSubmitNoOp：组装段整体纳入兜底——任一步抛错都必须落到状态行，不许再出现
         // 「点了没反应」（真机：容器越界异常外溢到 EDT，平台只记 SEVERE 日志，用户零反馈）
         val submission = runCatching {
-            composeSubmission(
-                FeedbackApi.Submission(collectRequest(), collectStackAttachment()),
-                selectedBatchItems(),
-            )
+            val review = diagnosticReview
+            if (review != null) {
+                val reviewed = review.takeSubmission() ?: error("Diagnostic consent is no longer valid")
+                FeedbackApi.Submission(collectRequest().copy(description = reviewed.description, attachments = emptyList()), null)
+            } else {
+                composeSubmission(
+                    FeedbackApi.Submission(collectRequest(), collectStackAttachment()),
+                    selectedBatchItems(),
+                )
+            }
         }.getOrElse { error ->
             LOG.warn("报告提交前置组装失败", error)
             finishSubmitting(

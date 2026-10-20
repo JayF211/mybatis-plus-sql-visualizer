@@ -1,6 +1,8 @@
 package cn.song.mybatisplus.visualizer.psi
 
+import cn.song.mybatisplus.visualizer.model.SqlFragment
 import cn.song.mybatisplus.visualizer.model.SqlValue
+import cn.song.mybatisplus.visualizer.sql.placeholderPositions
 import com.intellij.psi.JavaTokenType
 import com.intellij.psi.PsiClassObjectAccessExpression
 import com.intellij.psi.PsiExpression
@@ -23,6 +25,9 @@ object ExpressionEvaluator {
 
     /** 变量追踪最大深度，防止循环引用死循环。 */
     private const val MAX_TRACE_DEPTH = 5
+
+    /** 片段中用户自写、无可追溯来源的占位符所用的中性来源名（保持参数表与 `?` 数量对齐）。 */
+    private const val UNKNOWN_PARAM = "?"
 
     /**
      * 求值表达式。
@@ -68,7 +73,7 @@ object ExpressionEvaluator {
      * 求值字符串拼接表达式（清单 P11 `selectAs("alias.col" ...)`、P12 `last("LIMIT " + N)`）。
      *
      * 仅当连接符全为 `+` 且所有操作数可静态求值（字面量/可追踪变量/嵌套拼接）时拼接为字符串；
-     * 否则降级为占位符（运行时值）。
+     * 否则降级为占位符（运行时值），同时尽力给出该表达式的**原始 SQL 片段**形态（[fragmentOf]）。
      */
     private fun evaluatePolyadic(expr: PsiPolyadicExpression): SqlValue {
         if (expr.operationTokenType != JavaTokenType.PLUS) return SqlValue.Placeholder(expr.text)
@@ -76,11 +81,74 @@ object ExpressionEvaluator {
         for (operand in expr.operands) {
             when (val v = evaluate(operand)) {
                 is SqlValue.Literal -> parts += v.unquoted
-                else -> return SqlValue.Placeholder(expr.text)
+                else -> return SqlValue.Placeholder(expr.text, fragmentOf(expr))
             }
         }
         val joined = parts.joinToString("")
         return SqlValue.Literal(raw = "'" + joined.replace("'", "''") + "'", unquoted = joined)
+    }
+
+    /**
+     * 拼接表达式的「原始 SQL 片段」形态（T-UpdateSetSqlConcat）：静态段保留、运行期段写 `?`，
+     * 同时按文本顺序记录每个占位符的来源（片段里的 `?` 不登记进参数表就会让面板回填整体错位）。
+     *
+     * 例：`"amount = amount * " + rate` → 文本 `amount = amount * ?`、来源 `[rate]`。
+     *
+     * 来源按**真实占位符位点**收敛：字符串字面量/注释内的 `?` 不计（`first("/*+ ...(" + ms + ") */")`
+     * 的 `?` 在块注释里，不能凭空多出一个来源——那会让面板把后面的值填错位）。
+     *
+     * 只在整体是字符串拼接时才给值——数值算术（`1 + n`）不是 SQL 片段，给 null 以免拼出 `1?`。
+     */
+    private fun fragmentOf(expr: PsiPolyadicExpression): SqlFragment? {
+        if (expr.operationTokenType != JavaTokenType.PLUS) return null
+        if (!isStringConcat(expr)) return null
+        val text = StringBuilder()
+        // 文本位点 → 来源（仅用于最终按真实占位符位点过滤；注释/引号内的会被丢弃）
+        val marks = mutableListOf<Pair<Int, String>>()
+        fun appendRuntime(source: String) {
+            marks += text.length to source
+            text.append('?')
+        }
+        for (operand in expr.operands) {
+            when (val v = evaluate(operand)) {
+                is SqlValue.Literal -> {
+                    // 字面量里用户自写的 `?` 也是一次占位（注释/引号内的会被最终过滤掉）
+                    v.unquoted.forEachIndexed { index, ch ->
+                        if (ch == '?') marks += (text.length + index) to UNKNOWN_PARAM
+                    }
+                    text.append(v.unquoted)
+                }
+                is SqlValue.Placeholder -> {
+                    val nested = v.fragment
+                    if (nested != null) {
+                        // 嵌套拼接：按嵌套文本的**真实占位符位点**逐位对齐来源（引号/注释内的 `?` 不参与）
+                        val realOffsets = placeholderPositions(nested.text)
+                        nested.params.forEachIndexed { i, source ->
+                            realOffsets.getOrNull(i)?.let { at -> marks += (text.length + at) to source }
+                        }
+                        text.append(nested.text)
+                    } else {
+                        appendRuntime(v.source)
+                    }
+                }
+            }
+        }
+        val effective = placeholderPositions(text.toString()).toSet()
+        return SqlFragment(text.toString(), marks.filter { it.first in effective }.map { it.second })
+    }
+
+    /**
+     * 是否为字符串拼接：类型可解析时按 `String` 判定（Java 里 `String + 任意类型` 结果恒为 String），
+     * 类型解析不到（light fixture 缺 classpath 等）时回落到「任一操作数静态求值为字符串/字符字面量」
+     * ——判据取求值结果而非 PSI 字面量，这样变量追踪到的静态前缀（`String p = "a = "; p + x`）也能识别。
+     */
+    private fun isStringConcat(expr: PsiPolyadicExpression): Boolean {
+        if (expr.type?.equalsToText("java.lang.String") == true) return true
+        return expr.operands.any { operand ->
+            val value = evaluate(operand)
+            // 字符串/字符字面量的 raw 带单引号（见 SqlValue.Literal KDoc），数值原样
+            value is SqlValue.Literal && value.raw.startsWith("'")
+        }
     }
 
     /**

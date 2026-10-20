@@ -117,4 +117,102 @@ object ExplainJsonPlanTree {
         }
 
     private fun primitiveText(el: JsonElement): String = runCatching { el.asString }.getOrDefault(el.toString())
+
+    // ---------- R61（V113①）：计划节点稳定标识与结构化提取 ----------
+
+    /**
+     * R61（V113①）：JSON 计划节点的**结构化视图**（跨次对比的对齐底座）。
+     *
+     * 节点稳定标识双档：
+     *  - [PlanNodeInfo.path]＝结构位置路径（`"0"`、`"0.2"`——根序.子序，同次结果内唯一；
+     *  - [PlanNodeInfo.matchKey]＝对齐键 `nodeType on relation#出现序`（同键多次出现按前序
+     *    遍历出现序消歧）——跨次对比按本键对齐，兄弟增删只挪 path 不影响同键节点配对。
+     */
+    data class PlanNodeInfo(
+        /** 结构位置路径（根序.子序.……，同次结果内稳定唯一）。 */
+        val path: String,
+        /** 对齐键（nodeType + relation + 出现序——跨次对比的节点身份）。 */
+        val matchKey: String,
+        /** 人读标签（与展示树 planLabel 同口径）。 */
+        val label: String,
+        val nodeType: String,
+        val relation: String?,
+        /** Plan Rows，缺省退 Actual Rows（EXPLAIN ANALYZE）。 */
+        val rows: Long?,
+        /** Total Cost（PG JSON 档；缺 null 不虚标）。 */
+        val cost: Double?,
+        /** 其余标量键值（diff 细节比对面；对象/数组值跳过——标量才可比）。 */
+        val extras: Map<String, String>,
+    )
+
+    /**
+     * 把 EXPLAIN 结果行扁平化为计划节点清单（前序遍历；解析失败/非计划对象 → 空清单——
+     * 诚实降级：没有可对齐的结构就没有对比，调用方按无可比处理）。
+     */
+    fun flattenPlanNodes(rows: List<List<String>>): List<PlanNodeInfo> {
+        val out = mutableListOf<PlanNodeInfo>()
+        val ordinals = HashMap<String, Int>()
+        var rootOrdinal = 0
+        for (row in rows) {
+            for (cell in row) {
+                val text = cell.trim()
+                if (text.isEmpty()) continue
+                val parsed = runCatching { JsonParser.parseString(text) }.getOrNull() ?: continue
+                collectPlanObjects(parsed) { obj ->
+                    val nodeType = stringOf(obj, "Node Type") ?: return@collectPlanObjects
+                    val relation = stringOf(obj, "Relation Name") ?: stringOf(obj, "Alias")
+                    val base = buildString {
+                        append(nodeType)
+                        if (relation != null) append(" on ").append(relation)
+                    }
+                    val ord = ordinals.merge(base, 1, Int::plus)!! - 1
+                    val rowsVal = longOf(obj, "Plan Rows") ?: longOf(obj, "Actual Rows")
+                    val costVal = doubleOf(obj, "Total Cost")
+                    val extras = LinkedHashMap<String, String>()
+                    obj.entrySet().forEach { (k, v) ->
+                        if (k !in LABEL_KEYS && k != "Plans" && k != "Total Cost" && v.isJsonPrimitive) {
+                            extras[k] = primitiveText(v)
+                        }
+                    }
+                    out += PlanNodeInfo(
+                        path = "$rootOrdinal",
+                        matchKey = "$base#$ord",
+                        label = buildString {
+                            append(base)
+                            if (rowsVal != null) append(" (rows=").append(rowsVal).append(')')
+                        },
+                        nodeType = nodeType,
+                        relation = relation,
+                        rows = rowsVal,
+                        cost = costVal,
+                        extras = extras,
+                    )
+                    rootOrdinal++
+                }
+            }
+        }
+        return out
+    }
+
+    /** 递归收集计划对象（顶层包装塌缩语义与展示树一致：数组摊平、`{"Plan": …}` 单键包装下钻）。 */
+    private fun collectPlanObjects(el: JsonElement, sink: (com.google.gson.JsonObject) -> Unit) {
+        when {
+            el.isJsonArray -> el.asJsonArray.forEach { collectPlanObjects(it, sink) }
+            el.isJsonObject -> {
+                val obj = el.asJsonObject
+                if (obj.get("Node Type") != null) {
+                    sink(obj)
+                    obj.get("Plans")?.let { plans -> collectPlanObjects(plans, sink) }
+                } else if (obj.size() == 1) {
+                    collectPlanObjects(obj.entrySet().first().value, sink)
+                }
+            }
+            else -> Unit
+        }
+    }
+
+    private fun doubleOf(obj: com.google.gson.JsonObject, key: String): Double? =
+        obj.get(key)?.takeIf { it.isJsonPrimitive }?.let {
+            runCatching { it.asDouble }.getOrNull() ?: runCatching { it.asString.trim().toDoubleOrNull() }.getOrNull()
+        }
 }

@@ -168,7 +168,9 @@ dependencies {
         // 录制态可选：把 robot-server 作为本地插件依赖交给 prepareSandbox 一起安装，
         // 不覆盖 idea.plugins.path（覆盖会让主插件与 AI Assistant 消失）。
         // 首次使用先运行 record/bootstrap-robot-server.py 下载到被忽略的本地目录。
-        if (gifRecord && providers.gradleProperty("gifRobotServer").orNull == "true") {
+        // T-DevFullUI：-PgifRobotServer=true 独立生效（不再要求 gifRecord 同开——
+        // gifRecord 会切 262 平台与 GifFresh 沙盒，UI243 验收沙盒用不了）。
+        if (providers.gradleProperty("gifRobotServer").orNull == "true") {
             val robotServer = file("record/robot-plugins/robot-server-plugin")
             require(robotServer.resolve("lib").isDirectory) {
                 "缺少 robot-server：先运行 python record/bootstrap-robot-server.py"

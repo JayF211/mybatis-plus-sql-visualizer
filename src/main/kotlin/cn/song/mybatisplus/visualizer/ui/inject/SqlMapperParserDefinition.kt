@@ -76,8 +76,16 @@ class SqlMapperParserDefinition : PlainTextParserDefinition() {
          * [cn.song.mybatisplus.visualizer.update.BarrierRegistry]。测试环境无应用容器时
          * 退回两参裸注册（无卸载语义，测试自清理）。
          */
-        @Synchronized
         fun ensureRegistered() {
+            // F67（T-PerfSweep18）：前置 registered 短路——@Volatile 读零锁零注册表查询，
+            // 进程内一次注册后的常态调用不再进监视器；registered 赋值在锁内（双检安全，
+            // 竞态下第二个进锁者由 forLanguage 在位判定兜底，幂等无害）。
+            if (registered != null) return
+            ensureRegisteredLocked()
+        }
+
+        @Synchronized
+        private fun ensureRegisteredLocked() {
             val registry = com.intellij.lang.LanguageParserDefinitions.INSTANCE
             if (registry.forLanguage(SqlMapperLanguage) != null) return
             val def = SqlMapperParserDefinition()

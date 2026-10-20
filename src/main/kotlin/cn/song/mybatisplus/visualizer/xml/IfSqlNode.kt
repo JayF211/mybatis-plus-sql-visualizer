@@ -19,8 +19,12 @@ class IfSqlNode(val contents: SqlNode, val test: String) : SqlNode {
         return truth
     }
 
-    private fun evaluate(context: DynamicContext): Boolean =
-        when (val result = OgnlEvaluator.evaluate(test, context.bindings, context.staticFieldValues)) {
+    private fun evaluate(context: DynamicContext): Boolean {
+        val unknownPaths = OgnlEvaluator.unsupportedPropertyPaths(test, context.bindings)
+        if (unknownPaths.isNotEmpty()) {
+            context.errors += "条件表达式无法静态读取对象属性 ${unknownPaths.joinToString(", ")}：'$test'；请核对运行时 SQL 或在预览面板覆盖条件"
+        }
+        return when (val result = OgnlEvaluator.evaluate(test, context.bindings, context.staticFieldValues)) {
             is EvalResult.Ok -> OgnlEvaluator.isTrue(result.value)
             is EvalResult.Err -> {
                 // T-EP-02：不再静默 true——展开行为不变（面板开关是第一真值源，开关缺席时预览容错），
@@ -29,6 +33,7 @@ class IfSqlNode(val contents: SqlNode, val test: String) : SqlNode {
                 true
             }
         }
+    }
 }
 
 /**

@@ -1,5 +1,7 @@
 package cn.song.mybatisplus.visualizer.model
 
+import cn.song.mybatisplus.visualizer.sql.Dialect
+import cn.song.mybatisplus.visualizer.sql.DialectDecisionEngine
 import cn.song.mybatisplus.visualizer.sql.ParamHint
 import cn.song.mybatisplus.visualizer.sql.perf.PerfWarning
 import cn.song.mybatisplus.visualizer.xml.PagesColumn
@@ -89,6 +91,8 @@ data class PreviewResult(
      * 仅供面板重渲染路径复用。null = 无分页 LIMIT（未分页 / count·exists 消费 / 已含手写 LIMIT / 开关关闭）。
      */
     val paginationLimitLine: String? = null,
+    /** 分页后处理新增占位的来源序列；与原 SQL 的位置映射分开保存，重渲染不得按名称去重。 */
+    val paginationParamSources: List<String> = emptyList(),
     /**
      * T-JpaParamOrder F3：JPA 命名参数占位符名序（HQL `:name` 首现序，与转换后 SQL 中 `?` 一一对应）。
      * 非空时渲染/复制按名回填（同名占位复用同值，JPA 命名参数语义），与 setParameter 书写顺序解耦；
@@ -121,4 +125,13 @@ data class PreviewResult(
      * 使开关切换不再影响参数历史归属。null = 回落 [sql]（存量行为零变化）。
      */
     val historyFingerprintSeed: String? = null,
-)
+    val renderedDialect: Dialect? = null,
+    /** 本次渲染瞬态证据快照，仅携带方言名/来源/候选 UUID；不保存 JDBC URL 或 PSI。 */
+    val dialectDecision: DialectDecisionEngine.Decision? = null,
+    /** R90：本次预览实际入库条目，recordHistory 在返回结果前设置；副本保留，未知为空。 */
+    var historyEntryId: String = "",
+    /** ShardingSphere 路由日志原文，只读附注，不参与 SQL 编辑、复制或执行。 */
+    val actualSql: String? = null,
+) {
+    val effectiveDialect: Dialect? get() = previewModel?.dialect ?: batchModel?.dialect ?: renderedDialect
+}

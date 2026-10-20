@@ -434,15 +434,18 @@ internal class LogEntryListCellRenderer : JPanel(BorderLayout()), javax.swing.Li
      */
     private fun sqlLineFragmentsFor(entry: LogSqlEntry): List<List<SqlTextFragment>> {
         val mode = PluginSettings.getInstance().sqlListDisplayMode()
-        val sql = withTerminator(if (mode == SqlListDisplayMode.FORMATTED) entry.restoredSql else entry.summary)
+        // R60：展示文本打码、原始条目不动；缓存同时以模式和脱敏态为键，防切换后复用旧语义片段。
+        val maskOn = PluginSettings.getInstance().state.displayMaskEnabled
+        val sql = withTerminator(displaySqlForList(entry, mode, maskOn))
         if (mode == SqlListDisplayMode.SINGLE_LINE) {
             return listOf(SqlListFragmentRenderer.renderFragments(sql))
         }
         val semantics = entry.cachedListLineFragments
-            ?.takeIf { entry.cachedListLineFragmentsMode == mode }
+            ?.takeIf { entry.cachedListLineFragmentsMode == mode && entry.cachedListLineFragmentsMasked == maskOn }
             ?: SqlListFragmentRenderer.semanticLineFragments(sql, mode).also {
                 entry.cachedListLineFragments = it
                 entry.cachedListLineFragmentsMode = mode
+                entry.cachedListLineFragmentsMasked = maskOn
             }
         return visibleSqlLines(SqlListFragmentRenderer.projectLineFragments(semantics), mode)
     }

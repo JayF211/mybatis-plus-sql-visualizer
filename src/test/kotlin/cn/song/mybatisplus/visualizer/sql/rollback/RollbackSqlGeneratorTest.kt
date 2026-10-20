@@ -252,6 +252,19 @@ class RollbackSqlGeneratorTest {
     }
 
     @Test
+    fun `TSV解析_UI018单列无Tab与逗号数据不扩展为CSV`() {
+        assertEquals(
+            Pair(listOf("id"), listOf(listOf("71"))),
+            RollbackSqlGenerator.parseSnapshotTsv("id\r\n71\r\n"),
+        )
+        assertEquals(
+            Pair(listOf("id", "username"), listOf(listOf("71", "M19,FAKE_USER"))),
+            RollbackSqlGenerator.parseSnapshotTsv("id\tusername\n71\tM19,FAKE_USER"),
+        )
+        assertNull(RollbackSqlGenerator.parseSnapshotTsv("invalid_snapshot"))
+    }
+
+    @Test
     fun `TSV解析_空文本与单行返回null`() {
         assertNull(RollbackSqlGenerator.parseSnapshotTsv(""))
         assertNull(RollbackSqlGenerator.parseSnapshotTsv("a\tb"))

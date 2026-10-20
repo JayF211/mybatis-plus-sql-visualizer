@@ -10,6 +10,10 @@ package cn.song.mybatisplus.visualizer.model
  * @param tableAlias 主表别名（T-M21-08：UpdateJoinWrapper 联表更新渲染 `UPDATE 表名 别名`；单表更新为 null）
  * @param joins 联表子句（T-M21-08：UpdateJoinWrapper 渲染于 FROM 之后、SET 之前，
  *              `UPDATE user t LEFT JOIN address t1 ON (t1.user_id = t.id) SET ...`）
+ * @param unparsedSets 解析失败的 SET 调用原文（T-UpdateSetSqlConcat）：`setSql(sqlVar)` 这类
+ *              纯运行期片段静态不可还原，只能省略；此处留痕供 UI 警示，
+ *              避免静默产出「无 SET」的非法 SQL
+ * @param rawTailParams [rawTail] 中占位符 `?` 的来源（按出现顺序，T-UpdateSetSqlConcat）
  */
 data class UpdateStatement(
     override val table: TableInfo,
@@ -18,6 +22,8 @@ data class UpdateStatement(
     val rawTail: String? = null,
     val tableAlias: String? = null,
     val joins: List<JoinClause> = emptyList(),
+    val unparsedSets: List<String> = emptyList(),
+    val rawTailParams: List<String> = emptyList(),
 ) : SqlStatement()
 
 /**
@@ -31,6 +37,8 @@ data class SetClause(
     val column: ColumnRef? = null,
     val value: SqlValue? = null,
     val rawSql: String? = null,
+    /** [rawSql] 中占位符 `?` 的来源（按出现顺序，T-UpdateSetSqlConcat）：渲染时按序登记进参数表。 */
+    val rawParams: List<String> = emptyList(),
 ) {
     /** 是否为原始 SQL 形式（setSql）。 */
     val isRaw: Boolean get() = rawSql != null

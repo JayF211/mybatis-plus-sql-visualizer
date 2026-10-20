@@ -28,6 +28,9 @@ object PaginationSimulator {
     /** COUNT 包裹表别名（MP getOriginalCountSql 固定形态）。 */
     private const val COUNT_ALIAS = "TOTAL"
 
+    /** F60（T-PerfSweep18）：LIMIT 子句探测（原 hasExistingLimit 函数体内现场 Regex，提 object 单例；internal＝同一 Pattern 实例断言观察缝）。 */
+    internal val LIMIT_CLAUSE = Regex("(?i)\\bLIMIT\\b")
+
     /**
      * COUNT 包裹（基础形态，D2=A）：`SELECT COUNT(*) FROM (原SQL) TOTAL`。
      *
@@ -51,7 +54,7 @@ object PaginationSimulator {
      * V13c 边界判定：语句文本是否已含 LIMIT 子句（顶层或子查询一律从保守——已含即不模拟追加，
      * 避免双 LIMIT 产出；对 MP 运行时「字面拼接不分现况」的偏离已登记为预览侧保守口径）。
      */
-    fun hasExistingLimit(sql: String): Boolean = Regex("(?i)\\bLIMIT\\b").containsMatchIn(sql)
+    fun hasExistingLimit(sql: String): Boolean = LIMIT_CLAUSE.containsMatchIn(sql)
 
     /** 分页占位 `?` 的参数来源清单（offset 公式在前、size 在后，顺序与 SQL 中出现序一致）。 */
     fun placeholderParamSources(paramName: String): List<String> = listOf(

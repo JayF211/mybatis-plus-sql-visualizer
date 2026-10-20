@@ -1,12 +1,15 @@
 package cn.song.mybatisplus.visualizer.actions
 
+import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.openapi.actionSystem.ActionManager
 import com.intellij.openapi.actionSystem.ActionPlaces
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.CommonDataKeys
 import com.intellij.openapi.actionSystem.Presentation
 import com.intellij.testFramework.MapDataContext
+import com.intellij.testFramework.PlatformTestUtil
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 
@@ -19,6 +22,7 @@ class ConvertToSqlActionTest : BasePlatformTestCase() {
 
     private fun eventFor(file: com.intellij.psi.PsiFile?, editor: com.intellij.openapi.editor.Editor?): AnActionEvent {
         val dc = MapDataContext()
+        dc.put(CommonDataKeys.PROJECT.name, project)
         if (file != null) dc.put(CommonDataKeys.PSI_FILE.name, file)
         if (editor != null) dc.put(CommonDataKeys.EDITOR.name, editor)
         return AnActionEvent(null, dc, ActionPlaces.UNKNOWN, Presentation(), ActionManager.getInstance(), 0)
@@ -36,6 +40,45 @@ class ConvertToSqlActionTest : BasePlatformTestCase() {
         val e = eventFor(myFixture.file, myFixture.editor)
         ConvertToSqlAction().update(e)
         assertTrue("XML mapper 文件应启用", e.presentation.isEnabledAndVisible)
+    }
+
+    fun testUpdate_Kotlin文件主动入口可达且命中Wrapper时给专用降级说明() {
+        myFixture.configureByText(
+            "Demo.kt",
+            """
+            fun query() {
+                service.ktQuery().eq(User::name, "x").list()
+            }
+            """.trimIndent(),
+        )
+        val offset = myFixture.file.text.indexOf("ktQuery")
+        myFixture.editor.caretModel.moveToOffset(offset)
+        val event = eventFor(myFixture.file, myFixture.editor)
+        ConvertToSqlAction().update(event)
+        assertTrue("Kotlin 主动快捷入口应保持可达", event.presentation.isEnabledAndVisible)
+        assertTrue(ConvertToSqlAction.kotlinWrapperUnavailableAt(myFixture.file, offset))
+
+        val captured = java.util.concurrent.atomic.AtomicReference<com.intellij.notification.Notification?>()
+        ConvertToSqlAction.kotlinWrapperUnavailableNoticeForTest = { captured.set(it) }
+        try {
+            ConvertToSqlAction().actionPerformed(event)
+            PlatformTestUtil.waitWithEventsDispatching(
+                "Kotlin Wrapper 主动入口应给降级说明",
+                { captured.get() != null },
+                5_000,
+            )
+            val notification = captured.get()!!
+            assertEquals(MpSqlVisualizerBundle.message("action.kotlinWrapperUnsupported.title"), notification.title)
+            assertEquals(MpSqlVisualizerBundle.message("action.kotlinWrapperUnsupported.message"), notification.content)
+        } finally {
+            ConvertToSqlAction.kotlinWrapperUnavailableNoticeForTest = null
+        }
+    }
+
+    fun testUpdate_Kotlin普通行不误判Wrapper降级() {
+        myFixture.configureByText("Demo.kt", "fun query() = println(\"ok\")")
+        val offset = myFixture.file.text.indexOf("println")
+        assertFalse(ConvertToSqlAction.kotlinWrapperUnavailableAt(myFixture.file, offset))
     }
 
     fun testUpdate_非Java非Xml文件不可见() {

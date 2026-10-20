@@ -57,8 +57,15 @@ class SqlPreviewServiceJpaQueryDeepTest : BasePlatformTestCase() {
             }
             """.trimIndent(),
         )
-        val result = newService().preview(call("findAll"))
+        val source = myFixture.file.virtualFile
+        cn.song.mybatisplus.visualizer.sql.IdeaSourceDialectProbe.languageIdForTest = { _, file ->
+            assertEquals(source, file)
+            "Oracle"
+        }
+        val result = newService().previewQueryByExample(call("findAll"))
         assertNotNull("Example 查询应产出预览", result)
+        assertEquals("Oracle", result!!.renderedDialect?.name)
+        assertEquals("Oracle", result.dialectDecision?.dialectName)
         assertEquals(
             """
             SELECT id, user_name, age
@@ -297,8 +304,15 @@ class SqlPreviewServiceJpaQueryDeepTest : BasePlatformTestCase() {
             }
             """.trimIndent(),
         )
+        val source = myFixture.file.virtualFile
+        cn.song.mybatisplus.visualizer.sql.IdeaSourceDialectProbe.languageIdForTest = { _, file ->
+            assertEquals(source, file)
+            "PostgreSQL"
+        }
         val result = newService().previewProcedure(method("countByProc"))
         assertNotNull("@Procedure 方法应产出预览", result)
+        assertEquals("PostgreSQL", result!!.renderedDialect?.name)
+        assertEquals("PostgreSQL", result.dialectDecision?.dialectName)
         assertEquals(
             "CALL proc_user_stat(?)\n-- 输出参数：total（注册为 OUT 参数，执行后按名取值）",
             result!!.sql,
@@ -555,6 +569,7 @@ class SqlPreviewServiceJpaQueryDeepTest : BasePlatformTestCase() {
     override fun tearDown() {
         PluginSettings.getInstance().state.injectTenantLine = false
         PluginSettings.getInstance().state.dialect = PluginSettings.DEFAULT_DIALECT
+        cn.song.mybatisplus.visualizer.sql.IdeaSourceDialectProbe.languageIdForTest = null
         super.tearDown()
     }
 

@@ -56,6 +56,23 @@ object SqlLogParamCodec {
 
     private val gson = Gson()
 
+    /** 修订仅升级元数据：匹配首次 SQL/绑定值/捕获时间，不使用可重置的 UI 序号。 */
+    internal fun historyIdentity(entry: LogSqlEntry): String {
+        val original = JsonArray().apply {
+            add(entry.rawSql.trim().removeSuffix(";").trim())
+            add(entry.restoredSql.trim().removeSuffix(";").trim())
+            add(entry.timestamp)
+            add(JsonArray().apply { entry.params.forEach { p ->
+                add(JsonArray().apply {
+                    add(p.value?.let(::JsonPrimitive) ?: JsonNull.INSTANCE)
+                    add(p.type?.let(::JsonPrimitive) ?: JsonNull.INSTANCE)
+                })
+            } })
+        }
+        return java.security.MessageDigest.getInstance("SHA-256")
+            .digest(gson.toJson(original).toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
+    }
+
     /** pd 载荷解码结果。[mapperStatement] / [errorText] / [requestTag] / [updateCount] 为 M56 扩展字段，旧 payload 为 null。 */
     data class DecodedPayload(
         val rawSql: String,
@@ -94,57 +111,63 @@ object SqlLogParamCodec {
      * 编码条目为 Base64 载荷：rawSql + params 恒写；M56 扩展字段（mapperStatement/errorText/
      * requestTag/updateCount）仅非默认时落键，旧版本插件解码端忽略未知键（gson 宽松解析）。
      */
-    fun encodeEntry(entry: LogSqlEntry): String {
-        val obj = JsonObject().apply {
-            addProperty(RAW_FIELD, entry.rawSql)
-            add(
-                PARAMS_FIELD,
-                JsonArray().apply {
-                    entry.params.forEach { p ->
-                        add(
-                            JsonArray().apply {
-                                add(if (p.value == null) JsonNull.INSTANCE else JsonPrimitive(p.value))
-                                add(if (p.type == null) JsonNull.INSTANCE else JsonPrimitive(p.type))
-                            },
-                        )
-                    }
-                },
-            )
-            entry.mapperStatement?.let { addProperty(MAPPER_FIELD, it) }
-            entry.errorText?.let { addProperty(ERROR_FIELD, it) }
-            entry.requestTag?.let { addProperty(TAG_FIELD, it) }
-            entry.updateCount?.let { addProperty(UPDATE_COUNT_FIELD, it) }
-            // T-SourceJumpFunnel：候选/栈快照（非默认才落键，旧版本解码端忽略未知键）
-            if (entry.sourceCandidates.isNotEmpty()) {
-                add(
-                    CANDS_FIELD,
-                    JsonArray().apply {
-                        entry.sourceCandidates.forEach { (file, line) ->
-                            add(JsonArray().apply { add(file); add(line) })
-                        }
-                    },
-                )
-            }
-            if (entry.candidateClasses.isNotEmpty()) {
-                add(
-                    CAND_CLASSES_FIELD,
-                    JsonArray().apply { entry.candidateClasses.forEach { add(it) } },
-                )
-            }
-            entry.stackDigest?.let { addProperty(STACK_DIGEST_FIELD, it) }
-            entry.actualSql?.let { addProperty(ACTUAL_SQL_FIELD, it) }
-            // O-147：捕获路径仅非 UNKNOWN 落键（枚举名非序号，新增常量不使旧文件失效）
-            if (entry.captureProvenance != CaptureProvenance.UNKNOWN) {
-                addProperty(PROVENANCE_FIELD, entry.captureProvenance.name)
-            }
-            // T-McpAuditTrail T-MAT-03：来源标记——仅 MCP 落键（本任务范围：其余来源的读回口径
-            // 维持 UNKNOWN 不变，不做未立项的行为扩张）。枚举名而非序号：新增常量不使旧文件失效。
-            // R10：SHARDINGSPHERE 同样落键——控制台解析产出的来源若无键，历史读回退化为 UNKNOWN。
-            if (entry.source == SqlSource.MCP || entry.source == SqlSource.SHARDINGSPHERE) {
-                addProperty(SOURCE_FIELD, entry.source.name)
+    fun encodeEntry(entry: LogSqlEntry): String = java.io.StringWriter().also { writeEncodedEntry(entry, it) }.toString()
+
+    /** JSON → UTF-8 → Base64 均增量写入，修订调用方可以在任意字节预算处中止。 */
+    internal fun writeEncodedEntry(entry: LogSqlEntry, target: java.io.Writer) {
+        val ascii = object : java.io.OutputStream() {
+            override fun write(b: Int) { target.write(b) }
+            override fun write(b: ByteArray, off: Int, len: Int) {
+                var at = off
+                while (at < off + len) {
+                    val n = minOf(1024, off + len - at)
+                    target.write(String(b, at, n, Charsets.US_ASCII)); at += n
+                }
             }
         }
-        return Base64.getEncoder().encodeToString(gson.toJson(obj).toByteArray(Charsets.UTF_8))
+        val encoded = Base64.getEncoder().wrap(ascii)
+        val utf8 = java.io.OutputStreamWriter(encoded, Charsets.UTF_8)
+        val json = gson.newJsonWriter(ChunkedWriter(utf8))
+        json.beginObject()
+        json.name(RAW_FIELD).value(entry.rawSql)
+        json.name(PARAMS_FIELD).beginArray()
+        entry.params.forEach { p -> json.beginArray().value(p.value).value(p.type).endArray() }
+        json.endArray()
+        entry.mapperStatement?.let { json.name(MAPPER_FIELD).value(it) }
+        entry.errorText?.let { json.name(ERROR_FIELD).value(it) }
+        entry.requestTag?.let { json.name(TAG_FIELD).value(it) }
+        entry.updateCount?.let { json.name(UPDATE_COUNT_FIELD).value(it) }
+        if (entry.sourceCandidates.isNotEmpty()) {
+            json.name(CANDS_FIELD).beginArray()
+            entry.sourceCandidates.forEach { (file, line) -> json.beginArray().value(file).value(line).endArray() }
+            json.endArray()
+        }
+        if (entry.candidateClasses.isNotEmpty()) {
+            json.name(CAND_CLASSES_FIELD).beginArray()
+            entry.candidateClasses.forEach { json.value(it) }
+            json.endArray()
+        }
+        entry.stackDigest?.let { json.name(STACK_DIGEST_FIELD).value(it) }
+        entry.actualSql?.let { json.name(ACTUAL_SQL_FIELD).value(it) }
+        if (entry.captureProvenance != CaptureProvenance.UNKNOWN) json.name(PROVENANCE_FIELD).value(entry.captureProvenance.name)
+        if (entry.source == SqlSource.MCP || entry.source == SqlSource.SHARDINGSPHERE) json.name(SOURCE_FIELD).value(entry.source.name)
+        json.endObject()
+        json.close() // 输出 Base64 尾块，不关闭外部 target。
+    }
+
+    /** 避免 OutputStreamWriter.write(String) 将巨型 String 一次转成 char[]。 */
+    internal class ChunkedWriter(private val target: java.io.Writer) : java.io.Writer() {
+        override fun write(cbuf: CharArray, off: Int, len: Int) {
+            var at = off
+            while (at < off + len) { val n = minOf(1024, off + len - at); target.write(cbuf, at, n); at += n }
+        }
+        override fun write(str: String, off: Int, len: Int) {
+            var at = off
+            while (at < off + len) { val n = minOf(1024, off + len - at); target.write(str, at, n); at += n }
+        }
+        override fun write(c: Int) = target.write(c)
+        override fun flush() = target.flush()
+        override fun close() = target.close()
     }
 
     /**

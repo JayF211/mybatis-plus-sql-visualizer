@@ -1,5 +1,13 @@
 package cn.song.mybatisplus.visualizer.ui
 
+import cn.song.mybatisplus.visualizer.execute.ExecutionSubmission
+import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ModalityState
+import com.intellij.openapi.application.PathManager
+import com.intellij.openapi.fileEditor.FileEditorManager
+import com.intellij.openapi.vfs.LocalFileSystem
+import com.intellij.openapi.vfs.VirtualFile
+import java.util.concurrent.atomic.AtomicBoolean
 import cn.song.mybatisplus.visualizer.sql.rollback.RollbackSqlGenerator
 import cn.song.mybatisplus.visualizer.sql.rollback.RollbackSnapshotStore
 import cn.song.mybatisplus.visualizer.ui.highlight.DatabaseSchemaResolver
@@ -13,12 +21,15 @@ import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.openapi.util.Disposer
 import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBLabel
+import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBPanel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextArea
 import com.intellij.ui.components.JBTextField
+import com.intellij.ui.table.JBTable
 import com.intellij.util.ui.JBUI
 import java.awt.BorderLayout
+import java.awt.CardLayout
 import java.awt.Dimension
 import java.awt.FlowLayout
 import java.awt.Toolkit
@@ -26,6 +37,13 @@ import java.awt.datatransfer.StringSelection
 import javax.swing.Action
 import javax.swing.JButton
 import javax.swing.JComponent
+import javax.swing.JPopupMenu
+import javax.swing.JTable
+import javax.swing.KeyStroke
+import javax.swing.table.DefaultTableModel
+import javax.swing.table.TableRowSorter
+import javax.swing.event.DocumentEvent
+import javax.swing.event.DocumentListener
 
 /**
  * 回滚 SQL 视图（T-RollbackSql P1-F3 / P2-F5，dbx 精华融合）。
@@ -37,7 +55,8 @@ import javax.swing.JComponent
  *  - Complete：绿色横幅 + 只读回滚 SQL 编辑器 + 底部「执行回滚 / 复制 / 关闭」；
  *  - Partial：橙色横幅（风险警示）+ COUNT 自查模板展示，其余同上；
  *  - Unable（可解析的 UPDATE/DELETE）：红色横幅 + 人工恢复指引 + **快照工作流**——
- *    快照查询模板一键执行（结果落面板控制台网格，用户亲手取得 before-image）+
+ *    快照查询模板一键执行（T-PreviewSideQuery 只读旁路：不替换预览编辑器/不换入控制台，
+ *    结果自动填入下方并生成回滚；失败/空结果在对话框内提示，仍可手工复制粘贴）+
  *    粘贴结果生成完整回滚（dbx「有 before-image 才回滚」的半自动落地，P2-F5 降级方案；
  *    262 连接协议不可程序化快照的定夺见 [RollbackSnapshotStore] KDoc）——粘贴生成的回填 INSERT
  *    在快照条目持有 identity 信息（O-52：[RollbackSnapshotStore.SnapshotEntry.dialect] /
@@ -71,6 +90,118 @@ class RollbackSqlDialog(
     private val pkField = JBTextField(20)
     private var editor: Editor? = null
 
+    // T-RollbackSnapshotView：快照双态展示——表格视图（只读，列值一一对应）与文本视图
+    //（保留手工粘贴/编辑）。自动查询结果默认表格；文本始终是生成回滚的权威来源。
+    // T-RollbackSnapshotCsvView：表格增强——可排序/可选中/复制/右键菜单/行号/列宽自适应。
+    private val snapshotTableModel = object : DefaultTableModel() {
+        override fun isCellEditable(row: Int, column: Int): Boolean = false
+    }
+    private val snapshotSorter = TableRowSorter(snapshotTableModel)
+    private val snapshotRowHeader = JBList<String>().apply {
+        border = JBUI.Borders.empty()
+    }
+    private val snapshotTable = object : JBTable(snapshotTableModel) {
+        override fun getToolTipText(event: java.awt.event.MouseEvent): String? {
+            val viewColumn = columnAtPoint(event.point)
+            if (viewColumn >= 0) {
+                val modelColumn = convertColumnIndexToModel(viewColumn)
+                if (modelColumn in 0 until columnCount) return snapshotTableModel.getColumnName(modelColumn)
+            }
+            return super.getToolTipText(event)
+        }
+    }.apply {
+        autoResizeMode = JTable.AUTO_RESIZE_OFF
+        rowSorter = snapshotSorter
+        cellSelectionEnabled = true
+        rowSelectionAllowed = true
+        fillsViewportHeight = true
+        preferredScrollableViewportSize = Dimension(DIALOG_WIDTH - 48, 92)
+        installSnapshotCopyBindings(this)
+        addMouseListener(snapshotPopupListener())
+    }
+    private val snapshotCards = JBPanel<JBPanel<*>>(CardLayout())
+    private val snapshotSummary = JBLabel()
+    private val snapshotToggle = JButton(MpSqlVisualizerBundle.message("rollback.snapshot.view.text")).apply {
+        toolTipText = MpSqlVisualizerBundle.message("rollback.snapshot.view.tooltip")
+        addActionListener { toggleSnapshotView() }
+    }
+    private val snapshotOpenCsv = JButton(MpSqlVisualizerBundle.message("rollback.snapshot.openCsv")).apply {
+        toolTipText = MpSqlVisualizerBundle.message("rollback.snapshot.openCsv.tooltip")
+        addActionListener { openSnapshotInCsvEditor() }
+    }
+    private val snapshotAutofit = JButton(MpSqlVisualizerBundle.message("rollback.snapshot.autofit")).apply {
+        toolTipText = MpSqlVisualizerBundle.message("rollback.snapshot.autofit.tooltip")
+        addActionListener { autoFitSnapshotColumns() }
+    }
+    private var snapshotTableShown = false
+
+    /** T-RollbackSnapshotCsvView：「在 CSV 编辑器中打开」生成的临时文件（dispose 时清理未打开的）。 */
+    private val snapshotTempFiles = mutableListOf<java.io.File>()
+
+    /** 测试缝：打开临时文件（生产走 FileEditorManager.openFile）。 */
+    @Volatile
+    internal var snapshotOpenInEditorForTest: ((com.intellij.openapi.vfs.VirtualFile, java.io.File) -> Unit)? = null
+
+    init {
+        // 排序后行号需按视图顺序重排；数据装载后同样刷新（showSnapshotTable 内调用）。
+        snapshotSorter.addRowSorterListener { updateSnapshotRowHeader() }
+        snapshotTable.tableHeader.addMouseListener(object : java.awt.event.MouseAdapter() {
+            override fun mouseClicked(e: java.awt.event.MouseEvent) {
+                if (e.clickCount == 2) {
+                    val viewColumn = snapshotTable.columnAtPoint(e.point)
+                    if (viewColumn >= 0) autoFitSnapshotColumn(viewColumn)
+                }
+            }
+        })
+    }
+
+    /** 测试缝：headless 无真库/绑定数据源；生产为 null 走 [DataSourceSelector.boundConsoleDataSource]。 */
+    @Volatile
+    internal var snapshotQueryTargetForTest: (() -> Any?)? = null
+
+    /** 测试缝：数据源选择器弹出（生产走 [DataSourceSelector.prepareConsole]）。 */
+    @Volatile
+    internal var snapshotPromptForTest: ((Project, String, (String) -> Unit) -> Unit)? = null
+
+    /** 测试缝：绑定等待（生产走 [SqlPreviewPanel.awaitDataSourceBoundThen]）。 */
+    @Volatile
+    internal var snapshotAwaitBindForTest: ((Project, Int, () -> Unit, () -> Unit) -> Unit)? = null
+
+    /** 测试缝：方言闸请求（生产走 [SqlPreviewPanel.executionDialectGateRequest]，由模型能力决定可重渲染位）。 */
+    @Volatile
+    internal var snapshotGateRequestForTest: (() -> cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Request)? = null
+
+    /** 测试缝：按目标方言重渲染（生产走 [SqlPreviewPanel.rerenderForExecutionTarget]）。 */
+    @Volatile
+    internal var snapshotRerenderForTest: ((String) -> Boolean)? = null
+
+    /** T-DialectGateExit：方言闸阻断态的出口行（默认隐藏，仅方言冲突时出现）。 */
+    private val gateExitRow = JBPanel<JBPanel<*>>(java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 4, 2)).apply {
+        isOpaque = false
+        isVisible = false
+    }
+
+    /** 最近一次方言阻断的目标方言（「按目标方言重渲染」按钮的动作输入）。 */
+    private var blockedTargetDialect: String? = null
+
+    private val rerenderToTargetButton = JButton(
+        MpSqlVisualizerBundle.message("rollback.snapshot.rerender"),
+    ).apply {
+        toolTipText = MpSqlVisualizerBundle.message("rollback.snapshot.rerender.tooltip")
+        addActionListener { rerenderToTargetAndRetry() }
+    }
+
+    private val switchDataSourceButton = JButton(
+        MpSqlVisualizerBundle.message("rollback.snapshot.switchSource"),
+    ).apply {
+        toolTipText = MpSqlVisualizerBundle.message("rollback.snapshot.switchSource.tooltip")
+        addActionListener {
+            val sql = currentResult.snapshotSelectSql ?: return@addActionListener
+            val proj = panel?.project ?: return@addActionListener
+            promptDataSourceThenRetrySnapshot(proj, sql, forceChoose = true)
+        }
+    }
+
     // 底部动作以字段持有——DialogWrapper 无公开 getActions()（javap 实证），粘贴生成后
     // 启用态只能经自身引用刷新；字段初始化先于 init()（createActions 在 init() 内调用）
     private val executeAction = object : DialogWrapperAction(MpSqlVisualizerBundle.message("rollback.action.execute")) {
@@ -88,13 +219,26 @@ class RollbackSqlDialog(
     internal var currentResult: RollbackSqlGenerator.RollbackResult = result
         private set
 
+    /** 仅快照派生产物受输入编辑影响；原始 INSERT 等非快照回滚保持原有执行路径。 */
+    private var snapshotGenerationStarted = false
+
     init {
         title = MpSqlVisualizerBundle.message("rollback.dialog.title")
         setCancelButtonText(MpSqlVisualizerBundle.message("rollback.action.close"))
         init()
         assembleBanner()
         assembleSnapshotSection()
+        val inputListener = object : DocumentListener {
+            override fun insertUpdate(e: DocumentEvent) = snapshotInputChanged()
+            override fun removeUpdate(e: DocumentEvent) = snapshotInputChanged()
+            override fun changedUpdate(e: DocumentEvent) = snapshotInputChanged()
+        }
+        pasteArea.document.addDocumentListener(inputListener)
+        pkField.document.addDocumentListener(inputListener)
     }
+
+    /** 测试访问用：DialogWrapper.init() 创建的同一个中心面板（不重复建编辑器）。 */
+    private var snapshotCenterPanel: JComponent? = null
 
     override fun createCenterPanel(): JComponent {
         val body = JBPanel<JBPanel<*>>(BorderLayout()).apply {
@@ -104,6 +248,7 @@ class RollbackSqlDialog(
             if (hasSnapshotWorkflow()) add(buildSnapshotBlock(), BorderLayout.SOUTH)
         }
         body.preferredSize = Dimension(DIALOG_WIDTH, DIALOG_HEIGHT)
+        snapshotCenterPanel = body
         return body
     }
 
@@ -145,31 +290,71 @@ class RollbackSqlDialog(
         }
     }
 
-    private fun hasSnapshotWorkflow(): Boolean = currentResult.snapshotSelectSql != null && panel != null
+    private fun hasSnapshotWorkflow(): Boolean = result.snapshotSelectSql != null && panel != null
 
     private fun buildSnapshotBlock(): JComponent = JBPanel<JBPanel<*>>(BorderLayout()).apply {
         isOpaque = false
         border = JBUI.Borders.empty(4, 10, 6, 10)
         add(
-            JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 4, 2)).apply {
+            JBPanel<JBPanel<*>>(BorderLayout()).apply {
                 isOpaque = false
-                add(snapshotQueryLabel)
-                add(JButton(MpSqlVisualizerBundle.message("rollback.snapshot.run")).apply {
-                    addActionListener { runSnapshotQuery() }
-                })
-                add(JButton(MpSqlVisualizerBundle.message("rollback.snapshot.copy")).apply {
-                    addActionListener {
-                        val sql = currentResult.snapshotSelectSql ?: return@addActionListener
-                        copyToClipboard(sql)
-                    }
-                })
+                // T-RollbackSnapshotCsvView C：第一行 SQL 标签（CENTER 可压缩）+ 摘要/视图切换
+                //（EAST 固定）——旧实现把切换按钮放在 FlowLayout 行尾，窄宽换行后被裁掉。
+                add(
+                    JBPanel<JBPanel<*>>(BorderLayout()).apply {
+                        isOpaque = false
+                        add(snapshotQueryLabel, BorderLayout.CENTER)
+                        snapshotSummary.isVisible = false
+                        add(
+                            JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.RIGHT, 4, 0)).apply {
+                                isOpaque = false
+                                add(snapshotSummary)
+                                add(snapshotToggle)
+                            },
+                            BorderLayout.EAST,
+                        )
+                    },
+                    BorderLayout.NORTH,
+                )
+                // 第二行：动作按钮（执行快照查询 / 复制快照 SQL / 在 CSV 编辑器中打开 / 自适应列宽）
+                add(
+                    JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 4, 2)).apply {
+                        isOpaque = false
+                        add(JButton(MpSqlVisualizerBundle.message("rollback.snapshot.run")).apply {
+                            toolTipText = MpSqlVisualizerBundle.message("rollback.snapshot.run.tooltip")
+                            addActionListener { runSnapshotQuery() }
+                        })
+                        add(JButton(MpSqlVisualizerBundle.message("rollback.snapshot.copy")).apply {
+                            addActionListener {
+                                val sql = currentResult.snapshotSelectSql ?: return@addActionListener
+                                copyToClipboard(sql)
+                            }
+                        })
+                        add(snapshotOpenCsv)
+                        add(snapshotAutofit)
+                    },
+                    BorderLayout.CENTER,
+                )
+                // T-DialectGateExit：方言冲突时的两个出口（默认隐藏）
+                gateExitRow.apply {
+                    add(rerenderToTargetButton)
+                    add(switchDataSourceButton)
+                }
+                add(gateExitRow, BorderLayout.SOUTH)
             },
             BorderLayout.NORTH,
         )
+        snapshotCards.isOpaque = false
+        snapshotCards.add(
+            JBScrollPane(snapshotTable).apply { setRowHeaderView(snapshotRowHeader) },
+            SNAPSHOT_CARD_TABLE,
+        )
+        snapshotCards.add(JBScrollPane(pasteArea), SNAPSHOT_CARD_TEXT)
+        (snapshotCards.layout as CardLayout).show(snapshotCards, SNAPSHOT_CARD_TEXT)
         add(
             JBPanel<JBPanel<*>>(BorderLayout(0, 4)).apply {
                 isOpaque = false
-                add(JBScrollPane(pasteArea), BorderLayout.CENTER)
+                add(snapshotCards, BorderLayout.CENTER)
                 add(
                     JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 4, 2)).apply {
                         isOpaque = false
@@ -184,6 +369,239 @@ class RollbackSqlDialog(
             },
             BorderLayout.CENTER,
         )
+    }
+
+    /** T-RollbackSnapshotView：把快照数据（列名 + 行）装进只读表格并切到表格视图。 */
+    private fun showSnapshotTable(columns: List<String>, rows: List<List<String?>>) {
+        snapshotTableModel.setDataVector(
+            rows.map { row -> row.map { it ?: "" }.toTypedArray() }.toTypedArray(),
+            columns.toTypedArray(),
+        )
+        // 新数据回到原始顺序；行号与列宽随内容刷新。
+        snapshotSorter.sortKeys = emptyList()
+        updateSnapshotRowHeader()
+        autoFitSnapshotColumns()
+        snapshotSummary.text = MpSqlVisualizerBundle.message(
+            "rollback.snapshot.summary", rows.size, columns.size,
+        )
+        snapshotSummary.isVisible = true
+        snapshotTableShown = true
+        (snapshotCards.layout as CardLayout).show(snapshotCards, SNAPSHOT_CARD_TABLE)
+        snapshotToggle.text = MpSqlVisualizerBundle.message("rollback.snapshot.view.text")
+    }
+
+    /** T-RollbackSnapshotCsvView A：行号列按视图顺序重排（排序后 1..N 连续）。 */
+    private fun updateSnapshotRowHeader() {
+        val model = javax.swing.DefaultListModel<String>()
+        for (i in 1..snapshotTable.rowCount) model.addElement(i.toString())
+        snapshotRowHeader.model = model
+        snapshotRowHeader.fixedCellHeight = snapshotTable.rowHeight
+    }
+
+    /** T-RollbackSnapshotCsvView A：Ctrl+C / Ctrl+Insert 复制当前选择（TSV）。 */
+    private fun installSnapshotCopyBindings(table: JTable) {
+        val action = object : javax.swing.AbstractAction() {
+            override fun actionPerformed(e: java.awt.event.ActionEvent?) {
+                copySnapshotSelection()
+            }
+        }
+        table.inputMap.put(KeyStroke.getKeyStroke("control C"), "snapshotCopy")
+        table.inputMap.put(KeyStroke.getKeyStroke("control INSERT"), "snapshotCopy")
+        table.actionMap.put("snapshotCopy", action)
+    }
+
+    /** T-RollbackSnapshotCsvView A：右键菜单（复制单元格/行/列、全选、自适应列宽）。 */
+    private fun snapshotPopupListener(): java.awt.event.MouseAdapter =
+        object : java.awt.event.MouseAdapter() {
+            override fun mousePressed(e: java.awt.event.MouseEvent) = maybeShow(e)
+            override fun mouseReleased(e: java.awt.event.MouseEvent) = maybeShow(e)
+
+            private fun maybeShow(e: java.awt.event.MouseEvent) {
+                if (!e.isPopupTrigger) return
+                val menu = JPopupMenu()
+                menu.add(snapshotMenuItem("rollback.snapshot.copyCell") { copySnapshotSelection() })
+                menu.add(snapshotMenuItem("rollback.snapshot.copyRow") { copySnapshotRows() })
+                menu.add(snapshotMenuItem("rollback.snapshot.copyColumn") { copySnapshotColumn() })
+                menu.add(snapshotMenuItem("rollback.snapshot.selectAll") { snapshotTable.selectAll() })
+                menu.addSeparator()
+                menu.add(snapshotMenuItem("rollback.snapshot.autofit") { autoFitSnapshotColumns() })
+                menu.show(e.component, e.x, e.y)
+            }
+        }
+
+    private fun snapshotMenuItem(key: String, action: () -> Unit): javax.swing.JMenuItem =
+        javax.swing.JMenuItem(MpSqlVisualizerBundle.message(key)).apply {
+            addActionListener { action() }
+        }
+
+    /** 复制当前选择（无选择时复制全表）；TSV 与结果网格复制口径一致。 */
+    internal fun copySnapshotSelection(): Boolean {
+        val rows = snapshotTable.selectedRows.toList()
+            .ifEmpty { (0 until snapshotTable.rowCount).toList() }
+        val columns = snapshotTable.selectedColumns.toList()
+            .ifEmpty { (0 until snapshotTable.columnCount).toList() }
+        return copySnapshotCells(rows, columns)
+    }
+
+    private fun copySnapshotRows(): Boolean =
+        copySnapshotCells(
+            snapshotTable.selectedRows.toList().ifEmpty { (0 until snapshotTable.rowCount).toList() },
+            (0 until snapshotTable.columnCount).toList(),
+        )
+
+    private fun copySnapshotColumn(): Boolean {
+        val viewColumn = snapshotTable.selectedColumn.takeIf { it >= 0 } ?: 0
+        val modelColumn = snapshotTable.convertColumnIndexToModel(viewColumn)
+        val header = snapshotTableModel.getColumnName(modelColumn)
+        val body = (0 until snapshotTable.rowCount).joinToString("\n") { viewRow ->
+            snapshotTableModel.getValueAt(
+                snapshotTable.convertRowIndexToModel(viewRow), modelColumn,
+            )?.toString().orEmpty()
+        }
+        val text = if (body.isEmpty()) header else "$header\n$body"
+        UiTextClipboard.copy(text)
+        return true
+    }
+
+    private fun copySnapshotCells(viewRows: List<Int>, viewColumns: List<Int>): Boolean {
+        if (viewRows.isEmpty() || viewColumns.isEmpty()) return false
+        val text = viewRows.joinToString("\n") { viewRow ->
+            viewColumns.joinToString("\t") { viewColumn ->
+                snapshotTableModel.getValueAt(
+                    snapshotTable.convertRowIndexToModel(viewRow),
+                    snapshotTable.convertColumnIndexToModel(viewColumn),
+                )?.toString().orEmpty()
+            }
+        }
+        if (text.isEmpty()) return false
+        UiTextClipboard.copy(text)
+        return true
+    }
+
+    /** 按内容自适应列宽（双击列头 = 单列；按钮 = 全部），上限 360px。 */
+    internal fun autoFitSnapshotColumns() {
+        for (viewColumn in 0 until snapshotTable.columnCount) autoFitSnapshotColumn(viewColumn)
+    }
+
+    private fun autoFitSnapshotColumn(viewColumn: Int) {
+        if (viewColumn !in 0 until snapshotTable.columnCount) return
+        val modelColumn = snapshotTable.convertColumnIndexToModel(viewColumn)
+        val headerMetrics = snapshotTable.tableHeader.getFontMetrics(snapshotTable.tableHeader.font)
+        val cellMetrics = snapshotTable.getFontMetrics(snapshotTable.font)
+        var width = headerMetrics.stringWidth(snapshotTableModel.getColumnName(modelColumn)) + 24
+        val rows = minOf(snapshotTable.rowCount, 500)
+        for (viewRow in 0 until rows) {
+            val value = snapshotTableModel.getValueAt(
+                snapshotTable.convertRowIndexToModel(viewRow), modelColumn,
+            )?.toString().orEmpty()
+            width = maxOf(width, cellMetrics.stringWidth(value) + 16)
+        }
+        snapshotTable.columnModel.getColumn(viewColumn).preferredWidth = width.coerceIn(48, 360)
+    }
+
+    /**
+     * T-RollbackSnapshotCsvView B：「在 CSV 编辑器中打开」——快照写临时 .tsv 后用
+     * [FileEditorManager] 打开。Ultimate 由 grid 插件的 `csv-data-editor` 自动进入原生表格
+     *（可切文本）；Community 降级为文本编辑器。写盘+refresh 在池线程（VFS refresh 属慢操作），
+     * 打开在 EDT。
+     */
+    internal fun openSnapshotInCsvEditor() {
+        val proj = project ?: return
+        val text = pasteArea.text
+        if (text.isBlank()) {
+            warningLabel.text = "<html>${escapeHtml(
+                MpSqlVisualizerBundle.message("rollback.snapshot.emptyInput"))}</html>"
+            return
+        }
+        // 落在 JVM 系统临时目录（java.io.tmpdir）：不在 IDE 的 VFS 允许根内时也能被
+        // 测试沙盒放行（沙盒只允许 C:/Users/USER/AppData/Local/Temp 等少数根），
+        // 且与 IDE 配置目录解耦——临时文件由本对话框显式回收。
+        val file = java.io.File(
+            System.getProperty("java.io.tmpdir") ?: PathManager.getTempPath(),
+            "mpsql-rollback-snapshot-${System.currentTimeMillis()}.tsv",
+        )
+        // T-RollbackSnapshotCsvView：写盘+VFS refresh 属写操作——生产走池线程
+        // （WriteIntentReadAction，对齐 DataSourceSelectorResults 的 refreshVfs 段）；
+        // 单测模式同步执行（池线程在 headless 用例里不派发 EDT 回调，测试无法确定性地观察）。
+        if (ApplicationManager.getApplication().isUnitTestMode) {
+            val vf = writeSnapshotTempFile(file, text)
+            if (vf == null) {
+                warningLabel.text = "<html>${escapeHtml(
+                    MpSqlVisualizerBundle.message("rollback.snapshot.openCsv.failed"))}</html>"
+                return
+            }
+            snapshotTempFiles += file
+            val sink = snapshotOpenInEditorForTest
+            if (sink != null) sink(vf, file) else FileEditorManager.getInstance(proj).openFile(vf, true)
+            return
+        }
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val vf = writeSnapshotTempFile(file, text)
+            ApplicationManager.getApplication().invokeLater({
+                if (vf == null) {
+                    warningLabel.text = "<html>${escapeHtml(
+                        MpSqlVisualizerBundle.message("rollback.snapshot.openCsv.failed"))}</html>"
+                    return@invokeLater
+                }
+                snapshotTempFiles += file
+                val sink = snapshotOpenInEditorForTest
+                if (sink != null) {
+                    sink(vf, file)
+                } else {
+                    FileEditorManager.getInstance(proj).openFile(vf, true)
+                }
+            }, ModalityState.any())
+        }
+    }
+
+    /** 写临时 TSV 并让 VFS 可见（写操作走 WriteIntentReadAction）。 */
+    /**
+     * 写临时 TSV 并让 VFS 可见。
+     *
+     * 写盘在池线程（`WriteIntentReadAction`），随后用 [com.intellij.openapi.vfs.VfsUtil.markDirtyAndRefresh]
+     * 触发**异步**刷新：同步 `refreshAndFindFileByIoFile` 会在测试沙盒触发 VFS 根访问限制
+     * （VfsRootAccessNotAllowedError），异步标记不触碰根校验。文件内容用文档 API 兜底写入，
+     * 保证 CSV 编辑器打开时是完整内容。
+     */
+    private fun writeSnapshotTempFile(file: java.io.File, text: String): VirtualFile? = runCatching {
+        com.intellij.openapi.application.WriteIntentReadAction.compute<VirtualFile?> {
+            file.parentFile?.mkdirs()
+            file.writeText(text, Charsets.UTF_8)
+            com.intellij.openapi.vfs.VfsUtil.markDirtyAndRefresh(false, true, false, file)
+            LocalFileSystem.getInstance().findFileByIoFile(file)
+        }
+    }.getOrNull()
+
+    /** dispose 清理：仍被编辑器打开的临时文件保留（避免删正在编辑的文件），其余删除。 */
+    private fun cleanupSnapshotTempFiles() {
+        val proj = project ?: return
+        val manager = runCatching { FileEditorManager.getInstance(proj) }.getOrNull()
+        snapshotTempFiles.forEach { file ->
+            val open = runCatching {
+                val vf = LocalFileSystem.getInstance().findFileByIoFile(file)
+                vf != null && manager?.isFileOpen(vf) == true
+            }.getOrDefault(false)
+            if (!open) runCatching { file.delete() }
+        }
+        snapshotTempFiles.clear()
+    }
+
+    /** 表格 ↔ 文本视图切换；从文本切表格时重新解析，解析失败留在文本视图并提示。 */
+    private fun toggleSnapshotView() {
+        if (snapshotTableShown) {
+            snapshotTableShown = false
+            (snapshotCards.layout as CardLayout).show(snapshotCards, SNAPSHOT_CARD_TEXT)
+            snapshotToggle.text = MpSqlVisualizerBundle.message("rollback.snapshot.view.table")
+            return
+        }
+        val parsed = RollbackSqlGenerator.parseSnapshotTsv(pasteArea.text ?: "")
+        if (parsed == null) {
+            warningLabel.text = "<html>${escapeHtml(
+                MpSqlVisualizerBundle.message("rollback.snapshot.parseFailed"))}</html>"
+            return
+        }
+        val (columns, rows) = parsed
+        showSnapshotTable(columns, rows)
     }
 
     private fun assembleBanner() {
@@ -224,13 +642,28 @@ class RollbackSqlDialog(
     internal fun executeRollback() {
         val sql = currentResult.statements.joinToString("\n")
         if (sql.isBlank()) return
-        panel?.executeAdhocSql(sql, rollbackOfEntry = snapshotEntry)
-        // F6 留痕：回滚已提交执行——快照条目置终态 + 横幅更新（执行结果反馈走面板 resultPanel）
-        snapshotEntry?.let { entry ->
-            project?.getService(RollbackSnapshotStore::class.java)?.markRollbackExecuted(entry)
+        panel?.executeAdhocSql(sql, rollbackOfEntry = snapshotEntry, onSubmission = rollbackSubmissionReceipt())
+    }
+
+    /** 每次请求仅结算一次；真实提交后保留业务留痕，关闭弹窗仅抑制迟到的 UI 更新。 */
+    internal fun rollbackSubmissionReceipt(): (ExecutionSubmission) -> Unit {
+        val completed = AtomicBoolean(false)
+        val submittedResult = currentResult
+        val store = project?.getService(RollbackSnapshotStore::class.java)
+        return receipt@{ outcome ->
+            if (!completed.compareAndSet(false, true) || outcome != ExecutionSubmission.SUBMITTED) return@receipt
+            // SUBMITTED 来自底层 afterSubmitted，不代表数据库执行成功或事务已提交。
+            snapshotEntry?.let { store?.markRollbackExecuted(it) }
+            val updateBanner = {
+                if (!isDisposed && currentResult === submittedResult) {
+                    bannerLabel.text = MpSqlVisualizerBundle.message("rollback.banner.executed")
+                    bannerLabel.foreground = SUCCESS_COLOR
+                }
+            }
+            val app = ApplicationManager.getApplication()
+            if (app.isDispatchThread) updateBanner()
+            else app.invokeLater({ updateBanner() }, ModalityState.any())
         }
-        bannerLabel.text = MpSqlVisualizerBundle.message("rollback.banner.executed")
-        bannerLabel.foreground = SUCCESS_COLOR
     }
 
     /** 「复制」：回滚 SQL 入剪贴板。 */
@@ -241,21 +674,253 @@ class RollbackSqlDialog(
         return true
     }
 
-    /** 「执行快照查询」：查询类语句经 executeAdhocSql 免确认直跑，结果落面板控制台网格。 */
-    internal fun runSnapshotQuery() {
-        val sql = currentResult.snapshotSelectSql ?: return
-        panel?.executeAdhocSql(sql)
+    /**
+     * 「执行快照查询」：只读旁路查询（T-PreviewSideQuery 通道，[McpDbExecutor] 只读链）——
+     * **不调用** `executeAdhocSql`，因此不替换预览编辑器、不换入控制台（旧实现会把预览窗口
+     * 切成执行视图且结果只在控制台网格，用户须手工复制粘贴，快照框看起来「没填充」）。
+     * 结果自动填入快照框并按粘贴结果生成回滚；阻断/失败/空结果在对话框内提示，
+     * 「复制快照 SQL」+ 手工粘贴路径保留为降级通道。
+     */
+    internal fun runSnapshotQuery() = runSnapshotQuery(allowRerenderRetry = true)
+
+    /**
+     * @param allowRerenderRetry 方言冲突时是否允许「按目标方言重渲染后重试」——重试只做一次，
+     *        防止「渲染→仍不匹配→再渲染」循环。
+     * @param sqlOverride 重渲染后按新预览文本重算出的快照 SELECT（提交用它；显示区回滚文本不动）
+     */
+    private fun runSnapshotQuery(allowRerenderRetry: Boolean, sqlOverride: String? = null) {
+        val sql = sqlOverride ?: currentResult.snapshotSelectSql ?: return
+        val p = panel ?: return
+        val proj = p.project ?: return
+        val target = snapshotQueryTargetForTest?.invoke() ?: runCatching {
+            cn.song.mybatisplus.visualizer.execute.DataSourceSelector.boundConsoleDataSource()
+        }.getOrNull()
+        if (target == null) {
+            // 用户真机反馈：无数据源时不该只报「请先绑定」，应直接弹数据源选择器，绑定后自动重试
+            //（与 DML 影响面预演/EXPLAIN 的 T-UI030 链路同款；只准备/绑定，不提交任何语句）。
+            promptDataSourceThenRetrySnapshot(proj, sql)
+            return
+        }
+        warningLabel.text = ""
+        hideGateExitRow()
+        // T-DialectGateExit：改用面板自己的闸请求——`canLosslesslyRerender` 由模型能力决定
+        //（原实现写死 false，把本来能无损重渲染的路径直接判成阻断）。
+        // 面板无当前预览时（headless 夹具/异常态）沿用旧口径的 MySQL 兜底，不因拿不到方言而误判冲突。
+        val request = snapshotGateRequestForTest?.invoke()
+            ?: p.current?.let {
+                p.executionDialectGateRequest(cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Intent.QUERY)
+            }
+            ?: cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Request(
+                renderMode = p.executionDialectRenderMode,
+                renderedDialectName = cn.song.mybatisplus.visualizer.sql.MySqlDialect.name,
+                intent = cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Intent.QUERY,
+                canLosslesslyRerender = false,
+                userTextUntouched = true,
+            )
+        PreviewSideQuery.run(proj, target, sql, request, scalar = false, requireSelectGuard = true) { result ->
+            when (result) {
+                is PreviewSideQuery.Result.Table -> {
+                    if (result.raw.rows.isEmpty()) {
+                        warningLabel.text = "<html>${escapeHtml(
+                            MpSqlVisualizerBundle.message("rollback.snapshot.emptyResult"))}</html>"
+                        return@run
+                    }
+                    pasteArea.text = toSnapshotTsv(result.raw)
+                    showSnapshotTable(result.raw.headers, result.raw.rows)
+                    generateFromPaste()
+                }
+
+                is PreviewSideQuery.Result.Blocked -> {
+                    warningLabel.text = "<html>${escapeHtml(result.message)}</html>"
+                    showGateExitRowIfDialectConflict(result.verdict, allowRerenderRetry)
+                }
+
+                is PreviewSideQuery.Result.Failed ->
+                    warningLabel.text = "<html>${escapeHtml(result.message)}</html>"
+
+                is PreviewSideQuery.Result.Scalar ->
+                    warningLabel.text = "<html>${escapeHtml(
+                        MpSqlVisualizerBundle.message("rollback.snapshot.parseFailed"))}</html>"
+            }
+        }
+    }
+
+    /**
+     * T-DialectGateExit：方言冲突时露出两个出口。
+     *
+     * - 「按目标方言重新渲染并重试」：手动选方言（MANUAL_CONFLICT）时不提供——闸门语义是插件不覆盖手动选择；
+     *   其余冲突都提供，能否成功由 [SqlPreviewPanel.rerenderForExecutionTarget] 的模型能力决定。
+     * - 「切换数据源」：任何方言冲突都提供（强制弹选择器，见 P0-3）。
+     *
+     * 只读护栏/目标未知等阻断不显示（那是另一类原因，重渲染与换目标都解决不了）。
+     */
+    private fun showGateExitRowIfDialectConflict(
+        verdict: cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Verdict?,
+        allowRerenderRetry: Boolean,
+    ) {
+        if (verdict == null) return
+        val conflict = when (verdict.status) {
+            cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Status.AUTO_RERENDER_REQUIRED,
+            cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Status.RERENDER_UNAVAILABLE,
+            cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Status.MANUAL_CONFLICT -> true
+            else -> false
+        }
+        if (!conflict) return
+        val targetDialect = verdict.targetDialectName
+        blockedTargetDialect = targetDialect
+        val canRerender = verdict.status !=
+            cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Status.MANUAL_CONFLICT &&
+            targetDialect != null && allowRerenderRetry
+        rerenderToTargetButton.isVisible = canRerender
+        rerenderToTargetButton.isEnabled = canRerender
+        switchDataSourceButton.isVisible = true
+        switchDataSourceButton.isEnabled = true
+        gateExitRow.isVisible = true
+        gateExitRow.revalidate()
+        gateExitRow.repaint()
+    }
+
+    private fun hideGateExitRow() {
+        blockedTargetDialect = null
+        gateExitRow.isVisible = false
+    }
+
+    /** 「按目标方言重新渲染并重试」：成功则重建请求重跑一次；失败就地说明原因（不冒充成功）。 */
+    internal fun rerenderToTargetAndRetry() {
+        val targetDialect = blockedTargetDialect ?: return
+        val p = panel ?: return
+        val rerender = snapshotRerenderForTest ?: { name -> p.rerenderForExecutionTarget(name) }
+        val ok = runCatching { rerender(targetDialect) }.getOrDefault(false)
+        if (!ok) {
+            warningLabel.text = "<html>${escapeHtml(
+                MpSqlVisualizerBundle.message("rollback.snapshot.rerender.failed"))}</html>"
+            return
+        }
+        hideGateExitRow()
+        // 重渲染会改写预览文本，快照 SELECT 可能带旧方言的标识符引用 → 按新文本重算后再提交。
+        runSnapshotQuery(allowRerenderRetry = false, sqlOverride = refreshedSnapshotSql())
+    }
+
+    /**
+     * 按重渲染后的预览文本重算快照 SELECT（主键列沿用对话框当前输入）。
+     *
+     * 快照 SELECT 由 [RollbackSqlGenerator] 从语句 AST 拼出，标识符引用跟随输入文本的方言——
+     * 不重算就可能把旧方言的引用样式提交给新目标。重算失败（无法解析）时回退原文本，不阻断重试。
+     */
+    private fun refreshedSnapshotSql(): String? {
+        val p = panel ?: return currentResult.snapshotSelectSql
+        val newSql = p.currentEditorSql() ?: return currentResult.snapshotSelectSql
+        val pkColumns = pkField.text.orEmpty()
+            .split(',', '，')
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .takeIf { it.isNotEmpty() }
+        val regenerated = runCatching {
+            RollbackSqlGenerator.generate(newSql, primaryKeyColumns = pkColumns)
+        }.getOrNull()
+        return regenerated?.snapshotSelectSql ?: currentResult.snapshotSelectSql
+    }
+
+    /** 测试访问器：出口行当前是否可见（方言冲突时应为 true）。 */
+    internal fun gateExitRowVisibleForTest(): Boolean = gateExitRow.isVisible
+
+    /** 测试访问器：两个出口按钮（可见性/启用态断言用）。 */
+    internal fun rerenderButtonForTest(): JButton = rerenderToTargetButton
+
+    internal fun switchSourceButtonForTest(): JButton = switchDataSourceButton
+
+    /** 结果网格 → TSV（首行列名；单元格内制表/换行折叠为空格，与手工复制口径一致）。 */
+    private fun toSnapshotTsv(
+        raw: cn.song.mybatisplus.visualizer.mcp.McpExplainFormatter.RawResult,
+    ): String = buildString {
+        append(raw.headers.joinToString("\t"))
+        raw.rows.forEach { row ->
+            append('\n')
+            append(row.joinToString("\t") { cell ->
+                cell.replace('\t', ' ').replace('\n', ' ').replace('\r', ' ')
+            })
+        }
+    }
+
+    /**
+     * 无绑定数据源：弹数据源选择器（只准备/绑定，不提交任何语句），绑定成功后自动重试快照查询；
+     * 取消/超时收口为原有说明文案。链路与 DML 影响面预演 / EXPLAIN 的 T-UI030 同款，
+     * 代际沿用面板 `explainStructuredGeneration`（预览切换即停表，避免晚到重试打到新预览）。
+     */
+    /**
+     * @param forceChoose T-DialectGateExit：已绑定但方言冲突时，强制弹选择器（跳过 last-used 静默命中
+     *                    与共享控制台复用）——否则「切换数据源」点了等于没点。
+     */
+    private fun promptDataSourceThenRetrySnapshot(proj: Project, sql: String, forceChoose: Boolean = false) {
+        val p = panel ?: return
+        warningLabel.text = ""
+        val errorShown = java.util.concurrent.atomic.AtomicBoolean(false)
+        if (cn.song.mybatisplus.visualizer.execute.ExplainFallbackGuidance.shouldPromptForDataSource(
+                cn.song.mybatisplus.visualizer.execute.DataSourceSelector.isPrepareInFlight(),
+            )
+        ) {
+            val prompt = snapshotPromptForTest
+                ?: { project: Project, s: String, onError: (String) -> Unit ->
+                    cn.song.mybatisplus.visualizer.execute.DataSourceSelector.prepareConsole(
+                        project, s, onError = onError, forceChoose = forceChoose,
+                    )
+                }
+            runCatching {
+                prompt(proj, sql) { message ->
+                    errorShown.set(true)
+                    warningLabel.text = "<html>${escapeHtml(message)}</html>"
+                }
+            }.onFailure { e ->
+                errorShown.set(true)
+                warningLabel.text = "<html>${escapeHtml(e.message ?: e.javaClass.simpleName)}</html>"
+            }
+        }
+        val await = snapshotAwaitBindForTest
+            ?: { project: Project, gen: Int, onBound: () -> Unit, onGiveUp: () -> Unit ->
+                p.awaitDataSourceBoundThen(project, gen, onBound, onGiveUp)
+            }
+        await(
+            proj,
+            p.explainStructuredGeneration,
+            { runSnapshotQuery() },
+            {
+                if (!errorShown.get()) {
+                    warningLabel.text = "<html>${escapeHtml(
+                        MpSqlVisualizerBundle.message("rollback.snapshot.noDataSource"))}</html>"
+                }
+            },
+        )
+    }
+
+    private fun snapshotInputChanged() {
+        if (snapshotGenerationStarted) invalidateSnapshotResult()
+    }
+
+    /** 清空执行/复制共用的模型和编辑器，不能仅禁用按钮或退回可能可执行的原始结果。 */
+    private fun invalidateSnapshotResult() {
+        currentResult = result.copy(
+            rating = RollbackSqlGenerator.Rating.UNABLE,
+            statements = emptyList(),
+            countCheckSql = null,
+        )
+        refreshAfterPaste()
     }
 
     /** 「生成回滚」：粘贴 TSV → 快照回填（按原语句类型分派）→ 刷新编辑器与横幅。 */
     internal fun generateFromPaste() {
-        val table = currentResult.targetTable ?: return
+        if (!hasSnapshotWorkflow()) return
+        snapshotGenerationStarted = true
+        // 每次尝试先撤销上次产物；解析失败、生成失败乃至异常都不得保留旧 SQL。
+        invalidateSnapshotResult()
+        val table = result.targetTable ?: return
         val parsed = RollbackSqlGenerator.parseSnapshotTsv(pasteArea.text ?: "")
         if (parsed == null) {
             warningLabel.text = "<html>${escapeHtml(MpSqlVisualizerBundle.message("rollback.snapshot.parseFailed"))}</html>"
             return
         }
         val (columns, rows) = parsed
+        // T-RollbackSnapshotView：手动粘贴成功后也切到表格视图（列值对应一目了然）。
+        showSnapshotTable(columns, rows)
         val pk = pkField.text?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }?.takeIf { it.isNotEmpty() }
         val mode = when (statementKind.uppercase()) {
             "UPDATE" -> RollbackSqlGenerator.SnapshotMode.REVERT_UPDATE
@@ -268,8 +933,8 @@ class RollbackSqlDialog(
             rows = rows,
             mode = mode,
             primaryKeyColumns = pk,
-            changedColumns = currentResult.setColumns,
-            newValuesByColumn = currentResult.setValues,
+            changedColumns = result.setColumns,
+            newValuesByColumn = result.setValues,
             // O-52（D1=A）：identity 知识随快照条目留存，此处取回传给生成器——条目未持有
             // （旧条目/未传参的登记点）时保持 null/空 → 不包装，与改前逐字节相同
             dialect = snapshotEntry?.dialect,
@@ -284,7 +949,13 @@ class RollbackSqlDialog(
             warningLabel.text = warningsHtml(generated)
             return
         }
-        currentResult = generated
+        // 生成结果不携带原语句的快照模板/SET 元信息；保留它们以支持再次生成与快照查询。
+        currentResult = generated.copy(
+            whereText = result.whereText,
+            setColumns = result.setColumns,
+            setValues = result.setValues,
+            snapshotSelectSql = result.snapshotSelectSql,
+        )
         refreshAfterPaste()
     }
 
@@ -373,6 +1044,9 @@ class RollbackSqlDialog(
     /** 释放自建编辑器（DialogWrapper 不感知 EditorFactory 产物，须自行兜底）。 */
     override fun dispose() {
         releaseEditor()
+        // T-RollbackSnapshotCsvView B：临时 TSV 随弹窗回收（仍被编辑器打开的保留）。
+        // 放在 dispose() 而非 Disposer 回调——dispose 是确定的收口点，便于测试断言。
+        cleanupSnapshotTempFiles()
         super.dispose()
     }
 
@@ -387,6 +1061,18 @@ class RollbackSqlDialog(
     /** 测试访问器：编辑器实例（T-SqlCopyShortcuts：键盘复制接线断言用）。 */
     internal fun editorForTest(): com.intellij.openapi.editor.Editor? = editor
     internal fun pasteAreaForTest(): JBTextArea = pasteArea
+    internal fun snapshotTableForTest(): JBTable = snapshotTable
+    internal fun snapshotSummaryTextForTest(): String = snapshotSummary.text
+    internal fun snapshotTableShownForTest(): Boolean = snapshotTableShown
+    internal fun snapshotToggleForTest(): JButton = snapshotToggle
+    internal fun snapshotOpenCsvForTest(): JButton = snapshotOpenCsv
+    internal fun snapshotAutofitForTest(): JButton = snapshotAutofit
+    internal fun copySnapshotSelectionForTest(): Boolean = copySnapshotSelection()
+    internal fun autoFitSnapshotColumnsForTest() = autoFitSnapshotColumns()
+    internal fun openSnapshotInCsvEditorForTest() = openSnapshotInCsvEditor()
+    internal fun snapshotTempFilesForTest(): List<java.io.File> = snapshotTempFiles.toList()
+    internal fun snapshotRowHeaderForTest(): JBList<String> = snapshotRowHeader
+    internal fun centerPanelForTest(): JComponent = snapshotCenterPanel ?: createCenterPanel()
     internal fun pkFieldForTest(): JBTextField = pkField
     internal fun executeActionForTest(): Action = executeAction
     internal fun copyActionForTest(): Action = copyAction
@@ -395,6 +1081,9 @@ class RollbackSqlDialog(
     companion object {
         /** 尺寸记忆 key。 */
         const val DIMENSION_KEY = "cn.song.mybatisplus.visualizer.RollbackSqlDialog"
+
+        private const val SNAPSHOT_CARD_TABLE = "snapshot-table"
+        private const val SNAPSHOT_CARD_TEXT = "snapshot-text"
 
         private const val DIALOG_WIDTH = 720
         private const val DIALOG_HEIGHT = 460

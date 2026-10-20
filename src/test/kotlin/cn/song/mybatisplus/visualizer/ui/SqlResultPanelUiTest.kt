@@ -246,6 +246,26 @@ class SqlResultPanelUiTest : BasePlatformTestCase() {
         }
     }
 
+    fun testRichErrorPreservesMetadataInTooltipAndCopy() {
+        val panel = SqlResultPanel()
+        try {
+            val driver = java.sql.SQLException("Syntax <bad> & detail\nPosition: 12", "42601", 932)
+            val info = cn.song.mybatisplus.visualizer.execute.ErrorPositionExtractor.buildInfo(driver, driver.message!!, 80)
+            val expected = cn.song.mybatisplus.visualizer.execute.ExecutionErrorFormatter.format(info)
+            panel.showErrorRich(info, { })
+            waitForEdt()
+            val label = allComponents(panel).filterIsInstance<javax.swing.JLabel>()
+                .first { it.toolTipText == expected }
+            assertTrue(label.text.contains("sqlState: 42601"))
+            assertTrue(locateButton(panel)!!.isVisible)
+            cn.song.mybatisplus.visualizer.util.UiTextClipboard.copy("sentinel")
+            copyButton(panel)!!.doClick()
+            assertEquals(expected, cn.song.mybatisplus.visualizer.util.UiTextClipboard.readText())
+        } finally {
+            panel.clear()
+        }
+    }
+
     /** 富错误后再走普通 showError（无定位）→ 定位按钮必须收起（不残留可点却无动作的按钮）。 */
     fun testShowErrorRich_转普通错误后按钮收起() {
         val panel = SqlResultPanel()
@@ -338,6 +358,58 @@ class SqlResultPanelUiTest : BasePlatformTestCase() {
             assertEquals("仍应进入 ERROR 态", "ERROR", panel2.stateForTest())
         } finally {
             panel2.clear()
+        }
+    }
+
+    /**
+     * T-DialectGateUx：方言闸门阻断态的两个就地出口——可见、可点、离开错误态即清。
+     *
+     * 反向判据：`doClick` 不看可见性，故「清空后再点不得再触发」必须由 handler 置 null 保证；
+     * 这里一并钉死，防止旧动作挂在成功/加载态上被误触。
+     */
+    fun testShowErrorWithActions_两个修复入口可点且随状态清除() {
+        val panel = SqlResultPanel()
+        try {
+            var fixClicks = 0
+            var settingsClicks = 0
+            panel.showErrorWithActions(
+                "dialect mismatch",
+                fixLabel = "切换数据源",
+                fixTooltip = "tip-fix",
+                fix = { fixClicks++ },
+                settingsLabel = "方言设置",
+                settingsTooltip = "tip-settings",
+                settings = { settingsClicks++ },
+            )
+            waitForEdt()
+            val fix = panel.fixActionForTest()
+            val settings = panel.settingsActionForTest()
+            assertTrue("修复入口应可见", fix.isVisible)
+            assertTrue("设置入口应可见", settings.isVisible)
+            assertEquals("切换数据源", fix.text)
+            assertEquals("方言设置", settings.text)
+            assertEquals("tip-fix", fix.toolTipText)
+            assertEquals("tip-settings", settings.toolTipText)
+
+            fix.doClick()
+            settings.doClick()
+            assertEquals("点击修复入口应触发一次", 1, fixClicks)
+            assertEquals("点击设置入口应触发一次", 1, settingsClicks)
+
+            panel.showStatus("ok")
+            waitForEdt()
+            assertFalse("非错误态不得残留修复入口", fix.isVisible)
+            assertFalse("非错误态不得残留设置入口", settings.isVisible)
+            fix.doClick()
+            assertEquals("清空后旧动作不得再触发", 1, fixClicks)
+
+            // 普通 showError 不带动作：两个入口保持隐藏
+            panel.showError("plain error")
+            waitForEdt()
+            assertFalse("普通错误不应显示修复入口", fix.isVisible)
+            assertFalse("普通错误不应显示设置入口", settings.isVisible)
+        } finally {
+            panel.clear()
         }
     }
 }

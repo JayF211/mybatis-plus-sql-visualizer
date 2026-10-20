@@ -7,9 +7,12 @@ import cn.song.mybatisplus.visualizer.config.SettingsChangeListener
 import cn.song.mybatisplus.visualizer.log.agent.AgentManager
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService
+import cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons
 // T-UiCoord F2：下拉按钮文本截尾省略复用 meta 行的同款纯函数（避免第二份省略实现）
 import cn.song.mybatisplus.visualizer.ui.clipTailToWidth
 import com.intellij.util.ui.JBUI
+import com.intellij.util.ui.UIUtil
+import cn.song.mybatisplus.visualizer.util.DisplayMasker
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.util.MpvsUiColors
 import cn.song.mybatisplus.visualizer.util.TextCopyList
@@ -39,12 +42,10 @@ import com.intellij.notification.NotificationAction
 import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.util.IconLoader
 import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.intellij.openapi.fileEditor.OpenFileDescriptor
 import com.intellij.openapi.vfs.VirtualFile
-import com.intellij.ui.SearchTextField
 import com.intellij.ui.SimpleColoredComponent
 import com.intellij.ui.speedSearch.SpeedSearchUtil
 import com.intellij.ui.SimpleTextAttributes
@@ -113,19 +114,6 @@ class SqlLogPanel(
     private lateinit var entryCellRenderer: LogEntryListCellRenderer
     private lateinit var previewHost: SqlListPreviewHost
     private val dockedPreview = SqlDockedPreview(project, list) { previewHost.toggle() }
-    /**
-     * 页签容器（T-SqlLogTabsSingleRow / O-149，用户 2026-10-14）。
-     *
-     * 折行根因：`JTabbedPane` 默认 `tabLayoutPolicy` 是 **WRAP_TAB_LAYOUT**——页签总宽超过容器宽度时
-     * 按行折，窄侧栏下四个页签会变成两行（用户截图形态）。改为 **SCROLL_TAB_LAYOUT** 后页签**永不折行**，
-     * 宽度不足时由平台按滚动/溢出处理。
-     *
-     * 再用 `setTabComponentInsets` 收紧页签内边距（243 与 262 本机 jar `javap` 均实证该 API 存在），
-     * 让四个页签在用户侧栏宽度下正好一行、通常不需要滚动。
-     *
-     * 备选（本期不做，见计划 §2.2 / V182）：换平台 `JBTabs` + `TabLayout.SHRINK` 取编辑器页签那种
-     * 「缩到最小 + 下拉列出全部」的交互——该容器跨 243/253/262 构造签名有漂移面，须先补签名门禁。
-     */
     /**
      * 页签容器（T-SqlLogTabsSingleRow / O-149，用户 2026-10-14 两轮校正后定稿）。
      *
@@ -251,7 +239,7 @@ class SqlLogPanel(
      */
     private val typeFilterButton = JButton().apply {
         isFocusable = false
-        icon = AllIcons.General.ArrowDown
+        icon = MpvsIcons.TypeFilter
         horizontalTextPosition = SwingConstants.LEFT // 图标在文字右侧（下拉按钮惯例）
         addActionListener { showTypeFilterPopup() }
     }
@@ -268,12 +256,12 @@ class SqlLogPanel(
      */
     internal val sortModeAction: AnAction = object : AnAction() {
         init {
-            templatePresentation.icon = AllIcons.RunConfigurations.SortbyDuration
+            templatePresentation.icon = MpvsIcons.Sort
         }
 
         override fun update(e: AnActionEvent) {
             val label = currentSortLabel()
-            e.presentation.icon = AllIcons.RunConfigurations.SortbyDuration
+            e.presentation.icon = MpvsIcons.Sort
             e.presentation.text = label
             e.presentation.description = MpSqlVisualizerBundle.message("log.sort.label") + label
         }
@@ -489,7 +477,7 @@ class SqlLogPanel(
     internal val previewToggleAction: ToggleAction = object : ToggleAction(
         MpSqlVisualizerBundle.message("log.dockedPreview.toggle"),
         MpSqlVisualizerBundle.message("log.dockedPreview.toggle.tip"),
-        AllIcons.Actions.Preview,
+        MpvsIcons.DockedPreview,
     ) {
         override fun isSelected(e: AnActionEvent): Boolean = dockedPreview.isOpen
 
@@ -497,6 +485,13 @@ class SqlLogPanel(
             if (dockedPreview.isOpen != state) previewHost.toggle()
         }
     }
+
+    /**
+     * R53：增强捕获暂停/恢复动作（工具窗入口；图标/文案按 userPaused 态输出）。
+     * 语义 = 暂停只停 agent 通道（事件在入队点丢弃）、控制台通道照常；暂停≠关闭——
+     * 连接/心跳/CONFIG 链不动。增强未开启时隐藏（update 置 isVisible=false，平台不渲染）。
+     */
+    val agentPauseAction: AnAction = AgentPauseAction()
 
     /**
      * 工具栏动作组（T-M39：internal 供测试断言帮助入口存在性；
@@ -509,6 +504,7 @@ class SqlLogPanel(
      */
     internal val toolbarGroup = DefaultActionGroup(
         captureToggleAction,
+        agentPauseAction,
         ClearAction(),
         SettingsAction(),
         ManageSuppressAction(),
@@ -567,6 +563,20 @@ class SqlLogPanel(
     /** 工具栏动作图标组组件（挂行宿主 CENTER）——结构断言用（曾因还原反向验证探针时误删挂载而漏）。 */
     private var toolbarComponent: JComponent? = null
 
+    // ---------- R53：双通道捕获状态栏（字段须在 init 之前——init 里 buildStatusBar 会赋值） ----------
+
+    /** 状态栏：控制台通道段（已挂载 N 个 · 已扫描 M 行）。 */
+    private var statusConsoleLabel: JLabel? = null
+
+    /** 状态栏：增强 agent 通道段（未开启 / 暂停中 / 已挂载 pid · 已收事件 N / 等待…）。 */
+    private var statusAgentLabel: JLabel? = null
+
+    /**
+     * 状态栏宿主（非捕捉态整体隐藏——只清两段文案会留下分隔符与一条空白高度；
+     * BorderLayout 跳过 isVisible=false 的子件，故置位后需 revalidate）。
+     */
+    private var statusBarPanel: JPanel? = null
+
     init {
         // 注册子面板到 Disposer 树：父面板 dispose 时级联释放子面板（及其 DocumentListener），
         // 避免 IDE 退出时 ObjectTree 报 Memory leak detected
@@ -576,7 +586,7 @@ class SqlLogPanel(
         // T-RecentExecMenu O-119：面板外「送条目到页签」通道注册（弹框右键用；dispose 注销）
         manager.onOpenEntryInTab = openEntryInTabCallback
 
-        // 标签 1：SQL 日志（工具栏行 + 搜索条 + 条目列表）
+        // 标签 1：SQL 日志（工具栏行 + 搜索条 + 条目列表 + 底部双通道状态栏）
         val logPanel = JPanel(BorderLayout())
         logPanel.add(buildTopPanel(), BorderLayout.NORTH)
         previewHost = SqlListPreviewHost(
@@ -585,6 +595,8 @@ class SqlLogPanel(
             Toggleable.setSelected(previewToggleAction.templatePresentation, it)
         }
         logPanel.add(previewHost.component, BorderLayout.CENTER)
+        // R53：双通道捕获状态栏（捕捉期间常驻；非捕捉态清空隐藏——见 syncCaptureStatusBar）
+        logPanel.add(buildStatusBar(), BorderLayout.SOUTH)
 
         // 标签 2：日志转 SQL（粘贴日志 → 批量还原可执行 SQL）
         logsTab = tabs.addTab(com.intellij.ui.tabs.TabInfo(logPanel).setText(MpSqlVisualizerBundle.message("log.tab.logs")))
@@ -601,14 +613,14 @@ class SqlLogPanel(
         tabs.addListener(
             object : com.intellij.ui.tabs.TabsListener {
                 override fun selectionChanged(
-                    current: com.intellij.ui.tabs.TabInfo?,
                     previous: com.intellij.ui.tabs.TabInfo?,
+                    current: com.intellij.ui.tabs.TabInfo?,
                 ) {
                     if (current === sqlToJavaTab) {
                         sqlToJavaPanel.refreshFormatFromSettings()
                     }
-                    // F-44：切换到历史 tab 时刷新数据；F87（T-PerfSweep25）起这里同时是**首扫唯一入口**
-                    //（历史面板构造不再自带 refresh——开窗即扫回退为首次切换才扫）
+                    // UI-004：TabsListener 参数顺序为旧页签、新页签；必须在进入历史页时刷新。
+                    // 设置变更可能已在隐藏期间扫描空目录，不能依赖 showing 的一次性首扫兜底。
                     if (current === historyTab) {
                         historyPanel.refresh()
                     }
@@ -787,6 +799,26 @@ class SqlLogPanel(
         return row
     }
 
+    /**
+     * R53：双通道捕获状态栏（SQL 日志页签底部一行，捕捉期间常驻；非捕捉态整条隐藏）。
+     * 两个 JLabel（控制台通道 / 增强通道）+ 语义分隔符；文案由 [captureStatusLineText] 纯函数产出，
+     * [syncCaptureStatusBar] 在 2s 诊断定时器上无锁轮询刷新（V80①：取数全为只读内存态）。
+     * 淡色（[UIUtil.getContextHelpForeground]）与空态诊断行标注同视觉惯例，不抢正文。
+     */
+    private fun buildStatusBar(): JPanel {
+        statusConsoleLabel = JLabel().apply { foreground = UIUtil.getContextHelpForeground() }
+        statusAgentLabel = JLabel().apply { foreground = UIUtil.getContextHelpForeground() }
+        return JPanel(FlowLayout(FlowLayout.LEFT, 6, 2)).apply {
+            isOpaque = false
+            add(statusConsoleLabel)
+            add(JLabel(SEP_LABEL).apply { foreground = UIUtil.getContextHelpForeground() })
+            add(statusAgentLabel)
+            border = JBUI.Borders.empty(0, 6, 3, 6)
+            // 初始隐藏：面板构建时捕捉多半未起，先显示会留一条无信息的空带
+            isVisible = false
+            statusBarPanel = this
+        }
+    }
 
     /** Ctrl+F/⌘F 唤起搜索条（快捷键经 CommonShortcuts.getFind() 平台 keymap 自适应 mac/win）。 */
     internal inner class ShowSearchAction : AnAction() {
@@ -797,7 +829,7 @@ class SqlLogPanel(
         override fun update(e: AnActionEvent) {
             // 图标必须在 update 里写（工具栏 ActionButton 按 presentation 渲染；
             // 不设则渲染为占位圆圈——用户实测缺陷）
-            e.presentation.icon = AllIcons.Actions.Search
+            e.presentation.icon = MpvsIcons.Search
             e.presentation.text = MpSqlVisualizerBundle.message("log.panel.search")
         }
 
@@ -1039,12 +1071,12 @@ class SqlLogPanel(
     internal inner class CaptureAction : AnAction() {
         override fun update(e: AnActionEvent) {
             if (manager.capturing) {
-                e.presentation.icon = AllIcons.Actions.Suspend
+                e.presentation.icon = MpvsIcons.CaptureStop
                 e.presentation.text = MpSqlVisualizerBundle.message("log.panel.stop")
                 e.presentation.description = if (manager.isWaitingForConsole)
                     MpSqlVisualizerBundle.message("log.panel.capture.waiting.desc") else null
             } else {
-                e.presentation.icon = AllIcons.Actions.Execute
+                e.presentation.icon = MpvsIcons.CaptureStart
                 e.presentation.text = MpSqlVisualizerBundle.message("log.panel.capture")
                 e.presentation.description = null
             }
@@ -1059,9 +1091,34 @@ class SqlLogPanel(
         }
     }
 
-    internal inner class ClearAction : AnAction() {
+    /**
+     * R53：增强捕获暂停/恢复（工具窗入口）。
+     *
+     * T-AgentPauseVisibility（2026-10-19，用户拍板方案 B）：**临时全隐藏**。
+     * 增强捕获已默认开启且无提示，该按钮在应用未运行时没有可暂停对象，并与捕捉按钮形成
+     * 「播放/暂停」误读；先整体隐藏，动作对象仍保留在工具栏组内（不删能力代码）。
+     * 代价：暂停 agent 通道的 UI 入口暂时不可达（关闭总开关仍会回落控制台）。
+     * 恢复条件：方案 A（agent 已挂载或暂停态才显示）落地，或新增状态栏/右键菜单入口。
+     *
+     * 历史语义（保留在 [actionPerformed]）：暂停只停 agent 通道（事件在入队点丢弃）、
+     * 控制台通道照常；暂停≠关闭——连接/心跳/CONFIG 链不动。
+     */
+    private inner class AgentPauseAction : AnAction() {
         override fun update(e: AnActionEvent) {
-            e.presentation.icon = AllIcons.Actions.GC
+            // 方案 B：无条件隐藏。不要改回 isEnhancedEnabled()——恢复时必须走方案 A 的条件可见。
+            e.presentation.isVisible = false
+            e.presentation.isEnabled = false
+        }
+
+        override fun actionPerformed(e: AnActionEvent) {
+            val am = AgentManager.getInstance(project)
+            am.setUserPaused(!am.userPaused)
+        }
+    }
+
+    internal inner class ClearAction : AnAction(MpvsIcons.Clear) {
+        override fun update(e: AnActionEvent) {
+            e.presentation.icon = MpvsIcons.Clear
             e.presentation.text = MpSqlVisualizerBundle.message("log.panel.clear")
         }
 
@@ -1073,11 +1130,11 @@ class SqlLogPanel(
 
     /**
      * T-SqlLogPerf：「滚动到底部」动作（跳列表底 + 恢复尾部跟随）。
-     * 图标复用 [AllIcons.General.ArrowDown]（本文件 SQL类型/排序按钮同款下箭头，向下语义一致）。
+     * 图标 = [MpvsIcons.ScrollToEnd]（列表 + 向下箭头；原先复用 [AllIcons.General.ArrowDown]）。
      */
     internal inner class ScrollToEndAction : AnAction() {
         override fun update(e: AnActionEvent) {
-            e.presentation.icon = AllIcons.General.ArrowDown
+            e.presentation.icon = MpvsIcons.ScrollToEnd
             e.presentation.text = MpSqlVisualizerBundle.message("log.panel.scrollBottom")
             e.presentation.description = MpSqlVisualizerBundle.message(
                 if (tailFollow.shouldFollow) "log.panel.scrollBottom.tip" else "log.panel.scrollBottom.paused.tip",
@@ -1091,7 +1148,7 @@ class SqlLogPanel(
 
     internal inner class SettingsAction : AnAction() {
         override fun update(e: AnActionEvent) {
-            e.presentation.icon = AllIcons.General.Settings
+            e.presentation.icon = MpvsIcons.Settings
             e.presentation.text = MpSqlVisualizerBundle.message("log.panel.settings")
         }
 
@@ -1103,13 +1160,13 @@ class SqlLogPanel(
     }
 
     /**
-     * T-SqlSuppress（O-69）：屏蔽管理入口（D1 定案主入口，插设置旁；D7 图标漏斗
-     * `AllIcons.General.Filter`——262 jar 实渲染比对后用户选定，全栏无漏斗形不撞车）。
+     * T-SqlSuppress（O-69）：屏蔽管理入口（D1 定案主入口，插设置旁；图标 = [MpvsIcons.Suppress]
+     * 自绘「眼睛 + 红斜线」，原先复用 [AllIcons.General.Filter] 漏斗——漏斗让给 SQL 类型过滤）。
      * 打开与右键「管理屏蔽规则…」同一非模态对话框。
      */
     internal inner class ManageSuppressAction : AnAction() {
         override fun update(e: AnActionEvent) {
-            e.presentation.icon = AllIcons.General.Filter
+            e.presentation.icon = MpvsIcons.Suppress
             e.presentation.text = MpSqlVisualizerBundle.message("log.suppress.manage")
         }
 
@@ -1121,7 +1178,7 @@ class SqlLogPanel(
     internal inner class CommunityAction : AnAction(
         MpSqlVisualizerBundle.message("log.community.action"),
         MpSqlVisualizerBundle.message("log.community.action.tip"),
-        IconLoader.getIcon("/icons/communityChat.svg", SqlLogPanel::class.java),
+        MpvsIcons.Community,
     ) {
         override fun actionPerformed(e: AnActionEvent) {
             CommunityDialog(project).apply { startLoading() }.show()
@@ -1129,7 +1186,7 @@ class SqlLogPanel(
     }
 
     /** T-M39：帮助入口（? 按钮，位于设置按钮旁）→ 内嵌浏览器打开本地 HTML 帮助文档。
-     *  图标用 AllIcons.Actions.Help（纯灰 #6E6E6E 问号，与设置/清空按钮同色系；
+     *  图标 = [MpvsIcons.Help]（AllIcons.Actions.Help，纯灰问号，与设置/清空按钮同色系；
      *  ContextHelp 为灰蓝圆圈 #9AA7B0，与旁边按钮色相不一致——用户反馈）。
      *
      *  打开逻辑（2026-08-31 定稿：本地 HTML 为主路径，零网络依赖）：
@@ -1146,7 +1203,7 @@ class SqlLogPanel(
      *  不发起任何外部请求，不存在资源加载失败导致缺样式。 */
     internal inner class HelpAction : AnAction() {
         override fun update(e: AnActionEvent) {
-            e.presentation.icon = AllIcons.Actions.Help
+            e.presentation.icon = MpvsIcons.Help
             e.presentation.text = MpSqlVisualizerBundle.message("log.panel.help")
         }
 
@@ -1292,11 +1349,28 @@ class SqlLogPanel(
     private var diagnosticsTimer: javax.swing.Timer? = null
 
     /**
-     * 诊断行同步（EDT）：更新列表空态文案 + 管理定时器生命周期。
+     * R53 测试缝：双通道状态栏两段标签（第一段=控制台通道，第二段=增强通道）。
+     */
+    internal fun statusBarLabelsForTest(): Pair<JLabel?, JLabel?> = statusConsoleLabel to statusAgentLabel
+
+    /**
+     * R53 测试缝：同步驱动状态栏刷新（等价 2s 诊断定时器的一拍）。
+     */
+    internal fun syncStatusBarForTest() = syncCaptureStatusBar()
+
+    /** R53 测试缝：状态栏宿主面板（非捕捉态应整条隐藏——不留分隔符/空白高度）。 */
+    internal fun statusBarForTest(): JPanel? = statusBarPanel
+
+    /** 诊断行同步（EDT）：更新列表空态文案 + 双通道状态栏 + 管理定时器生命周期。
      * 取数全部为只读内存态（buffer 快照 / 桥计数 / AgentManager 状态），不触发平台调用。
+     *
+     * R53：定时器生命周期由「空态才跑」放宽为「捕捉期间常跑」——状态栏需要持续刷新；
+     * 空态判定改 [SqlLogEntryBuffer.size]（O(1)）而非 snapshot().isEmpty()（O(N) 拷贝，
+     * 长列表下 2s 常跑会白付整表拷贝）。
      */
     private fun syncDiagnostics() {
-        val active = manager.capturing && manager.entries.snapshot().isEmpty()
+        syncCaptureStatusBar()
+        val active = manager.capturing && manager.entries.size() == 0
         val text = if (active) {
             captureDiagnosticsText(
                 CaptureDiagnostics(
@@ -1326,7 +1400,8 @@ class SqlLogPanel(
             null
         }
         if (text != null) applyEmptyText(text) else applyEmptyTextWithEnhancedLink()
-        if (active) {
+        // R53：定时器捕捉期间常跑（状态栏持续刷新）；非捕捉态停表清栏
+        if (manager.capturing) {
             if (diagnosticsTimer == null) {
                 diagnosticsTimer = javax.swing.Timer(DIAGNOSTICS_TICK_MS) { syncDiagnostics() }
                     .apply { isRepeats = true; start() }
@@ -1335,6 +1410,50 @@ class SqlLogPanel(
             diagnosticsTimer?.stop()
             diagnosticsTimer = null
         }
+    }
+
+    /**
+     * R53：双通道捕获状态栏刷新（EDT，挂在诊断定时器上 2s 无锁轮询）。
+     * 文案由纯函数 [captureStatusLineText] 产出（V80①：取数全为只读内存态）；
+     * 非捕捉态整条面板隐藏（只清文案会留下分隔符与空白高度）。
+     */
+    private fun syncCaptureStatusBar() {
+        val label = statusConsoleLabel ?: return
+        val texts = if (manager.capturing) {
+            runCatching {
+                val am = AgentManager.getInstance(project)
+                captureStatusLineText(
+                    CaptureStatusLine(
+                        capturing = true,
+                        consolesAttached = manager.consoleBridge.attachedConsoles.size,
+                        linesSeen = manager.consoleBridge.consoleLinesSeen.get(),
+                        agentStatus = am.statusSummary(),
+                        agentLivePids = am.healthyPids(),
+                        agentPaused = am.userPaused,
+                        agentEventsReceived = cn.song.mybatisplus.visualizer.log.agent.AgentEventAdapter.receivedEvents(),
+                    ),
+                )
+            }.getOrNull()
+        } else {
+            null
+        }
+        if (texts == null) {
+            label.text = ""
+            statusAgentLabel?.text = ""
+            setStatusBarVisible(false)
+        } else {
+            label.text = texts.first
+            statusAgentLabel?.text = texts.second
+            setStatusBarVisible(true)
+        }
+    }
+
+    /** R53：状态栏显隐（BorderLayout 跳过不可见子件，须 revalidate 才重排高度）。 */
+    private fun setStatusBarVisible(visible: Boolean) {
+        val bar = statusBarPanel ?: return
+        if (bar.isVisible == visible) return
+        bar.isVisible = visible
+        bar.parent?.revalidate()
     }
 
     // ---------- 条目列表 ----------
@@ -1439,7 +1558,9 @@ class SqlLogPanel(
         // T-SqlLogPerf P5（20261006-1020 计划）：上一轮全量重建链未走完就来了新刷新时，增量差分会被
         // 「model.size != lastRendered.size」拒绝 → 每次刷新都重启重建链，风暴期列表永远停在首屏 30 条
         // （用户体感「监听加载有延迟」的实态）。进差分前同步补完剩余批次，让差分基线对齐。
-        flushRebuildChainSync()
+        // F80（T-PerfSweep24）：超大余量时补完让路（false＝本拍刷新挂起，链尾补跑）——单拍同步写
+        // 量不再随 logMaxCount 线性放大。
+        if (!flushRebuildChainSync()) return
         val snapshot = LogPerfProbe.measure("LogPanel.refreshList.snapshot", { "size=${manager.entries.size()}" }) {
             manager.entries.snapshot()
         }
@@ -1471,11 +1592,14 @@ class SqlLogPanel(
         val evicted = manager.entries.drainEvictedCount()
 
         val modelSizeBefore = listModel.size()
+        val visibleTailSequenceBefore = lastRendered.lastOrNull()?.sequenceNumber ?: 0L
         if (!applyIncremental(newVisible, evicted)) {
             applyFullRebuild(newVisible, gen)
         }
-        // T-SqlLogPerf：尾部跟随——仅当列表真的长高（新条目追加）才贴底；搜索/过滤收窄不打扰浏览位置
-        if (tailFollow.shouldFollow && listModel.size() > modelSizeBefore) {
+        val tailAdvancedAtCapacity = evicted > 0 &&
+            (newVisible.lastOrNull()?.sequenceNumber ?: 0L) > visibleTailSequenceBefore
+        // 缓冲区满时头部淘汰与尾部追加相抵，模型长度不变；只随确有新可见条目时贴底。
+        if (tailFollow.shouldFollow && (listModel.size() > modelSizeBefore || tailAdvancedAtCapacity)) {
             scrollToBottom(resume = false)
         }
 
@@ -1560,6 +1684,9 @@ class SqlLogPanel(
     /** T-SqlLogPerf P5：在途全量重建链的剩余游标（null = 无在途链）。 */
     private var rebuildRemaining: Iterator<LogSqlEntry>? = null
 
+    /** F80：链后补跑挂起标志（超大余量让路本拍刷新，链排空即补跑一次）。 */
+    private var pendingRefreshAfterChain = false
+
     /** 追加一批（REFRESH_CHUNK_SIZE 条）；写完仍有余量则排下一拍。 */
     private fun appendRebuildChunk() {
         val remaining = rebuildRemaining ?: return
@@ -1570,6 +1697,10 @@ class SqlLogPanel(
         rebuildRemaining = if (remaining.hasNext()) remaining else null
         if (rebuildRemaining != null) {
             ApplicationManager.getApplication().invokeLater { appendRebuildChunk() }
+        } else if (pendingRefreshAfterChain) {
+            // F80：链排空——补跑挂起的刷新（风暴期多次挂起合并为一次补跑）
+            pendingRefreshAfterChain = false
+            ApplicationManager.getApplication().invokeLater { refreshList() }
         }
     }
 
@@ -1579,16 +1710,28 @@ class SqlLogPanel(
      * 旧形态：重建链在途时 `listModel.size != lastRendered.size`，增量差分必被拒绝 → 风暴期
      * 每 200ms 的新刷新都重启重建链，链永远走不完，列表停在首屏 30 条且反复 clear/addAll 白耗 EDT。
      * 补完后 model 与 lastRendered 对齐，后续刷新走增量差分。
+     *
+     * F80（T-PerfSweep24）补完保留分批：余量 ≤ [FLUSH_SYNC_MAX]（默认设置 ≤170）照旧单拍同步
+     * 补完——默认行为逐字不变；余量超大（用户 logMaxCount 数千）不再单拍同步写数千条
+     * （EDT 冻结随 logMaxCount 线性放大），本拍刷新让路（返回 false 挂起），在途链沿用
+     * appendRebuildChunk 逐拍语义推进（每拍 30 条 EDT 脉冲），链排空补跑挂起刷新——
+     * 风暴期新刷新不再反复 clear+重启链，列表从首屏 30 条起逐拍长满。
      */
-    private fun flushRebuildChainSync() {
-        val remaining = rebuildRemaining ?: return
+    private fun flushRebuildChainSync(): Boolean {
+        val remaining = rebuildRemaining ?: return true
+        val rest = remaining.asSequence().toList()
+        if (rest.size > FLUSH_SYNC_MAX) {
+            // 超大余量：让路——链保持推进（rebuildRemaining 不动），本拍刷新挂起
+            pendingRefreshAfterChain = true
+            return false
+        }
         rebuildRemaining = null
         list.ignoreRepaint = true
-        val rest = remaining.asSequence().toList()
         if (rest.isNotEmpty()) listModel.addAll(rest)
         list.ignoreRepaint = false
         list.revalidate()
         list.repaint()
+        return true
     }
 
     /** 按当前排序模式排序条目。 */
@@ -1779,7 +1922,11 @@ class SqlLogPanel(
     }
 
     /** R4（W3 历史工作流包）：导出当前可见行集（lastRendered=面板过滤/搜索/排序后的实际可见集）。 */
-    internal inner class ExportVisibleAction : AnAction(MpSqlVisualizerBundle.message("log.export.visible")) {
+    internal inner class ExportVisibleAction : AnAction(
+        MpSqlVisualizerBundle.message("log.export.visible"),
+        null,
+        MpvsIcons.Export,
+    ) {
         override fun actionPerformed(e: AnActionEvent) {
             exportVisibleEntries()
         }
@@ -1969,6 +2116,8 @@ class SqlLogPanel(
     override fun dispose() {
         // T-Perf-24：停止搜索防抖 Timer（防晚到 apply 触碰已销毁面板）
         searchDebounceTimer.stop()
+        // F80：撤链后补跑挂起标志（防 dispose 后晚到 invokeLater 触碰已销毁面板）
+        pendingRefreshAfterChain = false
         // T-CaptureTruth T-CT-03：停止诊断定时器（同上，防晚到 syncDiagnostics 触碰已销毁列表）
         diagnosticsTimer?.stop()
         diagnosticsTimer = null
@@ -2085,6 +2234,8 @@ class SqlLogPanel(
         private const val DROPDOWN_TEXT_BUDGET_PX = 64
         /** T-CaptureTruth T-CT-03：零产出诊断刷新间隔（与桥轮询同频 2s）。 */
         private const val DIAGNOSTICS_TICK_MS = 2000
+        /** R53：双通道状态栏两段文案之间的语义分隔符。 */
+        private const val SEP_LABEL = "｜"
         internal const val DEFAULT_TIMESTAMP_FORMAT = "yyyy-MM-dd HH:mm:ss"
         /** T-M39：帮助文档 URL（降级系统浏览器打开）。
          *  2026-08-31 改为自建站点 jvtools.cn（可自主接入国内 CDN；

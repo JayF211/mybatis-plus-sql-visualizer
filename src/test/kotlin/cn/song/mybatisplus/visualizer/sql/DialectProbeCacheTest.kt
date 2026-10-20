@@ -29,6 +29,7 @@ class DialectProbeCacheTest : BasePlatformTestCase() {
         now = 1_000_000L
         AgentUrlRegistry.clearAllForTest()
         DataSourceUrlProbe.probeForTest = null
+        DataSourceUrlProbe.probeCandidatesForTest = null
         DataSourceUrlProbe.ttlMs = 5_000L
         DataSourceUrlProbe.clockMs = { now }
         DataSourceUrlProbe.probeCount.set(0)
@@ -138,6 +139,55 @@ class DialectProbeCacheTest : BasePlatformTestCase() {
         } finally {
             ps.loadState(psSnapshot)
             global.loadState(globalSnapshot)
+        }
+    }
+
+    fun test异方言项目候选不取首个并在兼容结果中标证据不足() {
+        val settings = PluginSettings.getInstance()
+        val saved = settings.getState().copy()
+        val projectSettings = project.service<ProjectPluginSettings>()
+        val savedProject = projectSettings.getState().copy()
+        try {
+            projectSettings.state.useProjectSettings = false
+            settings.state.dialectAuto = true
+            var calls = 0
+            DataSourceUrlProbe.probeCandidatesForTest = {
+                calls++
+                listOf(
+                    DialectDecisionEngine.Candidate("pg", "PostgreSQL"),
+                    DialectDecisionEngine.Candidate("my", "MySQL"),
+                )
+            }
+            val decision = DialectRegistry.decision(project)
+            assertEquals(DialectDecisionEngine.Status.AMBIGUOUS, decision.status)
+            assertEquals(listOf("my", "pg"), decision.dataSourceIds)
+            assertEquals("未知时兼容渲染不得伪称是明确推断", MySqlDialect, DialectRegistry.effective(project))
+            assertEquals("同项目短窗内候选只查一次", 1, calls)
+        } finally {
+            projectSettings.loadState(savedProject)
+            settings.loadState(saved)
+        }
+    }
+
+    fun test两个数据源方言相同可确定渲染但不虚构唯一库() {
+        val settings = PluginSettings.getInstance()
+        val saved = settings.getState().copy()
+        val projectSettings = project.service<ProjectPluginSettings>()
+        val savedProject = projectSettings.getState().copy()
+        try {
+            projectSettings.state.useProjectSettings = false
+            settings.state.dialectAuto = true
+            DataSourceUrlProbe.probeCandidatesForTest = {
+                listOf(DialectDecisionEngine.Candidate("pg2", "PostgreSQL"),
+                    DialectDecisionEngine.Candidate("pg1", "PostgreSQL"))
+            }
+            val decision = DialectRegistry.decision(project)
+            assertEquals(DialectDecisionEngine.Status.RESOLVED, decision.status)
+            assertEquals(DialectDecisionEngine.Confidence.CONSENSUS, decision.confidence)
+            assertEquals(listOf("pg1", "pg2"), decision.dataSourceIds)
+        } finally {
+            projectSettings.loadState(savedProject)
+            settings.loadState(saved)
         }
     }
 }

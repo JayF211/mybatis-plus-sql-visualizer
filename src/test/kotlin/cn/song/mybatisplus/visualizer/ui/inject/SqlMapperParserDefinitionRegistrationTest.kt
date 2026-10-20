@@ -52,6 +52,31 @@ class SqlMapperParserDefinitionRegistrationTest : BasePlatformTestCase() {
         SqlMapperParserDefinition.unregisterForTest()
     }
 
+    /**
+     * F67（T-PerfSweep18）：ensureRegistered 前置 registered 短路（@Volatile 读零锁零注册表查询）。
+     * 纯性能微件——短路与原 forLanguage 在位判定行为等价（都不重建实例），黑盒无独占判别面，
+     * 此处钉「行为等价」两面：已注册态重复调用零副作用（实例同一）、摘除后短路失效须重注册。
+     */
+    @Test
+    fun testF67_前置短路_已注册态重复调用零副作用且摘除后失效() {
+        SqlMapperParserDefinition.ensureRegistered()
+        val first = LanguageParserDefinitions.INSTANCE.forLanguage(SqlMapperLanguage)
+        assertNotNull(first)
+        // 短路路径连打三次：注册表实例不换
+        repeat(3) { SqlMapperParserDefinition.ensureRegistered() }
+        assertTrue(
+            "短路下不重建实例（注册表实例同一）",
+            first === LanguageParserDefinitions.INSTANCE.forLanguage(SqlMapperLanguage),
+        )
+        // 摘除复位短路：再次 ensure 须重新注册
+        SqlMapperParserDefinition.unregisterForTest()
+        SqlMapperParserDefinition.ensureRegistered()
+        assertNotNull(
+            "摘除后 ensureRegistered 须重新注册（短路只对已注册态生效）",
+            LanguageParserDefinitions.INSTANCE.forLanguage(SqlMapperLanguage),
+        )
+    }
+
     @Test
     fun testF48_裸注册与挂靠注册对照() {
         val registry = LanguageParserDefinitions.INSTANCE

@@ -2,13 +2,22 @@
 
 > 服务未启，SQL 先知。
 
-SQL Visualizer 是 IntelliJ IDEA 的 SQL 调试插件。写代码时，不启动应用就能预览 Wrapper、XML、注解、JPA / Hibernate 最终生成的 SQL；运行应用后，捕获真实参数、耗时与调用位置，从慢查询直接跳回源码。预览结果可以继续执行、查看执行计划，也可以反向生成 MyBatis-Plus Java 代码。
+SQL Visualizer 是 IntelliJ IDEA 的 SQL 调试插件。写代码时，不启动应用就能预览 Wrapper、XML、注解、JPA / Hibernate 可静态推导的 SQL；运行应用后，捕获真实参数、耗时与调用位置，从慢查询直接跳回源码。预览结果可以继续执行、查看执行计划，也可以反向生成 MyBatis-Plus Java 代码。
 
 [官网与在线文档](https://sql-visualizer.jvtools.cn) · [插件市场](https://plugins.jetbrains.com/plugin/33633-sql-visualizer) · [快速开始](https://sql-visualizer.jvtools.cn/guide/getting-started) · [更新记录](CHANGELOG.md) · [问题反馈](https://sql-visualizer.jvtools.cn/about/feedback)
 
 支持 IntelliJ IDEA 2024.3 及以上版本。Community 版可使用静态预览、日志捕获、代码转换等核心能力；内嵌执行控制台与数据库表入口需要 Ultimate 的 Database Tools。MCP 接入需要 IDEA 2025.2+ 及可用的 MCP Server。
 
-本文随 `master` 的最新能力维护，具体发行范围以 [CHANGELOG](CHANGELOG.md) 和所安装版本为准。
+本文包含 `dev` 的后续能力，具体发行范围以 [CHANGELOG](CHANGELOG.md) 和所安装版本为准。
+
+## dev 后续能力与验收边界
+
+- EXPLAIN 跨会话基线复用预览历史保存，按项目/数据源 UUID/方言/实际 SQL 隔离；“保留原始执行计划”独立默认关闭。计划可能含业务谓词或秘密，启用前应阅读应用级存储说明；清除预览历史同时清除计划。
+- “复制为 AI 上下文”v2 仅消费已取得且当前匹配的计划和静态元数据，不为复制触发网络或 JDBC；默认输出严格匿名诊断投影，不是可执行 SQL，也不保证代替用户完成隐私审查。
+- FieldFill 安全模拟只使用用户显式填写的字面量，默认关闭，不执行用户的 MetaObjectHandler；显式参数优先，WHERE条件与UPSERT不猜填，清除参数历史会清除模拟预设。
+- 诊断反馈增加审阅/删段/最终文本及逐次同意，只有用户最终提交才走已有公开需求池；编辑和重试均需重新同意，不自动附原SQL/参数/文件。
+- 自动方言按来源证据与实际目标分层校验；显式 Resolution Scope 无法可靠解释时明确不可用，不将厂商候选冒称绑定。模块仅学习数据源 UUID，旧日志无精确 URL 时不猜历史方言；实际 session 与 active console 双闸阻断已知冲突和未知写/EXPLAIN，无损自动重渲染须复核后二次执行。
+- 正式 [UI验收规程](docs/验收文档/20261015-2338-T-M19-UI增量正式验收文档.md) 与 [Runner/真库规程](docs/验收文档/20261015-2345-T-O145-V178-Runner与真库正式验收文档.md) 包含入口、操作、正反例和截图记录。2026-10-16 用户已授权沙盒UI全量验收，非UI证据不代替尚未记录的UI结果，dev代码不表示已发版。
 
 ## 能解决什么问题
 
@@ -97,7 +106,7 @@ Claude Code、Cursor、JetBrains AI Assistant 等客户端可经 IDEA MCP Server
 
 ### 编码期：静态预览与编辑辅助
 
-- **MyBatis-Plus / MPJ**：Lambda 与字符串 Wrapper、服务链、联表、批量操作；Java / Kotlin 均可预览。支持逻辑删除、乐观锁、多租户 / 数据权限模拟，以及分页 LIMIT 与可独立关闭的 COUNT 模拟。
+- **MyBatis-Plus / MPJ**：Lambda 与字符串 Wrapper、服务链、联表、批量操作；Java 支持静态预览；Kotlin Wrapper 尚不能可靠还原表和列/值，因此不显示预览图标，主动使用 Convert to SQL/快捷键时说明限制且不生成猜测 SQL。支持逻辑删除、乐观锁、多租户 / 数据权限模拟，以及分页 LIMIT 与可独立关闭的 COUNT 模拟。
 - **MyBatis XML / 注解**：动态标签、OGNL 条件、集合参数、跨命名空间 SQL 片段、`@Select` / `@Update` / `@Delete` / `@Insert` 与 Provider。自研 XML 的自定义标签内嵌 SQL / HQL 可按内容识别。
 - **JPA / Hibernate**：派生查询、JPQL / 原生 `@Query`、Criteria、Specification、QBE、HQL、hbm 映射；支持 `@Embedded` / `@EmbeddedId`、嵌套 `@AttributeOverride`、Spring Data 嵌入前缀。组件路径命名可从工程配置探测或手动指定；实体所在模块无法确定时，可从工程配置与源码信号探测组件路径命名约定。
 - **其他 SQL 来源**：JdbcTemplate、命名参数、自研 DAO 字符串 SQL，以及 xbatis、Easy-Query、MyBatis Dynamic SQL、Querydsl。支持可静态分析的字符串拼接、StringBuilder / StringBuffer 和源码可见的辅助方法返回值；多分支结果不一致或无法求值时不猜运行结果。
@@ -108,7 +117,7 @@ Claude Code、Cursor、JetBrains AI Assistant 等客户端可经 IDEA MCP Server
 
 ### 运行期：捕获、筛选、溯源与历史
 
-- **增强捕获**：启用或首次打开未授权项目时先确认，再向应用 JVM 接入 agent。正常随应用启动的通道可采集启动期 SQL；对已运行应用的热挂载能力受驱动与语句创建时机限制，必要时重启应用完整采集。默认不脱敏，可在设置中开启参数打码。
+- **增强捕获**：默认开启，无需确认即向应用 JVM 接入 agent；可在设置页关闭并回落控制台捕获。正常随应用启动的通道可采集启动期 SQL；对已运行应用的热挂载能力受驱动与语句创建时机限制，必要时重启应用完整采集。默认不脱敏，可在设置中开启参数打码。
 - **控制台回落**：支持 MyBatis、Hibernate、JdbcTemplate 日志；按线程分桶还原并发日志。ShardingSphere 的 Logic SQL 可作为主语句，Actual SQL 作为路由附注；「日志 → SQL」页签支持粘贴整段日志或主动点击「从剪贴板读取」。
 - **新版列表**：SQL 高亮跟随 IDE 编辑器配色；单击只选中，底部快速预览按需打开，双击打开完整弹窗。支持类型筛选、搜索与大小写开关、多选复制、慢查询筛选、同结构聚类和按目标库分组。手动向上浏览暂停跟随，点击「滚动到底部」恢复。
 - **降噪与定位**：精确 / 结构匹配屏蔽刷屏 SQL；同模板计数辅助排查 N+1。可按调用方法、请求或模板聚焦；增强捕获使用真实调用栈定位，JAR 业务包可单独登记，避免跳转停在框架入口。
@@ -123,7 +132,7 @@ Claude Code、Cursor、JetBrains AI Assistant 等客户端可经 IDEA MCP Server
 - **EXPLAIN 与性能建议**：覆盖 11 种方言的计划入口；验证情况分别为 9 种真机 / 引擎级实证、OceanBase 文档级验证、SQL Server 官方文法级落地待真机。默认由原生控制台呈现；MySQL / PostgreSQL 结构化结果是默认关闭的实验选项。静态建议不是实际执行计划，也不能替代真实索引与数据分布验证。
 - **SQL 快捷模板**：选中表名，或将光标停在表名上，通过右键运行 EXPLAIN / COUNT / 抽样查询；抽样默认 10 行，可在设置中调整。
 - **JOIN 关系图**：查看联表与列信息，可导出 PNG / SVG；Community 环境使用降级绘图。
-- **写入风险与回滚预案**：`${}` 直接替换有注入提示与确认，无界 UPDATE / DELETE 有风险清单，执行有超时护栏。INSERT 可推导逆向 DELETE；UPDATE / DELETE 缺少修改前数据时不会凭空生成恢复 SQL，需先查询快照、再按实际数据回填。回滚预案不是事务回滚，也不会自动执行。
+- **写入风险与回滚预案**：`${}` 直接替换有注入提示与确认，无界 UPDATE / DELETE 有风险清单，MCP 直连执行有超时护栏，IDE 原生控制台不受插件该护栏保护。INSERT 可推导逆向 DELETE；UPDATE / DELETE 缺少修改前数据时不会凭空生成恢复 SQL，需先查询快照、再按实际数据回填。回滚预案不是事务回滚，也不会自动执行。
 - **SQL → Java**：支持单表与 MPJ JOIN、分组聚合、HAVING、DISTINCT、FOR UPDATE 及 Map / Object / VO 返回形态。复杂条件可用 `apply()` 透传；UNION 在 Java 生成层有降级提示，不能承诺所有 SQL 都一键变成等价 Wrapper。
 - **CRUD 与分享**：实体 / 数据库表生成 CRUD，按映射处理自增、逻辑删除、乐观锁；支持可移植 SQL 导出、与上次预览对比，以及 Markdown / HTML 分享。
 
@@ -144,7 +153,7 @@ Claude Code、Cursor、JetBrains AI Assistant 等客户端可经 IDEA MCP Server
 1. 在 `Settings → Plugins → Marketplace` 搜索 **SQL Visualizer**，或打开 [插件市场页面](https://plugins.jetbrains.com/plugin/33633-sql-visualizer) 安装。
 2. 打开业务工程，在可识别的 Wrapper、Mapper XML、注解或 JPA 查询旁点击预览图标；也可按 `Alt+Shift+Q`（macOS 为 `Option+Shift+Q`）。
 3. 在预览左侧切换条件、填写参数，右侧查看或复制 SQL。需要执行时先在 Database 工具窗口配置数据源。
-4. 要查看真实执行，在增强捕获提示中确认接入，然后运行应用；在「SQL Visualizer」工具窗口查看日志。若不使用增强捕获，可开启应用 SQL 日志后使用控制台通道。
+4. 要查看真实执行，直接运行应用即可（增强捕获默认开启）；在「SQL Visualizer」工具窗口查看日志。若在设置中关闭了增强捕获，可开启应用 SQL 日志后使用控制台通道。
 
 SQL → Java 的快捷键为 `Alt+Shift+J`。快捷键可在 Keymap 或插件设置页修改；预览图标可按 Wrapper、XML、注解、JPA / HQL 等来源分组开关。
 
@@ -176,6 +185,8 @@ SQL → Java 的快捷键为 `Alt+Shift+J`。快捷键可在 Keymap 或插件设
 SQL 静态预览、代码转换、日志还原、关系图和 CRUD 生成在本地完成，不需要把源码或 SQL 上传到外部服务。执行与 EXPLAIN 需要连接你选择的数据库；增强捕获会监听本机回环端口，用于与应用 JVM 通信。
 
 可选的外部访问包括：检查 / 下载插件更新、主动提交问题反馈、打开官网文档，以及帮助页演示图和交流群二维码的加载。无网时这些在线内容可能不可用，不影响本地静态分析。插件不采集使用遥测；主动反馈时请检查所选附加信息。若启用 MCP 并让外部 AI 客户端调用，返回的 SQL、表结构与历史内容会交给该客户端，其后续数据处理取决于你的客户端与模型服务配置。
+
+本地数据不止捕获日志文件：预览 SQL 历史默认随预览持久化（可含参数快照），参数历史及命名方案在使用后可能以明文 JSON 保存参数值；两者均在 IDE 应用配置目录的 `mp-sql-visualizer.xml` 中，独立于自动保存捕获日志开关。「清除缓存」仅清运行缓存，不清这三类持久数据；设置页可分别打开捕获历史目录、确认清除预览 SQL 历史（含收藏和参数快照）、确认清除参数历史与命名方案。参数清理使旧面板和迟到写回失效，但不连带清除预览历史里的快照。
 
 ### 内网更新源
 

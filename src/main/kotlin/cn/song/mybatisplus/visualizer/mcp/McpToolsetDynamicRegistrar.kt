@@ -5,6 +5,17 @@ import com.intellij.openapi.extensions.ExtensionPointName
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
+ * 注册入口与设置页共用的只读能力探测；类可达不代表工具已注册、服务器已启用或客户端可调用。
+ * 顶层函数避免设置页为探测而初始化注册器及 TOOL_CLASSES；initialize=false 不启动平台服务。
+ * 反射沿用注册器原有 McpToolset 入口，签名登记见 PlatformSignatureChecker.checkMcpToolsetCapability。
+ */
+internal fun findMcpToolsetClass(
+    loader: ClassLoader = McpToolGate::class.java.classLoader,
+): Class<*>? = runCatching {
+    Class.forName("com.intellij.mcpserver.McpToolset", false, loader).takeIf { it.isInterface }
+}.getOrNull()
+
+/**
  * MCP 工具集**动态壳注册器**（T-McpDynamicToolset）：运行期生成「extends 工具类 implements
  * 平台 McpToolset」的壳类并程序化注册到 `com.intellij.mcpServer.mcpToolset` EP，替代
  * mcp-optional.xml 的 10 条 XML toolset 声明。
@@ -39,7 +50,6 @@ object McpToolsetDynamicRegistrar {
     private val LOG = Logger.getInstance(McpToolsetDynamicRegistrar::class.java)
 
     private const val TOOLSET_EP_NAME = "com.intellij.mcpServer.mcpToolset"
-    private const val TOOLSET_IFACE_FQN = "com.intellij.mcpserver.McpToolset"
 
     private val registered = AtomicBoolean(false)
 
@@ -71,7 +81,7 @@ object McpToolsetDynamicRegistrar {
     @Synchronized
     fun registerOnce() {
         if (registered.get()) return
-        val toolsetIface = runCatching { Class.forName(TOOLSET_IFACE_FQN) }.getOrNull() ?: return
+        val toolsetIface = findMcpToolsetClass() ?: return
         runCatching {
             TOOL_CLASSES.forEach { registerToolset(it, toolsetIface) }
             registered.set(true)

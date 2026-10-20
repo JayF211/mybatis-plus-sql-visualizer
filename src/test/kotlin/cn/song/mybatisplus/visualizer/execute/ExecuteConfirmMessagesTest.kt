@@ -75,4 +75,78 @@ class ExecuteConfirmMessagesTest {
         // 查询不走确认流，但构建函数对无发现输入恒走既有文案
         assertEquals(legacy("SELECT"), ExecuteConfirmMessages.build("SELECT * FROM t", "SELECT"))
     }
+
+    // ---------- R52：方言能力自检（第三参 dialect） ----------
+
+    @Test
+    fun `R52_dialect为null_与旧版逐字节一致`() {
+        val sql = "DELETE FROM t WHERE id = 1 LIMIT 10"
+        assertEquals(legacy("DELETE"), ExecuteConfirmMessages.build(sql, "DELETE", null))
+    }
+
+    @Test
+    fun `R52_方言支持该能力_零缺口走既有文案`() {
+        val sql = "DELETE FROM t WHERE id = 1 LIMIT 10"
+        assertEquals(
+            "MySQL 支持 DELETE LIMIT，不应出现能力提示",
+            legacy("DELETE"),
+            ExecuteConfirmMessages.build(sql, "DELETE", cn.song.mybatisplus.visualizer.sql.MySqlDialect),
+        )
+    }
+
+    @Test
+    fun `R52_方言不支持_确认文案含能力缺口行`() {
+        val sql = "DELETE FROM t WHERE id = 1 LIMIT 10"
+        val message = ExecuteConfirmMessages.build(sql, "DELETE", cn.song.mybatisplus.visualizer.sql.OracleDialect)
+        assertEquals(
+            MpSqlVisualizerBundle.message(
+                "execute.confirm.precheck.summary",
+                "DELETE",
+                "• " + MpSqlVisualizerBundle.message("execute.confirm.capability.deleteLimit", "Oracle"),
+            ),
+            message,
+        )
+    }
+
+    @Test
+    fun `R52_无界写与能力缺口并存_两类发现都在清单`() {
+        // 无 WHERE（无界写）+ Oracle 不支持 DELETE LIMIT（能力缺口）
+        val message = ExecuteConfirmMessages.build(
+            "DELETE FROM t LIMIT 10",
+            "DELETE",
+            cn.song.mybatisplus.visualizer.sql.OracleDialect,
+        )
+        assertTrue(message, message.contains(MpSqlVisualizerBundle.message("execute.confirm.unbounded.missingWhere")))
+        assertTrue(
+            message,
+            message.contains(MpSqlVisualizerBundle.message("execute.confirm.capability.deleteLimit", "Oracle")),
+        )
+    }
+
+    /**
+     * R46×R52 同链联动断言：R46 的 Schema 发现行（additionalFindings）与 R52 的方言能力缺口
+     * 由**同一个确认消息**承载——两类发现同进一份清单，且抬头为通用预检摘要（不冒用无界写抬头）。
+     */
+    @Test
+    fun `R46与R52同链_两类发现同进一份确认文案`() {
+        val schemaLine = "• " + MpSqlVisualizerBundle.message(
+            "schema.check.unknownColumnSuggestion", "user_nam", "t_user", "user_name",
+        )
+        val message = ExecuteConfirmMessages.build(
+            "DELETE FROM t_user WHERE user_nam = 'x' LIMIT 10",
+            "DELETE",
+            cn.song.mybatisplus.visualizer.sql.OracleDialect,
+            listOf(schemaLine),
+        )
+        assertTrue("R46 发现应在文案内", message.contains(schemaLine))
+        assertTrue(
+            "R52 能力缺口应在同一文案内",
+            message.contains(MpSqlVisualizerBundle.message("execute.confirm.capability.deleteLimit", "Oracle")),
+        )
+        // 抬头用 precheck.summary 的**前缀**（占位符前的固定文案）判定——{1} 是发现清单本体
+        val precheckHeader = MpSqlVisualizerBundle
+            .message("execute.confirm.precheck.summary", "DELETE", "PLACEHOLDER")
+            .substringBefore("PLACEHOLDER")
+        assertTrue("两类发现共存时应走通用预检抬头", message.startsWith(precheckHeader))
+    }
 }

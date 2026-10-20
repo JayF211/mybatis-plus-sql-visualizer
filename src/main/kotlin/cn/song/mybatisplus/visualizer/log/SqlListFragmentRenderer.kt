@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.log
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlFormatter
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlListSyntaxHighlighter
 import cn.song.mybatisplus.visualizer.ui.highlight.SqlLexer
+import cn.song.mybatisplus.visualizer.util.DisplayMasker
 import com.intellij.openapi.editor.colors.EditorColorsManager
 import com.intellij.openapi.editor.colors.EditorColorsScheme
 import com.intellij.openapi.editor.colors.TextAttributesKey
@@ -21,6 +22,16 @@ internal fun prepareSqlForList(sql: String, mode: SqlListDisplayMode): String = 
     SqlListDisplayMode.SINGLE_LINE -> sql
     SqlListDisplayMode.KEYWORD_WRAP -> SqlFormatter.formatClauseLine(sql)
     SqlListDisplayMode.FORMATTED -> SqlFormatter.format(sql)
+}
+
+internal fun displaySqlForList(entry: LogSqlEntry, mode: SqlListDisplayMode, masked: Boolean): String {
+    if (mode == SqlListDisplayMode.FORMATTED) {
+        return DisplayMasker.maskDisplay(entry.restoredSql, masked)
+    }
+    if (!masked) return entry.summary
+    return entry.cachedMaskedSummary ?: LogSqlEntry.summarizeSql(DisplayMasker.maskSqlText(entry.restoredSql)).also {
+        entry.cachedMaskedSummary = it
+    }
 }
 
 /** 不包含任何主题属性的词法片段，可安全存于条目缓存；空白 token 同样保留。 */

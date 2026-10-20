@@ -5,9 +5,12 @@ import cn.song.mybatisplus.visualizer.actions.ConvertToSqlAction
 import cn.song.mybatisplus.visualizer.actions.ExplainSelectedTableAction
 import cn.song.mybatisplus.visualizer.actions.CountSelectedTableAction
 import cn.song.mybatisplus.visualizer.actions.SampleSelectedTableAction
+import cn.song.mybatisplus.visualizer.history.SqlHistoryManager
 import cn.song.mybatisplus.visualizer.log.SourceCaptureGuide
 import cn.song.mybatisplus.visualizer.log.SqlListTypeColor
+import cn.song.mybatisplus.visualizer.log.SqlLogAutoSaver
 import cn.song.mybatisplus.visualizer.log.agent.AgentManager
+import cn.song.mybatisplus.visualizer.ui.ParamHistoryCache
 import cn.song.mybatisplus.visualizer.log.agent.AgentStatusListener
 import cn.song.mybatisplus.visualizer.util.PluginCacheManager
 import cn.song.mybatisplus.visualizer.sql.DialectRegistry
@@ -42,6 +45,7 @@ import java.awt.GridBagLayout
 import java.awt.Insets
 import java.awt.event.KeyAdapter
 import java.awt.event.KeyEvent
+import java.io.File
 import javax.swing.DefaultComboBoxModel
 import javax.swing.JButton
 import javax.swing.JComboBox
@@ -239,48 +243,29 @@ class PluginSettingsPanel @JvmOverloads constructor(
 
     // ---------- M56 T-M56-08：增强捕获（agent 字节码通道；对用户不出现 agent 字样） ----------
 
-    /** 增强捕获开关（默认关）：开启时弹注入确认对话框（JEP 451 预告 + 数据留本机说明）。 */
+    /** 增强捕获开关（默认开）：勾选即授权，不再弹注入确认对话框。 */
     internal val enhancedCaptureCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.enhancedCapture"))
 
-    /** 脱敏开关（默认开）：对疑似敏感形态打码，agent 采集层执行。 */
+    /** 脱敏开关（默认关）：对疑似敏感形态打码，agent 采集层执行。 */
     internal val enhancedDesensitizeCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.enhancedCapture.desensitize"))
+
+    /** R60（T-LaneB D96）：展示/导出链脱敏（日志列表/预览浮层/导出文本打码；默认关）。 */
+    internal val displayMaskCheck = JBCheckBox(MpSqlVisualizerBundle.message("settings.display.mask"))
 
     /** T-StackHoverUi：调用栈快照总帧数（agent 两端采样预算；CONFIG 帧热下发）。 */
     internal val stackMaxFramesField = JBTextField(6)
 
-    /** 增强捕获状态行：已挂载 pid=x / 未授权注入 / 已回落控制台捕获（T-CaptureTruth T-CT-01 五态）。 */
+    /** 增强捕获状态行：已挂载 pid=x / 等待应用启动 / 已回落控制台捕获。 */
     internal val enhancedStatusLabel = JBLabel(" ")
-
-    /**
-     * T-CaptureTruth T-CT-02：重新授权按钮——仅在「开关开着但未授权」时露出（拒绝冷却期的恢复入口）。
-     *
-     * 监听器在字段初始化时挂一次：本面板 [rebuild]（语言切换）会重跑 buildSections，若在 addRow
-     * 处挂监听会随重建叠加重复回调。
-     */
-    internal val enhancedReauthButton = JButton(MpSqlVisualizerBundle.message("settings.enhancedCapture.reauth")).apply {
-        toolTipText = MpSqlVisualizerBundle.message("settings.enhancedCapture.reauth.tip")
-        isVisible = false
-        addActionListener { onReauthorizeClicked() }
-    }
-
-    /** T-CaptureTruth T-CT-02：对首个「待授权」项目重走确认流（多项目取值歧义属既有边界）。 */
-    private fun onReauthorizeClicked() {
-        ProjectManager.getInstance().openProjects
-            .firstOrNull { p ->
-                runCatching { !p.isDisposed && AgentManager.getInstance(p).needsReauthorization() }
-                    .getOrDefault(false)
-            }
-            ?.let { p -> runCatching { AgentManager.getInstance(p).requestReauthorization() } }
-        refreshEnhancedStatusLabel()
-    }
 
     /** T-SettingsTruth P2：AgentManager 状态行 messageBus 连接（disposeResources 断开）。 */
     private var agentStatusConnection: com.intellij.openapi.Disposable? = null
 
     /**
-     * T-SettingsTruth P2 / T-CaptureTruth T-CT-01/02：聚合各打开项目的 AgentManager 状态写入增强捕获
-     * 状态行，并按「是否存在待授权项目」控制重新授权按钮可见性。
-     * 无任何活动叙事（各项目均 null）→ 显示空串；多项目以「；」连接。
+     * T-SettingsTruth P2 / T-CaptureTruth T-CT-01：聚合各打开项目的 AgentManager 状态写入增强捕获
+     * 状态行。无任何活动叙事（各项目均 null）→ 显示空串；多项目以「；」连接。
+     *
+     * T-EnhancedCaptureDefaultOn（2026-10-19）：重新授权入口已移除，本函数只刷新文本。
      */
     internal fun refreshEnhancedStatusLabel() {
         val agents = ProjectManager.getInstance().openProjects.mapNotNull { p ->
@@ -291,9 +276,6 @@ class PluginSettingsPanel @JvmOverloads constructor(
             .filterNotNull()
             .joinToString("；")
         enhancedStatusLabel.text = text.ifEmpty { " " }
-        enhancedReauthButton.isVisible = agents.any { a ->
-            runCatching { a.needsReauthorization() }.getOrDefault(false)
-        }
     }
 
     /**
@@ -377,7 +359,10 @@ class PluginSettingsPanel @JvmOverloads constructor(
      * T-SourceJumpFunnel P1-3：源码捕获帧过滤前缀（一行一个前缀，如 `com.corp.engine.`）。
      * Apply 后经 CONFIG 热下发 agent（即时生效，无需重启应用），IDE 侧候选解析同步过滤。
      */
-    internal val frameSkipPrefixesField = com.intellij.ui.components.JBTextArea(5, 40).apply {
+    internal val frameSkipPrefixesField = com.intellij.ui.components.JBTextArea(5, 24).apply {
+        // UI026：列宽只影响 preferred（实际宽度由分栏 CENTER + fill=HORIZONTAL 拉伸），
+        // 40 列在英文 UI 下与「源码捕获帧过滤前缀」标签相加会把设置页撑出横向滚动条；
+        // 24 列让 preferred 落回默认内容区，默认窗口下可见宽度不变。
         // T-SourceJumpFunnel：空态灰色占位提示（悬停 tooltip 之外的第一眼引导）
         emptyText.text = MpSqlVisualizerBundle.message("settings.sourceFrameSkipPrefixes.placeholder")
         lineWrap = true
@@ -417,7 +402,8 @@ class PluginSettingsPanel @JvmOverloads constructor(
      * 语义与 [frameSkipPrefixesField] 相反——名单内包名的帧即使来自 JAR 也按业务帧对待；
      * Apply 后随 CONFIG 热下发 agent。
      */
-    internal val bizJarPrefixesField = com.intellij.ui.components.JBTextArea(5, 40).apply {
+    internal val bizJarPrefixesField = com.intellij.ui.components.JBTextArea(5, 24).apply {
+        // UI026：同 [frameSkipPrefixesField]，24 列仅收敛 preferred，避免英文 UI 横向溢出。
         emptyText.text = MpSqlVisualizerBundle.message("settings.sourceFrameBizJarPrefixes.placeholder")
         lineWrap = true
         wrapStyleWord = true
@@ -514,6 +500,8 @@ class PluginSettingsPanel @JvmOverloads constructor(
 
     /** EXPLAIN 结构化渲染开关（R33）：面板执行计划按钮的结构化通道（默认开，失败自动回退原生控制台）。 */
     internal val explainStructuredCheck = JBCheckBox()
+    internal val explainPlanRetentionCheck = JBCheckBox()
+    internal val explainPlanRetentionDisclosure = JBLabel()
 
     /** T-ExecTimeoutGuard：执行超时（秒，0=不限）——JBIntSlider 过重，JBTextField + 数字容错。 */
     internal val executionTimeoutField = JBTextField(8)
@@ -602,6 +590,45 @@ class PluginSettingsPanel @JvmOverloads constructor(
     internal val logAutoSavePatternPreview = JBLabel(" ")
     /** T-HistoryFileRetention：历史文件保留上限（0 = 不限/全量）。 */
     internal val logAutoSaveMaxFilesField = JBTextField(12)
+
+    // ---------- T-M19-StorageClear：三类本地数据的分离动作 ----------
+
+    internal enum class StorageClearKind { PREVIEW_HISTORY, PARAM_HISTORY }
+
+    /** 破坏性动作确认缝：生产弹确认；headless 测试注入确定结果，不唤起原生对话框。 */
+    internal var storageClearConfirmation: (StorageClearKind) -> Boolean = { kind ->
+        val messageKey = when (kind) {
+            StorageClearKind.PREVIEW_HISTORY -> "settings.storage.previewHistory.clear.confirm"
+            StorageClearKind.PARAM_HISTORY -> "settings.storage.paramHistory.clear.confirm"
+        }
+        Messages.showYesNoDialog(
+            ProjectManager.getInstance().openProjects.firstOrNull(),
+            MpSqlVisualizerBundle.message(messageKey),
+            MpSqlVisualizerBundle.message("settings.storage.clear.title"),
+            Messages.getWarningIcon(),
+        ) == Messages.YES
+    }
+
+    /** 捕获目录打开缝：测试只观察目标路径；生产交给平台既有 BrowserUtil.open(file URI)。 */
+    internal var captureDirectoryOpener: (File) -> Unit = { dir ->
+        com.intellij.ide.BrowserUtil.open(dir.toURI().toString())
+    }
+
+    /** 默认目录需要项目根；无打开项目时 SqlLogAutoSaver 按既有契约回落 user.home。 */
+    internal var captureProjectBasePathProvider: () -> String? = {
+        ProjectManager.getInstance().openProjects.firstOrNull { !it.isDisposed }?.basePath
+    }
+
+    internal val openCaptureDirectoryButton = JButton().apply {
+        addActionListener { openCaptureHistoryDirectory() }
+    }
+    internal val clearPreviewHistoryButton = JButton().apply {
+        addActionListener { clearPreviewHistory() }
+    }
+    internal val clearParamHistoryButton = JButton().apply {
+        addActionListener { clearParamHistory() }
+    }
+    internal val storageActionStatusLabel = JBLabel(" ")
 
     // ---------- F-44-7 SqlSourceInterceptor 自动注入 ----------
     internal val autoInjectInterceptorCheck = JBCheckBox()
@@ -1008,6 +1035,64 @@ class PluginSettingsPanel @JvmOverloads constructor(
     }
 
     /**
+     * 打开捕获历史目录。只解析/创建并打开目录，绝不枚举或删除其中任何文件；自定义目录与默认目录
+     * 走 [SqlLogAutoSaver.resolveHistoryDir] 同一写端口径，避免设置页显示路径与真实落盘路径分叉。
+     */
+    private fun openCaptureHistoryDirectory() {
+        val path = SqlLogAutoSaver.resolveHistoryDir(
+            logAutoSavePathField.text,
+            captureProjectBasePathProvider(),
+        )
+        val dir = File(path)
+        runCatching {
+            java.nio.file.Files.createDirectories(dir.toPath())
+            captureDirectoryOpener(dir)
+        }.onSuccess {
+            storageActionStatusLabel.text = MpSqlVisualizerBundle.message(
+                "settings.storage.captureFiles.opened",
+                dir.absolutePath,
+            )
+            storageActionStatusLabel.toolTipText = dir.absolutePath
+        }.onFailure {
+            storageActionStatusLabel.text = MpSqlVisualizerBundle.message("settings.storage.captureFiles.open.failed")
+            storageActionStatusLabel.toolTipText = it.message
+        }
+    }
+
+    /** 清空预览 SQL 历史组件（普通/收藏条目及其标签、参数快照），不触碰共享 XML 的其他组件。 */
+    private fun clearPreviewHistory() {
+        if (!storageClearConfirmation(StorageClearKind.PREVIEW_HISTORY)) return
+        runCatching { SqlHistoryManager.getInstance().clear() }
+            .onSuccess {
+                storageActionStatusLabel.text = MpSqlVisualizerBundle.message("settings.storage.previewHistory.cleared")
+                storageActionStatusLabel.toolTipText = null
+            }
+            .onFailure {
+                storageActionStatusLabel.text = MpSqlVisualizerBundle.message("settings.storage.clear.failed")
+                storageActionStatusLabel.toolTipText = it.message
+            }
+    }
+
+    /** 清空默认参数历史、全部命名方案与激活指针，并立即失效所有已打开预览面板的缓存实例。 */
+    private fun clearParamHistory() {
+        if (!storageClearConfirmation(StorageClearKind.PARAM_HISTORY)) return
+        runCatching { ParamHistoryCache.clearPersistedHistory() }
+            .onSuccess {
+                storageActionStatusLabel.text = MpSqlVisualizerBundle.message("settings.storage.paramHistory.cleared")
+                storageActionStatusLabel.toolTipText = null
+            }
+            .onFailure {
+                storageActionStatusLabel.text = MpSqlVisualizerBundle.message("settings.storage.clear.failed")
+                storageActionStatusLabel.toolTipText = it.message
+            }
+    }
+
+    internal fun openCaptureDirectoryButtonForTest(): JButton = openCaptureDirectoryButton
+    internal fun clearPreviewHistoryButtonForTest(): JButton = clearPreviewHistoryButton
+    internal fun clearParamHistoryButtonForTest(): JButton = clearParamHistoryButton
+    internal fun storageActionStatusForTest(): JBLabel = storageActionStatusLabel
+
+    /**
      * 刷新插件缓存信息（大小 + 条目数，所有打开项目汇总——含反查/解析/Wrapper 预览三类缓存；
      * 面板构造与清除按钮共用）。
      */
@@ -1085,32 +1170,16 @@ class PluginSettingsPanel @JvmOverloads constructor(
             || (SECTION_UPDATE_DIAGNOSTICS in sections && updateSection.autoCheckCheck.isSelected != s.autoCheckUpdate)
     }
 
-    /**
-     * T-DialectAutoInfer：刷新推断状态行——推断模式显示当前推断结果（含依据 URL），
-     * 手动模式显示手动值。惰性调用（reset/选中哨兵项时），不做监听器常驻。
-     */
+    /** 全局设置不把首个打开项目的方言冒充其他项目；项目唯一时展示决策状态。 */
     internal fun refreshInferredLabel() {
-        dialectInferredLabel.text = when (dialectCombo.selectedItem as? String) {
+        dialectInferredLabel.text = wrapPreviewText(when (dialectCombo.selectedItem as? String) {
             autoDialectItem -> {
-                // T-PS5-04：agentUrl 读轻量持有者（不再经 AgentManager.getInstance 实例化服务——
-                // 设置页仅显示推断状态，不该顺带把增强捕获的守护线程带起来）
-                val agentUrl = cn.song.mybatisplus.visualizer.log.agent.AgentUrlRegistry.lastConnectionUrl(
-                    ProjectManager.getInstance().openProjects.firstOrNull() ?: return run {
-                        dialectInferredLabel.text = MpSqlVisualizerBundle.message("settings.dialect.inferred.none")
-                    },
-                )
-                val dataSourceUrl = runCatching {
-                    cn.song.mybatisplus.visualizer.sql.DataSourceUrlProbe.firstUrl(
-                        ProjectManager.getInstance().openProjects.firstOrNull(),
-                    )
-                }.getOrNull()
-                val inferred = cn.song.mybatisplus.visualizer.sql.DialectInference.infer(agentUrl, dataSourceUrl)
-                val name = inferred.dialectName
-                    ?: MpSqlVisualizerBundle.message("settings.dialect.inferred.none")
-                MpSqlVisualizerBundle.message("settings.dialect.inferred", name)
+                val projects = ProjectManager.getInstance().openProjects.filterNot { it.isDisposed }
+                val decision = projects.singleOrNull()?.let { DialectRegistry.decision(it) }
+                DialectSettingsStatusText.describe(projects.size, decision)
             }
             else -> MpSqlVisualizerBundle.message("settings.dialect.manual", dialectCombo.selectedItem as? String ?: "")
-        }
+        })
     }
 
     private fun isModifiedPreview(s: PluginSettings.State): Boolean =
@@ -1135,6 +1204,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             || paginationCountCheck.isSelected != s.paginationCountEnabled
             || jdbcSqlPreviewCheck.isSelected != s.jdbcSqlPreviewEnabled
             || explainStructuredCheck.isSelected != s.explainStructuredRender
+            || explainPlanRetentionCheck.isSelected != s.explainPlanRetentionEnabled
             || executionTimeoutField.text.trim().toIntOrNull() != s.executionTimeoutSeconds
 
     private fun isModifiedTableMapping(s: PluginSettings.State): Boolean =
@@ -1174,6 +1244,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             // M56 T-M56-08：增强捕获三行归位 SQL 日志区组后，改动判定随 sqlLog 分区
             || enhancedCaptureCheck.isSelected != s.enhancedCaptureEnabled
             || enhancedDesensitizeCheck.isSelected != s.enhancedCaptureDesensitize
+            || displayMaskCheck.isSelected != s.displayMaskEnabled
             || stackMaxFramesField.text.trim().toIntOrNull() != s.enhancedCaptureStackMaxFrames
             || frameSkipPrefixesField.text.trim() != s.sourceFrameSkipPrefixes.trim()
             || bizJarPrefixesField.text.trim() != s.sourceFrameBizJarPrefixes.trim()
@@ -1260,6 +1331,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             s.paginationCountEnabled = paginationCountCheck.isSelected
             s.jdbcSqlPreviewEnabled = jdbcSqlPreviewCheck.isSelected
             s.explainStructuredRender = explainStructuredCheck.isSelected
+            s.explainPlanRetentionEnabled = explainPlanRetentionCheck.isSelected
             s.executionTimeoutSeconds = executionTimeoutField.text.trim().toIntOrNull()
                 ?: PluginSettings.DEFAULT_EXECUTION_TIMEOUT_SECONDS
         }
@@ -1302,6 +1374,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             // M56 T-M56-08：增强捕获三行归位 SQL 日志区组后，读写随 sqlLog 分区（preview 分支不再处理）
             s.enhancedCaptureEnabled = enhancedCaptureCheck.isSelected
             s.enhancedCaptureDesensitize = enhancedDesensitizeCheck.isSelected
+            s.displayMaskEnabled = displayMaskCheck.isSelected
             // T-StackHoverUi：非法输入回缺省，越界钳位 [12,64]（agent 侧 setStackMaxFrames 同口径兜底）
             s.enhancedCaptureStackMaxFrames = (stackMaxFramesField.text.trim().toIntOrNull()
                 ?: PluginSettings.DEFAULT_ENHANCED_CAPTURE_STACK_MAX_FRAMES)
@@ -1427,6 +1500,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             paginationCountCheck.isSelected = s.paginationCountEnabled
             jdbcSqlPreviewCheck.isSelected = s.jdbcSqlPreviewEnabled
             explainStructuredCheck.isSelected = s.explainStructuredRender
+            explainPlanRetentionCheck.isSelected = s.explainPlanRetentionEnabled
             executionTimeoutField.text = s.executionTimeoutSeconds.toString()
         }
         if (SECTION_TABLE_MAPPING in sections) {
@@ -1501,6 +1575,7 @@ class PluginSettingsPanel @JvmOverloads constructor(
             // M56 T-M56-08：增强捕获三行归位 SQL 日志区组后，读写随 sqlLog 分区（preview 分支不再处理）
             enhancedCaptureCheck.isSelected = s.enhancedCaptureEnabled
             enhancedDesensitizeCheck.isSelected = s.enhancedCaptureDesensitize
+            displayMaskCheck.isSelected = s.displayMaskEnabled
             stackMaxFramesField.text = s.enhancedCaptureStackMaxFrames.toString()
             frameSkipPrefixesField.text = s.sourceFrameSkipPrefixes
             bizJarPrefixesField.text = s.sourceFrameBizJarPrefixes

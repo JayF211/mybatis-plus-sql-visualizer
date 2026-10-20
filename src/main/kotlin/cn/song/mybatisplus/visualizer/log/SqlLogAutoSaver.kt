@@ -68,6 +68,137 @@ class SqlLogAutoSaver(
     /** 在途淘汰条目队列（控制台输出线程投递，写线程消费）。 */
     private val pendingEntries = java.util.concurrent.ConcurrentLinkedQueue<LogSqlEntry>()
 
+    // O-147：最多 2048 条身份索引，只认本写入器写出的实例，不靠 SQL/会话序号猜测归属。
+    private data class WrittenBlock(val file: File, val id: String, val key: Any, val identity: String)
+    private val writtenBlocks = java.util.IdentityHashMap<LogSqlEntry, WrittenBlock>()
+    private val pendingMerges = java.util.concurrent.ConcurrentLinkedQueue<Pair<LogSqlEntry, LogSqlEntry>>()
+    private val writtenOrder = java.util.ArrayDeque<LogSqlEntry>()
+    private data class WaitingMerge(val merged: LogSqlEntry, val expires: Long)
+    private val waitingMerges = java.util.IdentityHashMap<LogSqlEntry, WaitingMerge>()
+    private val waitingOrder = java.util.ArrayDeque<LogSqlEntry>()
+
+    private fun awaitStore(old: LogSqlEntry, merged: LogSqlEntry) {
+        waitingMerges[old] = WaitingMerge(merged, clock() + 60_000)
+        waitingOrder.removeIf { it === old }
+        waitingOrder.addLast(old)
+        while (waitingOrder.size > 2048) waitingMerges.remove(waitingOrder.removeFirst())
+    }
+
+    private fun forgetWritten(entry: LogSqlEntry) {
+        writtenBlocks.remove(entry)
+        writtenOrder.removeIf { it === entry }
+    }
+
+    /** 元数据升级只追加修订注释，不重写旧字节，也不追加第二条可执行 SQL。 */
+    fun submitMerge(old: LogSqlEntry, merged: LogSqlEntry) {
+        pendingMerges.add(old to merged)
+        if (drainScheduled.compareAndSet(false, true)) ensureExecutor().execute { drainAndWrite() }
+    }
+
+    private fun fileKey(file: File): Any? {
+        val a = Files.readAttributes(file.toPath(), java.nio.file.attribute.BasicFileAttributes::class.java,
+            java.nio.file.LinkOption.NOFOLLOW_LINKS)
+        return (a.fileKey() ?: a.creationTime()).takeIf { a.isRegularFile && !a.isSymbolicLink }
+    }
+
+    private fun remember(entry: LogSqlEntry, block: WrittenBlock) {
+        writtenBlocks[entry] = block
+        writtenOrder.removeIf { it === entry }
+        writtenOrder.addLast(entry)
+        while (writtenOrder.size > 2048) writtenBlocks.remove(writtenOrder.removeFirst())
+        waitingMerges.remove(entry)?.let { waiting ->
+            waitingOrder.removeIf { it === entry }
+            if (waiting.expires >= clock()) pendingMerges.add(entry to waiting.merged)
+        }
+    }
+
+    private fun drainMerges() {
+        val now = clock()
+        waitingMerges.entries.removeIf { it.value.expires < now }
+        waitingOrder.removeIf { !waitingMerges.containsKey(it) }
+        while (true) {
+            val (old, merged) = pendingMerges.poll() ?: break
+            val block = writtenBlocks[old]
+            if (block == null) {
+                awaitStore(old, merged)
+                continue
+            }
+            if (old.sequenceNumber != merged.sequenceNumber || SqlLogParamCodec.historyIdentity(merged) != block.identity) continue
+            try {
+                // 不 CREATE：删除/替换/重配后的文件不恢复、不认领。非协作外写无法CAS，
+                // 但 APPEND 永不覆盖其字节；修订还须 ID + 原条目摘要匹配才在读取时生效。
+                check(fileKey(block.file) == block.key)
+                if (currentFile == block.file) writer?.flush()
+                // Windows 创建时间可能被文件系统隧道复用；必须再找到本实例写出的随机标识。
+                check(block.file.bufferedReader().use { containsExactLine(it, "-- pd: o147-id: ${block.id} --") })
+                val payload = revisionPayload(merged)
+                val line = "\n-- pd: o147-revision: ${block.id} ${block.identity} $payload --\n"
+                java.nio.channels.FileChannel.open(block.file.toPath(), StandardOpenOption.WRITE,
+                    StandardOpenOption.APPEND, java.nio.file.LinkOption.NOFOLLOW_LINKS).use { channel ->
+                    channel.lock().use {
+                        check(fileKey(block.file) == block.key)
+                        val bytes = java.nio.ByteBuffer.wrap(line.toByteArray(Charsets.UTF_8))
+                        while (bytes.hasRemaining()) channel.write(bytes)
+                    }
+                }
+                forgetWritten(old)
+                remember(merged, block)
+            } catch (_: Exception) {
+                forgetWritten(old)
+                LOG.warn("自动保存历史 SQL：融合修订未追加，保留原历史")
+            }
+        }
+    }
+
+    /** 固定内存逐字符比较；不论外部行多长均不累积，CRLF/LF/EOF 都支持。 */
+    internal fun containsExactLine(reader: java.io.Reader, expected: String): Boolean {
+        var index = 0
+        var matches = true
+        var cr = false
+        while (true) {
+            val c = reader.read()
+            if (c == -1 || c == '\n'.code) {
+                if (matches && index == expected.length) return true
+                if (c == -1) return false
+                index = 0; matches = true; cr = false
+            } else if (matches) {
+                if (index < expected.length && c == expected[index].code && !cr) index++
+                else if (index == expected.length && c == '\r'.code && !cr) cr = true
+                else matches = false
+            }
+        }
+    }
+
+    internal class RevisionLimitExceeded : java.io.IOException("history revision exceeds byte budget")
+
+    /** Base64最终输出硬封顶；超额在流写时抛出，绝不先生成完整payload。 */
+    internal class RevisionOutput(private val limit: Int) : java.io.OutputStream() {
+        private val data = java.io.ByteArrayOutputStream(minOf(limit, 1024))
+        val size: Int get() = data.size()
+        override fun write(b: Int) {
+            if (size >= limit) throw RevisionLimitExceeded()
+            data.write(b)
+        }
+        override fun write(b: ByteArray, off: Int, len: Int) {
+            if (len > limit - size) throw RevisionLimitExceeded()
+            data.write(b, off, len)
+        }
+        fun text(): String = data.toString("US-ASCII")
+    }
+
+    internal fun revisionPayload(entry: LogSqlEntry): String {
+        val output = RevisionOutput(SqlLogFileReader.MAX_REVISION_PAYLOAD)
+        writeRevision(entry, output)
+        return output.text()
+    }
+
+    internal fun writeRevision(entry: LogSqlEntry, output: java.io.OutputStream) {
+        val encoded = java.util.Base64.getEncoder().wrap(output)
+        val w = SqlLogParamCodec.ChunkedWriter(java.io.OutputStreamWriter(encoded, Charsets.UTF_8))
+        writeEntryText(w, entry, null)
+        w.close()
+    }
+
     /** 本轮已调度标志（幂等调度——风暴期 N 条投递 = 1 个写任务）。 */
     private val drainScheduled = java.util.concurrent.atomic.AtomicBoolean()
 
@@ -116,6 +247,7 @@ class SqlLogAutoSaver(
             // T-HistoryFileRetention：写批之后在同写线程裁剪超限历史文件（不阻塞捕获热路径；与写串行无竞态）
             pruneRetainedFiles()
         }
+        drainMerges()
     }
 
     /** T-HistoryFileRetention：历史文件保留上限裁剪——目录下**本插件名族**的逻辑历史文件（按基名归并滚动块）
@@ -237,6 +369,8 @@ class SqlLogAutoSaver(
     fun configure(customPath: String, pattern: String, projectBasePath: String?, maxFiles: Int = 0) {
         // T-PS4-13：configure 链调用线程常为 EDT（设置变更）——限批同步排水防长批磁盘写阻塞
         close(configureDrainLimit)
+        writtenBlocks.clear()
+        writtenOrder.clear()
         saveDir = resolveHistoryDir(customPath, projectBasePath)
         fileNamePattern = pattern.ifBlank { PluginSettings.DEFAULT_LOG_AUTO_SAVE_FILE_NAME_PATTERN }
         this.maxFiles = maxFiles
@@ -291,7 +425,9 @@ class SqlLogAutoSaver(
 
     /** 静默 flush（写失败不阻断批次）。 */
     private fun flushQuietly() {
-        runCatching { writer?.flush() }.onFailure {
+        runCatching {
+            writer?.flush()
+        }.onFailure {
             LOG.warn("自动保存历史 SQL：flush 失败", it)
         }
     }
@@ -339,10 +475,19 @@ class SqlLogAutoSaver(
      */
     private fun writeEntry(w: BufferedWriter, entry: LogSqlEntry) {
         runCatching {
+            val id = if (entry.captureProvenance != CaptureProvenance.UNKNOWN) java.util.UUID.randomUUID().toString() else null
+            writeEntryText(w, entry, id)
+            if (id != null) currentFile?.let { file ->
+                fileKey(file)?.let { key -> remember(entry, WrittenBlock(file, id, key, SqlLogParamCodec.historyIdentity(entry))) }
+            }
+        }.onFailure { LOG.warn("自动保存历史 SQL：写入失败", it) }
+    }
+
+    private fun writeEntryText(w: java.io.Writer, entry: LogSqlEntry, historyId: String?) {
             // 头部：源码位置 | 耗时 | 时间戳 | 日志原始时间（可选）
-            val source = entry.sourceFile?.let { file ->
-                if (entry.sourceLine > 0) "$file:${entry.sourceLine}" else file
-            } ?: "unknown"
+            w.write("-- source: ")
+            w.write(entry.sourceFile ?: "unknown")
+            if (entry.sourceFile != null && entry.sourceLine > 0) w.write(":${entry.sourceLine}")
             val duration = entry.executionTimeMs?.let { "${it}ms" } ?: "—"
             // T-Perf-12：SimpleDateFormat（每条新建/线程缓存）→ DateTimeFormatter 常量（不可变线程安全）
             val timestamp = TIMESTAMP_FORMATTER.format(
@@ -351,8 +496,9 @@ class SqlLogAutoSaver(
             // 日志原始时间（解析到才写，向后兼容旧文件）
             val logTimePart = entry.logTimestamp?.let { " | logTime: $it" } ?: ""
             // T-AgentDialectLoop：目标库显示名（agent 通道才有，解析到才写）
-            val dbPart = entry.databaseName?.let { " | db: $it" } ?: ""
-            w.write("-- source: $source | time: $duration | $timestamp$logTimePart$dbPart --\n")
+            w.write(" | time: $duration | $timestamp$logTimePart")
+            entry.databaseName?.let { w.write(" | db: "); w.write(it) }
+            w.write(" --\n")
             // T-HistParam F1：参数持久化——params 非空或 rawSql 含 `?`（绑定行缺失未识别条目）时，
             // 在头部下写独立 Base64 注释行（正文保持可执行 restoredSql；读端 SqlLogFileReader 探测解码）。
             // M56 T-M56-00：扩展字段（mapperStatement/errorText/requestTag/updateCount）任一在场也写
@@ -366,17 +512,17 @@ class SqlLogAutoSaver(
                 entry.mapperStatement != null || entry.errorText != null ||
                 entry.requestTag != null || entry.updateCount != null ||
                 entry.sourceCandidates.isNotEmpty() || entry.stackDigest != null ||
-                entry.actualSql != null ||
+                entry.actualSql != null || entry.captureProvenance != CaptureProvenance.UNKNOWN ||
                 entry.source == SqlSource.MCP || entry.source == SqlSource.SHARDINGSPHERE
             ) {
-                w.write("-- pd: ${SqlLogParamCodec.encodeEntry(entry)} --\n")
+                w.write("-- pd: ")
+                SqlLogParamCodec.writeEncodedEntry(entry, w)
+                w.write(" --\n")
             }
-            w.write(withTerminator(entry.restoredSql))
+            historyId?.let { w.write("-- pd: o147-id: $it --\n") }
+            w.write(entry.restoredSql)
+            if (entry.restoredSql.isNotEmpty() && !entry.restoredSql.endsWith(";")) w.write(";")
             w.write("\n\n")
-            // T-Perf-12：flush 上移到批末（writeBatch）/同步 API（write）——写线程逐条 flush 磁盘已移除
-        }.onFailure {
-            LOG.warn("自动保存历史 SQL：写入失败", it)
-        }
     }
 
     /**
@@ -425,6 +571,9 @@ class SqlLogAutoSaver(
     @Synchronized
     fun close(maxDrainEntries: Int = Int.MAX_VALUE) {
         drainPendingSync(maxDrainEntries)
+        drainMerges()
+        waitingMerges.clear()
+        waitingOrder.clear()
         executor?.shutdownNow()
         executor = null
         drainScheduled.set(false)

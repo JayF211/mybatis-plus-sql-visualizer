@@ -152,10 +152,14 @@ class SqlGutterLineMarkerProvider : LineMarkerProvider {
 
         /** 左键原行为：锚点转 SQL 并弹预览（后台转换，F-16 展示配置）。 */
         private fun previewSource(project: Project, elt: PsiElement) {
+            val contextRef = java.util.concurrent.atomic.AtomicReference<cn.song.mybatisplus.visualizer.context.PreviewSourceContext?>()
             SqlPreviewService.previewAsync(project, {
-                project.getService(SqlPreviewService::class.java).preview(elt)
+                val service = project.getService(SqlPreviewService::class.java)
+                val context = service.resolveWrapperSourceContext(elt)
+                contextRef.set(context)
+                service.preview(elt, context)
             }) { result ->
-                SqlPreviewService.showResult(project, result)
+                SqlPreviewService.showResult(project, result, sourceContext = contextRef.get())
             }
         }
 

@@ -681,6 +681,16 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "offenders 列表在用例内联累积，无独立「返回违规点集合」的具名判定函数，故 decisionFns 留空；" +
                     "灵敏度=按用例内合成样本自证（含合法/违规两向样本），实施轮已实测。",
             ),
+            GuardEntry(
+                "convention/EnhancedCaptureDefaultOnGuardTest.kt",
+                emptyList(),
+                "增强捕获默认开启/确认流删除守卫（T-EnhancedCaptureDefaultOn）：判定内核内联于三个用例——" +
+                    "扫 src/main 全量 .kt/.java（先剥注释）断言确认流符号零命中；扫中英 bundle 断言确认/" +
+                    "重新授权/未授权键零命中且 enableDone/tip 键在场；断言默认值与 loadState 归一在场。" +
+                    "无独立「返回违规点集合」的具名判定函数，故 decisionFns 留空；" +
+                    "灵敏度=反向三组各恰 1 红（恢复 confirmed 闸门 / 恢复 requestReauthorization 符号 / " +
+                    "摘 loadState 归一）已实测。",
+            ),
             // ---- 判定内核类（有可注入合成样本的判定函数） ----
             GuardEntry(
                 "convention/BannedApiScanSupport.kt",
@@ -1008,7 +1018,13 @@ class GuardSelfTestCoverageMetaGuardTest {
                 "ui/ExplainPanelWiringGuardTest.kt",
                 emptyList(),
                 "断言直接内联在 @Test（R33 接线四断言：ExplainPanelChannel.decide 可达/submitExplainDirect 直送链单函数收敛/" +
-                    "embedExplainView 结构化视图嵌入/ExplainIndexAdvisor.advise 面板侧建议接入）",
+                    "ExplainPlanDialog/showExplainDialog 非模态展示不替换编辑器/ExplainIndexAdvisor.advise 面板侧建议接入）",
+            ),
+            GuardEntry(
+                "ui/DialectStatusRefreshWiringGuardTest.kt",
+                emptyList(),
+                "断言直接内联在 @Test（T-DialectStatusLiveRefresh 两断言：embedConsole 钩子与绑定行刷新同拍调用 " +
+                    "refreshDialectStatusRow / rerenderForExecutionTarget 在 renderSql 前升级 currentDialectDecision）",
             ),
             // ---- O-93 全局手动方言残值泄漏守卫（2026-10-02 T-BatchTestLeak 补登记——漏登记由 R33 修复轮元守卫红抓出） ----
             GuardEntry(
@@ -1017,6 +1033,13 @@ class GuardSelfTestCoverageMetaGuardTest {
                 "断言直接内联在 @Test（O-93 三断言：effective(project=null) auto 态忽略手动残值回退 MySQL/" +
                     "手动模式语义不变对照/saveOrUpdate 批量预览 upsert+反引号不受残值污染）；" +
                     "私有 leakStaleManualDialect 为污染动作夹具非判定函数",
+            ),
+            // ---- T-PerfSweep24 F84 新增守卫补登记（2026-10-08 收口门禁红抓出：整体脱离自证覆盖率扫描面） ----
+            GuardEntry(
+                "convention/InFunctionRegexSourceScanTest.kt",
+                emptyList(),
+                "断言直接内联在 @Test（受守卫文件零函数体现场 Regex 构造 + 判定器自证两用例）；" +
+                    "repoRoot/stripComments/guardedFiles 为夹具（F59/F60/F84 提常量的源码形态守卫）",
             ),
             // ---- T-PrewarmWilDeadlock：同步 VFS refresh × WIRA 死锁守卫（2026-10-15） ----
             GuardEntry(
@@ -1027,6 +1050,15 @@ class GuardSelfTestCoverageMetaGuardTest {
                 "同步 VFS refresh × WriteIntentReadAction 死锁守卫：BGT 持 WIL 等刷新会话（会话推进需 " +
                     "WIL/EDT）自锁，2026.2 真机 threadDump 全 IDE 冻结实证；白名单仅 EDT 冷路径 " +
                     "createTempPsiFile。判定内核配同文件合成样本自证（BGT 站点必抓/白名单不报/裸调不报）。",
+            ),
+            // ---- T-UiFixGate9：exec 预暖链/文档写项目 dispose 生命周期守卫（2026-10-18 门禁补登记） ----
+            GuardEntry(
+                "execute/ExecDocPrewarmDisposeGuardTest.kt",
+                emptyList(),
+                "断言直接内联在 @Test（四用例：prewarmChainAbandonedOnDisposedProject/" +
+                    "prewarmRawCreateRefusedOnDisposedProject/docWriteOnceRefusedOnDisposedProject/" +
+                    "writeVfTextViaDocumentNoopOnDisposedProject——项目 dispose 后预热链与文档写全链拒绝写）；" +
+                    "disposedProjectProxy/refreshVf 为夹具非判定函数",
             ),
             // ---- 本元守卫自身 ----
             GuardEntry(

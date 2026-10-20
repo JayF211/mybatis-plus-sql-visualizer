@@ -84,6 +84,26 @@ class HistoryCellRendererTest : BasePlatformTestCase() {
         assertTrue("超长 SQL 摘要含省略号", joinedText(r.sqlLine).contains("…"))
     }
 
+    fun test摘要截断在敏感字面量中间_历史展示仍须脱敏() {
+        val state = PluginSettings.getInstance().state
+        val savedMask = state.displayMaskEnabled
+        val savedMode = state.logListSqlDisplayMode
+        try {
+            state.displayMaskEnabled = true
+            state.logListSqlDisplayMode = "SINGLE_LINE"
+            val secret = "PRIVATE_MARKER_" + "x".repeat(200)
+            val entry = sqlEntry("SELECT * FROM account WHERE password = '$secret'")
+            assertTrue("夹具须在闭合引号前截断", entry.summary.contains("PRIVATE_MARKER_"))
+            assertFalse(entry.summary.contains("'$secret'"))
+            val displayed = joinedText(renderSql(entry).sqlLine)
+            assertTrue("密码应按完整字面量打码：$displayed", displayed.contains("password = '***'"))
+            assertFalse("截断的敏感片段不得泄漏：$displayed", displayed.contains("PRIVATE_MARKER_"))
+        } finally {
+            state.displayMaskEnabled = savedMask
+            state.logListSqlDisplayMode = savedMode
+        }
+    }
+
     // ---------- O-90：同模板 ×N 徽章 ----------
 
     fun test二级条目_同模板徽章达阈值渲染() {

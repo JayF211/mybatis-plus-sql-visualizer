@@ -6,6 +6,9 @@ import com.intellij.notification.NotificationType
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
 
+/** 提交回执，不代表数据库执行成功；与旧准备/选择 Boolean 回调分离。 */
+enum class ExecutionSubmission { SUBMITTED, CANCELLED, BLOCKED }
+
 /**
  * SQL 执行引擎（M36，反射隔离）：弹出原生数据源选择 → Database 控制台内嵌执行。
  *
@@ -18,6 +21,9 @@ import com.intellij.openapi.project.Project
  * 反射隔离约定：本类仅当 Database 插件已加载时被调用，Community 下永不加载。
  */
 object SqlExecutor {
+
+    /** UI023：headless 下截获真实执行入口边界，避免靠 Community 不可执行制造「零提交」假绿。 */
+    internal var executionAttemptForTest: ((String?) -> Unit)? = null
 
     /** T-UiNative T-UN-02：轻提示通知组（plugin.xml 已注册）。 */
     private const val NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview"
@@ -39,13 +45,31 @@ object SqlExecutor {
         onError: ((String) -> Unit)? = null,
         onErrorRich: ((ExecutionErrorInfo) -> Unit)? = null,
         wholeScriptExec: Boolean = false,
+        dialectGateRequest: ExecutionDialectGate.Request? = null,
+        onDialectGate: ((ExecutionDialectGate.Verdict) -> Unit)? = null,
+        onSubmission: ((ExecutionSubmission) -> Unit)? = null,
+        /** T-DialectGateUx：强制弹数据源选择器（方言闸门的「切换数据源」入口）。 */
+        forceChoose: Boolean = false,
     ) {
+        executionAttemptForTest?.let { it(sql); return }
+        val completed = java.util.concurrent.atomic.AtomicBoolean(false)
+        val receipt: (ExecutionSubmission) -> Unit = { outcome ->
+            if (completed.compareAndSet(false, true)) onSubmission?.invoke(outcome)
+        }
         DataSourceSelector.selectAndExecute(
             project, sql,
             onConsole = onConsole,
             onEditor = onEditor,
-            onError = onError,
-            onErrorRich = onErrorRich,
+            onError = if (onSubmission == null) onError else { message ->
+                receipt(ExecutionSubmission.BLOCKED)
+                onError?.invoke(message)
+                Unit
+            },
+            // 富错误通道仍按既有优先级投递，未提供时不可用空 lambda 吞掉旧通道。
+            onErrorRich = if (onSubmission == null) onErrorRich else onErrorRich?.let { sink -> { info: ExecutionErrorInfo ->
+                receipt(ExecutionSubmission.BLOCKED)
+                sink(info)
+            } },
             callback = { success ->
                 if (!success) {
                     // Community 或失败时提示
@@ -55,6 +79,10 @@ object SqlExecutor {
                 }
             },
             wholeScriptExec = wholeScriptExec,
+            dialectGateRequest = dialectGateRequest,
+            onDialectGate = onDialectGate,
+            onSubmission = if (onSubmission == null) null else receipt,
+            forceChoose = forceChoose,
         )
     }
 
@@ -69,6 +97,8 @@ object SqlExecutor {
         onEditor: ((com.intellij.openapi.editor.Editor) -> Unit)? = null,
         onError: ((String) -> Unit)? = null,
         callback: ((Boolean) -> Unit)? = null,
+        dialectGateRequest: ExecutionDialectGate.Request? = null,
+        onDialectGate: ((ExecutionDialectGate.Verdict) -> Unit)? = null,
     ) {
         if (!ExecuteSqlSupport.isAvailable()) {
             // 社区版：静默回退（不弹提示——自研编辑器已是回退态）
@@ -81,6 +111,8 @@ object SqlExecutor {
             onEditor = onEditor,
             onError = onError,
             callback = callback,
+            dialectGateRequest = dialectGateRequest,
+            onDialectGate = onDialectGate,
         )
     }
 
@@ -99,9 +131,32 @@ object SqlExecutor {
         onError: ((String) -> Unit)? = null,
         onErrorRich: ((ExecutionErrorInfo) -> Unit)? = null,
         wholeScriptExec: Boolean = false,
+        dialectGateRequest: ExecutionDialectGate.Request? = null,
+        onDialectGate: ((ExecutionDialectGate.Verdict) -> Unit)? = null,
+        onSubmission: ((ExecutionSubmission) -> Unit)? = null,
     ): Boolean {
+        executionAttemptForTest?.let { it(null); return true }
         if (!ExecuteSqlSupport.isAvailable()) return false
-        return DataSourceSelector.executePrepared(project, onResultsReady, onError, onErrorRich, wholeScriptExec)
+        val completed = java.util.concurrent.atomic.AtomicBoolean(false)
+        val receipt: (ExecutionSubmission) -> Unit = { outcome ->
+            if (completed.compareAndSet(false, true)) onSubmission?.invoke(outcome)
+        }
+        return DataSourceSelector.executePrepared(
+            project, onResultsReady,
+            onError = if (onSubmission == null) onError else { message ->
+                receipt(ExecutionSubmission.BLOCKED)
+                onError?.invoke(message)
+                Unit
+            },
+            onErrorRich = if (onSubmission == null) onErrorRich else onErrorRich?.let { sink -> { info: ExecutionErrorInfo ->
+                receipt(ExecutionSubmission.BLOCKED)
+                sink(info)
+            } },
+            wholeScriptExec = wholeScriptExec,
+            dialectGateRequest = dialectGateRequest,
+            onDialectGate = onDialectGate,
+            onSubmission = if (onSubmission == null) null else receipt,
+        )
     }
 
     /** 控制台是否已就绪（[prepareConsole] 成功后 true）。 */

@@ -1,5 +1,7 @@
 package cn.song.mybatisplus.visualizer.actions
 
+import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import cn.song.mybatisplus.visualizer.psi.KtWrapperDetector
 import cn.song.mybatisplus.visualizer.psi.WrapperLocator
 import cn.song.mybatisplus.visualizer.psi.jpa.CriteriaQueryLocator
 import cn.song.mybatisplus.visualizer.psi.jpa.CustomDaoHqlLocator
@@ -25,15 +27,19 @@ import cn.song.mybatisplus.visualizer.xml.XmlInlineSqlDetector
 import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
+import com.intellij.lang.injection.InjectedLanguageManager
 import com.intellij.openapi.actionSystem.CommonDataKeys
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.ScrollType
+import com.intellij.notification.Notification
+import com.intellij.notification.NotificationType
 import com.intellij.openapi.project.Project
 import com.intellij.psi.PsiAnnotation
 import com.intellij.psi.PsiClass
 import com.intellij.psi.PsiElement
+import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiJavaFile
 import com.intellij.psi.PsiMethod
 import com.intellij.psi.PsiMethodCallExpression
@@ -110,24 +116,31 @@ class ConvertToSqlAction : AnAction() {
                 // 一并后台 ReadAction 预计算——SqlSelectionDialog 构造只做纯 UI 渲染（EDT 上 PSI 解析
                 // 会被 2025.3+ SlowOperations 守卫禁止，实测 SEVERE "Slow operations are prohibited on EDT"）
                 val payload = try {
-                    ReadAction.compute<Pair<List<PsiMethodCallExpression>, List<SqlSelectionDialog.Row>>, Throwable> {
+                    ReadAction.compute<Triple<List<PsiMethodCallExpression>, List<SqlSelectionDialog.Row>, Boolean>, Throwable> {
                         val heads = WrapperLocator.sqlCandidatesInRange(file, selStart, selEnd)
-                        heads to heads.map { head ->
-                            SqlSelectionDialog.Row.of(
-                                WrapperLocator.sqlCandidateSummary(head),
-                                WrapperLocator.sqlCandidateLineText(head),
-                            )
-                        }
+                        Triple(
+                            heads,
+                            heads.map { head ->
+                                SqlSelectionDialog.Row.of(
+                                    WrapperLocator.sqlCandidateSummary(head),
+                                    WrapperLocator.sqlCandidateLineText(head),
+                                )
+                            },
+                            kotlinWrapperUnavailableInRange(file, selStart, selEnd),
+                        )
                     }
                 } catch (t: Throwable) {
-                    emptyList<PsiMethodCallExpression>() to emptyList<SqlSelectionDialog.Row>()
+                    Triple(emptyList(), emptyList(), false)
                 }
-                val (chainHeads, displayTexts) = payload
+                val (chainHeads, displayTexts, kotlinWrapperUnavailable) = payload
                 ApplicationManager.getApplication().invokeLater {
                     if (project.isDisposed) return@invokeLater
                     when (chainHeads.size) {
                         // T-M29.6：选择区内无 Wrapper 候选 → 回落选择区内 SQL 注解候选（0/1/多分发）
-                        0 -> showAnnotationSelectionCandidates(project, file, editor, selStart, selEnd, sourceLocation)
+                        0 -> showAnnotationSelectionCandidates(
+                            project, file, editor, selStart, selEnd, sourceLocation,
+                            onEmpty = if (kotlinWrapperUnavailable) ({ notifyKotlinWrapperUnavailable(project) }) else null,
+                        )
                         1 -> preview(service, chainHeads[0], project, sourceLocation)
                         else -> SqlSelectionDialog(project, chainHeads, displayTexts) { head ->
                             // T-M23.8：选中确定 → 编辑器定位（光标到行首 + 滚动居中 + 整行选中）→ 预览 SQL
@@ -142,33 +155,44 @@ class ConvertToSqlAction : AnAction() {
 
         // 分支 B（现状）：光标处定位（内部增强：eq/list 调用处同样可触发）
         val offset = editor.caretModel.offset
-        val element = file.findElementAt(offset) ?: return
+        val element = resolveCaretElement(project, file, offset) ?: return
 
         // T-M25-03：光标在 MyBatis SQL 注解内 → 注解预览（@Select/@Update/Provider 族）
         val annotation = PsiTreeUtil.getParentOfType(element, PsiAnnotation::class.java, false)
         if (annotation != null && AnnotationSqlPreviewService.isSqlAnnotation(annotation)) {
+            val contextRef = java.util.concurrent.atomic.AtomicReference<cn.song.mybatisplus.visualizer.context.PreviewSourceContext?>()
             SqlPreviewService.previewAsync(project, {
-                AnnotationSqlPreviewService.preview(annotation, project)
+                val context = AnnotationSqlPreviewService.resolveSourceContext(annotation, project)
+                contextRef.set(context)
+                AnnotationSqlPreviewService.preview(annotation, project, context)
             }) { result ->
-                SqlPreviewService.showResult(project, result, sourceLocation)
+                SqlPreviewService.showResult(project, result, sourceLocation, contextRef.get())
             }
             return
         }
 
         // PSI 转换在后台线程执行（EDT 上慢操作会被 2025.3+ 禁止），回调在 EDT 渲染
+        val wrapperContext = java.util.concurrent.atomic.AtomicReference<cn.song.mybatisplus.visualizer.context.PreviewSourceContext?>()
+        val kotlinWrapperUnavailable = java.util.concurrent.atomic.AtomicBoolean(false)
         SqlPreviewService.previewAsync(project, {
-            service.preview(element)
+            kotlinWrapperUnavailable.set(kotlinWrapperUnavailableAt(file, offset))
+            val context = service.resolveWrapperSourceContext(element)
+            wrapperContext.set(context)
+            service.preview(element, context)
         }) { result ->
             if (result != null) {
                 // 统一展示入口（M10-03）：按显示方式（F-16）弹窗 / 工具窗口 / 两者
-                SqlPreviewService.showResult(project, result, sourceLocation)
+                SqlPreviewService.showResult(project, result, sourceLocation, wrapperContext.get())
             } else if (!tryHqlFallback(service, project, element, sourceLocation)
                 && !tryNamedQueryFallback(service, project, element, sourceLocation)
                 && !tryJdbcTemplateFallback(project, element, sourceLocation)
                 && !tryJpaFallback(service, project, element, sourceLocation)
                 && !tryMethodBodyStringSqlFallback(project, element, sourceLocation)) {
                 // 均未命中 → 回落文件级 SQL 注解候选（M26-A，Mapper 接口场景）
-                showAnnotationCandidates(project, file, editor, sourceLocation)
+                showAnnotationCandidates(
+                    project, file, editor, sourceLocation,
+                    onEmpty = if (kotlinWrapperUnavailable.get()) ({ notifyKotlinWrapperUnavailable(project) }) else null,
+                )
             }
             // 任一 tryXxxFallback 返回 true 时已在内部触发预览 + showResult，无需额外操作
         }
@@ -349,7 +373,13 @@ class ConvertToSqlAction : AnAction() {
      * T-M29.6：选中确定后编辑器定位（对齐选择区候选交互）。
      */
     @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
-    private fun showAnnotationCandidates(project: Project, file: com.intellij.psi.PsiFile, editor: Editor, sourceLocation: String?) {
+    private fun showAnnotationCandidates(
+        project: Project,
+        file: com.intellij.psi.PsiFile,
+        editor: Editor,
+        sourceLocation: String?,
+        onEmpty: (() -> Unit)? = null,
+    ) {
         ApplicationManager.getApplication().executeOnPooledThread {
             val payload = try {
                 ReadAction.compute<Pair<List<PsiAnnotation>, List<SqlSelectionDialog.Row>>, Throwable> {
@@ -369,7 +399,7 @@ class ConvertToSqlAction : AnAction() {
             ApplicationManager.getApplication().invokeLater {
                 if (project.isDisposed) return@invokeLater
                 when (annotations.size) {
-                    0 -> SqlPreviewService.showResult(project, null, sourceLocation)
+                    0 -> onEmpty?.invoke() ?: SqlPreviewService.showResult(project, null, sourceLocation)
                     1 -> previewAnnotation(project, annotations[0], sourceLocation)
                     else -> SqlSelectionDialog(project, annotations, displayTexts) { selected ->
                         locateEditorTo(editor, selected)
@@ -393,6 +423,7 @@ class ConvertToSqlAction : AnAction() {
         selStart: Int,
         selEnd: Int,
         sourceLocation: String? = null,
+        onEmpty: (() -> Unit)? = null,
     ) {
         ApplicationManager.getApplication().executeOnPooledThread {
             val payload = try {
@@ -413,7 +444,7 @@ class ConvertToSqlAction : AnAction() {
             ApplicationManager.getApplication().invokeLater {
                 if (project.isDisposed) return@invokeLater
                 when (annotations.size) {
-                    0 -> SqlPreviewService.showResult(project, null, sourceLocation)
+                    0 -> onEmpty?.invoke() ?: SqlPreviewService.showResult(project, null, sourceLocation)
                     1 -> previewAnnotation(project, annotations[0], sourceLocation)
                     else -> SqlSelectionDialog(project, annotations, displayTexts) { selected ->
                         locateEditorTo(editor, selected)
@@ -494,7 +525,7 @@ class ConvertToSqlAction : AnAction() {
             statement = statement.parentTag
         }
         if (statement != null) {
-            previewXmlTag(project, file, statement, sourceLocation)
+            previewXmlTag(project, file, statement, sourceLocation, editor.caretModel.offset)
             return
         }
         // 光标不在语句内 → 全部语句候选（T-M25-01）
@@ -541,7 +572,7 @@ class ConvertToSqlAction : AnAction() {
 
     /** 预览单个 XML 语句（后台转换，EDT 渲染；T-M25.2 传 project 解析静态常量引用）。 */
     /** O-72：统一 XML 语句分发——通用内嵌 SQL 载体走 inline 预览，其余走 mapper 语句预览。 */
-    private fun previewXmlTag(project: Project, file: XmlFile, tag: XmlTag, sourceLocation: String?) {
+    private fun previewXmlTag(project: Project, file: XmlFile, tag: XmlTag, sourceLocation: String?, caretOffset: Int? = null) {
         if (XmlInlineSqlDetector.isSqlCarrierTag(tag)) {
             SqlPreviewService.previewAsync(project, {
                 XmlInlineSqlPreviewService.preview(project, tag)
@@ -550,20 +581,23 @@ class ConvertToSqlAction : AnAction() {
             }
             return
         }
-        previewXml(project, file, tag, sourceLocation)
+        previewXml(project, file, tag, sourceLocation, caretOffset)
     }
 
-    private fun previewXml(project: Project, file: XmlFile, tag: XmlTag, sourceLocation: String?) {
+    private fun previewXml(project: Project, file: XmlFile, tag: XmlTag, sourceLocation: String?, caretOffset: Int?) {
+        val contextRef = java.util.concurrent.atomic.AtomicReference<cn.song.mybatisplus.visualizer.context.PreviewSourceContext?>()
         SqlPreviewService.previewAsync(project, {
+            val context = XmlPreviewService.resolveSourceContext(file, tag, caretOffset)
+            contextRef.set(context)
             // T-M27.3/4：注入实体上下文（namespace → Mapper 接口 → 主实体 + @TableName 联表候选）——
             // 预览弹窗补全表/列来源；候选表名全位置提示（主表去重）
             val src = XmlSqlCompletionContextResolver.resolveXml(project, tag)
             val entity = src.main?.let { m ->
                 SqlCompletionContext(m.tableName, m.columns, m.tableAlias, m.columnComments, m.tableComment, src.candidates)
             }
-            XmlPreviewService.preview(file.text, tag.getAttributeValue("id"), project, entity)
+            XmlPreviewService.preview(file.text, tag.getAttributeValue("id"), project, entity, sourceContext = context)
         }) { result ->
-            SqlPreviewService.showResult(project, result, sourceLocation)
+            SqlPreviewService.showResult(project, result, sourceLocation, contextRef.get())
         }
     }
 
@@ -669,8 +703,13 @@ class ConvertToSqlAction : AnAction() {
 
     /** 预览单个链首调用（后台转换，EDT 渲染）。 */
     private fun preview(service: SqlPreviewService, anchor: PsiElement, project: Project, sourceLocation: String?) {
-        SqlPreviewService.previewAsync(project, { service.preview(anchor) }) { result ->
-            SqlPreviewService.showResult(project, result, sourceLocation)
+        val contextRef = java.util.concurrent.atomic.AtomicReference<cn.song.mybatisplus.visualizer.context.PreviewSourceContext?>()
+        SqlPreviewService.previewAsync(project, {
+            val context = service.resolveWrapperSourceContext(anchor)
+            contextRef.set(context)
+            service.preview(anchor, context)
+        }) { result ->
+            SqlPreviewService.showResult(project, result, sourceLocation, contextRef.get())
         }
     }
 
@@ -688,18 +727,67 @@ class ConvertToSqlAction : AnAction() {
         }
     }
 
+    private fun notifyKotlinWrapperUnavailable(project: Project) {
+        val notification = kotlinWrapperUnavailableNotification()
+        kotlinWrapperUnavailableNoticeForTest?.let {
+            it(notification)
+            return
+        }
+        if (ApplicationManager.getApplication().isUnitTestMode) return
+        notification.notify(project)
+    }
+
     // update() 读取 PSI，必须在后台线程执行（EDT 上请求 PSI_FILE 会抛异常）
     override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.BGT
 
     override fun update(e: AnActionEvent) {
-        // Java 文件（Wrapper 链）与 XML mapper 文件（T-M24-04：动态 SQL 语句）均可用
+        // Java/XML 可直接预览；Kotlin 主动入口保持可达，在尚不能可靠求表列时给诚实降级说明。
         val file = e.getData(CommonDataKeys.PSI_FILE)
-        e.presentation.isEnabledAndVisible = file is PsiJavaFile || file is XmlFile
+        val extension = file?.virtualFile?.extension
+        e.presentation.isEnabledAndVisible = file is PsiJavaFile || file is XmlFile || extension == "kt" || extension == "kts"
     }
 
     companion object {
         /** 插件动作 ID（plugin.xml 中注册）。 */
         const val ACTION_ID = "cn.song.mybatisplus.visualizer.ConvertToSql"
+        private const val NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview"
+
+        @Volatile
+        internal var kotlinWrapperUnavailableNoticeForTest: ((Notification) -> Unit)? = null
+
+        internal fun kotlinWrapperUnavailableAt(file: com.intellij.psi.PsiFile, offset: Int): Boolean =
+            KtWrapperDetector.detectAt(file, offset)
+
+        internal fun kotlinWrapperUnavailableInRange(
+            file: com.intellij.psi.PsiFile,
+            startOffset: Int,
+            endOffset: Int,
+        ): Boolean = KtWrapperDetector.detectInRange(file, startOffset, endOffset)
+
+        internal fun kotlinWrapperUnavailableNotification(): Notification = Notification(
+            NOTIFICATION_GROUP_ID,
+            MpSqlVisualizerBundle.message("action.kotlinWrapperUnsupported.title"),
+            MpSqlVisualizerBundle.message("action.kotlinWrapperUnsupported.message"),
+            NotificationType.INFORMATION,
+        )
     }
 }
 
+
+/**
+ * T-EntryInjectedSql：把光标 PSI 归位到宿主元素。
+ *
+ * 注解 SQL（@Select/@Update/@Delete…）在编辑器里是**注入片段**——光标落在字符串内时
+ * `file.findElementAt(offset)` 返回注入 SQL 文件的 PSI，父链上没有宿主 `PsiAnnotation`，
+ * 注解预览分支因此误报「未在光标处找到可预览的 SQL 源」（真机 20261019 走查复现）。
+ * 注入元素先取 `getInjectionHost` 回到字符串字面量，注解/Wrapper 两条定位链才能看到宿主上下文。
+ * 非注入位置原样返回，行为不变。
+ */
+internal fun resolveCaretElement(project: Project, file: PsiFile, offset: Int): PsiElement? {
+    val injections = InjectedLanguageManager.getInstance(project)
+    // 动作拿到的 file 可能是注入文件（真机形态）；offset 仍是编辑器（宿主文档）偏移，
+    // 故先回到顶层宿主文件再定位，不能拿宿主偏移去查注入文件自己的树。
+    val hostFile = runCatching { injections.getTopLevelFile(file) }.getOrDefault(file)
+    val element = hostFile.findElementAt(offset) ?: return null
+    return runCatching { injections.getInjectionHost(element) }.getOrNull() ?: element
+}

@@ -5,6 +5,7 @@ import cn.song.mybatisplus.visualizer.model.Condition
 import cn.song.mybatisplus.visualizer.model.FillClause
 import cn.song.mybatisplus.visualizer.model.JoinClause
 import cn.song.mybatisplus.visualizer.model.JoinType
+import cn.song.mybatisplus.visualizer.model.SqlFragment
 import cn.song.mybatisplus.visualizer.model.SqlStatement
 import cn.song.mybatisplus.visualizer.model.SqlValue
 import cn.song.mybatisplus.visualizer.model.TableInfo
@@ -146,8 +147,11 @@ object MpjLambdaConverter : WrapperConverter {
             joins = joins,
             unions = unions,
             fromSubQuery = fromSubQuery,
-            rawAround = around?.second,
+            rawAround = around?.last,
+            rawAroundParams = around?.lastParams.orEmpty(),
             rawFirst = around?.first?.let { listOfNotNull(base.rawFirst, it).joinToString(" ") } ?: base.rawFirst,
+            // T-UpdateSetSqlConcat：first 片段合并后来源同序拼接（base 的在前）
+            rawFirstParams = if (around?.first != null) base.rawFirstParams + around.firstParams else base.rawFirstParams,
             fillClauses = fillClauses,
         )
     }
@@ -161,7 +165,9 @@ object MpjLambdaConverter : WrapperConverter {
         val nested = call.args.getOrNull(1) as? WrapperArg.NestedArg ?: return null
         val subStatement = QueryWrapperParser(subTable).parse(nested.chain)
         val keyword = if (call.methodName == "unionAll") "UNION ALL" else "UNION"
-        return UnionClause(keyword, SqlGenerator.generate(subStatement, compact = true))
+        // T-UpdateSetSqlConcat：子语句的占位符来源随子句一起带出（渲染点按序登记，否则主语句后面的参数错位）
+        val generated = SqlGenerator.generateWithParams(subStatement, compact = true)
+        return UnionClause(keyword, generated.sql, generated.unresolvedParams)
     }
 
     /**
@@ -197,17 +203,29 @@ object MpjLambdaConverter : WrapperConverter {
      *  - 模板形态 `around("sql {0}", v, ...)`（任务规约兼容）：模板 + `{i}` 绑定参数替换
      *    （复用 [renderJoinSql] 思路），first=null、second=替换结果。
      *
-     * @return Pair(firstSql?, lastSql)——firstSql 并入 rawFirst（可与 first(...) 并存），lastSql 为 rawAround
+     * @return [AroundFragment]（first 并入 rawFirst、last 为 rawAround，各带占位符来源）
      */
-    private fun parseAround(call: WrapperCall): Pair<String?, String>? {
-        val first = (call.args.getOrNull(0).asValue() as? SqlValue.Literal)?.unquoted ?: return null
-        // 双字符串字面量形态：模板不含 {i} 占位、双参且第二参为字符串字面量
-        if (!first.contains("{") && call.args.size == 2) {
-            (call.args.getOrNull(1).asValue() as? SqlValue.Literal)?.unquoted?.let { return first to it }
+    private fun parseAround(call: WrapperCall): AroundFragment? {
+        // T-UpdateSetSqlConcat：片段位取 asSqlFragment；来源随片段带出（渲染点按序登记）
+        val first = call.args.getOrNull(0).asSqlFragment() ?: return null
+        // 双字符串字面量形态：模板不含 {i} 占位、双参且第二参为 SQL 片段
+        if (!first.text.contains("{") && call.args.size == 2) {
+            call.args.getOrNull(1).asSqlFragment()?.let {
+                return AroundFragment(first.text, first.params, it.text, it.params)
+            }
         }
         // 模板形态：模板 + {i} 绑定参数替换
-        return null to renderJoinSql(first, call.args.drop(1))
+        val rendered = renderJoinSql(first, call.args.drop(1))
+        return AroundFragment(null, emptyList(), rendered.text, rendered.params)
     }
+
+    /** `around` 解析产物（T-UpdateSetSqlConcat：文本与占位符来源成对携带）。 */
+    private data class AroundFragment(
+        val first: String?,
+        val firstParams: List<String>,
+        val last: String,
+        val lastParams: List<String>,
+    )
 
     /**
      * T-MpjFill：解析 fill 调用 → FillClause（MPJ 1.5.1+）。
@@ -488,23 +506,33 @@ object MpjLambdaConverter : WrapperConverter {
         // 6. 自定义关键字 join：join("FULL JOIN", condition, "address t1 on ..."[, args])
         if (call.methodName == "join") {
             val keyword = (args.getOrNull(0).asValue() as? SqlValue.Literal)?.unquoted ?: return null
-            val joinSql = (args.getOrNull(2).asValue() as? SqlValue.Literal)?.unquoted ?: return null
-            return JoinClause(type, "", "", emptyList(), rawSql = renderJoinSql(joinSql, args.drop(3)), customKeyword = keyword)
+            // T-UpdateSetSqlConcat：片段位取 asSqlFragment 并带来源（join 里的 `?` 须按序登记）
+            val joinSql = args.getOrNull(2).asSqlFragment() ?: return null
+            val rendered = renderJoinSql(joinSql, args.drop(3))
+            return JoinClause(
+                type, "", "", emptyList(),
+                rawSql = rendered.text, rawParams = rendered.params, customKeyword = keyword,
+            )
         }
 
         // 5. 字符串 SQL join：leftJoin("address t1 on t1.user_id = t.id"[, args]) /
-        //    leftJoin(condition, "sql"[, args])——首参为含 SQL 结构（空格/括号/{i} 占位）的字符串字面量；
+        //    leftJoin(condition, "sql"[, args])——首参为含 SQL 结构（空格/括号/{i} 占位）的 SQL 片段；
         //    纯类名（CamelCase，无空格）走下方类名降级（converter 测试手工构造形态）
         val first = args.getOrNull(0)
         if (first is WrapperArg.ValueArg) {
-            val literal = first.value as? SqlValue.Literal ?: return null
-            val text = literal.unquoted
+            // T-UpdateSetSqlConcat：字符串 join 片段位取 asSqlFragment——首参含运行期段时
+            // 静态结构（空格/括号/{i}）仍在，不再整段丢弃
+            val text = first.asSqlFragment()?.text ?: return null
             if (!text.trimEnd().endsWith(".class") &&
                 (text.contains(' ') || text.contains('(') || text.contains('{'))
             ) {
                 val startIndex = if (args.size >= 2 && isFlagArgument(args[0])) 1 else 0
-                val sql = (args.getOrNull(startIndex).asValue() as? SqlValue.Literal)?.unquoted ?: return null
-                return JoinClause(type, "", "", emptyList(), rawSql = renderJoinSql(sql, args.drop(startIndex + 1)))
+                val sql = args.getOrNull(startIndex).asSqlFragment() ?: return null
+                val rendered = renderJoinSql(sql, args.drop(startIndex + 1))
+                return JoinClause(
+                    type, "", "", emptyList(),
+                    rawSql = rendered.text, rawParams = rendered.params,
+                )
             }
         }
 
@@ -653,25 +681,22 @@ object MpjLambdaConverter : WrapperConverter {
         return JoinClause(type, tableName, alias, onConditions, logicDeleteColumn = logicDelete, tableInfo = tableInfo)
     }
 
-    /** 字符串 join 的 `{i}` 绑定参数替换（官方示例：`leftJoin("(select ... where addr.id = {0})", 1)`）。 */
-    private fun renderJoinSql(template: String, values: List<WrapperArg>): String {
-        var sql = template
-        for ((index, value) in values.withIndex()) {
-            sql = sql.replace("{$index}", renderJoinValue(value.asValue() ?: continue))
-        }
-        return sql
-    }
-
-    /** join 绑定参数渲染：字面量原样（raw），运行时值渲染为 `?`。 */
-    private fun renderJoinValue(value: SqlValue): String = when (value) {
-        is SqlValue.Literal -> value.raw
-        is SqlValue.Placeholder -> "?"
-    }
+    /**
+     * 字符串 join 的 `{i}` 绑定参数替换（官方示例：`leftJoin("(select ... where addr.id = {0})", 1)`）。
+     *
+     * T-UpdateSetSqlConcat：统一走 [renderSqlFragment]——替换 `{i}` 的同时按序登记占位符来源，
+     * 否则 join 里的 `?` 会占用后面条件的参数位。
+     */
+    private fun renderJoinSql(template: SqlFragment, values: List<WrapperArg>): SqlFragment =
+        renderSqlFragment(template, values.map { it.asValue() })
 
     /** 首参是否为布尔条件前缀（true/false 字面量或运行时布尔表达式占位符）；列引用（ColumnArg）恒为列。 */
     private fun isFlagArgument(arg: WrapperArg): Boolean {
         if (arg is WrapperArg.ColumnArg) return false
         val value = arg.asValue()
+        // T-UpdateSetSqlConcat：带片段形态的运行期实参是 SQL 片段（`leftJoin("... " + x, ...)`），
+        // 不是布尔前缀——否则片段会被当 flag 吞掉，真正的片段位被错取成第二参
+        if (value is SqlValue.Placeholder && arg.asSqlFragment() != null) return false
         return when (value) {
             is SqlValue.Literal -> value.unquoted == "true" || value.unquoted == "false"
             is SqlValue.Placeholder -> true

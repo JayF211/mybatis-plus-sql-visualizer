@@ -133,6 +133,22 @@ object DatabaseSchemaResolver {
         }
     }
 
+    /** UI023：只读精确对象与库的既有缓存；不遍历、不跨源回退、不取未知库条目。 */
+    internal fun columnNamesCachedForTarget(
+        dataSource: Any,
+        database: String,
+        tableNames: Collection<String>,
+    ): Map<String, Set<String>> = synchronized(metaCache) {
+        if (database.isBlank()) return@synchronized emptyMap()
+        // 用身份而非 equals 匹配：目标对象更换后宁可冷缓存，不借旧连接的结构。
+        val cached = metaCache.entries.firstOrNull { it.key === dataSource }?.value
+            ?: return@synchronized emptyMap()
+        tableNames.mapNotNull { name ->
+            cached[cacheKeyOf(database, name)]?.allColumnNames?.takeIf { it.isNotEmpty() }
+                ?.let { name to it }
+        }.toMap()
+    }
+
     /**
      * P7：按数据源顺序给出「表名 → 该源缓存里的全列名」查询器（该源未持有该表返回 null）。
      * 与 [columnsCached] 内部的查询器同构；抽成 internal 是为了让 [mergeCachedColumnNames]

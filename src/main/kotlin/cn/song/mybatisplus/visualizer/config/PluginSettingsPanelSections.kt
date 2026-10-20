@@ -65,6 +65,20 @@ import cn.song.mybatisplus.visualizer.config.PluginSettingsPanel.Companion.SECTI
 // T-M53-II（2026-10-10）：以下为 PluginSettingsPanel 的「设置页各分区构建」内聚成员，
 // 以同包扩展函数形式搬出——方法体逐字符搬运，被触及的私有成员已按需放宽为 internal。
 
+/**
+ * 使用 Swing 原生 HTML 换行，保留完整文案（尤其是 R90 的事前隐私披露）。
+ * 480 个逻辑像素给默认 Settings 约 700px 内容区留出边框、复选图标和滚动条；
+ * 更窄窗口仍交给 Settings 自带的滚动容器，不通过裁字或 tooltip 隐藏说明。
+ */
+internal fun wrapPreviewText(text: String): String {
+    val body = if (text.startsWith("<html>", ignoreCase = true)) {
+        text.removePrefix("<html>").removeSuffix("</html>")
+    } else {
+        text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    }
+    return "<html><table width='${JBUI.scale(480)}' cellpadding='0' cellspacing='0'><tr><td>$body</td></tr></table></html>"
+}
+
 internal fun PluginSettingsPanel.buildSections(panel: JPanel) {
     val gbc = GridBagConstraints().apply {
         gridx = 0
@@ -74,6 +88,36 @@ internal fun PluginSettingsPanel.buildSections(panel: JPanel) {
     }
 
     fun addRow(panel: JPanel, gbc: GridBagConstraints, label: String, component: JComponent, fill: Int = GridBagConstraints.NONE) {
+        // 独立开关和事前披露不是字段值，不应占据第二列、继承标签列的缩进。
+        // 仅 SQL Preview / Code Generation 使用整行；其余页保留原有排布。
+        if (component === reverseFormatCombo) {
+            gbc.gridx = 0
+            gbc.gridwidth = 2
+            gbc.weightx = 1.0
+            gbc.fill = GridBagConstraints.HORIZONTAL
+            panel.add(JBLabel(label), gbc)
+            gbc.gridy++
+            panel.add(component, gbc)
+            gbc.gridy++
+            gbc.gridwidth = 1
+            gbc.fill = GridBagConstraints.NONE
+            return
+        }
+        if (label.isEmpty() && panel.getClientProperty("previewFullWidthRows") == true) {
+            when (component) {
+                is JBCheckBox -> component.text = wrapPreviewText(component.text)
+                is JBLabel -> component.text = wrapPreviewText(component.text)
+            }
+            gbc.gridx = 0
+            gbc.gridwidth = 2
+            gbc.weightx = 1.0
+            gbc.fill = GridBagConstraints.HORIZONTAL
+            panel.add(component, gbc)
+            gbc.gridwidth = 1
+            gbc.fill = GridBagConstraints.NONE
+            gbc.gridy++
+            return
+        }
         gbc.gridx = 0
         gbc.weightx = 0.0
         panel.add(JBLabel(label), gbc)
@@ -90,17 +134,20 @@ internal fun PluginSettingsPanel.buildSections(panel: JPanel) {
         titleKey: String,
         content: (JPanel, GridBagConstraints) -> Unit,
     ) {
-        val contentPanel = JPanel(GridBagLayout())
+        val contentPanel = JPanel(GridBagLayout()).apply {
+            putClientProperty("previewFullWidthRows", titleKey in setOf("settings.section.preview", "settings.section.codeGen"))
+        }
         val inner = GridBagConstraints().apply {
             gridx = 0; gridy = 0; anchor = GridBagConstraints.WEST; insets = Insets(2, 6, 2, 6)
         }
         content(contentPanel, inner)
 
-        // 计算内容区标签最大宽度，统一列宽
+        // 只统计真正的首列标签。第二列状态/披露及跨列说明绝不能反过来撑大首列。
         val layout = contentPanel.layout as GridBagLayout
         var maxLabelWidth = 0
         for (comp in contentPanel.components) {
-            if (comp is JBLabel) {
+            val constraints = layout.getConstraints(comp)
+            if (comp is JBLabel && constraints.gridx == 0 && constraints.gridwidth == 1) {
                 maxLabelWidth = maxOf(maxLabelWidth, comp.preferredSize.width)
             }
         }
@@ -148,7 +195,7 @@ internal fun PluginSettingsPanel.buildSections(panel: JPanel) {
             emptyParamFillGroup.add(emptyParamFillPlaceholderRadio)
             emptyParamFillGroup.add(emptyParamFillNullRadio)
             emptyParamFillGroup.add(emptyParamFillEmptyRadio)
-            addRow(p, g, MpSqlVisualizerBundle.message("settings.emptyParamFill"), JPanel().apply {
+            addRow(p, g, MpSqlVisualizerBundle.message("settings.emptyParamFill"), JPanel(java.awt.GridLayout(0, 1)).apply {
                 add(emptyParamFillPlaceholderRadio)
                 add(emptyParamFillNullRadio)
                 add(emptyParamFillEmptyRadio)
@@ -202,6 +249,12 @@ internal fun PluginSettingsPanel.buildSections(panel: JPanel) {
                 text = MpSqlVisualizerBundle.message("settings.explain.structured")
                 toolTipText = MpSqlVisualizerBundle.message("settings.explain.structured.tip")
             })
+            addRow(p, g, "", explainPlanRetentionCheck.apply {
+                text = MpSqlVisualizerBundle.message("settings.explain.retention")
+            })
+            addRow(p, g, "", explainPlanRetentionDisclosure.apply {
+                text = MpSqlVisualizerBundle.message("settings.explain.retention.disclosure")
+            })
             addRow(p, g, MpSqlVisualizerBundle.message("settings.preview.executionTimeout"), executionTimeoutField.apply {
                 toolTipText = MpSqlVisualizerBundle.message("settings.preview.executionTimeout.tip")
             })
@@ -253,6 +306,14 @@ internal fun PluginSettingsPanel.buildSections(panel: JPanel) {
         sectionGroup("settings.section.codeGen") { p, g ->
             addRow(p, g, MpSqlVisualizerBundle.message("settings.reverseWrapperFormat"), reverseFormatCombo.apply {
                 model = DefaultComboBoxModel(reverseFormatOptions())
+                // 选项包含完整解释，使用同一多行 renderer 保留选中值和下拉列表的全文。
+                renderer = object : javax.swing.DefaultListCellRenderer() {
+                    override fun getListCellRendererComponent(
+                        list: javax.swing.JList<*>?, value: Any?, index: Int, isSelected: Boolean, cellHasFocus: Boolean,
+                    ): Component = super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus).also {
+                        text = wrapPreviewText(value?.toString().orEmpty())
+                    }
+                }
                 toolTipText = MpSqlVisualizerBundle.message("settings.reverseWrapperFormat.tip")
                 selectedItem = reverseFormatOptions().firstOrNull { it.value == settings.state.reverseWrapperFormat }
                     ?: reverseFormatOptions().first()
@@ -287,7 +348,7 @@ internal fun PluginSettingsPanel.buildSections(panel: JPanel) {
                     isOpaque = false
                     add(
                         JBLabel(
-                            "<html>" + MpSqlVisualizerBundle.message("settings.sourceFrameSkipPrefixes.hint") + "</html>",
+                            wrapPreviewText(MpSqlVisualizerBundle.message("settings.sourceFrameSkipPrefixes.hint")),
                         ).apply { foreground = JBUI.CurrentTheme.ContextHelp.FOREGROUND },
                         BorderLayout.CENTER,
                     )
@@ -412,6 +473,50 @@ internal fun PluginSettingsPanel.buildSections(panel: JPanel) {
         }
 
         sectionGroup("settings.log.tab.autoSave") { p, g ->
+            // 三处本地持久化彼此独立；说明始终可见，不随文件自动保存开关禁用。
+            // 包一层面板避免 sectionGroup 将长说明误当首列标签撑宽整个设置页。
+            fun disclosure(key: String, action: JButton? = null) {
+                g.gridx = 0
+                g.gridwidth = 2
+                g.weightx = 1.0
+                // UI024：本行不随整页拉宽。页面其他分区（源码捕获分栏等）的 preferred 宽度仍可能
+                // 大于视口；若本行 fill=HORIZONTAL，右对齐按钮会被推到页面右缘之外而裁切。
+                g.fill = GridBagConstraints.NONE
+                // UI024：说明与操作纵向排列（操作右对齐换到下一行）。原先说明固定 500px、操作在
+                // EAST 同行，两者宽度相加把「自动保存」组 preferred 宽度撑到 848px（整页 894px），
+                // 默认设置窗口内容区下三个按钮被右缘裁切并出现横向滚动条；换行后行宽只取两者
+                // 最大值（约 650px），且不随页面溢出宽度移动，按钮始终落在可视区内。
+                p.add(JPanel(BorderLayout(0, 4)).apply {
+                    isOpaque = false
+                    add(JBLabel("<html><body style='width: 500px'>" +
+                        MpSqlVisualizerBundle.message(key) + "</body></html>").apply {
+                        foreground = JBUI.CurrentTheme.ContextHelp.FOREGROUND
+                    }, BorderLayout.CENTER)
+                    if (action != null) {
+                        add(JPanel(BorderLayout()).apply {
+                            isOpaque = false
+                            add(action, BorderLayout.EAST)
+                        }, BorderLayout.SOUTH)
+                    }
+                }, g)
+                g.gridwidth = 1
+                g.fill = GridBagConstraints.NONE
+                g.gridy++
+            }
+            disclosure("settings.storage.captureFiles", openCaptureDirectoryButton.apply {
+                text = MpSqlVisualizerBundle.message("settings.storage.captureFiles.open")
+                toolTipText = MpSqlVisualizerBundle.message("settings.storage.captureFiles.open.tip")
+            })
+            disclosure("settings.storage.previewHistory", clearPreviewHistoryButton.apply {
+                text = MpSqlVisualizerBundle.message("settings.storage.previewHistory.clear")
+                toolTipText = MpSqlVisualizerBundle.message("settings.storage.previewHistory.clear.tip")
+            })
+            disclosure("settings.storage.paramHistory", clearParamHistoryButton.apply {
+                text = MpSqlVisualizerBundle.message("settings.storage.paramHistory.clear")
+                toolTipText = MpSqlVisualizerBundle.message("settings.storage.paramHistory.clear.tip")
+            })
+            disclosure("settings.storage.clearBoundary")
+            addRow(p, g, "", storageActionStatusLabel)
             addRow(p, g, "", logAutoSaveCheck.apply {
                 text = MpSqlVisualizerBundle.message("settings.log.autoSave")
                 toolTipText = MpSqlVisualizerBundle.message("settings.log.autoSave.tip")
@@ -482,32 +587,23 @@ internal fun PluginSettingsPanel.buildSections(panel: JPanel) {
             // M56 T-M56-08：增强捕获设置（捕获通道类设置与源码位置捕获同组）
             addRow(p, g, "", enhancedCaptureCheck.apply {
                 text = MpSqlVisualizerBundle.message("settings.enhancedCapture")
+                toolTipText = MpSqlVisualizerBundle.message("settings.enhancedCapture.tip")
                 addActionListener {
-                    if (isSelected && !PluginSettings.getInstance().state.enhancedCaptureConfirmed) {
-                        // T-M56-08：首次启用弹注入确认（确认记忆持久化，重开不弹）
-                        if (EnhancedCaptureConfirmDialog.confirm(null)) {
-                            PluginSettings.getInstance().state.enhancedCaptureConfirmed = true
-                        } else {
-                            isSelected = false
-                        }
-                        // T-ConsentTruth T-CN-03：确认结果直接写全局 state，不经过 AgentManager 的
-                        // 状态广播——不在这里补一次刷新的话，五态状态行会停在旧文案（如仍显示
-                        // 「未授权注入——下次启动主配置时会询问」），直到下一次 attach/掉线才纠正。
-                        refreshEnhancedStatusLabel()
-                    }
+                    // T-EnhancedCaptureDefaultOn：勾选即授权，不再弹注入确认；只刷新状态行。
+                    refreshEnhancedStatusLabel()
                 }
             })
             addRow(p, g, "", enhancedDesensitizeCheck.apply { text = MpSqlVisualizerBundle.message("settings.enhancedCapture.desensitize") })
+            // R60（T-LaneB D96）：展示/导出链脱敏（与采集开关解耦——管「文本怎么出去」）
+            addRow(p, g, "", displayMaskCheck.apply {
+                text = MpSqlVisualizerBundle.message("settings.display.mask")
+                toolTipText = MpSqlVisualizerBundle.message("settings.display.mask.tip")
+            })
             // T-StackHoverUi：调用栈快照总帧数（栈顶 B-8 帧＋栈底固定 8 帧；CONFIG 帧热下发 agent）
             addRow(p, g, MpSqlVisualizerBundle.message("settings.enhancedCapture.stackMaxFrames"), stackMaxFramesField.apply {
                 toolTipText = MpSqlVisualizerBundle.message("settings.enhancedCapture.stackMaxFrames.tip")
             })
             addRow(p, g, "", enhancedStatusLabel)
-            // T-CaptureTruth T-CT-02：重新授权入口（仅未授权态可见，文本随语言重建刷新）
-            addRow(p, g, "", enhancedReauthButton.apply {
-                text = MpSqlVisualizerBundle.message("settings.enhancedCapture.reauth")
-                toolTipText = MpSqlVisualizerBundle.message("settings.enhancedCapture.reauth.tip")
-            })
             // T-SourceJumpFunnel P1-3：帧过滤前缀（自研框架包名登记，热下发 agent）
             frameSkipPrefixesField.apply {
                 text = PluginSettings.getInstance().state.sourceFrameSkipPrefixes

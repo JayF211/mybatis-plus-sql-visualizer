@@ -155,6 +155,10 @@ class BannedApiSourceScanTest : BannedApiScanSupport() {
             // 条目变成「顺手弹个窗」的隐性许可）。
             "src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewPanelExecution.kt",
             "src/main/kotlin/cn/song/mybatisplus/visualizer/config/PluginSettingsPanel.kt",
+            // O-145 W6：清除本项目模块数据源绑定须用户确认，拒绝后不改变任何绑定。
+            "src/main/kotlin/cn/song/mybatisplus/visualizer/config/ProjectPluginSettingsConfigurable.kt",
+            // O-145 W7：仅未知方言的原始查询须用户确认；已知冲突和未知写操作直接阻断。
+            "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelector.kt",
             "src/main/kotlin/cn/song/mybatisplus/visualizer/log/LogToSqlPanel.kt",
             "src/main/kotlin/cn/song/mybatisplus/visualizer/config/McpConfigurable.kt",
             "src/main/kotlin/cn/song/mybatisplus/visualizer/log/SqlSuppressManagerDialog.kt",
@@ -181,6 +185,15 @@ class BannedApiSourceScanTest : BannedApiScanSupport() {
                 "确属「用户必须选择/知情确认」场景才可加白本守卫并在调用点注释依据",
             extra.isEmpty(),
         )
+        for ((path, owner) in mapOf(
+            "src/main/kotlin/cn/song/mybatisplus/visualizer/config/ProjectPluginSettingsConfigurable.kt" to "clearModuleBindings",
+            "src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelector.kt" to "allowDialectGate",
+        )) {
+            val code = stripComments(repoRoot().resolve(path).readText())
+            assertTrue("确认动作应保留在 $owner", code.contains("fun $owner("))
+            assertEquals("$path 只允许一处已登记的知情确认", 1,
+                Regex("Messages\\.showYesNoDialog\\(").findAll(code).count())
+        }
     }
 
     @Test
@@ -275,6 +288,48 @@ class BannedApiSourceScanTest : BannedApiScanSupport() {
                 "方言映射统一走 DialectPreMapping.ensureMapped",
             bad.isEmpty(),
         )
+    }
+
+    /**
+     * O-145 日志来源证据边界：只禁危险的“升级为精确事实”，不禁止未来经验证的 sourceContext。
+     * 库标是脱敏展示文本，last agent URL 是另一时刻/连接的事实；源码文件也不是 SQL PSI。
+     */
+    private fun unsafeLogPreviewEvidence(code: String): List<String> {
+        val patterns = listOf(
+            Regex("capturedJdbcUrl\\s*=\\s*(?:entry\\.)?databaseName\\b") to "库标反推精确 JDBC URL",
+            Regex("capturedJdbcUrl\\s*=\\s*[^\\n]*lastConnectionUrl\\s*\\(") to "最近 agent URL 冒充本条连接",
+            Regex("SqlPsiResolution\\.(?:Exact|UniqueInOwner)\\s*\\(") to "运行时源码冒充真实 SQL PSI",
+            Regex("hostVirtualFile\\s*=\\s*SourcePathResolver\\.resolveVirtualFile\\s*\\(") to "首命中源码路径冒充唯一来源",
+            Regex("SourcePathResolver\\.resolveVirtualFiles\\s*\\([^\\n]*\\)\\s*\\.first(?:OrNull)?\\s*\\(") to "多路径候选取首个冒充唯一来源",
+        )
+        return patterns.filter { (pattern, _) -> pattern.containsMatchIn(code) }.map { it.second }
+    }
+
+    @Test
+    fun `O145日志预览不得从库标旧URL或源码路径升级精确来源`() {
+        // 三个实际打开入口（实时、历史、反查）都要覆盖，而非只验证合成字符串。
+        val paths = listOf("SqlLogPanel.kt", "HistorySqlLogPanel.kt", "EntrySourceMatcher.kt")
+        val root = repoRoot().resolve("src/main/kotlin/cn/song/mybatisplus/visualizer/log")
+        val violations = paths.flatMap { name ->
+            val code = stripComments(root.resolve(name).readText())
+            unsafeLogPreviewEvidence(code).map { "$name: $it" }
+        }
+        assertTrue("O-145 日志预览不能伪造精确 JDBC/SQL PSI/唯一源码：$violations", violations.isEmpty())
+    }
+
+    @Test
+    fun `O145守卫自证_危险推断必红而安全来源展示不禁`() {
+        for (sample in listOf(
+            "capturedJdbcUrl = entry.databaseName",
+            "capturedJdbcUrl = AgentUrlRegistry.lastConnectionUrl(project)",
+            "sqlPsiResolution = SqlPsiResolution.Exact(sourcePsi)",
+            "hostVirtualFile = SourcePathResolver.resolveVirtualFile(project, entry.sourceFile)",
+            "hostVirtualFile = SourcePathResolver.resolveVirtualFiles(project, entry.sourceFile).firstOrNull()",
+        )) {
+            assertTrue("危险形态未检出：$sample", unsafeLogPreviewEvidence(sample).isNotEmpty())
+        }
+        assertTrue(unsafeLogPreviewEvidence("sourceLocation = entry.sourceFile").isEmpty())
+        assertTrue(unsafeLogPreviewEvidence("sourceContext = verifiedUniqueEvidence").isEmpty())
     }
 
     @Test

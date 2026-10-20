@@ -37,6 +37,19 @@ data class ExecutionErrorInfo(
     val executedSqlLength: Int? = null,
 )
 
+/** UI 三入口共用的纯文本错误呈现；原始消息完整保留，元数据只显示实际存在的有效值。 */
+object ExecutionErrorFormatter {
+    fun format(info: ExecutionErrorInfo): String = buildString {
+        append(info.message)
+        info.sqlState?.takeIf { it.isNotBlank() }?.let { append("\nsqlState: ").append(it) }
+        info.errorCode?.takeIf { it != 0 }?.let { append("\nerrorCode: ").append(it) }
+        if (!info.positionSource.isNullOrBlank()) {
+            info.positionChar?.takeIf { it > 0 }?.let { append("\nerrorPosition: char ").append(it) }
+                ?: info.lineInSql?.takeIf { it > 0 }?.let { append("\nerrorPosition: line ").append(it) }
+        }
+    }
+}
+
 /**
  * 错误位置提取器（纯函数，零平台依赖）。
  *

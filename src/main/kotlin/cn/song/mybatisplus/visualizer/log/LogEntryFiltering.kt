@@ -124,6 +124,14 @@ internal const val REFRESH_FIRST_BATCH_SIZE = 30
 internal const val REFRESH_CHUNK_SIZE = 30
 
 /**
+ * F80（T-PerfSweep24）：flushRebuildChainSync 单拍同步补完封顶——默认设置（logMaxCount=200）
+ * 在途余量 ≤170 全量补完（行为不变）；用户调大 logMaxCount 至数千时，超出部分不再单拍
+ * 同步写数千条模型（EDT 冻结随 logMaxCount 线性放大），改由 appendRebuildChunk 逐拍链推进、
+ * 本拍刷新挂起链尾补跑。
+ */
+internal const val FLUSH_SYNC_MAX = 512
+
+/**
  * 日志条目列表（T-M42）：覆写 JBList.itemToText——内置 Ctrl+C 复制默认返回 cellRenderer
  * 渲染文本（HTML 源码，用户实测缺陷），覆写后复制输出纯 SQL（多选逐条换行拼接、
  * CopyPasteManager 写入、Ctrl+C 快捷键注册均由 JBList 既有链路复用）。

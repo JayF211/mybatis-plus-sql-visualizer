@@ -51,7 +51,28 @@ class ExecDocAutosaveHostTest : BasePlatformTestCase() {
     override fun tearDown() {
         runCatching { DataSourceSelector.resetExecDocAutosaveForTest() }
         runCatching { ExecDocAutosaveHost.getInstance().detachListenerForTest() }
+        convergeExecDocDirtyStateForTeardown()
         super.tearDown()
+    }
+
+    /**
+     * 本类多个用例刻意把 exec 文档置成「已改未存」模拟用户键入（[changeDoc]），用例内不断言
+     * 收敛——light 测试项目在分片 JVM 内跨类共享同一个临时工程与该文件，脏文档残留到本类之外，
+     * 后续任意一次 VFS refresh 命中 MemoryDiskConflictResolver（冲突收集后 EDT 延迟处理，
+     * 杀的是「当下正在收尾」的无辜测试，victim 随分片组合漂移：20261018 门禁 FieldFill/
+     * CrudSql 轮流单红四连坐实）。teardown 落盘归零脏态，残留窗口只存在于本类生命周期内。
+     */
+    private fun convergeExecDocDirtyStateForTeardown() {
+        runCatching {
+            val vf = refreshVf() ?: return
+            val fdm = FileDocumentManager.getInstance()
+            val doc = fdm.getCachedDocument(vf) ?: return
+            if (!fdm.isDocumentUnsaved(doc)) return
+            @Suppress("DEPRECATION") // T-M52：WriteAction.compute(ThrowableComputable) 243 编译目标仅此重载可用
+            com.intellij.openapi.application.WriteAction.compute<Unit, Throwable> {
+                fdm.saveDocument(doc)
+            }
+        }
     }
 
     // ======================== 核心：监听随 Disposable 卸载 ========================

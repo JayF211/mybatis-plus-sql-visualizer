@@ -5,6 +5,9 @@ import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import kotlin.coroutines.Continuation
+import kotlin.coroutines.EmptyCoroutineContext
+import kotlin.coroutines.startCoroutine
 
 /**
  * MCP 工具门控测试（T-McpToolset2 / T-MTS2-00；R14 T-HistorySearch 起十一工具）：
@@ -66,6 +69,27 @@ class McpToolGateTest : BasePlatformTestCase() {
         assertTrue(McpToolGate.shouldHideFromExternalToolsList("sqlv_explain"))
         assertFalse(McpToolGate.shouldHideFromExternalToolsList("sqlv_render_sql"))
         assertFalse(McpToolGate.shouldHideFromExternalToolsList("search_text"))
+    }
+
+    fun test禁用后已知名称直接调用也在执行前拒绝() {
+        state.mcpDisabledTools.add("sqlv_check_sql")
+        val disabled = callCheckSql("SELECT 1")
+        assertTrue(disabled.exceptionOrNull()?.message?.contains("[TOOL_DISABLED]") == true)
+        state.mcpDisabledTools.clear()
+        assertTrue(callCheckSql("SELECT 1").isSuccess)
+
+        state.mcpToolsEnabled = false
+        assertTrue(callCheckSql("SELECT 1").exceptionOrNull()?.message?.contains("[TOOL_DISABLED]") == true)
+    }
+
+    private fun callCheckSql(sql: String): Result<String> {
+        var outcome: Result<String>? = null
+        val call: suspend () -> String = { SqlVisualizerCheckSqlTool().sqlv_check_sql(sql) }
+        call.startCoroutine(object : Continuation<String> {
+            override val context = EmptyCoroutineContext
+            override fun resumeWith(result: Result<String>) { outcome = result }
+        })
+        return outcome ?: error("静态 SQL 工具不应挂起")
     }
 
     fun test十一个工具类钩子跟门控且稳定集恒定() {

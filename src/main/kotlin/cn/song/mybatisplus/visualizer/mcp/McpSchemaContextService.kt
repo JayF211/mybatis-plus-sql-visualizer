@@ -351,11 +351,20 @@ object McpSchemaContextService {
         }.getOrNull()
     }
 
+    /**
+     * F77（T-PerfSweep23）：dsName 反射 Method 缓存——来源披露从每数据源一次扩为
+     * **每命中表一次**后（S3 命中表所在数据源名逐表取），Class.forName+getMethod
+     * 不再逐次付（negative 也缓存：Community/无 Database 插件下 forName 恒抛，
+     * 缓 null 后逐表零反射）。
+     */
+    private val dasGetNameMethod: java.lang.reflect.Method? =
+        runCatching { Class.forName(DAS_DATA_SOURCE).getMethod("getName") }.getOrNull()
+
     /** 数据源显示名（S3 来源披露与日志用；取不到返回 `?`，披露侧跳过）。 */
     private fun dsName(ds: Any): String =
         dsNameForTest?.invoke(ds)
             ?: runCatching {
-                Class.forName(DAS_DATA_SOURCE).getMethod("getName").invoke(ds) as? String
+                dasGetNameMethod?.invoke(ds) as? String
             }.getOrNull()
             ?: "?"
 

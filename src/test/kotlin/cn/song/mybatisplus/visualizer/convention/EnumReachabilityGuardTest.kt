@@ -177,7 +177,7 @@ class EnumReachabilityGuardTest {
         if (tailMatches("when\\s*\\(\\s*", before)) return false // when 主语位
         // 赋值 / return / when 结果位 / 实参（`(` `,`）/ if-else 分支值（前随 `)`）/
         // 映射值（`to`）/ 块末表达式
-        if (tailMatches("(=|return|->|\\(|,|\\)|\\bto|\\bin|\\bby|\\belse|\\?:|\\+=|&&|\\|\\|)\\s*", before)) {
+        if (tailMatches("(=|return(?:@[A-Za-z_]\\w*)?|->|\\(|,|\\)|\\bto|\\bin|\\bby|\\belse|\\?:|\\+=|&&|\\|\\|)\\s*", before)) {
             return true
         }
         if (Regex("^\\s*[});,]").containsMatchIn(after)) return true // 块末表达式
@@ -264,7 +264,7 @@ class EnumReachabilityGuardTest {
 
             enum class SyntheticDefect { LIVE, DEAD }
 
-            enum class SyntheticProduced { P }
+            enum class SyntheticProduced { P, Q }
 
             object SyntheticConsumer {
                 fun use(kind: SyntheticKind): Boolean = kind == SyntheticKind.INSERT
@@ -272,6 +272,7 @@ class EnumReachabilityGuardTest {
                 fun useDefect(d: SyntheticDefect): Boolean = d == SyntheticDefect.DEAD
                 fun useProduced(p: SyntheticProduced): Boolean = p == SyntheticProduced.P
                 fun produce(): SyntheticProduced = SyntheticProduced.P
+                fun produceViaLabel(): SyntheticProduced = run { return@run SyntheticProduced.Q }
             }
         """.trimIndent()
         val sources = listOf("src/main/kotlin/Synthetic.kt" to synthetic)
@@ -291,6 +292,8 @@ class EnumReachabilityGuardTest {
         val dead = rows["SyntheticDefect.DEAD"]!!
         assertTrue("被比较且零产出的常量必须判为违规：$dead", dead.produced == 0 && dead.consumed > 0)
         assertTrue("被产出且被消费的常量不得判违规：${rows["SyntheticProduced.P"]}", rows["SyntheticProduced.P"]!!.produced > 0)
+        assertTrue("return@run 有标签返回必须算真实产出：${rows["SyntheticProduced.Q"]}",
+            rows["SyntheticProduced.Q"]!!.produced > 0)
         val consumedOnly = rows["SyntheticKind.INSERT"]!!
         assertTrue("被比较且零产出的常量应判为违规：$consumedOnly", consumedOnly.produced == 0 && consumedOnly.consumed > 0)
         assertTrue(
@@ -354,10 +357,16 @@ class EnumReachabilityGuardTest {
          *   该态由设计决定永不产出（穷尽性映射保留位）。**不是**静默失效：分支行为与文档一致。
          *   注意：这条豁免的代价是「该形态的死分支不再报警」——若将来有第二例，先判断能否改判据
          *   （如按「消费点是否为穷尽 when」细分），再考虑加白。
+         * - `Capability.EXPLAIN`（R52，2026-10-08 收口门禁抓出）：同类形态——能力矩阵需**单列**
+         *   EXPLAIN 行以保矩阵完整，但该枚举刻意**不产出** EXPLAIN 缺口：EXPLAIN 缺口归既有
+         *   `ExplainGate` 轻通知（不重复进执行确认弹窗，见 `DialectCapabilities` KDoc）。消费点＝
+         *   矩阵渲染（`summaryText`），产出点缺席系设计。**不是**静默失效：矩阵列与文档一致。
          */
         val WHITELIST = mapOf(
             "SubmitPhase.SUCCESS" to
                 "KDoc 明示预留：成功即关窗，不需要写状态行（ErrorReportDialog.submitStatusText 分支返回 null）",
+            "Capability.EXPLAIN" to
+                "有意保留的未产出位（R52）：矩阵单列 EXPLAIN 保完整，缺口归 ExplainGate 轻通知、不进确认弹窗",
         )
     }
 }

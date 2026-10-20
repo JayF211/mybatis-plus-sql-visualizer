@@ -88,6 +88,36 @@ class SqlResultPanel : JBPanel<SqlResultPanel>(BorderLayout()) {
     /** T-ErrorLocate：定位动作（宿主面板注入——需要 project + 预览源锚点，面板自身不可知）。 */
     private var locateHandler: (() -> Unit)? = null
 
+    /**
+     * T-DialectGateUx：错误态的两个**就地修复入口**（仅错误态出现，形态照 errorLocateButton）。
+     *
+     * 方言闸门阻断时文案只说明「渲染方言 ≠ 数据源方言」，用户还得自己找设置页；
+     * 这里把两条出路直接挂到错误行：切换数据源（重开选择器）与打开 SQL 方言设置。
+     */
+    private val errorFixButton = JButton().apply {
+        isVisible = false
+        isOpaque = false
+        isContentAreaFilled = false
+        border = JBUI.Borders.empty(1, 6)
+        font = font.deriveFont(11f)
+        foreground = JBColor.namedColor("Link.activeForeground", JBColor.BLUE)
+        margin = JBUI.insets(0, 6, 0, 6)
+        addActionListener { fixHandler?.invoke() }
+    }
+    private var fixHandler: (() -> Unit)? = null
+
+    private val errorSettingsButton = JButton().apply {
+        isVisible = false
+        isOpaque = false
+        isContentAreaFilled = false
+        border = JBUI.Borders.empty(1, 6)
+        font = font.deriveFont(11f)
+        foreground = JBColor.namedColor("Link.activeForeground", JBColor.GRAY)
+        margin = JBUI.insets(0, 6, 0, 6)
+        addActionListener { settingsHandler?.invoke() }
+    }
+    private var settingsHandler: (() -> Unit)? = null
+
     /** M36.5.49：面板状态——防止 error 被后续 showEmpty/showLoading 误清（"一闪而过"）。 */
     private enum class State { EMPTY, LOADING, ERROR, SUCCESS }
     private var state = State.EMPTY
@@ -103,6 +133,9 @@ class SqlResultPanel : JBPanel<SqlResultPanel>(BorderLayout()) {
         val east = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.RIGHT, 2, 0)).apply {
             isOpaque = false
             border = JBUI.Borders.empty()
+            // T-DialectGateUx：修复入口排在定位/复制之前（错误越具体，动作越靠左）
+            add(errorFixButton)
+            add(errorSettingsButton)
             add(errorLocateButton)
             add(errorCopyButton)
         }
@@ -128,7 +161,7 @@ class SqlResultPanel : JBPanel<SqlResultPanel>(BorderLayout()) {
         state = State.EMPTY
         currentError = null
         errorCopyButton.isVisible = false
-        errorLocateButton.isVisible = false
+        clearErrorActions()
         setLoadingIconVisible(false)
         val dsInfo = if (dataSourceName.isNotEmpty()) {
             " | ${MpSqlVisualizerBundle.message("execute.datasource.label", dataSourceName)}"
@@ -147,7 +180,7 @@ class SqlResultPanel : JBPanel<SqlResultPanel>(BorderLayout()) {
         state = State.LOADING
         currentError = null
         errorCopyButton.isVisible = false
-        errorLocateButton.isVisible = false
+        clearErrorActions()
         setLoadingIconVisible(true)
         infoLabel.text = if (dataSourceName.isNotEmpty()) {
             "<html>${MpSqlVisualizerBundle.message("execute.result.loading")} | " +
@@ -172,7 +205,7 @@ class SqlResultPanel : JBPanel<SqlResultPanel>(BorderLayout()) {
         state = State.SUCCESS
         currentError = null
         errorCopyButton.isVisible = false
-        errorLocateButton.isVisible = false
+        clearErrorActions()
         setLoadingIconVisible(false)
         val dsInfo = if (dataSourceName.isNotEmpty()) {
             " | ${MpSqlVisualizerBundle.message("execute.datasource.label", dataSourceName)}"
@@ -196,13 +229,29 @@ class SqlResultPanel : JBPanel<SqlResultPanel>(BorderLayout()) {
         state = State.SUCCESS
         currentError = null
         errorCopyButton.isVisible = false
-        errorLocateButton.isVisible = false
+        clearErrorActions()
         setLoadingIconVisible(false)
         val dsInfo = if (dataSourceName.isNotEmpty()) {
             " | ${MpSqlVisualizerBundle.message("execute.datasource.label", dataSourceName)}"
         } else ""
         infoLabel.text = "<html>${MpSqlVisualizerBundle.message("execute.result.rows", rowCount, elapsedMs)}$dsInfo</html>"
         infoLabel.foreground = JBColor.namedColor("Label.successForeground", JBColor(0x00, 0x00))
+        showContent()
+        revalidate()
+        repaint()
+    }
+
+    /** O-145 W7：显示不属于执行成功/失败的诚实状态（如已重渲染、需复核后二击）。 */
+    fun showStatus(message: String) {
+        state = State.EMPTY
+        currentError = null
+        errorCopyButton.isVisible = false
+        clearErrorActions()
+        setLoadingIconVisible(false)
+        val esc = message.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        infoLabel.text = "<html>$esc</html>"
+        infoLabel.toolTipText = message
+        infoLabel.foreground = JBColor.namedColor("Label.infoForeground", JBColor.GRAY)
         showContent()
         revalidate()
         repaint()
@@ -228,12 +277,59 @@ class SqlResultPanel : JBPanel<SqlResultPanel>(BorderLayout()) {
         errorCopyButton.isVisible = true
         errorCopyButton.revalidate()
         errorCopyButton.repaint()
-        locateHandler = null
-        errorLocateButton.isVisible = false
+        clearErrorActions()
         showContent()
         revalidate()
         repaint()
     }
+
+    /**
+     * T-DialectGateUx：错误 + 就地修复入口（方言闸门阻断时用）。
+     *
+     * 文案只解释「为什么被拦」；这里把两条出路挂成可点按钮——切数据源、打开方言设置。
+     * 入口为 null/label 为空时不显示对应按钮（例如 Community 无 Database 插件）。
+     */
+    fun showErrorWithActions(
+        error: String,
+        fixLabel: String? = null,
+        fixTooltip: String? = null,
+        fix: (() -> Unit)? = null,
+        settingsLabel: String? = null,
+        settingsTooltip: String? = null,
+        settings: (() -> Unit)? = null,
+    ) {
+        showError(error)
+        if (fixLabel != null && fix != null) {
+            fixHandler = fix
+            errorFixButton.text = fixLabel
+            errorFixButton.toolTipText = fixTooltip
+            errorFixButton.isVisible = true
+        }
+        if (settingsLabel != null && settings != null) {
+            settingsHandler = settings
+            errorSettingsButton.text = settingsLabel
+            errorSettingsButton.toolTipText = settingsTooltip
+            errorSettingsButton.isVisible = true
+        }
+        revalidate()
+        repaint()
+    }
+
+    /** T-DialectGateUx：清空全部错误动作（非错误态与每次 showError 的统一起点）。 */
+    private fun clearErrorActions() {
+        locateHandler = null
+        errorLocateButton.isVisible = false
+        fixHandler = null
+        errorFixButton.isVisible = false
+        settingsHandler = null
+        errorSettingsButton.isVisible = false
+    }
+
+    /** T-DialectGateUx：测试访问器——就地修复入口（可见性与点击行为断言）。 */
+    internal fun fixActionForTest(): JButton = errorFixButton
+
+    /** T-DialectGateUx：测试访问器——方言设置入口。 */
+    internal fun settingsActionForTest(): JButton = errorSettingsButton
 
     /**
      * T-ErrorLocate T-EL-03：富错误呈现——在 [showError] 基础上追加「定位到出错位置」动作。
@@ -260,7 +356,7 @@ class SqlResultPanel : JBPanel<SqlResultPanel>(BorderLayout()) {
      * @param locate 定位动作；null = 不显示定位按钮
      */
     fun showErrorRich(info: cn.song.mybatisplus.visualizer.execute.ExecutionErrorInfo, locate: (() -> Unit)?) {
-        showError(info.message)
+        showError(cn.song.mybatisplus.visualizer.execute.ExecutionErrorFormatter.format(info))
         locateHandler = locate
         if (locate != null) {
             // T-Round10FU（独立复核 ㉕）：三态文案——字符位置 / 行号 / 两者皆无。
@@ -320,7 +416,7 @@ class SqlResultPanel : JBPanel<SqlResultPanel>(BorderLayout()) {
         state = State.EMPTY
         currentError = null
         errorCopyButton.isVisible = false
-        errorLocateButton.isVisible = false
+        clearErrorActions()
         setLoadingIconVisible(false)
         infoLabel.text = ""
         isVisible = false

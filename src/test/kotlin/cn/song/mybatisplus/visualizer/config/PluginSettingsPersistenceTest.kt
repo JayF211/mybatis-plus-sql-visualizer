@@ -207,11 +207,14 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
             // R12 T-PaginationSim：分页拦截器模拟开关（paginationSimCheck）+1 后为 39；
             // R10 T-ShardingSphereCompat：ShardingSphere 双段日志捕获开关（logShardingSphereEnabledCheck）+1 后为 40；
             // R33 T-ExplainStructured：EXPLAIN 结构化渲染开关（explainStructuredCheck）+1 后为 41；
-            // T-CountSimToggle：分页 COUNT 子开关（paginationCountCheck）+1 后为 42；
-            // T-DataSourceBadgeMode：数据源角标完整上下文开关（dataSourceBadgeDetailCheck）+1 后为 43；
-            // T-JarEmbedded 优化方案 2：后台扫描依赖库以反查实体开关（librarySweepCheck）+1 后为 44；
+            // R60 T-LaneB D96：展示/导出链脱敏开关（displayMaskCheck）+1 后为 42；
+            // T-CountSimToggle：分页 COUNT 子开关（paginationCountCheck）+1 后为 43；
+            // T-DataSourceBadgeMode：数据源角标完整上下文开关（dataSourceBadgeDetailCheck）+1 后为 44；
+            // R90：独立默认关闭的原始计划保留授权 +1 后为 45，不与结构化渲染共用；
+            // T-JarEmbedded 优化方案 2：后台扫描依赖库以反查实体开关（librarySweepCheck）+1 后为 46。
             // 同步先例 ccd0f74（R2 设置页六组 gutter 复选框曾 31→37 同步）
-            assertEquals("复选框总数应为 44", 44, texts.size)
+            assertTrue(texts.any { it.contains("Retain raw EXPLAIN plans") })
+            assertEquals("复选框总数应为 46", 46, texts.size)
         } finally {
             settings.state.language = old
         }
@@ -521,6 +524,38 @@ class PluginSettingsPersistenceTest : BasePlatformTestCase() {
             assertEquals("Gutter 图标开关应保留", false, settings.state.showGutterIcon)
             assertEquals("更新检查开关应保留（SettingsIO 自称不含全局项）", true, settings.state.autoCheckUpdate)
             assertEquals("忽略版本列表应保留", "1.2.3", settings.state.ignoredUpdateVersions)
+        } finally {
+            settings.loadState(snapshot)
+        }
+    }
+
+    /**
+     * T-EnhancedCaptureDefaultOn G3：旧 XML/JSON 的确认记忆与拒绝冷却在加载时幂等归一。
+     * 只碰这两个字段——用户显式关闭的 enhancedCaptureEnabled 必须原样保留。
+     */
+    fun testLoadStateNormalizesLegacyConsentFields() {
+        val settings = PluginSettings.getInstance()
+        val snapshot = settings.getState().copy()
+        try {
+            val legacyEnabled = snapshot.copy().apply {
+                enhancedCaptureEnabled = true
+                enhancedCaptureConfirmed = false
+                enhancedCaptureRejectedAtMs = 123_456L
+            }
+            settings.loadState(legacyEnabled)
+            assertEquals("旧 confirmed=false 应归一为 true", true, settings.state.enhancedCaptureConfirmed)
+            assertEquals("旧拒绝时刻应归一为 0", 0L, settings.state.enhancedCaptureRejectedAtMs)
+            assertTrue("用户开着增强时不得被归一关掉", settings.state.enhancedCaptureEnabled)
+
+            val legacyDisabled = snapshot.copy().apply {
+                enhancedCaptureEnabled = false
+                enhancedCaptureConfirmed = false
+                enhancedCaptureRejectedAtMs = 999L
+            }
+            settings.loadState(legacyDisabled)
+            assertEquals("用户显式关闭必须保持关闭", false, settings.state.enhancedCaptureEnabled)
+            assertEquals("确认记忆仍归一为 true", true, settings.state.enhancedCaptureConfirmed)
+            assertEquals("拒绝时刻仍归一为 0", 0L, settings.state.enhancedCaptureRejectedAtMs)
         } finally {
             settings.loadState(snapshot)
         }

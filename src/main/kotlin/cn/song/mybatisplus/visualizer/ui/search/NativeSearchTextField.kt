@@ -141,6 +141,14 @@ class NativeSearchTextField(
         statusLabel.isVisible = text.isNotEmpty()
     }
 
+    /** 搜索校验反馈：复用平台搜索错误配色，并同步实际挂载的右侧标签。null 清除错误。 */
+    fun setSearchError(message: String?) {
+        if (message == null) component.setRegularBackground() else component.setNotFoundBackground()
+        statusLabel.foreground = if (message == null) UIUtil.getLabelInfoForeground() else component.statusColor
+        textComponent.toolTipText = message
+        if (message != null) setStatusText(message)
+    }
+
     /**
      * 宿主面板在过滤真正应用（防抖后）时喂词：非空去重移到队尾，容量 [MAX_HISTORY] 淘汰最旧。
      * 与平台历史（全局 Find 历史）完全隔离。

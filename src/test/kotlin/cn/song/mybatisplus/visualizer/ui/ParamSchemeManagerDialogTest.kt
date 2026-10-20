@@ -103,6 +103,81 @@ class ParamSchemeManagerDialogTest : BasePlatformTestCase() {
         d.dispose()
     }
 
+    fun testSaveAsRejectsDefaultReservedNameWithEmptyDefaultBucket() {
+        assertEquals(0, cache.size())
+        assertTrue(cache.schemeNames().isEmpty())
+        val d = openDialog()
+        for (name in listOf(ParamHistoryCache.DEFAULT_SCHEME, " \t ")) {
+            assertFalse("默认保留名经规范化必须在写入前拒绝", d.saveAsForTest(name))
+            assertEquals(bundle("panel.scheme.dialog.blank"), d.statusTextForTest())
+        }
+        assertEquals(0, changedCount)
+        assertEquals(0, cache.size())
+        assertTrue(cache.schemeNames().isEmpty())
+        assertEquals(1, d.schemeCountForTest())
+        assertEquals(ParamHistoryCache.DEFAULT_SCHEME, cache.activeSchemeFor("stmt-key"))
+        assertEquals(
+            "缓存层也必须拒绝默认保留名",
+            ParamHistoryCache.SchemeOpResult.INVALID,
+            cache.saveAsScheme(ParamHistoryCache.DEFAULT_SCHEME, "stmt-key", snapshotStub!!.second),
+        )
+        assertEquals(0, cache.size())
+        assertTrue(cache.schemeNames().isEmpty())
+    }
+
+    fun testUI017_saveAsReusesNameForAnotherStatementWithoutOverwritingSnapshots() {
+        val foreachKey = "UserMapper.selectByAnnotationForeach"
+        val idKey = "UserMapper.selectByAnnotationId"
+        val foreachSnapshot = mapOf("__fev__:ids" to "71,72,73")
+        cache.saveAsScheme("UI-Shared", foreachKey, foreachSnapshot)
+        cache.switchScheme(ParamHistoryCache.DEFAULT_SCHEME, foreachKey)
+        snapshotStub = idKey to mapOf("id" to "91")
+        val d = openDialog()
+        assertEquals("其他方法的预设不应出现在当前列表", 1, d.schemeCountForTest())
+
+        assertTrue("跨方法允许复用名称，输入首尾空白仍规范化", d.saveAsForTest(" UI-Shared "))
+        assertEquals(bundle("panel.scheme.dialog.saved", "UI-Shared"), d.statusTextForTest())
+        assertEquals(2, d.schemeCountForTest())
+        assertEquals("UI-Shared", d.selectedSchemeForTest())
+        assertEquals(listOf("UI-Shared"), cache.schemeNames())
+        assertEquals(2, cache.schemeEntryCount("UI-Shared"))
+        assertEquals(foreachSnapshot, cache.recallFromScheme("UI-Shared", foreachKey))
+        assertEquals(mapOf("id" to "91"), cache.recallFromScheme("UI-Shared", idKey))
+        assertEquals("另存不得切换其他方法的激活态", ParamHistoryCache.DEFAULT_SCHEME, cache.activeSchemeFor(foreachKey))
+        assertEquals("UI-Shared", cache.activeSchemeFor(idKey))
+        assertEquals(1, changedCount)
+
+        snapshotStub = idKey to mapOf("id" to "92")
+        assertFalse("当前方法重复另存仍应拒绝", d.saveAsForTest(" UI-Shared "))
+        assertEquals(bundle("panel.scheme.dialog.duplicate"), d.statusTextForTest())
+        assertEquals("拒绝不得触发回调", 1, changedCount)
+        assertEquals(mapOf("id" to "91"), cache.recallFromScheme("UI-Shared", idKey))
+        assertEquals(foreachSnapshot, cache.recallFromScheme("UI-Shared", foreachKey))
+
+        val restored = ParamHistoryCache()
+        assertEquals("跨方法快照持久化后仍各自保留", foreachSnapshot, restored.recallFromScheme("UI-Shared", foreachKey))
+        assertEquals(mapOf("id" to "91"), restored.recallFromScheme("UI-Shared", idKey))
+    }
+
+    fun testUI017_saveAsReusesNameAtLimitAndKeepsNameWideRenameDelete() {
+        repeat(ParamHistoryCache.MAX_SCHEME_COUNT) { i ->
+            cache.saveAsScheme("S$i", "other-statement", mapOf("id" to "$i"))
+        }
+        val d = openDialog()
+        assertEquals(1, d.schemeCountForTest())
+        assertTrue("复用已有名称不占新名额，满额时也应成功", d.saveAsForTest("S0"))
+        assertEquals(ParamHistoryCache.MAX_SCHEME_COUNT, cache.schemeNames().size)
+        assertEquals(2, cache.schemeEntryCount("S0"))
+
+        assertTrue("重命名仍作用同名全部语句", d.renameForTest("Shared-Renamed"))
+        assertFalse(cache.hasScheme("S0"))
+        assertEquals(mapOf("id" to "0"), cache.recallFromScheme("Shared-Renamed", "other-statement"))
+        assertEquals(snapshotStub!!.second, cache.recallFromScheme("Shared-Renamed", "stmt-key"))
+        assertTrue("删除仍作用同名全部语句", d.deleteForTest())
+        assertFalse(cache.hasScheme("Shared-Renamed"))
+        assertEquals(1, d.schemeCountForTest())
+    }
+
     fun testF49_另存为_方案个数上限状态行() {
         repeat(ParamHistoryCache.MAX_SCHEME_COUNT) { i ->
             cache.saveAsScheme("S$i", "stmt-key", mapOf("id" to "$i"))

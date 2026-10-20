@@ -33,20 +33,22 @@ class PluginUpdateRunnerTest {
 
     @Test
     fun checkFetchFailureIsFailure() {
-        val result = PluginUpdateRunner.check("2026.8.14") { null }
+        val result = PluginUpdateRunner.check("2026.8.14") { UpdateApi.FetchOutcome.NetworkError("network unavailable") }
         assertTrue(result is PluginUpdateRunner.CheckResult.Failure)
     }
 
     @Test
     fun checkMalformedManifestIsFailure() {
-        val result = PluginUpdateRunner.check("2026.8.14") { "not json" }
+        val result = PluginUpdateRunner.check("2026.8.14") { UpdateApi.FetchOutcome.Success("not json") }
         assertTrue(result is PluginUpdateRunner.CheckResult.Failure)
     }
 
     @Test
     fun checkNewerVersionIsAvailable() {
         val result = PluginUpdateRunner.check("2026.8.14") {
-            """{"version":"2026.8.15","downloadUrl":"https://example.com/plugin.zip"}"""
+            UpdateApi.FetchOutcome.Success(
+                """{"version":"2026.8.15","downloadUrl":"https://example.com/plugin.zip"}""",
+            )
         }
         assertEquals(PluginUpdateRunner.CheckResult.Available(manifest), result)
     }
@@ -54,10 +56,14 @@ class PluginUpdateRunnerTest {
     @Test
     fun checkSameOrOlderIsUpToDate() {
         val same = PluginUpdateRunner.check("2026.8.15") {
-            """{"version":"2026.8.15","downloadUrl":"https://example.com/plugin.zip"}"""
+            UpdateApi.FetchOutcome.Success(
+                """{"version":"2026.8.15","downloadUrl":"https://example.com/plugin.zip"}""",
+            )
         }
         val older = PluginUpdateRunner.check("2026.8.16") {
-            """{"version":"2026.8.15","downloadUrl":"https://example.com/plugin.zip"}"""
+            UpdateApi.FetchOutcome.Success(
+                """{"version":"2026.8.15","downloadUrl":"https://example.com/plugin.zip"}""",
+            )
         }
         assertTrue(same is PluginUpdateRunner.CheckResult.UpToDate)
         assertTrue(older is PluginUpdateRunner.CheckResult.UpToDate)

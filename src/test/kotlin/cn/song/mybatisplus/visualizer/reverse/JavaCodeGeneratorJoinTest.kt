@@ -489,8 +489,9 @@ class JavaCodeGeneratorJoinTest {
             selectColumns = listOf(SelectColumn("t.name", "productName"), SelectColumn("id")),
         )
         val code = JavaCodeGenerator.generate(result, JavaCodeGenerator.EntityTarget("User", mapOf("id" to "id", "name" to "name")), GeneratedWrapper.LAMBDA)
-        assertTrue(code, code.contains(".selectAs(User::getName, \"productName\")"))
-        assertTrue(code, code.contains(".select(User::getId)"))
+        // MP core 无 selectAs 重载（javap 3.5.14/3.5.17 实证），带别名投影整链回落字符串 select
+        assertTrue(code, code.contains(".select(\"t.name AS productName\", \"id\")"))
+        assertFalse("MP core 无 selectAs 重载，生成物不得引用", code.contains("selectAs"))
     }
 
     @Test

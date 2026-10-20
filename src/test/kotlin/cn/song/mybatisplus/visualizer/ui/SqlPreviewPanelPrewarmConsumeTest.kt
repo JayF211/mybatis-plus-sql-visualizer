@@ -5,6 +5,7 @@ import cn.song.mybatisplus.visualizer.model.WrapperType
 import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import com.intellij.util.ui.UIUtil
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -132,6 +133,51 @@ class SqlPreviewPanelPrewarmConsumeTest : BasePlatformTestCase() {
             )
             assertNull("产物被消费后字段应置 null（一次性语义）", panel.prewarmedTempFileForTest())
         } finally {
+            panel.clear()
+        }
+    }
+
+    /**
+     * T-DegradedPreviewUx P4：装配端**不得**复用预热产物里的 PSI 实例，必须按 vFile 重取。
+     *
+     * 真机形态（2026-10-20 16:14:33 沙盒日志）：预热成功后方言映射从 MySQL 切到 PostgreSQL，
+     * 平台对预览文件做语言替换重解析，预热线程捕获的 PSI 实例随之失效；装配拿旧实例取文档失败，
+     * 整条预览落内存 PSI 降级（横幅「临时文件解析失败」），而重试就能恢复。
+     *
+     * 本用例用「PSI 与 vFile 不匹配」等价构造这一态：传入一个非物理文件的 PSI，
+     * 旧实现会拿它去取文档（null → 降级），新实现按 vFile 重取后正常挂在项目内临时文件上。
+     */
+    fun test产物PSI与文件失配_装配按文件重取不降级() {
+        val donor = SqlPreviewPanel(project)
+        val panel = SqlPreviewPanel(project)
+        try {
+            val real = awaitPrewarmProduct(donor)
+            assertNotNull("headless 下项目内预览文件应预热成功", real)
+
+            val stalePsi = com.intellij.psi.PsiFileFactory.getInstance(project).createFileFromText(
+                "stale-preview.sql",
+                com.intellij.openapi.fileTypes.FileTypeManager.getInstance().getStdFileType("SQL"),
+                "STALE",
+            )
+            val product = real!!.first to stalePsi
+            panel.prewarmedTempFile = product
+            panel.assemblePreviewEditor("SELECT 1\nFROM dual", product)
+
+            val doc = panel.editorForTest()?.document
+            assertNotNull("应已装配编辑器", doc)
+            assertEquals("SELECT 1\nFROM dual", doc!!.text)
+            assertEquals(
+                "装配必须按 vFile 重取 PSI——复用传入的失配实例会挂错文件或直接降级",
+                real.first,
+                FileDocumentManager.getInstance().getFile(doc),
+            )
+            assertNotEquals(
+                "主路径装配成功不得落降级横幅",
+                DegradationBanner.Kind.DEGRADED,
+                panel.degradationBannerForTest().kindForTest(),
+            )
+        } finally {
+            donor.clear()
             panel.clear()
         }
     }

@@ -124,9 +124,15 @@ object RunConfigurationProcessListener {
             LOG.info("$logTag: getAllDescriptors 不可用——跳过补扫（project=${project.name}）")
             return
         }
+        scanDescriptors(project, logTag, descriptors)
+    }
+
+    /** UI-007：与生产补扫共用循环，测试传真实 BaseOSProcessHandler 描述符，不扫描系统进程。 */
+    internal fun scanDescriptors(project: Project, logTag: String, descriptors: Array<*>) {
         var noHandler = 0
         var dead = 0
         var nonJvm = 0
+        var excluded = 0
         var backfilled = 0
         val jvmHandlerClass = runCatching {
             Class.forName("com.intellij.execution.process.BaseOSProcessHandler", true, platformClassLoader)
@@ -157,13 +163,18 @@ object RunConfigurationProcessListener {
                 LOG.debug("$logTag: 描述符 ${d.javaClass.name} handler 非 JVM 进程（${handler.javaClass.name}）——跳过")
                 continue
             }
+            val agentManager = project.getService(AgentManager::class.java)
+            if (!agentManager.isAttachCandidate(handler)) {
+                excluded++
+                continue
+            }
             backfilled++
-            LOG.info("$logTag: 发现已在跑的 JVM 进程（${handler.javaClass.name}）——补发 onProcessAppeared")
-            project.getService(AgentManager::class.java).onProcessAppeared(handler, isMainConfigLaunch = true)
+            LOG.info("$logTag: 发现已在跑的 JVM 候选（${handler.javaClass.name}）——补发 onProcessAppeared")
+            agentManager.onProcessAppeared(handler)
         }
         LOG.info(
             "$logTag: 在跑进程扫描完成——描述符 ${descriptors.size} 个，补发 $backfilled" +
-                "（无handler $noHandler / 已结束 $dead / 非JVM $nonJvm，project=${project.name}）",
+                "（无handler $noHandler / 已结束 $dead / 非JVM $nonJvm / 排除目标 $excluded，project=${project.name}）",
         )
         lastScanAttachedCount = backfilled
     }
@@ -181,6 +192,10 @@ object RunConfigurationProcessListener {
         if (FatalErrors.isFatal(t)) throw t
         LOG.warn("isModuleBasedProfile: 判定失败，按主进程处理（${t.message}）", t)
         true
+    }
+
+    internal fun offerStartedProcess(project: Project, handler: Any?) {
+        project.getService(AgentManager::class.java).onProcessAppeared(handler)
     }
 
     /**
@@ -228,14 +243,12 @@ object RunConfigurationProcessListener {
                     LOG.warn("processStarted: 自动捕捉回调失败（project=${project.name}）", t)
                 }
 
-                // M56 T-M56-01/02：增强捕获惰性挂载入口（增强未开启/未确认时空操作；
+                // M56 T-M56-01/02：增强捕获惰性挂载入口（增强未开启时空操作；
                 // 后台线程等进程就绪 + 3s 去抖再 attach，全程不进 EDT）。
-                // T-PS4-01 触发面收窄：未确认态的确认弹窗仅对主配置启动触发（复用上方
-                // isMainLaunch 同源判定），HTTP 请求/测试/profiler 等非主配置进程在未确认态
-                // 静默跳过——杜绝「拒绝注入的用户每进程启动挨一次模态弹窗」；已确认的 attach
-                // 链路维持对所有进程触发不变（增强捕获主通道语义零变化）。
+                // T-EnhancedCaptureDefaultOn：注入确认已移除，非主配置进程同样进入挂载链；
+                // 目标身份门（UI-007）仍在 AgentManager 内把关，helper/非 Java 入口始终排除。
                 try {
-                    project.getService(AgentManager::class.java).onProcessAppeared(args?.getOrNull(2), isMainLaunch)
+                    offerStartedProcess(project, args?.getOrNull(2))
                 } catch (t: Throwable) {
                     if (FatalErrors.isFatal(t)) throw t // T-FP-02：fatal 透传
                     LOG.warn("processStarted: 增强捕获回调失败（project=${project.name}）", t)

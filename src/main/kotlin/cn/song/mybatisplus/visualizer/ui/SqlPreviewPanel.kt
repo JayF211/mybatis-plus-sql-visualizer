@@ -1,6 +1,8 @@
 package cn.song.mybatisplus.visualizer.ui
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
+import cn.song.mybatisplus.visualizer.history.SqlHistoryEntry
+import cn.song.mybatisplus.visualizer.history.SqlHistoryManager
 import cn.song.mybatisplus.visualizer.sql.SqlCommentStripper
 import cn.song.mybatisplus.visualizer.execute.ConsoleEmbedMode
 import cn.song.mybatisplus.visualizer.execute.DocWriteContext
@@ -15,7 +17,12 @@ import cn.song.mybatisplus.visualizer.model.FillClause
 import cn.song.mybatisplus.visualizer.model.LikePosition
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.model.SelectStatement
+import cn.song.mybatisplus.visualizer.mcp.McpExplainFormatter
+import cn.song.mybatisplus.visualizer.model.wrapperFlagOutcome
+import cn.song.mybatisplus.visualizer.model.wrapperFlagOutcomeText
+import cn.song.mybatisplus.visualizer.model.wrapperFlagOutcomeTooltip
 import cn.song.mybatisplus.visualizer.sql.ExplainGate
+import cn.song.mybatisplus.visualizer.sql.ExplainOutputFormat
 import cn.song.mybatisplus.visualizer.sql.JoinDiagramGenerator
 import cn.song.mybatisplus.visualizer.sql.MySqlDialect
 import cn.song.mybatisplus.visualizer.sql.ParamHint
@@ -158,6 +165,21 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
     internal var lastMetaBudget: Int = -1
 
     /**
+     * T-DialectStatusLiveRefresh：当前方言决策（初值来自 [PreviewResult.dialectDecision]）。
+     * 执行/绑定后可重算升级；meta 行只重组方言段，不重跑 [updateMeta] 的警示/横幅全链。
+     */
+    internal var currentDialectDecision: cn.song.mybatisplus.visualizer.sql.DialectDecisionEngine.Decision? = null
+
+    /** 方言段之外的 meta 主体（类型/表/警示行），方言段轻量重组时的固定前缀。 */
+    internal var metaCoreText: String = ""
+
+    /** tooltip 的方言详情之前部分（meta/警示/perf），拆分保证详情追加后顺序不变。 */
+    internal var metaTooltipCore: String = ""
+
+    /** tooltip 的方言详情之后部分（方言能力矩阵），拆分同上。 */
+    internal var metaTooltipSuffix: String = ""
+
+    /**
      * T-SourceJumpFunnel P6 修复：meta 行 tooltip 的**基线文本**（[updateMeta] 每次预览重建）。
      *
      * 行内提示态（参数导入空剪贴板）需要临时改写可见行与 tooltip，但 tooltip 是「悬停见完整调用链」
@@ -221,6 +243,9 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
     internal val xmlConditionOutcomeLabels = mutableMapOf<String, JBLabel>()
     internal var autoPopupDisposable: Disposable? = null
     internal val conditionValueFields = mutableListOf<JBTextField>()
+    // R49：Wrapper 布尔条件探镜——条件行尾的求值结果标注（按条件行下标与 conditionCheckBoxes 对齐，
+    // 仅 buildConditionRow 产出；该行不可标注时为 null 占位，下标不跳位）
+    internal val conditionOutcomeLabels = mutableListOf<JBLabel?>()
     // T-M23-04：批量列级勾选复选框（INSERT/UPDATE/UPSERT 参数列，与动态条件复选框互斥——批量预览无 conditionViews）
     internal val batchCheckBoxes = mutableListOf<JCheckBox>()
     // T-M26.3：全选/全不选按钮回挂分区标题行右侧（IDEA 组操作惯例，T-M23.2 原生形态；
@@ -303,6 +328,34 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
     internal var lastRenderedSql: String? = null
 
     /**
+     * T-DegradedPreviewUx P1：瞬时降级的宽限定时器。
+     *
+     * 预热超时（产物仍在途）时不立刻挂横幅——[DEGRADED_GRACE_MS] 内产物到达会由主路径装配
+     * 取消本定时器，横幅一次都不出现；到点仍未恢复才显示超时型横幅。硬失败不走这条路。
+     */
+    internal var degradedGraceTimer: javax.swing.Timer? = null
+
+    /** 宽限定时器到点后要披露的原因（[cancelDegradedGraceTimer] 一并清空）。 */
+    internal var degradedGraceReason: PreviewDegradationReason? = null
+
+    // R92: preview-only overlay; never mixed into paramValues or real handler state.
+    internal var fieldFillEnabled = false
+    internal var fieldFillSyncing = false
+    internal var fieldFillPreview: PreviewResult? = null
+    internal val fieldFillValues = linkedMapOf<String, String>()
+    internal val fieldFillFields = linkedMapOf<String, JBTextField>()
+    /** 模拟值覆盖时的普通参数输入框（source → 普通输入框）；用于置灰/恢复。 */
+    internal val fieldFillNormalFields = linkedMapOf<String, JBTextField>()
+    /** 模拟值行（标签+输入框）；仅在「FieldFill 安全模拟」勾选时可见。 */
+    internal val fieldFillSimulationComponents = mutableListOf<JComponent>()
+    internal var fieldFillCheckBox: JCheckBox? = null
+    internal var fieldFillStatus: JBLabel? = null
+    /** T-PreviewSideQuery P1：预估影响行数的内联结果行（不进入控制台/结果区）。 */
+    internal var impactResultLabel: JBLabel? = null
+    /** T-PreviewSideQuery P2：EXPLAIN 非模态结果对话框（不替换预览编辑器）。 */
+    internal var explainResultDialog: ExplainPlanDialog? = null
+
+    /**
      * T-PrewarmLateRecover F1：预热相关回调的 EDT 派发通道（写安全模态）。
      *
      * 与 [prewarmPreviewTempFile] 里 PrewarmAwait 的 dispatcher 是同一份实现：迟到产物换装也要
@@ -333,6 +386,14 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
      *  T-FixN2 起该 vf 是**预览目录**（不再是单个文件）——见 [mapPreviewDialectBeforePsi]。 */
     @Volatile
     internal var previewDialectMappedVf: com.intellij.openapi.vfs.VirtualFile? = null
+    /** 本次预览 SQL 的实际生成方言；预热线程与结果到达后的重映射共用。null=兼容 MySQL。 */
+    @Volatile
+    internal var previewDesiredDialectName: String? = null
+    /** [previewDialectMappedVf] 当前已映射的平台 language id，防同目录误把 MySQL 当成 Oracle/PG 幂等命中。 */
+    @Volatile
+    internal var previewDialectMappedLanguageId: String? = null
+    /** O-145 W1/W6：面板只保留不可变模块键，不持有宿主 PSI 或 JDBC URL。 */
+    internal var sourceModuleKey: String? = null
     /** F-46：当前代码位置（文件名:行号），来源列默认值；null 表示未知（日志/历史等无锚点场景）。 */
     private var sourceLocation: String? = null
     internal val editorHolder = JBPanel<JBPanel<*>>(java.awt.GridLayout(1, 1)).apply {
@@ -357,12 +418,78 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
     /** M36：已内嵌的原生控制台 UI 组件（清空/释放时级联 dispose）。 */
     internal var embeddedConsole: JComponent? = null
 
+    /** T-PreviewSideQuery P3a：执行结果视图头部（含「返回预览」）；null=当前不是执行视图。 */
+    internal var executeViewHeader: JComponent? = null
+
     /**
      * R33：结构化 EXPLAIN 回调代际计数——每次发起新的 EXPLAIN 结构化提交/新预览/清空都递增，
      * 在途 pooled 回调（JDBC 可能慢于用户操作）按提交时捕获的代际判过期，过期即丢弃：
      * 慢计划绝不覆盖用户已经看到的新预览/新提交（与 DataSourceSelector 的 swapGeneration 同思路）。
      */
     internal var explainStructuredGeneration = 0
+
+    /**
+     * R61（V113②）：会话级上一次结构化 EXPLAIN 结果（跨次对比基线）。
+     * 生命周期＝会话级（面板实例存活期）——不持久化、不跨会话；同 SQL 多次执行时滚动更新，
+     * 不同 SQL 各自独立基线（按 SQL 指纹键控）。
+     */
+    internal var lastStructuredExplain: Pair<String, McpExplainFormatter.RawResult>? = null
+    /** R90：同目标会话基线与持久化历史协调；未知 UUID 仅按目标对象身份比较。 */
+    internal val explainPlanHistorySession = cn.song.mybatisplus.visualizer.history.ExplainPlanHistorySession()
+    /** R91: confirmed EXPLAIN target for this preview only; never infer from last-used project source. */
+    internal var aiContextTarget: AiContextTarget? = null
+    /** R91: only the last acquired plan in this panel, invalidated by history clear/load generation. */
+    internal var aiContextPlan: Pair<Long, cn.song.mybatisplus.visualizer.history.ExplainPlanSnapshot>? = null
+    internal data class AiContextTarget(
+        val preview: PreviewResult?,
+        val key: cn.song.mybatisplus.visualizer.history.ExplainPlanKey,
+        val stillCurrent: () -> Boolean,
+    )
+    /**
+     * R51（O-105 余半）测试缝：recall 回落源——ParamHistoryCache 未命中时按缓存键取历史
+     * 参数快照（null = 单测态默认禁用真服务；生产走 [SqlHistoryManager.newestParamSnapshot]，
+     * 接线由源码扫描守卫钉住）。循 [bindStateNameProvider] 同款 provider 惯例。
+     */
+    internal var historySnapshotFallbackSource: ((String) -> Map<String, String>?)? = null
+
+    /** R51 测试缝：参数快照回写 sink——flush 链同步进历史条目的落点观察（null = 单测态禁用真服务）。 */
+    internal var historySnapshotSink: ((String, Map<String, String>) -> Unit)? = null
+    /**
+     * R51（O-105 余半·主体）：参数快照回落——ParamHistoryCache 未命中（LRU 淘汰 / 清缓存 /
+     * 命名方案桶不含本键）时，按同一缓存键从 [SqlHistoryManager] 最新历史条目的
+     * [SqlHistoryEntry.paramSnapshot] 回落。缓存 50 条 LRU 对历史 200 条，「历史条目→面板
+     * 参数态」的桥（十五轮 R51 定义）；快照格式与缓存同源（[buildHistorySnapshot]），
+     * 下游应用逻辑（普通值 + `__chk__`/`__fnull__`/`__fev__`）零分叉。
+     *
+     * 单测态默认禁用真服务（SqlHistoryManager 为 APP 级服务，跨用例残留会串扰既有
+     * recall 断言）——测试经 [historySnapshotFallbackSource] 注入替代源；生产链走真服务
+     * （接线由 ExplainPanelWiringGuard 同款源码扫描守卫钉住，防测试缝默认化成死代码）。
+     */
+    internal fun SqlPreviewPanel.historySnapshotFallback(key: String): Map<String, String>? {
+        historySnapshotFallbackSource?.let { return it(key) }
+        if (ApplicationManager.getApplication().isUnitTestMode) return null
+        return runCatching {
+            SqlHistoryManager.getInstance().newestParamSnapshot { entrySnapshotKey(it) == key }
+        }.getOrNull()
+    }
+
+    /** R51：历史条目 → 缓存键（与 [historyCacheKey] 同口径——tableName 空串与 null 同走
+     *  `sql:` 指纹路径，recordHistory 落表 `result.tableName ?: ""`，故空串回 null 复算一致）。 */
+    internal fun SqlPreviewPanel.entrySnapshotKey(entry: SqlHistoryEntry): String? =
+        paramHistoryCache.computeKey(entry.tableName.ifEmpty { null }, entry.sql)
+
+    /** R51：参数快照回写——面板参数编辑防抖落库时同步进最新匹配历史条目（会话内闭环：
+     *  编辑→flush→历史条目快照；单测态走 [historySnapshotSink] seam，真服务同上禁用）。 */
+    internal fun SqlPreviewPanel.updateHistoryEntrySnapshot(key: String, snapshot: Map<String, String>) {
+        historySnapshotSink?.invoke(key, snapshot)
+        if (ApplicationManager.getApplication().isUnitTestMode) return
+        runCatching {
+            SqlHistoryManager.getInstance().updateNewestParamSnapshot(
+                { entrySnapshotKey(it) == key },
+                snapshot,
+            )
+        }
+    }
 
     /**
      * M36.5.39-A2：持久包装容器——console 组件统一嵌入此容器、容器整体挂入 editorHolder。
@@ -399,6 +526,10 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
     internal var nativeConsoleEditor: com.intellij.openapi.editor.Editor? = null
 
     internal var current: PreviewResult? = null
+
+    /** O-145 W7：结果到达时冻结的渲染模式；提交时不得重读设置冒充当初的渲染事实。 */
+    internal var executionDialectRenderMode =
+        cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.RenderMode.UNKNOWN
     internal var compactMode = false
 
     /**
@@ -489,6 +620,20 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
             dollarMarkDismissedSession = true
             clear(DegradationBanner.Kind.DOLLAR_INJECT)
         }
+    }
+
+    /**
+     * T-DmlImpactProminence（用户真机反馈：左下角灰字不够明显）：影响行数试算结果独立横幅行——
+     * 与降级/渲染警示**并存**（各自占一行，不抢同一显示位），蓝色加粗；失败红色。
+     */
+    internal val dmlImpactBanner = JBPanel<JBPanel<*>>(java.awt.BorderLayout()).apply {
+        isOpaque = false
+        isVisible = false
+    }
+    internal val dmlImpactBannerLabel = JBLabel().apply {
+        putClientProperty("html.disable", true)
+        border = JBUI.Borders.empty(4, 8, 4, 8)
+        foreground = com.intellij.ui.JBColor.namedColor("Link.activeForeground", com.intellij.ui.JBColor.BLUE)
     }
 
     /** T-DollarInjectMark：最近一次 XML 渲染的 `${}` 直替计数（非 XML 路径恒 0）。 */
@@ -593,7 +738,16 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
             isOpaque = false
             add(topRow, BorderLayout.NORTH)
             add(buildBindStateRow(), BorderLayout.CENTER)
-            add(degradationBanner, BorderLayout.SOUTH)
+            // T-DmlImpactProminence：降级横幅与影响行数结果横幅上下各占一行（并存不抢位）
+            dmlImpactBanner.add(dmlImpactBannerLabel, BorderLayout.CENTER)
+            add(
+                JBPanel<JBPanel<*>>(BorderLayout()).apply {
+                    isOpaque = false
+                    add(degradationBanner, BorderLayout.NORTH)
+                    add(dmlImpactBanner, BorderLayout.CENTER)
+                },
+                BorderLayout.SOUTH,
+            )
         }
         add(northHost, BorderLayout.NORTH)
         // T-PreviewTopOverlap F3：宽度预算截断跟随尺寸变化（首显 + 拉伸/缩窄；宽度未变短路）
@@ -634,6 +788,15 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
         // T-DarkTheme：主题切换时重绘（工具窗口模式下实时响应；命名色自动更新，仅需触发重绘）
         ApplicationManager.getApplication().messageBus.connect(this)
             .subscribe(LafManagerListener.TOPIC, LafManagerListener { lookAndFeelChanged() })
+        ApplicationManager.getApplication().messageBus.connect(this).subscribe(
+            PluginSettings.SETTINGS_CHANGE_TOPIC,
+            cn.song.mybatisplus.visualizer.config.SettingsChangeListener {
+                val app = ApplicationManager.getApplication()
+                // 设置应用通常在 EDT；后台广播同步收口，避免开脱敏后仍能复制旧原文。
+                val update = Runnable { if (!previewDisposed) refreshShardingRouteDisplay() }
+                if (app.isDispatchThread) update.run() else app.invokeAndWait(update)
+            },
+        )
 
         // F-1：注册图集面板到 Disposer 树（级联释放后台渲染任务）
         Disposer.register(this, diagramPanel)
@@ -689,8 +852,11 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
     /** 清空展示区。 */
     internal var bindStateNameProvider: (() -> String?)? = null
 
+
     internal val checkBoxFont: Font by lazy { JCheckBox().font }
 
+
+    /** T-M26.3：复选框标签截断——test 表达式等长文本超上限时中段省略显示（tooltip 原文由调用方处理）。 */
     /** T-M26.3：复选框标签截断——test 表达式等长文本超上限时中段省略显示（tooltip 原文由调用方处理）。 */
     override fun removeNotify() {
         super.removeNotify()
@@ -717,6 +883,8 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
         // T-AutoFold F5：面板废弃——控制台编辑器引用一并清空（防 EditorFactory 泄漏告警）
         // T-PreviewLineCommentDash O-134：面板销毁减计数（detachConsole 已覆盖常规路径，此处兜底直清分支）
         nativeConsoleEditor?.let(EditorCommentShortcuts::uninstall)
+        // UI025：摘除编辑器级错列标注通道（监听 + RangeHighlighter）
+        nativeConsoleEditor?.let(cn.song.mybatisplus.visualizer.ui.annotate.PreviewSchemaHighlighter::uninstall)
         nativeConsoleEditor = null
         // T-M36.6-03：面板销毁——晚到的预热线程产物作废（预热线程自查后删除临时文件）
         previewDisposed = true
@@ -732,6 +900,8 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
         // T-Perf-04：防抖/历史 Timer 随面板停止（防晚到 flush 触碰已销毁面板状态）
         renderDebounceTimer.stop()
         pendingRender = null
+        // T-DegradedPreviewUx P1：降级宽限定时器同样随面板停止（到点不得再弹横幅）
+        cancelDegradedGraceTimer()
         historyAlarm.stop()
         // T-Perf-16：释放 DataSourceSelector 单例滞留引用（弹窗关闭此前不走 clear 按钮路径——
         // prepared/shared/pendingOnConsole 强引用已关闭面板与原生控制台，堆转储滞留整棵面板树）
@@ -818,6 +988,15 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
     /** T-PrewarmLateRecover F2：横幅「重试」动作入口（等价于点击横幅上的动作）。 */
     internal fun retryPrewarmForTest() = retryPrewarm()
 
+    /** T-DegradedPreviewUx P1：宽限定时器是否在途（瞬时降级的「尚未披露」态）。 */
+    internal fun degradedGracePendingForTest(): Boolean = degradedGraceTimer?.isRunning == true
+
+    /** T-DegradedPreviewUx P1：模拟宽限期到点（headless 无真实 3s 等待）。 */
+    internal fun fireDegradedGraceForTest() = flushDegradedGrace()
+
+    /** T-DegradedPreviewUx P1/P2：按原因披露横幅的入口（等价于装配降级链的调用）。 */
+    internal fun showDegradedBannerForTest(reason: PreviewDegradationReason) = showDegradedBanner(reason)
+
     internal fun currentForTest(): PreviewResult? = current
     internal fun compactForTest(): Boolean = compactMode
     /** T-PreviewDisplayMode：当前显示模式（参数变更后保持性断言用）。 */
@@ -878,6 +1057,10 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
     // F-46：来源位置（来源列默认值）
     // ------------------------------------------------------------------
 
+    fun setSourceContext(context: cn.song.mybatisplus.visualizer.context.PreviewSourceContext?) {
+        sourceModuleKey = context?.canonicalModuleKey
+    }
+
     /** 设置当前代码位置（文件名:行号），来源列默认显示此值。 */
     fun setSourceLocation(loc: String?) { sourceLocation = loc }
 
@@ -916,7 +1099,7 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
     fun currentTableName(): String? = current?.tableName
 
     /** F-8：当前预览的方言名称（可 null）。 */
-    fun currentDialect(): String? = current?.previewModel?.dialect?.name
+    fun currentDialect(): String? = current?.effectiveDialect?.name
     internal fun paramFieldForTest(index: Int): JBTextField? = paramFields.getOrNull(index)
     /** T-M24-04：元信息标签文本（警告断言用）。 */
     internal fun metaLabelForTest(): String = metaLabel.text
@@ -988,6 +1171,11 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
         paramWarnLabels.getOrNull(index)?.takeIf { it.isVisible }?.toolTipText
     internal fun conditionCheckboxForTest(index: Int): JCheckBox? = conditionCheckBoxes.getOrNull(index)
     internal fun conditionValueFieldForTest(index: Int): JBTextField? = conditionValueFields.getOrNull(index)
+    /**
+     * R49 测试缝：第 index 个 Wrapper 条件行尾的求值结果标注（按**条件行下标**与
+     * [conditionCheckboxForTest] 对齐；该行不可标注时为 null，下标不跳位）。
+     */
+    internal fun conditionOutcomeLabelForTest(index: Int): JBLabel? = conditionOutcomeLabels.getOrNull(index)
     /** T-M23-04：第 index 个批量列级勾选复选框（toggle 列按 BatchModel 顺序）。 */
     internal fun batchCheckboxForTest(index: Int): JCheckBox? = batchCheckBoxes.getOrNull(index)
 
@@ -1021,6 +1209,9 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
 
     /** T-PreviewUx-Pack #2：诚实降级横幅（显隐/文案/类别断言用）。 */
     internal fun degradationBannerForTest(): DegradationBanner = degradationBanner
+    /** T-DmlImpactProminence：影响行数结果横幅（显隐/文案断言用）。 */
+    internal fun dmlImpactBannerForTest(): JBPanel<JBPanel<*>> = dmlImpactBanner
+    internal fun dmlImpactBannerTextForTest(): String = dmlImpactBannerLabel.text
     /** P-05：当前 paramValues 快照（断言用）。 */
     internal fun paramValuesForTest(): Map<String, String> = paramValues.toMap()
     /** P-05：强制同步刷写历史缓存（测试用，绕过 debounce Timer）。 */
@@ -1148,6 +1339,9 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
         /** R22 T-02：勾选框 client property 锚点（快照枚举 + 召回视觉同步）。 */
         internal const val PROP_TOGGLE_ID = "mpsv.toggleId"
 
+        /** R49：条件复选框标签截断预算下限（px）——行尾探镜标注按宽度扣减后仍保底可读（同 [checkBoxMaxWidth] 下限）。 */
+        internal const val MIN_CHECKBOX_TEXT_WIDTH = 100
+
         /**
          * T-DevAcceptFix ⑤（20261006 验收）：参数输入框的 source 锚点——召回回写按锚点显式映射
          * （[syncParamFieldText]），禁以 paramValues 插入序对位 paramFields 行序（方案切换后
@@ -1236,6 +1430,16 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
          * 抬高预算的代价是等待期变长，已由 [showPreviewPreparingPlaceholder] 的占位覆盖观感。
          */
         const val PREWARM_WAIT_MS = 500L
+
+        /**
+         * T-DegradedPreviewUx P1：预热超时后的降级横幅宽限期（毫秒）。
+         *
+         * 超时只代表「预热还没回来」，T-PrewarmLateRecover F1 的迟到产物通常数秒内到达并自动换装。
+         * 取值 3000 的依据：既有实测样本里冷启首开 233~360ms、重负载约 1s、最坏一次 3016ms
+         * （`docs/验收文档/20260920-预热耗时采样与预算建议.md`），3000ms 覆盖到观测尾部；
+         * 到点仍未恢复才披露，避免把「慢」呈现成「故障」。硬失败不走本宽限期（立即显示）。
+         */
+        internal const val DEGRADED_GRACE_MS = 3000L
 
         /**
          * T-PerfSweep6 T-PS6-04（性能报告发现 4）：预热目录残留清扫的**年龄**上限（7 天）。

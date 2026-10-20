@@ -71,6 +71,8 @@ object DataSourceSelector {
     internal var preparedScriptModel: Any? = null
     internal var preparedExecOption: Any? = null
     internal var preparedUi: Any? = null
+    internal var preparedDialectGateRequest: ExecutionDialectGate.Request? = null
+    internal var preparedDialectGateCallback: ((ExecutionDialectGate.Verdict) -> Unit)? = null
 
     // M36.5.4：已备控制台的 UI 块——顶部块（原生头部工具栏+编辑器 DataProvider 包装）、结果区、
     // 完整 SplitPane。内嵌统一为完整 SplitPane（三条执行路径结果都可见）；executeOnConsole 的
@@ -92,6 +94,8 @@ object DataSourceSelector {
     internal var sharedUi: Any? = null
     internal var sharedFullComponent: javax.swing.JComponent? = null
     internal var sharedDataSourceName: String? = null
+    internal var sharedDialectGateRequest: ExecutionDialectGate.Request? = null
+    internal var sharedDialectGateCallback: ((ExecutionDialectGate.Verdict) -> Unit)? = null
 
     /** T-PreviewFlash：mpsql-exec.sql 的 vf+psi 配对缓存（路径稳定，vf 有效即复用，吸收每次预览的 VFS refresh + findFile 慢操作）。
      *  T-ExecSlowOps F3：[prewarmExecTempFile] 后台线程成为第二写方后须 volatile 跨线程可见。 */
@@ -114,8 +118,24 @@ object DataSourceSelector {
     @Volatile
     internal var dialectMappedVf: com.intellij.openapi.vfs.VirtualFile? = null
 
+    /**
+     * O-136 T-PreviewExecDsDialect：[dialectMappedVf] 当前映射到的方言 language id
+     * （null/「MySQL」= 旧行为）。与 vf 字段同生命周期成对回写——幂等短路判定为
+     * 「同 vf **且同方言**」，目标数据源方言切换（MySQL↔DM）后同 vf 也必须重映射。
+     */
+    @Volatile
+    internal var dialectMappedLanguageId: String? = null
+
     /** T-ExecSlowOps F2：exec 预热进行中标记（并发预览只跑一条真实链，其余直接返回）。 */
     private val execPrewarmInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /**
+     * T-UiFixGate9 测试缝：exec 预暖链在途标记读数。victim 面板测试（rerender 触发预暖链）
+     * 收尾前等「链静止」（先见置位、再候复位），让写收敛落在用例生命周期内——链跨出用例后，
+     * 测试边界迟到的 VFS 会话会命中写窗口的「已改未存」态，MemoryDiskConflictResolver
+     * 收集冲突并在收尾 EDT 泵处理时抛 CompoundRuntimeException 杀无辜测试。
+     */
+    internal fun execPrewarmInFlightForTest(): Boolean = execPrewarmInFlight.get()
 
     /**
      * T-PrewarmWilDeadlock W2：exec 预热整链预算——预热是投机性增强，链内任何平台等待
@@ -179,9 +199,104 @@ object DataSourceSelector {
     // 结果栏消失、contentAdded 换入未写回共享缓存导致复用嵌了旧编辑器块，均是此类过期引用。）
     internal var sharedTopBlock: javax.swing.JComponent? = null
 
+    /** 查询的目标或原始渲染方言未知时的确认测试缝；生产为 null 时走本地化确认框。 */
+    @Volatile
+    internal var unknownTargetQueryConfirmationForTest: ((ExecutionDialectGate.Verdict) -> Boolean)? = null
+
+    /**
+     * O-145 W7：最终实际目标方言闸门统一处置。request 为空保持所有旧调用逐字行为；
+     * 非空时回调先收到判定，随后按状态继续、确认或阻断。AUTO_RERENDER_REQUIRED 必停当前点击，
+     * 由宿主无损重渲染后要求用户复核并再次点击，绝不在同一次点击里偷偷改写后提交。
+     */
+    internal fun allowDialectGate(
+        project: Project,
+        request: ExecutionDialectGate.Request?,
+        target: ExecutionDialectGate.Target?,
+        onDialectGate: ((ExecutionDialectGate.Verdict) -> Unit)?,
+        onError: ((String) -> Unit)?,
+        onSubmission: ((ExecutionSubmission) -> Unit)? = null,
+    ): Boolean {
+        if (request == null) return true
+        val verdict = ExecutionDialectGate.evaluate(request, target?.dialectName)
+        onDialectGate?.invoke(verdict)
+        val needsConfirmation = verdict.status == ExecutionDialectGate.Status.TARGET_UNKNOWN_QUERY_CONFIRM ||
+            verdict.status == ExecutionDialectGate.Status.RENDER_UNKNOWN_QUERY_CONFIRM
+        if (verdict.status != ExecutionDialectGate.Status.MATCH && !needsConfirmation) {
+            // 先报告未提交，后交付原有详细红字，不能用通用阻断状态覆盖详细原因。
+            onSubmission?.invoke(ExecutionSubmission.BLOCKED)
+        }
+        val allowed = when (verdict.status) {
+            ExecutionDialectGate.Status.MATCH -> true
+            ExecutionDialectGate.Status.TARGET_UNKNOWN_QUERY_CONFIRM,
+            ExecutionDialectGate.Status.RENDER_UNKNOWN_QUERY_CONFIRM -> {
+                unknownTargetQueryConfirmationForTest?.invoke(verdict) ?: runCatching {
+                    val messageKey = if (verdict.status == ExecutionDialectGate.Status.TARGET_UNKNOWN_QUERY_CONFIRM) {
+                        "execute.dialectGate.unknownQuery.confirm"
+                    } else {
+                        "execute.dialectGate.unknownRenderQuery.confirm"
+                    }
+                    com.intellij.openapi.ui.Messages.showYesNoDialog(
+                        project,
+                        MpSqlVisualizerBundle.message(messageKey),
+                        MpSqlVisualizerBundle.message("execute.dialectGate.title"),
+                        com.intellij.openapi.ui.Messages.getWarningIcon(),
+                    ) == com.intellij.openapi.ui.Messages.YES
+                }.getOrDefault(false)
+            }
+            ExecutionDialectGate.Status.AUTO_RERENDER_REQUIRED -> {
+                if (onDialectGate == null) onError?.invoke(dialectGateMessage(verdict))
+                false
+            }
+            ExecutionDialectGate.Status.MANUAL_CONFLICT,
+            ExecutionDialectGate.Status.RERENDER_UNAVAILABLE,
+            ExecutionDialectGate.Status.TARGET_UNKNOWN_BLOCK,
+            ExecutionDialectGate.Status.RENDER_UNKNOWN_BLOCK -> {
+                onError?.invoke(dialectGateMessage(verdict))
+                false
+            }
+        }
+        if (!allowed && needsConfirmation) onSubmission?.invoke(ExecutionSubmission.CANCELLED)
+        return allowed
+    }
+
+    internal fun dialectGateMessage(verdict: ExecutionDialectGate.Verdict): String = when (verdict.status) {
+        ExecutionDialectGate.Status.MATCH -> ""
+        ExecutionDialectGate.Status.AUTO_RERENDER_REQUIRED -> MpSqlVisualizerBundle.message(
+            "execute.dialectGate.rerendered",
+            verdict.renderedDialectName ?: MpSqlVisualizerBundle.message("execute.dialectGate.unknownDialect"),
+            verdict.targetDialectName ?: MpSqlVisualizerBundle.message("execute.dialectGate.unknownDialect"),
+        )
+        ExecutionDialectGate.Status.MANUAL_CONFLICT -> MpSqlVisualizerBundle.message(
+            "execute.dialectGate.manualConflict",
+            verdict.renderedDialectName ?: MpSqlVisualizerBundle.message("execute.dialectGate.unknownDialect"),
+            verdict.targetDialectName ?: MpSqlVisualizerBundle.message("execute.dialectGate.unknownDialect"),
+        )
+        ExecutionDialectGate.Status.RERENDER_UNAVAILABLE -> MpSqlVisualizerBundle.message(
+            "execute.dialectGate.rerenderUnavailable",
+            verdict.renderedDialectName ?: MpSqlVisualizerBundle.message("execute.dialectGate.unknownDialect"),
+            verdict.targetDialectName ?: MpSqlVisualizerBundle.message("execute.dialectGate.unknownDialect"),
+        )
+        ExecutionDialectGate.Status.TARGET_UNKNOWN_QUERY_CONFIRM ->
+            MpSqlVisualizerBundle.message("execute.dialectGate.unknownQuery.confirm")
+        ExecutionDialectGate.Status.TARGET_UNKNOWN_BLOCK ->
+            MpSqlVisualizerBundle.message("execute.dialectGate.unknownBlock")
+        ExecutionDialectGate.Status.RENDER_UNKNOWN_QUERY_CONFIRM ->
+            MpSqlVisualizerBundle.message("execute.dialectGate.unknownRenderQuery.confirm")
+        ExecutionDialectGate.Status.RENDER_UNKNOWN_BLOCK ->
+            MpSqlVisualizerBundle.message("execute.dialectGate.unknownRenderBlock")
+    }
+
     /** 控制台是否已就绪（prepareConsole 成功后 true）。 */
     @JvmStatic
     fun isPrepared(): Boolean = preparedConsole != null
+
+    /**
+     * T-UI030：是否有准备链正在飞。结构化 EXPLAIN 在无已绑数据源时要弹既有选择器，
+     * 但已有准备链在飞时**只能等待**——预览准备对并发是 PASS_THROUGH，再走一次
+     * chooseAndPrepare 会建第二条会话/控制台（T-FirstExecResultInvisible F1 已实证的坑）。
+     */
+    @JvmStatic
+    fun isPrepareInFlight(): Boolean = prepareGate.prepareInFlight.get()
 
     /**
      * R33 EXPLAIN 结构化通道：当前预览会话已绑控制台的 DBN 数据源（共享/已备控制台二者取一，
@@ -202,6 +317,24 @@ object DataSourceSelector {
         return ReadAction.compute<Any?, RuntimeException> {
             ExecConsoleContext.boundDataSource(console)
         }
+    }
+
+    /** UI023：仅替代 DBN 状态读取；测试仍走执行文档身份检查和真实缓存读取。 */
+    internal var schemaTargetReaderForTest: ((Any) -> SchemaValidationGate.Target?)? = null
+
+    internal fun schemaValidationTarget(document: com.intellij.openapi.editor.Document?): SchemaValidationGate.Target? {
+        // 首次 onEditor→embedConsole 会清 nativeConsoleEditor 辅助引用，但保留实际执行文档。
+        // 只认本面板执行文档与 preparedEditor.document 同一对象；不得借共享或其他预览文档。
+        if (document == null || document !== preparedEditor?.document) return null
+        val console = preparedConsole ?: return null
+        schemaTargetReaderForTest?.let { return it(console) }
+        if (!ExecuteSqlSupport.isAvailable()) return null
+        return runCatching {
+            if (console.javaClass.getMethod("isValid").invoke(console) != true) return@runCatching null
+            ReadAction.compute<SchemaValidationGate.Target?, RuntimeException> {
+                ExecConsoleContext.schemaValidationTarget(console)
+            }
+        }.getOrNull()
     }
 
     /**
@@ -244,14 +377,7 @@ object DataSourceSelector {
     fun rememberedDataSourceName(project: Project): String? {
         val memory = lastUsedRunner(project)
         if (memory.dataSourceId.isNullOrBlank() && memory.displayName.isNullOrBlank()) return null
-        val (registeredNames, nameById) = rememberedLookupForTest?.invoke(project) ?: run {
-            DataSourceSettings.getAllDataSources(project).map { DataSourceSettings.getName(it) } to
-                { id: String ->
-                    runCatching {
-                        DataSourceSettings.getDataSourceById(project, id)?.let { DataSourceSettings.getName(it) }
-                    }.getOrNull()
-                }
-        }
+        val (registeredNames, nameById) = rememberedLookupForTest?.invoke(project) ?: rememberedRoster(project)
         return resolveRememberedDataSourceName(memory, registeredNames, nameById)
     }
 
@@ -263,6 +389,29 @@ object DataSourceSelector {
     ): String? =
         resolveLastUsedRunnerIndex(memory, registeredNames, dataSourceNameById)
             .index?.let { registeredNames.getOrNull(it) }
+
+    /**
+     * F68a（T-PerfSweep20）：在籍数据源名单按 project 弱缓存——指示行取名链每次刷新
+     * 不再现场建表（原每次 getAllDataSources 反射枚举+逐名 getName 反射）。
+     * WeakHashMap 弱键随 project 关闭释放；名单陈旧窗口＝数据源增删后到下次进程内
+     * 首次重建——只影响展示回退路径的「未绑定/旧名」判定，绑定优先级最高的活控制台
+     * 取名（[boundConsoleDataSourceName]）不走本表。测试缝（[rememberedLookupForTest]）
+     * 优先于本缓存，headless 用例不受影响。
+     */
+    private val rememberedRosters =
+        java.util.WeakHashMap<Project, Pair<List<String>, (String) -> String?>>()
+
+    private fun rememberedRoster(project: Project): Pair<List<String>, (String) -> String?> =
+        synchronized(rememberedRosters) {
+            rememberedRosters.getOrPut(project) {
+                DataSourceSettings.getAllDataSources(project).map { DataSourceSettings.getName(it) } to
+                    { id: String ->
+                        runCatching {
+                            DataSourceSettings.getDataSourceById(project, id)?.let { DataSourceSettings.getName(it) }
+                        }.getOrNull()
+                    }
+            }
+        }
 
     /** O-96 测试辅助：headless 直写 last-used 记忆双键（生产写入口 [rememberRunner] 为 private）。 */
     internal fun plantLastUsedMemoryForTest(project: Project, id: String?, name: String?) {
@@ -281,6 +430,8 @@ object DataSourceSelector {
         preparedScriptModel = null
         preparedExecOption = null
         preparedUi = null
+        preparedDialectGateRequest = null
+        preparedDialectGateCallback = null
         preparedTopBlock = null
         preparedResultComponent = null
         preparedFullComponent = null
@@ -317,9 +468,14 @@ object DataSourceSelector {
         onEditor: ((com.intellij.openapi.editor.Editor) -> Unit)? = null,
         onError: ((String) -> Unit)? = null,
         callback: ((Boolean) -> Unit)? = null,
+        dialectGateRequest: ExecutionDialectGate.Request? = null,
+        onDialectGate: ((ExecutionDialectGate.Verdict) -> Unit)? = null,
+        forceChoose: Boolean = false,
     ) {
         chooseAndPrepare(project, sql, executeAfterPrepare = false,
-            onConsole = onConsole, onEditor = onEditor, onError = onError, callback = callback)
+            onConsole = onConsole, onEditor = onEditor, onError = onError, callback = callback,
+            dialectGateRequest = dialectGateRequest, onDialectGate = onDialectGate,
+            forceChoose = forceChoose)
     }
 
     /**
@@ -335,12 +491,22 @@ object DataSourceSelector {
         onError: ((String) -> Unit)? = null,
         onErrorRich: ((ExecutionErrorInfo) -> Unit)? = null,
         wholeScriptExec: Boolean = false,
+        dialectGateRequest: ExecutionDialectGate.Request? = null,
+        onDialectGate: ((ExecutionDialectGate.Verdict) -> Unit)? = null,
+        onSubmission: ((ExecutionSubmission) -> Unit)? = null,
     ): Boolean {
         val console = preparedConsole ?: return false
         val editor = preparedEditor ?: return false
         val scriptModel = preparedScriptModel ?: return false
         val execOption = preparedExecOption ?: return false
-        executeOnConsole(project, console, editor, scriptModel, execOption, preparedUi, onResultsReady, onError, onErrorRich, wholeScriptExec = wholeScriptExec)
+        executeOnConsole(
+            project, console, editor, scriptModel, execOption, preparedUi, onResultsReady, onError, onErrorRich,
+            wholeScriptExec = wholeScriptExec,
+            dialectGateRequest = dialectGateRequest ?: preparedDialectGateRequest,
+            onDialectGate = onDialectGate ?: preparedDialectGateCallback,
+            onSubmission = onSubmission,
+        )
+        // true 仍仅表示已进入准备好的控制台路径；提交结果只由 onSubmission 回报。
         return true
     }
 
@@ -354,7 +520,8 @@ object DataSourceSelector {
      *                  调用方可将其内嵌到任意容器；null = 不需要内嵌
      * @param onEditor  控制台编辑器就绪回调（注入插件补全上下文等）；null = 不需要
      * @param onError   错误回调（执行链任何环节失败时调用，参数为错误信息；null = 不通知）
-     * @param callback  完成回调（true=已触发执行；false=不可用/无数据源/取消）
+     * @param callback  兼容回调（true=已选择/排队，不保证提交；false=不可用/无数据源/取消）
+     * @param onSubmission 提交回执；成功来自 afterSubmitted，不来自选择、排队或 runner 返回
      */
     fun selectAndExecute(
         project: Project,
@@ -365,10 +532,16 @@ object DataSourceSelector {
         callback: ((Boolean) -> Unit)? = null,
         onErrorRich: ((ExecutionErrorInfo) -> Unit)? = null,
         wholeScriptExec: Boolean = false,
+        dialectGateRequest: ExecutionDialectGate.Request? = null,
+        onDialectGate: ((ExecutionDialectGate.Verdict) -> Unit)? = null,
+        onSubmission: ((ExecutionSubmission) -> Unit)? = null,
+        /** T-DialectGateUx：强制弹选择器（跳过共享控制台复用与 last-used 静默命中）。 */
+        forceChoose: Boolean = false,
     ) {
         chooseAndPrepare(project, sql, executeAfterPrepare = true,
             onConsole = onConsole, onEditor = onEditor, onError = onError, callback = callback, onErrorRich = onErrorRich,
-            wholeScriptExec = wholeScriptExec)
+            wholeScriptExec = wholeScriptExec, dialectGateRequest = dialectGateRequest, onDialectGate = onDialectGate,
+            onSubmission = onSubmission, forceChoose = forceChoose)
     }
 
     /**
@@ -386,6 +559,8 @@ object DataSourceSelector {
         sharedTopBlock = null
         sharedFullComponent = null
         sharedDataSourceName = null
+        sharedDialectGateRequest = null
+        sharedDialectGateCallback = null
     }
 
     /**
@@ -723,13 +898,11 @@ object DataSourceSelector {
      *
      * @param dataSourceName 所选数据源名（M36.5.5 共享缓存记忆与复用判定用；可 null）
      */
-    internal fun abortPrepareGate(ownsGate: Boolean, failureMessage: String?, LOG: com.intellij.openapi.diagnostic.Logger) {
-        if (!ownsGate) return
-        prepareGate.consumePendingExecute()?.let { queued ->
-            LOG.warn("[M36][T-FirstExec F1] prepare chain aborted with queued execute intent - surface failure to intent onError")
-            queued.onError?.invoke(failureMessage ?: MpSqlVisualizerBundle.message("execute.tempFile.failed", "prepare aborted"))
+    internal fun abortPrepareGate(prepareOwner: QueuedExecuteIntent?, failureMessage: String?, LOG: com.intellij.openapi.diagnostic.Logger) {
+        if (prepareGate.abort(prepareOwner, ExecutionSubmission.BLOCKED,
+                failureMessage ?: MpSqlVisualizerBundle.message("execute.tempFile.failed", "prepare aborted"))) {
+            LOG.warn("[M36][T-FirstExec F1] prepare chain aborted - settle current and queued requests")
         }
-        prepareGate.finishPrepare()
     }
 
     /**
@@ -1089,6 +1262,14 @@ object DataSourceSelector {
     // T-PreviewExecDs-02 F4：显式传 project——失败路径曾用 openProjects.firstOrNull() 清 last-used
     // /弹错误框，多项目同开时清的是「第一个打开项目」的记忆（错项目 bug，见开发计划 §2.2）。
     internal fun showRunnerPopup(project: Project, runners: List<Any>, callback: (Any?) -> Unit) {
+        com.intellij.openapi.ui.popup.JBPopupFactory.getInstance()
+            .createListPopup(createRunnerPopupStep(project, runners, callback))
+            .showInFocusCenter()
+    }
+
+    internal fun createRunnerPopupStep(
+        project: Project, runners: List<Any>, callback: (Any?) -> Unit,
+    ): com.intellij.openapi.ui.popup.util.BaseListPopupStep<RunnerItem> {
         val items = runners.map { RunnerItem(it, getRunnerName(it), getRunnerIcon(it)) }
         // T-PreviewExecDs-02 F5：多项目同开时标题带当前项目名——runner 枚举严格按当前项目
         // facade（F1 修复后），标题注明归属避免「这是哪来的数据源」困惑；单项目不加噪音。
@@ -1102,22 +1283,34 @@ object DataSourceSelector {
             title,
             items,
         ) {
+            private var choiceAccepted = false
+            private var delivered = false
+            private fun deliver(runner: Any?) {
+                if (delivered) return
+                delivered = true
+                callback(runner)
+            }
+
             override fun getTextFor(value: RunnerItem): String = value.name
             override fun getIconFor(value: RunnerItem): Icon? = value.icon
             override fun onChosen(selectedValue: RunnerItem?, finalChoice: Boolean): com.intellij.openapi.ui.popup.PopupStep<*>? {
                 com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
                     .info("[M36] popup onChosen: ${selectedValue?.name}")
-                callback(selectedValue?.runner)
-                return com.intellij.openapi.ui.popup.PopupStep.FINAL_CHOICE
+                // 243 禁止在 onChosen 内开模态确认；runner/session 续链须在弹窗关闭后启动。
+                choiceAccepted = true
+                return doFinalStep { deliver(selectedValue?.runner) }
+            }
+
+            override fun canceled() {
+                // 243 的已显示 popup 在选择后 dispose 也经 cancel；不是用户按 Esc。
+                if (!choiceAccepted) deliver(null)
             }
         }
-        com.intellij.openapi.ui.popup.JBPopupFactory.getInstance()
-            .createListPopup(step)
-            .showInFocusCenter()
+        return step
     }
 
     /** 弹窗列表项（Runner 包装）。 */
-    private data class RunnerItem(val runner: Any, val name: String, val icon: Icon?)
+    internal data class RunnerItem(val runner: Any, val name: String, val icon: Icon?)
 
     /**
      * 创建临时 .sql 文件（含 SQL），返回 (VirtualFile, PsiFile)。
@@ -1231,25 +1424,56 @@ object DataSourceSelector {
      * internal 供测试。
      */
     internal fun writeVfTextViaDocument(project: Project, vf: com.intellij.openapi.vfs.VirtualFile, text: String) {
+        // T-UiFixGate9：生命周期守卫——项目已 dispose（含测试框架的 temporarily-disposed 窗口：
+        // 243 平台 ProjectImpl.isDisposed() = 容器态≥DISPOSE_IN_PROGRESS || isTemporarilyDisposed，
+        // javap 实证该标志被 OR 进判定，守卫点在此窗口可达）后一律放弃写。半途写入（setText 成功、
+        // commitDocument/saveDocument 撞上收尾中的项目抛异常）会留下「已修改未保存」脏文档，
+        // 后续任一 VFS refresh 命中 MemoryDiskConflictResolver → EDT 延迟冲突处理杀掉无辜测试
+        // （20261018 门禁 shard5 三轮实录的第二个毒源）。预热是投机性写入，重跑无意义。
+        if (project.isDisposed) {
+            com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
+                .info("[M36] exec doc write abandoned (project disposed, T-UiFixGate9): ${vf.name}")
+            return
+        }
         // T-PreviewFast P4：程序性写入整段开闸——文档变更事件同步派发给自动落盘监听，
-        // 闸门开着即跳过（内容由本函数自己落盘，无需 1.5s 后再写一遍）
-        ExecDocAutosaveGate.suppressDuring {
-            val fileDoc = com.intellij.openapi.fileEditor.FileDocumentManager.getInstance().getDocument(vf)
-            if (fileDoc == null) {
-                vf.setBinaryContent(text.toByteArray())
-            } else {
-                if (fileDoc.text != text) {
-                    fileDoc.setText(text)
-                }
-                // setText 的 write command 结束时自动 commit；显式 commitDocument 双保险
-                // （同步后同 tick 内 findFile 的 PSI 立即对齐，M36.5.20 语义保留）
-                com.intellij.psi.PsiDocumentManager.getInstance(project).commitDocument(fileDoc)
-                // T-EC-01 核心：同临界区落盘——磁盘即时与内存一致，document 不滞留 modified 态
-                // T-PreviewFast P5：落盘前先判「已修改未保存」——内容本就一致时（连续预览同一
-                // SQL 的常见路径）跳过磁盘写，消除每次预览的无效落盘与随之而来的 VFS/索引噪音
+        // 闸门开着即跳过（内容由本函数自己落盘，无需 1.5s 后再写一遍）。
+        // T-UiFixGate9：写体内自包 WriteAction（平台可重入，已持写动作的调用方形态不变）——
+        // 零窗口直写分支需要 VFS 写权限，原「等内容路径不需要写权限」的裸调约定随之失效。
+        @Suppress("DEPRECATION") // T-M52：WriteAction.compute(ThrowableComputable) 243 编译目标仅此重载可用
+        com.intellij.openapi.application.WriteAction.compute<Unit, Throwable> {
+            ExecDocAutosaveGate.suppressDuring {
                 val fdm = com.intellij.openapi.fileEditor.FileDocumentManager.getInstance()
-                if (fdm.isDocumentUnsaved(fileDoc)) {
-                    fdm.saveDocument(fileDoc)
+                // T-UiFixGate9：改 getCachedDocument（**不主动建 document**）+ 双路写。
+                // 旧实现 getDocument 会主动建 document，随后 setText→saveDocument 之间存在
+                // ~30ms「已修改未保存」窗口——该窗口对**异步 refresh 线程**可见（EDT 原子性管不到
+                // 会话应用线程），边界迟到的 VFS 会话（fixture 重建/相邻测试 vf 删除重建的
+                // root-model 刷新）恰在此窗口命中，MemoryDiskConflictResolver 即收集冲突并在
+                // EDT 下一拍处理时抛出、杀掉正在收尾的无辜测试（20261018 门禁三轮实录 +
+                // [PROBE-GATE9] 探针实锤：victim 写窗口被建条目会话正中）。零窗口直写不建
+                // document，写后任一时刻 resolver 看到的都是干净态，冲突无从收集。
+                // 编辑器打开（真机控制台正看着这份内容，需视图同步）或文档已脏（用户键入未存，
+                // 外部覆盖须走既有冲突语义）仍走 document 路径，T-EC-01 同临界区落盘语义不变。
+                val fileDoc = fdm.getCachedDocument(vf)
+                if (fileDoc == null || (!isExecDocOpenInEditor(vf) && !fdm.isDocumentUnsaved(fileDoc))) {
+                    vf.setBinaryContent(text.toByteArray())
+                    if (fileDoc != null) {
+                        // 缓存 doc 是干净态：同步从盘重载对齐新内容（平台对「外部改盘+干净 doc」
+                        // 的既有语义），不产生 modified 位
+                        fdm.reloadFromDisk(fileDoc)
+                    }
+                } else {
+                    if (fileDoc.text != text) {
+                        fileDoc.setText(text)
+                    }
+                    // setText 的 write command 结束时自动 commit；显式 commitDocument 双保险
+                    // （同步后同 tick 内 findFile 的 PSI 立即对齐，M36.5.20 语义保留）
+                    com.intellij.psi.PsiDocumentManager.getInstance(project).commitDocument(fileDoc)
+                    // T-EC-01 核心：同临界区落盘——磁盘即时与内存一致，document 不滞留 modified 态
+                    // T-PreviewFast P5：落盘前先判「已修改未保存」——内容本就一致时（连续预览同一
+                    // SQL 的常见路径）跳过磁盘写，消除每次预览的无效落盘与随之而来的 VFS/索引噪音
+                    if (fdm.isDocumentUnsaved(fileDoc)) {
+                        fdm.saveDocument(fileDoc)
+                    }
                 }
             }
         }
@@ -1294,6 +1518,16 @@ object DataSourceSelector {
     internal fun docWriteOnce(project: Project, vf: com.intellij.openapi.vfs.VirtualFile, sql: String): Boolean = runCatching {
         if (execWriteActionFailureInjection) {
             error("injected exec WriteAction failure (T-ExecDocSync test seam)")
+        }
+        // T-UiFixGate9：派发拍执行时刻复查——fire-and-forget 写（waitBudgetMs=0）排队期间项目
+        // 可能已进入 dispose/temporarily-disposed；DocWriteContext.invokeLaterWriteSafe 的
+        // Disposer.isDisposed 守卫对测试框架的临时 dispose 失明（只置 ProjectImpl 标志、不动
+        // ObjectTree），须以 project.isDisposed（已 OR temporarily 标志）复查并放弃写。false =
+        // 有界等待路径照常走「不裸写、内容旧一拍」既有降级，语义不变。
+        if (project.isDisposed) {
+            com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
+                .info("[M36] exec doc write refused at dispatch (project disposed, T-UiFixGate9): ${vf.name}")
+            return@runCatching false
         }
         @Suppress("DEPRECATION") // T-M52：WriteAction.compute(ThrowableComputable) 243 编译目标仅此重载可用
         com.intellij.openapi.application.WriteAction.compute<Unit, Throwable> {
@@ -1456,13 +1690,33 @@ object DataSourceSelector {
      * （doc/vf 长度与 stamp、unsaved 态）：F1-F5 全上后若真机仍复发，idea.log 直出现场数据，
      * 替代人工复现排查。经项目 messageBus 连接（随项目 disposable 自动断开）。
      */
-    internal fun mapDialectBeforePsi(project: Project, vf: com.intellij.openapi.vfs.VirtualFile, LOG: com.intellij.openapi.diagnostic.Logger) {
+    internal fun mapDialectBeforePsi(
+        project: Project,
+        vf: com.intellij.openapi.vfs.VirtualFile,
+        LOG: com.intellij.openapi.diagnostic.Logger,
+        renderedDialectName: String? = null,
+    ) {
+        // O-145 W7：有渲染事实时 exec PSI 必须跟随渲染方言；没有 request 的旧调用继续沿用
+        // O-136 的 last-used/default 数据源路由。平台无对应 parser 时降级 GenericSQL，不冒充 MySQL。
+        val targetDs = if (renderedDialectName == null) ExecDialectRouting.resolveTargetDataSource(project) else null
+        val renderedLanguage = renderedDialectName?.let {
+            ExecDialectRouting.resolvePluginDialectLanguage(project, it)
+        }
+        val targetLanguage = when {
+            renderedDialectName == null -> ExecDialectRouting.resolveTargetLanguage(project, targetDs)
+            renderedLanguage != null -> renderedLanguage
+            else -> DialectPreMapping.languageById(project, ExecDialectRouting.GENERIC_LANGUAGE_ID)
+        }
+        val targetId = (targetLanguage as? com.intellij.lang.Language)?.id
+            ?: if (renderedDialectName == null) ExecDialectRouting.MYSQL_LANGUAGE_ID else ExecDialectRouting.GENERIC_LANGUAGE_ID
         // T-PreviewFlash：插件侧幂等短路——mpsql-exec.sql 路径稳定，同 vf 已映射过 MySQL 直接跳过，
         // 消除每次预览的点 setMapping（同值 setMapping 仍触发 SqlDialectPusher push all dumb 任务，见沙盒日志）。
-        val inProcessMapped = dialectMappedVf?.isValid == true && dialectMappedVf === vf
-        if (DialectPreMapping.ensureMapped(project, vf, inProcessMapped)) {
+        // O-136：短路收紧为「同 vf 且同方言」——目标数据源方言切换后同 vf 也必须重映射。
+        val inProcessMapped = dialectMappedVf?.isValid == true && dialectMappedVf === vf && dialectMappedLanguageId == targetId
+        if (DialectPreMapping.ensureMapped(project, vf, targetLanguage, inProcessMapped)) {
             dialectMappedVf = vf
-            LOG.info("[M36] dialect pre-mapped to MySQL for ${vf.name}")
+            dialectMappedLanguageId = targetId
+            LOG.info("[M36] dialect pre-mapped to $targetId for ${vf.name} (O-136 ds-dialect routing, ds=${targetDs?.javaClass?.simpleName})")
         }
     }
 
@@ -1500,7 +1754,7 @@ object DataSourceSelector {
      * Community/无 Database 插件场景安全：本方法不触任何 Database 类，纯 VFS/PSI。
      */
     @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
-    fun prewarmExecTempFile(project: Project, sql: String) {
+    fun prewarmExecTempFile(project: Project, sql: String, renderedDialectName: String? = null) {
         val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
         if (ApplicationManager.getApplication().isDispatchThread) {
             LOG.warn("[M36] prewarmExecTempFile called on EDT — refused (slow ops, T-ExecSlowOps F2)")
@@ -1509,6 +1763,9 @@ object DataSourceSelector {
         if (project.isDisposed || sql.isBlank()) return
         val cachedVf = cachedTempPsiFile?.first
         if (cachedVf != null && isCacheUsable(project, cachedVf)) {
+            // O-136：缓存命中路径同样对齐方言映射（幂等读探测稳态零写）——否则目标数据源方言
+            // 切换（MySQL↔DM）后预热仍按旧映射放行，Runner 枚举按旧方言过滤。
+            mapDialectBeforePsi(project, cachedVf, LOG, renderedDialectName)
             // 缓存命中≠内容新鲜：连续预览 SQL 会变，而缓存命中路径不重写文件——只刷新文件
             // 内容（projectExecFile doc 驱动三方同步，vf/psi 身份不变），保证 attachConsole
             // 初始 document 与本条预览 SQL 一致；差量内容比较在 projectExecFile 内部短路。
@@ -1522,8 +1779,10 @@ object DataSourceSelector {
                 LOG.info("[M36] exec prewarm: cache hit, exec doc open in editor — content refresh SKIPPED (T-PreviewFast P3)")
                 return
             }
-            // T-PreviewFast P2：非阻塞派发——预热是投机性写入，没必要让 BGT 等满 2 秒
-            runCatching { projectExecFile(project, sql, nonBlocking = true) }.onFailure { e ->
+            // T-UiFixGate9：有界派发（原 T-PreviewFast P2 的 nonBlocking=true fire-and-forget 已退役，
+            // 见 projectExecFile 内注释）——缓存命中刷新同样不得留下跨边界的排队写：排队拍落在
+            // 测试/交互边界时，迟到的 VFS 会话会命中 setText→save 窗口的「已改未存」态收集冲突。
+            runCatching { projectExecFile(project, sql) }.onFailure { e ->
                 // T-FatalPassthrough T-FP-02b（独立复核阻断 2）：写盘链的 fatal 不得被本 runCatching
                 // 吞成一条 warn（否则 prewarm 链 4 处既有透传全部作废）。非 fatal 仍原样 warn 降级。
                 if (FatalErrors.isFatal(e)) throw e
@@ -1542,7 +1801,7 @@ object DataSourceSelector {
         // 重建兜底。中断能否真正唤醒平台内部等待不作依赖（RefreshSessionImpl.waitFor 的
         // runBlockingMaybeCancellable 通常响应中断）；即便不可中断，业务也已脱困，滞留线程无 WIL 在身。
         val prewarmFuture = com.intellij.util.concurrency.AppExecutorUtil.getAppExecutorService().submit {
-            prewarmExecTempFileInner(project, sql, LOG)
+            prewarmExecTempFileInner(project, sql, LOG, renderedDialectName)
         }
         try {
             prewarmFuture.get(EXEC_PREWARM_BUDGET_MS, java.util.concurrent.TimeUnit.MILLISECONDS)

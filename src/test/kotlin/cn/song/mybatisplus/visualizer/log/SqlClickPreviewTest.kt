@@ -398,6 +398,28 @@ class SqlClickPreviewTest : BasePlatformTestCase() {
         assertTrue("关键字换行（FROM 独立成行）", formatted.contains("FROM"))
     }
 
+    // ---------- R60（T-LaneB D96）：预览浮层链脱敏（判别断言两态） ----------
+
+    fun testClickPreviewSql脱敏开_展示文本打码() {
+        val masked = clickPreviewSql(
+            "SELECT * FROM t WHERE phone = '13812345678'",
+            formatSql = false,
+            maskSql = true,
+        )
+        assertTrue("脱敏开应打码", masked.contains("'***'"))
+        assertFalse("原文手机号不得出现", masked.contains("13812345678"))
+    }
+
+    fun testClickPreviewSql脱敏关_原文加分号() {
+        val plain = clickPreviewSql(
+            "SELECT * FROM t WHERE phone = '13812345678'",
+            formatSql = false,
+            maskSql = false,
+        )
+        assertTrue("脱敏关原文保留", plain.contains("13812345678"))
+        assertTrue("分号收尾语义不变", plain.endsWith(";"))
+    }
+
     // ---------- 三面板接线 ----------
 
     fun testSqlLogPanel和历史页默认不打开底部预览() {

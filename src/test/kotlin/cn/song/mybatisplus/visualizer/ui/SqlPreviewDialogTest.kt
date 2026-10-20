@@ -26,6 +26,25 @@ class SqlPreviewDialogTest : BasePlatformTestCase() {
         columns = listOf("id"),
     )
 
+    fun testCopyAndCloseActionCopiesSqlAndDisposesDialog() {
+        // T-DmlImpactProminence：底部新增蓝色「复制 SQL 并关闭」——复制原文并关闭弹窗。
+        val clipboard = cn.song.mybatisplus.visualizer.testutil.installFakeClipboard(testRootDisposable)
+        val dialog = SqlPreviewDialog(project, previewResult())
+        val label = cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message("panel.copySqlAndClose")
+        val action = dialog.actionsForTest().first { it.getValue(javax.swing.Action.NAME) == label }
+        try {
+            action.actionPerformed(java.awt.event.ActionEvent(dialog, 0, ""))
+            val copied = clipboard.getContents()
+                ?.getTransferData(java.awt.datatransfer.DataFlavor.stringFlavor) as? String
+            assertTrue("应复制 SQL 原文：$copied", copied?.contains("SELECT") == true)
+            assertTrue("应复制 SQL 原文：$copied", copied?.contains("FROM tbl") == true)
+            assertTrue("复制后应关闭弹窗", dialog.isDisposed())
+        } finally {
+            if (!dialog.isDisposed()) dialog.doDispose()
+            dialog.panelForTest()?.clear()
+        }
+    }
+
     fun testClosePanelCallbackInjectedToPanel() {
         // T-M23.6：面板 onClosePanelRequested 已被弹窗注入（复制/执行 SQL 提示点「关闭 SQL 面板」
         // → 回调 dispose 关闭预览弹窗）；面板持有与对话框一致的当前结果

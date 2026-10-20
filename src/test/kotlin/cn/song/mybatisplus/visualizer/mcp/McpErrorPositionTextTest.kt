@@ -6,6 +6,8 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
+import java.lang.reflect.InvocationTargetException
+import java.sql.SQLException
 
 /**
  * T-Round10FU（独立复核 ⑨）：`sqlv_explain` 失败消息里 `errorPosition` 文案形态的守卫。
@@ -65,6 +67,53 @@ class McpErrorPositionTextTest {
         )
     }
 
+    /** 反射调用的非超时驱动错误：外层 message=null，必须读 SQLException 才能保住错误和位置。 */
+    @Test
+    fun `反射包装的驱动错误保留消息与位置及原错误码`() {
+        val driverError = SQLException("ERROR: column naem does not exist\n  Position: 42")
+        val reflected = InvocationTargetException(driverError)
+        val message = McpExplainFormatter.formatFailure(reflected, "PostgreSQL", "EXPLAIN SELECT naem FROM some_table_with_a_longer_table_name")
+        assertEquals(
+            "[DATASOURCE_UNREACHABLE] EXPLAIN failed on 'PostgreSQL' data source: " +
+                "ERROR: column naem does not exist\nerrorPosition: char 42",
+            message,
+        )
+    }
+
+    /** T-M19-McpErrorMeta：反射包装不应吞掉驱动状态码和厂商码，首行与位置仍取解包后的错误。 */
+    @Test
+    fun `反射包装的 SQL 异常保留状态码厂商码和位置`() {
+        val driverError = SQLException("ERROR: column naem does not exist\n  Position: 42", "42703", 1049)
+        val reflected = InvocationTargetException(driverError)
+        assertEquals(
+            "[DATASOURCE_UNREACHABLE] EXPLAIN failed on 'PostgreSQL' data source: " +
+                "ERROR: column naem does not exist\nsqlState: 42703\nerrorCode: 1049\nerrorPosition: char 42",
+            McpExplainFormatter.formatFailure(reflected, "PostgreSQL", "EXPLAIN SELECT naem FROM some_table_with_a_longer_table_name"),
+        )
+    }
+
+    /** 状态码不存在时不伪造；厂商码独立存在仍必须保留。 */
+    @Test
+    fun `无 SQLState 时仅追加存在的厂商码`() {
+        val driverError = SQLException("syntax error at line 2", null, 1064)
+        assertEquals(
+            "[DATASOURCE_UNREACHABLE] EXPLAIN failed on 'MySQL' data source: " +
+                "syntax error at line 2\nerrorCode: 1064\nerrorPosition: line 2",
+            McpExplainFormatter.formatFailure(InvocationTargetException(driverError), "MySQL", "EXPLAIN SELECT 1\nFROM t"),
+        )
+    }
+
+    /** 超时异常已由执行通道改写为带 timed out 的 SQLException，不得替换原有消息。 */
+    @Test
+    fun `超时错误文本仍保留超时标记与原错误码`() {
+        val timeout = SQLException("query timed out after 5s (cancel requested); original: statement canceled")
+        assertEquals(
+            "[DATASOURCE_UNREACHABLE] EXPLAIN failed on 'PostgreSQL' data source: " +
+                "query timed out after 5s (cancel requested); original: statement canceled",
+            McpExplainFormatter.formatFailure(timeout, "PostgreSQL", "EXPLAIN SELECT 1"),
+        )
+    }
+
     /**
      * 接线守卫：生产链必须走 [McpExplainFormatter.formatErrorPosition]，且不得再内联该文案。
      * 源码扫描形态照 `ErrorPositionWiringGuardTest`（同仓既有先例）——单测照不出「实现有、接线漏」。
@@ -75,9 +124,11 @@ class McpErrorPositionTextTest {
         assertTrue("未定位到 SqlVisualizerExplainTool（扫描规则失效）", tool.isFile)
         val text = tool.readText()
         assertTrue(
-            "SqlVisualizerExplainTool 必须调用 McpExplainFormatter.formatErrorPosition（否则本类的文案断言与本函数脱钩）",
-            text.contains("McpExplainFormatter.formatErrorPosition("),
+            "SqlVisualizerExplainTool 必须使用测试覆盖的失败格式化入口",
+            text.contains("McpExplainFormatter.formatFailure(e, target.dialectName, target.explainSql)"),
         )
+        val formatter = File(repoRoot(), "src/main/kotlin/cn/song/mybatisplus/visualizer/mcp/McpExplainFormatter.kt")
+        assertTrue("失败格式化入口必须保留 errorPosition 文案接线", formatter.readText().contains("formatErrorPosition(pos)"))
         assertFalse(
             "工具内不得再内联 errorPosition 文案（改回内联即绕开本守卫，重新变成空绿）",
             text.contains("errorPosition: "),
