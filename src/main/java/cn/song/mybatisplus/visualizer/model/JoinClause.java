@@ -14,6 +14,7 @@ import java.util.Objects;
  * @param customKeyword 自定义 join 关键字（join("FULL JOIN", ...)，M15-P0）；null 时按 type 映射
  * @param logicDeleteColumn 关联表逻辑删除列（@TableLogic 标注字段的列名，T-M20-05）；null 表示无逻辑删除
  * @param tableInfo          关联表实体元数据（PSI 解析的 EntityRefArg）；null 表示无实体信息
+ * @param rawParams          {@code rawSql} 中占位符 {@code ?} 的来源（按出现顺序，T-UpdateSetSqlConcat）：渲染时按序登记进参数表
  */
 public final class JoinClause {
     private final JoinType type;
@@ -24,9 +25,10 @@ public final class JoinClause {
     private final String customKeyword;
     private final String logicDeleteColumn;
     private final TableInfo tableInfo;
+    private final List<String> rawParams;
 
     public JoinClause(JoinType type, String tableName, String alias, List<Condition> onConditions, String rawSql,
-                      String customKeyword, String logicDeleteColumn, TableInfo tableInfo) {
+                      String customKeyword, String logicDeleteColumn, TableInfo tableInfo, List<String> rawParams) {
         this.type = type;
         this.tableName = tableName;
         this.alias = alias;
@@ -35,11 +37,17 @@ public final class JoinClause {
         this.customKeyword = customKeyword;
         this.logicDeleteColumn = logicDeleteColumn;
         this.tableInfo = tableInfo;
+        this.rawParams = rawParams == null ? List.of() : List.copyOf(rawParams);
+    }
+
+    public JoinClause(JoinType type, String tableName, String alias, List<Condition> onConditions, String rawSql,
+                      String customKeyword, String logicDeleteColumn, TableInfo tableInfo) {
+        this(type, tableName, alias, onConditions, rawSql, customKeyword, logicDeleteColumn, tableInfo, List.of());
     }
 
     public JoinClause(JoinType type, String tableName,
                       String alias, List<Condition> onConditions) {
-        this(type, tableName, alias, onConditions, null, null, null, null);
+        this(type, tableName, alias, onConditions, null, null, null, null, List.of());
     }
 
     public JoinType getType() {
@@ -74,9 +82,20 @@ public final class JoinClause {
         return tableInfo;
     }
 
+    public List<String> getRawParams() {
+        return rawParams;
+    }
+
+    public JoinClause copy(JoinType type, String tableName, String alias, List<Condition> onConditions, String rawSql,
+                           String customKeyword, String logicDeleteColumn, TableInfo tableInfo, List<String> rawParams) {
+        return new JoinClause(type, tableName, alias, onConditions, rawSql, customKeyword, logicDeleteColumn,
+                tableInfo, rawParams);
+    }
+
     public JoinClause copy(JoinType type, String tableName, String alias, List<Condition> onConditions, String rawSql,
                            String customKeyword, String logicDeleteColumn, TableInfo tableInfo) {
-        return new JoinClause(type, tableName, alias, onConditions, rawSql, customKeyword, logicDeleteColumn, tableInfo);
+        return new JoinClause(type, tableName, alias, onConditions, rawSql, customKeyword, logicDeleteColumn,
+                tableInfo, rawParams);
     }
 
     @Override
@@ -95,18 +114,20 @@ public final class JoinClause {
                 && Objects.equals(rawSql, that.rawSql)
                 && Objects.equals(customKeyword, that.customKeyword)
                 && Objects.equals(logicDeleteColumn, that.logicDeleteColumn)
-                && Objects.equals(tableInfo, that.tableInfo);
+                && Objects.equals(tableInfo, that.tableInfo)
+                && Objects.equals(rawParams, that.rawParams);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(type, tableName, alias, onConditions, rawSql, customKeyword, logicDeleteColumn, tableInfo);
+        return Objects.hash(type, tableName, alias, onConditions, rawSql, customKeyword, logicDeleteColumn,
+                tableInfo, rawParams);
     }
 
     @Override
     public String toString() {
         return "JoinClause(type=" + type + ", tableName=" + tableName + ", alias=" + alias + ", onConditions="
                 + onConditions + ", rawSql=" + rawSql + ", customKeyword=" + customKeyword + ", logicDeleteColumn="
-                + logicDeleteColumn + ", tableInfo=" + tableInfo + ")";
+                + logicDeleteColumn + ", tableInfo=" + tableInfo + ", rawParams=" + rawParams + ")";
     }
 }

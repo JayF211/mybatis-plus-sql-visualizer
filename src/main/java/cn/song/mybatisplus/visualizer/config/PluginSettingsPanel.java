@@ -507,58 +507,26 @@ public class PluginSettingsPanel implements Disposable {
     /** 增强捕获开关（默认关）：开启时弹注入确认对话框（JEP 451 预告 + 数据留本机说明）。 */
     public final JBCheckBox enhancedCaptureCheck = new JBCheckBox(MpSqlVisualizerBundle.message("settings.enhancedCapture"));
 
-    /** 脱敏开关（默认开）：对疑似敏感形态打码，agent 采集层执行。 */
+    /** 脱敏开关（默认关）：对疑似敏感形态打码，agent 采集层执行。 */
     public final JBCheckBox enhancedDesensitizeCheck = new JBCheckBox(MpSqlVisualizerBundle.message("settings.enhancedCapture.desensitize"));
+
+    /** R60（T-LaneB D96）：展示/导出链脱敏（日志列表/预览浮层/导出文本打码；默认关）。 */
+    public final JBCheckBox displayMaskCheck = new JBCheckBox(MpSqlVisualizerBundle.message("settings.display.mask"));
 
     /** T-StackHoverUi：调用栈快照总帧数（agent 两端采样预算；CONFIG 帧热下发）。 */
     public final JBTextField stackMaxFramesField = new JBTextField(6);
 
-    /** 增强捕获状态行：已挂载 pid=x / 未授权注入 / 已回落控制台捕获（T-CaptureTruth T-CT-01 五态）。 */
+    /** 增强捕获状态行：已挂载 pid=x / 等待应用启动 / 已回落控制台捕获。 */
     public final JBLabel enhancedStatusLabel = new JBLabel(" ");
-
-    /**
-     * T-CaptureTruth T-CT-02：重新授权按钮——仅在「开关开着但未授权」时露出（拒绝冷却期的恢复入口）。
-     *
-     * 监听器在字段初始化时挂一次：本面板 {@link #rebuild()}（语言切换）会重跑 buildSections，若在 addRow
-     * 处挂监听会随重建叠加重复回调。
-     */
-    public final JButton enhancedReauthButton = new JButton(MpSqlVisualizerBundle.message("settings.enhancedCapture.reauth"));
-
-    {
-        // Kotlin 属性初始化 apply{} 的等价形态（字段初始化期执行一次；rebuild 不重复挂监听）
-        enhancedReauthButton.setToolTipText(MpSqlVisualizerBundle.message("settings.enhancedCapture.reauth.tip"));
-        enhancedReauthButton.setVisible(false);
-        enhancedReauthButton.addActionListener(e -> onReauthorizeClicked());
-    }
-
-    /** T-CaptureTruth T-CT-02：对首个「待授权」项目重走确认流（多项目取值歧义属既有边界）。 */
-    private void onReauthorizeClicked() {
-        for (Project p : ProjectManager.getInstance().getOpenProjects()) {
-            boolean needs = false;
-            try {
-                needs = !p.isDisposed() && AgentManager.getInstance(p).needsReauthorization();
-            } catch (Throwable ignored) {
-                // runCatching().getOrDefault(false) 等价：环境异常按「无需授权」处理
-            }
-            if (needs) {
-                try {
-                    AgentManager.getInstance(p).requestReauthorization();
-                } catch (Throwable ignored) {
-                    // runCatching 等价：恢复失败不阻断状态行刷新
-                }
-                break;
-            }
-        }
-        refreshEnhancedStatusLabel();
-    }
 
     /** T-SettingsTruth P2：AgentManager 状态行 messageBus 连接（{@link #disposeResources()} 断开）。 */
     private Disposable agentStatusConnection = null;
 
     /**
-     * T-SettingsTruth P2 / T-CaptureTruth T-CT-01/02：聚合各打开项目的 AgentManager 状态写入增强捕获
-     * 状态行，并按「是否存在待授权项目」控制重新授权按钮可见性。
-     * 无任何活动叙事（各项目均 null）→ 显示空串；多项目以「；」连接。
+     * T-SettingsTruth P2 / T-CaptureTruth T-CT-01：聚合各打开项目的 AgentManager 状态写入增强捕获
+     * 状态行。无任何活动叙事（各项目均 null）→ 显示空串；多项目以「；」连接。
+     *
+     * <p>T-EnhancedCaptureDefaultOn（2026-10-19）：重新授权入口已移除，本函数只刷新文本。</p>
      */
     public void refreshEnhancedStatusLabel() {
         java.util.List<AgentManager> agents = new java.util.ArrayList<>();
@@ -587,18 +555,6 @@ public class PluginSettingsPanel implements Disposable {
             }
         }
         enhancedStatusLabel.setText(text.length() == 0 ? " " : text.toString());
-        boolean anyNeedsReauth = false;
-        for (AgentManager a : agents) {
-            try {
-                if (a.needsReauthorization()) {
-                    anyNeedsReauth = true;
-                    break;
-                }
-            } catch (Throwable ignored) {
-                // runCatching().getOrDefault(false) 等价
-            }
-        }
-        enhancedReauthButton.setVisible(anyNeedsReauth);
     }
 
     /**

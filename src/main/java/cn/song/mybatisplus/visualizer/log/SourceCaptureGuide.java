@@ -1,6 +1,5 @@
 package cn.song.mybatisplus.visualizer.log;
 
-import cn.song.mybatisplus.visualizer.config.EnhancedCaptureConsent;
 import cn.song.mybatisplus.visualizer.config.PluginSettings;
 import cn.song.mybatisplus.visualizer.log.agent.AgentManager;
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
@@ -20,11 +19,14 @@ import java.util.function.Consumer;
  * Wrapper（同表名 ≠ 同调用点，命中即误导，已整体移除），而是弹框按<b>全局增强捕获状态</b>给出口：
  *
  * <ul>
- * <li>未开启 / 未授权（{@link GuideBranch#EnhanceFirst}）：默认按钮让位「开启增强捕获」——不改工程代码、
- *     同意一次授权 + 重启应用即生效，对用户最省事；注入拦截器降为次选。</li>
- * <li>已开启已授权（{@link GuideBranch#Legacy}）：维持原两出口（打开设置 / 注入拦截器），此时缺位置
+ * <li>未开启（{@link GuideBranch#EnhanceFirst}）：默认按钮让位「开启增强捕获」——不改工程代码、
+ *     开关打开即生效，对用户最省事；注入拦截器降为次选。</li>
+ * <li>已开启（{@link GuideBranch#Legacy}）：维持原两出口（打开设置 / 注入拦截器），此时缺位置
  *     另有原因（帧过滤前缀命中 / 应用未重启 / agent 未挂载），message 末尾附一行实时状态（D1）。</li>
  * </ul>
+ *
+ * <p>T-EnhancedCaptureDefaultOn（2026-10-19）：注入确认弹窗已移除，本引导的「开启增强捕获」
+ * 只置开关并提示重启应用，不再走授权确认流。</p>
  *
  * <p>注入结果四类弹窗亦收敛于此（原设置页硬编码文案 i18n 化迁入）；其中 UnsupportedProject 在
  * EnhanceFirst 分支复用本编排引导开启增强捕获（20260924 定案：不再指路手动配置），Legacy 维持普通警告。
@@ -39,7 +41,7 @@ public final class SourceCaptureGuide {
     /** 引导弹框用户选择（纯函数映射，测试驱动不触 UI）。 */
     public enum GuideChoice { EnableEnhanced, OpenSettings, InjectNow, Cancel }
 
-    /** 引导分支（{@link #decideActions} 产出）：EnhanceFirst＝增强捕获未开启/未授权，Legacy＝已开启已授权。 */
+    /** 引导分支（{@link #decideActions} 产出）：EnhanceFirst＝增强捕获未开启，Legacy＝已开启。 */
     public enum GuideBranch { EnhanceFirst, Legacy }
 
     /** 注入防重入（弹框与设置页共用本编排，检测期间不重复触发）。 */
@@ -47,11 +49,11 @@ public final class SourceCaptureGuide {
 
     /**
      * 全局增强捕获状态 → 引导分支（纯函数）。
-     * 增强捕获未开启或未授权时，它是携带源码位置的通道里对用户最省事的一条（不注入工程代码），
-     * 默认按钮让位；已开启已授权时开关不再是原因，维持原出口。
+     * 增强捕获未开启时，它是携带源码位置的通道里对用户最省事的一条（不注入工程代码），
+     * 默认按钮让位；已开启时开关不再是原因，维持原出口。
      */
-    public static GuideBranch decideActions(boolean enabled, boolean confirmed) {
-        return enabled && confirmed ? GuideBranch.Legacy : GuideBranch.EnhanceFirst;
+    public static GuideBranch decideActions(boolean enabled) {
+        return enabled ? GuideBranch.Legacy : GuideBranch.EnhanceFirst;
     }
 
     /**
@@ -86,7 +88,7 @@ public final class SourceCaptureGuide {
     /** 无捕获位置时的引导弹框（实时日志 sourceFile==null / 历史面板 NoSource 共用入口）。 */
     public static void showMissingSourceDialog(Project project) {
         PluginSettings.State state = PluginSettings.getInstance().getState();
-        GuideBranch branch = decideActions(state.getEnhancedCaptureEnabled(), state.getEnhancedCaptureConfirmed());
+        GuideBranch branch = decideActions(state.getEnhancedCaptureEnabled());
         String message;
         if (branch == GuideBranch.EnhanceFirst) {
             message = MpSqlVisualizerBundle.message("log.jump.guide.message.enhanceFirst");
@@ -135,47 +137,39 @@ public final class SourceCaptureGuide {
     }
 
     /**
-     * {@link #enableEnhancedCapture(Project, kotlin.jvm.functions.Function1)} 的默认回调形态
-     * （master 默认参数 onOutcome：同意 → 展示生效提示）。
+     * {@link #enableEnhancedCapture(Project, Runnable)} 的默认回调形态
+     * （master 默认参数 onEnabled：开启后展示生效提示）。
      */
     public static void enableEnhancedCapture(Project project) {
-        enableEnhancedCapture(project, consent -> {
-            if (consent == EnhancedCaptureConsent.ACCEPTED) {
-                showEnhanceDone(project);
-            }
-            return kotlin.Unit.INSTANCE;
-        });
+        enableEnhancedCapture(project, () -> showEnhanceDone(project));
     }
 
     /**
      * 「开启增强捕获」动作（O-66，EnhanceFirst 分支默认按钮触发）。
      *
-     * <p>总开关关闭时先置 enabled=true 并发布 {@link PluginSettings#SETTINGS_CHANGE_TOPIC}——与设置页
-     * Apply 同通道，AgentManager 的「关闭→再开启」上升沿据此清零拒绝冷却、CONFIG 下发链跟随；
-     * 已开启时不得重复发布（设置页面板的 isModified 对比读同一 state，乱发布会制造脏态假象）。
-     * 随后复用 {@link AgentManager#requestReauthorization} 确认流（清冷却 + 弹确认框 + 三态持久化全部
-     * 单点收在 AgentManager，本编排只经 onOutcome 消费结果，不复写状态机）：
-     * 同意 → 展示「重启应用后生效」提示（无句柄不挂载，挂载由下一次应用进程启动承接——本动作
-     * 不碰已在运行的应用）；拒绝 / 关闭增强 → 静默（尊重 24h 冷却与关闭语义，不再打扰）。
+     * <p>总开关关闭时置 enabled=true 并发布 {@link PluginSettings#SETTINGS_CHANGE_TOPIC}——与设置页
+     * Apply 同通道，AgentManager 的「关闭→再开启」上升沿据此扫描在跑进程补挂、CONFIG 下发链跟随；
+     * 已开启时不得重复发布（设置页面板的 isModified 对比读同一 state，乱发布会制造脏态假象）。</p>
+     *
+     * <p>T-EnhancedCaptureDefaultOn（2026-10-19）：不再走注入确认流。开关打开即授权，本动作只
+     * 展示「重启应用后生效」提示；挂载由下一次应用进程启动或上升沿补挂承接。</p>
      */
-    public static void enableEnhancedCapture(
-            Project project,
-            kotlin.jvm.functions.Function1<? super EnhancedCaptureConsent, kotlin.Unit> onOutcome) {
+    public static void enableEnhancedCapture(Project project, Runnable onEnabled) {
         PluginSettings.State state = PluginSettings.getInstance().getState();
         if (!state.getEnhancedCaptureEnabled()) {
             state.setEnhancedCaptureEnabled(true);
             ApplicationManager.getApplication().getMessageBus()
                     .syncPublisher(PluginSettings.SETTINGS_CHANGE_TOPIC).settingsChanged();
         }
-        AgentManager.getInstance(project).requestReauthorization(onOutcome);
+        onEnabled.run();
     }
 
-    /** 同意后的生效提示（title 复用确认框标题键，语义同属「启用增强捕获」）。 */
+    /** 开启后的生效提示。 */
     private static void showEnhanceDone(Project project) {
         Messages.showInfoMessage(
                 project,
                 MpSqlVisualizerBundle.message("log.jump.guide.enhanceDone"),
-                MpSqlVisualizerBundle.message("settings.enhancedCapture.confirm.title"));
+                MpSqlVisualizerBundle.message("settings.enhancedCapture.enableDone.title"));
     }
 
     /**
@@ -225,8 +219,7 @@ public final class SourceCaptureGuide {
         }
         if (result instanceof InjectionResult.UnsupportedProject) {
             PluginSettings.State state = PluginSettings.getInstance().getState();
-            if (decideActions(state.getEnhancedCaptureEnabled(), state.getEnhancedCaptureConfirmed())
-                    == GuideBranch.EnhanceFirst) {
+            if (decideActions(state.getEnhancedCaptureEnabled()) == GuideBranch.EnhanceFirst) {
                 showUnsupportedWithEnhanceGuide(project, title);
             } else {
                 Messages.showWarningDialog(

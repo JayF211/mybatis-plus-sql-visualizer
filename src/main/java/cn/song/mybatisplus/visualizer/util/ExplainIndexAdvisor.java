@@ -144,7 +144,39 @@ public final class ExplainIndexAdvisor {
                         table,
                         "Using temporary — GROUP BY/DISTINCT spills to a temp table; consider an index"));
             }
+            // R45（EXPLAIN 体检）：rows 估算独立规则——type 非 ALL（与 FULL_SCAN 互补不重复）但
+            // 估算行数仍超阈 → 索引选择性差 / 大范围扫描（命中索引却不窄）。此前 rows 只作
+            // FULL_SCAN 的阈值闸门，非 ALL 形态无从触发，体检清单缺「rows 估算」这一维。
+            if (rowsN != null && rowsN >= ROWS_THRESHOLD && !"ALL".equalsIgnoreCase(type)) {
+                out.add(new Hint(
+                        "HIGH_ROWS_ESTIMATE",
+                        table,
+                        "estimated rows=" + rowsN + " even with an index — poor selectivity / wide range scan; "
+                                + "verify the filter columns are covered"));
+            }
         }
+    }
+
+    /**
+     * R45：体检规则清单（呈现层数据源——面板/MCP 的「支持哪些体检规则」一栏都从这里取，
+     * 不复制第二套）。每条含规则码与一句话职责说明；顺序稳定（声明序）。
+     */
+    public record RuleInfo(String rule, String description) {
+    }
+
+    private static final List<RuleInfo> RULE_INVENTORY = List.of(
+            new RuleInfo("FULL_SCAN", "type=ALL full table scan over the threshold"),
+            new RuleInfo("NO_INDEX_USED", "no usable index was selected (key=NULL)"),
+            new RuleInfo("HIGH_ROWS_ESTIMATE", "estimated rows still high even with an index (poor selectivity)"),
+            new RuleInfo("FILESORT", "ORDER BY cannot use an index (Using filesort)"),
+            new RuleInfo("TEMPORARY_TABLE", "GROUP BY/DISTINCT spills to a temp table (Using temporary)"),
+            new RuleInfo("SEQ_SCAN", "sequential scan on a large table (PostgreSQL/KingBase)")
+    );
+
+    /** 体检规则清单（R45；空实现无——清单恒非空，供面板「体检规则」说明栏与文档生成）。 */
+    @NotNull
+    public static List<RuleInfo> ruleInventory() {
+        return RULE_INVENTORY;
     }
 
     private static void advisePlanText(@NotNull List<List<String>> rows, @NotNull List<Hint> out) {

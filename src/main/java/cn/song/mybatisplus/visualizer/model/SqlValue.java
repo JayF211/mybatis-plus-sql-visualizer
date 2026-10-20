@@ -80,20 +80,40 @@ public abstract sealed class SqlValue permits SqlValue.Literal, SqlValue.Placeho
      * 运行时值，渲染为占位符。
      *
      * @param source 参数来源描述（变量名或表达式文本），用于 M2 参数替换与对照表
+     * @param fragment 该表达式作为<b>原始 SQL 片段</b>使用时的形态（文本 + 占位符来源，
+     *                 {@code "amount = amount * " + rate} → {@code amount = amount * ?}，来源 {@code [rate]}）。
+     *                 仅字符串拼接时非 null（见 ExpressionEvaluator）。
+     *                 片段位置（setSql/apply/last/having 等不做参数绑定的入口）经
+     *                 {@code converter.asSqlFragment} 取用；值位置（eq/set 的值实参）恒渲染
+     *                 {@code ?}，不读本字段——那里整个字符串是一个绑定参数。
      */
     public static final class Placeholder extends SqlValue {
         private final String source;
+        private final SqlFragment fragment;
+
+        public Placeholder(String source, SqlFragment fragment) {
+            this.source = source;
+            this.fragment = fragment;
+        }
 
         public Placeholder(String source) {
-            this.source = source;
+            this(source, null);
         }
 
         public String getSource() {
             return source;
         }
 
+        public SqlFragment getFragment() {
+            return fragment;
+        }
+
+        public Placeholder copy(String source, SqlFragment fragment) {
+            return new Placeholder(source, fragment);
+        }
+
         public Placeholder copy(String source) {
-            return new Placeholder(source);
+            return new Placeholder(source, fragment);
         }
 
         @Override
@@ -105,17 +125,17 @@ public abstract sealed class SqlValue permits SqlValue.Literal, SqlValue.Placeho
                 return false;
             }
             Placeholder that = (Placeholder) o;
-            return Objects.equals(source, that.source);
+            return Objects.equals(source, that.source) && Objects.equals(fragment, that.fragment);
         }
 
         @Override
         public int hashCode() {
-            return Objects.hash(source);
+            return Objects.hash(source, fragment);
         }
 
         @Override
         public String toString() {
-            return "Placeholder(source=" + source + ")";
+            return "Placeholder(source=" + source + ", fragment=" + fragment + ")";
         }
     }
 }

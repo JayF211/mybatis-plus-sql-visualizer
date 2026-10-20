@@ -20,9 +20,6 @@ public final class PremainInjection {
     /** 增强捕获总开关关闭（复用 {@link AgentManager#isEnhancedEnabled} 语义）。 */
     public static final String REASON_DISABLED = "enhanced-disabled";
 
-    /** 增强捕获已开启但注入确认未达成（复用 {@link AgentManager#isEnhancedConfirmed} 语义）。 */
-    public static final String REASON_UNCONFIRMED = "enhanced-unconfirmed";
-
     /** agent jar 解压落盘失败（资源缺失/磁盘不可写）。 */
     public static final String REASON_NO_JAR = "agent-jar-unavailable";
 
@@ -48,17 +45,15 @@ public final class PremainInjection {
     }
 
     /**
-     * 四闸门判定（纯函数）。{@code port} 为 null/非正即视为协商失败——端口 0 在 agent 侧
+     * 三闸门判定（纯函数）。{@code port} 为 null/非正即视为协商失败——端口 0 在 agent 侧
      * {@code AgentArgs.parse} 后会被 {@code AgentMain.install} 判为「无端口可上报」直接放弃挂载
      * （AgentMain.java:45-48），故这里同样拒绝。
+     *
+     * <p>T-EnhancedCaptureDefaultOn（2026-10-19）：注入确认闸门已移除——开关打开即注入。</p>
      */
-    public static Decision decide(boolean enhancedEnabled, boolean enhancedConfirmed,
-                                  boolean agentJarAvailable, Integer port) {
+    public static Decision decide(boolean enhancedEnabled, boolean agentJarAvailable, Integer port) {
         if (!enhancedEnabled) {
             return new Decision.Skip(REASON_DISABLED);
-        }
-        if (!enhancedConfirmed) {
-            return new Decision.Skip(REASON_UNCONFIRMED);
         }
         if (!agentJarAvailable) {
             return new Decision.Skip(REASON_NO_JAR);
@@ -69,14 +64,9 @@ public final class PremainInjection {
         return new Decision.Inject(port);
     }
 
-    /** 四闸门判定（agentJarAvailable 缺省 true，Kotlin 默认参数的便捷重载）。 */
-    public static Decision decide(boolean enhancedEnabled, boolean enhancedConfirmed, boolean agentJarAvailable) {
-        return decide(enhancedEnabled, enhancedConfirmed, agentJarAvailable, null);
-    }
-
-    /** 四闸门判定（agentJarAvailable/port 均缺省，Kotlin 默认参数的便捷重载）。 */
-    public static Decision decide(boolean enhancedEnabled, boolean enhancedConfirmed) {
-        return decide(enhancedEnabled, enhancedConfirmed, true, null);
+    /** 三闸门判定（agentJarAvailable/port 均缺省，Kotlin 默认参数的便捷重载）。 */
+    public static Decision decide(boolean enhancedEnabled) {
+        return decide(enhancedEnabled, true, null);
     }
 
     /**

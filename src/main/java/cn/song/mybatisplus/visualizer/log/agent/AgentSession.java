@@ -76,6 +76,13 @@ public class AgentSession {
      */
     private final Runnable onCaptureConfirmationChanged;
 
+    /**
+     * R53：用户暂停闸门（默认 false = 不暂停）。生产由 {@code AgentManager} 注入 {@code () -> userPaused}——
+     * 暂停只停 agent 通道（EVENT 在入队点丢弃），连接/心跳/CONFIG ACK 链不动（暂停≠关闭）。
+     * 包私有可注入为同模块守护测试缝（照 {@link #listenActiveProvider} 先例）。
+     */
+    BooleanSupplier pausedProvider = () -> false;
+
     private volatile boolean alive = true;
 
     private volatile long lastSeen;
@@ -88,6 +95,13 @@ public class AgentSession {
      * 单调递增——它是「控制通道可能失效」的量化证据（应用侧仍在采集投递），不只丢弃了事。
      */
     public final AtomicLong intakeDropped = new AtomicLong();
+
+    /**
+     * R53：用户暂停态丢弃计数（暂停期间投递的 EVENT 条数）。单调递增——「暂停中」不是「通道断了」：
+     * 计数在涨 = agent 通道仍活着、只是被用户停掉展示；结合 {@code AgentEventAdapter.receivedEvents}
+     * （两者同帧同增）可区分「暂停拦截」与「通道失效」。
+     */
+    public final AtomicLong pausedDropped = new AtomicLong();
 
     /** T-AgentConfigChannel T-03：入队闸门判据（可注入测试缝；默认读 SqlLogManager.capturing）。 */
     private BooleanSupplier listenActiveProvider = this::defaultListenActive;
@@ -305,9 +319,17 @@ public class AgentSession {
         this(project, pid, socket, onStateChange, clockMs, onUrlCaptured, scheduleConfigAckCheck, () -> { });
     }
 
+    /** 便捷构造器：pausedProvider 缺省 false（Kotlin 默认参数——R53 暂停闸门）。 */
     public AgentSession(Project project, long pid, Socket socket, Runnable onStateChange, LongSupplier clockMs,
                         Runnable onUrlCaptured, BiConsumer<Long, Runnable> scheduleConfigAckCheck,
                         Runnable onCaptureConfirmationChanged) throws IOException {
+        this(project, pid, socket, onStateChange, clockMs, onUrlCaptured, scheduleConfigAckCheck,
+            onCaptureConfirmationChanged, () -> false);
+    }
+
+    public AgentSession(Project project, long pid, Socket socket, Runnable onStateChange, LongSupplier clockMs,
+                        Runnable onUrlCaptured, BiConsumer<Long, Runnable> scheduleConfigAckCheck,
+                        Runnable onCaptureConfirmationChanged, BooleanSupplier pausedProvider) throws IOException {
         this.project = project;
         this.pid = pid;
         this.socket = socket;
@@ -316,6 +338,7 @@ public class AgentSession {
         this.onUrlCaptured = onUrlCaptured;
         this.scheduleConfigAckCheck = scheduleConfigAckCheck;
         this.onCaptureConfirmationChanged = onCaptureConfirmationChanged;
+        this.pausedProvider = pausedProvider;
         this.output = new DataOutputStream(socket.getOutputStream());
         this.lastSeen = clockMs.getAsLong();
         socket.setSoTimeout(0);
@@ -423,6 +446,17 @@ public class AgentSession {
                 // 宿主有、IDE 无=传输；两侧都有而面板空=消费链（去重/屏蔽/过滤/暂停）。
                 if (AgentEventAdapter.receivedEvents() == 1L) {
                     LOG.info("增强通道首条事件已到达并进入消费链（pid=" + pid + "）——若面板仍零产出，查消费链（去重窗口/屏蔽/过滤），不再疑 agent 侧");
+                }
+                // R53：用户暂停闸门（在收到计数**之后**——暂停中「已收事件 N」照常增长，
+                // 状态栏据此显示「暂停中且通道活着」而非「通道断了」）。只丢入列表，
+                // 连接/心跳/CONFIG ACK 链一概不动（暂停≠关闭，V80② 自洽）。
+                if (pausedProvider.getAsBoolean()) {
+                    long n = pausedDropped.incrementAndGet();
+                    if (n == 1L || n % AgentManager.INTAKE_DROP_WARN_STEP == 0L) {
+                        LOG.info("增强通道在用户暂停态收到 " + n + " 条事件——丢弃不入队（暂停只停 agent 通道，"
+                            + "控制台通道照常；恢复即续采）");
+                    }
+                    return;
                 }
                 // T-AgentDialectLoop / T-AgentLogTime：接管期间控制台嗅探暂存的「日志行原始时间」
                 // 按 logTimeKey（占位符版 SQL 指纹）取回，参数值序列作次级判别（stampLogTime）。

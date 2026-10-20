@@ -5,14 +5,13 @@ import java.util.List;
 
 /**
  * T-CaptureTruth T-CT-01：增强捕获状态行输入快照（纯数据，{@link AgentManagerKt#agentStatusText} 入参，零平台依赖）。
+ *
+ * <p>T-EnhancedCaptureDefaultOn（2026-10-19）：{@code confirmed} 与 {@code rejectCooldownRemainingMs}
+ * 已随注入确认流移除——授权语义收敛到 {@code enabled} 单字段。</p>
  */
 public record AgentStatusSnapshot(
     /** 增强捕获总开关是否开启。 */
     boolean enabled,
-    /** 注入确认是否已达成。 */
-    boolean confirmed,
-    /** 拒绝冷却剩余毫秒数（0 = 无冷却）。 */
-    long rejectCooldownRemainingMs,
     /** 健康（socket 未断且心跳窗口内）会话的 pid 列表。 */
     List<Long> livePids,
     /** 是否发生过成功挂载。 */
@@ -29,24 +28,19 @@ public record AgentStatusSnapshot(
     long heartbeatWindowSeconds
 ) {
     /** 便捷构造器：heartbeatExpired 缺省 false（Kotlin 默认参数）。 */
-    public AgentStatusSnapshot(boolean enabled, boolean confirmed, long rejectCooldownRemainingMs,
-                               List<Long> livePids, boolean everAttached) {
-        this(enabled, confirmed, rejectCooldownRemainingMs, livePids, everAttached,
-            false, false, AgentProtocol.ONLINE_WINDOW_MS / 1000);
+    public AgentStatusSnapshot(boolean enabled, List<Long> livePids, boolean everAttached) {
+        this(enabled, livePids, everAttached, false, false, AgentProtocol.ONLINE_WINDOW_MS / 1000);
     }
 
     /** 便捷构造器：firstHeartbeatPending / heartbeatWindowSeconds 缺省（Kotlin 默认参数）。 */
-    public AgentStatusSnapshot(boolean enabled, boolean confirmed, long rejectCooldownRemainingMs,
-                               List<Long> livePids, boolean everAttached, boolean heartbeatExpired) {
-        this(enabled, confirmed, rejectCooldownRemainingMs, livePids, everAttached,
-            heartbeatExpired, false, AgentProtocol.ONLINE_WINDOW_MS / 1000);
+    public AgentStatusSnapshot(boolean enabled, List<Long> livePids, boolean everAttached, boolean heartbeatExpired) {
+        this(enabled, livePids, everAttached, heartbeatExpired, false, AgentProtocol.ONLINE_WINDOW_MS / 1000);
     }
 
     /** 便捷构造器：heartbeatWindowSeconds 缺省（Kotlin 默认参数）。 */
-    public AgentStatusSnapshot(boolean enabled, boolean confirmed, long rejectCooldownRemainingMs,
-                               List<Long> livePids, boolean everAttached, boolean heartbeatExpired,
+    public AgentStatusSnapshot(boolean enabled, List<Long> livePids, boolean everAttached, boolean heartbeatExpired,
                                boolean firstHeartbeatPending) {
-        this(enabled, confirmed, rejectCooldownRemainingMs, livePids, everAttached,
-            heartbeatExpired, firstHeartbeatPending, AgentProtocol.ONLINE_WINDOW_MS / 1000);
+        this(enabled, livePids, everAttached, heartbeatExpired, firstHeartbeatPending,
+            AgentProtocol.ONLINE_WINDOW_MS / 1000);
     }
 }

@@ -20,6 +20,8 @@ import kotlin.Pair;
  * @param rawFirst      SQL 最前片段（first("...") 官方 API，M15 增补）；非 null 时置于 SELECT 之前
  * @param rawAround     around 片段（around(firstSql, lastSql) 的 lastSql 段，MPJ 1.4.11+，T-M21-09）；
  *                      非 null 时渲染于 ORDER BY 之后、LIMIT 之前（MP 内部 LAST 段位置）
+ * @param rawFirstParams  {@code rawFirst} 中占位符 {@code ?} 的来源（按出现顺序，T-UpdateSetSqlConcat）
+ * @param rawAroundParams {@code rawAround} 中占位符 {@code ?} 的来源（按出现顺序，T-UpdateSetSqlConcat）
  * @param comment       SQL 注释（comment("...") 官方 API，M15 增补）；非 null 时追加到语句末尾
  * @param unions        UNION / UNION ALL 子查询（MPJ 官方 API，M15 增补）；按调用顺序追加到主语句之后
  * @param fromSubQuery  from 子查询主表（from(w -> ...)，MPJ 官方 API，T-M21-07）
@@ -38,6 +40,8 @@ public final class SelectStatement extends SqlStatement {
     private final LimitClause limit;
     private final String rawFirst;
     private final String rawAround;
+    private final List<String> rawFirstParams;
+    private final List<String> rawAroundParams;
     private final String comment;
     private final List<UnionClause> unions;
     private final Pair<String, String> fromSubQuery;
@@ -46,6 +50,7 @@ public final class SelectStatement extends SqlStatement {
     public SelectStatement(TableInfo table, List<ColumnRef> selectColumns, String tableAlias, List<JoinClause> joins,
                            boolean distinct, List<Condition> conditions, List<ColumnRef> groupBy, Condition having,
                            List<OrderByItem> orderBy, LimitClause limit, String rawFirst, String rawAround,
+                           List<String> rawFirstParams, List<String> rawAroundParams,
                            String comment, List<UnionClause> unions, Pair<String, String> fromSubQuery,
                            List<FillClause> fillClauses) {
         this.table = table;
@@ -60,10 +65,21 @@ public final class SelectStatement extends SqlStatement {
         this.limit = limit;
         this.rawFirst = rawFirst;
         this.rawAround = rawAround;
+        this.rawFirstParams = rawFirstParams == null ? List.of() : List.copyOf(rawFirstParams);
+        this.rawAroundParams = rawAroundParams == null ? List.of() : List.copyOf(rawAroundParams);
         this.comment = comment;
         this.unions = unions;
         this.fromSubQuery = fromSubQuery;
         this.fillClauses = fillClauses;
+    }
+
+    public SelectStatement(TableInfo table, List<ColumnRef> selectColumns, String tableAlias, List<JoinClause> joins,
+                           boolean distinct, List<Condition> conditions, List<ColumnRef> groupBy, Condition having,
+                           List<OrderByItem> orderBy, LimitClause limit, String rawFirst, String rawAround,
+                           String comment, List<UnionClause> unions, Pair<String, String> fromSubQuery,
+                           List<FillClause> fillClauses) {
+        this(table, selectColumns, tableAlias, joins, distinct, conditions, groupBy, having, orderBy, limit,
+                rawFirst, rawAround, List.of(), List.of(), comment, unions, fromSubQuery, fillClauses);
     }
 
     public SelectStatement(TableInfo table) {
@@ -146,6 +162,14 @@ public final class SelectStatement extends SqlStatement {
         return rawAround;
     }
 
+    public List<String> getRawFirstParams() {
+        return rawFirstParams;
+    }
+
+    public List<String> getRawAroundParams() {
+        return rawAroundParams;
+    }
+
     public String getComment() {
         return comment;
     }
@@ -165,15 +189,28 @@ public final class SelectStatement extends SqlStatement {
     public SelectStatement copy(TableInfo table, List<ColumnRef> selectColumns, String tableAlias, List<JoinClause> joins,
                                 boolean distinct, List<Condition> conditions, List<ColumnRef> groupBy, Condition having,
                                 List<OrderByItem> orderBy, LimitClause limit, String rawFirst, String rawAround,
+                                List<String> rawFirstParams, List<String> rawAroundParams,
                                 String comment, List<UnionClause> unions, Pair<String, String> fromSubQuery,
                                 List<FillClause> fillClauses) {
         return new SelectStatement(table, selectColumns, tableAlias, joins, distinct, conditions, groupBy, having,
-                orderBy, limit, rawFirst, rawAround, comment, unions, fromSubQuery, fillClauses);
+                orderBy, limit, rawFirst, rawAround, rawFirstParams, rawAroundParams, comment, unions, fromSubQuery,
+                fillClauses);
+    }
+
+    public SelectStatement copy(TableInfo table, List<ColumnRef> selectColumns, String tableAlias, List<JoinClause> joins,
+                                boolean distinct, List<Condition> conditions, List<ColumnRef> groupBy, Condition having,
+                                List<OrderByItem> orderBy, LimitClause limit, String rawFirst, String rawAround,
+                                String comment, List<UnionClause> unions, Pair<String, String> fromSubQuery,
+                                List<FillClause> fillClauses) {
+        return new SelectStatement(table, selectColumns, tableAlias, joins, distinct, conditions, groupBy, having,
+                orderBy, limit, rawFirst, rawAround, rawFirstParams, rawAroundParams, comment, unions, fromSubQuery,
+                fillClauses);
     }
 
     public SelectStatement copy(List<Condition> conditions) {
         return new SelectStatement(table, selectColumns, tableAlias, joins, distinct, conditions, groupBy, having,
-                orderBy, limit, rawFirst, rawAround, comment, unions, fromSubQuery, fillClauses);
+                orderBy, limit, rawFirst, rawAround, rawFirstParams, rawAroundParams, comment, unions, fromSubQuery,
+                fillClauses);
     }
 
     @Override
@@ -197,6 +234,8 @@ public final class SelectStatement extends SqlStatement {
                 && Objects.equals(limit, that.limit)
                 && Objects.equals(rawFirst, that.rawFirst)
                 && Objects.equals(rawAround, that.rawAround)
+                && Objects.equals(rawFirstParams, that.rawFirstParams)
+                && Objects.equals(rawAroundParams, that.rawAroundParams)
                 && Objects.equals(comment, that.comment)
                 && Objects.equals(unions, that.unions)
                 && Objects.equals(fromSubQuery, that.fromSubQuery)
@@ -206,7 +245,7 @@ public final class SelectStatement extends SqlStatement {
     @Override
     public int hashCode() {
         return Objects.hash(table, selectColumns, tableAlias, joins, distinct, conditions, groupBy, having, orderBy,
-                limit, rawFirst, rawAround, comment, unions, fromSubQuery, fillClauses);
+                limit, rawFirst, rawAround, rawFirstParams, rawAroundParams, comment, unions, fromSubQuery, fillClauses);
     }
 
     @Override
@@ -214,7 +253,8 @@ public final class SelectStatement extends SqlStatement {
         return "SelectStatement(table=" + table + ", selectColumns=" + selectColumns + ", tableAlias=" + tableAlias
                 + ", joins=" + joins + ", distinct=" + distinct + ", conditions=" + conditions + ", groupBy=" + groupBy
                 + ", having=" + having + ", orderBy=" + orderBy + ", limit=" + limit + ", rawFirst=" + rawFirst
-                + ", rawAround=" + rawAround + ", comment=" + comment + ", unions=" + unions
+                + ", rawAround=" + rawAround + ", rawFirstParams=" + rawFirstParams + ", rawAroundParams="
+                + rawAroundParams + ", comment=" + comment + ", unions=" + unions
                 + ", fromSubQuery=" + fromSubQuery + ", fillClauses=" + fillClauses + ")";
     }
 }

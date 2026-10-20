@@ -40,7 +40,7 @@ public abstract sealed class Condition
             return c.copy(c.getLeft(), c.getRight(), toggle);
         }
         if (this instanceof Raw r) {
-            return r.copy(r.getSqlText(), toggle);
+            return r.copy(r.getSqlText(), toggle, r.getParams());
         }
         throw new IllegalStateException("Unknown Condition subtype: " + getClass());
     }
@@ -490,22 +490,37 @@ public abstract sealed class Condition
         }
     }
 
-    /** 原始 SQL 片段（apply / last 等透传），不解析直接渲染。 */
+    /**
+     * 原始 SQL 片段（apply / last 等透传），不解析直接渲染。
+     *
+     * @param params 片段中占位符 {@code ?} 的来源（按出现顺序，与 {@code ?} 一一对应）。渲染时必须按序登记进参数表，
+     *               否则面板按位置回填会整体错位（片段里的 {@code ?} 会被当成下一个条件的参数）。
+     */
     public static final class Raw extends Condition {
         private final String sqlText;
         private final ConditionToggle toggle;
+        private final List<String> params;
 
-        public Raw(String sqlText, ConditionToggle toggle) {
+        public Raw(String sqlText, ConditionToggle toggle, List<String> params) {
             this.sqlText = sqlText;
             this.toggle = toggle;
+            this.params = params == null ? List.of() : List.copyOf(params);
+        }
+
+        public Raw(String sqlText, ConditionToggle toggle) {
+            this(sqlText, toggle, List.of());
         }
 
         public Raw(String sqlText) {
-            this(sqlText, null);
+            this(sqlText, null, List.of());
         }
 
         public String getSqlText() {
             return sqlText;
+        }
+
+        public List<String> getParams() {
+            return params;
         }
 
         @Override
@@ -513,8 +528,12 @@ public abstract sealed class Condition
             return toggle;
         }
 
+        public Raw copy(String sqlText, ConditionToggle toggle, List<String> params) {
+            return new Raw(sqlText, toggle, params);
+        }
+
         public Raw copy(String sqlText, ConditionToggle toggle) {
-            return new Raw(sqlText, toggle);
+            return new Raw(sqlText, toggle, params);
         }
 
         @Override
@@ -526,17 +545,18 @@ public abstract sealed class Condition
                 return false;
             }
             Raw that = (Raw) o;
-            return Objects.equals(sqlText, that.sqlText) && Objects.equals(toggle, that.toggle);
+            return Objects.equals(sqlText, that.sqlText) && Objects.equals(toggle, that.toggle)
+                    && Objects.equals(params, that.params);
         }
 
         @Override
         public int hashCode() {
-            return Objects.hash(sqlText, toggle);
+            return Objects.hash(sqlText, toggle, params);
         }
 
         @Override
         public String toString() {
-            return "Raw(sqlText=" + sqlText + ", toggle=" + toggle + ")";
+            return "Raw(sqlText=" + sqlText + ", toggle=" + toggle + ", params=" + params + ")";
         }
     }
 }

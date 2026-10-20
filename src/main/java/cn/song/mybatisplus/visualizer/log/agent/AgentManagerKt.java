@@ -18,15 +18,13 @@ public final class AgentManagerKt {
      * 分支</b>，设置页状态行渲染成空白而复选框仍显示勾选，用户读作「开着且没事」，实际一条都捕不到
      * （T-CaptureTruth 根因之三；旧守卫断言「无会话应返回 null」把该行为钉死，本次一并改）。
      *
-     * <p>各态：
+     * <p>各态（T-EnhancedCaptureDefaultOn（2026-10-19）起无「未授权」类叙事——注入确认已移除）：
      *  1. 关闭（!enabled）→ null（复选框未勾选，无需叙事）；
      *  2. 有活会话 →「已挂载 pid=…」；
-     *  3. 未授权 + 冷却中 → 含剩余小时与「重新授权」指引（冷却原本静默，用户无从得知被拒过）；
-     *  4. 未授权 + 无冷却 → 下次启动主配置时会询问；
-     *  5. 已授权 + 曾挂载 + 心跳过期 → 带窗口秒数的可核实表述（T-AgentHeartbeat T-05 去因果断言）；
-     *  6. 已授权 + 曾挂载 + 首条心跳未到 → 中性等待叙述（T-AgentHeartbeat T-05 新增）；
-     *  7. 已授权 + 曾挂载 + 其余 → 连接中断回落；
-     *  8. 已授权 + 从未挂载 → 等待应用进程启动后挂载。
+     *  3. 曾挂载 + 心跳过期 → 带窗口秒数的可核实表述（T-AgentHeartbeat T-05 去因果断言）；
+     *  4. 曾挂载 + 首条心跳未到 → 中性等待叙述（T-AgentHeartbeat T-05 新增）；
+     *  5. 曾挂载 + 其余 → 连接中断回落；
+     *  6. 从未挂载 → 等待应用进程启动后挂载。
      */
     public static String agentStatusText(AgentStatusSnapshot s) {
         if (!s.enabled()) {
@@ -41,14 +39,6 @@ public final class AgentManagerKt {
                 joined.append("pid=").append(s.livePids().get(i));
             }
             return MpSqlVisualizerBundle.message("settings.enhancedCapture.status.attached", joined.toString());
-        }
-        if (!s.confirmed()) {
-            if (s.rejectCooldownRemainingMs() > 0) {
-                // 小时向上取整（不足 1 小时也显示 1，避免「剩 0 小时」的歧义）
-                long hours = Math.max(1L, (s.rejectCooldownRemainingMs() + 3_599_999L) / 3_600_000L);
-                return MpSqlVisualizerBundle.message("settings.enhancedCapture.status.unauthorizedCooldown", hours);
-            }
-            return MpSqlVisualizerBundle.message("settings.enhancedCapture.status.unauthorizedPending");
         }
         if (s.everAttached()) {
             // T-ReachAudit T-RA-01：心跳过期 = socket 未断而帧停，与真断连分开叙述。

@@ -363,32 +363,22 @@ public final class PluginSettingsPanelSections {
                 addRow(p2, g2, "", self.autoInjectInterceptorCheck);
                 // M56 T-M56-08：增强捕获设置（捕获通道类设置与源码位置捕获同组）
                 self.enhancedCaptureCheck.setText(MpSqlVisualizerBundle.message("settings.enhancedCapture"));
+                self.enhancedCaptureCheck.setToolTipText(MpSqlVisualizerBundle.message("settings.enhancedCapture.tip"));
                 self.enhancedCaptureCheck.addActionListener(e -> {
-                    if (self.enhancedCaptureCheck.isSelected()
-                            && !PluginSettings.getInstance().getState().getEnhancedCaptureConfirmed()) {
-                        // T-M56-08：首次启用弹注入确认（确认记忆持久化，重开不弹）
-                        if (EnhancedCaptureConfirmDialog.confirm(null)) {
-                            PluginSettings.getInstance().getState().setEnhancedCaptureConfirmed(true);
-                        } else {
-                            self.enhancedCaptureCheck.setSelected(false);
-                        }
-                    }
-                    // T-ConsentTruth T-CN-03：确认结果直接写全局 state，不经过 AgentManager 的
-                    // 状态广播——不在这里补一次刷新的话，五态状态行会停在旧文案（如仍显示
-                    // 「未授权注入——下次启动主配置时会询问」），直到下一次 attach/掉线才纠正。
+                    // T-EnhancedCaptureDefaultOn：勾选即授权，不再弹注入确认；只刷新状态行。
                     self.refreshEnhancedStatusLabel();
                 });
                 addRow(p2, g2, "", self.enhancedCaptureCheck);
                 self.enhancedDesensitizeCheck.setText(MpSqlVisualizerBundle.message("settings.enhancedCapture.desensitize"));
                 addRow(p2, g2, "", self.enhancedDesensitizeCheck);
+                // R60（T-LaneB D96）：展示/导出链脱敏（与采集开关解耦——管「文本怎么出去」）
+                self.displayMaskCheck.setText(MpSqlVisualizerBundle.message("settings.display.mask"));
+                self.displayMaskCheck.setToolTipText(MpSqlVisualizerBundle.message("settings.display.mask.tip"));
+                addRow(p2, g2, "", self.displayMaskCheck);
                 // T-StackHoverUi：调用栈快照总帧数（栈顶 B-8 帧＋栈底固定 8 帧；CONFIG 帧热下发 agent）
                 self.stackMaxFramesField.setToolTipText(MpSqlVisualizerBundle.message("settings.enhancedCapture.stackMaxFrames.tip"));
                 addRow(p2, g2, MpSqlVisualizerBundle.message("settings.enhancedCapture.stackMaxFrames"), self.stackMaxFramesField);
                 addRow(p2, g2, "", self.enhancedStatusLabel);
-                // T-CaptureTruth T-CT-02：重新授权入口（仅未授权态可见，文本随语言重建刷新）
-                self.enhancedReauthButton.setText(MpSqlVisualizerBundle.message("settings.enhancedCapture.reauth"));
-                self.enhancedReauthButton.setToolTipText(MpSqlVisualizerBundle.message("settings.enhancedCapture.reauth.tip"));
-                addRow(p2, g2, "", self.enhancedReauthButton);
                 // T-SourceJumpFunnel P1-3：帧过滤前缀（自研框架包名登记，热下发 agent）
                 self.frameSkipPrefixesField.setText(PluginSettings.getInstance().getState().getSourceFrameSkipPrefixes());
                 self.frameSkipPrefixesField.setToolTipText(MpSqlVisualizerBundle.message("settings.sourceFrameSkipPrefixes.tip"));
