@@ -13,6 +13,21 @@
         <modelRelationProvider implementation="cn.song.mybatisplus.visualizer.ui.diagram.nativefw.db.JoinVirtualFkProvider"/>
     </extensions>
 
+    <!-- T-DmDialect（O-136 真机发现，20261014）：注册达梦 SQL 方言。放本文件（而非主 plugin.xml）
+         的原因：实现类直引 DatabaseTools 的 SqlLanguageDialectBase——裸 test 桶/Community 下
+         DatabaseTools 缺席时该类无法装载（20261014 实测 NoClassDefFoundError）；本文件仅在
+         com.intellij.database 在场时加载，注册随插件存在性启停。262 平台方言注册表
+         （database-plugin 35 项）实测无 DM → 语言 id `DM` 注册后即进入
+         SqlDialectMappings.getAvailableValues，UrlSubprotocolDialects 的达梦候选链（[DM, Dameng]）
+         随之命中，O-136 的「按数据源方言出 Runner」对达梦闭合。最小实现=Generic 样板
+         （javap：TokensHelper 委托 Sql92、Dbms.UNKNOWN、不开错误高亮）。 -->
+    <extensions defaultExtensionNs="com.intellij">
+        <!-- dbms 是平台 Dbms 枚举名，不是语言 ID。243/253/262 均无 DM 枚举；
+             与 Sql92/Generic 一样注册 UNKNOWN，保留语言 ID=DM，只提供 Generic 兼容能力。 -->
+        <sql.dialect dbms="UNKNOWN" order="last"
+                     implementationClass="cn.song.mybatisplus.visualizer.sql.dm.DmSqlDialect"/>
+    </extensions>
+
     <!-- T-CrudSql：数据库表节点右键生成 CRUD SQL——add-to-group DatabaseViewPopupMenu
          （DatabaseTools 内部组，2024.3.7.1 plugin.xml:713 实证，无专门视图 action EP）；
          本文件仅 com.intellij.database 在场时加载，DbTable/DasTable 类引用全部直引编译期类型。

@@ -35,7 +35,7 @@
 
         <h3>中文</h3>
         <ul>
-            <li><b>编码期预览 · SQL 来源全覆盖</b>：Lambda / Query / Update / Delete Wrapper 及服务链、MPJ 联表、mapper XML 动态标签（if / foreach / choose）、<code>@Select</code> 注解 SQL、Spring Data 派生查询、Specification / CriteriaQuery、HQL / <code>@Query</code>、JdbcTemplate / 自研 DAO 字符串 SQL、Querydsl / EasyQuery / Xbatis / MDS，Java 与 Kotlin 通用；mapper XML、注解与 Wrapper 链内补全表名、列名与 <code>#{}</code> 参数</li>
+            <li><b>编码期预览 · SQL 来源全覆盖</b>：Lambda / Query / Update / Delete Wrapper 及服务链、MPJ 联表、mapper XML 动态标签（if / foreach / choose）、<code>@Select</code> 注解 SQL、Spring Data 派生查询、Specification / CriteriaQuery、HQL / <code>@Query</code>、JdbcTemplate / 自研 DAO 字符串 SQL、Querydsl / EasyQuery / Xbatis / MDS；Java Wrapper 完整预览，Kotlin Wrapper 当前可识别链路但无法可靠推断实体时会明确提示、不生成猜测 SQL；mapper XML、注解与 Wrapper 链内补全表名、列名与 <code>#{}</code> 参数</li>
             <li><b>真实参数一键回填</b>：<code>?</code> 替换为实际值（LIKE 自动拼百分号、按字段类型加引号），命名参数 <code>:name</code> 按名回填；OGNL 条件勾选；逻辑删除 / 乐观锁 / 多租户 / 数据权限按 MyBatis-Plus 拦截器语义还原；11 种数据库方言自动格式化</li>
             <li><b>运行期捕获（默认开启）</b>：向运行中的应用挂载轻量 agent 直接采集真实执行——不依赖日志格式，附目标库、毫秒级耗时、影响行数与执行报错；慢查询标红并给出静态性能建议，真实源码位置一键跳回、调用栈悬停弹层可逐帧跳转。控制台日志（MyBatis / Hibernate / JdbcTemplate 三族）作为不改工程的回落通道，按线程分桶、去重过滤、着色标记；保活刷屏一键屏蔽，历史 SQL 自动落盘</li>
             <li><b>生成与转换 · SQL 反向转 Java</b>：一键生成可直接编译的 QueryWrapper / LambdaQueryWrapper / Wrappers / MPJLambdaWrapper 代码（增删改查与多表 JOIN）</li>
@@ -51,7 +51,7 @@
 
         <h3>English</h3>
         <ul>
-            <li><b>Preview &middot; all SQL sources covered</b>: Wrapper chains (Lambda / Query / Update / Delete, service chains, MPJ joins), mapper XML dynamic tags (if / foreach / choose), <code>@Select</code> annotation SQL, Spring Data derived queries, Specification / CriteriaQuery, HQL / <code>@Query</code>, JdbcTemplate / custom-DAO string SQL, Querydsl / EasyQuery / Xbatis / MDS &mdash; Java and Kotlin; completion for table / column names and <code>#{}</code> parameters in mapper XML, annotations and Wrapper chains</li>
+            <li><b>Preview &middot; all SQL sources covered</b>: Wrapper chains (Lambda / Query / Update / Delete, service chains, MPJ joins), mapper XML dynamic tags (if / foreach / choose), <code>@Select</code> annotation SQL, Spring Data derived queries, Specification / CriteriaQuery, HQL / <code>@Query</code>, JdbcTemplate / custom-DAO string SQL, Querydsl / EasyQuery / Xbatis / MDS. Java Wrapper preview is fully supported; Kotlin Wrapper chains are recognized, but when entity metadata cannot be inferred reliably the plugin explains the limitation instead of generating guessed SQL. Completion covers table / column names and <code>#{}</code> parameters in mapper XML, annotations and Wrapper chains</li>
             <li><b>Real parameters</b>: <code>?</code> replaced with actual values (LIKE auto-wildcard, type-aware quoting), named parameters <code>:name</code>; OGNL condition checkboxes; logic-delete / optimistic-lock / multi-tenant / data-permission replay as MyBatis-Plus interceptors would; formatting for 11 database dialects</li>
             <li><b>Runtime capture (on by default)</b>: an agent attached to the running app collects every statement directly &mdash; no log format required, with target database, exact duration, affected rows and execution errors; slow queries are marked red with static performance advice, source locations come from the real call stack for one-click jump-back, and a call-stack popup navigates frame by frame. Console logs (MyBatis / Hibernate / JdbcTemplate) remain as the no-code-change fallback, bucketed by thread, de-duplicated and color-marked; one-click suppression for keep-alive noise; history archiving</li>
             <li><b>Generate &middot; SQL to Java</b>: convert any SQL back into compilable QueryWrapper / LambdaQueryWrapper / Wrappers / MPJLambdaWrapper code (CRUD and joins)</li>
@@ -79,13 +79,13 @@
          CHANGELOG.md [Unreleased] 自动提取会取错分区（多 ### Added），显式配置在构建脚本 -->
     <!-- 插件兼容性声明
          （M14.7 动态插件支持）：仅依赖 com.intellij.java（内置模块，常驻加载）；
-         移除 org.jetbrains.kotlin 运行时依赖——本插件不处理 Kotlin PSI，该依赖为模板遗留，
-         且 Kotlin 插件不支持动态卸载（依赖非动态插件会导致本插件也无法免重启安装/更新）；
+         Kotlin 支持不静态引用 Kotlin PSI API，只在可选描述文件注册语言入口并读取通用 PsiFile 文本；
+         Kotlin 插件不支持动态卸载，故依赖保持 optional，缺席时主插件仍可加载；
          kotlin-stdlib 由构建自动打包进插件 jar，功能不受影响 -->
     <depends>com.intellij.java</depends>
     <!-- T-M24-04 XML 预览：com.intellij.modules.xml（平台 bundled 模块，IDE 恒启用）——XML PSI 定位语句 + XML gutter 注册 -->
     <depends>com.intellij.modules.xml</depends>
-    <!-- F-4：Kotlin Wrapper 链 gutter + 预览（org.jetbrains.kotlin 平台 bundled 插件，IDE 恒启用） -->
+    <!-- F-4：Kotlin Wrapper 链文本识别与主动入口降级说明；gutter 在不能可靠求表列时保持隐藏 -->
     <depends optional="true" config-file="kotlin-optional.xml">org.jetbrains.kotlin</depends>
 
     <!-- M17 执行 SQL：com.intellij.database（数据源/控制台，仅 Ultimate 捆绑）——
@@ -276,6 +276,18 @@
              全局/语言级 inlay 开关关闭（本插件不新增设置页） -->
         <codeInsight.inlayProvider language="SQL"
                                    implementationClass="cn.song.mybatisplus.visualizer.ui.inlay.PreviewInsertColumnInlayProvider"/>
+
+        <!-- UI025：预览编辑器「表中无此列」红色波浪 + 悬停建议。
+             EP 名与形态按 243/253 平台 META-INF/LangExtensionPoints.xml 实测：
+             `name="externalAnnotator" beanClass="com.intellij.lang.LanguageExtensionPoint"`
+             （`<with attribute="implementationClass" implements="...ExternalAnnotator"/>`），
+             注册属性为 language + implementationClass（与 inlayProvider 同为 language 级）。
+             **注册是 language 级**——对 IDE 内所有 SQL 编辑器生效，故 annotator 首行做
+             预览面板专用作用域闸门（预览临时文件名紧致判据 + 插件自有 exec 控制台路径），
+             用户自己的 .sql 文件零标注，见 PreviewSchemaAnnotationScope KDoc。
+             数据侧只读已预热的精确目标缓存（SchemaValidationGate 三参入口），无 DB I/O。 -->
+        <externalAnnotator language="SQL"
+                           implementationClass="cn.song.mybatisplus.visualizer.ui.annotate.PreviewUnknownColumnAnnotator"/>
 
         <!-- M9→原生SQL：补全注册到 SQL 语言。实测全语言注册（无 language）在补全调度时不被
      CompletionContributor.forLanguage 返回（M34 补全失效根因之一），必须显式 language；
@@ -499,6 +511,13 @@
                     description="action.cn.song.mybatisplus.visualizer.SampleSelectedTable.description"
                     icon="/icons/sqlGutter.svg">
             </action>
+        </group>
+
+        <!-- UI015：自建预览保留基础编辑菜单，仅追加既有模板组，不引入主文件编辑器的全部动作。 -->
+        <group id="cn.song.mybatisplus.visualizer.PreviewEditorPopupMenu">
+            <reference ref="BasicEditorPopupMenu"/>
+            <separator/>
+            <reference ref="cn.song.mybatisplus.visualizer.SqlTemplateGroup"/>
         </group>
 
         <!-- T-ErrReport：帮助菜单反馈入口（手动形态报告对话框，提交直达官网需求池；
