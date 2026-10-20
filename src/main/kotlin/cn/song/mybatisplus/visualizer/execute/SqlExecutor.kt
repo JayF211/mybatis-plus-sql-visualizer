@@ -48,6 +48,8 @@ object SqlExecutor {
         dialectGateRequest: ExecutionDialectGate.Request? = null,
         onDialectGate: ((ExecutionDialectGate.Verdict) -> Unit)? = null,
         onSubmission: ((ExecutionSubmission) -> Unit)? = null,
+        /** T-DialectGateUx：强制弹数据源选择器（方言闸门的「切换数据源」入口）。 */
+        forceChoose: Boolean = false,
     ) {
         executionAttemptForTest?.let { it(sql); return }
         val completed = java.util.concurrent.atomic.AtomicBoolean(false)
@@ -80,6 +82,7 @@ object SqlExecutor {
             dialectGateRequest = dialectGateRequest,
             onDialectGate = onDialectGate,
             onSubmission = if (onSubmission == null) null else receipt,
+            forceChoose = forceChoose,
         )
     }
 

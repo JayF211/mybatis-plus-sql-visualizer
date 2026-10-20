@@ -682,16 +682,81 @@ internal fun SqlPreviewPanel.onExecutionDialectGate(
             if (target != null && rerenderForExecutionTarget(target)) {
                 resultPanel.showStatus(cn.song.mybatisplus.visualizer.execute.DataSourceSelector.dialectGateMessage(verdict))
             } else {
-                resultPanel.showError(cn.song.mybatisplus.visualizer.execute.DataSourceSelector.dialectGateMessage(
+                showDialectGateError(
                     verdict.copy(status = cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Status.RERENDER_UNAVAILABLE),
-                ))
+                )
             }
         }
+        // T-DialectGateUx：方言不匹配的两态给就地出口（切数据源 / 打开方言设置），
+        // 其余阻断（目标未知、渲染未知）没有可直接跳转的设置面，保持纯文案。
+        cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Status.MANUAL_CONFLICT,
+        cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Status.RERENDER_UNAVAILABLE ->
+            showDialectGateError(verdict)
         else -> resultPanel.showError(
             cn.song.mybatisplus.visualizer.execute.DataSourceSelector.dialectGateMessage(verdict),
         )
     }
 }
+
+/**
+ * T-DialectGateUx：阻断态错误 + 两个就地出口。
+ *
+ *  - 「切换数据源」→ [executeSql] 带 forceChoose 重开选择器（跳过已准备会话）；
+ *  - 「打开 SQL 方言设置」→ 平台设置页（EP id = "SQL Dialects"，按 id 取避免整棵设置树实例化）。
+ *
+ * 文案只解释原因，动作直接通向修复点；用户不必自己翻设置或文档。
+ */
+internal fun SqlPreviewPanel.showDialectGateError(
+    verdict: cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Verdict,
+) {
+    val proj = project
+    val message = cn.song.mybatisplus.visualizer.execute.DataSourceSelector.dialectGateMessage(verdict)
+    if (proj == null) {
+        resultPanel.showError(message)
+        return
+    }
+    val settingsAvailable = runCatching { findSqlDialectConfigurable(proj) != null }.getOrDefault(false)
+    resultPanel.showErrorWithActions(
+        message,
+        fixLabel = MpSqlVisualizerBundle.message("execute.dialectGate.action.switchDataSource"),
+        fixTooltip = MpSqlVisualizerBundle.message("execute.dialectGate.action.switchDataSource.tip"),
+        fix = { executeSql(forceChoose = true) },
+        settingsLabel = if (settingsAvailable) {
+            MpSqlVisualizerBundle.message("execute.dialectGate.action.openSettings")
+        } else null,
+        settingsTooltip = MpSqlVisualizerBundle.message("execute.dialectGate.action.openSettings.tip"),
+        settings = { openSqlDialectSettings(proj) },
+    )
+}
+
+/** 方言设置页的 Configurable EP id（Database 插件注册，见 SqlPlugin.xml）。 */
+internal const val SQL_DIALECTS_SETTING_ID = "SQL Dialects"
+
+/** T-DialectGateUx：打开「设置 → 语言与框架 → SQL 方言」页。 */
+internal fun openSqlDialectSettings(proj: Project) {
+    val util = com.intellij.openapi.options.ShowSettingsUtil.getInstance()
+    val configurable = findSqlDialectConfigurable(proj)
+    if (configurable != null) {
+        util.showSettingsDialog(proj, configurable)
+    } else {
+        // 兜底：按本地化显示名定位（英/中 IDE 下该页名与 id 同源）
+        util.showSettingsDialog(proj, SQL_DIALECTS_SETTING_ID)
+    }
+}
+
+/**
+ * 按 configurable EP **id** 取方言设置页，不实例化整棵设置树。
+ *
+ * `Settings.find(Class)` / `showSettingsDialog(project, Class)` 会 `ConfigurableVisitor.findByType`
+ * 遍历并实例化全部 configurable（Kotlin scripting 页构造器会做文件名索引 → 真机 EDT 慢操作断言）；
+ * `findById` 只包一层 wrapper，页面本身在展示时才实例化。
+ */
+private fun findSqlDialectConfigurable(proj: Project): com.intellij.openapi.options.Configurable? =
+    runCatching {
+        val group = com.intellij.openapi.options.ex.ConfigurableExtensionPointUtil
+            .getConfigurableGroup(proj, true)
+        com.intellij.openapi.options.ex.ConfigurableVisitor.findById(SQL_DIALECTS_SETTING_ID, listOf(group))
+    }.getOrNull()
 
 /** 模型/批量 CRUD 载体的无损目标方言重渲染；成功只改预览，不提交当前点击。 */
 internal fun SqlPreviewPanel.rerenderForExecutionTarget(targetDialectName: String): Boolean {
@@ -737,7 +802,7 @@ internal fun SqlPreviewPanel.rerenderForExecutionTarget(targetDialectName: Strin
     return true
 }
 
-internal fun SqlPreviewPanel.executeSql() {
+internal fun SqlPreviewPanel.executeSql(forceChoose: Boolean = false) {
     val proj = project ?: return
     // M36.4：优先取原生编辑器文档，兜底自研编辑器
     val sql = nativeEditorDoc?.text?.takeIf { it.isNotBlank() }
@@ -797,7 +862,9 @@ internal fun SqlPreviewPanel.executeSql() {
     // 2. 控制台已就绪（M36.5 默认展示）→ 同步 SQL 到控制台文档后直接执行；
     //    未就绪 → 走准备+执行合一全链（准备完成后控制台内嵌右侧）
     resultPanel.showLoading()
-    if (SqlExecutor.isPrepared()) {
+    // T-DialectGateUx：forceChoose（错误行「切换数据源」）必须跳过已准备控制台，
+    // 否则会继续复用与原目标同源的会话，闸门再次拦截。
+    if (SqlExecutor.isPrepared() && !forceChoose) {
         // T-RefreshDbSteal F4：isPrepared 只证明插件级共享控制台存在，不证明它还挂在本面板——
         // 失联时 executePrepared 会把 SQL 执行到别的弹窗/Database 工具窗的控制台（症状③）。
         // 先走恢复链把控制台重嵌（prepareConsole 复用链同步 SQL + onConsole 重嵌），
@@ -854,6 +921,7 @@ internal fun SqlPreviewPanel.executeSql() {
         onErrorRich = { info -> showErrorRichWithLocate(info) },
         dialectGateRequest = dialectGateRequest,
         onDialectGate = { verdict -> onExecutionDialectGate(verdict) },
+        forceChoose = forceChoose,
     )
 }
 
