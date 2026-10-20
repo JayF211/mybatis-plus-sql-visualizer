@@ -1,5 +1,7 @@
 package cn.song.mybatisplus.visualizer.model;
 
+import cn.song.mybatisplus.visualizer.sql.Dialect;
+import cn.song.mybatisplus.visualizer.sql.DialectDecisionEngine;
 import cn.song.mybatisplus.visualizer.sql.ParamHint;
 import cn.song.mybatisplus.visualizer.sql.perf.PerfWarning;
 import cn.song.mybatisplus.visualizer.xml.PagesColumn;
@@ -132,6 +134,14 @@ public final class PreviewResult {
      * 使开关切换不再影响参数历史归属。null = 回落 {@code sql}（存量行为零变化）。</p>
      */
     private final String historyFingerprintSeed;
+    /** 分页后处理新增占位的来源序列；与原 SQL 的位置映射分开保存，重渲染不得按名称去重。 */
+    private final List<String> paginationParamSources;
+    private final Dialect renderedDialect;
+    private final DialectDecisionEngine.Decision dialectDecision;
+    /** R90：本次预览实际入库条目，recordHistory 在返回结果前设置；副本保留，未知为空。 */
+    private String historyEntryId = "";
+    /** ShardingSphere 路由日志原文，只读附注，不参与 SQL 编辑、复制或执行。 */
+    private final String actualSql;
 
     public PreviewResult(String sql, String compactSql, List<String> unresolvedParams, String paramTable,
                          WrapperType wrapperType, String tableName, String warning, List<String> columns,
@@ -191,7 +201,9 @@ public final class PreviewResult {
                          Map<String, ParamHint> namedParamHints, String stackDigest, boolean hasDollarRawSegments,
                          String countSql, String paginationLimitLine,
                          List<String> placeholderParamNames, Set<String> duplicateParamNames,
-                         SelectStatement diagramStatement, String historyFingerprintSeed) {
+                         SelectStatement diagramStatement, String historyFingerprintSeed,
+                         List<String> paginationParamSources, Dialect renderedDialect,
+                         DialectDecisionEngine.Decision dialectDecision, String historyEntryId, String actualSql) {
         this.sql = sql;
         this.compactSql = compactSql;
         this.unresolvedParams = unresolvedParams;
@@ -221,6 +233,30 @@ public final class PreviewResult {
         this.duplicateParamNames = duplicateParamNames != null ? duplicateParamNames : Set.of();
         this.diagramStatement = diagramStatement;
         this.historyFingerprintSeed = historyFingerprintSeed;
+        this.paginationParamSources = paginationParamSources != null ? paginationParamSources : List.of();
+        this.renderedDialect = renderedDialect;
+        this.dialectDecision = dialectDecision;
+        this.historyEntryId = historyEntryId != null ? historyEntryId : "";
+        this.actualSql = actualSql;
+    }
+
+    /** K2J 互操作：master 新五参取默认值的 29 参形态（既有调用点零改动）。 */
+    public PreviewResult(String sql, String compactSql, List<String> unresolvedParams, String paramTable,
+                         WrapperType wrapperType, String tableName, String warning, List<String> columns,
+                         Map<String, String> columnComments, String tableComment, SqlPreviewModel previewModel,
+                         List<ParamHint> paramHints, List<TableInfo> candidateTables, BatchModel batchModel,
+                         XmlPreviewModel xmlModel, Map<String, String> initialParamValues, List<PerfWarning> perfWarnings,
+                         List<FillClause> fillClauses, String previousSql, List<PagesColumn> pagesColumns,
+                         Map<String, ParamHint> namedParamHints, String stackDigest, boolean hasDollarRawSegments,
+                         String countSql, String paginationLimitLine,
+                         List<String> placeholderParamNames, Set<String> duplicateParamNames,
+                         SelectStatement diagramStatement, String historyFingerprintSeed) {
+        this(sql, compactSql, unresolvedParams, paramTable, wrapperType, tableName, warning, columns,
+                columnComments, tableComment, previewModel, paramHints, candidateTables, batchModel, xmlModel,
+                initialParamValues, perfWarnings, fillClauses, previousSql, pagesColumns,
+                namedParamHints, stackDigest, hasDollarRawSegments, countSql, paginationLimitLine,
+                placeholderParamNames, duplicateParamNames, diagramStatement, historyFingerprintSeed,
+                null, null, null, "", null);
     }
 
     /** K2J 互操作：master 新两参（diagramStatement/historyFingerprintSeed）取默认 null 的历史 27 参形态。 */
@@ -391,6 +427,41 @@ public final class PreviewResult {
     /** 参数历史缓存键的稳定指纹种子（null = 回落 sql）。 */
     public String getHistoryFingerprintSeed() {
         return historyFingerprintSeed;
+    }
+
+    public List<String> getPaginationParamSources() {
+        return paginationParamSources;
+    }
+
+    public Dialect getRenderedDialect() {
+        return renderedDialect;
+    }
+
+    public DialectDecisionEngine.Decision getDialectDecision() {
+        return dialectDecision;
+    }
+
+    public String getHistoryEntryId() {
+        return historyEntryId;
+    }
+
+    public void setHistoryEntryId(String historyEntryId) {
+        this.historyEntryId = historyEntryId != null ? historyEntryId : "";
+    }
+
+    public String getActualSql() {
+        return actualSql;
+    }
+
+    /** effectiveDialect：previewModel/batchModel 方言优先，缺省取本次渲染瞬态方言。 */
+    public Dialect getEffectiveDialect() {
+        if (previewModel != null && previewModel.getDialect() != null) {
+            return previewModel.getDialect();
+        }
+        if (batchModel != null && batchModel.getDialect() != null) {
+            return batchModel.getDialect();
+        }
+        return renderedDialect;
     }
 
     public PreviewResult copy(String sql, String compactSql, List<String> unresolvedParams, String paramTable,
