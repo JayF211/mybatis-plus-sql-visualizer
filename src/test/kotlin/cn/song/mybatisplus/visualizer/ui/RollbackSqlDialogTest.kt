@@ -223,19 +223,62 @@ class RollbackSqlDialogTest : BasePlatformTestCase() {
         }
     }
 
-    fun testRunSnapshotQueryNoDataSourceShowsHint() {
+    fun testRunSnapshotQueryWithoutDataSourcePromptsSelectorAndRetries() {
+        // 用户真机反馈：无数据源时应直接弹选择器并自动重试，而不是只报错。
+        val dialog = newDialog(unableUpdateResult(), "UPDATE")
+        var target: Any? = null
+        var prompted = false
+        dialog.snapshotQueryTargetForTest = { target }
+        dialog.snapshotPromptForTest = { _, _, _ -> prompted = true }
+        dialog.snapshotAwaitBindForTest = { _, _, onBound, _ ->
+            target = SnapshotTarget()
+            onBound()
+        }
+        val oldRunner = PreviewSideQuery.runnerForTest
+        PreviewSideQuery.runnerForTest = { _, _, _, _, cb ->
+            cb(
+                PreviewSideQuery.Result.Table(
+                    cn.song.mybatisplus.visualizer.mcp.McpExplainFormatter.RawResult(
+                        listOf("id", "age"), listOf(listOf("1", "20")),
+                    ),
+                ),
+            )
+        }
+        try {
+            dialog.runSnapshotQuery()
+            assertTrue("无数据源应先弹数据源选择器", prompted)
+            assertTrue("绑定后应自动重试并填充表格", dialog.snapshotTableShownForTest())
+            assertTrue(
+                "重试后不应残留无数据源告警：${dialog.warningsTextForTest()}",
+                !dialog.warningsTextForTest().contains(
+                    MpSqlVisualizerBundle.message("rollback.snapshot.noDataSource"),
+                ),
+            )
+        } finally {
+            PreviewSideQuery.runnerForTest = oldRunner
+            dialog.snapshotPromptForTest = null
+            dialog.snapshotAwaitBindForTest = null
+            dialog.doDispose()
+        }
+    }
+
+    fun testRunSnapshotQueryWithoutDataSourceGiveUpShowsHint() {
         val dialog = newDialog(unableUpdateResult(), "UPDATE")
         try {
             dialog.snapshotQueryTargetForTest = { null }
+            dialog.snapshotPromptForTest = { _, _, _ -> }
+            dialog.snapshotAwaitBindForTest = { _, _, _, onGiveUp -> onGiveUp() }
             dialog.runSnapshotQuery()
             assertTrue(
-                "无绑定数据源应提示：${dialog.warningsTextForTest()}",
+                "取消选择后应提示：${dialog.warningsTextForTest()}",
                 dialog.warningsTextForTest().contains(
                     MpSqlVisualizerBundle.message("rollback.snapshot.noDataSource"),
                 ),
             )
             assertTrue("快照框保持为空", dialog.pasteAreaForTest().text.isEmpty())
         } finally {
+            dialog.snapshotPromptForTest = null
+            dialog.snapshotAwaitBindForTest = null
             dialog.doDispose()
         }
     }

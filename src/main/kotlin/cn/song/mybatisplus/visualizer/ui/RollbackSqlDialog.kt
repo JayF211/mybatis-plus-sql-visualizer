@@ -102,6 +102,14 @@ class RollbackSqlDialog(
     @Volatile
     internal var snapshotQueryTargetForTest: (() -> Any?)? = null
 
+    /** 测试缝：数据源选择器弹出（生产走 [DataSourceSelector.prepareConsole]）。 */
+    @Volatile
+    internal var snapshotPromptForTest: ((Project, String, (String) -> Unit) -> Unit)? = null
+
+    /** 测试缝：绑定等待（生产走 [SqlPreviewPanel.awaitDataSourceBoundThen]）。 */
+    @Volatile
+    internal var snapshotAwaitBindForTest: ((Project, Int, () -> Unit, () -> Unit) -> Unit)? = null
+
     // 底部动作以字段持有——DialogWrapper 无公开 getActions()（javap 实证），粘贴生成后
     // 启用态只能经自身引用刷新；字段初始化先于 init()（createActions 在 init() 内调用）
     private val executeAction = object : DialogWrapperAction(MpSqlVisualizerBundle.message("rollback.action.execute")) {
@@ -353,8 +361,9 @@ class RollbackSqlDialog(
             cn.song.mybatisplus.visualizer.execute.DataSourceSelector.boundConsoleDataSource()
         }.getOrNull()
         if (target == null) {
-            warningLabel.text =
-                "<html>${escapeHtml(MpSqlVisualizerBundle.message("rollback.snapshot.noDataSource"))}</html>"
+            // 用户真机反馈：无数据源时不该只报「请先绑定」，应直接弹数据源选择器，绑定后自动重试
+            //（与 DML 影响面预演/EXPLAIN 的 T-UI030 链路同款；只准备/绑定，不提交任何语句）。
+            promptDataSourceThenRetrySnapshot(proj, sql)
             return
         }
         warningLabel.text = ""
@@ -406,6 +415,52 @@ class RollbackSqlDialog(
                 cell.replace('\t', ' ').replace('\n', ' ').replace('\r', ' ')
             })
         }
+    }
+
+    /**
+     * 无绑定数据源：弹数据源选择器（只准备/绑定，不提交任何语句），绑定成功后自动重试快照查询；
+     * 取消/超时收口为原有说明文案。链路与 DML 影响面预演 / EXPLAIN 的 T-UI030 同款，
+     * 代际沿用面板 `explainStructuredGeneration`（预览切换即停表，避免晚到重试打到新预览）。
+     */
+    private fun promptDataSourceThenRetrySnapshot(proj: Project, sql: String) {
+        val p = panel ?: return
+        warningLabel.text = ""
+        val errorShown = java.util.concurrent.atomic.AtomicBoolean(false)
+        if (cn.song.mybatisplus.visualizer.execute.ExplainFallbackGuidance.shouldPromptForDataSource(
+                cn.song.mybatisplus.visualizer.execute.DataSourceSelector.isPrepareInFlight(),
+            )
+        ) {
+            val prompt = snapshotPromptForTest
+                ?: { project: Project, s: String, onError: (String) -> Unit ->
+                    cn.song.mybatisplus.visualizer.execute.DataSourceSelector.prepareConsole(
+                        project, s, onError = onError,
+                    )
+                }
+            runCatching {
+                prompt(proj, sql) { message ->
+                    errorShown.set(true)
+                    warningLabel.text = "<html>${escapeHtml(message)}</html>"
+                }
+            }.onFailure { e ->
+                errorShown.set(true)
+                warningLabel.text = "<html>${escapeHtml(e.message ?: e.javaClass.simpleName)}</html>"
+            }
+        }
+        val await = snapshotAwaitBindForTest
+            ?: { project: Project, gen: Int, onBound: () -> Unit, onGiveUp: () -> Unit ->
+                p.awaitDataSourceBoundThen(project, gen, onBound, onGiveUp)
+            }
+        await(
+            proj,
+            p.explainStructuredGeneration,
+            { runSnapshotQuery() },
+            {
+                if (!errorShown.get()) {
+                    warningLabel.text = "<html>${escapeHtml(
+                        MpSqlVisualizerBundle.message("rollback.snapshot.noDataSource"))}</html>"
+                }
+            },
+        )
     }
 
     private fun snapshotInputChanged() {
