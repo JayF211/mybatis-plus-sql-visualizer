@@ -584,6 +584,8 @@ internal fun SqlPreviewPanel.clear() {
     metaCoreText = ""
     metaTooltipCore = ""
     metaTooltipSuffix = ""
+    // T-DmlImpactProminence：影响行数试算横幅随清空复位（下次试算重新挂）
+    clearDmlImpactBanner()
     // T-SourceJumpFunnel P6：tooltip 基线同步复位（行内提示态据此拼接，不复用上一份预览的残留）
     metaTooltipBase = ""
     metaLabel.toolTipText = null

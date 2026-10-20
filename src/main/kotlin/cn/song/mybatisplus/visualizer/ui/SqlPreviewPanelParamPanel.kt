@@ -632,8 +632,28 @@ internal fun SqlPreviewPanel.showDmlImpactResult(text: String, error: Boolean, t
     label.text = fieldFillText(text, label.font, JBUI.scale(260))
     label.toolTipText = tooltip ?: text
     label.foreground = if (error) JBColor.RED else UIUtil.getContextHelpForeground()
+    // T-DmlImpactProminence（用户真机反馈：左下角灰字不够明显）：结果同时挂到顶部独立横幅
+    // （蓝色加粗；失败红色），与降级/渲染警示各占一行、互不抢位。
+    showDmlImpactBanner(text, error)
     paramPanel.revalidate()
     paramPanel.repaint()
+}
+
+/** T-DmlImpactProminence：影响行数结果横幅显隐与配色（独立行，见 [SqlPreviewPanel.dmlImpactBanner]）。 */
+internal fun SqlPreviewPanel.showDmlImpactBanner(text: String, error: Boolean) {
+    dmlImpactBannerLabel.text = text
+    dmlImpactBannerLabel.foreground = if (error) JBColor.RED
+    else JBColor.namedColor("Link.activeForeground", JBColor.BLUE)
+    val base = com.intellij.util.ui.UIUtil.getLabelFont()
+    dmlImpactBannerLabel.font = if (error) base else base.deriveFont(java.awt.Font.BOLD)
+    dmlImpactBanner.isVisible = true
+    dmlImpactBanner.revalidate()
+    dmlImpactBanner.repaint()
+}
+
+internal fun SqlPreviewPanel.clearDmlImpactBanner() {
+    dmlImpactBanner.isVisible = false
+    dmlImpactBannerLabel.text = ""
 }
 
 /** 模拟值在场时置灰对应的普通参数输入框；清空模拟值后恢复。 */

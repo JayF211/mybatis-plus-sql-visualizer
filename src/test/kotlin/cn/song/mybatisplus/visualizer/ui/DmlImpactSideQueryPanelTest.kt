@@ -52,6 +52,12 @@ class DmlImpactSideQueryPanelTest : BasePlatformTestCase() {
             assertTrue("内联结果应显示行数：${label.text}", label.text.contains("7"))
             assertEquals("内联结果应为灰色说明", UIUtil.getContextHelpForeground(), label.foreground)
             assertTrue("内联行 tooltip 应包含试算语句详情：${label.toolTipText}", label.toolTipText.contains("COUNT(*)"))
+            // T-DmlImpactProminence：结果同时挂到顶部独立横幅（蓝色加粗），比左下角灰字显眼。
+            assertTrue("结果横幅应可见", p.dmlImpactBannerForTest().isVisible)
+            assertTrue(
+                "横幅应显示结果：${p.dmlImpactBannerTextForTest()}",
+                p.dmlImpactBannerTextForTest().contains("7"),
+            )
         } finally {
             dmlImpactTargetForTest = null
             PreviewSideQuery.runnerForTest = null
@@ -134,6 +140,11 @@ class DmlImpactSideQueryPanelTest : BasePlatformTestCase() {
             val label = p.impactResultLabel!!
             assertTrue("失败原因应内联展示：${label.text}", label.text.contains("boom"))
             assertEquals(com.intellij.ui.JBColor.RED, label.foreground)
+            assertTrue("失败横幅应可见", p.dmlImpactBannerForTest().isVisible)
+            assertTrue(
+                "失败原因应进横幅：${p.dmlImpactBannerTextForTest()}",
+                p.dmlImpactBannerTextForTest().contains("boom"),
+            )
         } finally {
             dmlImpactTargetForTest = null
             PreviewSideQuery.runnerForTest = null

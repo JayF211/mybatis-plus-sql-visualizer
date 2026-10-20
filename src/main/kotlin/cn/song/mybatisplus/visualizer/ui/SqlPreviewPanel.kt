@@ -611,6 +611,20 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
         }
     }
 
+    /**
+     * T-DmlImpactProminence（用户真机反馈：左下角灰字不够明显）：影响行数试算结果独立横幅行——
+     * 与降级/渲染警示**并存**（各自占一行，不抢同一显示位），蓝色加粗；失败红色。
+     */
+    internal val dmlImpactBanner = JBPanel<JBPanel<*>>(java.awt.BorderLayout()).apply {
+        isOpaque = false
+        isVisible = false
+    }
+    internal val dmlImpactBannerLabel = JBLabel().apply {
+        putClientProperty("html.disable", true)
+        border = JBUI.Borders.empty(4, 8, 4, 8)
+        foreground = com.intellij.ui.JBColor.namedColor("Link.activeForeground", com.intellij.ui.JBColor.BLUE)
+    }
+
     /** T-DollarInjectMark：最近一次 XML 渲染的 `${}` 直替计数（非 XML 路径恒 0）。 */
     internal var xmlDollarSubstitutions = 0
 
@@ -713,7 +727,16 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
             isOpaque = false
             add(topRow, BorderLayout.NORTH)
             add(buildBindStateRow(), BorderLayout.CENTER)
-            add(degradationBanner, BorderLayout.SOUTH)
+            // T-DmlImpactProminence：降级横幅与影响行数结果横幅上下各占一行（并存不抢位）
+            dmlImpactBanner.add(dmlImpactBannerLabel, BorderLayout.CENTER)
+            add(
+                JBPanel<JBPanel<*>>(BorderLayout()).apply {
+                    isOpaque = false
+                    add(degradationBanner, BorderLayout.NORTH)
+                    add(dmlImpactBanner, BorderLayout.CENTER)
+                },
+                BorderLayout.SOUTH,
+            )
         }
         add(northHost, BorderLayout.NORTH)
         // T-PreviewTopOverlap F3：宽度预算截断跟随尺寸变化（首显 + 拉伸/缩窄；宽度未变短路）
@@ -1164,6 +1187,9 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
 
     /** T-PreviewUx-Pack #2：诚实降级横幅（显隐/文案/类别断言用）。 */
     internal fun degradationBannerForTest(): DegradationBanner = degradationBanner
+    /** T-DmlImpactProminence：影响行数结果横幅（显隐/文案断言用）。 */
+    internal fun dmlImpactBannerForTest(): JBPanel<JBPanel<*>> = dmlImpactBanner
+    internal fun dmlImpactBannerTextForTest(): String = dmlImpactBannerLabel.text
     /** P-05：当前 paramValues 快照（断言用）。 */
     internal fun paramValuesForTest(): Map<String, String> = paramValues.toMap()
     /** P-05：强制同步刷写历史缓存（测试用，绕过 debounce Timer）。 */

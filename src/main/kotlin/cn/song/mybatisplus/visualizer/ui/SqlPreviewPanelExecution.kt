@@ -18,6 +18,7 @@ import cn.song.mybatisplus.visualizer.util.EditorCommentShortcuts
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.xml.XmlPreviewModel
 import com.intellij.notification.Notification
+import com.intellij.ui.JBColor
 import com.intellij.notification.NotificationAction
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.application.ApplicationManager
@@ -193,11 +194,9 @@ internal fun SqlPreviewPanel.showRollbackSql() {
                     probe.targetTable,
                     capLine,
                 )
-                notifyDmlImpact(
-                    proj,
-                    MpSqlVisualizerBundle.message("dml.impact.probe.title"),
-                    probeBody,
-                )
+                // T-DmlImpactProminence（用户真机反馈）：不再发「试算语句/目标表」预演通知——
+                // 气泡讲的是探针而非结果，与内联/横幅结果并存时既冗余又易被误读。
+                // 探针详情保留在结果横幅的 tooltip（probeBody）里，需要时悬停可见。
                 val target = if (dmlImpactTargetForTest != null) dmlImpactTargetForTest!!.invoke() else runCatching {
                     cn.song.mybatisplus.visualizer.execute.DataSourceSelector.boundConsoleDataSource()
                 }.getOrNull()
@@ -1350,7 +1349,8 @@ private fun SqlPreviewPanel.executeViewHeader(): JComponent =
             java.awt.BorderLayout.WEST,
         )
         add(
-            smallButton(MpSqlVisualizerBundle.message("panel.backToPreview")) { backToPreview() },
+            primaryButton(MpSqlVisualizerBundle.message("panel.backToPreview")) { backToPreview() }
+                .apply { font = buttonFont() },
             java.awt.BorderLayout.EAST,
         )
     }
@@ -2037,6 +2037,24 @@ internal fun SqlPreviewPanel.buttonFont() = font.deriveFont(11f)
 
 internal fun SqlPreviewPanel.smallButton(text: String, action: () -> Unit): JButton = JButton(text).apply {
     font = buttonFont()
+    addActionListener { action() }
+}
+
+/**
+ * T-DmlImpactProminence：主行动按钮样式（蓝色实底）——用于「返回预览」「复制 SQL 并关闭」
+ * 这类需要一眼看到的显式出口。主题键缺失时回退固定蓝；文字用白/深色由主题键决定。
+ */
+internal fun applyPrimaryButtonStyle(button: JButton) {
+    button.isOpaque = true
+    button.background = JBColor.namedColor(
+        "Button.default.startBackground", JBColor(0x3574F0, 0x548AF7),
+    )
+    button.foreground = JBColor.namedColor("Button.default.foreground", JBColor.WHITE)
+    button.isFocusPainted = false
+}
+
+internal fun primaryButton(text: String, action: () -> Unit): JButton = JButton(text).apply {
+    applyPrimaryButtonStyle(this)
     addActionListener { action() }
 }
 
