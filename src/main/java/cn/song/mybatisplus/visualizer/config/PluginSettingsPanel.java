@@ -643,7 +643,7 @@ public class PluginSettingsPanel implements Disposable {
      * T-SourceJumpFunnel P1-3：源码捕获帧过滤前缀（一行一个前缀，如 {@code com.corp.engine.}）。
      * Apply 后经 CONFIG 热下发 agent（即时生效，无需重启应用），IDE 侧候选解析同步过滤。
      */
-    public final JBTextArea frameSkipPrefixesField = new JBTextArea(5, 40);
+    public final JBTextArea frameSkipPrefixesField = new JBTextArea(5, 24);
 
     {
         // T-SourceJumpFunnel：空态灰色占位提示（悬停 tooltip 之外的第一眼引导）
@@ -689,7 +689,7 @@ public class PluginSettingsPanel implements Disposable {
      * 语义与 {@link #frameSkipPrefixesField} 相反——名单内包名的帧即使来自 JAR 也按业务帧对待；
      * Apply 后随 CONFIG 热下发 agent。
      */
-    public final JBTextArea bizJarPrefixesField = new JBTextArea(5, 40);
+    public final JBTextArea bizJarPrefixesField = new JBTextArea(5, 24);
 
     {
         bizJarPrefixesField.getEmptyText().setText(MpSqlVisualizerBundle.message("settings.sourceFrameBizJarPrefixes.placeholder"));
@@ -798,6 +798,8 @@ public class PluginSettingsPanel implements Disposable {
 
     /** EXPLAIN 结构化渲染开关（R33）：面板执行计划按钮的结构化通道（默认开，失败自动回退原生控制台）。 */
     public final JBCheckBox explainStructuredCheck = new JBCheckBox();
+    public final JBCheckBox explainPlanRetentionCheck = new JBCheckBox();
+    public final JBLabel explainPlanRetentionDisclosure = new JBLabel();
 
     /** T-ExecTimeoutGuard：执行超时（秒，0=不限）——JBIntSlider 过重，JBTextField + 数字容错。 */
     public final JBTextField executionTimeoutField = new JBTextField(8);
@@ -1271,31 +1273,24 @@ public class PluginSettingsPanel implements Disposable {
      */
     public void refreshInferredLabel() {
         if (Objects.equals(dialectCombo.getSelectedItem(), autoDialectItem)) {
-            Project firstProject = null;
+            // 全局设置不把首个打开项目的方言冒充其他项目；项目唯一时展示决策状态。
+            java.util.List<Project> projects = new java.util.ArrayList<>();
             for (Project p : ProjectManager.getInstance().getOpenProjects()) {
-                firstProject = p;
-                break;
+                if (!p.isDisposed()) {
+                    projects.add(p);
+                }
             }
-            if (firstProject == null) {
-                dialectInferredLabel.setText(MpSqlVisualizerBundle.message("settings.dialect.inferred.none"));
-                return;
+            cn.song.mybatisplus.visualizer.sql.DialectDecisionEngine.Decision decision = null;
+            if (projects.size() == 1) {
+                try {
+                    decision = cn.song.mybatisplus.visualizer.sql.DialectRegistry.INSTANCE
+                            .decision(projects.get(0), null, null, null);
+                } catch (Throwable ignored) {
+                    decision = null;
+                }
             }
-            // T-PS5-04：agentUrl 读轻量持有者（不再经 AgentManager.getInstance 实例化服务——
-            // 设置页仅显示推断状态，不该顺带把增强捕获的守护线程带起来）
-            String agentUrl = cn.song.mybatisplus.visualizer.log.agent.AgentUrlRegistry
-                .lastConnectionUrl(firstProject);
-            String dataSourceUrl = null;
-            try {
-                dataSourceUrl = cn.song.mybatisplus.visualizer.sql.DataSourceUrlProbe.firstUrl(firstProject);
-            } catch (Throwable ignored) {
-                // runCatching().getOrNull() 等价：数据源探测失败按无候选处理
-            }
-            cn.song.mybatisplus.visualizer.sql.DialectInference.Result inferred =
-                cn.song.mybatisplus.visualizer.sql.DialectInference.infer(agentUrl, dataSourceUrl);
-            String name = inferred.dialectName() != null
-                ? inferred.dialectName()
-                : MpSqlVisualizerBundle.message("settings.dialect.inferred.none");
-            dialectInferredLabel.setText(MpSqlVisualizerBundle.message("settings.dialect.inferred", name));
+            dialectInferredLabel.setText(
+                    DialectSettingsStatusText.describe(projects.size(), decision));
         } else {
             Object manualItem = dialectCombo.getSelectedItem();
             dialectInferredLabel.setText(MpSqlVisualizerBundle.message(
@@ -1536,6 +1531,7 @@ public class PluginSettingsPanel implements Disposable {
             || paginationCountCheck.isSelected() != s.getPaginationCountEnabled()
             || jdbcSqlPreviewCheck.isSelected() != s.getJdbcSqlPreviewEnabled()
             || explainStructuredCheck.isSelected() != s.getExplainStructuredRender()
+            || explainPlanRetentionCheck.isSelected() != s.getExplainPlanRetentionEnabled()
             || !Objects.equals(parseIntOrNull(executionTimeoutField.getText().trim()), s.getExecutionTimeoutSeconds());
     }
 
@@ -1585,6 +1581,7 @@ public class PluginSettingsPanel implements Disposable {
             // M56 T-M56-08：增强捕获三行归位 SQL 日志区组后，改动判定随 sqlLog 分区
             || enhancedCaptureCheck.isSelected() != s.getEnhancedCaptureEnabled()
             || enhancedDesensitizeCheck.isSelected() != s.getEnhancedCaptureDesensitize()
+            || displayMaskCheck.isSelected() != s.getDisplayMaskEnabled()
             || !Objects.equals(parseIntOrNull(stackMaxFramesField.getText().trim()), s.getEnhancedCaptureStackMaxFrames())
             || !frameSkipPrefixesField.getText().trim().equals(s.getSourceFrameSkipPrefixes().trim())
             || !bizJarPrefixesField.getText().trim().equals(s.getSourceFrameBizJarPrefixes().trim())
@@ -1682,6 +1679,7 @@ public class PluginSettingsPanel implements Disposable {
             s.setPaginationCountEnabled(paginationCountCheck.isSelected());
             s.setJdbcSqlPreviewEnabled(jdbcSqlPreviewCheck.isSelected());
             s.setExplainStructuredRender(explainStructuredCheck.isSelected());
+            s.setExplainPlanRetentionEnabled(explainPlanRetentionCheck.isSelected());
             Integer executionTimeout = parseIntOrNull(executionTimeoutField.getText().trim());
             s.setExecutionTimeoutSeconds(executionTimeout != null
                 ? executionTimeout
@@ -1737,6 +1735,7 @@ public class PluginSettingsPanel implements Disposable {
             // M56 T-M56-08：增强捕获三行归位 SQL 日志区组后，读写随 sqlLog 分区（preview 分支不再处理）
             s.setEnhancedCaptureEnabled(enhancedCaptureCheck.isSelected());
             s.setEnhancedCaptureDesensitize(enhancedDesensitizeCheck.isSelected());
+            s.setDisplayMaskEnabled(displayMaskCheck.isSelected());
             // T-StackHoverUi：非法输入回缺省，越界钳位 [12,64]（agent 侧 setStackMaxFrames 同口径兜底）
             Integer stackMaxFrames = parseIntOrNull(stackMaxFramesField.getText().trim());
             s.setEnhancedCaptureStackMaxFrames(Math.min(
@@ -1886,6 +1885,7 @@ public class PluginSettingsPanel implements Disposable {
             paginationCountCheck.setSelected(s.getPaginationCountEnabled());
             jdbcSqlPreviewCheck.setSelected(s.getJdbcSqlPreviewEnabled());
             explainStructuredCheck.setSelected(s.getExplainStructuredRender());
+            explainPlanRetentionCheck.setSelected(s.getExplainPlanRetentionEnabled());
             executionTimeoutField.setText(String.valueOf(s.getExecutionTimeoutSeconds()));
         }
         if (sections.contains(SECTION_TABLE_MAPPING)) {
@@ -1961,6 +1961,7 @@ public class PluginSettingsPanel implements Disposable {
             // M56 T-M56-08：增强捕获三行归位 SQL 日志区组后，读写随 sqlLog 分区（preview 分支不再处理）
             enhancedCaptureCheck.setSelected(s.getEnhancedCaptureEnabled());
             enhancedDesensitizeCheck.setSelected(s.getEnhancedCaptureDesensitize());
+            displayMaskCheck.setSelected(s.getDisplayMaskEnabled());
             stackMaxFramesField.setText(String.valueOf(s.getEnhancedCaptureStackMaxFrames()));
             frameSkipPrefixesField.setText(s.getSourceFrameSkipPrefixes());
             bizJarPrefixesField.setText(s.getSourceFrameBizJarPrefixes());
