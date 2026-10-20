@@ -333,6 +333,6 @@ fun WrapperArg?.asSqlFragment(): String? = when (val v = (this as? WrapperArg.Va
 | 复制 SQL（rate 清空） | 剪贴板＝`... amount = amount * ? ...` —— 未填参数就是文本里的 `?`，无报错 | 剪贴板回读 |
 | 执行计划（本方法为 UPDATE） | 通知「未执行 EXPLAIN：语句以 update 开头，不是可解释的查询」——既有闸门，与 `?` 无关 | `img16_explain.png` |
 | 执行计划（含 `?` 的 SELECT，`list` 方法） | 方言闸门提示「所选数据源实际使用 MySQL，不是 PostgreSQL……本次点击未提交任何语句」——拦截理由是方言，不是占位符 | `img20_explain_select.png` |
-| 验收期间异常 | `idea.log` 12:24 之后无插件 ERROR/异常（无 `?` 相关报错） | 日志检查 |
+| 验收期间异常 | 无 `?`/片段相关的报错或异常。需如实登记：12:35:54 有 **2 条 `TransactionGuardImpl` SEVERE**（`Last Action: ConvertToSql`，来自第二次 EXPLAIN 提交）；同一沙盒日志在 **2026-10-18 15:45:50 已有同形两处**（更早的构建/会话），属既有形态，与本改动无关，未登记为本任务缺陷 | 日志检查 |
 
 三点说明：①`执行计划` 在本方法上必然不可执行（UPDATE 不在 EXPLAIN 白名单），所以补跑了同文件里带 `?` 的 SELECT（`list`）证明 EXPLAIN 链路对占位符无感；②那次 SELECT 的执行被「数据源实际方言与预览方言不一致」的既有闸门拦下（demo 数据源是 MySQL、模块推断为 PostgreSQL），属既有环境现象，与本改动无关，未登记为缺陷；③`?` 在复制产物里保留是设计行为（未填参数就是文本占位），不是错误。
