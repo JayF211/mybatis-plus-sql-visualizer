@@ -52,9 +52,11 @@ object UpdateJoinConverter : WrapperConverter {
             ?: MAIN_ALIAS_DEFAULT
 
         // SET 赋值（按源码顺序；setUpdateEntity 展开为多列）
+        // T-UpdateSetSqlConcat：解析失败的 SET 调用原文（UI 警示用）
+        val unparsedSets = mutableListOf<String>()
         val sets = chain.calls
             .filter { it.methodName in SET_METHODS }
-            .flatMap { parseSet(it, table, mainAlias) }
+            .flatMap { parseSet(it, table, mainAlias, unparsedSets) }
 
         // 联表子句（渲染于 FROM 之后、SET 之前）；T-FS-04：project 透传至类名兜底推断
         val joins = chain.calls
@@ -72,50 +74,77 @@ object UpdateJoinConverter : WrapperConverter {
             .conditions
 
         // last 非 limit 尾缀（U05 语义对齐）：`last("AND (... >= 0)")` 原样追加到语句末尾
-        val rawTail = chain.calls
+        // T-UpdateSetSqlConcat：片段位取 asSqlFragment——含运行期段的拼接不再整段丢弃
+        val tailFragment = chain.calls
             .filter { it.methodName == LAST }
-            .mapNotNull { (it.args.firstOrNull().asValue() as? SqlValue.Literal)?.unquoted }
-            .firstOrNull { !it.startsWith("limit", ignoreCase = true) }
+            .mapNotNull { it.args.firstOrNull().asSqlFragment() }
+            .firstOrNull { !it.text.startsWith("limit", ignoreCase = true) }
 
-        return UpdateStatement(table, sets, conditions, rawTail, tableAlias = mainAlias, joins = joins)
+        return UpdateStatement(
+            table, sets, conditions, tailFragment?.text,
+            tableAlias = mainAlias, joins = joins, unparsedSets = unparsedSets,
+            rawTailParams = tailFragment?.params.orEmpty(),
+        )
     }
 
     /**
      * 解析 set 类调用为赋值子句（T-M21-08）。
      *
+     * @param unparsedSets 解析失败的调用原文收集器（T-UpdateSetSqlConcat：UI 警示用）
      * @return 赋值列表（setUpdateEntity 展开为多列；解析失败返回空列表）
      */
-    private fun parseSet(call: WrapperCall, table: TableInfo, mainAlias: String): List<SetClause> = when (call.methodName) {
+    private fun parseSet(
+        call: WrapperCall,
+        table: TableInfo,
+        mainAlias: String,
+        unparsedSets: MutableList<String>,
+    ): List<SetClause> = when (call.methodName) {
         SET, SET_IF_EXISTS -> {
             // 布尔条件前缀剥离：`set(StrUtil.isNotBlank(x), col, val)` / `set(true, col, val)`
             val args = call.args
             val startIndex = if (args.size >= 3 && isFlagArgument(args[0])) 1 else 0
-            val column = args.getOrNull(startIndex).asColumn() ?: return emptyList()
-            val value = args.getOrNull(startIndex + 1).asValue() ?: return emptyList()
+            val column = args.getOrNull(startIndex).asColumn()
+            val value = args.getOrNull(startIndex + 1).asValue()
+            if (column == null || value == null) {
+                unparsedSets += setCallSummary(call)
+                return emptyList()
+            }
             listOf(SetClause(column = withMainAliasIfUnqualified(column, mainAlias), value = value))
         }
         SET_SQL, SET_APPLY -> {
             // 布尔条件前缀剥离（同 set）：`setSql(condition, "col = expr")`
             val args = call.args
             val startIndex = if (args.size >= 2 && isFlagArgument(args[0])) 1 else 0
-            val raw = args.getOrNull(startIndex).asValue() as? SqlValue.Literal ?: return emptyList()
-            var sql = raw.unquoted
-            // `{i}` 绑定参数替换：`setSql("frozen_amount = COALESCE(frozen_amount, 0) - {0}", allocated)`
-            for ((index, value) in args.drop(startIndex + 1).withIndex()) {
-                sql = sql.replace("{$index}", renderSetValue(value.asValue() ?: continue))
+            // T-UpdateSetSqlConcat：片段位取 asSqlFragment（静态段保留、运行期段写 `?`）
+            val fragment = args.getOrNull(startIndex).asSqlFragment()
+            if (fragment == null) {
+                unparsedSets += setCallSummary(call)
+                return emptyList()
             }
-            listOf(SetClause(rawSql = sql))
+            // `{i}` 绑定参数替换 + 按最终文本顺序登记占位符来源
+            val rendered = renderSqlFragment(fragment, args.drop(startIndex + 1).map { it.asValue() })
+            listOf(SetClause(rawSql = rendered.text, rawParams = rendered.params))
         }
         // setIncrBy(col, n) → `col = col + n`；setDecrBy → `col = col - n`（3.5.6+ 官方 API）
         SET_INCR, SET_DECR -> {
             val args = call.args
             val startIndex = if (args.size >= 3 && isFlagArgument(args[0])) 1 else 0
-            val column = args.getOrNull(startIndex).asColumn() ?: return emptyList()
-            val value = args.getOrNull(startIndex + 1).asValue() ?: return emptyList()
+            val column = args.getOrNull(startIndex).asColumn()
+            val value = args.getOrNull(startIndex + 1).asValue()
+            if (column == null || value == null) {
+                unparsedSets += setCallSummary(call)
+                return emptyList()
+            }
             // T-M23.5：列名按方言引用（联表 setIncrBy/setDecrBy 解析期拼 rawSql）
             val qualified = withMainAliasIfUnqualified(column, mainAlias).qualifiedName(currentDialect())
             val op = if (call.methodName == SET_INCR) "+" else "-"
-            listOf(SetClause(rawSql = "$qualified = $qualified $op ${renderSetValue(value)}"))
+            listOf(
+                SetClause(
+                    rawSql = "$qualified = $qualified $op ${renderSetValue(value)}",
+                    // T-UpdateSetSqlConcat：rawSql 里的 `?` 也要登记来源（否则后续条件整体错位）
+                    rawParams = if (value is SqlValue.Placeholder) listOf(value.source) else emptyList(),
+                ),
+            )
         }
         // setUpdateEntity / setUpdateEntityAndNull：实体字段静态不可得 → 主表非主键全列占位近似
         SET_UPDATE_ENTITY, SET_UPDATE_ENTITY_AND_NULL ->
@@ -123,6 +152,21 @@ object UpdateJoinConverter : WrapperConverter {
                 .filter { !it.isId }
                 .map { SetClause(column = ColumnRef(tableAlias = mainAlias, columnName = it.columnName), value = SqlValue.Placeholder("?")) }
         else -> emptyList()
+    }
+
+    /** SET 调用原文摘要（警示文案用）：`setApply("t.a = " + x)`。 */
+    private fun setCallSummary(call: WrapperCall): String {
+        val args = call.args.joinToString(", ") { arg ->
+            when (arg) {
+                is WrapperArg.ColumnArg -> arg.column.columnName
+                is WrapperArg.ValueArg -> when (val v = arg.value) {
+                    is SqlValue.Literal -> v.unquoted
+                    is SqlValue.Placeholder -> v.source
+                }
+                else -> "…"
+            }
+        }
+        return "${call.methodName}($args)"
     }
 
     /**
@@ -137,6 +181,9 @@ object UpdateJoinConverter : WrapperConverter {
     private fun isFlagArgument(arg: WrapperArg): Boolean {
         if (arg is WrapperArg.ColumnArg) return false
         val value = arg.asValue()
+        // T-UpdateSetSqlConcat：带片段形态的运行期实参是 SQL 模板（`setApply("t.a = " + x, ...)`），
+        // 不是布尔前缀——否则模板会被当 flag 吞掉，真正的模板位被错取成第二参
+        if (value is SqlValue.Placeholder && arg.asSqlFragment() != null) return false
         return when (value) {
             is SqlValue.Literal -> value.unquoted == "true" || value.unquoted == "false"
             is SqlValue.Placeholder -> true

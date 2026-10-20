@@ -8,6 +8,7 @@ import cn.song.mybatisplus.visualizer.model.LikePosition
 import cn.song.mybatisplus.visualizer.model.LimitClause
 import cn.song.mybatisplus.visualizer.model.OrderByItem
 import cn.song.mybatisplus.visualizer.model.SelectStatement
+import cn.song.mybatisplus.visualizer.model.SqlFragment
 import cn.song.mybatisplus.visualizer.model.SqlValue
 import cn.song.mybatisplus.visualizer.model.TableInfo
 import cn.song.mybatisplus.visualizer.model.WrapperArg
@@ -191,8 +192,9 @@ class QueryWrapperParser(
                 }
                 "last" -> limit = parseLimit(call)
                 // first / comment（官方 API，M15 增补）：SQL 最前片段与注释原样透传
-                "first" -> rawFirst = (call.args.firstOrNull().asValue() as? SqlValue.Literal)?.unquoted
-                "comment" -> comment = (call.args.firstOrNull().asValue() as? SqlValue.Literal)?.unquoted
+                // T-UpdateSetSqlConcat：片段位取 asSqlFragment（含运行期段的拼接不再整段丢弃）
+                "first" -> rawFirst = call.args.firstOrNull().asSqlFragment()?.text
+                "comment" -> comment = call.args.firstOrNull().asSqlFragment()?.text
 
                 // ---------- 逻辑分组 ----------
                 // 无参 or()（P14）：与前一条件组成 OR 分组（分隔符）；有参 and/or → 嵌套 lambda 分组
@@ -297,7 +299,8 @@ class QueryWrapperParser(
             val expr = "$fn($qualified)"
             return listOf(ColumnRef(columnName = expr, rawExpr = expr, alias = alias))
         }
-        val template = (first as? SqlValue.Literal)?.unquoted ?: return emptyList()
+        // T-UpdateSetSqlConcat：片段位取 asSqlFragment（模板含运行期段时静态段保留、运行期段写 `?`）
+        val template = call.args.getOrNull(0).asSqlFragment()?.text ?: return emptyList()
 
         var expr = template
         // %s 列占位替换（逐列、带主表别名前缀）；T-M23.5 列名按方言引用
@@ -458,16 +461,17 @@ class QueryWrapperParser(
     /** IN SQL 片段条件（inSql / notInSql，官方 API）：`column IN (sql 片段)`（支持子查询）。 */
     private fun inSql(call: WrapperCall, negated: Boolean): Condition? {
         val column = argAsColumn(call.args.firstOrNull()) ?: return null
-        val sql = (call.args.getOrNull(1).asValue() as? SqlValue.Literal)?.unquoted ?: return null
+        // T-UpdateSetSqlConcat：片段位取 asSqlFragment（`"SELECT id FROM t WHERE x = " + x` → `... x = ?`）
+        val frag = call.args.getOrNull(1).asSqlFragment() ?: return null
         val op = if (negated) "NOT IN" else "IN"
-        return Condition.Raw("${column.qualifiedName(dialect)} $op ($sql)")
+        return Condition.Raw("${column.qualifiedName(dialect)} $op (${frag.text})", params = frag.params)
     }
 
     /** 比较 SQL 片段条件（eqSql/gtSql/geSql/ltSql/leSql，官方 API）：`column op (sql 片段)`。 */
     private fun compareSql(call: WrapperCall, op: String): Condition? {
         val column = argAsColumn(call.args.firstOrNull()) ?: return null
-        val sql = (call.args.getOrNull(1).asValue() as? SqlValue.Literal)?.unquoted ?: return null
-        return Condition.Raw("${column.qualifiedName(dialect)} $op ($sql)")
+        val frag = call.args.getOrNull(1).asSqlFragment() ?: return null
+        return Condition.Raw("${column.qualifiedName(dialect)} $op (${frag.text})", params = frag.params)
     }
 
     /** NOT 嵌套条件（not(consumer)，官方 API）：`NOT (嵌套条件)`。 */
@@ -550,7 +554,10 @@ class QueryWrapperParser(
         // 原实现只认 lambda 嵌套形态，字符串片段被静默丢弃。按原生片段透传渲染。
         val first = call.args.firstOrNull()
         if (first is WrapperArg.ValueArg) {
-            (first.value as? SqlValue.Literal)?.unquoted?.takeIf { it.isNotBlank() }?.let { return Condition.Raw(it) }
+            // T-UpdateSetSqlConcat：片段位取 asSqlFragment（`having("count(*) > " + n)` → `count(*) > ?`）
+            first.asSqlFragment()?.let { frag ->
+                if (frag.text.isNotBlank()) return Condition.Raw(frag.text, params = frag.params)
+            }
         }
         val nested = call.args.firstOrNull() as? WrapperArg.NestedArg ?: return null
         val conditions = parseInternal(nested.chain).conditions
@@ -756,6 +763,8 @@ class QueryWrapperParser(
         val flagSource: String?,
         val defaultEnabled: Boolean,
         val sql: String,
+        /** 片段中占位符 `?` 的来源（T-UpdateSetSqlConcat）：渲染时按序登记进参数表。 */
+        val params: List<String> = emptyList(),
     )
 
     private fun parseRawTemplate(call: WrapperCall): RawTemplate? {
@@ -766,18 +775,19 @@ class QueryWrapperParser(
         val flagValue = first.asValue()
         val hasFlag = args.size >= 2 && when {
             flagValue is SqlValue.Literal -> flagValue.unquoted == "true" || flagValue.unquoted == "false"
-            flagValue is SqlValue.Placeholder -> true
+            // T-UpdateSetSqlConcat：带片段形态的运行期实参是 SQL 模板（`apply("x > " + v, w)`），
+            // 不是布尔前缀——否则模板会被当 flag 吞掉，真正的模板位被错取成第二参
+            flagValue is SqlValue.Placeholder -> first.asSqlFragment() == null
             first !is WrapperArg.ValueArg -> true
             else -> false
         }
         val startIndex = if (hasFlag) 1 else 0
         if (args.size <= startIndex) return null
-        val template = (args.getOrNull(startIndex).asValue() as? SqlValue.Literal)?.unquoted ?: return null
-        val values = args.drop(startIndex + 1).mapNotNull { it.asValue() }
-        var sql = template
-        for ((index, value) in values.withIndex()) {
-            sql = sql.replace("{$index}", renderFuncValue(value))
-        }
+        // T-UpdateSetSqlConcat：片段位取 asSqlFragment（`apply("amount > " + x)` → `amount > ?`）
+        val template = args.getOrNull(startIndex).asSqlFragment() ?: return null
+        // `{i}` 绑定参数替换 + 按最终文本顺序登记占位符来源（不登记会让面板回填整体错位）
+        val rendered = renderSqlFragment(template, args.drop(startIndex + 1).map { it.asValue() })
+        val sql = rendered.text
         val flagSource = if (hasFlag) {
             when (val f = first) {
                 is WrapperArg.ValueArg -> when (val v = f.value) {
@@ -789,7 +799,7 @@ class QueryWrapperParser(
         } else {
             null
         }
-        return RawTemplate(hasFlag, flagSource, flagSource != "false", sql)
+        return RawTemplate(hasFlag, flagSource, flagSource != "false", sql, rendered.params)
     }
 
     /**
@@ -807,6 +817,7 @@ class QueryWrapperParser(
                 defaultEnabled = t.defaultEnabled,
                 label = SqlGenerator.renderConditionText(Condition.Raw(t.sql)),
             ),
+            params = t.params,
         )
     }
 
@@ -815,20 +826,20 @@ class QueryWrapperParser(
      * → 条件片段。`%s` 列占位（按 accept 顺序替换）、`{i}` 绑定参数替换（与 selectFunc 占位语义一致）。
      */
     private fun parseApplyFunc(call: WrapperCall): Condition? {
-        val template = (call.args.getOrNull(0).asValue() as? SqlValue.Literal)?.unquoted ?: return null
+        // T-UpdateSetSqlConcat：片段位取 asSqlFragment（模板含运行期段时静态段保留、运行期段写 `?`）
+        val template = call.args.getOrNull(0).asSqlFragment() ?: return null
         val func = call.args.getOrNull(1) as? WrapperArg.FuncArg ?: return null
-        var sql = template
+        var sql = template.text
         for (col in func.columns) {
             // MPJ 主表别名前缀（concat(t.order_code, t.code, ...)）；T-M23.5 列名按方言引用
             val qualified = columnPrefix?.let { col.withTableAlias(it) }?.qualifiedName(dialect)
                 ?: col.qualifiedName(dialect)
             sql = sql.replaceFirst("%s", qualified)
         }
-        for ((index, value) in func.values.withIndex()) {
-            sql = sql.replace("{$index}", renderFuncValue(value))
-        }
         if (sql.contains("%s")) return null
-        return Condition.Raw(sql)
+        // `{i}` 绑定参数替换 + 按最终文本顺序登记占位符来源
+        val rendered = renderSqlFragment(SqlFragment(sql, template.params), func.values)
+        return Condition.Raw(rendered.text, params = rendered.params)
     }
 
     /**
@@ -851,6 +862,7 @@ class QueryWrapperParser(
             } else {
                 null
             },
+            params = t.params,
         )
     }
 

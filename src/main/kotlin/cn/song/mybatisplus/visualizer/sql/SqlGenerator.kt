@@ -236,7 +236,15 @@ object SqlGenerator {
             sb.append(nl).append("SET ")
             sb.append(statement.sets.joinToString(", ") { set ->
                 when {
-                    set.isRaw -> set.rawSql.orEmpty()
+                    set.isRaw -> {
+                        // T-UpdateSetSqlConcat：rawSql 里的 `?` 按序登记来源——不登记会让面板把
+                        // 用户的 WHERE 值填到 SET 的占位符上（首例即 setSql 拼接形态）
+                        set.rawParams.forEach { source ->
+                            paramSink?.add(source)
+                            hintSink?.add(ParamHint(quote = null))
+                        }
+                        set.rawSql.orEmpty()
+                    }
                     set.column != null -> "${renderQualified(set.column, dialect)} = ${renderValue(
                         set.value ?: SqlValue.Placeholder("?"), paramSink, hintSink, quoteHint(statement.table, set.column),
                     )}"
@@ -247,7 +255,14 @@ object SqlGenerator {
 
         appendWhere(sb, statement.conditions, nl, compact, paramSink, hintSink, enabledConditionIds, statement.table, dialect)
         // 非 limit 尾缀透传（U05，T-M15-04）：`last("AND (last_total - n >= 0)")` 追加到语句末尾
-        statement.rawTail?.let { sb.append(nl).append(it) }
+        statement.rawTail?.let {
+            // T-UpdateSetSqlConcat：尾缀片段里的 `?` 按序登记来源（与文本顺序一致——WHERE 之后）
+            statement.rawTailParams.forEach { source ->
+                paramSink?.add(source)
+                hintSink?.add(ParamHint(quote = null))
+            }
+            sb.append(nl).append(it)
+        }
         return sb.toString()
     }
 
@@ -354,7 +369,14 @@ object SqlGenerator {
             cn.song.mybatisplus.visualizer.model.JoinType.FULL -> "FULL JOIN"
         }
         // 原生 join 子句（leftJoin("address t1 on t1.user_id = t.id", args)）：整段原样
-        join.rawSql?.let { return "$typeName $it" }
+        join.rawSql?.let { raw ->
+            // T-UpdateSetSqlConcat：join 片段里的 `?` 按序登记（渲染位置在 SET/WHERE 之前）
+            join.rawParams.forEach { source ->
+                paramSink?.add(source)
+                hintSink?.add(ParamHint(quote = null))
+            }
+            return "$typeName $raw"
+        }
         val onPart = if (join.onConditions.isEmpty()) {
             ""
         } else {
@@ -466,8 +488,15 @@ object SqlGenerator {
         is Condition.ColumnComparison ->
             "${renderQualified(condition.left, dialect)} = ${renderQualified(condition.right, dialect)}"
 
-        is Condition.Raw ->
+        is Condition.Raw -> {
+            // T-UpdateSetSqlConcat：片段里的 `?` 按序登记来源——不登记会让面板按位置回填整体错位
+            // （片段里的 `?` 会被当成下一个条件的参数）
+            condition.params.forEach { source ->
+                paramSink?.add(source)
+                hintSink?.add(ParamHint(quote = null))
+            }
             condition.sqlText
+        }
     }
 
     // ------------------------------------------------------------------

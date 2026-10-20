@@ -40,6 +40,8 @@ data class JoinClause(
     val customKeyword: String? = null,
     val logicDeleteColumn: String? = null,
     val tableInfo: TableInfo? = null,
+    /** [rawSql] 中占位符 `?` 的来源（按出现顺序，T-UpdateSetSqlConcat）：渲染时按序登记进参数表。 */
+    val rawParams: List<String> = emptyList(),
 )
 
 /**
