@@ -365,6 +365,102 @@ class SqlPreviewPanelImportTest : BasePlatformTestCase() {
     }
 
     // ------------------------------------------------------------------
+    // T-ParamImportColumnKey：实体变量前缀（order.）与裸列名互认
+    // ------------------------------------------------------------------
+
+    private fun updateBatchResult(sources: List<Pair<String, String>>): PreviewResult {
+        val model = BatchModel(
+            kind = BatchKind.UPDATE,
+            tableName = "t_order",
+            toggleColumns = sources.dropLast(1).map { (column, source) ->
+                BatchColumn(column, source, quote = null, checked = true)
+            },
+            fixedColumns = listOf(sources.last().let { (column, source) ->
+                BatchColumn(column, source, quote = null, checked = true)
+            }),
+        )
+        val sql = "UPDATE t_order SET " +
+            sources.dropLast(1).joinToString(", ") { "${it.first} = ?" } +
+            " WHERE ${sources.last().first} = ?"
+        return result(sql = sql, compact = sql, tableName = "t_order").copy(batchModel = model)
+    }
+
+    fun testImportBareColumnMatchesPrefixedSource() {
+        // 用户真机反馈：单表无别名 wrapper 预览的 source 带实体变量前缀（order.status，
+        // 来自调用首参表达式，不是 SQL 别名）；导入裸列名应唯一命中，不要求用户手写前缀。
+        val panel = SqlPreviewPanel(project)
+        panel.showResult(updateBatchResult(listOf("status" to "order.status", "id" to "order.id")))
+        panel.importParamsForTest(mapOf("status" to "1", "id" to "1"))
+        assertEquals("1", panel.paramValues["order.status"])
+        assertEquals("1", panel.paramValues["order.id"])
+        panel.clear()
+    }
+
+    fun testImportBareColumnAmbiguousSourcesNotGuessed() {
+        // 两个实体都有 status：裸列名歧义，保持未匹配（fail-closed，不猜）；完整 source 仍可精确导入。
+        val model = BatchModel(
+            kind = BatchKind.UPDATE,
+            tableName = "t_order",
+            toggleColumns = listOf(
+                BatchColumn("status", "order.status", quote = null, checked = true),
+                BatchColumn("status2", "user.status", quote = null, checked = true),
+            ),
+            fixedColumns = listOf(BatchColumn("id", "order.id", quote = null, checked = true)),
+        )
+        val panel = SqlPreviewPanel(project)
+        panel.showResult(
+            result(
+                sql = "UPDATE t_order SET status = ? WHERE id = ?",
+                compact = "UPDATE t_order SET status = ? WHERE id = ?",
+                tableName = "t_order",
+            ).copy(batchModel = model),
+        )
+        panel.importParamsForTest(mapOf("status" to "1"))
+        assertTrue("歧义裸列名不得命中", panel.paramValues["order.status"].isNullOrEmpty())
+        assertTrue("歧义裸列名不得命中", panel.paramValues["user.status"].isNullOrEmpty())
+        panel.importParamsForTest(mapOf("user.status" to "2"))
+        assertEquals("2", panel.paramValues["user.status"])
+        panel.clear()
+    }
+
+    fun testPrefillUsesShortestUniqueKey() {
+        // 单表无歧义：预填键用裸列名（status），不再带实体变量前缀。
+        val panel = SqlPreviewPanel(project)
+        panel.showResult(updateBatchResult(listOf("status" to "order.status", "id" to "order.id")))
+        panel.paramValues["order.status"] = "1"
+        panel.paramValues["order.id"] = "1"
+        val json = panel.serializeParamsToJsonForTest()
+        assertTrue("预填应使用裸列名：$json", json.contains("\"status\""))
+        assertFalse("单表无歧义时不应带实体前缀：$json", json.contains("\"order.status\""))
+        panel.clear()
+    }
+
+    fun testPrefillKeepsFullKeyWhenAmbiguous() {
+        // 多实体同名列：保留完整 source（前缀用于消歧）。
+        val model = BatchModel(
+            kind = BatchKind.UPDATE,
+            tableName = "t_order",
+            toggleColumns = listOf(
+                BatchColumn("status", "order.status", quote = null, checked = true),
+                BatchColumn("status2", "user.status", quote = null, checked = true),
+            ),
+            fixedColumns = listOf(BatchColumn("id", "order.id", quote = null, checked = true)),
+        )
+        val panel = SqlPreviewPanel(project)
+        panel.showResult(
+            result(
+                sql = "UPDATE t_order SET status = ? WHERE id = ?",
+                compact = "UPDATE t_order SET status = ? WHERE id = ?",
+                tableName = "t_order",
+            ).copy(batchModel = model),
+        )
+        panel.paramValues["order.status"] = "1"
+        val json = panel.serializeParamsToJsonForTest()
+        assertTrue("歧义时保留完整 source：$json", json.contains("\"order.status\""))
+        panel.clear()
+    }
+
+    // ------------------------------------------------------------------
     // 工具方法
     // ------------------------------------------------------------------
 

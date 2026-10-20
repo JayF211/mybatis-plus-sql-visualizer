@@ -1326,13 +1326,26 @@ internal fun SqlPreviewPanel.importParamsFromClipboard() {
  */
 
 internal fun SqlPreviewPanel.serializeParamsToJson(): String {
+    val allSources = buildAllSources()
     val entries = paramValues.entries
         .filter { it.value.isNotEmpty() }
         .joinToString(",\n") { (key, value) ->
+            val outKey = shortestUniqueKey(key, allSources)
             val escaped = value.replace("\\", "\\\\").replace("\"", "\\\"")
-            """  "${key}": "${escaped}""""
+            """  "$outKey": "${escaped}""""
         }
     return if (entries.isEmpty()) "" else "{\n$entries\n}"
+}
+
+/**
+ * T-ParamImportColumnKey：预填键取最短唯一形态——末段在全部 source 中唯一时用列名
+ * （`status`），否则保留完整 source（多实体同名列需要前缀消歧）。导入侧
+ * [resolveSource] 同时接受两种形态。
+ */
+private fun shortestUniqueKey(source: String, sources: Set<String>): String {
+    val segment = source.substringAfterLast('.')
+    if (segment == source || segment.isEmpty()) return source
+    return if (sources.count { it.substringAfterLast('.') == segment } == 1) segment else source
 }
 
 /**
@@ -1403,6 +1416,15 @@ internal fun SqlPreviewPanel.resolveSource(key: String, sources: Set<String>): S
     if (sources.contains(snake)) return snake
     val camel = CaseFormatUtil.snakeToCamel(stripped)
     if (sources.contains(camel)) return camel
+    // 4. 末段唯一匹配（T-ParamImportColumnKey）：wrapper 预览的 source 带实体变量前缀
+    //    （`order.status`——BatchOperationConverter.entityPrefix 取调用首参表达式，不是 SQL 别名），
+    //    用户按列名导入（`status`）应唯一命中；多实体同名列（歧义）保持未匹配，不猜。
+    val segment = stripped.substringAfterLast('.')
+    if (segment.isNotEmpty()) {
+        val variants = setOf(segment, CaseFormatUtil.camelToSnake(segment), CaseFormatUtil.snakeToCamel(segment))
+        val matches = sources.filter { it.substringAfterLast('.') in variants }
+        if (matches.size == 1) return matches.single()
+    }
     return null
 }
 
