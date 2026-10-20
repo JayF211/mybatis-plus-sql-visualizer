@@ -100,7 +100,7 @@ Top20 占 39%，其余 712 类占 61%——没有「砍一个类就大幅提速�
 | 5 路 | ≈5.5 min | 499s（4 路自动闸门，5 片全量） |
 
 - 并行跑 0 失败、类并集与计划全集一致（731）——已满足。
-- **反向验证**：①摘掉内存闸门 → 构造每路 100GB 预算（lanes=1）必须回落串行：已验（打印「内存余量不足两路，回落串行 testShards」并进入串行分支）；②摘掉串行隔离 → 未重跑（隔离类来自前轮战役实证，清单默认只作用于并行运行器，串行 `testShards` 不受影响）；③预热去掉 buildSrc 隔离 → 3 路真并发复现 `buildSrc:compilePluginsBlocks FAILED` / `Daemon compilation failed`（shard1/2/4 exit=1），加 `-PmpvBuildSrcDir` 隔开后同配置全绿：已验。
+- **反向验证**：①摘掉内存闸门 → 构造每路 100GB 预算（lanes=1）必须回落串行：已验（打印「内存余量不足两路，回落串行 testShards」并进入串行分支）；②摘掉串行隔离 → 2026-10-20 21:40 临时移出隔离类后尝试复跑，被并行登记检查硬拦（另一会话 `sync-k2j-496` 活跃至 22:25，按定例 check 非零必须硬停），本轮未取得读数；隔离依据仍为前轮战役的并发失败实测（§2.2），该轮若复现仍按回归排查而非默认屏蔽；③预热去掉 buildSrc 隔离 → 3 路真并发复现 `buildSrc:compilePluginsBlocks FAILED` / `Daemon compilation failed`（shard1/2/4 exit=1），加 `-PmpvBuildSrcDir` 隔开后同配置全绿：已验。
 - 串行 `testShards` 语义不变，继续作为发布门禁权威读数。
 
 ---
