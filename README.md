@@ -223,13 +223,24 @@ SQL 静态预览、代码转换、日志还原、关系图和 CRUD 生成在本�
 | `./gradlew buildPlugin` | 生成插件 ZIP |
 | `./gradlew verifyGate` | 构建与平台兼容性门禁 |
 
-日常修改先跑相关定向测试，收口统一跑全量；涉及构建依赖、平台 API 或发行时再执行构建与兼容性门禁。并行开发时遵守仓库的任务登记与独立沙盒约定。
+日常修改先跑相关定向测试，收口统一跑全量；涉及构建依赖、平台 API 或发行时再执行构建与兼容性门禁。并行开发时各分支使用独立工作树与沙盒，具体约定见 [CONTRIBUTING.md](CONTRIBUTING.md#并行开发与工作树)。
 
 - [功能规格](docs/需求文档/20260812-1058-MP-SQL可视化-需求文档.md)
 - [开发计划](docs/开发计划/20260812-1058-MP-SQL可视化-开发计划.md)
 - [架构设计](docs/架构设计/01-项目架构总览.md)
 - [Marketplace 发布流程](docs/发行说明/Marketplace发布流程-说明文档.md)
 - [变更记录](CHANGELOG.md)
+
+## 参与贡献
+
+欢迎提交 Issue 与 Pull Request。完整流程、分支模型、测试门槛与代码风格见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+
+- 新功能或行为变更请先开 Issue 讨论；拼写、文档和小范围修复可直接提 PR。
+- 外部 PR 以 `dev` 为基分支，`master` 为发布分支。
+- 提交前至少跑与改动相关的定向测试，并在 PR 中附命令与读数；全量门禁由维护者收口。
+- 全量测试需要测试 demo 与本地 MySQL：先运行 `dev-support/test-demo/setup-test-env.ps1`（或 `.sh`），详见 [CONTRIBUTING.md](CONTRIBUTING.md#全量测试前置测试-demo-与本地数据库)。
+- 开发环境、构建/测试命令与扩展指南见[开发与测试指南](docs/架构设计/03-开发与测试指南.md)。
+- 提交即表示同意以 [Apache-2.0](LICENSE) 许可发布。
 
 ## 参考与致谢
 

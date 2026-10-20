@@ -107,6 +107,10 @@ tasks.withType<Test>().configureEach {
 // M36.5.23：DB 集成测试默认 demo 项目路径（顶层求值，避免 task lambda 捕获 Project 破坏配置缓存）
 val mpDemoProjectDirDefault = rootProject.projectDir.parentFile
     .resolve("mybatis-plus-sql-visualizer-demo").absolutePath
+// T-ContribDemoFixture：demo 路径单一来源（-PmpDemoProjectDir 可覆盖），供 testShards 预检、
+// testDatabase 系统属性与报错文案共用；预检本身可用 -PskipDemoFixtureCheck=true 显式关闭。
+val mpDemoProjectDir = providers.gradleProperty("mpDemoProjectDir").orNull ?: mpDemoProjectDirDefault
+val skipDemoFixtureCheck = providers.gradleProperty("skipDemoFixtureCheck").orNull?.toBoolean() ?: false
 
 // T-TestPerf14 S2：DB 集成任务 → 每个 FQCN 一个并行 testIde 任务（UI025 起 6 个），聚合任务 testDatabase
 // dependsOn 与各任务 filter 均由本清单驱动。分片排除清单仍是 testIde 块内 dbIntegrationClasses
@@ -717,6 +721,8 @@ intellijPlatformTesting {
                 testFramework(TestFrameworkType.Platform)
                 sandboxDirectory.set(layout.buildDirectory.dir("test-sandbox/shard$i"))
                 task {
+                    // T-ContribDemoFixture：每片都先过 demo 预检；直接跑 testShardN 也不会绕过。
+                    dependsOn("verifyDemoFixture")
                     // IPGP 只给默认 test 任务自动配置 sourceSets 输出，分片任务需补齐
                     testClassesDirs = sourceSets["test"].output.classesDirs
                     classpath = classpath + sourceSets["test"].output
@@ -778,6 +784,8 @@ intellijPlatformTesting {
                 testFramework(TestFrameworkType.Platform)
                 sandboxDirectory.set(layout.buildDirectory.dir("test-sandbox/database/$name"))
                 task {
+                    // T-ContribDemoFixture：DB 集成任务同样先过 demo 预检。
+                    dependsOn("verifyDemoFixture")
                     testClassesDirs = sourceSets["test"].output.classesDirs
                     classpath = classpath + sourceSets["test"].output
                     // M36.5.23：DB 集成测试配置
@@ -785,7 +793,7 @@ intellijPlatformTesting {
                     //    密码硬编码在测试里（root/root，从 demo application.yml 复制，本地开发库无敏感性）。
                     systemProperty(
                         "mpDemoProjectDir",
-                        providers.gradleProperty("mpDemoProjectDir").getOrElse(mpDemoProjectDirDefault),
+                        mpDemoProjectDir,
                     )
                     // 代理透传（与 runIde/verifyPlugin 一致）——DBN createBlocking 内部 HttpRequests
                     // 访问外部（驱动元数据/校验）需要代理；无代理时建连失败 → introspect 返回 false → skip
@@ -893,19 +901,59 @@ intellijPlatformTesting {
     }
 }
 
+// T-ContribDemoFixture：全量/DB 测试的 demo 前置预检——只读检查，不修改 demo。
+// 5 个 Demo* 用例硬断言 demo 源码存在；缺 demo 时提前失败并给出一键设置指引，避免 5 个分片
+// 各跑一遍才在同一个断言上成片报红。可用 -PskipDemoFixtureCheck=true 显式跳过本预检。
+tasks.register("verifyDemoFixture") {
+    group = "verification"
+    description = "校验测试 demo 是否存在且包含测试读取的关键文件（-PmpDemoProjectDir 覆盖）"
+    inputs.property("mpvDemoRoot", mpDemoProjectDir)
+    inputs.property("mpvSkipDemoFixtureCheck", skipDemoFixtureCheck.toString())
+    doLast {
+        if (inputs.properties["mpvSkipDemoFixtureCheck"] == "true") {
+            logger.lifecycle("verifyDemoFixture: skipped (-PskipDemoFixtureCheck=true)")
+            return@doLast
+        }
+        val root = File(inputs.properties["mpvDemoRoot"] as String)
+        val required = listOf(
+            "mybatis-plus-demo/src/main/java/cn/song/mybatisplusdemo/service/impl/UserServiceImpl.java",
+            "mybatis-plus-demo/src/main/resources/db/schema.sql",
+            "mybatis-plus-join-demo/src/main/resources/db/schema.sql",
+            "jpa-hibernate-demo/src/main/java/cn/song/jpademo",
+            "jpa-embedded-prefix-demo/src/main/java/cn/song/embedprefixdemo/service",
+            "jpa-jar-model-demo/src/main/java/cn/song/jarmodeldemo/service",
+            "jpa-jar-model-lib/pom.xml",
+        )
+        val missing = required.filter { !File(root, it).exists() }
+        if (!root.isDirectory || missing.isNotEmpty()) {
+            val detail = if (missing.isEmpty()) "" else "\n缺少：" + missing.joinToString("、")
+            throw GradleException(
+                "测试 demo 未就绪：$root$detail\n" +
+                    "全量 testShards 中 5 个 Demo* 用例会硬断言 demo 源码存在。\n" +
+                    "请运行：dev-support/test-demo/setup-test-env.ps1（或 setup-test-env.sh）\n" +
+                    "或指定：-PmpDemoProjectDir=<demo 路径>\n" +
+                    "只想跳过本预检：-PskipDemoFixtureCheck=true",
+            )
+        }
+        logger.lifecycle("verifyDemoFixture: OK ($root)")
+    }
+}
+
 // T-TestPerf14 S2：testDatabase 聚合任务（命令名与语义不变，一命令全部 testDb* 全跑）——纯容器，
 // 6 个 testDb* 任务在 org.gradle.parallel 下并行执行。原单任务串行形态见 git 历史。
 tasks.register("testDatabase") {
     group = "verification"
     description =
         "DB 插件 classpath 门禁（T-TestPerf14 S2：各任务独占 JVM+沙盒；UI025 起 6 个、T-PreviewSideQuery 起 7 个，原单任务串行形态见 git 历史）"
+    dependsOn("verifyDemoFixture")
     dependsOn(*dbIntegrationTaskSpecs.map { it.first }.toTypedArray())
 }
 
 tasks.register("testShards") {
     group = "verification"
     description =
-        "分片全量测试（时长均衡自动分区 $testShardCount 片，一命令真并行；-PtestShardCount 调片数）"
+        "分片全量测试（时长均衡自动分区 $testShardCount 片；-PtestShardCount 调片数；跨进程并行用 dev-support/test-shards-parallel.ps1）"
+    dependsOn("verifyDemoFixture")
     dependsOn(*(1..testShardCount).map { "testShard$it" }.toTypedArray())
     // T-TestPerf6：S3 外部护栏桶与分片同命令并行（org.gradle.parallel 已开）
     dependsOn("testExternal")
