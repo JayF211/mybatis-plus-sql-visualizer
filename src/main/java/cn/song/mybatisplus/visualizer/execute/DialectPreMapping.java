@@ -42,7 +42,8 @@ public final class DialectPreMapping {
     /**
      * 判定能否跳过 setMapping（纯函数，表驱动单测）：
      *  - 进程内幂等短路命中（同 vf 已设过）→ 跳过；
-     *  - 读探测确认已配置为 MySQL（含 IDE 重启后 workspace.xml 持久映射幸存）→ 跳过；
+     *  - 读探测确认已配置为目标方言（O-136 泛化：MySQL 目标即「已配置为 MySQL」，含 IDE 重启后
+     *    workspace.xml 持久映射幸存；非 MySQL 目标即「已配置为该目标」）→ 跳过；
      *  - 探测失败（null）保守不跳过——宁可多设一次同值映射，不冒 GenericSQL PSI 静默失败的险（M36.5.3）。
      */
     public static boolean shouldSkip(boolean inProcessMapped, Boolean configuredIsMySql) {
@@ -76,6 +77,75 @@ public final class DialectPreMapping {
     }
 
     /**
+     * O-136：只读探测 vf 当前配置方言的 language id（null = 未配置/反射失败，无法判定）。
+     * 纯读（PerFileMappings 内存表查询），ReadAction 内或 EDT 均可调用。
+     */
+    static String configuredLanguageId(Project project, VirtualFile vf) {
+        try {
+            Object mappings = instanceOf(project);
+            if (mappings == null) {
+                return null;
+            }
+            Object configured = mappings.getClass()
+                    .getMethod("getConfiguredMapping", VirtualFile.class)
+                    .invoke(mappings, vf);
+            return configured instanceof Language language ? language.getID() : null;
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /** O-136：按 language id 在 SqlDialectMappings 可用值里找方言 Language 实例（忽略大小写；失败 null）。 */
+    static Object languageById(Project project, String id) {
+        try {
+            Object mappings = instanceOf(project);
+            if (mappings == null) {
+                return null;
+            }
+            @SuppressWarnings("unchecked")
+            List<Object> values = (List<Object>) mappings.getClass().getMethod("getAvailableValues").invoke(mappings);
+            if (values == null) {
+                return null;
+            }
+            for (Object v : values) {
+                if (v instanceof Language language && language.getID().equalsIgnoreCase(id)) {
+                    return v;
+                }
+            }
+            return null;
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /**
+     * O-136：EDT 执行 setMapping(vf, targetLanguage)——与 {@link #setMySqlOnEdt} 同一线程断言与降级口径，
+     * 方言实例由调用方解析（ExecDialectRouting.resolveTargetLanguage，SqlDialectMappings 可用值家族）。
+     */
+    static boolean setLanguageOnEdt(Project project, VirtualFile vf, Object targetLanguage) {
+        if (!ApplicationManager.getApplication().isDispatchThread()) {
+            LOG.warn("[M36] setLanguageOnEdt called off EDT — refused (VcsVFSListener EDT assert, T-ExecSlowOps F1)");
+            return false;
+        }
+        try {
+            Object mappings = instanceOf(project);
+            if (mappings == null) {
+                return false;
+            }
+            mappings.getClass()
+                    .getMethod("setMapping", VirtualFile.class, Object.class)
+                    .invoke(mappings, vf, targetLanguage);
+            return true;
+        } catch (Throwable e) {
+            if (cn.song.mybatisplus.visualizer.util.FatalErrors.isFatal(e)) {
+                throw (Error) e;
+            }
+            LOG.warn("[M36] dialect setMapping skipped: " + e.getClass().getSimpleName() + ": " + e.getMessage());
+            return false;
+        }
+    }
+
+    /**
      * EDT 执行 setMapping(vf, MySQL)——平台线程断言见类 KDoc，非 EDT 调用直接拒绝并 warn
      * （防御网：调用方编排错误不得静默退化为 BGT 直调）。
      */
@@ -105,29 +175,60 @@ public final class DialectPreMapping {
     }
 
     /**
-     * 后台线程两段式入口：{@link #shouldSkip} 判定（读探测包 ReadAction，BGT 合法）→ 命中即返；
-     * 未命中 invokeLater 派发 EDT 映射 + 有界等待（<b>禁止在 EDT 调用本函数</b>——误入则退化为
-     * 同步 {@link #setMySqlOnEdt}，语义仍正确）。返回映射是否已就位；false 不阻断调用方 findFile
-     * （最差 = GenericSQL PSI 旧行为）。
+     * 后台线程两段式入口（MySQL 目标，O-136 前的既有语义保持）：{@link #shouldSkip} 判定（读探测包
+     * ReadAction，BGT 合法）→ 命中即返；未命中 invokeLater 派发 EDT 映射 + 有界等待（<b>禁止在
+     * EDT 调用本函数</b>——误入则退化为同步 {@link #setMySqlOnEdt}，语义仍正确）。返回映射是否已就位；
+     * false 不阻断调用方 findFile（最差 = GenericSQL PSI 旧行为）。
      */
     public static boolean ensureMapped(Project project, VirtualFile vf, boolean inProcessMapped, long waitMs) {
+        return ensureMapped(project, vf, null, inProcessMapped, waitMs);
+    }
+
+    /** 默认等待预算重载（master 默认参数）。 */
+    public static boolean ensureMapped(Project project, VirtualFile vf, boolean inProcessMapped) {
+        return ensureMapped(project, vf, null, inProcessMapped, EDT_SET_MAPPING_WAIT_MS);
+    }
+
+    /**
+     * O-136 主入口：{@code targetLanguage} 非 null 时按该方言（数据源方言路由，ExecDialectRouting
+     * 解析）映射；null 保持 MySQL 旧行为。两段式语义与上同——BGT 读探测稳态跳过（当前配置
+     * 已等于目标方言，含 DBN SqlDialectPusher 已推成目标方言的自愈场景）、未命中派 EDT 写。
+     */
+    public static boolean ensureMapped(Project project, VirtualFile vf, Object targetLanguage,
+                                       boolean inProcessMapped, long waitMs) {
+        String targetId = targetLanguage instanceof Language language ? language.getID() : null;
         if (ApplicationManager.getApplication().isDispatchThread()) {
-            return inProcessMapped || setMySqlOnEdt(project, vf);
+            if (inProcessMapped) {
+                return true;
+            }
+            return targetLanguage != null
+                    ? setLanguageOnEdt(project, vf, targetLanguage)
+                    : setMySqlOnEdt(project, vf);
         }
-        Boolean configured;
+        String configured;
         try {
-            configured = ReadAction.compute(() -> configuredAsMySql(project, vf));
+            configured = ReadAction.compute(() -> configuredLanguageId(project, vf));
         } catch (Throwable t) {
             configured = null;
         }
-        if (shouldSkip(inProcessMapped, configured)) {
+        Boolean configuredMatches;
+        if (configured == null) {
+            configuredMatches = null;
+        } else if (targetId == null) {
+            configuredMatches = configured.equalsIgnoreCase(ExecDialectRouting.MYSQL_LANGUAGE_ID);
+        } else {
+            configuredMatches = configured.equalsIgnoreCase(targetId);
+        }
+        if (shouldSkip(inProcessMapped, configuredMatches)) {
             return true;
         }
         CountDownLatch done = new CountDownLatch(1);
         final boolean[] mapped = {false};
         ApplicationManager.getApplication().invokeLater(() -> {
             try {
-                mapped[0] = setMySqlOnEdt(project, vf);
+                mapped[0] = targetLanguage != null
+                        ? setLanguageOnEdt(project, vf, targetLanguage)
+                        : setMySqlOnEdt(project, vf);
             } finally {
                 done.countDown();
             }
@@ -144,11 +245,6 @@ public final class DialectPreMapping {
             return false;
         }
         return mapped[0];
-    }
-
-    /** 默认等待预算重载（master 默认参数）。 */
-    public static boolean ensureMapped(Project project, VirtualFile vf, boolean inProcessMapped) {
-        return ensureMapped(project, vf, inProcessMapped, EDT_SET_MAPPING_WAIT_MS);
     }
 
     private static Object instanceOf(Project project) {
