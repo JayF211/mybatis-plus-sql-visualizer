@@ -111,6 +111,28 @@ public final class DataSourceSelectorConsoleKt {
             @Nullable Consumer<ExecutionErrorInfo> onErrorRich,
             boolean wholeScriptExec,
             boolean ownsPrepareGate) {
+        prepareAfterEditorResolved(project, vf, executeAfterPrepare, dataSourceName, onConsole, onError, console,
+                document, editor, onErrorRich, wholeScriptExec, null, null, null, null, () -> true);
+    }
+
+    public static void prepareAfterEditorResolved(
+            @NotNull Project project,
+            @NotNull VirtualFile vf,
+            boolean executeAfterPrepare,
+            @Nullable String dataSourceName,
+            @Nullable Consumer<JComponent> onConsole,
+            @Nullable Consumer<String> onError,
+            Object console,
+            com.intellij.openapi.editor.Document document,
+            com.intellij.openapi.editor.Editor editor,
+            @Nullable Consumer<ExecutionErrorInfo> onErrorRich,
+            boolean wholeScriptExec,
+            @Nullable QueuedExecuteIntent prepareOwner,
+            @Nullable ExecutionDialectGate.Request dialectGateRequest,
+            @Nullable Consumer<ExecutionDialectGate.Verdict> onDialectGate,
+            @Nullable Consumer<ExecutionSubmission> onSubmission,
+            @NotNull java.util.function.Supplier<Boolean> isPrepareActive) {
+        if (!isPrepareActive.get()) return;
         Logger LOG = Logger.getInstance(DataSourceSelector.class);
         // T-FirstExecResultInvisible F1：排队执行意图在本链完成准备时消费（下方缓存落地后）。
         // 意图消费后、执行落地前撞上失败 → onFailure 兜底回落意图 onError（面板已 showLoading）。
@@ -157,7 +179,8 @@ public final class DataSourceSelectorConsoleKt {
             if (scriptModel == null) {
                 // T-FirstExecResultInvisible F1：链就此静默终结（历史形态，未到排队消费点）——
                 // 门持有链复位，否则后续执行被永久排队
-                if (ownsPrepareGate) prepareGate.finishPrepare();
+                PrepareSingleFlightGateKt.failPrepareRequests(prepareGate, prepareOwner, onSubmission, onError,
+                        queuedIntent, MpSqlVisualizerBundle.message("execute.failed", "scriptModel unavailable"));
                 return;
             }
 
@@ -200,13 +223,16 @@ public final class DataSourceSelectorConsoleKt {
             preparedEditor = editor;
             preparedScriptModel = effectiveScriptModel;
             preparedExecOption = execOption;
+            DataSourceSelector.preparedDialectGateRequest = dialectGateRequest;
+            DataSourceSelector.preparedDialectGateCallback = onDialectGate;
 
             // T-FirstExecResultInvisible F1：排队执行意图消费点——准备完成即取走（一次性）。
             // executeNow = 本链显式执行（selectAndExecute 全链）或排队意图就位；后者按
             // executePrepared 口径执行（见下方消费块）。仅门持有链可消费——PASS_THROUGH
             // 预览链消费会把别人的执行意图打在自己的 SQL 上。
-            if (ownsPrepareGate) {
-                queuedIntent = prepareGate.consumePendingExecute();
+            if (!isPrepareActive.get()) return;
+            if (prepareOwner != null) {
+                queuedIntent = prepareGate.consumePendingExecute(prepareOwner);
                 if (queuedIntent != null) {
                     LOG.info("[M36][T-FirstExec F1] queued execute intent consumed after prepare (executeAfterPrepare=" + executeAfterPrepare + ")");
                 }
@@ -220,6 +246,8 @@ public final class DataSourceSelectorConsoleKt {
                 // ignore
             }
             if (logView != null) {
+                // 单测/惰性平台在 attach 时尚未建 view；这里 getView 后补登记同一资源。
+                NativeConsoleViewLifetime.remember(project, console);
                 try {
                     logView.getClass().getMethod("ensureContentInitialized").invoke(logView);
                 } catch (Throwable e) {
@@ -248,12 +276,8 @@ public final class DataSourceSelectorConsoleKt {
             if (editorComponentRaw == null) {
                 // T-FirstExecResultInvisible F1：此处已过排队意图消费点——链就此静默终结（历史
                 // 形态）时意图若未执行须回落 onError（面板已 showLoading），并复位单飞位
-                QueuedExecuteIntent qi = queuedIntent;
-                if (qi != null && !queuedExecuted) {
-                    LOG.warn("[M36][T-FirstExec F1] editor component unavailable, queued execute intent surfaced as error");
-                    if (qi.onError() != null) qi.onError().accept(consoleEditorUnavailableMessage("editorComponent"));
-                }
-                if (ownsPrepareGate) prepareGate.finishPrepare();
+                PrepareSingleFlightGateKt.failPrepareRequests(prepareGate, prepareOwner, onSubmission, onError,
+                        queuedIntent, consoleEditorUnavailableMessage("editorComponent"));
                 return;
             }
             editorComponentRaw.setVisible(true);
@@ -371,6 +395,8 @@ public final class DataSourceSelectorConsoleKt {
             // 语义不变（见 shouldComposeEmbedSplitPane）。
             sharedFullComponent = fullComponent;
             sharedDataSourceName = dataSourceName;
+            DataSourceSelector.sharedDialectGateRequest = dialectGateRequest;
+            DataSourceSelector.sharedDialectGateCallback = onDialectGate;
             // T-SI-02：控制台已建，数据源 UUID 从此可取（LocalDataSource.getUniqueId）——
             // 记忆升级为「UUID + 显示名」双字段，下次预览按身份命中而非猜名字
             if (dataSourceName != null) rememberRunner(project, dataSourceName, consoleDataSourceId(console));
@@ -395,6 +421,7 @@ public final class DataSourceSelectorConsoleKt {
             }
 
             if (executeNow) {
+                if (prepareOwner != null && !prepareGate.beginSubmission(prepareOwner)) return;
                 // T-FirstExecResultInvisible F1：排队执行意图消费——按 executePrepared 口径调
                 // executeOnConsole（onResultsReady 齐：提交后完整 UI 换入 + 面板 EXECUTE 内嵌展开）；
                 // onError/onErrorRich/wholeScriptExec 用意图自身回调（面板 showLoading 的解除与错误
@@ -417,12 +444,19 @@ public final class DataSourceSelectorConsoleKt {
                 // Java 无具名实参故以变量名承载，O-64 扫描守卫按 wholeScriptExec
                 // 令牌识别旗标转发点）
                 final boolean wholeScriptExecEffective = queuedIntent != null ? queuedIntent.wholeScriptExec() : wholeScriptExec;
+                Consumer<ExecutionDialectGate.Verdict> effectiveOnDialectGate = (queuedIntent != null
+                        && queuedIntent.onDialectGate() != null) ? queuedIntent.onDialectGate() : onDialectGate;
+                ExecutionDialectGate.Request effectiveGateRequest = (queuedIntent != null
+                        && queuedIntent.dialectGateRequest() != null) ? queuedIntent.dialectGateRequest() : dialectGateRequest;
                 executeOnConsole(
                         project, console, editor, effectiveScriptModel, execOption, ui,
-                        effectiveOnConsole, effectiveOnError, effectiveOnErrorRich, wholeScriptExecEffective);
+                        effectiveOnConsole, effectiveOnError, effectiveOnErrorRich, wholeScriptExecEffective,
+                        effectiveGateRequest, effectiveOnDialectGate,
+                        PrepareSingleFlightGateKt.selectPrepareSubmission(queuedIntent, onSubmission));
                 if (queuedIntent != null) queuedExecuted = true;
             }
         } catch (Throwable e) {
+            NativeConsoleViewLifetime.unwrapAndRethrowCritical(e);
             LOG.warn("[M36] prepareInConsole FAILED: " + e.getClass().getSimpleName() + ": " + e.getMessage(), e);
             Throwable cause = (e instanceof InvocationTargetException) ? ((InvocationTargetException) e).getTargetException() : e;
             // T-FP-02 定例（守卫解包锚点尾款收口）：反射包装层是普通异常，只判外层会漏判——
@@ -442,19 +476,21 @@ public final class DataSourceSelectorConsoleKt {
             } else {
                 failureMsg = cause.getMessage() != null ? cause.getMessage() : cause.toString();
             }
+            if (onSubmission != null) onSubmission.accept(ExecutionSubmission.BLOCKED);
             if (onError != null) onError.accept(failureMsg);
-            // T-FirstExecResultInvisible F1：排队意图已消费但执行未落地即失败 → 回落意图自身
-            // onError（面板已 showLoading，静默丢失会让状态条恒「执行中」）
+            // 消费前异常也必须结算仍在门里的排队请求，不能只复位后丢弃。
+            if (prepareOwner != null) prepareGate.abort(prepareOwner, ExecutionSubmission.BLOCKED, failureMsg);
+            // 消费后的请求已离开门，仍须单独结算。
             QueuedExecuteIntent qi = queuedIntent;
             if (qi != null && !queuedExecuted) {
                 LOG.warn("[M36][T-FirstExec F1] queued execute intent dropped by prepare failure, surface to intent onError");
-                if (qi.onError() != null) qi.onError().accept(failureMsg);
+                qi.complete(ExecutionSubmission.BLOCKED, failureMsg);
             }
         }
 
         // T-FirstExecResultInvisible F1：单飞位复位（成功/失败同尽；排队意图的消费与回落都在
         // 上方完成）——仅门持有链；PASS_THROUGH 预览链不得触碰别人的门。
-        if (ownsPrepareGate) prepareGate.finishPrepare();
+        if (prepareOwner != null) prepareGate.finishPrepare(prepareOwner);
     }
 
 
@@ -470,7 +506,43 @@ public final class DataSourceSelectorConsoleKt {
             @Nullable Consumer<String> onError,
             @Nullable Consumer<ExecutionErrorInfo> onErrorRich,
             boolean wholeScriptExec) {
+        executeOnConsole(project, console, editor, scriptModel, execOption, ui, onResultsReady, onError,
+                onErrorRich, wholeScriptExec, null, null, null);
+    }
+
+    public static void executeOnConsole(
+            @NotNull Project project,
+            Object console,
+            @NotNull Editor editor,
+            Object scriptModel,
+            Object execOption,
+            Object ui,
+            @Nullable Consumer<JComponent> onResultsReady,
+            @Nullable Consumer<String> onError,
+            @Nullable Consumer<ExecutionErrorInfo> onErrorRich,
+            boolean wholeScriptExec,
+            @Nullable ExecutionDialectGate.Request dialectGateRequest,
+            @Nullable Consumer<ExecutionDialectGate.Verdict> onDialectGate,
+            @Nullable Consumer<ExecutionSubmission> onSubmission) {
         Logger LOG = Logger.getInstance(DataSourceSelector.class);
+        // O-145 W7：真实提交总口再次从 JdbcConsole 取实际数据源；必须早于任何文档改写、失效、
+        // submitTransactionLater/executeQueries。准备后用户切换原生控制台数据源时，session 时判定已过期，
+        // 本闸负责第二次阻断，绝不按 runner 显示名或缓存名猜目标。
+        ExecutionDialectGate.Target actualTarget = ExecutionDialectGate.fromConsole(console);
+        if (!DataSourceSelector.allowDialectGate(project, dialectGateRequest, actualTarget, onDialectGate,
+                onError, onSubmission)) {
+            LOG.warn("[M36][O-145] submit blocked before console mutation: target="
+                    + (actualTarget != null ? actualTarget.stableId() : null) + "/"
+                    + (actualTarget != null ? actualTarget.dialectName() : null));
+            return;
+        }
+        // 只有真正通过提交前闸的模块/目标才学习；预览 prepare、冲突或取消均不写绑定。
+        String moduleKey = dialectGateRequest != null ? dialectGateRequest.moduleKey() : null;
+        String dataSourceId = actualTarget != null ? actualTarget.stableId() : null;
+        if (moduleKey != null && !moduleKey.isBlank() && dataSourceId != null && !dataSourceId.isBlank()) {
+            cn.song.mybatisplus.visualizer.sql.ModuleDataSourceBindingStore.getInstance(project)
+                    .remember(moduleKey, dataSourceId);
+        }
         // O-64/T-RollbackIdentityParse：identity 包装产物整批直跑——覆写本次执行的 ExecOption
         // （只造**副本**传下去，prepared/shared 缓存与用户全局设置一概不动），弹层不再出现、
         // 整批（SET…ON + INSERT + SET…OFF）全部执行，即「Statements 默认全选」的平台实现杠杆。
@@ -559,6 +631,7 @@ public final class DataSourceSelectorConsoleKt {
             DumbService.getInstance(project).runWhenSmart(() -> {
                 if (generation != executionGeneration) {
                     LOG.warn("[M36] execution submit cancelled (generation " + generation + " != " + executionGeneration + ")");
+                    if (onSubmission != null) onSubmission.accept(ExecutionSubmission.CANCELLED);
                     return;
                 }
                 try {
@@ -669,6 +742,7 @@ public final class DataSourceSelectorConsoleKt {
                                     ApplicationManager.getApplication().invokeLater(() -> {
                                         if (generation != executionGeneration) {
                                             LOG.warn("[M36] execution submit cancelled at EDT (generation " + generation + " != " + executionGeneration + ")");
+                                            if (onSubmission != null) onSubmission.accept(ExecutionSubmission.CANCELLED);
                                             return;
                                         }
                                         com.intellij.openapi.Disposable disposable = (console instanceof com.intellij.openapi.Disposable)
@@ -690,7 +764,7 @@ public final class DataSourceSelectorConsoleKt {
                                                     LOG.info("[M36] native findScriptModel OK, doRunQueryInConsole");
                                                     doRunMethodRef[0].invoke(null, console, info);
                                                     LOG.info("[M36] native query SUBMITTED (starting result watch)");
-                                                    DataSourceSelectorResultsKt.afterSubmitted(project, ui, console, onResultsReady, onError, LOG, dsName, false, executedSql, onErrorRich);
+                                                    DataSourceSelectorResultsKt.afterSubmitted(project, ui, console, onResultsReady, onError, LOG, dsName, false, executedSql, onErrorRich, onSubmission);
                                                 } catch (Throwable t) {
                                                     Throwable cause = (t instanceof InvocationTargetException) ? ((InvocationTargetException) t).getTargetException() : t;
                                                     final Throwable fCause = cause;
@@ -716,6 +790,7 @@ public final class DataSourceSelectorConsoleKt {
                                         } catch (Throwable t) {
                                             if (FatalErrors.isFatal(t)) throw (Error) t; // T-FP-02：fatal 透传
                                             LOG.warn("[M36] submitTransactionLater FAILED: " + t.getClass().getSimpleName() + ": " + t.getMessage(), t);
+                                            if (onSubmission != null) onSubmission.accept(ExecutionSubmission.BLOCKED);
                                         }
                                     }, ModalityState.any());
                                     nativeRunRef[0] = true;
@@ -756,7 +831,7 @@ public final class DataSourceSelectorConsoleKt {
                     if (submittedRef[0]) {
                         // 兜底路径（executeQueries 同步提交）：监听在此启动；原生路径由事务内
                         // afterSubmitted 启动，此处不再重复（防双重监听互相顶掉结果）。
-                        DataSourceSelectorResultsKt.afterSubmitted(project, ui, console, onResultsReady, onError, LOG, dsName, false, executedSql, onErrorRich);
+                        DataSourceSelectorResultsKt.afterSubmitted(project, ui, console, onResultsReady, onError, LOG, dsName, false, executedSql, onErrorRich, onSubmission);
                     }
                 });
             });
@@ -1011,6 +1086,27 @@ public final class DataSourceSelectorConsoleKt {
             @Nullable Consumer<ExecutionErrorInfo> onErrorRich,
             boolean wholeScriptExec,
             boolean ownsPrepareGate) {
+        prepareInConsole(project, session, vf, executeAfterPrepare, dataSourceName, onConsole, onEditor, onError,
+                onErrorRich, wholeScriptExec, null, null, null, null, () -> true);
+    }
+
+    public static void prepareInConsole(
+            @NotNull Project project,
+            Object session,
+            @NotNull VirtualFile vf,
+            boolean executeAfterPrepare,
+            @Nullable String dataSourceName,
+            @Nullable Consumer<JComponent> onConsole,
+            @Nullable Consumer<Editor> onEditor,
+            @Nullable Consumer<String> onError,
+            @Nullable Consumer<ExecutionErrorInfo> onErrorRich,
+            boolean wholeScriptExec,
+            @Nullable QueuedExecuteIntent prepareOwner,
+            @Nullable ExecutionDialectGate.Request dialectGateRequest,
+            @Nullable Consumer<ExecutionDialectGate.Verdict> onDialectGate,
+            @Nullable Consumer<ExecutionSubmission> onSubmission,
+            @NotNull java.util.function.Supplier<Boolean> isPrepareActive) {
+        if (!isPrepareActive.get()) return;
         Logger LOG = Logger.getInstance(DataSourceSelector.class);
         try {
             Class<?> providerClass = Class.forName(CONSOLE_PROVIDER_CLASS);
@@ -1042,7 +1138,13 @@ public final class DataSourceSelectorConsoleKt {
                     }
                 });
             LOG.info("[M36] attachConsole -> " + console);
-            if (console == null) return;
+            if (console == null) {
+                if (onSubmission != null) onSubmission.accept(ExecutionSubmission.BLOCKED);
+                DataSourceSelector.abortPrepareGate(prepareOwner, null, LOG);
+                return;
+            }
+            // 在回调/后续准备可能失败之前登记已创建的原生 view；不依赖 prepared/shared 缓存。
+            NativeConsoleViewLifetime.remember(project, console);
 
             Class<?> consoleClass = Class.forName(CONSOLE_CLASS);
 
@@ -1088,14 +1190,15 @@ public final class DataSourceSelectorConsoleKt {
                     }, ModalityState.any());
                     // T-FirstExecResultInvisible F1：链就此终结（未到消费点）——门持有链复位 +
                     // 排队执行意图回落错误回调（原子位操作任意线程可调）
-                    abortPrepareGate(ownsPrepareGate, consoleEditorUnavailableMessage("sync"), LOG);
+                    DataSourceSelector.abortPrepareGate(prepareOwner, consoleEditorUnavailableMessage("sync"), LOG);
                     return;
                 }
                 Editor ed = editor;
                 // M36.2：编辑器就绪回调（调用方注入插件补全上下文，与原生补全叠加）
                 if (onEditor != null) onEditor.accept(ed);
                 prepareAfterEditorResolved(project, vf, executeAfterPrepare, dataSourceName,
-                        onConsole, onError, console, document, ed, onErrorRich, wholeScriptExec, ownsPrepareGate);
+                        onConsole, onError, console, document, ed, onErrorRich, wholeScriptExec, prepareOwner,
+                        dialectGateRequest, onDialectGate, onSubmission, isPrepareActive);
             } else {
                 ApplicationManager.getApplication().executeOnPooledThread(() -> {
                     Editor editor = null;
@@ -1111,13 +1214,16 @@ public final class DataSourceSelectorConsoleKt {
                     // 模态，any() 恒 write-unsafe（见 DocWriteContext KDoc）。代价：模态弹窗存续期
                     // 准备链延后到弹窗关闭，正是平台对「改模型」要求的语义。
                     ApplicationManager.getApplication().invokeLater(() -> {
+                        if (!isPrepareActive.get()) return;
                         LOG.info("[M36] editor=" + resolved + " (async wait)");
                         if (resolved != null) {
                             if (onEditor != null) onEditor.accept(resolved);
                             try {
                                 prepareAfterEditorResolved(project, vf, executeAfterPrepare, dataSourceName,
-                                        onConsole, onError, console, document, resolved, onErrorRich, wholeScriptExec, ownsPrepareGate);
+                                        onConsole, onError, console, document, resolved, onErrorRich, wholeScriptExec,
+                                        prepareOwner, dialectGateRequest, onDialectGate, onSubmission, isPrepareActive);
                             } catch (Throwable e) {
+                                NativeConsoleViewLifetime.unwrapAndRethrowCritical(e);
                                 LOG.warn("[M36] prepareInConsole(editor async wait) FAILED: "
                                         + e.getClass().getSimpleName() + ": " + e.getMessage(), e);
                                 Throwable cause = (e instanceof InvocationTargetException)
@@ -1131,7 +1237,7 @@ public final class DataSourceSelectorConsoleKt {
                                 }
                                 // T-FirstExecResultInvisible F1：准备链在此终结（未到消费点）——
                                 // 门持有链复位 + 排队执行意图回落错误回调
-                                abortPrepareGate(ownsPrepareGate, cause.getMessage() != null ? cause.getMessage() : cause.toString(), LOG);
+                                DataSourceSelector.abortPrepareGate(prepareOwner, cause.getMessage() != null ? cause.getMessage() : cause.toString(), LOG);
                             }
                         } else {
                             // T-TS-09：原为「无 else」——EDT 调用方（测试/面板准备链的常态）轮询 400ms
@@ -1141,7 +1247,7 @@ public final class DataSourceSelectorConsoleKt {
                             LOG.warn("[M36] console editor unavailable after 400ms wait (async path), abort prepare");
                             if (onError != null) onError.accept(consoleEditorUnavailableMessage("async"));
                             // T-FirstExecResultInvisible F1：同上——链终结复位 + 意图回落
-                            abortPrepareGate(ownsPrepareGate, consoleEditorUnavailableMessage("async"), LOG);
+                            DataSourceSelector.abortPrepareGate(prepareOwner, consoleEditorUnavailableMessage("async"), LOG);
                         }
                     }, ModalityState.nonModal());
                 });
@@ -1166,10 +1272,11 @@ public final class DataSourceSelectorConsoleKt {
             } else {
                 failureMsg = cause.getMessage() != null ? cause.getMessage() : cause.toString();
             }
+            if (onSubmission != null) onSubmission.accept(ExecutionSubmission.BLOCKED);
             if (onError != null) onError.accept(failureMsg);
             // T-FirstExecResultInvisible F1：准备链在此终结（未到消费点）——门持有链复位 +
             // 排队执行意图回落错误回调
-            abortPrepareGate(ownsPrepareGate, failureMsg, LOG);
+            DataSourceSelector.abortPrepareGate(prepareOwner, failureMsg, LOG);
         }
     }
 

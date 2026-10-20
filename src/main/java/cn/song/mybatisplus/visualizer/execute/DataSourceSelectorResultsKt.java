@@ -229,6 +229,16 @@ public final class DataSourceSelectorResultsKt {
     }
 
 
+    /** T-DialectGateExit：是否允许复用已准备好的共享控制台。forceChoose（用户显式要求换数据源）必须跳过复用。 */
+    static boolean allowsSharedConsoleReuse(boolean forceChoose) {
+        return !forceChoose;
+    }
+
+    /** T-DialectGateExit：是否允许 last-used 数据源静默命中（显式执行本来就不静默；forceChoose 也不静默）。 */
+    static boolean allowsSilentLastUsed(boolean executeAfterPrepare, boolean forceChoose) {
+        return !executeAfterPrepare && !forceChoose;
+    }
+
     public static void chooseAndPrepare(
             @NotNull Project project,
             @NotNull String sql,
@@ -239,9 +249,28 @@ public final class DataSourceSelectorResultsKt {
             @Nullable Consumer<Boolean> callback,
             @Nullable Consumer<ExecutionErrorInfo> onErrorRich,
             boolean wholeScriptExec) {
+        chooseAndPrepare(project, sql, executeAfterPrepare, onConsole, onEditor, onError, callback, onErrorRich,
+                wholeScriptExec, null, null, null, false);
+    }
+
+    public static void chooseAndPrepare(
+            @NotNull Project project,
+            @NotNull String sql,
+            boolean executeAfterPrepare,
+            @Nullable Consumer<JComponent> onConsole,
+            @Nullable Consumer<Editor> onEditor,
+            @Nullable Consumer<String> onError,
+            @Nullable Consumer<Boolean> callback,
+            @Nullable Consumer<ExecutionErrorInfo> onErrorRich,
+            boolean wholeScriptExec,
+            @Nullable ExecutionDialectGate.Request dialectGateRequest,
+            @Nullable Consumer<ExecutionDialectGate.Verdict> onDialectGate,
+            @Nullable Consumer<ExecutionSubmission> onSubmission,
+            boolean forceChoose) {
         Logger LOG = Logger.getInstance(DataSourceSelector.class);
         if (!ExecuteSqlSupport.isAvailable()) {
             LOG.warn("[M36] database plugin NOT available, abort");
+            if (onSubmission != null) onSubmission.accept(ExecutionSubmission.BLOCKED);
             if (onError != null) onError.accept(MpSqlVisualizerBundle.message("execute.noDatabase"));
             if (callback != null) callback.accept(false);
             return;
@@ -252,9 +281,10 @@ public final class DataSourceSelectorResultsKt {
         // 两条链的 executionGeneration++ 与提交/取消判定交错 → 提交被取消或结果组件被换掉
         //（结果区空白、二击正常的 H1 根因）。单飞判定先于共享复用：冷启时 sharedConsole 尚未
         // 落地，复用必不命中，单飞是唯一闸门。
-        QueuedExecuteIntent queuedIntent = executeAfterPrepare
-                ? new QueuedExecuteIntent(onConsole, onEditor, onError, onErrorRich, wholeScriptExec)
-                : null;
+        // 预览也持有身份，超时后旧 session 回调不能消费下一链的队列。
+        QueuedExecuteIntent queuedIntent = new QueuedExecuteIntent(onConsole, onEditor, onError, onErrorRich,
+                wholeScriptExec, dialectGateRequest, onDialectGate, onSubmission);
+        Consumer<ExecutionSubmission> submission = queuedIntent.onSubmission();
         PrepareGateDecision gateDecision = prepareGate.tryEnter(executeAfterPrepare, queuedIntent);
         if (gateDecision == PrepareGateDecision.QUEUE_ONLY) {
             LOG.info("[M36][T-FirstExec F1] prepare chain in flight: execute intent queued, no second session/console chain");
@@ -266,6 +296,17 @@ public final class DataSourceSelectorResultsKt {
             LOG.info("[M36][T-FirstExec F1] prepare chain in flight: preview prepare passes through (no gate ownership)");
         }
 
+        final QueuedExecuteIntent prepareOwner = ownsGate ? queuedIntent : null;
+        // 只有 owner 看守后台；排队 B 不另开计时器截断 A 的用户交互。
+        if (prepareOwner != null) {
+            javax.swing.Timer expiryTimer = new javax.swing.Timer(1000, event -> {
+                if (prepareGate.expire(prepareOwner)) {
+                    ((javax.swing.Timer) event.getSource()).stop();
+                }
+            });
+            expiryTimer.start();
+        }
+
         // T-MysqlGStrip T-MG-02：提交链总口——SQL 文本进入 exec 文件/控制台文档之前剥离 MySQL CLI
         // 的 `\G` 后缀（DBX #35）。此点数据源尚未选定（runner 弹窗在下方），方言不可得 → 按计划
         // §三 定案默认剥离（`\G` 非任何方言合法语法，剥离无害）。剥后文本写入 exec 文件，
@@ -275,23 +316,25 @@ public final class DataSourceSelectorResultsKt {
         // M36.5.5：共享控制台命中（last-used 数据源一致且控制台仍有效）→ 直接复用——
         // 不同步 session/连接/临时文件/方言映射，规避"第二个会话连接永不发起"挂死（见字段注释）。
         // 显式执行路径同样复用（结果落在已嵌入面板）；用户切换数据源走弹窗 → 新建并替换共享缓存。
-        if (reuseSharedConsole(project, submitSql, executeAfterPrepare, onConsole, onEditor, onError, callback, onErrorRich, wholeScriptExec)) {
+        if (allowsSharedConsoleReuse(forceChoose) && reuseSharedConsole(project, submitSql, executeAfterPrepare,
+                onConsole, onEditor, onError, callback, onErrorRich, wholeScriptExec,
+                dialectGateRequest, onDialectGate, submission, prepareOwner)) {
             // T-FirstExecResultInvisible F1：复用路径同步收敛（不建链、不经 prepareAfterEditorResolved）
             // ——门持有链就地终结复位；PASS_THROUGH 预览链不动门。
-            if (ownsGate) prepareGate.finishPrepare();
+            if (ownsGate) prepareGate.finishPrepare(prepareOwner);
             return;
         }
 
         // 临时文件 + VF + PsiFile：Runner 上下文 + 控制台挂载点（VF 须保持引用）
-        TempPsiFile temp = createTempPsiFile(project, submitSql);
+        TempPsiFile temp = createTempPsiFile(project, submitSql,
+                dialectGateRequest != null ? dialectGateRequest.renderedDialectName() : null);
         if (temp == null) {
             // T-ExecCopyFix F2a：携带阶段原因（stage 标识/异常摘要），本地化文案——
             // 用户真机曾只见笼统英文 "Failed to create temporary SQL file"，无从归因
             LOG.warn("[M36] createTempPsiFile failed (reason=" + lastTempFileFailure + "), abort");
-            if (onError != null) onError.accept(MpSqlVisualizerBundle.message("execute.tempFile.failed",
-                    lastTempFileFailure != null ? lastTempFileFailure : "unknown"));
-            // T-FirstExecResultInvisible F1：链就此终结，复位单飞位（否则后续执行被永久排队）
-            if (ownsGate) prepareGate.finishPrepare();
+            PrepareSingleFlightGateKt.failPrepareRequests(prepareGate, prepareOwner, submission, onError, null,
+                    MpSqlVisualizerBundle.message("execute.tempFile.failed",
+                            lastTempFileFailure != null ? lastTempFileFailure : "unknown"));
             if (callback != null) callback.accept(false);
             return;
         }
@@ -299,19 +342,66 @@ public final class DataSourceSelectorResultsKt {
         PsiFile psiFile = temp.psi;
 
         final String[] chosenRunnerName = {null};
+        java.util.function.Supplier<Boolean> isPrepareActive = () ->
+                !queuedIntent.isCompleted()
+                        && (!ownsGate || prepareGate.isOwner(queuedIntent));
+        final Consumer<String> runnerError = message -> {
+            if (isPrepareActive.get()) {
+                PrepareSingleFlightGateKt.failPrepareRequests(prepareGate, prepareOwner, submission, onError,
+                        null, message);
+            }
+        };
         com.intellij.util.Consumer<Object> sessionConsumer = session -> {
-            LOG.info("[M36] session created: " + (session != null ? session.getClass().getName() : "null")
-                    + ", attaching console (execute=" + executeAfterPrepare + ", ds=" + chosenRunnerName[0] + ")");
-            DataSourceSelectorConsoleKt.prepareInConsole(project, session, vf, executeAfterPrepare, chosenRunnerName[0], onConsole, onEditor, onError, onErrorRich, wholeScriptExec, ownsGate);
+            if (!isPrepareActive.get()) {
+                return;
+            }
+            ExecutionDialectGate.Target actualTarget = ExecutionDialectGate.fromSession(session);
+            LOG.info("[M36][O-145] session created: "
+                    + (session != null ? session.getClass().getName() : "null")
+                    + ", target=" + (actualTarget != null ? actualTarget.stableId() : null) + "/"
+                    + (actualTarget != null ? actualTarget.dialectName() : null)
+                    + ", execute=" + executeAfterPrepare);
+            boolean allowed = prepareGate.duringInteraction(prepareOwner, () ->
+                    DataSourceSelector.allowDialectGate(project, dialectGateRequest, actualTarget, onDialectGate,
+                            onError, submission));
+            if (!allowed) {
+                DataSourceSelector.abortPrepareGate(prepareOwner,
+                        dialectGateRequest != null
+                                ? DataSourceSelector.dialectGateMessage(ExecutionDialectGate.evaluate(
+                                        dialectGateRequest,
+                                        actualTarget != null ? actualTarget.dialectName() : null))
+                                : null,
+                        LOG);
+                if (callback != null) callback.accept(false);
+                return;
+            }
+            // 确认框的模态事件泵期间可能超时/被替代，返回 Yes 也不能复活旧准备链。
+            if (!isPrepareActive.get()) {
+                return;
+            }
+            DataSourceSelectorConsoleKt.prepareInConsole(project, session, vf, executeAfterPrepare,
+                    chosenRunnerName[0], onConsole, onEditor, onError, onErrorRich, wholeScriptExec,
+                    prepareOwner, dialectGateRequest, onDialectGate, submission, isPrepareActive);
         };
 
-        List<Object> runners = getAttachDataSourceRunners(psiFile, submitSql, sessionConsumer);
-        LOG.info("[M36] runners=" + runners.size());
+        List<Object> enumerated = getAttachDataSourceRunners(psiFile, submitSql, sessionConsumer);
+        // O-136 T-PreviewExecDsDialect：组 Runner 展开——平台在「方言匹配集 ≠ 全部数据源」时返回
+        // "All" 组 Runner（getSubRunners 携带全部数据源的 Runner，组项自身 runnable 为空操作），
+        // 插件弹窗不展开子级 → 方言不匹配的数据源（DM 等）藏在死项里不可选。展开后按显示名去重，
+        // 方言不匹配的数据源在弹窗内直接可见可选（计划 §三「按可选数据源的方言出 Runner」）。
+        List<Object> runners = ExecDialectRouting.expandGroupRunners(enumerated);
+        if (runners.size() != enumerated.size()) {
+            LOG.info("[M36] runners=" + enumerated.size() + " expanded to " + runners.size()
+                    + " (O-136 group runners flattened)");
+        } else {
+            LOG.info("[M36] runners=" + runners.size());
+        }
 
         // M36.5：last-used 数据源静默命中（仅 prepareConsole 路径；显式执行保持弹窗可选）
         // T-SI-02：命中判定升级为「UUID 精确命中 → 名字唯一命中」，同名多条判歧义弃记忆走弹窗
         //（旧实现 firstOrNull 静默取首条，选错数据源时用户无从察觉）。
-        if (!executeAfterPrepare) {
+        // T-DialectGateExit：forceChoose（用户点「切换数据源」）同样跳过——否则点了等于没点。
+        if (allowsSilentLastUsed(executeAfterPrepare, forceChoose)) {
             LastUsedMemory memory = lastUsedRunner(project);
             LastUsedResolution resolution = resolveLastUsedRunnerIndex(memory,
                     runners.stream().map(DataSourceSelector::getRunnerName).collect(java.util.stream.Collectors.toList()),
@@ -329,7 +419,7 @@ public final class DataSourceSelectorResultsKt {
                 String matchedName = getRunnerName(matched);
                 LOG.info("[M36] silent reuse last runner: " + matchedName + " (memory id=" + memory.dataSourceId() + ")");
                 chosenRunnerName[0] = matchedName;
-                runRunner(project, matched, true, onError);
+                runRunner(project, matched, true, runnerError);
                 if (callback != null) callback.accept(true);
                 return;
             }
@@ -341,22 +431,54 @@ public final class DataSourceSelectorResultsKt {
         }
 
         if (runners.isEmpty()) {
-            LOG.warn("[M36] runners empty (execute=" + executeAfterPrepare + ")");
+            // O-136 T-PreviewExecDsDialect D3：空 Runner 二分归因——有在册数据源 = 方言不匹配
+            //（或数据源均不可连接），给可行动文案（V3），不再让用户笼统「没数据源」或等超时；
+            // 真无数据源保持既有引导文案。
+            List<Object> registered = java.util.List.of();
+            try {
+                registered = DataSourceSettings.getAllDataSources(project);
+            } catch (Throwable ignored) {
+                registered = java.util.List.of();
+            }
+            LOG.warn("[M36] runners empty (execute=" + executeAfterPrepare + ", registered=" + registered.size() + ")");
             // T-DsCover：仅显式执行引导打开 Database 工具窗；预览默认准备静默——
             // 补全 M36.5 预览路径（onError=null）设计意图，避免每次双击预览抢占侧边栏。
             if (executeAfterPrepare) openDatabaseToolWindow(project);
-            if (onError != null) onError.accept(MpSqlVisualizerBundle.message("execute.datasource.empty"));
+            if (registered.isEmpty()) {
+                if (onError != null) onError.accept(MpSqlVisualizerBundle.message("execute.datasource.empty"));
+            } else {
+                Object targetDs = ExecDialectRouting.resolveTargetDataSource(project);
+                Object targetLanguage = ExecDialectRouting.resolveTargetLanguage(project, targetDs);
+                String dialectDisplay = targetLanguage instanceof com.intellij.lang.Language language
+                        ? language.getID() : ExecDialectRouting.MYSQL_LANGUAGE_ID;
+                StringBuilder names = new StringBuilder();
+                for (Object ds : registered) {
+                    if (names.length() > 0) names.append(", ");
+                    names.append(DataSourceSettings.getName(ds));
+                }
+                if (onError != null) {
+                    onError.accept(MpSqlVisualizerBundle.message("execute.datasource.dialectMismatch",
+                            dialectDisplay, names.toString()));
+                }
+            }
+            // M36.3：无数据源时通知 UI 从「执行中」恢复
             // T-FirstExecResultInvisible F1：链就此终结，复位单飞位（否则后续执行被永久排队）
-            if (ownsGate) prepareGate.finishPrepare();
+            submission.accept(ExecutionSubmission.BLOCKED);
+            if (ownsGate) prepareGate.abort(prepareOwner, ExecutionSubmission.BLOCKED, null);
             if (callback != null) callback.accept(false);
         } else if (runners.size() == 1 && shouldBeChosenIfAlone(runners.get(0))) {
             LOG.info("[M36] single runner, run directly");
             chosenRunnerName[0] = getRunnerName(runners.get(0));
-            runRunner(project, runners.get(0), !executeAfterPrepare, onError);
+            runRunner(project, runners.get(0), !executeAfterPrepare, runnerError);
             if (callback != null) callback.accept(true);
         } else {
             LOG.info("[M36] show popup with " + runners.size() + " runners");
+            prepareGate.beginInteraction(prepareOwner);
             showRunnerPopup(project, runners, runner -> {
+                prepareGate.endInteraction(prepareOwner);
+                if (!isPrepareActive.get()) {
+                    return;
+                }
                 LOG.info("[M36] popup selected: " + (runner != null ? getRunnerName(runner) : "null"));
                 if (!executeAfterPrepare && runner != null) {
                     rememberRunnerName(project, getRunnerName(runner));
@@ -364,9 +486,12 @@ public final class DataSourceSelectorResultsKt {
                 if (runner != null) chosenRunnerName[0] = getRunnerName(runner);
                 if (callback != null) callback.accept(runner != null);
                 // T-FirstExecResultInvisible F1：用户取消弹窗 = 链就此终结，复位单飞位
-                if (runner == null && ownsGate) prepareGate.finishPrepare();
+                if (runner == null) {
+                    if (ownsGate) prepareGate.abort(prepareOwner, ExecutionSubmission.CANCELLED, null);
+                    submission.accept(ExecutionSubmission.CANCELLED);
+                }
                 // 弹窗中用户刚做了主动选择，失败仍需模态引导（silent=false）
-                if (runner != null) runRunner(project, runner, false, onError);
+                if (runner != null) runRunner(project, runner, false, runnerError);
             });
         }
     }
@@ -382,6 +507,24 @@ public final class DataSourceSelectorResultsKt {
             @Nullable Consumer<Boolean> callback,
             @Nullable Consumer<ExecutionErrorInfo> onErrorRich,
             boolean wholeScriptExec) {
+        return reuseSharedConsole(project, sql, executeAfterPrepare, onConsole, onEditor, onError, callback,
+                onErrorRich, wholeScriptExec, null, null, null, null);
+    }
+
+    public static boolean reuseSharedConsole(
+            @NotNull Project project,
+            @NotNull String sql,
+            boolean executeAfterPrepare,
+            @Nullable Consumer<JComponent> onConsole,
+            @Nullable Consumer<Editor> onEditor,
+            @Nullable Consumer<String> onError,
+            @Nullable Consumer<Boolean> callback,
+            @Nullable Consumer<ExecutionErrorInfo> onErrorRich,
+            boolean wholeScriptExec,
+            @Nullable ExecutionDialectGate.Request dialectGateRequest,
+            @Nullable Consumer<ExecutionDialectGate.Verdict> onDialectGate,
+            @Nullable Consumer<ExecutionSubmission> onSubmission,
+            @Nullable QueuedExecuteIntent prepareOwner) {
         Logger LOG = Logger.getInstance(DataSourceSelector.class);
         Object console = sharedConsole;
         if (console == null) return false;
@@ -516,7 +659,15 @@ public final class DataSourceSelectorResultsKt {
         clearConsolePrompt(console, LOG);
         LOG.info("[M36] shared console reused (ds=" + dsName + ", execute=" + executeAfterPrepare + ", liveResult=" + (liveResult != null) + ")");
         if (executeAfterPrepare) {
-            DataSourceSelectorConsoleKt.executeOnConsole(project, console, editor, refreshedModel != null ? refreshedModel : scriptModel, execOption, sharedUi, null, onError, onErrorRich, wholeScriptExec);
+            if (prepareOwner != null && !prepareGate.beginSubmission(prepareOwner)) {
+                return true;
+            }
+            DataSourceSelectorConsoleKt.executeOnConsole(project, console, editor,
+                    refreshedModel != null ? refreshedModel : scriptModel, execOption, sharedUi, null, onError,
+                    onErrorRich, wholeScriptExec,
+                    dialectGateRequest != null ? dialectGateRequest : DataSourceSelector.sharedDialectGateRequest,
+                    onDialectGate != null ? onDialectGate : DataSourceSelector.sharedDialectGateCallback,
+                    onSubmission);
         }
         if (callback != null) callback.accept(true);
         return true;
@@ -848,6 +999,23 @@ public final class DataSourceSelectorResultsKt {
             boolean demotedOverride,
             @Nullable String sqlText,
             @Nullable Consumer<ExecutionErrorInfo> onErrorRich) {
+        afterSubmitted(project, ui, console, onResultsReady, onError, LOG, dsName, demotedOverride, sqlText,
+                onErrorRich, null);
+    }
+
+    public static void afterSubmitted(
+            @NotNull Project project,
+            Object ui,
+            Object console,
+            @Nullable Consumer<JComponent> onResultsReady,
+            @Nullable Consumer<String> onError,
+            Logger LOG,
+            String dsName,
+            boolean demotedOverride,
+            @Nullable String sqlText,
+            @Nullable Consumer<ExecutionErrorInfo> onErrorRich,
+            @Nullable Consumer<ExecutionSubmission> onSubmission) {
+        if (onSubmission != null) onSubmission.accept(ExecutionSubmission.SUBMITTED);
         swapGeneration++;
         // write-safe: UI-only（纯 Swing/只读，无文档写）
         ApplicationManager.getApplication().invokeLater(() -> {
@@ -1221,6 +1389,10 @@ public final class DataSourceSelectorResultsKt {
      * 两段式（BGT 读探测 + invokeLater 派 EDT + 有界 latch 等待，绝不 invokeAndWait）解决。</p>
      */
     public static TempPsiFile createTempPsiFile(Project project, String sql) {
+        return createTempPsiFile(project, sql, null);
+    }
+
+    public static TempPsiFile createTempPsiFile(Project project, String sql, @Nullable String renderedDialectName) {
         Logger LOG = Logger.getInstance(DataSourceSelector.class);
         // T-ExecCopyFix F2a：失败阶段记录（onError 文案携带，见 chooseAndPrepare 错误文案）
         lastTempFileFailure = null;
@@ -1753,6 +1925,17 @@ public final class DataSourceSelectorResultsKt {
      * T-PreviewExecDs-02 F4：显式传 project——失败路径曾用 openProjects.firstOrNull() 清 last-used
      * /弹错误框，多项目同开时清的是「第一个打开项目」的记忆（错项目 bug，见开发计划 §2.2）。 */
     public static void runRunner(Project project, Object runner, boolean silent, Consumer<String> onError) {
+        // 空操作 Runner（平台组项的 EmptyRunnable）不能执行：run() 立即返回且永不回调 session，
+        // 只会把准备门拖到 60s 超时。立即结算错误，让面板红字给出可行动原因。
+        if (ExecDialectRouting.isNoOpRunner(runner)) {
+            String name = getRunnerName(runner);
+            Logger.getInstance(DataSourceSelector.class).warn("[M36] runner '" + name
+                    + "' has EmptyRunnable; refusing to run (would wait for prepare timeout)");
+            if (onError != null) {
+                onError.accept(MpSqlVisualizerBundle.message("execute.datasource.noRunnable", name));
+            }
+            return;
+        }
         Logger LOG = Logger.getInstance(DataSourceSelector.class);
         try {
             Method method = runner.getClass().getMethod("run");

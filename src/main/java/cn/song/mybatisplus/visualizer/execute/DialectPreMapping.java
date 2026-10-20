@@ -189,6 +189,12 @@ public final class DialectPreMapping {
         return ensureMapped(project, vf, null, inProcessMapped, EDT_SET_MAPPING_WAIT_MS);
     }
 
+    /** O-136 目标方言形态（waitMs 缺省，master 默认参数）。 */
+    public static boolean ensureMapped(Project project, VirtualFile vf, Object targetLanguage,
+                                       boolean inProcessMapped) {
+        return ensureMapped(project, vf, targetLanguage, inProcessMapped, EDT_SET_MAPPING_WAIT_MS);
+    }
+
     /**
      * O-136 主入口：{@code targetLanguage} 非 null 时按该方言（数据源方言路由，ExecDialectRouting
      * 解析）映射；null 保持 MySQL 旧行为。两段式语义与上同——BGT 读探测稳态跳过（当前配置

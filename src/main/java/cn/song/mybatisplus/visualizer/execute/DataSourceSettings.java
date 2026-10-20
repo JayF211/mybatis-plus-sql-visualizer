@@ -119,12 +119,13 @@ public final class DataSourceSettings implements PersistentStateComponent<DataSo
     @NotNull
     public static List<Object> getAllDataSources(@NotNull Project project) {
         try {
-            Class<?> storageClass = Class.forName(DS_STORAGE_CLASS);
-            Method getStorageMethod = storageClass.getMethod("getStorage", Project.class);
-            Object storage = getStorageMethod.invoke(null, project);
+            Class<?> storageClass = cachedClass(DS_STORAGE_CLASS);
+            if (storageClass == null) return List.of();
+            Method getStorageMethod = cachedMethod(storageClass, "getStorage", Project.class);
+            Object storage = getStorageMethod != null ? getStorageMethod.invoke(null, project) : null;
             if (storage == null) return List.of();
-            Method getDataSourcesMethod = storageClass.getMethod("getDataSources");
-            Object dataSources = getDataSourcesMethod.invoke(storage);
+            Method getDataSourcesMethod = cachedMethod(storageClass, "getDataSources");
+            Object dataSources = getDataSourcesMethod != null ? getDataSourcesMethod.invoke(storage) : null;
             if (!(dataSources instanceof List)) return List.of();
             @SuppressWarnings("unchecked")
             List<Object> list = (List<Object>) dataSources;
@@ -140,12 +141,13 @@ public final class DataSourceSettings implements PersistentStateComponent<DataSo
     @Nullable
     public static Object getDataSourceById(@NotNull Project project, @NotNull String id) {
         try {
-            Class<?> storageClass = Class.forName(DS_STORAGE_CLASS);
-            Method getStorageMethod = storageClass.getMethod("getStorage", Project.class);
-            Object storage = getStorageMethod.invoke(null, project);
+            Class<?> storageClass = cachedClass(DS_STORAGE_CLASS);
+            if (storageClass == null) return null;
+            Method getStorageMethod = cachedMethod(storageClass, "getStorage", Project.class);
+            Object storage = getStorageMethod != null ? getStorageMethod.invoke(null, project) : null;
             if (storage == null) return null;
-            Method getByIdMethod = storageClass.getMethod("getDataSourceById", String.class);
-            return getByIdMethod.invoke(storage, id);
+            Method getByIdMethod = cachedMethod(storageClass, "getDataSourceById", String.class);
+            return getByIdMethod != null ? getByIdMethod.invoke(storage, id) : null;
         } catch (Throwable ignored) {
             return null;
         }
@@ -167,7 +169,8 @@ public final class DataSourceSettings implements PersistentStateComponent<DataSo
     @NotNull
     public static String getName(@NotNull Object ds) {
         try {
-            Method getNameMethod = Class.forName(LOCAL_DS_CLASS).getMethod("getName");
+            Method getNameMethod = cachedMethod(cachedClass(LOCAL_DS_CLASS), "getName");
+            if (getNameMethod == null) return "Unknown";
             Object result = getNameMethod.invoke(ds);
             return result instanceof String ? (String) result : "Unknown";
         } catch (Throwable ignored) {
@@ -181,7 +184,8 @@ public final class DataSourceSettings implements PersistentStateComponent<DataSo
     @Nullable
     public static String getUniqueId(@NotNull Object ds) {
         try {
-            Method getUniqueIdMethod = Class.forName(LOCAL_DS_CLASS).getMethod("getUniqueId");
+            Method getUniqueIdMethod = cachedMethod(cachedClass(LOCAL_DS_CLASS), "getUniqueId");
+            if (getUniqueIdMethod == null) return null;
             Object result = getUniqueIdMethod.invoke(ds);
             return result instanceof String ? (String) result : null;
         } catch (Throwable ignored) {
@@ -195,11 +199,57 @@ public final class DataSourceSettings implements PersistentStateComponent<DataSo
     @Nullable
     public static Icon getIcon(@NotNull Object ds) {
         try {
-            Method getIconMethod = Class.forName(LOCAL_DS_CLASS).getMethod("getIcon");
+            Method getIconMethod = cachedMethod(cachedClass(LOCAL_DS_CLASS), "getIcon");
+            if (getIconMethod == null) return null;
             Object result = getIconMethod.invoke(ds);
             return result instanceof Icon ? (Icon) result : null;
         } catch (Throwable ignored) {
             return null;
         }
+    }
+
+    // ---------- F68a（T-PerfSweep20）：反射 Class/Method 记忆化 ----------
+    //
+    // 比照 SqlLogConsoleBridge.methodCache 范式：预览绑定指示行取名链每次刷新现场
+    // forName+getMethod 建表，Community/无 Database 插件下 forName 恒抛更要逐次付——
+    // 收敛为首次付；负缓存用 Optional（CHM 禁 null），键含类名防跨类撞键。
+
+    private static final java.util.concurrent.ConcurrentHashMap<String, java.util.Optional<Class<?>>> classCache =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    private static final java.util.concurrent.ConcurrentHashMap<String, java.util.Optional<Method>> methodCache =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    @Nullable
+    private static Class<?> cachedClass(@NotNull String fqcn) {
+        return classCache.computeIfAbsent(fqcn, name -> {
+            try {
+                Class<?> cls = Class.forName(name);
+                return cls != null ? java.util.Optional.of(cls) : java.util.Optional.empty();
+            } catch (Throwable t) {
+                return java.util.Optional.empty();
+            }
+        }).orElse(null);
+    }
+
+    @Nullable
+    private static Method cachedMethod(@Nullable Class<?> clazz, @NotNull String name,
+                                       Class<?>... paramTypes) {
+        if (clazz == null) {
+            return null;
+        }
+        StringBuilder key = new StringBuilder(clazz.getName()).append('#').append(name).append('(');
+        for (int i = 0; i < paramTypes.length; i++) {
+            if (i > 0) key.append(',');
+            key.append(paramTypes[i].getName());
+        }
+        key.append(')');
+        return methodCache.computeIfAbsent(key.toString(), k -> {
+            try {
+                return java.util.Optional.of(clazz.getMethod(name, paramTypes));
+            } catch (Throwable t) {
+                return java.util.Optional.empty();
+            }
+        }).orElse(null);
     }
 }

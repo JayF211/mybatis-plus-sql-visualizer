@@ -124,6 +124,9 @@ public final class DataSourceSelector {
     public static Object preparedScriptModel = null;
     public static Object preparedExecOption = null;
     public static Object preparedUi = null;
+    /** O-145 W7 / UI-040：随本次准备缓存携带的方言闸请求与判定回调。 */
+    public static volatile ExecutionDialectGate.Request preparedDialectGateRequest = null;
+    public static volatile Consumer<ExecutionDialectGate.Verdict> preparedDialectGateCallback = null;
     public static JComponent preparedTopBlock = null;
     public static JComponent preparedResultComponent = null;
     public static JComponent preparedFullComponent = null;
@@ -136,6 +139,8 @@ public final class DataSourceSelector {
     public static Object sharedUi = null;
     public static JComponent sharedFullComponent = null;
     public static String sharedDataSourceName = null;
+    public static volatile ExecutionDialectGate.Request sharedDialectGateRequest = null;
+    public static volatile Consumer<ExecutionDialectGate.Verdict> sharedDialectGateCallback = null;
 
     /** T-PreviewFlash：mpsql-exec.sql 的 vf+psi 配对缓存（路径稳定，vf 有效即复用，吸收每次预览的 VFS refresh + findFile 慢操作）。
      *  T-ExecSlowOps F3：{@link #prewarmExecTempFile} 后台线程成为第二写方后须 volatile 跨线程可见。 */
@@ -153,6 +158,26 @@ public final class DataSourceSelector {
     /** T-PreviewFlash：已 setMapping 的 vf（同文件幂等短路，避免每次预览重设方言触发 push all dumb）。
      * T-ExecSlowOps F3：BGT 预热链也会读写，volatile 保证跨线程可见。 */
     public static volatile VirtualFile dialectMappedVf = null;
+
+    /**
+     * O-136 T-PreviewExecDsDialect：{@code dialectMappedVf} 当前映射到的方言 language id
+     * （null/「MySQL」= 旧行为）。与 vf 字段同生命周期成对回写——幂等短路判定为
+     * 「同 vf <b>且同方言</b>」，目标数据源方言切换（MySQL↔DM）后同 vf 也必须重映射。
+     */
+    public static volatile String dialectMappedLanguageId = null;
+
+    /** T-UiFixGate9 测试缝：exec 预暖链在途标记读数（victim 面板测试等「链静止」用）。 */
+    public static boolean execPrewarmInFlightForTest() {
+        return execPrewarmInFlight.get();
+    }
+
+    /** 查询的目标或原始渲染方言未知时的确认测试缝；生产为 null 时走本地化确认框。 */
+    public static volatile java.util.function.Predicate<ExecutionDialectGate.Verdict>
+            unknownTargetQueryConfirmationForTest = null;
+
+    /** UI023：仅替代 DBN 状态读取；测试仍走执行文档身份检查和真实缓存读取。 */
+    public static volatile java.util.function.Function<Object, SchemaValidationGate.Target>
+            schemaTargetReaderForTest = null;
 
     /** T-ExecSlowOps F2：exec 预热进行中标记（并发预览只跑一条真实链，其余直接返回）。 */
     private static final java.util.concurrent.atomic.AtomicBoolean execPrewarmInFlight =
@@ -222,6 +247,123 @@ public final class DataSourceSelector {
     /** 控制台是否已就绪（prepareConsole 成功后 true）。 */
     public static boolean isPrepared() {
         return preparedConsole != null;
+    }
+
+    /**
+     * T-UI030：是否有准备链正在飞。结构化 EXPLAIN 在无已绑数据源时要弹既有选择器，
+     * 但已有准备链在飞时<b>只能等待</b>——预览准备对并发是 PASS_THROUGH，再走一次
+     * chooseAndPrepare 会建第二条会话/控制台（T-FirstExecResultInvisible F1 已实证的坑）。
+     */
+    public static boolean isPrepareInFlight() {
+        return prepareGate.prepareInFlight.get();
+    }
+
+    /**
+     * O-145 W7：最终实际目标方言闸门统一处置。request 为空保持所有旧调用逐字行为；
+     * 非空时回调先收到判定，随后按状态继续、确认或阻断。AUTO_RERENDER_REQUIRED 必停当前点击，
+     * 由宿主无损重渲染后要求用户复核并再次点击，绝不在同一次点击里偷偷改写后提交。
+     */
+    public static boolean allowDialectGate(Project project,
+                                           @Nullable ExecutionDialectGate.Request request,
+                                           @Nullable ExecutionDialectGate.Target target,
+                                           @Nullable Consumer<ExecutionDialectGate.Verdict> onDialectGate,
+                                           @Nullable Consumer<String> onError,
+                                           @Nullable Consumer<ExecutionSubmission> onSubmission) {
+        if (request == null) return true;
+        ExecutionDialectGate.Verdict verdict = ExecutionDialectGate.evaluate(request,
+                target != null ? target.dialectName() : null);
+        if (onDialectGate != null) onDialectGate.accept(verdict);
+        boolean needsConfirmation = verdict.status() == ExecutionDialectGate.Status.TARGET_UNKNOWN_QUERY_CONFIRM
+                || verdict.status() == ExecutionDialectGate.Status.RENDER_UNKNOWN_QUERY_CONFIRM;
+        if (verdict.status() != ExecutionDialectGate.Status.MATCH && !needsConfirmation) {
+            // 先报告未提交，后交付原有详细红字，不能用通用阻断状态覆盖详细原因。
+            if (onSubmission != null) onSubmission.accept(ExecutionSubmission.BLOCKED);
+        }
+        boolean allowed;
+        switch (verdict.status()) {
+            case MATCH -> allowed = true;
+            case TARGET_UNKNOWN_QUERY_CONFIRM, RENDER_UNKNOWN_QUERY_CONFIRM -> {
+                java.util.function.Predicate<ExecutionDialectGate.Verdict> test =
+                        unknownTargetQueryConfirmationForTest;
+                if (test != null) {
+                    allowed = test.test(verdict);
+                } else {
+                    boolean confirmed = false;
+                    try {
+                        String messageKey = verdict.status() == ExecutionDialectGate.Status.TARGET_UNKNOWN_QUERY_CONFIRM
+                                ? "execute.dialectGate.unknownQuery.confirm"
+                                : "execute.dialectGate.unknownRenderQuery.confirm";
+                        confirmed = com.intellij.openapi.ui.Messages.showYesNoDialog(
+                                project,
+                                MpSqlVisualizerBundle.message(messageKey),
+                                MpSqlVisualizerBundle.message("execute.dialectGate.title"),
+                                com.intellij.openapi.ui.Messages.getWarningIcon())
+                                == com.intellij.openapi.ui.Messages.YES;
+                    } catch (Throwable ignored) {
+                        confirmed = false;
+                    }
+                    allowed = confirmed;
+                }
+            }
+            case AUTO_RERENDER_REQUIRED -> {
+                if (onDialectGate == null && onError != null) onError.accept(dialectGateMessage(verdict));
+                allowed = false;
+            }
+            default -> {
+                if (onError != null) onError.accept(dialectGateMessage(verdict));
+                allowed = false;
+            }
+        }
+        if (!allowed && needsConfirmation && onSubmission != null) {
+            onSubmission.accept(ExecutionSubmission.CANCELLED);
+        }
+        return allowed;
+    }
+
+    /** 方言闸判定 → 用户可读文案（bundle 双语；空串仅用于 MATCH）。 */
+    public static String dialectGateMessage(ExecutionDialectGate.Verdict verdict) {
+        String unknown = MpSqlVisualizerBundle.message("execute.dialectGate.unknownDialect");
+        String rendered = verdict.renderedDialectName() != null ? verdict.renderedDialectName() : unknown;
+        String target = verdict.targetDialectName() != null ? verdict.targetDialectName() : unknown;
+        return switch (verdict.status()) {
+            case MATCH -> "";
+            case AUTO_RERENDER_REQUIRED ->
+                    MpSqlVisualizerBundle.message("execute.dialectGate.rerendered", rendered, target);
+            case MANUAL_CONFLICT ->
+                    MpSqlVisualizerBundle.message("execute.dialectGate.manualConflict", rendered, target);
+            case RERENDER_UNAVAILABLE ->
+                    MpSqlVisualizerBundle.message("execute.dialectGate.rerenderUnavailable", rendered, target);
+            case TARGET_UNKNOWN_QUERY_CONFIRM ->
+                    MpSqlVisualizerBundle.message("execute.dialectGate.unknownQuery.confirm");
+            case TARGET_UNKNOWN_BLOCK -> MpSqlVisualizerBundle.message("execute.dialectGate.unknownBlock");
+            case RENDER_UNKNOWN_QUERY_CONFIRM ->
+                    MpSqlVisualizerBundle.message("execute.dialectGate.unknownRenderQuery.confirm");
+            case RENDER_UNKNOWN_BLOCK -> MpSqlVisualizerBundle.message("execute.dialectGate.unknownRenderBlock");
+        };
+    }
+
+    /**
+     * UI023：执行前置的 Schema 校验目标（只认本面板执行文档与 preparedEditor.document 同一对象）。
+     */
+    @Nullable
+    public static SchemaValidationGate.Target schemaValidationTarget(
+            com.intellij.openapi.editor.@Nullable Document document) {
+        // 首次 onEditor→embedConsole 会清 nativeConsoleEditor 辅助引用，但保留实际执行文档。
+        // 只认本面板执行文档与 preparedEditor.document 同一对象；不得借共享或其他预览文档。
+        if (document == null || preparedEditor == null || document != preparedEditor.getDocument()) return null;
+        Object console = preparedConsole;
+        if (console == null) return null;
+        java.util.function.Function<Object, SchemaValidationGate.Target> reader = schemaTargetReaderForTest;
+        if (reader != null) return reader.apply(console);
+        if (!ExecuteSqlSupport.isAvailable()) return null;
+        try {
+            Object valid = console.getClass().getMethod("isValid").invoke(console);
+            if (!Boolean.TRUE.equals(valid)) return null;
+            return com.intellij.openapi.application.ReadAction.compute(() ->
+                    ExecConsoleContext.schemaValidationTarget(console));
+        } catch (Throwable ignored) {
+            return null;
+        }
     }
 
     /**
@@ -338,6 +480,8 @@ public final class DataSourceSelector {
         preparedScriptModel = null;
         preparedExecOption = null;
         preparedUi = null;
+        preparedDialectGateRequest = null;
+        preparedDialectGateCallback = null;
         preparedTopBlock = null;
         preparedResultComponent = null;
         preparedFullComponent = null;
@@ -370,7 +514,21 @@ public final class DataSourceSelector {
             @Nullable Consumer<Editor> onEditor,
             @Nullable Consumer<String> onError,
             @Nullable Consumer<Boolean> callback) {
-        DataSourceSelectorResultsKt.chooseAndPrepare(project, sql, false, onConsole, onEditor, onError, callback, null, false);
+        prepareConsole(project, sql, onConsole, onEditor, onError, callback, null, null, false);
+    }
+
+    public static void prepareConsole(
+            @NotNull Project project,
+            @NotNull String sql,
+            @Nullable Consumer<JComponent> onConsole,
+            @Nullable Consumer<Editor> onEditor,
+            @Nullable Consumer<String> onError,
+            @Nullable Consumer<Boolean> callback,
+            @Nullable ExecutionDialectGate.Request dialectGateRequest,
+            @Nullable Consumer<ExecutionDialectGate.Verdict> onDialectGate,
+            boolean forceChoose) {
+        DataSourceSelectorResultsKt.chooseAndPrepare(project, sql, false, onConsole, onEditor, onError, callback,
+                null, false, dialectGateRequest, onDialectGate, null, forceChoose);
     }
 
     /** M36.5：在已准备的控制台上执行（Kotlin 默认参 {@code wholeScriptExec = false} 形态）。 */
@@ -400,7 +558,29 @@ public final class DataSourceSelector {
         Object scriptModel = preparedScriptModel;
         Object execOption = preparedExecOption;
         if (console == null || editor == null || scriptModel == null || execOption == null) return false;
-        DataSourceSelectorConsoleKt.executeOnConsole(project, console, editor, scriptModel, execOption, preparedUi, onResultsReady, onError, onErrorRich, wholeScriptExec);
+        return executePrepared(project, onResultsReady, onError, onErrorRich, wholeScriptExec, null, null, null);
+    }
+
+    public static boolean executePrepared(
+            @NotNull Project project,
+            @Nullable Consumer<JComponent> onResultsReady,
+            @Nullable Consumer<String> onError,
+            @Nullable Consumer<ExecutionErrorInfo> onErrorRich,
+            boolean wholeScriptExec,
+            @Nullable ExecutionDialectGate.Request dialectGateRequest,
+            @Nullable Consumer<ExecutionDialectGate.Verdict> onDialectGate,
+            @Nullable Consumer<ExecutionSubmission> onSubmission) {
+        Object console = preparedConsole;
+        Editor editor = preparedEditor;
+        Object scriptModel = preparedScriptModel;
+        Object execOption = preparedExecOption;
+        if (console == null || editor == null || scriptModel == null || execOption == null) return false;
+        DataSourceSelectorConsoleKt.executeOnConsole(project, console, editor, scriptModel, execOption, preparedUi,
+                onResultsReady, onError, onErrorRich, wholeScriptExec,
+                dialectGateRequest != null ? dialectGateRequest : preparedDialectGateRequest,
+                onDialectGate != null ? onDialectGate : preparedDialectGateCallback,
+                onSubmission);
+        // true 仍仅表示已进入准备好的控制台路径；提交结果只由 onSubmission 回报。
         return true;
     }
 
@@ -426,7 +606,25 @@ public final class DataSourceSelector {
             @Nullable Consumer<Boolean> callback,
             @Nullable Consumer<ExecutionErrorInfo> onErrorRich,
             boolean wholeScriptExec) {
-        DataSourceSelectorResultsKt.chooseAndPrepare(project, sql, true, onConsole, onEditor, onError, callback, onErrorRich, wholeScriptExec);
+        selectAndExecute(project, sql, onConsole, onEditor, onError, callback, onErrorRich, wholeScriptExec,
+                null, null, null, false);
+    }
+
+    public static void selectAndExecute(
+            @NotNull Project project,
+            @NotNull String sql,
+            @Nullable Consumer<JComponent> onConsole,
+            @Nullable Consumer<Editor> onEditor,
+            @Nullable Consumer<String> onError,
+            @Nullable Consumer<Boolean> callback,
+            @Nullable Consumer<ExecutionErrorInfo> onErrorRich,
+            boolean wholeScriptExec,
+            @Nullable ExecutionDialectGate.Request dialectGateRequest,
+            @Nullable Consumer<ExecutionDialectGate.Verdict> onDialectGate,
+            @Nullable Consumer<ExecutionSubmission> onSubmission,
+            boolean forceChoose) {
+        DataSourceSelectorResultsKt.chooseAndPrepare(project, sql, true, onConsole, onEditor, onError, callback,
+                onErrorRich, wholeScriptExec, dialectGateRequest, onDialectGate, onSubmission, forceChoose);
     }
 
     /** M36.5.5：释放共享控制台缓存。 */
@@ -439,6 +637,8 @@ public final class DataSourceSelector {
         sharedTopBlock = null;
         sharedFullComponent = null;
         sharedDataSourceName = null;
+        sharedDialectGateRequest = null;
+        sharedDialectGateCallback = null;
     }
 
     /** M36.5.50：清空 RunnerLayoutUi 的结果 Tab。 */
@@ -814,17 +1014,13 @@ public final class DataSourceSelector {
      * （意图所属面板在 executeSql 里已 showLoading 并拿到 callback(true)，静默丢弃会让状态条
      * 恒「执行中」）。PASS_THROUGH 预览链不得调用（不持有门、也无属于它的排队意图）。
      */
-    public static void abortPrepareGate(boolean ownsGate, @Nullable String failureMessage, Logger LOG) {
-        if (!ownsGate) return;
-        QueuedExecuteIntent queued = prepareGate.consumePendingExecute();
-        if (queued != null) {
-            LOG.warn("[M36][T-FirstExec F1] prepare chain aborted with queued execute intent - surface failure to intent onError");
-            if (queued.onError() != null) {
-                queued.onError().accept(failureMessage != null ? failureMessage
-                        : MpSqlVisualizerBundle.message("execute.tempFile.failed", "prepare aborted"));
-            }
+    public static void abortPrepareGate(@Nullable QueuedExecuteIntent prepareOwner, @Nullable String failureMessage,
+                                        Logger LOG) {
+        if (prepareGate.abort(prepareOwner, ExecutionSubmission.BLOCKED,
+                failureMessage != null ? failureMessage
+                        : MpSqlVisualizerBundle.message("execute.tempFile.failed", "prepare aborted"))) {
+            LOG.warn("[M36][T-FirstExec F1] prepare chain aborted - settle current and queued requests");
         }
-        prepareGate.finishPrepare();
     }
 
     /**
@@ -1271,25 +1467,54 @@ public final class DataSourceSelector {
         String title = multiProject
                 ? MpSqlVisualizerBundle.message("execute.datasource.select.in", project.getName())
                 : MpSqlVisualizerBundle.message("execute.datasource.select");
-        com.intellij.openapi.ui.popup.util.BaseListPopupStep<RunnerItem> step =
-                new com.intellij.openapi.ui.popup.util.BaseListPopupStep<RunnerItem>(
-                        title, items) {
-                    @Override
-                    public String getTextFor(RunnerItem value) { return value.name; }
-                    @Override
-                    public javax.swing.Icon getIconFor(RunnerItem value) { return value.icon; }
-                    @Override
-                    public com.intellij.openapi.ui.popup.PopupStep<?> onChosen(RunnerItem selectedValue, boolean finalChoice) {
-                        Logger.getInstance(DataSourceSelector.class).info("[M36] popup onChosen: " + (selectedValue != null ? selectedValue.name : "null"));
-                        callback.accept(selectedValue != null ? selectedValue.runner : null);
-                        return com.intellij.openapi.ui.popup.PopupStep.FINAL_CHOICE;
-                    }
-                };
-        com.intellij.openapi.ui.popup.JBPopupFactory.getInstance().createListPopup(step).showInFocusCenter();
+        com.intellij.openapi.ui.popup.JBPopupFactory.getInstance()
+                .createListPopup(createRunnerPopupStep(project, runners, callback))
+                .showInFocusCenter();
+    }
+
+    static com.intellij.openapi.ui.popup.util.BaseListPopupStep<RunnerItem> createRunnerPopupStep(
+            Project project, List<Object> runners, Consumer<Object> callback) {
+        List<RunnerItem> items = new ArrayList<>();
+        for (Object r : runners) items.add(new RunnerItem(r, getRunnerName(r), getRunnerIcon(r)));
+        boolean multiProject = ProjectManager.getInstance().getOpenProjects().length > 1;
+        String title = multiProject
+                ? MpSqlVisualizerBundle.message("execute.datasource.select.in", project.getName())
+                : MpSqlVisualizerBundle.message("execute.datasource.select");
+        return new com.intellij.openapi.ui.popup.util.BaseListPopupStep<RunnerItem>(title, items) {
+            private boolean choiceAccepted = false;
+            private boolean delivered = false;
+
+            private void deliver(Object runner) {
+                if (delivered) return;
+                delivered = true;
+                callback.accept(runner);
+            }
+
+            @Override
+            public String getTextFor(RunnerItem value) { return value.name; }
+
+            @Override
+            public javax.swing.Icon getIconFor(RunnerItem value) { return value.icon; }
+
+            @Override
+            public com.intellij.openapi.ui.popup.PopupStep<?> onChosen(RunnerItem selectedValue, boolean finalChoice) {
+                Logger.getInstance(DataSourceSelector.class).info("[M36] popup onChosen: "
+                        + (selectedValue != null ? selectedValue.name : "null"));
+                // 243 禁止在 onChosen 内开模态确认；runner/session 续链须在弹窗关闭后启动。
+                choiceAccepted = true;
+                return doFinalStep(() -> deliver(selectedValue != null ? selectedValue.runner : null));
+            }
+
+            @Override
+            public void canceled() {
+                // 243 的已显示 popup 在选择后 dispose 也经 cancel；不是用户按 Esc。
+                if (!choiceAccepted) deliver(null);
+            }
+        };
     }
 
     /** 弹窗列表项（Runner 包装）。 */
-    private static final class RunnerItem {
+    public static final class RunnerItem {
         final Object runner;
         final String name;
         final javax.swing.Icon icon;
@@ -1441,32 +1666,56 @@ public final class DataSourceSelector {
      * text 相同但 document 仍 modified（用户改后还原等）时同样 commit+save 收敛。</p>
      */
     public static void writeVfTextViaDocument(Project project, VirtualFile vf, String text) {
+        // T-UiFixGate9：生命周期守卫——项目已 dispose（含测试框架的 temporarily-disposed 窗口）后一律放弃写。
+        // 半途写入会留下「已修改未保存」脏文档，后续任一 VFS refresh 命中 MemoryDiskConflictResolver →
+        // EDT 延迟冲突处理杀掉无辜测试。预热是投机性写入，重跑无意义。
+        if (project.isDisposed()) {
+            Logger.getInstance(DataSourceSelector.class)
+                    .info("[M36] exec doc write abandoned (project disposed, T-UiFixGate9): " + vf.getName());
+            return;
+        }
         // T-PreviewFast P4：程序性写入整段开闸——文档变更事件同步派发给自动落盘监听，
-        // 闸门开着即跳过（内容由本函数自己落盘，无需 1.5s 后再写一遍）
-        ExecDocAutosaveGate.suppressDuring(() -> {
-            Document fileDoc = FileDocumentManager.getInstance().getDocument(vf);
-            if (fileDoc == null) {
-                try {
-                    vf.setBinaryContent(text.getBytes(StandardCharsets.UTF_8));
-                } catch (Throwable ignored) {
-                    // ignore
-                }
-            } else {
-                if (!fileDoc.getText().equals(text)) {
-                    fileDoc.setText(text);
-                }
-                // setText 的 write command 结束时自动 commit；显式 commitDocument 双保险
-                //（同步后同 tick 内 findFile 的 PSI 立即对齐，M36.5.20 语义保留）
-                PsiDocumentManager.getInstance(project).commitDocument(fileDoc);
-                // T-EC-01 核心：同临界区落盘——磁盘即时与内存一致，document 不滞留 modified 态
-                // T-PreviewFast P5：落盘前先判「已修改未保存」——内容本就一致时（连续预览同一
-                // SQL 的常见路径）跳过磁盘写，消除每次预览的无效落盘与随之而来的 VFS/索引噪音
+        // 闸门开着即跳过（内容由本函数自己落盘，无需 1.5s 后再写一遍）。
+        // T-UiFixGate9：写体内自包 WriteAction（平台可重入，已持写动作的调用方形态不变）——
+        // 零窗口直写分支需要 VFS 写权限，原「等内容路径不需要写权限」的裸调约定随之失效。
+        WriteAction.compute(() -> {
+            ExecDocAutosaveGate.suppressDuring(() -> {
                 FileDocumentManager fdm = FileDocumentManager.getInstance();
-                if (fdm.isDocumentUnsaved(fileDoc)) {
-                    fdm.saveDocument(fileDoc);
+                // T-UiFixGate9：改 getCachedDocument（**不主动建 document**）+ 双路写。
+                // 旧实现 getDocument 会主动建 document，随后 setText→saveDocument 之间存在
+                // ~30ms「已修改未保存」窗口——该窗口对异步 refresh 线程可见，边界迟到的 VFS 会话
+                // 恰在此窗口命中，冲突收集后在 EDT 下一拍抛出、杀掉正在收尾的测试。零窗口直写不建
+                // document，写后任一时刻 resolver 看到的都是干净态。
+                // 编辑器打开（真机控制台正看着这份内容，需视图同步）或文档已脏（用户键入未存，
+                // 外部覆盖须走既有冲突语义）仍走 document 路径，T-EC-01 同临界区落盘语义不变。
+                Document fileDoc = fdm.getCachedDocument(vf);
+                if (fileDoc == null || (!isExecDocOpenInEditor(vf) && !fdm.isDocumentUnsaved(fileDoc))) {
+                    try {
+                        vf.setBinaryContent(text.getBytes(StandardCharsets.UTF_8));
+                    } catch (Throwable ignored) {
+                        // ignore
+                    }
+                    if (fileDoc != null) {
+                        // 缓存 doc 是干净态：同步从盘重载对齐新内容（平台对「外部改盘+干净 doc」
+                        // 的既有语义），不产生 modified 位
+                        fdm.reloadFromDisk(fileDoc);
+                    }
+                } else {
+                    if (!fileDoc.getText().equals(text)) {
+                        fileDoc.setText(text);
+                    }
+                    // setText 的 write command 结束时自动 commit；显式 commitDocument 双保险
+                    //（同步后同 tick 内 findFile 的 PSI 立即对齐，M36.5.20 语义保留）
+                    PsiDocumentManager.getInstance(project).commitDocument(fileDoc);
+                    // T-EC-01 核心：同临界区落盘——磁盘即时与内存一致，document 不滞留 modified 态
+                    // T-PreviewFast P5：落盘前先判「已修改未保存」——内容本就一致时跳过磁盘写
+                    if (fdm.isDocumentUnsaved(fileDoc)) {
+                        fdm.saveDocument(fileDoc);
+                    }
                 }
-            }
-            lastWrittenExecContent.put(vf.getPath(), new ExecWrittenSnapshot(text, vf.getTimeStamp()));
+                lastWrittenExecContent.put(vf.getPath(), new ExecWrittenSnapshot(text, vf.getTimeStamp()));
+                return null;
+            });
             return null;
         });
     }
@@ -1649,12 +1898,38 @@ public final class DataSourceSelector {
      * {@code ensureMapped} 线程自适应——EDT 直调安全（本方法现调用点全在 EDT），BGT 调用自动走两段式派发。</p>
      */
     public static void mapDialectBeforePsi(Project project, VirtualFile vf, Logger LOG) {
-        // T-PreviewFlash：插件侧幂等短路——mpsql-exec.sql 路径稳定，同 vf 已映射过 MySQL 直接跳过，
-        // 消除每次预览的点 setMapping（同值 setMapping 仍触发 SqlDialectPusher push all dumb 任务，见沙盒日志）。
-        boolean inProcessMapped = dialectMappedVf != null && dialectMappedVf.isValid() && dialectMappedVf == vf;
-        if (DialectPreMapping.ensureMapped(project, vf, inProcessMapped)) {
+        mapDialectBeforePsi(project, vf, LOG, null);
+    }
+
+    public static void mapDialectBeforePsi(Project project, VirtualFile vf, Logger LOG,
+                                           @Nullable String renderedDialectName) {
+        // O-145 W7：有渲染事实时 exec PSI 必须跟随渲染方言；没有 request 的旧调用继续沿用
+        // O-136 的 last-used/default 数据源路由。平台无对应 parser 时降级 GenericSQL，不冒充 MySQL。
+        Object targetDs = renderedDialectName == null ? ExecDialectRouting.resolveTargetDataSource(project) : null;
+        Object renderedLanguage = renderedDialectName != null
+                ? ExecDialectRouting.resolvePluginDialectLanguage(project, renderedDialectName) : null;
+        Object targetLanguage;
+        if (renderedDialectName == null) {
+            targetLanguage = ExecDialectRouting.resolveTargetLanguage(project, targetDs);
+        } else if (renderedLanguage != null) {
+            targetLanguage = renderedLanguage;
+        } else {
+            targetLanguage = DialectPreMapping.languageById(project, ExecDialectRouting.GENERIC_LANGUAGE_ID);
+        }
+        String targetId = targetLanguage instanceof com.intellij.lang.Language language
+                ? language.getID()
+                : (renderedDialectName == null ? ExecDialectRouting.MYSQL_LANGUAGE_ID
+                : ExecDialectRouting.GENERIC_LANGUAGE_ID);
+        // T-PreviewFlash：插件侧幂等短路——mpsql-exec.sql 路径稳定，同 vf 已映射过 MySQL 直接跳过。
+        // O-136：短路收紧为「同 vf 且同方言」——目标数据源方言切换后同 vf 也必须重映射。
+        boolean inProcessMapped = dialectMappedVf != null && dialectMappedVf.isValid() && dialectMappedVf == vf
+                && targetId.equals(dialectMappedLanguageId);
+        if (DialectPreMapping.ensureMapped(project, vf, targetLanguage, inProcessMapped)) {
             dialectMappedVf = vf;
-            LOG.info("[M36] dialect pre-mapped to MySQL for " + vf.getName());
+            dialectMappedLanguageId = targetId;
+            LOG.info("[M36] dialect pre-mapped to " + targetId + " for " + vf.getName()
+                    + " (O-136 ds-dialect routing, ds="
+                    + (targetDs != null ? targetDs.getClass().getSimpleName() : null) + ")");
         }
     }
 
@@ -1694,6 +1969,10 @@ public final class DataSourceSelector {
      * Community/无 Database 插件场景安全：本方法不触任何 Database 类，纯 VFS/PSI。</p>
      */
     public static void prewarmExecTempFile(Project project, String sql) {
+        prewarmExecTempFile(project, sql, null);
+    }
+
+    public static void prewarmExecTempFile(Project project, String sql, @Nullable String renderedDialectName) {
         Logger LOG = Logger.getInstance(DataSourceSelector.class);
         if (ApplicationManager.getApplication().isDispatchThread()) {
             LOG.warn("[M36] prewarmExecTempFile called on EDT — refused (slow ops, T-ExecSlowOps F2)");

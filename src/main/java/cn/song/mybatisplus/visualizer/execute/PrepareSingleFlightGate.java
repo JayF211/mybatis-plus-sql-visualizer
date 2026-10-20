@@ -1,6 +1,12 @@
 package cn.song.mybatisplus.visualizer.execute;
 
+import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
+import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
+
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.LongSupplier;
+import java.util.function.Supplier;
 
 /**
  * T-FirstExecResultInvisible F1：准备链单飞 + 执行意图排队门（纯逻辑，JDK 原子类，可单测）。
@@ -14,64 +20,185 @@ import org.jetbrains.annotations.Nullable;
  * <p>消除方式（结构性）：执行意图到达而已有准备链在飞时，<b>只排队不建链</b>——准备链完成时消费
  * 排队意图按 executePrepared 口径执行。无论 H1 是否终审定案都是纯增益（消除重复会话/连接）。</p>
  *
- * <p>线程纪律：{@code tryEnter}/{@code consumePendingExecute}/{@code finishPrepare} 只碰原子位与 volatile 字段，
- * 任意线程可调；排队意图回调的<b>触发</b>仍归 EDT（prepareAfterEditorResolved 消费点已在 EDT）。</p>
+ * <p>门状态转换串行化；取消/失败通知沿请求回调交付，UI 消费者负责归位 EDT。
+ * 每请求终态一次性，后到覆盖、超时和准备失败均不丢弃未结算请求。</p>
  */
 public final class PrepareSingleFlightGate {
 
+    /**
+     * 单飞位悬挂逃生窗口：远程 PG 会话「数秒」量级（计划 §一），60s 内仍未终结视作死链
+     * （runner 失败无 session 回调等历史挂死族，见 sharedConsole 字段注释的 M36.5.5 实证）。
+     */
+    public static final long STUCK_ESCAPE_MS = 60_000L;
+
+    private final LongSupplier clock;
+    private final Supplier<String> timeoutMessage;
+
+    public PrepareSingleFlightGate() {
+        this(() -> System.nanoTime() / 1_000_000,
+                () -> MpSqlVisualizerBundle.message("execute.prepare.timeout"));
+    }
+
+    public PrepareSingleFlightGate(LongSupplier clock, Supplier<String> timeoutMessage) {
+        this.clock = clock;
+        this.timeoutMessage = timeoutMessage;
+    }
+
     /** 门持有链终结（完成/失败/复用收敛）即复位；复位后新链可重新持有。 */
-    public final java.util.concurrent.atomic.AtomicBoolean prepareInFlight =
-            new java.util.concurrent.atomic.AtomicBoolean(false);
+    public final AtomicBoolean prepareInFlight = new AtomicBoolean(false);
 
     /** 排队执行意图在位标记（消费一次性；与 {@link #pendingIntent} 同步读写）。 */
-    public final java.util.concurrent.atomic.AtomicBoolean pendingExecute =
-            new java.util.concurrent.atomic.AtomicBoolean(false);
+    public final AtomicBoolean pendingExecute = new AtomicBoolean(false);
 
     /** 最后一个排队执行意图（同窗口连点执行时后到覆盖先到——最新用户意图优先）。 */
     public volatile QueuedExecuteIntent pendingIntent = null;
 
+    private QueuedExecuteIntent owner = null;
+    private boolean submissionStarted = false;
+    private int interactionDepth = 0;
+
     /** 当前门持有链的起始时刻（卡死逃生判定基准；仅 PROCEED/接管时写）。 */
     private volatile long inFlightSinceMs = 0L;
 
+    public synchronized boolean beginInteraction(@Nullable QueuedExecuteIntent expectedOwner) {
+        if (!matchesOwner(expectedOwner)) {
+            return false;
+        }
+        interactionDepth++;
+        return true;
+    }
+
+    /** 用户结束选择/确认后重新给后台完整预算；旧 timer tick 必须重新检查时间。 */
+    public synchronized void endInteraction(@Nullable QueuedExecuteIntent expectedOwner) {
+        if (!matchesOwner(expectedOwner) || interactionDepth == 0) {
+            return;
+        }
+        interactionDepth--;
+        if (interactionDepth == 0) {
+            inFlightSinceMs = clock.getAsLong();
+        }
+    }
+
+    public <T> T duringInteraction(@Nullable QueuedExecuteIntent expectedOwner, Supplier<T> action) {
+        boolean paused = beginInteraction(expectedOwner);
+        try {
+            return action.get();
+        } finally {
+            if (paused) {
+                endInteraction(expectedOwner);
+            }
+        }
+    }
+
+    private boolean backgroundExpired(long nowMs) {
+        return !submissionStarted && interactionDepth == 0 && nowMs - inFlightSinceMs >= STUCK_ESCAPE_MS;
+    }
+
+    /** 提交确认已接管回执，不再由准备超时伪报取消。 */
+    public synchronized boolean beginSubmission(@Nullable QueuedExecuteIntent expectedOwner) {
+        if (!matchesOwner(expectedOwner)) {
+            return false;
+        }
+        submissionStarted = true;
+        return true;
+    }
+
+    private boolean matchesOwner(@Nullable QueuedExecuteIntent expectedOwner) {
+        return expectedOwner != null && prepareInFlight.get() && owner == expectedOwner;
+    }
+
+    public synchronized boolean isOwner(@NotNull QueuedExecuteIntent intent) {
+        return prepareInFlight.get() && owner == intent;
+    }
+
+    /** 超时只结算所属链，迟到的旧回调不得清除新链。 */
+    public synchronized boolean expire(@NotNull QueuedExecuteIntent intent) {
+        return expire(intent, clock.getAsLong());
+    }
+
+    public synchronized boolean expire(@NotNull QueuedExecuteIntent intent, long nowMs) {
+        if (!matchesOwner(intent)) {
+            return true; // 旧 timer 不操作新 owner 或新队列
+        }
+        if (submissionStarted) {
+            return true;
+        }
+        if (!backgroundExpired(nowMs)) {
+            return false;
+        }
+        abort(intent, ExecutionSubmission.BLOCKED, timeoutMessage.get());
+        return true;
+    }
+
+    /** 先清空门和队列再通知，避免回调重入把旧请求遗留给下一链。 */
+    public synchronized boolean abort(@Nullable QueuedExecuteIntent expectedOwner,
+                                      ExecutionSubmission outcome, @Nullable String message) {
+        if (!matchesOwner(expectedOwner)) {
+            return false;
+        }
+        QueuedExecuteIntent current = owner;
+        QueuedExecuteIntent queued = takePendingExecute();
+        owner = null;
+        prepareInFlight.set(false);
+        if (current != null) {
+            current.complete(outcome, message);
+        }
+        if (queued != null) {
+            queued.complete(outcome, message);
+        }
+        return true;
+    }
+
     /**
-     * 入口判定（chooseAndPrepare 调用，先于共享复用检查——冷启时 sharedConsole 尚未落地，
-     * 复用必不命中，单飞是唯一闸门）。
-     *
-     * <p>判定序：① 空闲 → PROCEED（本链持有门，终结时必须 {@link #finishPrepare}）；
-     * ② 在飞但悬挂超过 {@link #STUCK_ESCAPE_MS}（准备链消亡未复位，如 runner 失败无 session 回调）
-     * → 接管放行新链自愈（清陈旧排队意图；否则执行按钮从此永久排队）；
-     * ③ 在飞且本链为预览准备（executeAfterPrepare=false）→ PASS_THROUGH 直通不取所有权
-     * （保持既有预览并发形态——拦截预览会让切换预览条目的 SQL 同步丢失）；
-     * ④ 在飞且本链为显式执行 → 排队意图、QUEUE_ONLY（调用方 callback(true) 后返回，
-     * 不再建第二条临时文件/会话/控制台）。</p>
+     * 入口判定（chooseAndPrepare 调用，先于共享复用检查）。判定序：
+     * ① 空闲 → PROCEED；② 在飞但悬挂超时 → 接管放行；③ 在飞且预览准备 → PASS_THROUGH；
+     * ④ 在飞且显式执行 → 排队 QUEUE_ONLY。
      */
     public PrepareGateDecision tryEnter(boolean executeAfterPrepare) {
         return tryEnter(executeAfterPrepare, null);
     }
 
-    /** Kotlin 默认参数等价重载：intent 缺省 null。 */
     public PrepareGateDecision tryEnter(boolean executeAfterPrepare, @Nullable QueuedExecuteIntent intent) {
-        return tryEnter(executeAfterPrepare, intent, System.currentTimeMillis());
+        return tryEnter(executeAfterPrepare, intent, clock.getAsLong());
     }
 
-    /** 规范入口：nowMs 缺省 {@code System.currentTimeMillis()}（Kotlin 默认参数由上面的重载补齐）。 */
-    public PrepareGateDecision tryEnter(boolean executeAfterPrepare, @Nullable QueuedExecuteIntent intent, long nowMs) {
+    public synchronized PrepareGateDecision tryEnter(boolean executeAfterPrepare, @Nullable QueuedExecuteIntent intent,
+                                                     long nowMs) {
         if (prepareInFlight.compareAndSet(false, true)) {
             inFlightSinceMs = nowMs;
+            owner = intent;
+            submissionStarted = false;
+            interactionDepth = 0;
             return PrepareGateDecision.PROCEED;
         }
-        if (nowMs - inFlightSinceMs > STUCK_ESCAPE_MS) {
+        if (backgroundExpired(nowMs)) {
             // 卡死逃生：接管所有权（CompareAndSet 已被旧链持有，直接 set 覆盖）并清陈旧排队
+            QueuedExecuteIntent expiredOwner = owner;
+            QueuedExecuteIntent expiredQueued = takePendingExecute();
             prepareInFlight.set(true);
-            pendingExecute.set(false);
-            pendingIntent = null;
             inFlightSinceMs = nowMs;
+            owner = intent;
+            submissionStarted = false;
+            interactionDepth = 0;
+            String message = timeoutMessage.get();
+            if (expiredOwner != null) {
+                expiredOwner.complete(ExecutionSubmission.BLOCKED, message);
+            }
+            if (expiredQueued != null) {
+                expiredQueued.complete(ExecutionSubmission.BLOCKED, message);
+            }
             return PrepareGateDecision.PROCEED;
         }
-        if (!executeAfterPrepare) return PrepareGateDecision.PASS_THROUGH;
+        if (!executeAfterPrepare) {
+            return PrepareGateDecision.PASS_THROUGH;
+        }
         // F1 核心：已 in-flight 且本次 executeAfterPrepare=true → 只排队，不建第二链
+        QueuedExecuteIntent replaced = pendingIntent;
         pendingIntent = intent;
         pendingExecute.set(true);
+        if (replaced != null) {
+            replaced.complete(ExecutionSubmission.CANCELLED);
+        }
         return PrepareGateDecision.QUEUE_ONLY;
     }
 
@@ -80,21 +207,34 @@ public final class PrepareSingleFlightGate {
      * （prepareAfterEditorResolved 缓存落地后）；PASS_THROUGH 链不得调用。
      */
     @Nullable
-    public QueuedExecuteIntent consumePendingExecute() {
-        if (!pendingExecute.getAndSet(false)) return null;
+    public synchronized QueuedExecuteIntent consumePendingExecute(@Nullable QueuedExecuteIntent expectedOwner) {
+        if (!matchesOwner(expectedOwner)) {
+            return null;
+        }
+        return takePendingExecute();
+    }
+
+    /** 仅在门内同步临界区调用，不向链暴露无身份消费入口。 */
+    private QueuedExecuteIntent takePendingExecute() {
+        if (!pendingExecute.getAndSet(false)) {
+            return null;
+        }
         QueuedExecuteIntent intent = pendingIntent;
         pendingIntent = null;
         return intent;
     }
 
     /** 门持有链终结复位（成功/失败/复用收敛均须调用；PASS_THROUGH 链不得调用）。 */
-    public void finishPrepare() {
+    public synchronized boolean finishPrepare(@Nullable QueuedExecuteIntent expectedOwner) {
+        if (!matchesOwner(expectedOwner)) {
+            return false;
+        }
+        QueuedExecuteIntent leftover = takePendingExecute();
+        owner = null;
         prepareInFlight.set(false);
+        if (leftover != null) {
+            leftover.complete(ExecutionSubmission.CANCELLED);
+        }
+        return true;
     }
-
-    /**
-     * 单飞位悬挂逃生窗口：远程 PG 会话「数秒」量级（计划 §一），60s 内仍未终结视作死链
-     * （runner 失败无 session 回调等历史挂死族，见 sharedConsole 字段注释的 M36.5.5 实证）。
-     */
-    public static final long STUCK_ESCAPE_MS = 60_000L;
 }

@@ -28,22 +28,67 @@ public final class ExecuteConfirmMessages {
     /** 无危险发现 → 既有文案；有 → 升级为发现清单。 */
     @org.jetbrains.annotations.NotNull
     public static String build(@org.jetbrains.annotations.NotNull String sql, @org.jetbrains.annotations.NotNull String keyword) {
+        return build(sql, keyword, null, java.util.List.of());
+    }
+
+    @org.jetbrains.annotations.NotNull
+    public static String build(@org.jetbrains.annotations.NotNull String sql, @org.jetbrains.annotations.NotNull String keyword,
+                               @org.jetbrains.annotations.Nullable cn.song.mybatisplus.visualizer.sql.Dialect dialect) {
+        return build(sql, keyword, dialect, java.util.List.of());
+    }
+
+    /**
+     * 无任何发现 → 既有文案；有险 → 升级为发现清单。
+     *
+     * <p>R52（方言能力自检）：dialect 非空时追加<b>方言能力缺口</b>发现（{@link cn.song.mybatisplus.visualizer.sql.DialectCapabilities#gapsFor}）
+     * ——SQL 用到了本方言不支持的形态（DELETE LIMIT / UPSERT / identity 包装）时执行前如实提示。
+     * dialect=null 时逐字节维持既有行为（旧调用点与既有测试零回归）。</p>
+     *
+     * @param dialect           当前生效方言（R52；null = 不做能力自检）
+     * @param additionalFindings R46 等上游预检已渲染好的发现行（含 {@code • } 前缀；无无界写发现时
+     *                           与能力缺口同走 {@code execute.confirm.precheck.summary} 抬头）
+     */
+    @org.jetbrains.annotations.NotNull
+    public static String build(@org.jetbrains.annotations.NotNull String sql, @org.jetbrains.annotations.NotNull String keyword,
+                               @org.jetbrains.annotations.Nullable cn.song.mybatisplus.visualizer.sql.Dialect dialect,
+                               @org.jetbrains.annotations.NotNull java.util.List<String> additionalFindings) {
         UnboundedWriteDetector.WriteRisk risk = UnboundedWriteDetector.detect(sql);
-        if (!risk.isDangerous()) {
+        java.util.List<String> riskLines = new ArrayList<>();
+        if (risk.isDangerous()) {
+            // Kotlin: risk.kinds().sorted().joinToString("\n") — 排序去重后逐类一行
+            Set<UnboundedWriteDetector.FindingKind> sorted = new TreeSet<>(risk.kinds());
+            for (UnboundedWriteDetector.FindingKind kind : sorted) {
+                riskLines.add("• " + MpSqlVisualizerBundle.message(messageKeyOf(kind)));
+            }
+        }
+        java.util.List<String> gapLines = new ArrayList<>();
+        if (dialect != null) {
+            for (cn.song.mybatisplus.visualizer.sql.DialectCapabilities.CapabilityGap gap
+                    : cn.song.mybatisplus.visualizer.sql.DialectCapabilities.gapsFor(sql, dialect)) {
+                gapLines.add("• " + MpSqlVisualizerBundle.message(gap.messageKey(), gap.dialectName()));
+            }
+        }
+        // 全部为空 → 既有文案逐字节不变（确认流零变化红线）
+        if (riskLines.isEmpty() && gapLines.isEmpty() && additionalFindings.isEmpty()) {
             return MpSqlVisualizerBundle.message("execute.confirm.dml.message", keyword);
         }
-        // Kotlin: risk.kinds().sorted().joinToString("\n") — 排序去重后逐类一行
-        Set<UnboundedWriteDetector.FindingKind> sorted = new TreeSet<>(risk.kinds());
-        List<String> lines = new ArrayList<>();
-        for (UnboundedWriteDetector.FindingKind kind : sorted) {
-            lines.add("• " + MpSqlVisualizerBundle.message(messageKeyOf(kind)));
+        // 无无界写发现（仅能力缺口/预检发现）→ 通用预检抬头（不冒用「无界写特征」）
+        if (riskLines.isEmpty()) {
+            java.util.List<String> merged = new ArrayList<>(gapLines);
+            merged.addAll(additionalFindings);
+            return MpSqlVisualizerBundle.message("execute.confirm.precheck.summary", keyword,
+                    String.join("\n", merged));
         }
-        return MpSqlVisualizerBundle.message("execute.confirm.unbounded.summary", keyword, String.join("\n", lines));
+        // 有无界写发现（可同时带能力缺口/预检发现）→ 走既有 unbounded.summary（既有测试逐字节钉住）
+        java.util.List<String> merged = new ArrayList<>(riskLines);
+        merged.addAll(gapLines);
+        merged.addAll(additionalFindings);
+        return MpSqlVisualizerBundle.message("execute.confirm.unbounded.summary", keyword, String.join("\n", merged));
     }
 
     /** 发现类别 → 文案键（单一映射点；键值见 bundle execute.confirm.unbounded.* 段）。 */
     @org.jetbrains.annotations.NotNull
-    private static String messageKeyOf(@org.jetbrains.annotations.NotNull UnboundedWriteDetector.FindingKind kind) {
+    static String messageKeyOf(@org.jetbrains.annotations.NotNull UnboundedWriteDetector.FindingKind kind) {
         switch (kind) {
             case MISSING_WHERE: return "execute.confirm.unbounded.missingWhere";
             case TAUTOLOGY: return "execute.confirm.unbounded.tautology";
