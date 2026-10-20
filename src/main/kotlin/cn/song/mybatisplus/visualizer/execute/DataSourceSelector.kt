@@ -470,10 +470,12 @@ object DataSourceSelector {
         callback: ((Boolean) -> Unit)? = null,
         dialectGateRequest: ExecutionDialectGate.Request? = null,
         onDialectGate: ((ExecutionDialectGate.Verdict) -> Unit)? = null,
+        forceChoose: Boolean = false,
     ) {
         chooseAndPrepare(project, sql, executeAfterPrepare = false,
             onConsole = onConsole, onEditor = onEditor, onError = onError, callback = callback,
-            dialectGateRequest = dialectGateRequest, onDialectGate = onDialectGate)
+            dialectGateRequest = dialectGateRequest, onDialectGate = onDialectGate,
+            forceChoose = forceChoose)
     }
 
     /**

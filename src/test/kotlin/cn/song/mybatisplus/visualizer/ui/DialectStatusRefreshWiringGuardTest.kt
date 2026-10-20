@@ -45,6 +45,31 @@ class DialectStatusRefreshWiringGuardTest {
     }
 
     @Test
+    fun `refresh EDT block rerenders for bound dialect`() {
+        // T-DialectGateExit P1：刷新链只重组状态行是不够的（UI-040：状态行/文本/目标三者可并存不一致）。
+        // 判据按**未注释的整行**匹配——反向验证实测过：子串匹配会被 `// rerenderIfBoundDialectDiffers(chosen)`
+        // 这种注释掉的探针骗成假绿。
+        val t = read("$root/DialectStatusRefresh.kt")
+        val wired = t.lines().any { it.trim() == "rerenderIfBoundDialectDiffers(chosen)" }
+        assertTrue("绑定后未按目标方言重渲染（或只留注释）", wired)
+        assertTrue("重渲染判据被摘（纯函数应在场）", t.contains("fun shouldRerenderForBoundDialect("))
+    }
+
+    @Test
+    fun `forceChoose gates silent reuse at both call sites`() {
+        // T-DialectGateExit P0-3：两处静默路径都必须被 forceChoose 短路，否则「切换数据源」点了等于没点。
+        // 同样只认未注释的行（防止注释掉的判据假绿）。
+        val t = read("src/main/kotlin/cn/song/mybatisplus/visualizer/execute/DataSourceSelectorResults.kt")
+        fun wired(fragment: String): Boolean =
+            t.lines().any { !it.trim().startsWith("//") && it.contains(fragment) }
+        assertTrue("共享控制台复用未接 forceChoose 判据", wired("allowsSharedConsoleReuse(forceChoose) &&"))
+        assertTrue(
+            "last-used 静默命中未接 forceChoose 判据",
+            wired("allowsSilentLastUsed(executeAfterPrepare, forceChoose)"),
+        )
+    }
+
+    @Test
     fun `updateMeta consumes panel decision not raw result field`() {
         val t = read("$root/SqlPreviewPanelResultView.kt")
         assertTrue("updateMeta 未写入面板决策", t.contains("currentDialectDecision = result.dialectDecision"))

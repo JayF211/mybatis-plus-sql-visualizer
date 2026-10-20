@@ -106,8 +106,50 @@ internal fun SqlPreviewPanel.refreshDialectStatusRow() {
                 ?: return@invokeLater
             currentDialectDecision = chosen
             applyDialectStatusSegment()
+            // T-DialectGateExit P1：绑定源给出更强方言时，把 SQL 也重渲染到该方言
+            rerenderIfBoundDialectDiffers(chosen)
         }, ModalityState.any())
     }
+}
+
+/**
+ * T-DialectGateExit P1：绑定源给出更强方言且与当前渲染不同 → 按目标方言重渲染。
+ *
+ * 不这么做的话「状态行说 A、SQL 文本是 B、执行目标是 C」可以并存（UI-040 现场）：
+ * 用户绑了 MySQL 源，但 SQL 仍按模块学到的 PostgreSQL 渲染，执行/回滚全被方言闸挡住。
+ *
+ * 护栏：只在用户没改过编辑器文本时做（`lastRenderedSql == 当前文本`）——重渲染整篇重写，
+ * 不能吞掉用户的编辑；模型不支持无损重渲染时 [rerenderForExecutionTarget] 自己返回 false。
+ */
+private fun SqlPreviewPanel.rerenderIfBoundDialectDiffers(
+    decision: cn.song.mybatisplus.visualizer.sql.DialectDecisionEngine.Decision,
+) {
+    val targetName = decision.dialectName ?: return
+    val rendered = current?.effectiveDialect?.name ?: return
+    val text = currentEditorSql()
+    val untouched = text != null && text == lastRenderedSql
+    if (!shouldRerenderForBoundDialect(decision.source, targetName, rendered, untouched)) return
+    rerenderForExecutionTarget(targetName)
+}
+
+/**
+ * T-DialectGateExit P1 判据（纯函数，便于单测）：
+ * 绑定源给出方言、与当前渲染不同、且用户没改过编辑器文本时，才按目标方言重渲染。
+ *
+ * - 只有 [DialectDecisionEngine.Source.BOUND_DATASOURCE] 生效：模块学习/项目共识都不是「执行目标」，
+ *   不该因为一条弱证据就改写 SQL；
+ * - 文本被编辑过时不重渲染（重渲染整篇重写，会吞掉用户改动）。
+ */
+internal fun shouldRerenderForBoundDialect(
+    source: cn.song.mybatisplus.visualizer.sql.DialectDecisionEngine.Source?,
+    targetDialectName: String?,
+    renderedDialectName: String?,
+    textUntouched: Boolean,
+): Boolean {
+    if (source != cn.song.mybatisplus.visualizer.sql.DialectDecisionEngine.Source.BOUND_DATASOURCE) return false
+    if (targetDialectName.isNullOrBlank() || renderedDialectName.isNullOrBlank()) return false
+    if (targetDialectName.equals(renderedDialectName, ignoreCase = true)) return false
+    return textUntouched
 }
 
 /**

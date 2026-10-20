@@ -33,8 +33,16 @@ internal object PreviewSideQuery {
         /** 表格结果（EXPLAIN 直送等）。 */
         data class Table(val raw: McpExplainFormatter.RawResult) : Result
 
-        /** 只读护栏/方言闸阻断；[message] 可直接展示。 */
-        data class Blocked(val message: String) : Result
+        /**
+         * 只读护栏/方言闸阻断；[message] 可直接展示。
+         *
+         * @param verdict 方言闸判定（只读护栏阻断时为 null）——调用方据此区分「方言冲突」
+         *                与其它阻断，并决定是否给「按目标方言重渲染 / 切换数据源」出口。
+         */
+        data class Blocked(
+            val message: String,
+            val verdict: ExecutionDialectGate.Verdict? = null,
+        ) : Result
 
         /** 执行失败；[message] 可直接展示。 */
         data class Failed(val message: String) : Result
@@ -73,7 +81,7 @@ internal object PreviewSideQuery {
         val target = runCatching { ExecutionDialectGate.fromDataSource(dataSource) }.getOrNull()
         val verdict = ExecutionDialectGate.evaluate(request, target?.dialectName)
         if (verdict.status != ExecutionDialectGate.Status.MATCH) {
-            onResult(Result.Blocked(DataSourceSelector.dialectGateMessage(verdict)))
+            onResult(Result.Blocked(DataSourceSelector.dialectGateMessage(verdict), verdict))
             return
         }
         val testRunner = runnerForTest

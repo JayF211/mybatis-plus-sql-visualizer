@@ -283,8 +283,129 @@ class RollbackSqlDialogTest : BasePlatformTestCase() {
         }
     }
 
-    fun testRunSnapshotQueryEmptyResultShowsHint() {
+    // ======================== T-DialectGateExit（UI-040） ========================
+
+    private fun gateRequest(
+        rendered: String? = "PostgreSQL",
+        mode: cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.RenderMode =
+            cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.RenderMode.AUTO,
+        canRerender: Boolean = true,
+    ) = cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Request(
+        renderMode = mode,
+        renderedDialectName = rendered,
+        intent = cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Intent.QUERY,
+        canLosslesslyRerender = canRerender,
+        userTextUntouched = true,
+    )
+
+    private fun tableResult() = PreviewSideQuery.Result.Table(
+        cn.song.mybatisplus.visualizer.mcp.McpExplainFormatter.RawResult(
+            listOf("id", "age"), listOf(listOf("1", "20")),
+        ),
+    )
+
+    fun testDialectConflictShowsExitRowAndRerenderRetries() {
+        // 方言冲突（PostgreSQL 渲染 vs MySQL 目标）→ 露出两个出口；点重渲染 → 重渲染并重试一次。
         val dialog = newDialog(unableUpdateResult(), "UPDATE")
+        dialog.snapshotQueryTargetForTest = { SnapshotTarget() } // MySQL
+        dialog.snapshotGateRequestForTest = { gateRequest() }
+        var rerenderedTo: String? = null
+        dialog.snapshotRerenderForTest = { name ->
+            rerenderedTo = name
+            true
+        }
+        var runnerCalls = 0
+        val oldRunner = PreviewSideQuery.runnerForTest
+        PreviewSideQuery.runnerForTest = { _, _, _, _, cb ->
+            runnerCalls++
+            cb(tableResult())
+        }
+        try {
+            dialog.runSnapshotQuery()
+            assertTrue("方言冲突应露出出口行", dialog.gateExitRowVisibleForTest())
+            assertTrue("重渲染按钮应可见", dialog.rerenderButtonForTest().isVisible)
+            assertTrue("切换数据源按钮应可见", dialog.switchSourceButtonForTest().isVisible)
+            assertEquals("阻断时不得提交查询", 0, runnerCalls)
+
+            // 重渲染成功后，重试用的请求已是目标方言 → 匹配并填表
+            dialog.snapshotGateRequestForTest = { gateRequest(rendered = "MySQL") }
+            dialog.rerenderButtonForTest().doClick()
+
+            assertEquals("应按目标数据源方言重渲染", "MySQL", rerenderedTo)
+            assertEquals("重渲染后应重试一次", 1, runnerCalls)
+            assertTrue(
+                "重试成功应填充快照：${dialog.pasteAreaForTest().text}",
+                dialog.pasteAreaForTest().text.contains("id\tage"),
+            )
+            assertFalse("成功后应收起出口行", dialog.gateExitRowVisibleForTest())
+        } finally {
+            PreviewSideQuery.runnerForTest = oldRunner
+            dialog.snapshotGateRequestForTest = null
+            dialog.snapshotRerenderForTest = null
+            dialog.doDispose()
+        }
+    }
+
+    fun testManualDialectConflictHidesRerenderButton() {
+        // 用户手动选了方言 → 闸门语义是「插件不覆盖手动选择」→ 不给重渲染，只给切换数据源。
+        val dialog = newDialog(unableUpdateResult(), "UPDATE")
+        dialog.snapshotQueryTargetForTest = { SnapshotTarget() }
+        dialog.snapshotGateRequestForTest = {
+            gateRequest(mode = cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.RenderMode.MANUAL)
+        }
+        try {
+            dialog.runSnapshotQuery()
+            assertTrue("手动方言冲突也应露出出口行", dialog.gateExitRowVisibleForTest())
+            assertFalse("手动方言不给重渲染按钮", dialog.rerenderButtonForTest().isVisible)
+            assertTrue("切换数据源仍可用", dialog.switchSourceButtonForTest().isVisible)
+        } finally {
+            dialog.snapshotGateRequestForTest = null
+            dialog.doDispose()
+        }
+    }
+
+    fun testNonDialectBlockHidesExitRow() {
+        // 渲染方言未知（非冲突）→ 出口行不出现（重渲染/换目标都解决不了这类阻断）。
+        val dialog = newDialog(unableUpdateResult(), "UPDATE")
+        dialog.snapshotQueryTargetForTest = { SnapshotTarget() }
+        dialog.snapshotGateRequestForTest = {
+            gateRequest(
+                rendered = null,
+                mode = cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.RenderMode.UNKNOWN,
+            )
+        }
+        try {
+            dialog.runSnapshotQuery()
+            assertFalse("非方言冲突不露出出口行", dialog.gateExitRowVisibleForTest())
+            assertTrue("仍应给出阻断原因：${dialog.warningsTextForTest()}", dialog.warningsTextForTest().isNotEmpty())
+        } finally {
+            dialog.snapshotGateRequestForTest = null
+            dialog.doDispose()
+        }
+    }
+
+    fun testSwitchDataSourceButtonInvokesPicker() {
+        // 「切换数据源」必须真的走选择器链路（而不是静默复用上次目标）。
+        val dialog = newDialog(unableUpdateResult(), "UPDATE")
+        dialog.snapshotQueryTargetForTest = { SnapshotTarget() }
+        dialog.snapshotGateRequestForTest = { gateRequest() }
+        var prompted = false
+        dialog.snapshotPromptForTest = { _, _, _ -> prompted = true }
+        dialog.snapshotAwaitBindForTest = { _, _, _, onGiveUp -> onGiveUp() }
+        try {
+            dialog.runSnapshotQuery()
+            assertTrue("前置：方言冲突露出出口行", dialog.gateExitRowVisibleForTest())
+            dialog.switchSourceButtonForTest().doClick()
+            assertTrue("切换数据源应触发选择器", prompted)
+        } finally {
+            dialog.snapshotGateRequestForTest = null
+            dialog.snapshotPromptForTest = null
+            dialog.snapshotAwaitBindForTest = null
+            dialog.doDispose()
+        }
+    }
+
+    fun testRunSnapshotQueryEmptyResultShowsHint() {        val dialog = newDialog(unableUpdateResult(), "UPDATE")
         dialog.snapshotQueryTargetForTest = { SnapshotTarget() }
         val oldRunner = PreviewSideQuery.runnerForTest
         PreviewSideQuery.runnerForTest = { _, _, _, _, cb ->

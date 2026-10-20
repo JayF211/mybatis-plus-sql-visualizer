@@ -110,6 +110,41 @@ class RollbackSqlDialog(
     @Volatile
     internal var snapshotAwaitBindForTest: ((Project, Int, () -> Unit, () -> Unit) -> Unit)? = null
 
+    /** 测试缝：方言闸请求（生产走 [SqlPreviewPanel.executionDialectGateRequest]，由模型能力决定可重渲染位）。 */
+    @Volatile
+    internal var snapshotGateRequestForTest: (() -> cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Request)? = null
+
+    /** 测试缝：按目标方言重渲染（生产走 [SqlPreviewPanel.rerenderForExecutionTarget]）。 */
+    @Volatile
+    internal var snapshotRerenderForTest: ((String) -> Boolean)? = null
+
+    /** T-DialectGateExit：方言闸阻断态的出口行（默认隐藏，仅方言冲突时出现）。 */
+    private val gateExitRow = JBPanel<JBPanel<*>>(java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 4, 2)).apply {
+        isOpaque = false
+        isVisible = false
+    }
+
+    /** 最近一次方言阻断的目标方言（「按目标方言重渲染」按钮的动作输入）。 */
+    private var blockedTargetDialect: String? = null
+
+    private val rerenderToTargetButton = JButton(
+        MpSqlVisualizerBundle.message("rollback.snapshot.rerender"),
+    ).apply {
+        toolTipText = MpSqlVisualizerBundle.message("rollback.snapshot.rerender.tooltip")
+        addActionListener { rerenderToTargetAndRetry() }
+    }
+
+    private val switchDataSourceButton = JButton(
+        MpSqlVisualizerBundle.message("rollback.snapshot.switchSource"),
+    ).apply {
+        toolTipText = MpSqlVisualizerBundle.message("rollback.snapshot.switchSource.tooltip")
+        addActionListener {
+            val sql = currentResult.snapshotSelectSql ?: return@addActionListener
+            val proj = panel?.project ?: return@addActionListener
+            promptDataSourceThenRetrySnapshot(proj, sql, forceChoose = true)
+        }
+    }
+
     // 底部动作以字段持有——DialogWrapper 无公开 getActions()（javap 实证），粘贴生成后
     // 启用态只能经自身引用刷新；字段初始化先于 init()（createActions 在 init() 内调用）
     private val executeAction = object : DialogWrapperAction(MpSqlVisualizerBundle.message("rollback.action.execute")) {
@@ -200,20 +235,32 @@ class RollbackSqlDialog(
         isOpaque = false
         border = JBUI.Borders.empty(4, 10, 6, 10)
         add(
-            JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 4, 2)).apply {
+            JBPanel<JBPanel<*>>(BorderLayout()).apply {
                 isOpaque = false
-                add(snapshotQueryLabel)
-                add(JButton(MpSqlVisualizerBundle.message("rollback.snapshot.run")).apply {
-                    toolTipText = MpSqlVisualizerBundle.message("rollback.snapshot.run.tooltip")
-                    addActionListener { runSnapshotQuery() }
-                })
-                add(JButton(MpSqlVisualizerBundle.message("rollback.snapshot.copy")).apply {
-                    addActionListener {
-                        val sql = currentResult.snapshotSelectSql ?: return@addActionListener
-                        copyToClipboard(sql)
-                    }
-                })
-                add(snapshotToggle)
+                add(
+                    JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 4, 2)).apply {
+                        isOpaque = false
+                        add(snapshotQueryLabel)
+                        add(JButton(MpSqlVisualizerBundle.message("rollback.snapshot.run")).apply {
+                            toolTipText = MpSqlVisualizerBundle.message("rollback.snapshot.run.tooltip")
+                            addActionListener { runSnapshotQuery() }
+                        })
+                        add(JButton(MpSqlVisualizerBundle.message("rollback.snapshot.copy")).apply {
+                            addActionListener {
+                                val sql = currentResult.snapshotSelectSql ?: return@addActionListener
+                                copyToClipboard(sql)
+                            }
+                        })
+                        add(snapshotToggle)
+                    },
+                    BorderLayout.NORTH,
+                )
+                // T-DialectGateExit：方言冲突时的两个出口（默认隐藏）
+                gateExitRow.apply {
+                    add(rerenderToTargetButton)
+                    add(switchDataSourceButton)
+                }
+                add(gateExitRow, BorderLayout.SOUTH)
             },
             BorderLayout.NORTH,
         )
@@ -353,8 +400,15 @@ class RollbackSqlDialog(
      * 结果自动填入快照框并按粘贴结果生成回滚；阻断/失败/空结果在对话框内提示，
      * 「复制快照 SQL」+ 手工粘贴路径保留为降级通道。
      */
-    internal fun runSnapshotQuery() {
-        val sql = currentResult.snapshotSelectSql ?: return
+    internal fun runSnapshotQuery() = runSnapshotQuery(allowRerenderRetry = true)
+
+    /**
+     * @param allowRerenderRetry 方言冲突时是否允许「按目标方言重渲染后重试」——重试只做一次，
+     *        防止「渲染→仍不匹配→再渲染」循环。
+     * @param sqlOverride 重渲染后按新预览文本重算出的快照 SELECT（提交用它；显示区回滚文本不动）
+     */
+    private fun runSnapshotQuery(allowRerenderRetry: Boolean, sqlOverride: String? = null) {
+        val sql = sqlOverride ?: currentResult.snapshotSelectSql ?: return
         val p = panel ?: return
         val proj = p.project ?: return
         val target = snapshotQueryTargetForTest?.invoke() ?: runCatching {
@@ -367,17 +421,21 @@ class RollbackSqlDialog(
             return
         }
         warningLabel.text = ""
-        // 快照 SELECT 由插件按预览方言生成（非用户手改文本）：与 DML 影响面预演同一口径构造
-        // 方言闸请求——渲染方言=预览实际方言，目标不一致时 fail-closed（不把另一语法族 SQL 送进目标库）。
-        val renderedDialect = p.current?.effectiveDialect
-            ?: cn.song.mybatisplus.visualizer.sql.MySqlDialect
-        val request = cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Request(
-            renderMode = p.executionDialectRenderMode,
-            renderedDialectName = renderedDialect.name,
-            intent = cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Intent.QUERY,
-            canLosslesslyRerender = false,
-            userTextUntouched = true,
-        )
+        hideGateExitRow()
+        // T-DialectGateExit：改用面板自己的闸请求——`canLosslesslyRerender` 由模型能力决定
+        //（原实现写死 false，把本来能无损重渲染的路径直接判成阻断）。
+        // 面板无当前预览时（headless 夹具/异常态）沿用旧口径的 MySQL 兜底，不因拿不到方言而误判冲突。
+        val request = snapshotGateRequestForTest?.invoke()
+            ?: p.current?.let {
+                p.executionDialectGateRequest(cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Intent.QUERY)
+            }
+            ?: cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Request(
+                renderMode = p.executionDialectRenderMode,
+                renderedDialectName = cn.song.mybatisplus.visualizer.sql.MySqlDialect.name,
+                intent = cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Intent.QUERY,
+                canLosslesslyRerender = false,
+                userTextUntouched = true,
+            )
         PreviewSideQuery.run(proj, target, sql, request, scalar = false, requireSelectGuard = true) { result ->
             when (result) {
                 is PreviewSideQuery.Result.Table -> {
@@ -391,8 +449,10 @@ class RollbackSqlDialog(
                     generateFromPaste()
                 }
 
-                is PreviewSideQuery.Result.Blocked ->
+                is PreviewSideQuery.Result.Blocked -> {
                     warningLabel.text = "<html>${escapeHtml(result.message)}</html>"
+                    showGateExitRowIfDialectConflict(result.verdict, allowRerenderRetry)
+                }
 
                 is PreviewSideQuery.Result.Failed ->
                     warningLabel.text = "<html>${escapeHtml(result.message)}</html>"
@@ -403,6 +463,90 @@ class RollbackSqlDialog(
             }
         }
     }
+
+    /**
+     * T-DialectGateExit：方言冲突时露出两个出口。
+     *
+     * - 「按目标方言重新渲染并重试」：手动选方言（MANUAL_CONFLICT）时不提供——闸门语义是插件不覆盖手动选择；
+     *   其余冲突都提供，能否成功由 [SqlPreviewPanel.rerenderForExecutionTarget] 的模型能力决定。
+     * - 「切换数据源」：任何方言冲突都提供（强制弹选择器，见 P0-3）。
+     *
+     * 只读护栏/目标未知等阻断不显示（那是另一类原因，重渲染与换目标都解决不了）。
+     */
+    private fun showGateExitRowIfDialectConflict(
+        verdict: cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Verdict?,
+        allowRerenderRetry: Boolean,
+    ) {
+        if (verdict == null) return
+        val conflict = when (verdict.status) {
+            cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Status.AUTO_RERENDER_REQUIRED,
+            cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Status.RERENDER_UNAVAILABLE,
+            cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Status.MANUAL_CONFLICT -> true
+            else -> false
+        }
+        if (!conflict) return
+        val targetDialect = verdict.targetDialectName
+        blockedTargetDialect = targetDialect
+        val canRerender = verdict.status !=
+            cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Status.MANUAL_CONFLICT &&
+            targetDialect != null && allowRerenderRetry
+        rerenderToTargetButton.isVisible = canRerender
+        rerenderToTargetButton.isEnabled = canRerender
+        switchDataSourceButton.isVisible = true
+        switchDataSourceButton.isEnabled = true
+        gateExitRow.isVisible = true
+        gateExitRow.revalidate()
+        gateExitRow.repaint()
+    }
+
+    private fun hideGateExitRow() {
+        blockedTargetDialect = null
+        gateExitRow.isVisible = false
+    }
+
+    /** 「按目标方言重新渲染并重试」：成功则重建请求重跑一次；失败就地说明原因（不冒充成功）。 */
+    internal fun rerenderToTargetAndRetry() {
+        val targetDialect = blockedTargetDialect ?: return
+        val p = panel ?: return
+        val rerender = snapshotRerenderForTest ?: { name -> p.rerenderForExecutionTarget(name) }
+        val ok = runCatching { rerender(targetDialect) }.getOrDefault(false)
+        if (!ok) {
+            warningLabel.text = "<html>${escapeHtml(
+                MpSqlVisualizerBundle.message("rollback.snapshot.rerender.failed"))}</html>"
+            return
+        }
+        hideGateExitRow()
+        // 重渲染会改写预览文本，快照 SELECT 可能带旧方言的标识符引用 → 按新文本重算后再提交。
+        runSnapshotQuery(allowRerenderRetry = false, sqlOverride = refreshedSnapshotSql())
+    }
+
+    /**
+     * 按重渲染后的预览文本重算快照 SELECT（主键列沿用对话框当前输入）。
+     *
+     * 快照 SELECT 由 [RollbackSqlGenerator] 从语句 AST 拼出，标识符引用跟随输入文本的方言——
+     * 不重算就可能把旧方言的引用样式提交给新目标。重算失败（无法解析）时回退原文本，不阻断重试。
+     */
+    private fun refreshedSnapshotSql(): String? {
+        val p = panel ?: return currentResult.snapshotSelectSql
+        val newSql = p.currentEditorSql() ?: return currentResult.snapshotSelectSql
+        val pkColumns = pkField.text.orEmpty()
+            .split(',', '，')
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .takeIf { it.isNotEmpty() }
+        val regenerated = runCatching {
+            RollbackSqlGenerator.generate(newSql, primaryKeyColumns = pkColumns)
+        }.getOrNull()
+        return regenerated?.snapshotSelectSql ?: currentResult.snapshotSelectSql
+    }
+
+    /** 测试访问器：出口行当前是否可见（方言冲突时应为 true）。 */
+    internal fun gateExitRowVisibleForTest(): Boolean = gateExitRow.isVisible
+
+    /** 测试访问器：两个出口按钮（可见性/启用态断言用）。 */
+    internal fun rerenderButtonForTest(): JButton = rerenderToTargetButton
+
+    internal fun switchSourceButtonForTest(): JButton = switchDataSourceButton
 
     /** 结果网格 → TSV（首行列名；单元格内制表/换行折叠为空格，与手工复制口径一致）。 */
     private fun toSnapshotTsv(
@@ -422,7 +566,11 @@ class RollbackSqlDialog(
      * 取消/超时收口为原有说明文案。链路与 DML 影响面预演 / EXPLAIN 的 T-UI030 同款，
      * 代际沿用面板 `explainStructuredGeneration`（预览切换即停表，避免晚到重试打到新预览）。
      */
-    private fun promptDataSourceThenRetrySnapshot(proj: Project, sql: String) {
+    /**
+     * @param forceChoose T-DialectGateExit：已绑定但方言冲突时，强制弹选择器（跳过 last-used 静默命中
+     *                    与共享控制台复用）——否则「切换数据源」点了等于没点。
+     */
+    private fun promptDataSourceThenRetrySnapshot(proj: Project, sql: String, forceChoose: Boolean = false) {
         val p = panel ?: return
         warningLabel.text = ""
         val errorShown = java.util.concurrent.atomic.AtomicBoolean(false)
@@ -433,7 +581,7 @@ class RollbackSqlDialog(
             val prompt = snapshotPromptForTest
                 ?: { project: Project, s: String, onError: (String) -> Unit ->
                     cn.song.mybatisplus.visualizer.execute.DataSourceSelector.prepareConsole(
-                        project, s, onError = onError,
+                        project, s, onError = onError, forceChoose = forceChoose,
                     )
                 }
             runCatching {
