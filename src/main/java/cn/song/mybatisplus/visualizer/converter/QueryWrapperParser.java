@@ -9,6 +9,7 @@ import cn.song.mybatisplus.visualizer.model.LikePosition;
 import cn.song.mybatisplus.visualizer.model.LimitClause;
 import cn.song.mybatisplus.visualizer.model.OrderByItem;
 import cn.song.mybatisplus.visualizer.model.SelectStatement;
+import cn.song.mybatisplus.visualizer.model.SqlFragment;
 import cn.song.mybatisplus.visualizer.model.SqlValue;
 import cn.song.mybatisplus.visualizer.model.TableInfo;
 import cn.song.mybatisplus.visualizer.model.WrapperArg;
@@ -86,6 +87,15 @@ public final class QueryWrapperParser {
     /** M38.2：MySQL limit 的另一形态 "limit 5 OFFSET 10"（MP last 常用）。 */
     private static final Pattern OFFSET_PATTERN = Pattern.compile("(?i)offset\\s+(\\d+)");
 
+    /** 占位 LIMIT 片段头（T-UpdateSetSqlConcat）：(?i)limit\s+(.+)$。 */
+    private static final Pattern LIMIT_FRAGMENT_PATTERN = Pattern.compile("(?i)limit\\s+(.+)$");
+
+    /** 占位 LIMIT 的 offset 形态（T-UpdateSetSqlConcat）：(?i)^(.+?)\s+offset\s+(.+)$。 */
+    private static final Pattern LIMIT_FRAGMENT_OFFSET_PATTERN = Pattern.compile("(?i)^(.+?)\\s+offset\\s+(.+)$");
+
+    /** 占位 LIMIT 数字 token（T-UpdateSetSqlConcat）：\d+。 */
+    private static final Pattern LIMIT_DIGIT_PATTERN = Pattern.compile("\\d+");
+
     /**
      * 解析调用链为 SELECT 语句模型。
      *
@@ -106,6 +116,7 @@ public final class QueryWrapperParser {
         List<OrderByItem> orderBy = new ArrayList<>();
         LimitClause limit = null;
         String rawFirst = null;
+        List<String> rawFirstParams = List.of();
         String comment = null;
         boolean distinct = false;
         boolean orPending = false;
@@ -138,7 +149,9 @@ public final class QueryWrapperParser {
                     if (classRef != null && predicate != null) {
                         selectColumns.addAll(selectColumnsByPredicate(predicate));
                     } else {
-                        selectColumns.addAll(columnArgs(call));
+                        // T-UpdateSetSqlConcat：字符串表达式按片段解析（运行期段写 `?` 并带来源，
+                        // 在 SELECT 列表渲染点按序登记；列引用（Lambda）不受影响）
+                        selectColumns.addAll(selectColumnArgs(call));
                     }
                 }
                 case "selectFilter" -> {
@@ -230,8 +243,20 @@ public final class QueryWrapperParser {
                     orderBy.addAll(orderItems(columnsCall, ascFlag));
                 }
                 case "last" -> limit = parseLimit(call);
-                case "first" -> rawFirst = literalUnquoted(argAt(call.getArgs(), 0));
-                case "comment" -> comment = literalUnquoted(argAt(call.getArgs(), 0));
+                // first / comment（官方 API，M15 增补）：SQL 最前片段与注释原样透传
+                // T-UpdateSetSqlConcat：片段位取 asSqlFragment；first 的来源随片段登记（SELECT 之前渲染）
+                // ——comment 的 `?` 落在 `/* ... */` 注释里，placeholderPositions 不计，故无来源
+                case "first" -> {
+                    SqlFragment firstFragment = WrapperConverterKt.asSqlFragment(argAt(call.getArgs(), 0));
+                    if (firstFragment != null) {
+                        rawFirst = firstFragment.getText();
+                        rawFirstParams = firstFragment.getParams();
+                    }
+                }
+                case "comment" -> {
+                    SqlFragment commentFragment = WrapperConverterKt.asSqlFragment(argAt(call.getArgs(), 0));
+                    if (commentFragment != null) comment = commentFragment.getText();
+                }
 
                 // ---------- 逻辑分组 ----------
                 case "or" -> {
@@ -285,6 +310,8 @@ public final class QueryWrapperParser {
                 limit,
                 rawFirst,
                 null,
+                rawFirstParams,
+                List.of(),
                 comment,
                 List.of(),
                 null,
@@ -345,8 +372,10 @@ public final class QueryWrapperParser {
             String expr = fn + "(" + withPrefix.qualifiedName(dialect) + ")";
             return List.of(new ColumnRef(null, expr, alias, null, expr, null, null));
         }
-        if (!(first instanceof SqlValue.Literal lit)) return List.of();
-        String template = lit.getUnquoted();
+        // T-UpdateSetSqlConcat：片段位取 asSqlFragment（模板含运行期段时静态段保留、运行期段写 `?`）
+        SqlFragment templateFragment = WrapperConverterKt.asSqlFragment(argAt(call.getArgs(), 0));
+        if (templateFragment == null) return List.of();
+        String template = templateFragment.getText();
         String expr = template;
         for (ColumnRef col : func.getColumns()) {
             if (!expr.contains("%s")) break;
@@ -508,19 +537,20 @@ public final class QueryWrapperParser {
     private Condition inSql(WrapperCall call, boolean negated) {
         ColumnRef column = argAsColumn(argAt(call.getArgs(), 0));
         if (column == null) return null;
-        SqlValue v = WrapperConverterKt.asValue(argAt(call.getArgs(), 1));
-        if (!(v instanceof SqlValue.Literal lit)) return null;
+        // T-UpdateSetSqlConcat：片段位取 asSqlFragment（`"SELECT id FROM t WHERE x = " + x` → `... x = ?`）
+        SqlFragment frag = WrapperConverterKt.asSqlFragment(argAt(call.getArgs(), 1));
+        if (frag == null) return null;
         String op = negated ? "NOT IN" : "IN";
-        return new Condition.Raw(column.qualifiedName(dialect) + " " + op + " (" + lit.getUnquoted() + ")", null);
+        return new Condition.Raw(column.qualifiedName(dialect) + " " + op + " (" + frag.getText() + ")", null, frag.getParams());
     }
 
     /** 比较 SQL 片段条件（eqSql/gtSql/geSql/ltSql/leSql）。 */
     private Condition compareSql(WrapperCall call, String op) {
         ColumnRef column = argAsColumn(argAt(call.getArgs(), 0));
         if (column == null) return null;
-        SqlValue v = WrapperConverterKt.asValue(argAt(call.getArgs(), 1));
-        if (!(v instanceof SqlValue.Literal lit)) return null;
-        return new Condition.Raw(column.qualifiedName(dialect) + " " + op + " (" + lit.getUnquoted() + ")", null);
+        SqlFragment frag = WrapperConverterKt.asSqlFragment(argAt(call.getArgs(), 1));
+        if (frag == null) return null;
+        return new Condition.Raw(column.qualifiedName(dialect) + " " + op + " (" + frag.getText() + ")", null, frag.getParams());
     }
 
     /** NOT 嵌套条件（not(consumer)）。 */
@@ -595,9 +625,12 @@ public final class QueryWrapperParser {
         // M38.2（语义对照矩阵实证）：字符串版 having("count(*) > 3")（MP 官方 API）——
         // 原实现只认 lambda 嵌套形态，字符串片段被静默丢弃。按原生片段透传渲染。
         WrapperArg firstArg = argAt(call.getArgs(), 0);
-        if (firstArg instanceof WrapperArg.ValueArg va && va.getValue() instanceof SqlValue.Literal lit
-                && lit.getUnquoted() != null && !lit.getUnquoted().isBlank()) {
-            return new Condition.Raw(lit.getUnquoted(), null);
+        if (firstArg instanceof WrapperArg.ValueArg) {
+            // T-UpdateSetSqlConcat：片段位取 asSqlFragment（`having("count(*) > " + n)` → `count(*) > ?`）
+            SqlFragment frag = WrapperConverterKt.asSqlFragment(firstArg);
+            if (frag != null && !frag.getText().isBlank()) {
+                return new Condition.Raw(frag.getText(), null, frag.getParams());
+            }
         }
         WrapperArg.NestedArg nested = argAt(call.getArgs(), 0) instanceof WrapperArg.NestedArg n ? n : null;
         if (nested == null) return null;
@@ -635,11 +668,23 @@ public final class QueryWrapperParser {
         return result;
     }
 
-    /** LIMIT 解析：last("limit 10") / last("limit 5, 10")（offset, count）。 */
+    /**
+     * LIMIT 解析：last("limit 10") / last("limit 5, 10")（MP 语义：offset, count）。
+     *
+     * <p>T-UpdateSetSqlConcat：运行期段渲染成 {@code ?} 后按<b>占位形态</b>建模（{@code last("LIMIT " + n)}）——
+     * LimitClause 本就持有 SqlValue，生成器的 limit 渲染点会按序登记占位符来源。
+     */
     private LimitClause parseLimit(WrapperCall call) {
         SqlValue v = argAsValue(argAt(call.getArgs(), 0));
-        if (!(v instanceof SqlValue.Literal lit)) return null;
-        String text = lit.getUnquoted().trim();
+        String literalText = v instanceof SqlValue.Literal lit ? lit.getUnquoted() : null;
+        if (literalText != null) return parseLimitText(literalText);
+        SqlFragment fragment = WrapperConverterKt.asSqlFragment(argAt(call.getArgs(), 0));
+        if (fragment == null) return null;
+        return parseLimitFragment(fragment);
+    }
+
+    /** 纯文本 LIMIT（既有口径：数字 / `5, 10` / `5 OFFSET 10`）。 */
+    private LimitClause parseLimitText(String text) {
         Matcher m = LIMIT_PATTERN.matcher(text);
         if (!m.find()) return null;
         Long first = parseLongOrNull(m.group(1));
@@ -651,6 +696,52 @@ public final class QueryWrapperParser {
         Matcher om = OFFSET_PATTERN.matcher(text);
         Long offset = om.find() ? parseLongOrNull(om.group(1)) : null;
         return offset != null ? new LimitClause(offset, first) : new LimitClause(null, first);
+    }
+
+    /**
+     * 占位 LIMIT（T-UpdateSetSqlConcat）：{@code limit ?} / {@code limit ?, ?} / {@code limit ? offset ?}，
+     * 也接受数字与占位混排（{@code limit 5, ?}）。占位符按片段来源顺序取名。
+     */
+    private LimitClause parseLimitFragment(SqlFragment fragment) {
+        Matcher m = LIMIT_FRAGMENT_PATTERN.matcher(fragment.getText().trim());
+        if (!m.find()) return null;
+        String body = m.group(1).trim();
+        int[] paramIndex = {0};
+        Matcher om = LIMIT_FRAGMENT_OFFSET_PATTERN.matcher(body);
+        if (om.find()) {
+            SqlValue count = limitValueOf(om.group(1).trim(), fragment, paramIndex);
+            if (count == null) return null;
+            SqlValue offset = limitValueOf(om.group(2).trim(), fragment, paramIndex);
+            if (offset == null) return null;
+            return new LimitClause(offset, count);
+        }
+        String[] parts = body.split(",");
+        if (parts.length == 1) {
+            SqlValue count = limitValueOf(parts[0].trim(), fragment, paramIndex);
+            return count != null ? new LimitClause(null, count) : null;
+        }
+        if (parts.length == 2) {
+            SqlValue offset = limitValueOf(parts[0].trim(), fragment, paramIndex);
+            if (offset == null) return null;
+            SqlValue count = limitValueOf(parts[1].trim(), fragment, paramIndex);
+            if (count == null) return null;
+            return new LimitClause(offset, count);
+        }
+        return null;
+    }
+
+    /** LIMIT 片段 token 取值：`?` 按来源顺序取占位来源、纯数字为字面量、其余无效。 */
+    private SqlValue limitValueOf(String token, SqlFragment fragment, int[] paramIndex) {
+        if ("?".equals(token)) {
+            List<String> params = fragment.getParams();
+            String source = paramIndex[0] < params.size() ? params.get(paramIndex[0]) : WrapperConverterKt.UNKNOWN_PARAM;
+            paramIndex[0]++;
+            return new SqlValue.Placeholder(source);
+        }
+        if (LIMIT_DIGIT_PATTERN.matcher(token).matches()) {
+            return new SqlValue.Literal(token);
+        }
+        return null;
     }
 
     /**
@@ -776,32 +867,29 @@ public final class QueryWrapperParser {
             if (flagValue instanceof SqlValue.Literal lit) {
                 hasFlag = "true".equals(lit.getUnquoted()) || "false".equals(lit.getUnquoted());
             } else if (flagValue instanceof SqlValue.Placeholder) {
-                hasFlag = true;
-            } else if (!(first instanceof WrapperArg.ValueArg)) {
-                hasFlag = true;
+                // T-UpdateSetSqlConcat：带片段形态的运行期实参是 SQL 模板（`apply("x > " + v, w)`），
+                // 不是布尔前缀——否则模板会被当 flag 吞掉，真正的模板位被错取成第二参
+                hasFlag = WrapperConverterKt.asSqlFragment(first) == null;
             } else {
-                hasFlag = false;
+                hasFlag = !(first instanceof WrapperArg.ValueArg);
             }
         } else {
             hasFlag = false;
         }
         int startIndex = hasFlag ? 1 : 0;
         if (args.size() <= startIndex) return null;
-        SqlValue tv = WrapperConverterKt.asValue(argAt(args, startIndex));
-        if (!(tv instanceof SqlValue.Literal lit)) return null;
-        String template = lit.getUnquoted();
+        // T-UpdateSetSqlConcat：片段位取 asSqlFragment（`apply("amount > " + x)` → `amount > ?`）
+        SqlFragment templateFragment = WrapperConverterKt.asSqlFragment(argAt(args, startIndex));
+        if (templateFragment == null) return null;
+        // `{i}` 绑定参数替换 + 按最终文本顺序登记占位符来源（不登记会让面板回填整体错位）
+        // 注意：null 值保留在列表里（{i} 索引对齐），缺失绑定原样保留 `{i}`
         List<SqlValue> values = new ArrayList<>();
         List<WrapperArg> tailArgs = args.size() > startIndex + 1 ? args.subList(startIndex + 1, args.size()) : java.util.Collections.emptyList();
         for (WrapperArg a : tailArgs) {
-            SqlValue v = WrapperConverterKt.asValue(a);
-            if (v != null) values.add(v);
+            values.add(WrapperConverterKt.asValue(a));
         }
-        String sql = template;
-        int idx = 0;
-        for (SqlValue value : values) {
-            sql = sql.replace("{" + idx + "}", renderFuncValue(value));
-            idx++;
-        }
+        SqlFragment rendered = WrapperConverterKt.renderSqlFragment(templateFragment, values);
+        String sql = rendered.getText();
         String flagSource = null;
         if (hasFlag && first instanceof WrapperArg.ValueArg va) {
             SqlValue fv = va.getValue();
@@ -809,7 +897,7 @@ public final class QueryWrapperParser {
             else if (fv instanceof SqlValue.Placeholder ph) flagSource = ph.getSource();
         }
         boolean defaultEnabled = !"false".equals(flagSource);
-        return new RawTemplate(hasFlag, flagSource, defaultEnabled, sql);
+        return new RawTemplate(hasFlag, flagSource, defaultEnabled, sql, rendered.getParams());
     }
 
     /** 解析 apply：原样 SQL 片段透传 + {i} 参数替换 + 布尔前缀 toggle。 */
@@ -823,28 +911,25 @@ public final class QueryWrapperParser {
                 SqlGenerator.renderConditionText(new Condition.Raw(t.sql(), null)),
                 null,
                 List.of()
-        ));
+        ), t.params());
     }
 
     /** 解析 applyFunc（MPJ 官方 API，1.4.13+）。 */
     private Condition parseApplyFunc(WrapperCall call) {
-        SqlValue tv = WrapperConverterKt.asValue(argAt(call.getArgs(), 0));
-        if (!(tv instanceof SqlValue.Literal lit)) return null;
-        String template = lit.getUnquoted();
+        // T-UpdateSetSqlConcat：片段位取 asSqlFragment（模板含运行期段时静态段保留、运行期段写 `?`）
+        SqlFragment template = WrapperConverterKt.asSqlFragment(argAt(call.getArgs(), 0));
+        if (template == null) return null;
         WrapperArg.FuncArg func = argAt(call.getArgs(), 1) instanceof WrapperArg.FuncArg fa ? fa : null;
         if (func == null) return null;
-        String sql = template;
+        String sql = template.getText();
         for (ColumnRef col : func.getColumns()) {
             ColumnRef withPrefix = columnPrefix != null ? WrapperConverterKt.withTableAlias(col, columnPrefix) : col;
             sql = sql.replaceFirst("%s", withPrefix.qualifiedName(dialect));
         }
-        int idx = 0;
-        for (SqlValue value : func.getValues()) {
-            sql = sql.replace("{" + idx + "}", renderFuncValue(value));
-            idx++;
-        }
         if (sql.contains("%s")) return null;
-        return new Condition.Raw(sql, null);
+        // `{i}` 绑定参数替换 + 按最终文本顺序登记占位符来源
+        SqlFragment rendered = WrapperConverterKt.renderSqlFragment(new SqlFragment(sql, template.getParams()), func.getValues());
+        return new Condition.Raw(rendered.getText(), null, rendered.getParams());
     }
 
     /** 解析 exists / notExists。 */
@@ -863,7 +948,7 @@ public final class QueryWrapperParser {
                     List.of()
             );
         }
-        return new Condition.Raw(sql, toggle);
+        return new Condition.Raw(sql, toggle, t.params());
     }
 
     /** 取调用中所有列实参（带主表别名前缀）。 */
@@ -872,6 +957,32 @@ public final class QueryWrapperParser {
         for (WrapperArg arg : call.getArgs()) {
             ColumnRef col = argAsColumn(arg);
             if (col != null) result.add(col);
+        }
+        return result;
+    }
+
+    /**
+     * SELECT 列表实参（T-UpdateSetSqlConcat）：字符串实参按<b>片段</b>解析——
+     * {@code select("amount * " + x + " AS v")} 的运行期段渲染成 {@code ?} 并带来源，由生成器在列列表渲染点按序登记。
+     *
+     * <p>与 {@link #columnArgs} 的区别只在字符串实参：条件/排序/分组是<b>标识符</b>位置（拼运行期值会产出非法标识符，
+     * 保持 {@code Literal} 口径），SELECT 列表才是「原样拼进语句的 SQL 表达式」位置。
+     */
+    private List<ColumnRef> selectColumnArgs(WrapperCall call) {
+        List<ColumnRef> result = new ArrayList<>();
+        for (WrapperArg arg : call.getArgs()) {
+            if (arg instanceof WrapperArg.ColumnArg || arg instanceof WrapperArg.AliasArg) {
+                ColumnRef col = argAsColumn(arg);
+                if (col != null) result.add(col);
+            } else if (arg instanceof WrapperArg.ValueArg) {
+                SqlFragment frag = WrapperConverterKt.asSqlFragment(arg);
+                if (frag != null) {
+                    result.add(new ColumnRef(null, frag.getText(), null, null, null, null, null, frag.getParams()));
+                }
+            } else {
+                ColumnRef col = argAsColumn(arg);
+                if (col != null) result.add(col);
+            }
         }
         return result;
     }
@@ -926,13 +1037,6 @@ public final class QueryWrapperParser {
         return WrapperConverterKt.asValue(arg);
     }
 
-    /** 安全取列名实参的字面量 unquoted（非字面量返回 null）。 */
-    private static String literalUnquoted(WrapperArg arg) {
-        SqlValue v = WrapperConverterKt.asValue(arg);
-        if (v instanceof SqlValue.Literal lit) return lit.getUnquoted();
-        return null;
-    }
-
     /** 安全取列表元素（越界返回 null）。 */
     private static WrapperArg argAt(List<WrapperArg> args, int i) {
         return (i >= 0 && i < args.size()) ? args.get(i) : null;
@@ -960,7 +1064,9 @@ public final class QueryWrapperParser {
      * @param flagSource    布尔条件实参源码文本（tooltip）
      * @param defaultEnabled 默认勾选态
      * @param sql           替换后的 SQL 片段
+     * @param params        片段中占位符 {@code ?} 的来源（T-UpdateSetSqlConcat）：渲染时按序登记进参数表
      */
-    private record RawTemplate(boolean hasFlag, String flagSource, boolean defaultEnabled, String sql) {
+    private record RawTemplate(boolean hasFlag, String flagSource, boolean defaultEnabled, String sql,
+                               List<String> params) {
     }
 }
