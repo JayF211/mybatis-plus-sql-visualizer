@@ -19,6 +19,12 @@ public final class MariaDbDialect implements Dialect {
         return "MariaDB";
     }
 
+    /** R36：MariaDB 同 MySQL 官方 `START TRANSACTION`（证据三档见 Dialect#getTransactionBegin）。 */
+    @Override
+    public String getTransactionBegin() {
+        return "START TRANSACTION";
+    }
+
     @Override
     public String renderLimit(LimitClause limit) {
         return Dialect.renderMySqlStyleLimit(limit);

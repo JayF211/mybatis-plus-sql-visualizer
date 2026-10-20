@@ -284,6 +284,32 @@ public interface Dialect {
     }
 
     /**
+     * R36（V46 证伪①）：<b>显式事务开始语句</b>（回放脚本的事务包裹用；不含结尾分号）。
+     *
+     * <p>语义：非 null = 本方言有「显式开启事务」的语句，回放脚本可用 {@code <本值>;}（前）+
+     * {@code COMMIT;}（后）包裹；null = <b>本方言无显式事务开始语句</b>——事务随首条 DML 隐式开启，
+     * 中途回退须由客户端持有同一连接/会话执行 ROLLBACK（脚本层无从表达）。此时回放脚本
+     * <b>诚实省略</b>包裹，UI 禁用该选项并说明原因（不产出 .sql 里必然语法错误的伪包裹）。</p>
+     *
+     * <p>边界与证据（三档，逐档标级别；核对先例照 O-9 闸门边界）：</p>
+     * <ul>
+     * <li><b>本机真引擎实测</b>（H2 2.3.232 六模式 REGULAR/MySQL/MariaDB/PostgreSQL/Oracle/
+     *    MSSQLServer + SQLite 3.50.3）：两引擎均取 {@code BEGIN}，且<b>语义成立</b>——BEGIN + INSERT +
+     *    ROLLBACK → 行不存在；同形 COMMIT → 行存在；对照「不开显式事务时 ROLLBACK 对自动
+     *    提交行无效」。两引擎的 {@code START TRANSACTION} 均为语法错误，故不取。</li>
+     * <li><b>官方文法（族/兼容面推定）</b>：MySQL/MariaDB 与 OceanBase（D1=A 只接 MySQL 模式）取
+     *    {@code START TRANSACTION}；PostgreSQL 族取 {@code BEGIN}（官方 BEGIN [WORK|TRANSACTION]），
+     *    KingBase / openGauss 随族取 {@code BEGIN}；SQL Server 取 {@code BEGIN TRANSACTION}。</li>
+     * <li><b>判无（保守禁用）</b>：Oracle——{@code BEGIN} 在 Oracle 是 PL/SQL 块起始，SQL Reference 无
+     *    {@code BEGIN [TRANSACTION]} 语句形态；DM（达梦）默认 Oracle 兼容模式同形。两款均无本机引擎
+     *    → 依据「宁可少包，不可产出语法错误脚本」判无，真机核对后增量。</li>
+     * </ul>
+     */
+    default String getTransactionBegin() {
+        return null;
+    }
+
+    /**
      * T-ExplainDbl：判断语句是否已以 EXPLAIN 关键字开头——实现已迁至
      * {@link ExplainGate#startsWithExplainKeyword}（T-ECH-01 把两处词法边界判定收口一处），
      * 此处不再保留第二份实现。

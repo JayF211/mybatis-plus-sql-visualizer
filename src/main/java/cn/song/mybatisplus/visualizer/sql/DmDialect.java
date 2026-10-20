@@ -19,6 +19,14 @@ public final class DmDialect implements Dialect {
         return "DM（达梦）";
     }
 
+    /** R36 判无（<b>显式声明</b>，保守）：DM 默认 Oracle 兼容模式，`BEGIN` 为块起始；
+     * 本机无 DM 引擎不可实测 → 依据「宁可少包，不可产出语法错误脚本」判无，
+     * 真机核对后增量（证据三档见 Dialect#getTransactionBegin）。 */
+    @Override
+    public String getTransactionBegin() {
+        return null;
+    }
+
     @Override
     public String renderLimit(LimitClause limit) {
         return Dialect.renderMySqlStyleLimit(limit);

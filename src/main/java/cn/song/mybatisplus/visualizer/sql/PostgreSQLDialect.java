@@ -19,6 +19,12 @@ public final class PostgreSQLDialect implements Dialect {
         return "PostgreSQL";
     }
 
+    /** R36：PG 官方 `BEGIN [WORK|TRANSACTION]`（证据三档见 Dialect#getTransactionBegin）。 */
+    @Override
+    public String getTransactionBegin() {
+        return "BEGIN";
+    }
+
     @Override
     public String renderLimit(LimitClause limit) {
         return Dialect.renderPgStyleLimit(limit);

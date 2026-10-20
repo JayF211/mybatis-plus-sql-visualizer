@@ -46,6 +46,12 @@ public final class OpenGaussDialect implements Dialect {
         return "openGauss";
     }
 
+    /** R36：openGauss 取 PG 形态 `BEGIN`（族推定；本方言 upsert 曾反族，真机核对后增量）（证据三档见 Dialect#getTransactionBegin）。 */
+    @Override
+    public String getTransactionBegin() {
+        return "BEGIN";
+    }
+
     @Override
     public String renderLimit(LimitClause limit) {
         return Dialect.renderPgStyleLimit(limit);

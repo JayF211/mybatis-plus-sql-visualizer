@@ -20,6 +20,12 @@ public final class SqlServerDialect implements Dialect {
         return "SQL Server";
     }
 
+    /** R36：T-SQL 官方 `BEGIN TRANSACTION`（缩写 `BEGIN TRAN`）（证据三档见 Dialect#getTransactionBegin）。 */
+    @Override
+    public String getTransactionBegin() {
+        return "BEGIN TRANSACTION";
+    }
+
     @Override
     public String renderLimit(LimitClause limit) {
         SqlValue offset = limit.getOffset() != null ? limit.getOffset() : new SqlValue.Literal("0");

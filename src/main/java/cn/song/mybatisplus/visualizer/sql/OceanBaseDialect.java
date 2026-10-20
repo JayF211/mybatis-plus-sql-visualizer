@@ -39,6 +39,12 @@ public final class OceanBaseDialect implements Dialect {
         return "OceanBase";
     }
 
+    /** R36：OceanBase 只接 MySQL 模式（D1=A），取 MySQL 形态 `START TRANSACTION`（文档级）（证据三档见 Dialect#getTransactionBegin）。 */
+    @Override
+    public String getTransactionBegin() {
+        return "START TRANSACTION";
+    }
+
     @Override
     public String renderLimit(LimitClause limit) {
         return Dialect.renderMySqlStyleLimit(limit);

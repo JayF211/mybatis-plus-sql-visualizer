@@ -19,6 +19,12 @@ public final class MySqlDialect implements Dialect {
         return "MySQL";
     }
 
+    /** R36：MySQL 官方 `START TRANSACTION`（`BEGIN` 亦可，取无歧义的长形态）（证据三档见 Dialect#getTransactionBegin）。 */
+    @Override
+    public String getTransactionBegin() {
+        return "START TRANSACTION";
+    }
+
     @Override
     public String renderLimit(LimitClause limit) {
         return Dialect.renderMySqlStyleLimit(limit);

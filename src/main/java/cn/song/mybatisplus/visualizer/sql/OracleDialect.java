@@ -19,6 +19,14 @@ public final class OracleDialect implements Dialect {
         return "Oracle";
     }
 
+    /** R36 判无（<b>显式声明</b>，非遗漏）：`BEGIN` 在 Oracle 是 PL/SQL 块起始而非事务语句，
+     * SQL Reference 无 `BEGIN [TRANSACTION]` 形态——脚本里写 `BEGIN;` 必语法错误，
+     * 故回放脚本不包裹、UI 禁用该选项（证据三档见 Dialect#getTransactionBegin）。 */
+    @Override
+    public String getTransactionBegin() {
+        return null;
+    }
+
     @Override
     public String renderLimit(LimitClause limit) {
         if (limit.getOffset() != null) {

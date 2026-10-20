@@ -20,6 +20,12 @@ public final class KingBaseDialect implements Dialect {
         return "KingBase（人大金仓）";
     }
 
+    /** R36：金仓 PG 族兼容，取 PG 形态 `BEGIN`（文档级/族推定）（证据三档见 Dialect#getTransactionBegin）。 */
+    @Override
+    public String getTransactionBegin() {
+        return "BEGIN";
+    }
+
     @Override
     public String renderLimit(LimitClause limit) {
         return Dialect.renderPgStyleLimit(limit);

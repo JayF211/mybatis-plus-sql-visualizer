@@ -47,67 +47,134 @@ public final class DialectRegistry {
 
     /** {@link #effective(com.intellij.openapi.project.Project)} 的无项目上下文形态（project=null）。 */
     public Dialect effective() {
-        return effective(null);
+        return effective((com.intellij.openapi.project.Project) null);
+    }
+
+    /** 旧形态兼容：project 单参（auto 推断/手动解析语义不变，落新决策链）。 */
+    public Dialect effective(com.intellij.openapi.project.Project project) {
+        return effective(project, null, null, null);
     }
 
     /**
-     * T-DialectAutoInfer：<b>渲染方言统一读取</b>（全部渲染消费点收口此函数）。
-     *
-     * <p>T-TS-FixC：auto/manual 的<b>模式判定与手动值解析的唯一事实源在本函数内部</b>，按
-     * 「项目级 &gt; 全局」逐层解析（项目级语义由
-     * {@link cn.song.mybatisplus.visualizer.config.ProjectPluginSettings} 的 effective* 方法承载）：</p>
-     *
-     * <ol>
-     *  <li>模式：项目级 {@link cn.song.mybatisplus.visualizer.config.ProjectPluginSettings#effectiveDialectAuto}
-     *      （启用项目设置且 dialectAuto 非 null 时取项目值）&gt; 全局
-     *      {@code cn.song.mybatisplus.visualizer.config.PluginSettings.State.dialectAuto}（默认 true）。
-     *      为什么项目级是权威：项目级「智能推断」是用户对该项目的<b>显式声明</b>，全局值只是<b>默认值</b>
-     *      （与 ProjectPluginSettings.State 的「空/未覆盖=跟随全局」语义同构）。此前本函数直读全局
-     *      auto，于是「项目 true + 全局 false」组合下项目声明被静默忽略——调用方已按项目级判为 auto
-     *      进入本函数，却被全局 false 拉回手动分支返回全局手动值（T-TS-FixC 验证者实测口径缺陷）。</li>
-     *  <li>auto=true → 智能推断（{@link DialectInference#infer}：agent 最近连接 URL &gt; IDE 数据源 URL），
-     *      未命中回退 {@link MySqlDialect}（与 {@link #byName} 未知回退语义一致）。</li>
-     *  <li>auto=false → 手动值：项目级
-     *      {@link cn.song.mybatisplus.visualizer.config.ProjectPluginSettings#effectiveDialect}
-     *      （启用且非空）&gt; 全局 {@code cn.song.mybatisplus.visualizer.config.PluginSettings.State.dialect}。</li>
-     * </ol>
-     *
-     * <p>边界（<b>有意为之，非缺陷</b>）：{@code project}=null 时推断链不可用——
-     * {@link cn.song.mybatisplus.visualizer.log.agent.AgentManager} 与 {@link DataSourceUrlProbe}
-     * 都要求项目上下文，故落回手动值（无项目则取全局手动值）。psi 侧
-     * {@code cn.song.mybatisplus.visualizer.psi.PsiDialect#currentDialect} 的调用点全部为无参调用，
-     * 因此 PSI 路径 auto 推断不生效（与合流前一致，无回归）；要让 PSI 路径生效，须由调用方传入宿主
-     * PSI 项目。</p>
-     *
-     * @param project 数据源探测与项目级设置读取用项目（null=无项目上下文，见上「边界」）
+     * T-TS-FixC 全参决策入口（O-136 泛化形态）：项目候选共识 + 模块学习 + IDEA 事实桥接入统一决策。
      */
-    public Dialect effective(com.intellij.openapi.project.Project project) {
+    public DialectDecisionEngine.Decision decision(com.intellij.openapi.project.Project project,
+                                                   com.intellij.openapi.vfs.VirtualFile sourceFile,
+                                                   com.intellij.psi.PsiFile sqlPsiFile,
+                                                   String moduleKey) {
+        return decision(project, sourceFile, sqlPsiFile, moduleKey, null);
+    }
+
+    /** {@link #decision} 的 PreviewSourceContext 形态（O-145 瞬态上下文直取）。 */
+    public DialectDecisionEngine.Decision decision(
+            cn.song.mybatisplus.visualizer.context.PreviewSourceContext context) {
+        return decision(context.project(), context.hostVirtualFile(), context.sqlPsiFile(),
+                context.canonicalModuleKey());
+    }
+
+    public Dialect effective(cn.song.mybatisplus.visualizer.context.PreviewSourceContext context) {
+        String name = decision(context).dialectName();
+        return name != null ? byName(name) : MySqlDialect.INSTANCE;
+    }
+
+    /**
+     * T-TS-FixC：渲染方言统一读取（决策态显式形态；兼容回退 {@link MySqlDialect}）。
+     */
+    public Dialect effective(com.intellij.openapi.project.Project project,
+                             com.intellij.openapi.vfs.VirtualFile sourceFile,
+                             com.intellij.psi.PsiFile sqlPsiFile,
+                             String moduleKey) {
+        String name = decision(project, sourceFile, sqlPsiFile, moduleKey).dialectName();
+        return name != null ? byName(name) : MySqlDialect.INSTANCE;
+    }
+
+    /**
+     * T-DialectAutoInfer（O-136 重构后的唯一事实源）：统一方言决策。
+     *
+     * <p>优先级（与 {@link DialectDecisionEngine#decide} 一致）：手动 &gt; 事件精确事实（captured）&gt;
+     * IDEA 事实桥（SQL PSI/数据源 provider/scope 候选）&gt; 已绑定数据源 &gt; 模块学习 &gt; 项目候选共识
+     * &gt; 最近 agent URL（单模块才采信）&gt; 兼容回退 MySQL（compatibilityFallbackName）。
+     * 原始 SQL PSI/模块作用域经参数显式传入；无候选时按 {@link DialectDecisionEngine} 语义判
+     * UNAVAILABLE 并携带兼容回退名，调用方可经 {@code decision()} 区分真实结论与兼容回退。</p>
+     *
+     * @param project               项目上下文（null=无项目上下文，直接判 UNAVAILABLE+MySQL 回退）
+     * @param sourceFile            非预览链的源文件（无 SQL PSI 时的 IDEA 方言探测目标）
+     * @param sqlPsiFile            实际 SQL PSI（DatabaseTools 控制台等；O-145 W1 桥的入口）
+     * @param moduleKey             宿主模块稳定键（模块学习绑定查取）
+     * @param boundDataSourceDialect 面板已绑定/上次使用数据源的方言（T-DialectStatusLiveRefresh）
+     */
+    public DialectDecisionEngine.Decision decision(com.intellij.openapi.project.Project project,
+                                                   com.intellij.openapi.vfs.VirtualFile sourceFile,
+                                                   com.intellij.psi.PsiFile sqlPsiFile,
+                                                   String moduleKey,
+                                                   String boundDataSourceDialect) {
         cn.song.mybatisplus.visualizer.config.PluginSettings.State settings;
         try {
             settings = cn.song.mybatisplus.visualizer.config.PluginSettings.getInstance().getState();
         } catch (Throwable e) {
             settings = null;
         }
-        // 手动值只解析一次：auto 分支的兜底与手动分支必须同源，否则两个分支会再次分叉
         String manualName = projectManualDialectName(project);
         if (manualName == null && settings != null) manualName = settings.getDialect();
         Boolean auto = projectDialectAuto(project);
         if (auto == null && settings != null) auto = settings.getDialectAuto();
         if (auto == null) auto = true;
-        if (!auto) return byName(manualName);
-        // O-93：无推断通道时 auto 回退 MySQL，手动残值不参与——旧形态此处返回 byName(manualName)，
-        // 等于让 auto 模式被手动残值劫持（曾设过手动方言又切回智能推断的环境会把残值泄漏给 psi
-        // 渲染链；PaginationSimTest 泄漏 "Oracle" 致 SqlPreviewServiceBatchTest 5 例间歇爆发实证）。
-        // auto=false 的手动语义不变（仍取手动值）。
-        if (project == null) return MySqlDialect.INSTANCE;
-        // T-PS5-04：agentUrl 读轻量持有者（不再经 AgentManager.getInstance 触发项目级服务实例化
-        // ——那是「预览一次即驻留 executor+monitor 双守护线程」的根因）；URL 由会话生命周期点回写，
-        // 推断优先级语义（agent URL > 数据源 URL > null 回退）逐字不变。
-        String agentUrl = cn.song.mybatisplus.visualizer.log.agent.AgentUrlRegistry.lastConnectionUrl(project);
-        DialectInference.Result inferred =
-                DialectInference.infer(agentUrl, DataSourceUrlProbe.firstUrl(project));
-        String name = inferred.dialectName();
-        return name != null ? byName(name) : MySqlDialect.INSTANCE;
+        if (!auto) {
+            return DialectDecisionEngine.decide(new DialectDecisionEngine.Input(manualName, null));
+        }
+        if (project == null) {
+            // O-93：无推断通道时 auto 回退 MySQL，手动残值不参与（见 KDoc「边界」）
+            return DialectDecisionEngine.decide(new DialectDecisionEngine.Input(null, null));
+        }
+        java.util.List<DialectDecisionEngine.Candidate> candidates = DataSourceUrlProbe.candidateDialects(project);
+        boolean singleModule = false;
+        try {
+            singleModule = com.intellij.openapi.module.ModuleManager.getInstance(project)
+                    .getModules().length == 1;
+        } catch (Throwable ignored) {
+            // runCatching().getOrDefault(false) 等价
+        }
+        String agentDialect = UrlSubprotocolDialects.dialectName(
+                cn.song.mybatisplus.visualizer.log.agent.AgentUrlRegistry.lastConnectionUrl(project));
+        DialectDecisionEngine.Candidate learnedModule = null;
+        if (moduleKey != null) {
+            try {
+                learnedModule = ModuleDataSourceBindingStore.getInstance(project).learnedCandidate(project, moduleKey);
+            } catch (Throwable ignored) {
+                // runCatching().getOrNull() 等价
+            }
+        }
+        com.intellij.openapi.vfs.VirtualFile dialectFile = sqlPsiFile != null && sqlPsiFile.getVirtualFile() != null
+                ? sqlPsiFile.getVirtualFile()
+                : sourceFile;
+        if (sqlPsiFile != null && dialectFile != null) {
+            IdeaSqlContextBridge.Snapshot snapshot = IdeaSqlContextBridge.resolve(project, sqlPsiFile, dialectFile);
+            if (snapshot.availability() != IdeaSqlContextBridge.Availability.DATABASE_TOOLS_UNAVAILABLE) {
+                return IdeaSqlDialectDecision.decide(
+                        null,
+                        null,
+                        snapshot,
+                        learnedModule,
+                        candidates,
+                        agentDialect,
+                        singleModule,
+                        boundDataSourceDialect);
+            }
+        }
+        String ideaDialect = sourceFile != null ? IdeaSourceDialectProbe.dialectName(project, sourceFile) : null;
+        return DialectDecisionEngine.decide(new DialectDecisionEngine.Input(
+                null,
+                null,
+                false,
+                java.util.List.of(),
+                DialectDecisionEngine.Source.IDEA_SCOPE,
+                ideaDialect,
+                DialectDecisionEngine.Source.IDEA_EFFECTIVE_DIALECT,
+                learnedModule,
+                candidates,
+                agentDialect,
+                singleModule,
+                boundDataSourceDialect));
     }
 
     /**

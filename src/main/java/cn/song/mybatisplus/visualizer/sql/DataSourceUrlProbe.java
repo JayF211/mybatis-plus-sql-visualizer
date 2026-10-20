@@ -66,6 +66,19 @@ public final class DataSourceUrlProbe {
         }
     }
 
+    /** 候选方言单槽缓存（O-136 项目候选共识链路；与 UrlSlot 同构）。 */
+    private static final class CandidateSlot {
+        final WeakReference<Project> project;
+        final List<DialectDecisionEngine.Candidate> candidates;
+        final long atMs;
+
+        CandidateSlot(WeakReference<Project> project, List<DialectDecisionEngine.Candidate> candidates, long atMs) {
+            this.project = project;
+            this.candidates = candidates;
+            this.atMs = atMs;
+        }
+    }
+
     /** T-PS5-03：TTL 上界（毫秒）。测试注入短窗驱动过期语义。 */
     public static volatile long ttlMs = 5_000L;
 
@@ -78,12 +91,17 @@ public final class DataSourceUrlProbe {
     /** T-DialectQuoteWarn §十二测试缝：按名探测替身（默认 null = 走真实反射链）。 */
     public static volatile BiFunction<Project, String, String> probeByNameForTest = null;
 
+    /** 候选方言探测替身（测试注入；默认 null = 走真实反射链）。 */
+    public static volatile Function<Project, List<DialectDecisionEngine.Candidate>> probeCandidatesForTest = null;
+
     /** T-PS5-03 测试缝：真实探测调用计数（断言 TTL 窗口内只探测一次）。 */
     public static final AtomicInteger probeCount = new AtomicInteger(0);
 
     private static volatile UrlSlot slot = null;
 
     private static volatile NamedUrlSlot namedSlot = null;
+
+    private static volatile CandidateSlot candidateSlot = null;
 
     private DataSourceUrlProbe() {}
 
@@ -103,6 +121,22 @@ public final class DataSourceUrlProbe {
         String url = probeFirstUrl(project);
         slot = new UrlSlot(new WeakReference<>(project), url, now);
         return url;
+    }
+
+    /** 多数据源只返回候选方言与会话内身份，不把连接 URL 留在决策模型中。 */
+    @NotNull
+    public static List<DialectDecisionEngine.Candidate> candidateDialects(@Nullable Project project) {
+        if (project == null) {
+            return List.of();
+        }
+        long now = clockMs.getAsLong();
+        CandidateSlot cached = candidateSlot;
+        if (cached != null && cached.project.get() == project && now - cached.atMs <= ttlMs) {
+            return cached.candidates;
+        }
+        List<DialectDecisionEngine.Candidate> candidates = probeCandidateDialects(project);
+        candidateSlot = new CandidateSlot(new WeakReference<>(project), candidates, now);
+        return candidates;
     }
 
     /**
@@ -140,12 +174,68 @@ public final class DataSourceUrlProbe {
         if (cached != null && (project == null || cached.project.get() == project)) slot = null;
         NamedUrlSlot named = namedSlot;
         if (named != null && (project == null || named.project.get() == project)) namedSlot = null;
+        CandidateSlot candidates = candidateSlot;
+        if (candidates != null && (project == null || candidates.project.get() == project)) candidateSlot = null;
     }
 
     /** T-PS5-03 测试缝：无条件清槽（用例隔离）。 */
     public static void invalidateAllForTest() {
         slot = null;
         namedSlot = null;
+        candidateSlot = null;
+    }
+
+    /** 候选方言真实探测（反射链，失败空清单）；{@link #probeCandidatesForTest} 注入时走替身。 */
+    @NotNull
+    private static List<DialectDecisionEngine.Candidate> probeCandidateDialects(@NotNull Project project) {
+        Function<Project, List<DialectDecisionEngine.Candidate>> candidatesProbe = probeCandidatesForTest;
+        if (candidatesProbe != null) {
+            probeCount.incrementAndGet();
+            return candidatesProbe.apply(project);
+        }
+        Function<Project, String> firstUrlProbe = probeForTest;
+        if (firstUrlProbe != null) {
+            String name = UrlSubprotocolDialects.dialectName(firstUrl(project));
+            if (name == null) {
+                return List.of();
+            }
+            return List.of(new DialectDecisionEngine.Candidate("test-first-url", name));
+        }
+        probeCount.incrementAndGet();
+        try {
+            if (project.isDisposed()) {
+                return List.of();
+            }
+            List<DialectDecisionEngine.Candidate> candidates = new java.util.ArrayList<>();
+            List<Object> managers = dataSourceManagers(project);
+            if (managers != null) {
+                for (int managerIndex = 0; managerIndex < managers.size(); managerIndex++) {
+                    Object manager = managers.get(managerIndex);
+                    Object raw = invoke(manager, "getDataSources");
+                    if (!(raw instanceof List)) {
+                        continue;
+                    }
+                    List<?> dataSources = (List<?>) raw;
+                    for (int sourceIndex = 0; sourceIndex < dataSources.size(); sourceIndex++) {
+                        Object source = dataSources.get(sourceIndex);
+                        if (source == null) {
+                            continue;
+                        }
+                        Object config = invoke(source, "getConnectionConfig");
+                        String url = config != null && invoke(config, "getUrl") instanceof String s ? s : null;
+                        candidates.add(new DialectDecisionEngine.Candidate(
+                                "session-" + managerIndex + "-" + sourceIndex,
+                                UrlSubprotocolDialects.dialectName(url)));
+                    }
+                }
+            }
+            return candidates;
+        } catch (Throwable t) {
+            if (cn.song.mybatisplus.visualizer.util.FatalErrors.isFatal(t)) {
+                throw (Error) t;
+            }
+            return List.of();
+        }
     }
 
     /** 真实探测（反射链，失败静默 null）；{@link #probeForTest} 注入时走替身。 */

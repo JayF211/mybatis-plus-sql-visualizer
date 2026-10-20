@@ -21,6 +21,12 @@ public final class H2Dialect implements Dialect {
         return "H2";
     }
 
+    /** R36：H2 2.3.232 六模式（含 MySQL/PG/Oracle/MSSQLServer 兼容模式）引擎实测取 `BEGIN`（证据三档见 Dialect#getTransactionBegin）。 */
+    @Override
+    public String getTransactionBegin() {
+        return "BEGIN";
+    }
+
     @Override
     public String renderLimit(LimitClause limit) {
         return Dialect.renderPgStyleLimit(limit);

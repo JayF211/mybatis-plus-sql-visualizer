@@ -19,6 +19,12 @@ public final class SqliteDialect implements Dialect {
         return "SQLite";
     }
 
+    /** R36：SQLite 3.50.3 引擎实测取 `BEGIN`（`START TRANSACTION` 语法错误）（证据三档见 Dialect#getTransactionBegin）。 */
+    @Override
+    public String getTransactionBegin() {
+        return "BEGIN";
+    }
+
     @Override
     public String renderLimit(LimitClause limit) {
         return Dialect.renderPgStyleLimit(limit);
