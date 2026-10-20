@@ -127,13 +127,15 @@ internal fun SqlPreviewPanel.prewarmPreviewTempFile() {
             }
             // T-PreviewExecDs-01c：方言映射须在 findFile/PSI 创建前（映射决定 PSI 语言，
             // 创建后再映射需 push 重建；exec 路径同款顺序）
-            mapPreviewDialectBeforePsi(proj, vf)
-            // T-StabilityTail：判据放读动作**内部**才管用——平台读动作可被 closeProject 的写动作
-            // 阻塞，放行时窗口已开（`ProjectImpl.isDisposed()` 在窗口内为真）；在外面判会漏掉这条窄缝，
-            // 而漏掉的代价就是下面 `PsiManagerImpl.findFile → FileManagerImpl.dispatchPendingEvents`
-            // 把 "Project is already disposed" 记成 ERROR（测试夹具里升格为 TestLoggerAssertionError）。
-            val psi = com.intellij.openapi.application.ReadAction.compute<PsiFile?, Throwable> {
-                if (prewarmAbandoned()) null else com.intellij.psi.PsiManager.getInstance(proj).findFile(vf)
+            val targetLanguageId = mapPreviewDialectBeforePsi(proj, vf)
+            // T-DegradedPreviewUx P4：映射切换的语言替换重解析是异步的——等到本文件 PSI 的
+            // 语言已等于目标再取实例，避免捕获即将失效的旧语言 PSI（真机 16:14:33 实证）。
+            val psi = if (targetLanguageId != null) {
+                awaitPreviewPsiLanguage(proj, vf, targetLanguageId)
+            } else {
+                com.intellij.openapi.application.ReadAction.compute<PsiFile?, Throwable> {
+                    if (prewarmAbandoned()) null else com.intellij.psi.PsiManager.getInstance(proj).findFile(vf)
+                }
             }
             if (psi == null) {
                 // 放弃（项目/面板已销毁）与真失败分开记账：前者不置 prewarmFailed、不记 WARN——
@@ -149,8 +151,15 @@ internal fun SqlPreviewPanel.prewarmPreviewTempFile() {
             }
             previewTempFile = vf
             // 结果可能恰在首次映射与 PSI 创建之间到达；再走一次幂等同步，避免早期 MySQL 映射赢竞态。
-            if (previewDesiredDialectName != null) mapPreviewDialectBeforePsi(proj, vf)
-            publishPrewarmProduct(await, vf to psi, prewarmStartedAt, round)
+            var publishPsi = psi
+            if (previewDesiredDialectName != null) {
+                val remappedId = mapPreviewDialectBeforePsi(proj, vf)
+                if (remappedId != null) {
+                    // 映射若再次变化，旧实例同样会被重解析失效：等落地并重取
+                    publishPsi = awaitPreviewPsiLanguage(proj, vf, remappedId) ?: publishPsi
+                }
+            }
+            publishPrewarmProduct(await, vf to publishPsi, prewarmStartedAt, round)
         }.onFailure { e ->
             prewarmFailed = true
             await.fail(e)
@@ -353,7 +362,7 @@ internal fun SqlPreviewPanel.projectPreviewFile(): java.io.File? {
  * 目录 vf 取不到（极端）时退回按文件映射，语义同改动前。
  */
 
-internal fun SqlPreviewPanel.mapPreviewDialectBeforePsi(proj: Project, vf: com.intellij.openapi.vfs.VirtualFile) {
+internal fun SqlPreviewPanel.mapPreviewDialectBeforePsi(proj: Project, vf: com.intellij.openapi.vfs.VirtualFile): String? {
     val target = previewDialectMappingTarget(vf)
     val desiredName = previewDesiredDialectName
     val resolvedLanguage = desiredName?.let {
@@ -368,7 +377,7 @@ internal fun SqlPreviewPanel.mapPreviewDialectBeforePsi(proj: Project, vf: com.i
     if (desiredName != null && targetLanguage == null) {
         com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
             .warn("[O-145] preview dialect '$desiredName' and GenericSQL platform Language are unavailable; keep existing mapping")
-        return
+        return null
     }
     val targetId = (targetLanguage as? com.intellij.lang.Language)?.id
         ?: cn.song.mybatisplus.visualizer.execute.ExecDialectRouting.MYSQL_LANGUAGE_ID
@@ -379,6 +388,38 @@ internal fun SqlPreviewPanel.mapPreviewDialectBeforePsi(proj: Project, vf: com.i
         )) {
         previewDialectMappedVf = target
         previewDialectMappedLanguageId = targetId
+        // T-DegradedPreviewUx P4：映射已就位才返回目标 id——调用方据此等语言替换重解析落地
+        // 后再取 PSI（见 [awaitPreviewPsiLanguage]）。映射失败返回 null，不退化成白等 400ms。
+        return targetId
+    }
+    return null
+}
+
+/**
+ * T-DegradedPreviewUx P4：等方言映射引发的「语言替换重解析」落地，返回当前 PSI。
+ *
+ * `DialectPreMapping.ensureMapped` 只等到 EDT 的 `setMapping` 返回，而平台随后用异步任务对
+ * 预览文件做 `LanguageSubstitutors` 重解析（真机日志 `Reparsing ... MySQL->PostgreSQL`）。
+ * 立刻 `findFile` 会拿到**旧语言 PSI**，重解析落地后该实例失效——装配时 `getDocument` 抛错，
+ * 整条预览落内存 PSI 降级（2026-10-20 16:14:33 沙盒实证：prewarm done 116ms → Reparsing →
+ * in-memory PSI）。这里只轮询**本文件**的 PSI 语言是否已等于目标，不等待全局 dumb，
+ * 有界预算用完即带当前实例返回（装配端还有一次按文件重取兜底）。
+ */
+internal fun SqlPreviewPanel.awaitPreviewPsiLanguage(
+    proj: Project,
+    vf: com.intellij.openapi.vfs.VirtualFile,
+    targetLanguageId: String,
+    budgetMs: Long = 400L,
+): com.intellij.psi.PsiFile? {
+    val deadline = System.nanoTime() + budgetMs * 1_000_000L
+    while (true) {
+        val current = com.intellij.openapi.application.ReadAction.compute<com.intellij.psi.PsiFile?, Throwable> {
+            if (prewarmAbandoned()) null else com.intellij.psi.PsiManager.getInstance(proj).findFile(vf)
+        }
+        if (current == null || prewarmAbandoned()) return current
+        if (current.language.id.equals(targetLanguageId, ignoreCase = true)) return current
+        if (System.nanoTime() >= deadline) return current
+        Thread.sleep(10L)
     }
 }
 
@@ -516,7 +557,14 @@ internal fun SqlPreviewPanel.assemblePreviewEditor(
         if (prewarmed != null && prewarmedTempFile === prewarmed) {
             prewarmedTempFile = null
             runCatching {
-                val (vFile, psi) = prewarmed
+                val (vFile, _) = prewarmed
+                // T-DegradedPreviewUx P4：不复用预热线程捕获的 PSI 实例——方言映射切换会让平台
+                // 异步重解析该文件并作废旧实例（真机 16:14:33 日志：prewarm done 后紧接 Reparsing
+                // MySQL->PostgreSQL）。装配时按文件重取当前 PSI，是这条竞态的最后一道兜底。
+                @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
+                val currentPsi = ReadAction.compute<PsiFile?, Throwable> {
+                    com.intellij.psi.PsiManager.getInstance(proj).findFile(vFile)
+                } ?: throw IllegalStateException("preview PSI unavailable after dialect remap")
                 // T-PreviewUx-Pack #2：主路径成功（项目内文件 + PSI 就绪）——清除降级横幅
                 // T-PrewarmLateRecover F2：动作一并摘除（横幅已清，留着会被后续 RENDER_WARNING 继承）
                 degradationBanner.onRetry = null
@@ -527,7 +575,7 @@ internal fun SqlPreviewPanel.assemblePreviewEditor(
                 // T-PrewarmLateRecover F1：主路径装配 → 当前文档不再属于降级态
                 degradedPreviewDocument = null
                 previewTempFile = vFile
-                psiFile = psi
+                psiFile = currentPsi
                 // T-PreviewDocLock：262 平台给「PSI 文件 → 文档」解析加了运行期读权限断言（243 只有
                 // @RequiresReadLock 注解，官方 243 sources jar 核实），故 EDT 鼠标事件里裸调即报内部错误：
                 // 单次调用固定 4 条 SEVERE「Plugin to blame: SQL Visualizer」——vf→Document 解析 2 条
@@ -541,7 +589,7 @@ internal fun SqlPreviewPanel.assemblePreviewEditor(
                 // write-intent lock，塞同步 VFS refresh 会复现 T-PreviewWiLock 的 write-safe 硬抛。
                 @Suppress("DEPRECATION") // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
                 val d = ReadAction.compute<com.intellij.openapi.editor.Document, Throwable> {
-                    com.intellij.psi.PsiDocumentManager.getInstance(proj).getDocument(psi)
+                    com.intellij.psi.PsiDocumentManager.getInstance(proj).getDocument(currentPsi)
                 } ?: throw IllegalStateException("临时 SQL 文件无关联文档")
                 // T-M36.6-03：预热文件为占位空内容 → 首次装配按实际 SQL 填充并同步 PSI
                 //（同 EDT tick 内完成，编辑器尚未显示，无闪烁）；同步路径文件内容=SQL，幂等跳过
@@ -555,6 +603,10 @@ internal fun SqlPreviewPanel.assemblePreviewEditor(
             }.getOrElse {
                 // T-DegradedPreviewUx P0：主路径产物在途失败（文档解析/写入异常）——真实原因是 PSI 侧，
                 // 不沿用 await 的终态（此刻 await 可能已成功）
+                // T-DegradedPreviewUx P4：此前该异常只传到二级降级的 msg、仅第三级才落日志，
+                // 二级降级时（真机首开形态）原因完全不可见——这里补一行不含 SQL 的 WARN 便于取证。
+                com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+                    .warn("[M36] preview main-path assembly FAILED: ${it.javaClass.simpleName}: ${it.message}")
                 fallbackPreviewDocument(
                     sql,
                     PreviewDegradationReason.PSI_UNAVAILABLE,

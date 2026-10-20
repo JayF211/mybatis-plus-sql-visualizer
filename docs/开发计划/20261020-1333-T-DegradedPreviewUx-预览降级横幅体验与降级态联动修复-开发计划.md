@@ -124,6 +124,31 @@
 4. 修复后把 P2-2 的「联动不生效」从句文案删除，并把 UI-022 在验收记录里的状态改为「已修」。
 5. 回归既有四类：`SqlPreviewPanelPrewarmLateRecoverTest`、`SqlPreviewPanelPrewarmConsumeTest`、`DegradationBannerTest`、`CrudSqlPreviewPanelRenderTest`。
 
+### P4 首开必降级的真根因：方言重映射与 PSI 的竞态（2026-10-20 沙盒日志实证）
+
+真机日志（IU-243 沙盒，16:14:33）：
+
+```
+16:14:33,649 [M36] prewarm done in 116ms (file=mpsql-preview-38116-2.sql ...)
+16:14:33,688 Reparsing .../preview/mpsql-preview-38116-2.sql because of language substitution MySQL->PostgreSQL
+16:14:33,696 [M36] in-memory PSI preview document created (len=250)   ← 落降级
+```
+
+预热成功却仍降级，链路如下：
+
+1. `DialectPreMapping.ensureMapped` 只等到 EDT 的 `setMapping` 返回（`execute/DialectPreMapping.kt` 的 latch），平台随后的 `LanguageSubstitutors` 重解析是**异步**任务；
+2. 预热线程在 `setMapping` 返回后立刻 `PsiManager.findFile`，拿到旧语言 PSI；
+3. 重解析落地后该实例失效，装配时 `PsiDocumentManager.getDocument(psi)` 抛错 → `runCatching` 吞掉 → 二级降级（横幅「临时文件解析失败」）；
+4. 点「重试」时目录已是目标方言映射、不再切换 → 成功恢复。表现为「首开必降级、重试就好」——这才是用户报的「问题没解决」；UI-022 的联动在降级态实测是好的（复选框与参数输入均生效）。
+
+修法（三层）：
+
+- **预热**：`mapPreviewDialectBeforePsi` 返回本次映射的目标 language id；新增 `awaitPreviewPsiLanguage` 有界轮询**本文件** PSI 的语言是否已等于目标（不用全局 dumb 等待），落地后再取实例；预热尾部二次映射同样等落地并重取。
+- **装配**：主路径不再信任产物里捕获的 PSI，按 `vFile` 重取当前实例（`assemblePreviewEditor`），作为最后兜底。
+- **诊断**：装配 `getOrElse` 补一行不含 SQL 的 WARN——此前异常只传到二级降级的 msg、仅第三级才落日志，真机首开形态下原因完全不可见。
+- **回归用例**：`test产物PSI与文件失配_装配按文件重取不降级`（传入与 vFile 失配的 PSI：旧实现落降级，新实现正常挂在项目内临时文件上）。
+- **真机复验判据**：方言从 MySQL 切到 PG 的那次首开不再出现降级横幅；日志里 `prewarm done` 后仍可看到 `Reparsing ... PostgreSQL`，但**不再**紧跟 `in-memory PSI preview document created`。
+
 ---
 
 ## 五、决策点
@@ -216,3 +241,5 @@ P0 归因分型 → P1 宽限期 → 用例 1/2/5/6 → P2 文案与取色 → �
 | 2026-10-20 | **终版复跑**（含悬停提示 `degradedHint` 与文档台账改动后）：同一组 10 类定向 **65 例 / 0 失败 / 0 错误 / 0 跳过，BUILD SUCCESSFUL 57s**。改动未提交（用户未要求提交）。 |
 | 2026-10-20 | **合入 dev**：特性提交 `f0499001` → dev 合并提交 `c5f50452`（父 `82ab60be` + `f0499001`，无冲突）；合并后工作树已清理（分支删除、`mpsv-degraded-ux` 移除）。合并后定向 6 类 **30/0/0/0**。 |
 | 2026-10-20 | **全量门禁（用户指定，dev `c5f50452`）**：`./gradlew testShards --no-configuration-cache` → **SHARD TOTAL 8018 例 / 0 失败 / 0 错误 / 9 跳过**（5 片 7987 + external 31；parity 731 类全集均有结果 XML），另 agent 子项目 **164/0/0/0**，合计 **8182/0/0/9**；BUILD SUCCESSFUL 15m54s。环境：Docker daemon 未运行（`docker info` 退出 1），Docker 测试按默认 `mpvDockerTests=false` 不参与，9 跳过同既有基线口径。 |
+| 2026-10-20 | **用户真机复验反馈「问题没解决」→ 读 `idea.log` 定位到 P4**：首开预热 116ms 成功，但方言映射 MySQL→PostgreSQL 的语言替换重解析异步落地，预热捕获的 PSI 失效 → 装配 `getDocument` 失败 → 降级。配套实证：UI-022 的复选框/参数联动在降级态正常（用户截图 2/5），故 UI-022 不成立，真正缺陷是 P4。 |
+| 2026-10-20 | **P4 实施（工作树 `mpsv-prewarm-psi-race`，分支 `t-prewarm-psi-race`，自 dev `9d0e40fa`）**：`mapPreviewDialectBeforePsi` 返回目标 language id；新增 `awaitPreviewPsiLanguage`（轮询本文件 PSI 语言，400ms 有界）；预热两处映射后等落地并重取 PSI；装配端按 vFile 重取 PSI；装配失败补 WARN。新增用例 `test产物PSI与文件失配_装配按文件重取不降级`。 |
