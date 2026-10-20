@@ -316,3 +316,23 @@ fun WrapperArg?.asSqlFragment(): String? = when (val v = (this as? WrapperArg.Va
 
 1. **片段入口必须进矩阵**：以后新增/修改任何「原样拼进语句」的入口，`fragmentFixtures()` 加一行即可同时获得「不静默丢弃」与「参数基数」两条护栏；只写场景用例不算收口。
 2. **报障用例之外必配类级断言**：单点复现用例只证明这一形态修好了；能不能防住同族，取决于有没有把那条被违反的不变式写成断言（本次是「`?` 数 == 来源数」与「片段文本必须出现」）。
+
+## 十三、真机沙盒验收（2026-10-20，243 沙盒）
+
+环境：dev 树 `runIde`（`.local/start-ui243.ps1`，sandbox `build/MPSV-MasterMerge-UI243`，`-PgifRobotServer=true`），打开 demo 根工程，`OrderController#discount` 光标落在 `setSql` 行，`Alt+Shift+Q` 开预览。证据帧在 `build/MPSV-MasterMerge-UI243-shots/`。
+
+在役包核验（先做，防旧包误诊）：沙盒 `plugins/mybatis-plus-sql-visualizer/lib/mybatis-plus-sql-visualizer-2026.10.16.jar` mtime **12:24**（晚于 `f69f75fe`），`javap`（ms-21）可见 `SqlFragment(String, List)` 与 `Placeholder(String, SqlFragment)` 两个新符号。
+
+| 判别点 | 结果 | 帧 |
+| --- | --- | --- |
+| SET 行出现 | `UPDATE t_order` / `SET` / `amount = amount * ?` / `WHERE status = ?` —— 与修前截图（无 SET）对照成立 | `img11_preview2.png` |
+| 左侧 `rate` 输入行 | 「参数」区出现 `#rate` 输入框；`status` 仍在「动态条件」区 | `img11_preview2.png` |
+| 填 `rate` 只改 SET | `#rate`=1.5 → `amount = amount * 1.5`，`WHERE status = ?` 不变 | `img12_rate_filled.png` |
+| 填 `status` 只改 WHERE | `status`=2 → `WHERE status = 2`，SET 保持 `amount * 1.5` | `img13_status_filled.png` |
+| 复制 SQL（已填值） | 剪贴板＝`UPDATE t_order⏎SET⏎    amount = amount * 1.5⏎WHERE status = 2` | `img15_copy_sql2.png` |
+| 复制 SQL（rate 清空） | 剪贴板＝`... amount = amount * ? ...` —— 未填参数就是文本里的 `?`，无报错 | 剪贴板回读 |
+| 执行计划（本方法为 UPDATE） | 通知「未执行 EXPLAIN：语句以 update 开头，不是可解释的查询」——既有闸门，与 `?` 无关 | `img16_explain.png` |
+| 执行计划（含 `?` 的 SELECT，`list` 方法） | 方言闸门提示「所选数据源实际使用 MySQL，不是 PostgreSQL……本次点击未提交任何语句」——拦截理由是方言，不是占位符 | `img20_explain_select.png` |
+| 验收期间异常 | `idea.log` 12:24 之后无插件 ERROR/异常（无 `?` 相关报错） | 日志检查 |
+
+三点说明：①`执行计划` 在本方法上必然不可执行（UPDATE 不在 EXPLAIN 白名单），所以补跑了同文件里带 `?` 的 SELECT（`list`）证明 EXPLAIN 链路对占位符无感；②那次 SELECT 的执行被「数据源实际方言与预览方言不一致」的既有闸门拦下（demo 数据源是 MySQL、模块推断为 PostgreSQL），属既有环境现象，与本改动无关，未登记为缺陷；③`?` 在复制产物里保留是设计行为（未填参数就是文本占位），不是错误。
