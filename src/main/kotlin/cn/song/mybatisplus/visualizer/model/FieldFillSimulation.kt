@@ -11,12 +11,6 @@ object FieldFillSimulation {
 
     data class Overlay(val literals: Map<Int, String>, val invalidSources: Set<String>)
 
-    fun applies(kind: BatchKind, fill: String?): Boolean = when (kind) {
-        BatchKind.INSERT -> fill == "INSERT" || fill == "INSERT_UPDATE"
-        BatchKind.UPDATE -> fill == "UPDATE" || fill == "INSERT_UPDATE"
-        BatchKind.UPSERT -> false // Runtime branch is unknown, even if the dialect renders plain INSERT.
-    }
-
     /** Null means invalid/unprovided; callers retain the placeholder rather than raw-inserting input. */
     fun literal(value: String, quote: Boolean?): String? {
         if (value.isBlank() || value.any { it == ';' || it == '\\' || it.isISOControl() }) return null
@@ -30,11 +24,15 @@ object FieldFillSimulation {
     fun overlay(
         model: BatchModel,
         active: Set<String>,
-        explicitValues: Map<String, String>,
         simulationValues: Map<String, String>,
         enabled: Boolean,
     ): Overlay {
         if (!enabled) return Overlay(emptyMap(), emptySet())
+        // T-FieldFillPriority（用户真机反馈）：UPSERT 的运行期分支不可知，仍不模拟（UI 文案已披露）；
+        // INSERT/UPDATE 下用户手填的模拟值是显式意图，不再按字段 fill 策略过滤——面板对所有 fill
+        // 字段都提供模拟行并置灰普通输入（tooltip「已由模拟值覆盖」），按 fill 过滤会让模拟值被
+        // 静默忽略、SQL 回落灰框值（UPDATE 预览里的 [fill=INSERT] 字段即此形态）。
+        if (model.kind == BatchKind.UPSERT) return Overlay(emptyMap(), emptySet())
         val literals = linkedMapOf<Int, String>()
         val invalid = linkedSetOf<String>()
         model.orderedColumns(active).forEachIndexed { index, col ->
@@ -44,8 +42,8 @@ object FieldFillSimulation {
                 BatchKind.INSERT -> index >= model.fixedColumns.size
                 BatchKind.UPSERT -> false
             }
-            if (!writableIndex || !applies(model.kind, col.fill) || col.columnName !in active) return@forEachIndexed
-            if (!explicitValues[col.source].isNullOrBlank()) return@forEachIndexed
+            if (!writableIndex || col.columnName !in active) return@forEachIndexed
+            // 模拟值优先：非空即覆盖普通参数（普通输入已置灰并给出覆盖提示）。
             val raw = simulationValues[col.source] ?: return@forEachIndexed
             if (raw.isEmpty()) return@forEachIndexed
             val literal = literal(raw, col.quote)

@@ -679,13 +679,9 @@ internal fun SqlPreviewPanel.fieldFillOverlay(): FieldFillSimulation.Overlay {
         syncFieldFillNormalEnabled()
     }
     val model = current?.batchModel ?: return FieldFillSimulation.Overlay(emptyMap(), emptySet())
-    // 模拟值在场时优先使用模拟值：对应普通参数从 explicitValues 中剔除（输入框已置灰）。
-    val explicitValues = if (fieldFillEnabled) {
-        paramValues.filterKeys { fieldFillValues[it].isNullOrBlank() }
-    } else {
-        paramValues
-    }
-    val overlay = FieldFillSimulation.overlay(model, enabledIds, explicitValues, fieldFillValues, fieldFillEnabled)
+    // 模拟值优先由模型层统一裁决（非空即覆盖普通参数；普通输入已置灰并给出覆盖提示），
+    // 面板不再预剔 explicitValues——旧做法会漏掉 UPDATE 预览里的 [fill=INSERT] 字段。
+    val overlay = FieldFillSimulation.overlay(model, enabledIds, fieldFillValues, fieldFillEnabled)
     fieldFillStatus?.apply {
         val message = if (overlay.invalidSources.isEmpty()) {
             MpSqlVisualizerBundle.message("fieldFill.simulation.status")
