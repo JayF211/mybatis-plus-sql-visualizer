@@ -104,6 +104,7 @@ class RollbackSqlDialogTest : BasePlatformTestCase() {
 
             assertEquals(RollbackSqlGenerator.Rating.COMPLETE, dialog.currentResult.rating)
             assertEquals("UPDATE user SET age = 20 WHERE id = 1 AND age = 3;", dialog.sqlTextForTest())
+            assertTrue("手动粘贴成功后应切到表格视图", dialog.snapshotTableShownForTest())
             assertTrue("生成成功后应启用执行动作", dialog.executeActionForTest().isEnabled)
             assertTrue(
                 "横幅应转为可执行",
@@ -144,6 +145,38 @@ class RollbackSqlDialogTest : BasePlatformTestCase() {
                 "整行定位风险应披露：${dialog.warningsTextForTest()}",
                 dialog.warningsTextForTest().contains("整行等值谓词"),
             )
+        } finally {
+            PreviewSideQuery.runnerForTest = oldRunner
+            dialog.doDispose()
+        }
+    }
+
+    fun testSnapshotTableViewShowsColumnsAndRowsAndToggles() {
+        // T-RollbackSnapshotView：自动查询结果默认表格展示（列值对应），可切回文本再切回表格。
+        val dialog = newDialog(unableUpdateResult(), "UPDATE")
+        dialog.snapshotQueryTargetForTest = { SnapshotTarget() }
+        val raw = cn.song.mybatisplus.visualizer.mcp.McpExplainFormatter.RawResult(
+            headers = listOf("id", "age"),
+            rows = listOf(listOf("1", "20")),
+        )
+        val oldRunner = PreviewSideQuery.runnerForTest
+        PreviewSideQuery.runnerForTest = { _, _, _, _, cb ->
+            cb(PreviewSideQuery.Result.Table(raw))
+        }
+        try {
+            dialog.runSnapshotQuery()
+            assertTrue("自动查询后应切到表格视图", dialog.snapshotTableShownForTest())
+            assertEquals("表格行数", 1, dialog.snapshotTableForTest().rowCount)
+            assertEquals("表格列数", 2, dialog.snapshotTableForTest().columnCount)
+            assertEquals(
+                MpSqlVisualizerBundle.message("rollback.snapshot.summary", 1, 2),
+                dialog.snapshotSummaryTextForTest(),
+            )
+            dialog.snapshotToggleForTest().doClick()
+            assertFalse("应切回文本视图", dialog.snapshotTableShownForTest())
+            dialog.snapshotToggleForTest().doClick()
+            assertTrue("应再切回表格视图（按文本重解析）", dialog.snapshotTableShownForTest())
+            assertEquals(1, dialog.snapshotTableForTest().rowCount)
         } finally {
             PreviewSideQuery.runnerForTest = oldRunner
             dialog.doDispose()

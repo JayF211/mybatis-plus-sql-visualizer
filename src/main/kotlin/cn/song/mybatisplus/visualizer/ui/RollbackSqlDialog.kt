@@ -21,8 +21,10 @@ import com.intellij.ui.components.JBPanel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextArea
 import com.intellij.ui.components.JBTextField
+import com.intellij.ui.table.JBTable
 import com.intellij.util.ui.JBUI
 import java.awt.BorderLayout
+import java.awt.CardLayout
 import java.awt.Dimension
 import java.awt.FlowLayout
 import java.awt.Toolkit
@@ -30,6 +32,8 @@ import java.awt.datatransfer.StringSelection
 import javax.swing.Action
 import javax.swing.JButton
 import javax.swing.JComponent
+import javax.swing.JTable
+import javax.swing.table.DefaultTableModel
 import javax.swing.event.DocumentEvent
 import javax.swing.event.DocumentListener
 
@@ -77,6 +81,22 @@ class RollbackSqlDialog(
     }
     private val pkField = JBTextField(20)
     private var editor: Editor? = null
+
+    // T-RollbackSnapshotView：快照双态展示——表格视图（只读，列值一一对应）与文本视图
+    //（保留手工粘贴/编辑）。自动查询结果默认表格；文本始终是生成回滚的权威来源。
+    private val snapshotTableModel = DefaultTableModel()
+    private val snapshotTable = JBTable(snapshotTableModel).apply {
+        isEnabled = false
+        autoResizeMode = JTable.AUTO_RESIZE_OFF
+        preferredScrollableViewportSize = Dimension(DIALOG_WIDTH - 48, 92)
+    }
+    private val snapshotCards = JBPanel<JBPanel<*>>(CardLayout())
+    private val snapshotSummary = JBLabel()
+    private val snapshotToggle = JButton(MpSqlVisualizerBundle.message("rollback.snapshot.view.text")).apply {
+        toolTipText = MpSqlVisualizerBundle.message("rollback.snapshot.view.tooltip")
+        addActionListener { toggleSnapshotView() }
+    }
+    private var snapshotTableShown = false
 
     /** 测试缝：headless 无真库/绑定数据源；生产为 null 走 [DataSourceSelector.boundConsoleDataSource]。 */
     @Volatile
@@ -185,16 +205,23 @@ class RollbackSqlDialog(
                         copyToClipboard(sql)
                     }
                 })
+                add(snapshotToggle)
             },
             BorderLayout.NORTH,
         )
+        snapshotCards.isOpaque = false
+        snapshotCards.add(JBScrollPane(snapshotTable), SNAPSHOT_CARD_TABLE)
+        snapshotCards.add(JBScrollPane(pasteArea), SNAPSHOT_CARD_TEXT)
+        (snapshotCards.layout as CardLayout).show(snapshotCards, SNAPSHOT_CARD_TEXT)
         add(
             JBPanel<JBPanel<*>>(BorderLayout(0, 4)).apply {
                 isOpaque = false
-                add(JBScrollPane(pasteArea), BorderLayout.CENTER)
+                add(snapshotCards, BorderLayout.CENTER)
                 add(
                     JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 4, 2)).apply {
                         isOpaque = false
+                        snapshotSummary.isVisible = false
+                        add(snapshotSummary)
                         add(JBLabel(MpSqlVisualizerBundle.message("rollback.snapshot.pk")))
                         add(pkField)
                         add(JButton(MpSqlVisualizerBundle.message("rollback.snapshot.generate")).apply {
@@ -206,6 +233,39 @@ class RollbackSqlDialog(
             },
             BorderLayout.CENTER,
         )
+    }
+
+    /** T-RollbackSnapshotView：把快照数据（列名 + 行）装进只读表格并切到表格视图。 */
+    private fun showSnapshotTable(columns: List<String>, rows: List<List<String?>>) {
+        snapshotTableModel.setDataVector(
+            rows.map { row -> row.map { it ?: "" }.toTypedArray() }.toTypedArray(),
+            columns.toTypedArray(),
+        )
+        snapshotSummary.text = MpSqlVisualizerBundle.message(
+            "rollback.snapshot.summary", rows.size, columns.size,
+        )
+        snapshotSummary.isVisible = true
+        snapshotTableShown = true
+        (snapshotCards.layout as CardLayout).show(snapshotCards, SNAPSHOT_CARD_TABLE)
+        snapshotToggle.text = MpSqlVisualizerBundle.message("rollback.snapshot.view.text")
+    }
+
+    /** 表格 ↔ 文本视图切换；从文本切表格时重新解析，解析失败留在文本视图并提示。 */
+    private fun toggleSnapshotView() {
+        if (snapshotTableShown) {
+            snapshotTableShown = false
+            (snapshotCards.layout as CardLayout).show(snapshotCards, SNAPSHOT_CARD_TEXT)
+            snapshotToggle.text = MpSqlVisualizerBundle.message("rollback.snapshot.view.table")
+            return
+        }
+        val parsed = RollbackSqlGenerator.parseSnapshotTsv(pasteArea.text ?: "")
+        if (parsed == null) {
+            warningLabel.text = "<html>${escapeHtml(
+                MpSqlVisualizerBundle.message("rollback.snapshot.parseFailed"))}</html>"
+            return
+        }
+        val (columns, rows) = parsed
+        showSnapshotTable(columns, rows)
     }
 
     private fun assembleBanner() {
@@ -318,6 +378,7 @@ class RollbackSqlDialog(
                         return@run
                     }
                     pasteArea.text = toSnapshotTsv(result.raw)
+                    showSnapshotTable(result.raw.headers, result.raw.rows)
                     generateFromPaste()
                 }
 
@@ -374,6 +435,8 @@ class RollbackSqlDialog(
             return
         }
         val (columns, rows) = parsed
+        // T-RollbackSnapshotView：手动粘贴成功后也切到表格视图（列值对应一目了然）。
+        showSnapshotTable(columns, rows)
         val pk = pkField.text?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }?.takeIf { it.isNotEmpty() }
         val mode = when (statementKind.uppercase()) {
             "UPDATE" -> RollbackSqlGenerator.SnapshotMode.REVERT_UPDATE
@@ -511,6 +574,10 @@ class RollbackSqlDialog(
     /** 测试访问器：编辑器实例（T-SqlCopyShortcuts：键盘复制接线断言用）。 */
     internal fun editorForTest(): com.intellij.openapi.editor.Editor? = editor
     internal fun pasteAreaForTest(): JBTextArea = pasteArea
+    internal fun snapshotTableForTest(): JBTable = snapshotTable
+    internal fun snapshotSummaryTextForTest(): String = snapshotSummary.text
+    internal fun snapshotTableShownForTest(): Boolean = snapshotTableShown
+    internal fun snapshotToggleForTest(): JButton = snapshotToggle
     internal fun pkFieldForTest(): JBTextField = pkField
     internal fun executeActionForTest(): Action = executeAction
     internal fun copyActionForTest(): Action = copyAction
@@ -519,6 +586,9 @@ class RollbackSqlDialog(
     companion object {
         /** 尺寸记忆 key。 */
         const val DIMENSION_KEY = "cn.song.mybatisplus.visualizer.RollbackSqlDialog"
+
+        private const val SNAPSHOT_CARD_TABLE = "snapshot-table"
+        private const val SNAPSHOT_CARD_TEXT = "snapshot-text"
 
         private const val DIALOG_WIDTH = 720
         private const val DIALOG_HEIGHT = 460
