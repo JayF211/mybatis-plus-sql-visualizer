@@ -27,6 +27,13 @@ public final class SqlExecutor {
     /** T-UiNative T-UN-02：轻提示通知组（plugin.xml 已注册）。 */
     private static final String NOTIFICATION_GROUP_ID = "cn.song.mybatisplus.visualizer.preview";
 
+    /** UI023：headless 下截获真实执行入口边界，避免靠 Community 不可执行制造「零提交」假绿。 */
+    public interface ExecutionAttempt {
+        void attempt(@Nullable String sql);
+    }
+
+    public static volatile ExecutionAttempt executionAttemptForTest = null;
+
     /** 准备 + 执行合一（M36 原语义）：选数据源 → 建控制台 → 直接执行（Kotlin 默认参 {@code onErrorRich = null} 形态）。 */
     public static void execute(
             @NotNull Project project,
@@ -63,6 +70,30 @@ public final class SqlExecutor {
             @Nullable Consumer<String> onError,
             @Nullable Consumer<ExecutionErrorInfo> onErrorRich,
             boolean wholeScriptExec) {
+        execute(project, sql, dataSource, isQuery, onConsole, onEditor, onError, onErrorRich, wholeScriptExec,
+                null, null, null, false);
+    }
+
+    /** 全参形态：方言闸 + 提交回执 + forceChoose（T-DialectGateUx / UI023）。 */
+    public static void execute(
+            @NotNull Project project,
+            @NotNull String sql,
+            @Nullable Object dataSource,
+            boolean isQuery,
+            @Nullable Consumer<JComponent> onConsole,
+            @Nullable Consumer<Editor> onEditor,
+            @Nullable Consumer<String> onError,
+            @Nullable Consumer<ExecutionErrorInfo> onErrorRich,
+            boolean wholeScriptExec,
+            @Nullable ExecutionDialectGate.Request dialectGateRequest,
+            @Nullable Consumer<ExecutionDialectGate.Verdict> onDialectGate,
+            @Nullable Consumer<ExecutionSubmission> onSubmission,
+            boolean forceChoose) {
+        ExecutionAttempt attempt = executionAttemptForTest;
+        if (attempt != null) {
+            attempt.attempt(sql);
+            return;
+        }
         DataSourceSelector.selectAndExecute(project, sql, onConsole, onEditor, onError,
                 success -> {
                     if (!Boolean.TRUE.equals(success)) {
@@ -72,7 +103,7 @@ public final class SqlExecutor {
                         }
                     }
                 },
-                onErrorRich, wholeScriptExec);
+                onErrorRich, wholeScriptExec, dialectGateRequest, onDialectGate, onSubmission, forceChoose);
     }
 
     /** M36.5：准备控制台（不执行）。Community 下静默失败（callback(false)）。 */
@@ -88,7 +119,25 @@ public final class SqlExecutor {
             if (callback != null) callback.accept(false);
             return;
         }
-        DataSourceSelector.prepareConsole(project, sql, onConsole, onEditor, onError, callback);
+        DataSourceSelector.prepareConsole(project, sql, onConsole, onEditor, onError, callback, null, null, false);
+    }
+
+    public static void prepareConsole(
+            @NotNull Project project,
+            @NotNull String sql,
+            @Nullable Consumer<JComponent> onConsole,
+            @Nullable Consumer<Editor> onEditor,
+            @Nullable Consumer<String> onError,
+            @Nullable Consumer<Boolean> callback,
+            @Nullable ExecutionDialectGate.Request dialectGateRequest,
+            @Nullable Consumer<ExecutionDialectGate.Verdict> onDialectGate,
+            boolean forceChoose) {
+        if (!ExecuteSqlSupport.isAvailable()) {
+            if (callback != null) callback.accept(false);
+            return;
+        }
+        DataSourceSelector.prepareConsole(project, sql, onConsole, onEditor, onError, callback,
+                dialectGateRequest, onDialectGate, forceChoose);
     }
 
     /** M36.5：在已准备的控制台上执行（Kotlin 默认参 {@code onErrorRich = null} 形态）。 */
@@ -105,7 +154,7 @@ public final class SqlExecutor {
             @Nullable Consumer<JComponent> onResultsReady,
             @Nullable Consumer<String> onError,
             @Nullable Consumer<ExecutionErrorInfo> onErrorRich) {
-        return executePrepared(project, onResultsReady, onError, onErrorRich, false);
+        return executePrepared(project, onResultsReady, onError, onErrorRich, false, null, null, null);
     }
 
     /**
@@ -121,8 +170,42 @@ public final class SqlExecutor {
             @Nullable Consumer<String> onError,
             @Nullable Consumer<ExecutionErrorInfo> onErrorRich,
             boolean wholeScriptExec) {
+        return executePrepared(project, onResultsReady, onError, onErrorRich, wholeScriptExec, null, null, null);
+    }
+
+    /** 全参形态：方言闸 + 提交回执（UI023 / O-145 W7）。 */
+    public static boolean executePrepared(
+            @NotNull Project project,
+            @Nullable Consumer<JComponent> onResultsReady,
+            @Nullable Consumer<String> onError,
+            @Nullable Consumer<ExecutionErrorInfo> onErrorRich,
+            boolean wholeScriptExec,
+            @Nullable ExecutionDialectGate.Request dialectGateRequest,
+            @Nullable Consumer<ExecutionDialectGate.Verdict> onDialectGate,
+            @Nullable Consumer<ExecutionSubmission> onSubmission) {
         if (!ExecuteSqlSupport.isAvailable()) return false;
-        return DataSourceSelector.executePrepared(project, onResultsReady, onError, onErrorRich, wholeScriptExec);
+        ExecutionAttempt attempt = executionAttemptForTest;
+        if (attempt != null) {
+            attempt.attempt(null);
+            return true;
+        }
+        final java.util.concurrent.atomic.AtomicBoolean completed = new java.util.concurrent.atomic.AtomicBoolean(false);
+        final Consumer<ExecutionSubmission> receipt = outcome -> {
+            if (completed.compareAndSet(false, true) && onSubmission != null) {
+                onSubmission.accept(outcome);
+            }
+        };
+        return DataSourceSelector.executePrepared(project, onResultsReady,
+                onSubmission == null ? onError : message -> {
+                    receipt.accept(ExecutionSubmission.BLOCKED);
+                    if (onError != null) onError.accept(message);
+                },
+                onSubmission == null ? onErrorRich : onErrorRich == null ? null : info -> {
+                    receipt.accept(ExecutionSubmission.BLOCKED);
+                    onErrorRich.accept(info);
+                },
+                wholeScriptExec, dialectGateRequest, onDialectGate,
+                onSubmission == null ? null : receipt);
     }
 
     /** 控制台是否已就绪（prepareConsole 成功后 true）。 */
