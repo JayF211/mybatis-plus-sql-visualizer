@@ -95,6 +95,8 @@ def main():
     ap.add_argument("--log", default=None, help="本轮 gradle 轮日志（提取均衡计划行 expected）")
     ap.add_argument("--results-dir", default=os.path.join("build", "test-results"))
     ap.add_argument("--shards", type=int, default=5)
+    ap.add_argument("--quarantine-dir", default=None,
+                    help="隔离类串行补跑的 results 目录；其计数计入 SHARD TOTAL 以对齐官方口径")
     args = ap.parse_args()
 
     expected = expected_loads_from_log(args.log, args.shards)
@@ -114,6 +116,15 @@ def main():
         if xmls_n > 0 and counted == 0:
             stale = "  [mtime 闸排除全部 %d 个 XML——该分片本轮真跑了吗？]" % xmls_n
         print(f"testShard{i}: tests={n} failures={f} errors={e} skipped={s} time={t:.1f}s{exp_txt}{stale}")
+        total["tests"] += n
+        total["failures"] += f
+        total["errors"] += e
+        total["skipped"] += s
+        tsum += t
+
+    if args.quarantine_dir and os.path.isdir(args.quarantine_dir):
+        n, f, e, s, t, counted, xmls_n, _ = collect(args.quarantine_dir)
+        print(f"quarantine(serial): tests={n} failures={f} errors={e} skipped={s} time={t:.1f}s")
         total["tests"] += n
         total["failures"] += f
         total["errors"] += e

@@ -1,0 +1,7 @@
+# 并发不安全类（T-TestShardParallel）
+#
+# 这些测试类共享应用级单例/端口/全局态，多个 Gradle 构建并发跑会 flake；
+# test-shards-parallel.ps1 把它们从分片计划剔除，改由一个串行任务补跑。
+# 一行一个 FQCN；# 开头为注释。只收「串行必绿、并发可复现失败」的类，
+# 不把真回归当 flake 屏蔽（新失败先按回归排查）。
+cn.song.mybatisplus.visualizer.log.agent.AgentManagerPremainReattachTest

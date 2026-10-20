@@ -407,10 +407,16 @@ intellijPlatformTesting {
             // T-PreviewSideQuery：旁路查询真库链（Database 插件 + 真实 MySQL）
             "cn.song.mybatisplus.visualizer.execute.PreviewSideQueryIntegrationTest",
         )
+        // T-TestShardParallel：并发不安全类隔离口（逗号分隔 FQCN）。这些类共享应用级单例/
+        // 端口/全局态，多构建并发跑会 flake；并行运行器把它们从分片计划剔除，改由串行补偿
+        // 任务单独跑。缺省空集 = 既有串行语义逐字不变。
+        val shardExcludeClasses: Set<String> = providers.gradleProperty("testShardExcludeClasses").orNull
+            ?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }?.toSet().orEmpty()
         val discoveredTestClasses: List<String> = testFileEntries
             .flatMap { (pkg, classNames, _) -> classNames.map { cn -> if (pkg.isEmpty()) cn else "$pkg.$cn" } }
             .filter { it !in dbIntegrationClasses }
             .filter { it !in testExternalClasses }
+            .filter { it !in shardExcludeClasses }
             .sorted()
         // 时长权重表：discoveredTestClasses 全集覆盖。T-TestPerf4 起同类取 mtime 最新的
         // K 份取中位数（-PtestShardWeightSamples，默认 2）——分片跑出的单类耗时带 ±7% 级
@@ -424,8 +430,19 @@ intellijPlatformTesting {
         val durationWeights: Map<String, Double> = run {
             val weightSamples = providers.gradleProperty("testShardWeightSamples").orNull
                 ?.toIntOrNull()?.coerceIn(1, 5) ?: 2
-            val resultDirs = sequenceOf(file("build/test-results/test")) +
-                (1..testShardCount).asSequence().map { file("build/test-results/testShard$it") }
+            // T-TestShardParallel：并行多构建同时配置时，各 lane 看到的 build/test-results
+            // 历史样本不同（别的 lane 正在删/写结果目录），会算出不同的分片分配 → 测试
+            // 重复或漏跑（20261020 实测两轮总数 7949 vs 8119）。并行运行器开跑前把上一轮
+            // 结果快照到固定目录，并用 -PtestShardWeightRoot 让所有 lane 读同一份冻结样本，
+            // 既保留真实权重（均衡）又让计划与配置时点无关；缺省仍是 build/test-results。
+            // -PtestShardIgnoreLocalWeights=true 是只吃入库画像的退路（冷树/快照缺失时用）。
+            val ignoreLocalWeights =
+                providers.gradleProperty("testShardIgnoreLocalWeights").orNull?.toBoolean() ?: false
+            val weightRoot = providers.gradleProperty("testShardWeightRoot").orNull
+                ?.let { file(it) } ?: file("build/test-results")
+            val resultDirs = if (ignoreLocalWeights) emptySequence() else
+                sequenceOf(File(weightRoot, "test")) +
+                    (1..testShardCount).asSequence().map { File(weightRoot, "testShard$it") }
             val samples = HashMap<String, MutableList<Pair<Long, Double>>>() // FQCN -> [(mtime, seconds)]
             for (dir in resultDirs) {
                 if (!dir.isDirectory) continue

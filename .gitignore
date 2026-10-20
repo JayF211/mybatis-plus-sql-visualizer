@@ -35,6 +35,8 @@ build/
 !**/src/main/**/build/
 !**/src/test/**/build/
 !**/src/reloc/**/build/
+# T-TestShardParallel：每条并行 lane 的 buildSrc 独立输出目录（-PmpvBuildSrcDir）
+buildSrc/build-lane*/
 
 ### VS Code ###
 .vscode/
