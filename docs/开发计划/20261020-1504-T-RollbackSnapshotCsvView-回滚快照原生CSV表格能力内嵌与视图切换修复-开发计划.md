@@ -78,3 +78,19 @@ UI-036 已把快照改成「只读 JBTable + 文本」双态，但实际使用�
 - 临时文件清理与 Windows 文件锁需实测；必要时改为「保留到项目关闭」并在 tooltip 说明路径。
 - 表格仍为只读展示；生成回滚的权威来源仍是文本（不变）。
 - 本轮只出计划，实施需用户确认。
+
+## 实施记录（2026-10-20，A/B/C 全部落地）
+
+**A 对话框内表格增强**：`DefaultTableModel` 改为不可编辑子类 + `TableRowSorter`（点击列头排序，**只影响视图不改模型**）；行号列（`JBList` 行头，随排序重排）；列头 tooltip 返回模型列名（排序后仍是原列名）；双击列头 = 该列自适应宽、「自适应列宽」按钮 = 全列（按内容测量，上限 360px，下限 48px）；`cellSelectionEnabled` + `rowSelectionAllowed` + Ctrl+C/Ctrl+Insert 复制选择为 TSV（无选择时复制全表）；右键菜单：复制单元格/行/列、全选、自适应列宽；复制列时首行为列名（与结果网格复制口径一致）。
+
+**B 在 CSV 编辑器中打开**：「在 CSV 编辑器中打开」按钮 → 快照写临时 `.tsv` → `FileEditorManager.openFile`。写盘在池线程（`WriteIntentReadAction` + `VfsUtil.markDirtyAndRefresh` 异步刷新）；单测模式同步执行（headless 无 EDT 泵，池线程回调不派发）。临时文件落在 `java.io.tmpdir`（**不在 IDE VFS 允许根内也能写**：测试沙盒只允许 `C:/Users/USER/AppData/Local/Temp` 等少数根，`PathManager.getTempPath()` 指向沙盒 system-test/tmp 会被 `VfsRootAccessNotAllowedError` 拒绝）。对话框 `dispose()` 时回收：仍被编辑器打开的保留，其余删除。Ultimate 由 grid 插件 `csv-data-editor` 自动进入原生表格，Community 降级为文本编辑器（tooltip 说明）。
+
+**C 布局修复**：快照区第一行 = SQL 标签（CENTER 可压缩）+ 摘要/视图切换（EAST 固定）；第二行 = 动作按钮（执行快照查询 / 复制快照 SQL / 在 CSV 编辑器中打开 / 自适应列宽）。旧实现把切换按钮放在 FlowLayout 行尾，窄宽换行后被裁掉（用户截图即此形态）。
+
+**文案**（zh/en 同步）：`openCsv` / `openCsv.tooltip` / `openCsv.failed` / `autofit` / `autofit.tooltip` / `copyCell` / `copyRow` / `copyColumn` / `selectAll`。
+
+**读数**：定向（回滚弹窗 + 面板 + 生成器）**102/0/0**（独立沙盒 `MPSV-CsvView`）；反向三处（摘排序 / 摘复制 / 摘临时文件写入）→ **恰 3 红**（三条用例各自独立命中），恢复后全绿、探针零残留。
+
+**新用例**：排序不改模型且行号随视图重排、选择复制为 TSV、长列自适应、临时 TSV 写出+打开+dispose 清理、窄宽（640px）下切换按钮可见、两个新按钮文案在位。
+
+**遗留**：真机复验待用户（需重建插件包）；「在 CSV 编辑器中打开」在 Community 的降级路径未造环境实测；大快照（≥1000 行）排序/复制性能未实测。

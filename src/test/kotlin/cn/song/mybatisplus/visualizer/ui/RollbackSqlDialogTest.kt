@@ -871,4 +871,133 @@ class RollbackSqlDialogTest : BasePlatformTestCase() {
         }
     }
 
+    // ---------- T-RollbackSnapshotCsvView：表格增强 / CSV 打开 / 布局修复 ----------
+
+    private fun dialogWithSnapshot(tsv: String): RollbackSqlDialog {
+        val dialog = newDialog(unableUpdateResult(), "UPDATE")
+        dialog.pasteAreaForTest().text = tsv
+        // 文本 → 表格（按文本重解析），复用既有切换链。
+        dialog.snapshotToggleForTest().doClick()
+        return dialog
+    }
+
+    fun testSnapshotTableSortsAndKeepsModelOrder() {
+        val dialog = dialogWithSnapshot("id\tname\n2\tB\n1\tA")
+        try {
+            val table = dialog.snapshotTableForTest()
+            assertEquals("装载后保持原始顺序", "2", table.getValueAt(0, 0))
+            table.rowSorter.toggleSortOrder(0)
+            assertEquals("列头排序后视图升序", "1", table.getValueAt(0, 0))
+            assertEquals("2", table.getValueAt(1, 0))
+            assertEquals("排序不得改模型顺序", "2", table.model.getValueAt(0, 0))
+            assertEquals("行号按视图顺序重排", "1",
+                dialog.snapshotRowHeaderForTest().model.getElementAt(0))
+        } finally {
+            dialog.doDispose()
+        }
+    }
+
+    fun testSnapshotCopySelectionCopiesTsv() {
+        val clipboard = cn.song.mybatisplus.visualizer.testutil.installFakeClipboard(testRootDisposable)
+        val dialog = dialogWithSnapshot("id\tname\n1\tA\n2\tB")
+        try {
+            val table = dialog.snapshotTableForTest()
+            table.setRowSelectionInterval(0, 0)
+            table.setColumnSelectionInterval(0, 1)
+            assertTrue("复制选择应成功", dialog.copySnapshotSelectionForTest())
+            val copied = clipboard.getContents()
+                ?.getTransferData(java.awt.datatransfer.DataFlavor.stringFlavor) as? String
+            assertEquals("选中单元格应复制为 TSV", "1\tA", copied)
+        } finally {
+            dialog.doDispose()
+        }
+    }
+
+    fun testSnapshotAutoFitWidensLongColumns() {
+        val long = "x".repeat(60)
+        val dialog = dialogWithSnapshot("id\tname\n1\t$long")
+        try {
+            val table = dialog.snapshotTableForTest()
+            dialog.autoFitSnapshotColumnsForTest()
+            assertTrue("长内容列应被加宽：${table.columnModel.getColumn(1).preferredWidth}",
+                table.columnModel.getColumn(1).preferredWidth > 120)
+            assertTrue("短内容列应有下限", table.columnModel.getColumn(0).preferredWidth >= 48)
+        } finally {
+            dialog.doDispose()
+        }
+    }
+
+    fun testOpenSnapshotInCsvEditorWritesTsvAndCleansUp() {
+        val dialog = newDialog(unableUpdateResult(), "UPDATE")
+        val latch = java.util.concurrent.CountDownLatch(1)
+        var opened: java.io.File? = null
+        var content: String? = null
+        dialog.snapshotOpenInEditorForTest = { _, file ->
+            opened = file
+            content = runCatching { file.readText() }.getOrNull()
+            latch.countDown()
+        }
+        try {
+            val tsv = "id\tname\n1\tA"
+            dialog.pasteAreaForTest().text = tsv
+            dialog.openSnapshotInCsvEditorForTest()
+            val deadline = System.currentTimeMillis() + 10_000
+            while (System.currentTimeMillis() < deadline && latch.count > 0) {
+                com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+                Thread.sleep(20)
+            }
+            assertTrue(
+                "临时文件应被写出并打开；warnings=" + dialog.warningsTextForTest() +
+                    " tempFiles=" + dialog.snapshotTempFilesForTest().map { it.path },
+                latch.count == 0L,
+            )
+            assertEquals("临时文件内容应为快照 TSV", tsv, content)
+            val file = opened!!
+            assertTrue(file.exists())
+            dialog.doDispose()
+            assertTrue("dispose 后未打开的临时文件应清理", !file.exists())
+        } finally {
+            dialog.snapshotOpenInEditorForTest = null
+        }
+    }
+
+    fun testSnapshotToggleVisibleAtNarrowWidth() {
+        val dialog = newDialog(unableUpdateResult(), "UPDATE")
+        try {
+            val center = dialog.centerPanelForTest()
+            center.setSize(640, 460)
+            layoutTree(center)
+            val toggle = dialog.snapshotToggleForTest()
+            assertTrue("切换按钮应可见", toggle.isVisible)
+            val bounds = javax.swing.SwingUtilities.convertRectangle(toggle.parent, toggle.bounds, center)
+            assertTrue("切换按钮宽度应大于 0：$bounds", bounds.width > 0)
+            assertTrue("切换按钮应在面板内：$bounds", bounds.x + bounds.width <= center.width + 2)
+        } finally {
+            dialog.doDispose()
+        }
+    }
+
+    fun testSnapshotCsvViewButtonsPresent() {
+        val dialog = newDialog(unableUpdateResult(), "UPDATE")
+        try {
+            assertEquals(
+                MpSqlVisualizerBundle.message("rollback.snapshot.openCsv"),
+                dialog.snapshotOpenCsvForTest().text,
+            )
+            assertEquals(
+                MpSqlVisualizerBundle.message("rollback.snapshot.autofit"),
+                dialog.snapshotAutofitForTest().text,
+            )
+        } finally {
+            dialog.doDispose()
+        }
+    }
+
+    private fun layoutTree(component: java.awt.Component) {
+        if (component is java.awt.Container) {
+            component.doLayout()
+            component.components.forEach { layoutTree(it) }
+        }
+    }
+
 }

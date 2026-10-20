@@ -3,6 +3,10 @@ package cn.song.mybatisplus.visualizer.ui
 import cn.song.mybatisplus.visualizer.execute.ExecutionSubmission
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ModalityState
+import com.intellij.openapi.application.PathManager
+import com.intellij.openapi.fileEditor.FileEditorManager
+import com.intellij.openapi.vfs.LocalFileSystem
+import com.intellij.openapi.vfs.VirtualFile
 import java.util.concurrent.atomic.AtomicBoolean
 import cn.song.mybatisplus.visualizer.sql.rollback.RollbackSqlGenerator
 import cn.song.mybatisplus.visualizer.sql.rollback.RollbackSnapshotStore
@@ -17,6 +21,7 @@ import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.openapi.util.Disposer
 import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBLabel
+import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBPanel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextArea
@@ -32,8 +37,11 @@ import java.awt.datatransfer.StringSelection
 import javax.swing.Action
 import javax.swing.JButton
 import javax.swing.JComponent
+import javax.swing.JPopupMenu
 import javax.swing.JTable
+import javax.swing.KeyStroke
 import javax.swing.table.DefaultTableModel
+import javax.swing.table.TableRowSorter
 import javax.swing.event.DocumentEvent
 import javax.swing.event.DocumentListener
 
@@ -84,11 +92,32 @@ class RollbackSqlDialog(
 
     // T-RollbackSnapshotView：快照双态展示——表格视图（只读，列值一一对应）与文本视图
     //（保留手工粘贴/编辑）。自动查询结果默认表格；文本始终是生成回滚的权威来源。
-    private val snapshotTableModel = DefaultTableModel()
-    private val snapshotTable = JBTable(snapshotTableModel).apply {
-        isEnabled = false
+    // T-RollbackSnapshotCsvView：表格增强——可排序/可选中/复制/右键菜单/行号/列宽自适应。
+    private val snapshotTableModel = object : DefaultTableModel() {
+        override fun isCellEditable(row: Int, column: Int): Boolean = false
+    }
+    private val snapshotSorter = TableRowSorter(snapshotTableModel)
+    private val snapshotRowHeader = JBList<String>().apply {
+        border = JBUI.Borders.empty()
+    }
+    private val snapshotTable = object : JBTable(snapshotTableModel) {
+        override fun getToolTipText(event: java.awt.event.MouseEvent): String? {
+            val viewColumn = columnAtPoint(event.point)
+            if (viewColumn >= 0) {
+                val modelColumn = convertColumnIndexToModel(viewColumn)
+                if (modelColumn in 0 until columnCount) return snapshotTableModel.getColumnName(modelColumn)
+            }
+            return super.getToolTipText(event)
+        }
+    }.apply {
         autoResizeMode = JTable.AUTO_RESIZE_OFF
+        rowSorter = snapshotSorter
+        cellSelectionEnabled = true
+        rowSelectionAllowed = true
+        fillsViewportHeight = true
         preferredScrollableViewportSize = Dimension(DIALOG_WIDTH - 48, 92)
+        installSnapshotCopyBindings(this)
+        addMouseListener(snapshotPopupListener())
     }
     private val snapshotCards = JBPanel<JBPanel<*>>(CardLayout())
     private val snapshotSummary = JBLabel()
@@ -96,7 +125,35 @@ class RollbackSqlDialog(
         toolTipText = MpSqlVisualizerBundle.message("rollback.snapshot.view.tooltip")
         addActionListener { toggleSnapshotView() }
     }
+    private val snapshotOpenCsv = JButton(MpSqlVisualizerBundle.message("rollback.snapshot.openCsv")).apply {
+        toolTipText = MpSqlVisualizerBundle.message("rollback.snapshot.openCsv.tooltip")
+        addActionListener { openSnapshotInCsvEditor() }
+    }
+    private val snapshotAutofit = JButton(MpSqlVisualizerBundle.message("rollback.snapshot.autofit")).apply {
+        toolTipText = MpSqlVisualizerBundle.message("rollback.snapshot.autofit.tooltip")
+        addActionListener { autoFitSnapshotColumns() }
+    }
     private var snapshotTableShown = false
+
+    /** T-RollbackSnapshotCsvView：「在 CSV 编辑器中打开」生成的临时文件（dispose 时清理未打开的）。 */
+    private val snapshotTempFiles = mutableListOf<java.io.File>()
+
+    /** 测试缝：打开临时文件（生产走 FileEditorManager.openFile）。 */
+    @Volatile
+    internal var snapshotOpenInEditorForTest: ((com.intellij.openapi.vfs.VirtualFile, java.io.File) -> Unit)? = null
+
+    init {
+        // 排序后行号需按视图顺序重排；数据装载后同样刷新（showSnapshotTable 内调用）。
+        snapshotSorter.addRowSorterListener { updateSnapshotRowHeader() }
+        snapshotTable.tableHeader.addMouseListener(object : java.awt.event.MouseAdapter() {
+            override fun mouseClicked(e: java.awt.event.MouseEvent) {
+                if (e.clickCount == 2) {
+                    val viewColumn = snapshotTable.columnAtPoint(e.point)
+                    if (viewColumn >= 0) autoFitSnapshotColumn(viewColumn)
+                }
+            }
+        })
+    }
 
     /** 测试缝：headless 无真库/绑定数据源；生产为 null 走 [DataSourceSelector.boundConsoleDataSource]。 */
     @Volatile
@@ -180,6 +237,9 @@ class RollbackSqlDialog(
         pkField.document.addDocumentListener(inputListener)
     }
 
+    /** 测试访问用：DialogWrapper.init() 创建的同一个中心面板（不重复建编辑器）。 */
+    private var snapshotCenterPanel: JComponent? = null
+
     override fun createCenterPanel(): JComponent {
         val body = JBPanel<JBPanel<*>>(BorderLayout()).apply {
             isOpaque = false
@@ -188,6 +248,7 @@ class RollbackSqlDialog(
             if (hasSnapshotWorkflow()) add(buildSnapshotBlock(), BorderLayout.SOUTH)
         }
         body.preferredSize = Dimension(DIALOG_WIDTH, DIALOG_HEIGHT)
+        snapshotCenterPanel = body
         return body
     }
 
@@ -237,10 +298,28 @@ class RollbackSqlDialog(
         add(
             JBPanel<JBPanel<*>>(BorderLayout()).apply {
                 isOpaque = false
+                // T-RollbackSnapshotCsvView C：第一行 SQL 标签（CENTER 可压缩）+ 摘要/视图切换
+                //（EAST 固定）——旧实现把切换按钮放在 FlowLayout 行尾，窄宽换行后被裁掉。
+                add(
+                    JBPanel<JBPanel<*>>(BorderLayout()).apply {
+                        isOpaque = false
+                        add(snapshotQueryLabel, BorderLayout.CENTER)
+                        snapshotSummary.isVisible = false
+                        add(
+                            JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.RIGHT, 4, 0)).apply {
+                                isOpaque = false
+                                add(snapshotSummary)
+                                add(snapshotToggle)
+                            },
+                            BorderLayout.EAST,
+                        )
+                    },
+                    BorderLayout.NORTH,
+                )
+                // 第二行：动作按钮（执行快照查询 / 复制快照 SQL / 在 CSV 编辑器中打开 / 自适应列宽）
                 add(
                     JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 4, 2)).apply {
                         isOpaque = false
-                        add(snapshotQueryLabel)
                         add(JButton(MpSqlVisualizerBundle.message("rollback.snapshot.run")).apply {
                             toolTipText = MpSqlVisualizerBundle.message("rollback.snapshot.run.tooltip")
                             addActionListener { runSnapshotQuery() }
@@ -251,9 +330,10 @@ class RollbackSqlDialog(
                                 copyToClipboard(sql)
                             }
                         })
-                        add(snapshotToggle)
+                        add(snapshotOpenCsv)
+                        add(snapshotAutofit)
                     },
-                    BorderLayout.NORTH,
+                    BorderLayout.CENTER,
                 )
                 // T-DialectGateExit：方言冲突时的两个出口（默认隐藏）
                 gateExitRow.apply {
@@ -265,7 +345,10 @@ class RollbackSqlDialog(
             BorderLayout.NORTH,
         )
         snapshotCards.isOpaque = false
-        snapshotCards.add(JBScrollPane(snapshotTable), SNAPSHOT_CARD_TABLE)
+        snapshotCards.add(
+            JBScrollPane(snapshotTable).apply { setRowHeaderView(snapshotRowHeader) },
+            SNAPSHOT_CARD_TABLE,
+        )
         snapshotCards.add(JBScrollPane(pasteArea), SNAPSHOT_CARD_TEXT)
         (snapshotCards.layout as CardLayout).show(snapshotCards, SNAPSHOT_CARD_TEXT)
         add(
@@ -275,8 +358,6 @@ class RollbackSqlDialog(
                 add(
                     JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 4, 2)).apply {
                         isOpaque = false
-                        snapshotSummary.isVisible = false
-                        add(snapshotSummary)
                         add(JBLabel(MpSqlVisualizerBundle.message("rollback.snapshot.pk")))
                         add(pkField)
                         add(JButton(MpSqlVisualizerBundle.message("rollback.snapshot.generate")).apply {
@@ -296,6 +377,10 @@ class RollbackSqlDialog(
             rows.map { row -> row.map { it ?: "" }.toTypedArray() }.toTypedArray(),
             columns.toTypedArray(),
         )
+        // 新数据回到原始顺序；行号与列宽随内容刷新。
+        snapshotSorter.sortKeys = emptyList()
+        updateSnapshotRowHeader()
+        autoFitSnapshotColumns()
         snapshotSummary.text = MpSqlVisualizerBundle.message(
             "rollback.snapshot.summary", rows.size, columns.size,
         )
@@ -303,6 +388,202 @@ class RollbackSqlDialog(
         snapshotTableShown = true
         (snapshotCards.layout as CardLayout).show(snapshotCards, SNAPSHOT_CARD_TABLE)
         snapshotToggle.text = MpSqlVisualizerBundle.message("rollback.snapshot.view.text")
+    }
+
+    /** T-RollbackSnapshotCsvView A：行号列按视图顺序重排（排序后 1..N 连续）。 */
+    private fun updateSnapshotRowHeader() {
+        val model = javax.swing.DefaultListModel<String>()
+        for (i in 1..snapshotTable.rowCount) model.addElement(i.toString())
+        snapshotRowHeader.model = model
+        snapshotRowHeader.fixedCellHeight = snapshotTable.rowHeight
+    }
+
+    /** T-RollbackSnapshotCsvView A：Ctrl+C / Ctrl+Insert 复制当前选择（TSV）。 */
+    private fun installSnapshotCopyBindings(table: JTable) {
+        val action = object : javax.swing.AbstractAction() {
+            override fun actionPerformed(e: java.awt.event.ActionEvent?) {
+                copySnapshotSelection()
+            }
+        }
+        table.inputMap.put(KeyStroke.getKeyStroke("control C"), "snapshotCopy")
+        table.inputMap.put(KeyStroke.getKeyStroke("control INSERT"), "snapshotCopy")
+        table.actionMap.put("snapshotCopy", action)
+    }
+
+    /** T-RollbackSnapshotCsvView A：右键菜单（复制单元格/行/列、全选、自适应列宽）。 */
+    private fun snapshotPopupListener(): java.awt.event.MouseAdapter =
+        object : java.awt.event.MouseAdapter() {
+            override fun mousePressed(e: java.awt.event.MouseEvent) = maybeShow(e)
+            override fun mouseReleased(e: java.awt.event.MouseEvent) = maybeShow(e)
+
+            private fun maybeShow(e: java.awt.event.MouseEvent) {
+                if (!e.isPopupTrigger) return
+                val menu = JPopupMenu()
+                menu.add(snapshotMenuItem("rollback.snapshot.copyCell") { copySnapshotSelection() })
+                menu.add(snapshotMenuItem("rollback.snapshot.copyRow") { copySnapshotRows() })
+                menu.add(snapshotMenuItem("rollback.snapshot.copyColumn") { copySnapshotColumn() })
+                menu.add(snapshotMenuItem("rollback.snapshot.selectAll") { snapshotTable.selectAll() })
+                menu.addSeparator()
+                menu.add(snapshotMenuItem("rollback.snapshot.autofit") { autoFitSnapshotColumns() })
+                menu.show(e.component, e.x, e.y)
+            }
+        }
+
+    private fun snapshotMenuItem(key: String, action: () -> Unit): javax.swing.JMenuItem =
+        javax.swing.JMenuItem(MpSqlVisualizerBundle.message(key)).apply {
+            addActionListener { action() }
+        }
+
+    /** 复制当前选择（无选择时复制全表）；TSV 与结果网格复制口径一致。 */
+    internal fun copySnapshotSelection(): Boolean {
+        val rows = snapshotTable.selectedRows.toList()
+            .ifEmpty { (0 until snapshotTable.rowCount).toList() }
+        val columns = snapshotTable.selectedColumns.toList()
+            .ifEmpty { (0 until snapshotTable.columnCount).toList() }
+        return copySnapshotCells(rows, columns)
+    }
+
+    private fun copySnapshotRows(): Boolean =
+        copySnapshotCells(
+            snapshotTable.selectedRows.toList().ifEmpty { (0 until snapshotTable.rowCount).toList() },
+            (0 until snapshotTable.columnCount).toList(),
+        )
+
+    private fun copySnapshotColumn(): Boolean {
+        val viewColumn = snapshotTable.selectedColumn.takeIf { it >= 0 } ?: 0
+        val modelColumn = snapshotTable.convertColumnIndexToModel(viewColumn)
+        val header = snapshotTableModel.getColumnName(modelColumn)
+        val body = (0 until snapshotTable.rowCount).joinToString("\n") { viewRow ->
+            snapshotTableModel.getValueAt(
+                snapshotTable.convertRowIndexToModel(viewRow), modelColumn,
+            )?.toString().orEmpty()
+        }
+        val text = if (body.isEmpty()) header else "$header\n$body"
+        UiTextClipboard.copy(text)
+        return true
+    }
+
+    private fun copySnapshotCells(viewRows: List<Int>, viewColumns: List<Int>): Boolean {
+        if (viewRows.isEmpty() || viewColumns.isEmpty()) return false
+        val text = viewRows.joinToString("\n") { viewRow ->
+            viewColumns.joinToString("\t") { viewColumn ->
+                snapshotTableModel.getValueAt(
+                    snapshotTable.convertRowIndexToModel(viewRow),
+                    snapshotTable.convertColumnIndexToModel(viewColumn),
+                )?.toString().orEmpty()
+            }
+        }
+        if (text.isEmpty()) return false
+        UiTextClipboard.copy(text)
+        return true
+    }
+
+    /** 按内容自适应列宽（双击列头 = 单列；按钮 = 全部），上限 360px。 */
+    internal fun autoFitSnapshotColumns() {
+        for (viewColumn in 0 until snapshotTable.columnCount) autoFitSnapshotColumn(viewColumn)
+    }
+
+    private fun autoFitSnapshotColumn(viewColumn: Int) {
+        if (viewColumn !in 0 until snapshotTable.columnCount) return
+        val modelColumn = snapshotTable.convertColumnIndexToModel(viewColumn)
+        val headerMetrics = snapshotTable.tableHeader.getFontMetrics(snapshotTable.tableHeader.font)
+        val cellMetrics = snapshotTable.getFontMetrics(snapshotTable.font)
+        var width = headerMetrics.stringWidth(snapshotTableModel.getColumnName(modelColumn)) + 24
+        val rows = minOf(snapshotTable.rowCount, 500)
+        for (viewRow in 0 until rows) {
+            val value = snapshotTableModel.getValueAt(
+                snapshotTable.convertRowIndexToModel(viewRow), modelColumn,
+            )?.toString().orEmpty()
+            width = maxOf(width, cellMetrics.stringWidth(value) + 16)
+        }
+        snapshotTable.columnModel.getColumn(viewColumn).preferredWidth = width.coerceIn(48, 360)
+    }
+
+    /**
+     * T-RollbackSnapshotCsvView B：「在 CSV 编辑器中打开」——快照写临时 .tsv 后用
+     * [FileEditorManager] 打开。Ultimate 由 grid 插件的 `csv-data-editor` 自动进入原生表格
+     *（可切文本）；Community 降级为文本编辑器。写盘+refresh 在池线程（VFS refresh 属慢操作），
+     * 打开在 EDT。
+     */
+    internal fun openSnapshotInCsvEditor() {
+        val proj = project ?: return
+        val text = pasteArea.text
+        if (text.isBlank()) {
+            warningLabel.text = "<html>${escapeHtml(
+                MpSqlVisualizerBundle.message("rollback.snapshot.emptyInput"))}</html>"
+            return
+        }
+        // 落在 JVM 系统临时目录（java.io.tmpdir）：不在 IDE 的 VFS 允许根内时也能被
+        // 测试沙盒放行（沙盒只允许 C:/Users/USER/AppData/Local/Temp 等少数根），
+        // 且与 IDE 配置目录解耦——临时文件由本对话框显式回收。
+        val file = java.io.File(
+            System.getProperty("java.io.tmpdir") ?: PathManager.getTempPath(),
+            "mpsql-rollback-snapshot-${System.currentTimeMillis()}.tsv",
+        )
+        // T-RollbackSnapshotCsvView：写盘+VFS refresh 属写操作——生产走池线程
+        // （WriteIntentReadAction，对齐 DataSourceSelectorResults 的 refreshVfs 段）；
+        // 单测模式同步执行（池线程在 headless 用例里不派发 EDT 回调，测试无法确定性地观察）。
+        if (ApplicationManager.getApplication().isUnitTestMode) {
+            val vf = writeSnapshotTempFile(file, text)
+            if (vf == null) {
+                warningLabel.text = "<html>${escapeHtml(
+                    MpSqlVisualizerBundle.message("rollback.snapshot.openCsv.failed"))}</html>"
+                return
+            }
+            snapshotTempFiles += file
+            val sink = snapshotOpenInEditorForTest
+            if (sink != null) sink(vf, file) else FileEditorManager.getInstance(proj).openFile(vf, true)
+            return
+        }
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val vf = writeSnapshotTempFile(file, text)
+            ApplicationManager.getApplication().invokeLater({
+                if (vf == null) {
+                    warningLabel.text = "<html>${escapeHtml(
+                        MpSqlVisualizerBundle.message("rollback.snapshot.openCsv.failed"))}</html>"
+                    return@invokeLater
+                }
+                snapshotTempFiles += file
+                val sink = snapshotOpenInEditorForTest
+                if (sink != null) {
+                    sink(vf, file)
+                } else {
+                    FileEditorManager.getInstance(proj).openFile(vf, true)
+                }
+            }, ModalityState.any())
+        }
+    }
+
+    /** 写临时 TSV 并让 VFS 可见（写操作走 WriteIntentReadAction）。 */
+    /**
+     * 写临时 TSV 并让 VFS 可见。
+     *
+     * 写盘在池线程（`WriteIntentReadAction`），随后用 [com.intellij.openapi.vfs.VfsUtil.markDirtyAndRefresh]
+     * 触发**异步**刷新：同步 `refreshAndFindFileByIoFile` 会在测试沙盒触发 VFS 根访问限制
+     * （VfsRootAccessNotAllowedError），异步标记不触碰根校验。文件内容用文档 API 兜底写入，
+     * 保证 CSV 编辑器打开时是完整内容。
+     */
+    private fun writeSnapshotTempFile(file: java.io.File, text: String): VirtualFile? = runCatching {
+        com.intellij.openapi.application.WriteIntentReadAction.compute<VirtualFile?> {
+            file.parentFile?.mkdirs()
+            file.writeText(text, Charsets.UTF_8)
+            com.intellij.openapi.vfs.VfsUtil.markDirtyAndRefresh(false, true, false, file)
+            LocalFileSystem.getInstance().findFileByIoFile(file)
+        }
+    }.getOrNull()
+
+    /** dispose 清理：仍被编辑器打开的临时文件保留（避免删正在编辑的文件），其余删除。 */
+    private fun cleanupSnapshotTempFiles() {
+        val proj = project ?: return
+        val manager = runCatching { FileEditorManager.getInstance(proj) }.getOrNull()
+        snapshotTempFiles.forEach { file ->
+            val open = runCatching {
+                val vf = LocalFileSystem.getInstance().findFileByIoFile(file)
+                vf != null && manager?.isFileOpen(vf) == true
+            }.getOrDefault(false)
+            if (!open) runCatching { file.delete() }
+        }
+        snapshotTempFiles.clear()
     }
 
     /** 表格 ↔ 文本视图切换；从文本切表格时重新解析，解析失败留在文本视图并提示。 */
@@ -763,6 +1044,9 @@ class RollbackSqlDialog(
     /** 释放自建编辑器（DialogWrapper 不感知 EditorFactory 产物，须自行兜底）。 */
     override fun dispose() {
         releaseEditor()
+        // T-RollbackSnapshotCsvView B：临时 TSV 随弹窗回收（仍被编辑器打开的保留）。
+        // 放在 dispose() 而非 Disposer 回调——dispose 是确定的收口点，便于测试断言。
+        cleanupSnapshotTempFiles()
         super.dispose()
     }
 
@@ -781,6 +1065,14 @@ class RollbackSqlDialog(
     internal fun snapshotSummaryTextForTest(): String = snapshotSummary.text
     internal fun snapshotTableShownForTest(): Boolean = snapshotTableShown
     internal fun snapshotToggleForTest(): JButton = snapshotToggle
+    internal fun snapshotOpenCsvForTest(): JButton = snapshotOpenCsv
+    internal fun snapshotAutofitForTest(): JButton = snapshotAutofit
+    internal fun copySnapshotSelectionForTest(): Boolean = copySnapshotSelection()
+    internal fun autoFitSnapshotColumnsForTest() = autoFitSnapshotColumns()
+    internal fun openSnapshotInCsvEditorForTest() = openSnapshotInCsvEditor()
+    internal fun snapshotTempFilesForTest(): List<java.io.File> = snapshotTempFiles.toList()
+    internal fun snapshotRowHeaderForTest(): JBList<String> = snapshotRowHeader
+    internal fun centerPanelForTest(): JComponent = snapshotCenterPanel ?: createCenterPanel()
     internal fun pkFieldForTest(): JBTextField = pkField
     internal fun executeActionForTest(): Action = executeAction
     internal fun copyActionForTest(): Action = copyAction
