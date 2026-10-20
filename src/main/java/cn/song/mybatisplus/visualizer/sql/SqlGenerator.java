@@ -194,12 +194,16 @@ public final class SqlGenerator {
         }
 
         // first 片段（官方 API）：置于 SELECT 之前（如 `/* hint */ SELECT ...`）
+        // T-UpdateSetSqlConcat：片段里的 `?` 按序登记来源（SELECT 之前，与文本顺序一致）
+        registerFragmentSources(statement.getRawFirstParams(), paramSink, hintSink);
         StringBuilder sb = new StringBuilder(statement.getRawFirst() != null ? statement.getRawFirst() + " " : "");
         sb.append("SELECT ");
         if (statement.isDistinct()) {
             sb.append("DISTINCT ");
         }
-        sb.append(selectColumns.stream().map(it -> renderColumnRef(it, dialect)).collect(Collectors.joining(", ")));
+        final List<String> sink = paramSink;
+        final List<ParamHint> hints = hintSink;
+        sb.append(selectColumns.stream().map(it -> renderColumnRef(it, dialect, sink, hints)).collect(Collectors.joining(", ")));
 
         // FROM 主表（可带别名）；T-M21-07：from(子查询主表) 形态 → FROM (子查询SQL) 外层别名
         // （主表实体表名不再直接出现——在子查询内部）
@@ -253,6 +257,8 @@ public final class SqlGenerator {
 
         // around 片段（官方 API，T-M21-09）：渲染于 ORDER BY 之后、LIMIT 之前
         if (statement.getRawAround() != null) {
+            // T-UpdateSetSqlConcat：片段里的 `?` 按序登记来源（位于 ORDER BY 之后）
+            registerFragmentSources(statement.getRawAroundParams(), paramSink, hintSink);
             sb.append(nl).append(statement.getRawAround());
         }
 
@@ -265,6 +271,8 @@ public final class SqlGenerator {
 
         // UNION / UNION ALL 子查询（MPJ 官方 API，M15 增补）
         for (var union : statement.getUnions()) {
+            // T-UpdateSetSqlConcat：子语句里的 `?` 按序登记来源（子语句整段渲染于此处）
+            registerFragmentSources(union.getParams(), paramSink, hintSink);
             sb.append(nl).append(union.getKeyword()).append(" (").append(union.getSql()).append(")");
         }
 
@@ -303,6 +311,9 @@ public final class SqlGenerator {
             sb.append(nl).append("SET ")
                     .append(statement.getSets().stream().map(set -> {
                         if (set.isRaw()) {
+                            // T-UpdateSetSqlConcat：rawSql 里的 `?` 按序登记来源——不登记会让面板把
+                            // 用户的 WHERE 值填到 SET 的占位符上（首例即 setSql 拼接形态）
+                            registerFragmentSources(set.getRawParams(), paramSink, hintSink);
                             return set.getRawSql() != null ? set.getRawSql() : "";
                         }
                         if (set.getColumn() != null) {
@@ -317,6 +328,8 @@ public final class SqlGenerator {
         appendWhere(sb, statement.getConditions(), nl, compact, paramSink, hintSink, enabledConditionIds, statement.getTable(), dialect);
         // 非 limit 尾缀透传（U05，T-M15-04）：`last("AND (last_total - n >= 0)")` 追加到语句末尾
         if (statement.getRawTail() != null) {
+            // T-UpdateSetSqlConcat：尾缀片段里的 `?` 按序登记来源（与文本顺序一致——WHERE 之后）
+            registerFragmentSources(statement.getRawTailParams(), paramSink, hintSink);
             sb.append(nl).append(statement.getRawTail());
         }
         return sb.toString();
@@ -428,6 +441,8 @@ public final class SqlGenerator {
         String typeName = join.getCustomKeyword() != null ? join.getCustomKeyword() : joinTypeName(join.getType());
         // 原生 join 子句（leftJoin("address t1 on t1.user_id = t.id", args)）：整段原样
         if (join.getRawSql() != null) {
+            // T-UpdateSetSqlConcat：join 片段里的 `?` 按序登记（渲染位置在 SET/WHERE 之前）
+            registerFragmentSources(join.getRawParams(), paramSink, hintSink);
             return typeName + " " + join.getRawSql();
         }
         String onPart = join.getOnConditions().isEmpty()
@@ -572,6 +587,9 @@ public final class SqlGenerator {
             return renderQualified(cc.getLeft(), dialect) + " = " + renderQualified(cc.getRight(), dialect);
         }
         if (condition instanceof Condition.Raw r) {
+            // T-UpdateSetSqlConcat：片段里的 `?` 按序登记来源——不登记会让面板按位置回填整体错位
+            // （片段里的 `?` 会被当成下一个条件的参数）
+            registerFragmentSources(r.getParams(), paramSink, hintSink);
             return r.getSqlText();
         }
         throw new IllegalStateException("Unknown condition type: " + condition.getClass());
@@ -593,11 +611,40 @@ public final class SqlGenerator {
      * 渲染完整列表达式（含聚合函数与 AS 别名）：rawExpr 原样透传（selectFunc 表达式，不拆解——
      * 文档化边界）；否则 `函数(限定列)` 或 `限定列`；别名 `AS xxx` 不引用。
      */
-    private static String renderColumnRef(ColumnRef column, Dialect dialect) {
+    /**
+     * 渲染完整列表达式（含聚合函数与 AS 别名）：rawExpr 原样透传（selectFunc 表达式，不拆解——
+     * 文档化边界）；否则 `函数(限定列)` 或 `限定列`；别名 `AS xxx` 不引用。
+     */
+    private static String renderColumnRef(ColumnRef column, Dialect dialect,
+                                          List<String> paramSink, List<ParamHint> hintSink) {
+        // T-UpdateSetSqlConcat：`select("col AS " + x)` 这类片段列的 `?` 按序登记（SELECT 列表渲染点）
+        registerFragmentSources(column.getRawParams(), paramSink, hintSink);
         String expr = column.getRawExpr() != null
                 ? column.getRawExpr()
                 : (column.getFunction() != null ? column.getFunction() + "(" + renderQualified(column, dialect) + ")" : renderQualified(column, dialect));
         return column.getAlias() != null ? expr + " AS " + column.getAlias() : expr;
+    }
+
+    private static String renderColumnRef(ColumnRef column, Dialect dialect) {
+        return renderColumnRef(column, dialect, null, null);
+    }
+
+    /**
+     * T-UpdateSetSqlConcat：片段（setSql/apply/last/first/around/UNION/join/rawTail/片段列）里
+     * `?` 的来源按序登记进参数表——「每个 `?` 都有来源槽」，漏登记会让面板按位置回填整体错位。
+     * sink 为 null 的调用形态（纯文本渲染，无参数收集）直接跳过。
+     */
+    private static void registerFragmentSources(List<String> sources,
+                                                List<String> paramSink, List<ParamHint> hintSink) {
+        if (sources == null || sources.isEmpty() || paramSink == null) {
+            return;
+        }
+        for (String source : sources) {
+            paramSink.add(source);
+            if (hintSink != null) {
+                hintSink.add(new ParamHint(null));
+            }
+        }
     }
 
     /** 渲染表名（关键字命中 → 按方言符号包裹）。 */
