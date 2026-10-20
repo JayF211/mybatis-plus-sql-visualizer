@@ -116,4 +116,10 @@
 
 归因（代码可判）：`explainStructuredRender` 默认 false → `ExplainPanelChannel.decide` 返回 `DirectSilent` → `submitExplainDirect`；该函数在无绑定数据源时（headless 无控制台）命中 UI-035 新增分支——`showExplainErrorDialog("…无数据源…", openDatabase = true)` 后 `return`，而 `resultPanel.showLoading()` 写在这个 `return` 之后。也就是说：**产品行为是对的（无源不空跑一次必然失败的执行），用例期望停在 UI-035 之前**。三条在干净 dev HEAD 上同样红（`git stash` 基线复现），与本轮改动无关。
 
-修法（测试侧，产品代码零改动）：给用例注入目标 `p.explainTargetForTest = { ExplainTarget() }`（`ExplainSideQueryPanelTest` 同款，`getUrl()` 返回 MySQL），放行后即走到 `showLoading()`，`assertProceeded` 恢复判别力；`finally` 里置回 null。
+修法（测试侧，产品代码零改动）：把断言从「放行 = 面板进入执行链（`state != EMPTY`）」改成「放行 = 给出无数据源引导」——用 `explainDialogSinkForTest` 截获 `showExplainErrorDialog` 并断言文案含 `panel.explain.noDataSource`；`${}` 门的「弹几次 / NO 中止 / YES 放行」断言全部保留。
+
+**为什么不是「注入目标」**：第一版照 `ExplainSideQueryPanelTest` 的做法注入 `explainTargetForTest`（带 `getUrl()` 的 MySQL 目标），仍然红。探针实测（把读数带进断言消息）得到 `state=EMPTY sinkHit=true dialogs=0 dialect=null text=35`——放行后**确实**走到了 `showExplainErrorDialog(openDatabase = true)`，但目标注入对这条分支不生效（引导来自「无绑定数据源」判定，与 `explainTargetForTest` 无关）；而把 runner 改成同步回调又会 `showIdle() → showEmpty()` 立刻把状态置回 `EMPTY`，让断言更没意义。结论：这几条用例的可观测契约已经变成「引导对话框」，按它断言才准确。
+
+读数：`InjectionGateTest` **18/0/0**、`UnknownParamGateTest` **6/0/0**；修后全量门禁 **7982 / 0 failed / 0 errors / 8 skipped**（`BUILD SUCCESSFUL in 17m41s`，`testShards --no-configuration-cache --continue`，单路）——首次全绿。
+
+顺带：门禁进度包装 `dev-support/testShardsProgress.ps1` 在实跑中暴露并修掉两个自身缺陷——①分片完成判定拿旧 XML 当本轮产物（改按 mtime ≥ 启动时刻过滤）；②`Get-Content` 默认 ANSI 读 UTF-8 的 TEST XML 导致中文用例名乱码、解析失败被 `catch {}` 吞掉（汇总 395 vs 真实 1568）——改 `-Raw -Encoding UTF8` + `DocumentElement.GetAttribute` 属性式读法，实测与 Python 逐类核对一致。
