@@ -32,6 +32,9 @@ internal class ExplainPlanDialog(
         title = MpSqlVisualizerBundle.message("panel.explain")
         isModal = false
         init()
+        // 插件语言独立于 IDE 语言：平台 cancelAction 文案跟随 IDE（英文 IDE 下显示 Cancel），
+        // 必须按插件 bundle 覆盖（同 SqlPreviewDialog 的既有做法）。
+        setCancelButtonText(MpSqlVisualizerBundle.message("panel.explain.close"))
     }
 
     override fun createCenterPanel(): JComponent = JBScrollPane(content).apply {
@@ -42,6 +45,9 @@ internal class ExplainPlanDialog(
     override fun createActions(): Array<javax.swing.Action> = arrayOf(cancelAction)
 
     internal fun contentForTest(): JComponent = content
+
+    /** 测试访问器：取消按钮文案（断言插件语言绑定，不受 IDE 语言影响）。 */
+    internal fun cancelButtonTextForTest(): String = getButtonMap()[cancelAction]?.text ?: ""
 }
 
 /** 测试缝：headless 不显示真实窗口；生产为 null 走 dialog.show()。 */
@@ -90,7 +96,14 @@ internal fun SqlPreviewPanel.showExplainRawResultDialog(title: String, raw: McpE
 }
 
 /** 旁路查询失败：给出原因，并保留显式「在控制台打开」入口（用户明确选择才换编辑器）。 */
-internal fun SqlPreviewPanel.showExplainErrorDialog(message: String, onOpenConsole: () -> Unit) {
+internal fun SqlPreviewPanel.showExplainErrorDialog(
+    message: String,
+    onOpenConsole: () -> Unit = {},
+    /** true=无绑定数据源场景：按钮改为打开 Database 工具窗口（按提示去选源），而非空跑执行。 */
+    openDatabase: Boolean = false,
+) {
+    val proj = project ?: return
+    var dialog: ExplainPlanDialog? = null
     val panel = JBPanel<JBPanel<*>>(BorderLayout()).apply {
         add(
             JBLabel("<html>" + escapeHtml(message) + "</html>").apply {
@@ -100,13 +113,27 @@ internal fun SqlPreviewPanel.showExplainErrorDialog(message: String, onOpenConso
             BorderLayout.CENTER,
         )
         add(
-            JButton(MpSqlVisualizerBundle.message("panel.explain.openConsole")).apply {
-                addActionListener { onOpenConsole() }
+            JButton(
+                MpSqlVisualizerBundle.message(
+                    if (openDatabase) "panel.explain.openDatabase" else "panel.explain.openConsole",
+                ),
+            ).apply {
+                addActionListener {
+                    if (openDatabase) {
+                        cn.song.mybatisplus.visualizer.execute.DataSourceSelector
+                            .openDatabaseToolWindow(proj)
+                    } else {
+                        onOpenConsole()
+                    }
+                    // 动作后关闭错误对话框：否则数据库窗口/控制台被它挡在后面，用户看着像「没反应」。
+                    runCatching { dialog?.close(0) }
+                }
             },
             BorderLayout.SOUTH,
         )
     }
-    showExplainDialog(panel)
+    dialog = ExplainPlanDialog(proj, panel)
+    showExplainDialog(dialog!!)
 }
 
 private fun escapeHtml(text: String): String =

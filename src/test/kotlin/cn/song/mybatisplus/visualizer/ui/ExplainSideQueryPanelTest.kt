@@ -189,6 +189,57 @@ class ExplainSideQueryPanelTest : BasePlatformTestCase() {
         }
     }
 
+    fun testExplainNoDataSourceOffersDatabaseToolWindow() {
+        // 用户真机反馈：无数据源时「在控制台打开」空跑无反应——按钮应直达 Database 工具窗口。
+        val sql = "SELECT * FROM t_order WHERE id = 1"
+        val p = panel(sql)
+        var captured: ExplainPlanDialog? = null
+        explainTargetForTest = { null }
+        explainDialogSinkForTest = { captured = it }
+        try {
+            p.submitExplainDirect(
+                project,
+                "EXPLAIN $sql",
+                ExecutionDialectGate.Request(
+                    renderMode = ExecutionDialectGate.RenderMode.AUTO,
+                    renderedDialectName = "MySQL",
+                    intent = ExecutionDialectGate.Intent.EXPLAIN,
+                    canLosslesslyRerender = false,
+                    userTextUntouched = true,
+                ),
+            )
+            val content = captured!!.contentForTest()
+            assertEquals(
+                "无数据源时按钮应直达 Database 工具窗口",
+                MpSqlVisualizerBundle.message("panel.explain.openDatabase"),
+                buttons(content).single().text,
+            )
+            assertTrue(
+                "原因应说明去 Database 工具窗口选源：${texts(content)}",
+                texts(content).any { it.contains("Database") },
+            )
+            assertEquals(sql, p.currentEditorSql())
+        } finally {
+            explainTargetForTest = null
+            explainDialogSinkForTest = null
+            p.clear()
+        }
+    }
+
+    fun testExplainDialogCancelButtonFollowsPluginLanguage() {
+        // 用户真机反馈：英文 IDE 下取消按钮显示 Cancel——必须按插件 bundle 覆盖。
+        val dialog = ExplainPlanDialog(project, com.intellij.ui.components.JBPanel<com.intellij.ui.components.JBPanel<*>>())
+        try {
+            assertEquals(
+                "取消按钮必须跟插件语言（不受 IDE 语言影响）",
+                MpSqlVisualizerBundle.message("panel.explain.close"),
+                dialog.cancelButtonTextForTest(),
+            )
+        } finally {
+            dialog.close(0)
+        }
+    }
+
     private fun buttons(component: java.awt.Component): List<javax.swing.JButton> =
         (if (component is javax.swing.JButton) listOf(component) else emptyList()) +
             (if (component is java.awt.Container) component.components.flatMap { buttons(it) } else emptyList())

@@ -1092,9 +1092,12 @@ internal fun SqlPreviewPanel.submitExplainDirect(
         cn.song.mybatisplus.visualizer.execute.DataSourceSelector.boundConsoleDataSource()
     }.getOrNull()
     if (target == null) {
-        showExplainErrorDialog(MpSqlVisualizerBundle.message("dml.impact.noDataSource")) {
-            submitExplainDirectConsole(proj, explainSql, dialectGateRequest)
-        }
+        // 无绑定数据源：按钮直达 Database 工具窗口（按提示去选源），不再空跑一次必然失败的执行；
+        // 文案用执行计划专用键（旧实现复用了 DML 影响面的「无法试算」，语境不符）。
+        showExplainErrorDialog(
+            MpSqlVisualizerBundle.message("panel.explain.noDataSource"),
+            openDatabase = true,
+        )
         return
     }
     resultPanel.showLoading()
