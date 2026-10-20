@@ -95,7 +95,7 @@ public final class SchemaValidationGate {
     }
 
     /** UI023：执行控制台已证实的目标；不从项目首个数据源或历史记忆猜测。 */
-    record Target(Object dataSource, String database) {
+    public record Target(Object dataSource, String database) {
     }
 
     /**
@@ -103,7 +103,7 @@ public final class SchemaValidationGate {
      * 只读该对象/库的缓存；旧两参入口的既有消费方保持原行为，不借本次接线扩大改造范围。
      */
     @NotNull
-    static Outcome check(@Nullable Project project, @NotNull String sql, @Nullable Target target) {
+    public static Outcome check(@Nullable Project project, @NotNull String sql, @Nullable Target target) {
         if (project == null || target == null || target.database().isBlank()) {
             return Skipped.INSTANCE;
         }
