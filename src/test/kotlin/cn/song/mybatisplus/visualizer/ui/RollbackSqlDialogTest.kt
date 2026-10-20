@@ -29,6 +29,12 @@ class RollbackSqlDialogTest : BasePlatformTestCase() {
 
     private val panel = lazy { SqlPreviewPanel(project) }
 
+    /** 必须是 public：生产反射按 getUrl 取目标方言，private 嵌套类会让 invoke 失败。 */
+    class SnapshotTarget {
+        @Suppress("unused")
+        fun getUrl(): String = "jdbc:mysql://localhost:3306/demo"
+    }
+
     override fun tearDown() {
         if (panel.isInitialized()) panel.value.dispose()
         super.tearDown()
@@ -108,8 +114,128 @@ class RollbackSqlDialogTest : BasePlatformTestCase() {
         }
     }
 
-    fun testGenerateFromPasteRejectsNonTsv() {
+    // T-RollbackSnapshotAutoFill：执行快照查询走只读旁路，自动填充并生成回滚。
+
+    fun testRunSnapshotQueryUsesSideQueryAndAutoFillsRollback() {
         val dialog = newDialog(unableUpdateResult(), "UPDATE")
+        dialog.snapshotQueryTargetForTest = { SnapshotTarget() }
+        val raw = cn.song.mybatisplus.visualizer.mcp.McpExplainFormatter.RawResult(
+            headers = listOf("id", "age"),
+            rows = listOf(listOf("1", "20")),
+        )
+        val oldRunner = PreviewSideQuery.runnerForTest
+        PreviewSideQuery.runnerForTest = { _, _, _, scalar, cb ->
+            assertFalse("快照查询必须是整表旁路（非标量）", scalar)
+            cb(PreviewSideQuery.Result.Table(raw))
+        }
+        try {
+            dialog.runSnapshotQuery()
+            assertTrue(
+                "快照框应自动填充 TSV：${dialog.pasteAreaForTest().text}",
+                dialog.pasteAreaForTest().text.contains("id\tage"),
+            )
+            assertTrue(
+                "回滚 SQL 应自动生成：${dialog.sqlTextForTest()}",
+                dialog.sqlTextForTest().contains("UPDATE user SET age = 20"),
+            )
+            assertTrue("生成成功后应启用执行动作", dialog.executeActionForTest().isEnabled)
+            // 未填主键列时整行等值定位存在误匹配风险，告警是设计内披露（文案中性，不再写死 DELETE）。
+            assertTrue(
+                "整行定位风险应披露：${dialog.warningsTextForTest()}",
+                dialog.warningsTextForTest().contains("整行等值谓词"),
+            )
+        } finally {
+            PreviewSideQuery.runnerForTest = oldRunner
+            dialog.doDispose()
+        }
+    }
+
+    fun testRunSnapshotQueryKeepsPreviewEditorUntouched() {
+        // 只读旁路：不调用 executeAdhocSql → 预览编辑器文档不变、不换入控制台。
+        val p = panel.value
+        val sql = "UPDATE user SET age = 3 WHERE id = 1"
+        p.showResult(
+            cn.song.mybatisplus.visualizer.model.PreviewResult(
+                sql, sql, emptyList(), null, null, "user",
+                renderedDialect = cn.song.mybatisplus.visualizer.sql.MySqlDialect,
+            ),
+        )
+        p.nativeEditorDoc = com.intellij.openapi.editor.EditorFactory.getInstance().createDocument(sql)
+        val beforeDoc = p.nativeEditorDoc?.text
+        val beforeConsole = p.embeddedConsole
+        val dialog = newDialog(unableUpdateResult(), "UPDATE")
+        dialog.snapshotQueryTargetForTest = { SnapshotTarget() }
+        val oldRunner = PreviewSideQuery.runnerForTest
+        var sideQueryCalled = false
+        PreviewSideQuery.runnerForTest = { _, _, _, _, cb ->
+            sideQueryCalled = true
+            cb(
+                PreviewSideQuery.Result.Table(
+                    cn.song.mybatisplus.visualizer.mcp.McpExplainFormatter.RawResult(
+                        listOf("id", "age"), listOf(listOf("1", "20")),
+                    ),
+                ),
+            )
+        }
+        try {
+            dialog.runSnapshotQuery()
+            assertTrue("必须走只读旁路查询（旧 executeAdhocSql 路径不会调用 runner）", sideQueryCalled)
+            assertEquals("只读快照查询不得替换预览编辑器", beforeDoc, p.nativeEditorDoc?.text)
+            assertEquals(sql, p.currentEditorSql())
+            assertSame("只读快照查询不得换入控制台", beforeConsole, p.embeddedConsole)
+        } finally {
+            PreviewSideQuery.runnerForTest = oldRunner
+            dialog.doDispose()
+            p.clear()
+        }
+    }
+
+    fun testRunSnapshotQueryNoDataSourceShowsHint() {
+        val dialog = newDialog(unableUpdateResult(), "UPDATE")
+        try {
+            dialog.snapshotQueryTargetForTest = { null }
+            dialog.runSnapshotQuery()
+            assertTrue(
+                "无绑定数据源应提示：${dialog.warningsTextForTest()}",
+                dialog.warningsTextForTest().contains(
+                    MpSqlVisualizerBundle.message("rollback.snapshot.noDataSource"),
+                ),
+            )
+            assertTrue("快照框保持为空", dialog.pasteAreaForTest().text.isEmpty())
+        } finally {
+            dialog.doDispose()
+        }
+    }
+
+    fun testRunSnapshotQueryEmptyResultShowsHint() {
+        val dialog = newDialog(unableUpdateResult(), "UPDATE")
+        dialog.snapshotQueryTargetForTest = { SnapshotTarget() }
+        val oldRunner = PreviewSideQuery.runnerForTest
+        PreviewSideQuery.runnerForTest = { _, _, _, _, cb ->
+            cb(
+                PreviewSideQuery.Result.Table(
+                    cn.song.mybatisplus.visualizer.mcp.McpExplainFormatter.RawResult(
+                        listOf("id", "age"), emptyList(),
+                    ),
+                ),
+            )
+        }
+        try {
+            dialog.runSnapshotQuery()
+            assertTrue(
+                "空结果应提示：${dialog.warningsTextForTest()}",
+                dialog.warningsTextForTest().contains(
+                    MpSqlVisualizerBundle.message("rollback.snapshot.emptyResult"),
+                ),
+            )
+            assertEquals("空结果不生成回滚", RollbackSqlGenerator.Rating.UNABLE, dialog.currentResult.rating)
+        } finally {
+            PreviewSideQuery.runnerForTest = oldRunner
+            dialog.doDispose()
+        }
+    }
+
+    fun testGenerateFromPasteRejectsNonTsv() {        val dialog = newDialog(unableUpdateResult(), "UPDATE")
         try {
             dialog.pasteAreaForTest().text = "只有一行无制表符"
             dialog.generateFromPaste()

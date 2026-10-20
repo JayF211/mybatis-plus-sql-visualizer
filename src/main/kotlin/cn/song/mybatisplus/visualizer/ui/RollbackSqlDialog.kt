@@ -43,7 +43,8 @@ import javax.swing.event.DocumentListener
  *  - Complete：绿色横幅 + 只读回滚 SQL 编辑器 + 底部「执行回滚 / 复制 / 关闭」；
  *  - Partial：橙色横幅（风险警示）+ COUNT 自查模板展示，其余同上；
  *  - Unable（可解析的 UPDATE/DELETE）：红色横幅 + 人工恢复指引 + **快照工作流**——
- *    快照查询模板一键执行（结果落面板控制台网格，用户亲手取得 before-image）+
+ *    快照查询模板一键执行（T-PreviewSideQuery 只读旁路：不替换预览编辑器/不换入控制台，
+ *    结果自动填入下方并生成回滚；失败/空结果在对话框内提示，仍可手工复制粘贴）+
  *    粘贴结果生成完整回滚（dbx「有 before-image 才回滚」的半自动落地，P2-F5 降级方案；
  *    262 连接协议不可程序化快照的定夺见 [RollbackSnapshotStore] KDoc）——粘贴生成的回填 INSERT
  *    在快照条目持有 identity 信息（O-52：[RollbackSnapshotStore.SnapshotEntry.dialect] /
@@ -76,6 +77,10 @@ class RollbackSqlDialog(
     }
     private val pkField = JBTextField(20)
     private var editor: Editor? = null
+
+    /** 测试缝：headless 无真库/绑定数据源；生产为 null 走 [DataSourceSelector.boundConsoleDataSource]。 */
+    @Volatile
+    internal var snapshotQueryTargetForTest: (() -> Any?)? = null
 
     // 底部动作以字段持有——DialogWrapper 无公开 getActions()（javap 实证），粘贴生成后
     // 启用态只能经自身引用刷新；字段初始化先于 init()（createActions 在 init() 内调用）
@@ -171,6 +176,7 @@ class RollbackSqlDialog(
                 isOpaque = false
                 add(snapshotQueryLabel)
                 add(JButton(MpSqlVisualizerBundle.message("rollback.snapshot.run")).apply {
+                    toolTipText = MpSqlVisualizerBundle.message("rollback.snapshot.run.tooltip")
                     addActionListener { runSnapshotQuery() }
                 })
                 add(JButton(MpSqlVisualizerBundle.message("rollback.snapshot.copy")).apply {
@@ -272,10 +278,73 @@ class RollbackSqlDialog(
         return true
     }
 
-    /** 「执行快照查询」：查询类语句经 executeAdhocSql 免确认直跑，结果落面板控制台网格。 */
+    /**
+     * 「执行快照查询」：只读旁路查询（T-PreviewSideQuery 通道，[McpDbExecutor] 只读链）——
+     * **不调用** `executeAdhocSql`，因此不替换预览编辑器、不换入控制台（旧实现会把预览窗口
+     * 切成执行视图且结果只在控制台网格，用户须手工复制粘贴，快照框看起来「没填充」）。
+     * 结果自动填入快照框并按粘贴结果生成回滚；阻断/失败/空结果在对话框内提示，
+     * 「复制快照 SQL」+ 手工粘贴路径保留为降级通道。
+     */
     internal fun runSnapshotQuery() {
         val sql = currentResult.snapshotSelectSql ?: return
-        panel?.executeAdhocSql(sql)
+        val p = panel ?: return
+        val proj = p.project ?: return
+        val target = snapshotQueryTargetForTest?.invoke() ?: runCatching {
+            cn.song.mybatisplus.visualizer.execute.DataSourceSelector.boundConsoleDataSource()
+        }.getOrNull()
+        if (target == null) {
+            warningLabel.text =
+                "<html>${escapeHtml(MpSqlVisualizerBundle.message("rollback.snapshot.noDataSource"))}</html>"
+            return
+        }
+        warningLabel.text = ""
+        // 快照 SELECT 由插件按预览方言生成（非用户手改文本）：与 DML 影响面预演同一口径构造
+        // 方言闸请求——渲染方言=预览实际方言，目标不一致时 fail-closed（不把另一语法族 SQL 送进目标库）。
+        val renderedDialect = p.current?.effectiveDialect
+            ?: cn.song.mybatisplus.visualizer.sql.MySqlDialect
+        val request = cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Request(
+            renderMode = p.executionDialectRenderMode,
+            renderedDialectName = renderedDialect.name,
+            intent = cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Intent.QUERY,
+            canLosslesslyRerender = false,
+            userTextUntouched = true,
+        )
+        PreviewSideQuery.run(proj, target, sql, request, scalar = false, requireSelectGuard = true) { result ->
+            when (result) {
+                is PreviewSideQuery.Result.Table -> {
+                    if (result.raw.rows.isEmpty()) {
+                        warningLabel.text = "<html>${escapeHtml(
+                            MpSqlVisualizerBundle.message("rollback.snapshot.emptyResult"))}</html>"
+                        return@run
+                    }
+                    pasteArea.text = toSnapshotTsv(result.raw)
+                    generateFromPaste()
+                }
+
+                is PreviewSideQuery.Result.Blocked ->
+                    warningLabel.text = "<html>${escapeHtml(result.message)}</html>"
+
+                is PreviewSideQuery.Result.Failed ->
+                    warningLabel.text = "<html>${escapeHtml(result.message)}</html>"
+
+                is PreviewSideQuery.Result.Scalar ->
+                    warningLabel.text = "<html>${escapeHtml(
+                        MpSqlVisualizerBundle.message("rollback.snapshot.parseFailed"))}</html>"
+            }
+        }
+    }
+
+    /** 结果网格 → TSV（首行列名；单元格内制表/换行折叠为空格，与手工复制口径一致）。 */
+    private fun toSnapshotTsv(
+        raw: cn.song.mybatisplus.visualizer.mcp.McpExplainFormatter.RawResult,
+    ): String = buildString {
+        append(raw.headers.joinToString("\t"))
+        raw.rows.forEach { row ->
+            append('\n')
+            append(row.joinToString("\t") { cell ->
+                cell.replace('\t', ' ').replace('\n', ' ').replace('\r', ' ')
+            })
+        }
     }
 
     private fun snapshotInputChanged() {
