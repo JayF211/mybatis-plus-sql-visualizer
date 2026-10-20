@@ -739,15 +739,17 @@ internal fun SqlPreviewPanel.showDialectGateError(
 /** 方言设置页的 Configurable EP id（Database 插件注册，见 SqlPlugin.xml）。 */
 internal const val SQL_DIALECTS_SETTING_ID = "SQL Dialects"
 
-/** T-DialectGateUx：打开「设置 → 语言与框架 → SQL 方言」页。 */
+/** T-DialectGateUx：打开「设置 → 语言与框架 → SQL 方言」页并选中该页。 */
 internal fun openSqlDialectSettings(proj: Project) {
-    val util = com.intellij.openapi.options.ShowSettingsUtil.getInstance()
-    val configurable = findSqlDialectConfigurable(proj)
-    if (configurable != null) {
-        util.showSettingsDialog(proj, configurable)
-    } else {
-        // 兜底：按本地化显示名定位（英/中 IDE 下该页名与 id 同源）
-        util.showSettingsDialog(proj, SQL_DIALECTS_SETTING_ID)
+    // 平台自带的「按 id 打开并选中」入口：它在**同一个** ConfigurableGroup 实例里查找目标
+    // configurable 再建对话框。先 findById 再把 wrapper 交给 showSettingsDialog(project, Configurable)
+    // 会因两次 group 实例不同而选不中——沙盒实证只打开到设置根页。
+    val opened = runCatching {
+        com.intellij.ide.actions.ShowSettingsUtilImpl.showSettingsDialog(proj, SQL_DIALECTS_SETTING_ID, null)
+    }.isSuccess
+    if (!opened) {
+        com.intellij.openapi.options.ShowSettingsUtil.getInstance()
+            .showSettingsDialog(proj, SQL_DIALECTS_SETTING_ID)
     }
 }
 
