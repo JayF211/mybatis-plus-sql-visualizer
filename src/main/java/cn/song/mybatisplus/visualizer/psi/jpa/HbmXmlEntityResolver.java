@@ -128,13 +128,27 @@ public final class HbmXmlEntityResolver {
 
     @Nullable
     public static HbmXmlMapping.NamedQuery findNamedQuery(String queryName, Project project, com.intellij.psi.PsiElement context) {
-        if (queryName.isBlank() || com.intellij.openapi.project.DumbService.isDumb(project)) return null;
+        List<HbmXmlMapping.NamedQuery> matches = namedQueryMatches(queryName, project, context);
+        return matches.size() == 1 && !matches.get(0).getQueryText().isBlank() ? matches.get(0) : null;
+    }
+
+    /** 调用点区分「未找到」与「重名歧义」，后者禁止把名字再当 HQL 字面量预览。 */
+    public static boolean hasAmbiguousNamedQuery(@NotNull String queryName, @NotNull Project project) {
+        return hasAmbiguousNamedQuery(queryName, project, null);
+    }
+
+    public static boolean hasAmbiguousNamedQuery(String queryName, Project project, com.intellij.psi.PsiElement context) {
+        return namedQueryMatches(queryName, project, context).size() > 1;
+    }
+
+    private static List<HbmXmlMapping.NamedQuery> namedQueryMatches(String queryName, Project project, com.intellij.psi.PsiElement context) {
+        if (queryName.isBlank() || com.intellij.openapi.project.DumbService.isDumb(project)) return List.of();
         try {
             GlobalSearchScope scope = cn.song.mybatisplus.visualizer.psi.EntityClassResolver.searchScope(project, context);
             var cache = cacheFor(project).queries;
             LookupKey key = new LookupKey(queryName, scope);
             var cached = cache.get(key);
-            if (cached != null) return cached.size() == 1 ? cached.get(0) : null;
+            if (cached != null) return cached;
             List<HbmXmlMapping.NamedQuery> matches = new ArrayList<>();
             for (XmlFile file : findHbmXmlFiles(project, scope)) {
                 com.intellij.openapi.progress.ProgressManager.checkCanceled();
@@ -150,12 +164,48 @@ public final class HbmXmlEntityResolver {
                     String name = tag.getAttributeValue("name");
                     if (!queryName.equals(name)) continue;
                     String text = extractNamedQueryText(tag);
-                    if (!text.isBlank()) matches.add(new HbmXmlMapping.NamedQuery(name, kind, text));
+                    // 空文本定义也参与消歧，不能过滤后把另一份同名定义虚构成唯一 owner。
+                    matches.add(new HbmXmlMapping.NamedQuery(name, kind, text));
                 }
             }
             if (cache.size() >= NEGATIVE_CACHE_MAX) cache.clear();
             cache.put(key, matches);
-            return matches.size() == 1 ? matches.get(0) : null;
+            return matches;
+        } catch (com.intellij.openapi.project.IndexNotReadyException ignored) {
+            return List.of();
+        }
+    }
+
+    /** 仅为预览决策查找定义标签；不缓存 PSI/URI，避免把调用点误认成 XML owner。 */
+    @Nullable
+    public static XmlTag findNamedQueryDefinition(@NotNull HbmXmlMapping.NamedQuery query, @NotNull Project project) {
+        return findNamedQueryDefinition(query, project, null);
+    }
+
+    @Nullable
+    public static XmlTag findNamedQueryDefinition(HbmXmlMapping.NamedQuery query, Project project, com.intellij.psi.PsiElement context) {
+        if (com.intellij.openapi.project.DumbService.isDumb(project)) return null;
+        try {
+            GlobalSearchScope scope = cn.song.mybatisplus.visualizer.psi.EntityClassResolver.searchScope(project, context);
+            XmlTag owner = null;
+            for (XmlFile file : findHbmXmlFiles(project, scope)) {
+                com.intellij.openapi.progress.ProgressManager.checkCanceled();
+                XmlTag root = file.getRootTag();
+                if (root == null || !"hibernate-mapping".equals(root.getName())) continue;
+                for (XmlTag tag : root.getSubTags()) {
+                    HbmXmlMapping.QueryKind kind;
+                    switch (tag.getName()) {
+                        case "query" -> kind = HbmXmlMapping.QueryKind.HQL;
+                        case "sql-query" -> kind = HbmXmlMapping.QueryKind.NATIVE;
+                        default -> { continue; }
+                    }
+                    if (kind == query.getKind() && query.getName().equals(tag.getAttributeValue("name"))) {
+                        if (owner != null || !extractNamedQueryText(tag).equals(query.getQueryText())) return null;
+                        owner = tag;
+                    }
+                }
+            }
+            return owner;
         } catch (com.intellij.openapi.project.IndexNotReadyException ignored) {
             return null;
         }
@@ -313,7 +363,7 @@ public final class HbmXmlEntityResolver {
     }
 
     /**
-     * 清除缓存（含负命中缓存与命名查询索引；PluginCacheManager.clearAll 接线，项目关闭时调用）。
+     * 清除实体与命名查询正/负缓存；PSI 或项目根变更也会自动失效，新增重复定义不会沿用旧首项。
      */
     public static void clearCache() {
         generation.incrementAndGet();

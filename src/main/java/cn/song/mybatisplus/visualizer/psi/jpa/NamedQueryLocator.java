@@ -119,14 +119,30 @@ public final class NamedQueryLocator {
             // 宿主不一定是根实体，也不一定有 @Entity；仅按宿主名查找。
             PsiClass[] classes = ownerName.contains(".") ? JavaPsiFacade.getInstance(project).findClasses(ownerName, scope)
                     : com.intellij.psi.search.PsiShortNamesCache.getInstance(project).getClassesByName(ownerName, scope);
-            List<NamedQueryInfo> matches = new ArrayList<>();
-            for (PsiClass cls : new java.util.LinkedHashSet<>(java.util.Arrays.asList(classes))) {
-                for (NamedQueryInfo info : locate(cls)) if (queryName.equals(info.getName())) matches.add(info);
-            }
-            return matches;
+            return queryHits(new java.util.LinkedHashSet<>(java.util.Arrays.asList(classes)), queryName);
         } catch (com.intellij.openapi.project.IndexNotReadyException ignored) {
             return List.of();
         }
+    }
+
+    /** 索引候选收口独立于测试框架的项目索引：跨文件歧义不能被空索引假绿掩盖。 */
+    public static NamedQueryInfo uniqueHit(Iterable<PsiClass> classes, String queryName) {
+        List<NamedQueryInfo> hits = queryHits(classes, queryName);
+        return hits.size() == 1 ? hits.get(0) : null;
+    }
+
+    /** 与生产索引入口共用消歧内核；第二个命中即可判歧义，不再枚举后续注解。 */
+    private static List<NamedQueryInfo> queryHits(Iterable<PsiClass> classes, String queryName) {
+        List<NamedQueryInfo> matches = new ArrayList<>();
+        for (PsiClass cls : classes) {
+            com.intellij.openapi.progress.ProgressManager.checkCanceled();
+            for (NamedQueryInfo hit : locate(cls)) {
+                if (!queryName.equals(hit.getName())) continue;
+                matches.add(hit);
+                if (matches.size() == 2) return matches;
+            }
+        }
+        return matches;
     }
 
     /**
