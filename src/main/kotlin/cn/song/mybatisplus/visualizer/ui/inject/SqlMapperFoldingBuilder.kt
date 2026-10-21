@@ -26,7 +26,9 @@ import com.intellij.psi.xml.XmlTag
  *  - 只在**根标签为 `mapper`** 的文件里生效；
  *  - 只对**语句标签**（select/insert/update/delete）与带 `id` 的 `<sql>` 建区；
  *  - 只对**跨多行**的标签建区（单行标签折叠无视觉意义，且更易与平台区重叠）；
- *  - 不自带默认折叠（`isCollapsedByDefault = false`，与平台「不自动折叠 XML 标签」一致）。
+ *  - 不自带默认折叠（`isCollapsedByDefault = false`，与平台「不自动折叠 XML 标签」一致）；
+ *  - `quick=true` 短路、超 [XmlSynHiGate.MAX_TEXT_LENGTH] 熔断返回空（T-PerfSweep26 F95，
+ *    编辑期快速重建与万行级文件不做子树遍历，见 [buildFoldRegions] 内注释）。
  *
  * 与平台区**范围相同**时的占位优先级属渲染期行为，单测只能钉本类产出；真机观感列入 W8 走查项
  * （计划 §十 遗留）。
@@ -34,8 +36,18 @@ import com.intellij.psi.xml.XmlTag
 class SqlMapperFoldingBuilder : FoldingBuilderEx() {
 
     override fun buildFoldRegions(root: PsiElement, document: Document, quick: Boolean): Array<FoldingDescriptor> {
+        // T-PerfSweep26 F95：`quick=true` 只发生在编辑器打开瞬间的初始折叠
+        // （`CodeFoldingManagerImpl.buildInitialFoldings` → `FoldingUpdate.getFoldingsFor(file, quick=true)`，
+        // 243 sources jar 实证），平台契约要求该 pass "avoid complex checks if possible"
+        // （`FoldingBuilderEx.buildFoldRegions` javadoc）；随后 daemon `CodeFoldingPass` 的
+        // `updateFoldRegionsAsync` 恒以 `quick=false` 全量重建（`updateFoldRegions(editor, firstTime, quick=false)`）。
+        // 本类不自动折叠、无打开瞬间必须立即可见的区（对比 Java imports），quick pass 直接短路，
+        // 全量区由 daemon 补齐——省掉一次全 PSI 子树遍历。
+        if (quick) return FoldingDescriptor.EMPTY
         val file = root.containingFile as? XmlFile ?: return FoldingDescriptor.EMPTY
         if (file.rootTag?.name != "mapper") return FoldingDescriptor.EMPTY
+        // T-PerfSweep26 F95：体量熔断——超万行级 mapper 不做子树遍历（与注入族 XmlSynHiGate 同阈值同防线）。
+        if (document.textLength > XmlSynHiGate.MAX_TEXT_LENGTH) return FoldingDescriptor.EMPTY
         val out = mutableListOf<FoldingDescriptor>()
         for (tag in PsiTreeUtil.findChildrenOfType(root, XmlTag::class.java)) {
             if (tag.name !in FOLDABLE_TAGS) continue
