@@ -49,6 +49,7 @@ import com.intellij.psi.PsiClass
 import com.intellij.psi.PsiClassOwner
 import com.intellij.psi.PsiDocumentManager
 import com.intellij.psi.PsiModifier
+import com.intellij.ide.ui.laf.darcula.DarculaUIUtil
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.JBColor
 import cn.song.mybatisplus.visualizer.util.FatalErrors
@@ -493,20 +494,11 @@ class SqlToJavaPanel(
             refresh()
         }
 
-        /** 输入框观感：圆角底色 + 主题边框色（对齐 IDEA TextField；只读无焦点态）。 */
-        override fun paintComponent(g: Graphics) {
-            val g2 = g.create() as Graphics2D
-            try {
-                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
-                g2.color = UIUtil.getTextFieldBackground()
-                g2.fillRoundRect(0, 0, width - 1, height - 1, PICKER_CORNER, PICKER_CORNER)
-                // T-DarkTheme：命名色优先 + JBColor.border() 兜底（亮/暗主题自适应，与 IDEA TextField 边框一致）
-                g2.color = JBColor.namedColor("Component.borderColor", JBColor.border())
-                g2.drawRoundRect(0, 0, width - 1, height - 1, PICKER_CORNER, PICKER_CORNER)
-            } finally {
-                g2.dispose()
-            }
-        }
+        /**
+         * 输入框观感：圆角底色 + 主题边框（对齐 IDEA TextField；只读无焦点态）。
+         * 实现在共享的 [paintPickerFieldSurface]（两处选择框共用，UI-045）。
+         */
+        override fun paintComponent(g: Graphics) = paintPickerFieldSurface(this, g)
 
         /** 对外文本（生成器读取类名；测试 setText 兼容——直接赋值不触发变更回调）。 */
         var text: String
@@ -894,20 +886,9 @@ class SqlToJavaPanel(
 
         /**
          * 输入框观感：圆角底色 + 主题边框色（对齐 IDEA TextField；只读无焦点态）——
-         * 与 [ClassPickerField] 逐行同源，保证「调用类」「返回类型」两行观感一致。
+         * 与 [ClassPickerField] 共用 [paintPickerFieldSurface]，保证两行观感一致（UI-045 抽出）。
          */
-        override fun paintComponent(g: Graphics) {
-            val g2 = g.create() as Graphics2D
-            try {
-                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
-                g2.color = UIUtil.getTextFieldBackground()
-                g2.fillRoundRect(0, 0, width - 1, height - 1, PICKER_CORNER, PICKER_CORNER)
-                g2.color = JBColor.namedColor("Component.borderColor", JBColor.border())
-                g2.drawRoundRect(0, 0, width - 1, height - 1, PICKER_CORNER, PICKER_CORNER)
-            } finally {
-                g2.dispose()
-            }
-        }
+        override fun paintComponent(g: Graphics) = paintPickerFieldSurface(this, g)
 
         /** 对外文本（生成器读取返回声明；测试直接赋值不触发变更回调——对齐 ClassPickerField 语义）。 */
         var text: String
@@ -1835,8 +1816,46 @@ class SqlToJavaPanel(
             CALLER_BASE_MAPPER to "baseMapper：ServiceImpl 的 baseMapper 字段（生成 baseMapper.selectList(...) / baseMapper.insert(...) 等）",
         )
 
-        /** 类选择字段圆角直径（radius 5，对齐 IDEA 输入框）。 */
+        /** 类选择字段圆角直径（radius 5，对齐 IDEA 输入框）。UI-045 起实际弧角改取平台 `COMPONENT_ARC`。 */
         private const val PICKER_CORNER = 10
+
+        /**
+         * 两个类选择字段（「调用类」/「返回类型」）共用的输入框外观（UI-045）。
+         *
+         * 描边粗细必须跟平台走：平台输入框用 `DarculaUIUtil.paintOutlineBorder` 画
+         * **`BW` 宽（= `Component.focusWidth`，默认 2px）** 的圆角，弧角取 `COMPONENT_ARC`
+         * （= `Component.arc`，默认 5）。早期这里用 `drawRoundRect` 画 1px 圆弧，浅色主题下
+         * 明显偏淡（用户截图实测：平台框边框像素 215,217,222，自绘框 227,228,231）。
+         *
+         * 不直接调 `paintOutlineBorder`：它要求传 `Outline` 枚举，而该枚举只有
+         * error/warning/defaultButton/focus 四档（javap 实证），没有「普通态」成员。
+         */
+        internal fun paintPickerFieldSurface(
+            target: javax.swing.JComponent,
+            g: Graphics,
+        ) {
+            val g2 = g.create() as Graphics2D
+            try {
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+                val bw = DarculaUIUtil.BW.get()
+                val arc = DarculaUIUtil.COMPONENT_ARC.get() * 2
+                g2.color = UIUtil.getTextFieldBackground()
+                g2.fillRoundRect(0, 0, target.width - 1, target.height - 1, arc, arc)
+                g2.color = JBColor.namedColor("Component.borderColor", JBColor.border())
+                val saved = g2.stroke
+                g2.stroke = java.awt.BasicStroke(bw.toFloat())
+                // 2px 描边内缩半个线宽，否则右/下侧会被组件边界裁掉一半
+                val inset = bw / 2
+                g2.drawRoundRect(
+                    inset, inset,
+                    target.width - 1 - inset * 2, target.height - 1 - inset * 2,
+                    arc, arc,
+                )
+                g2.stroke = saved
+            } finally {
+                g2.dispose()
+            }
+        }
 
         /** 类选择字段按钮图标（12px 缩放——AllIcons 原生 16px 偏大，用户反馈）。 */
         /** T-MapResultVo v4：返回类型选择器的 Map/Objs 预置声明（生成器按含 Map/含 Object 派生族）。 */
