@@ -170,6 +170,116 @@ public final class SqlHistoryManager implements PersistentStateComponent<SqlHist
         return mergeByTimestamp(state.getFavoriteEntries(), state.getEntries());
     }
 
+    // ---------- R90：EXPLAIN 计划持久化 ----------
+
+    private long planGeneration = 0L;
+
+    public synchronized long explainPlanGeneration() {
+        return planGeneration;
+    }
+
+    /** R90 计划预算：单条目最大计划数。 */
+    private static final int MAX_PLANS_PER_ENTRY = 10;
+    /** R90 计划预算：全域计划序列化字节总量上限。 */
+    private static final int MAX_TOTAL_PLAN_BYTES = 512 * 1024;
+    /** R90：单计划序列化字节上限。 */
+    private static final int MAX_PLAN_BYTES = 64 * 1024;
+
+    /** 提交前固定原条目；异步完成时禁止再按「最新 SQL」回查归属。 */
+    public synchronized ExplainPlanCapture beginExplainCapture(
+            String projectIdentity, String previewSql, ExplainPlanKey key, String entryId) {
+        if (!key.projectIdentity().equals(projectIdentity)) return null;
+        SqlHistoryEntry entry;
+        if (entryId != null) {
+            entry = findById(entryId);
+            if (entry == null || !entry.getProjectIdentity().equals(projectIdentity)) return null;
+        } else {
+            entry = null;
+            for (SqlHistoryEntry e : state.getEntries()) {
+                if (e.getProjectIdentity().equals(projectIdentity) && e.getSql().equals(previewSql)) {
+                    entry = e;
+                    break;
+                }
+            }
+            if (entry == null) return null;
+        }
+        return new ExplainPlanCapture(entry.getId(), planGeneration, key);
+    }
+
+    /** R91 可只读消费此 API：严格同项目/UUID/方言/格式/模板/exact，返回快照列表（最新在前）。 */
+    public synchronized java.util.List<ExplainPlanSnapshot> matchingExplainPlans(ExplainPlanKey key) {
+        if (!key.isPersistable()) return java.util.List.of();
+        java.util.List<ExplainPlanSnapshot> out = new java.util.ArrayList<>();
+        java.util.List<SqlHistoryEntry> all = new java.util.ArrayList<>(state.getEntries());
+        all.addAll(state.getFavoriteEntries());
+        for (SqlHistoryEntry entry : all) {
+            for (ExplainPlanSnapshot snapshot : entry.getExplainPlans()) {
+                if (snapshot.key().equals(key)) {
+                    out.add(snapshot);
+                }
+            }
+        }
+        out.sort((a, b) -> Long.compare(b.getCapturedAt(), a.getCapturedAt()));
+        return out;
+    }
+
+    public synchronized ExplainPlanSaveResult saveExplainPlan(ExplainPlanCapture capture,
+                                                              cn.song.mybatisplus.visualizer.mcp.McpExplainFormatter.RawResult raw) {
+        if (capture.generation() != planGeneration) return ExplainPlanSaveResult.CLEARED_OR_REMOVED;
+        SqlHistoryEntry entry = findById(capture.entryId());
+        if (entry == null) return ExplainPlanSaveResult.CLEARED_OR_REMOVED;
+        if (!entry.getProjectIdentity().equals(capture.key().projectIdentity())) {
+            return ExplainPlanSaveResult.CLEARED_OR_REMOVED;
+        }
+        if (!capture.key().isPersistable()) return ExplainPlanSaveResult.SESSION_ONLY;
+        ExplainPlanSnapshot snapshot = ExplainPlanSnapshot.create(capture.key(), raw);
+        long newestTime = 0L;
+        java.util.List<SqlHistoryEntry> all = new java.util.ArrayList<>(state.getEntries());
+        all.addAll(state.getFavoriteEntries());
+        for (SqlHistoryEntry e : all) {
+            for (ExplainPlanSnapshot p : e.getExplainPlans()) {
+                newestTime = Math.max(newestTime, p.getCapturedAt());
+            }
+        }
+        // 同一毫秒完成的多个回调仍按保存顺序淘汰，不因稳定排序把最新一份丢掉。
+        if (newestTime >= snapshot.getCapturedAt() && newestTime < Long.MAX_VALUE) {
+            snapshot.setCapturedAt(newestTime + 1);
+        }
+        if (snapshot.serializedBytes() > MAX_PLAN_BYTES) return ExplainPlanSaveResult.TOO_LARGE;
+        entry.getExplainPlans().add(0, snapshot);
+        enforcePlanBounds(all);
+        return ExplainPlanSaveResult.SAVED;
+    }
+
+    /** 计划预算只淘汰计划，绝不删除 SQL（特别是收藏）。加载旧/手改 XML 同样受限。 */
+    private void enforcePlanBounds(java.util.List<SqlHistoryEntry> all) {
+        for (SqlHistoryEntry entry : all) {
+            entry.getExplainPlans().removeIf(p ->
+                    !p.key().isPersistable() || !p.projectIdentity().equals(entry.getProjectIdentity())
+                            || p.raw() == null || p.serializedBytes() > MAX_PLAN_BYTES);
+            entry.getExplainPlans().sort((a, b) -> Long.compare(b.getCapturedAt(), a.getCapturedAt()));
+            while (entry.getExplainPlans().size() > MAX_PLANS_PER_ENTRY) {
+                entry.getExplainPlans().remove(entry.getExplainPlans().size() - 1);
+            }
+        }
+        record PlanRef(SqlHistoryEntry entry, ExplainPlanSnapshot snapshot, int size) {}
+        java.util.List<PlanRef> oldest = new java.util.ArrayList<>();
+        long totalBytes = 0;
+        for (SqlHistoryEntry entry : all) {
+            for (ExplainPlanSnapshot p : entry.getExplainPlans()) {
+                int sz = p.serializedBytes();
+                oldest.add(new PlanRef(entry, p, sz));
+                totalBytes += sz;
+            }
+        }
+        oldest.sort((a, b) -> Long.compare(a.snapshot().getCapturedAt(), b.snapshot().getCapturedAt()));
+        for (PlanRef ref : oldest) {
+            if (totalBytes <= MAX_TOTAL_PLAN_BYTES) break;
+            ref.entry().getExplainPlans().remove(ref.snapshot());
+            totalBytes -= ref.size();
+        }
+    }
+
     /** 按 id 查找条目（含收藏分区）。 */
     public SqlHistoryEntry findById(String id) {
         for (SqlHistoryEntry e : state.getEntries()) {

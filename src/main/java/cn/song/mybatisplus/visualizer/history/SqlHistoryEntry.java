@@ -39,6 +39,20 @@ public final class SqlHistoryEntry {
     /** R15（W3 历史工作流包）：钉住——非收藏分区裁剪跳过钉住条目（防翻找丢失）；上限由 manager 把关。 */
     private boolean pinned = false;
 
+    /**
+     * R51（O-105 余半·主体）：参数快照（键值对）。生命周期：recordHistory 早于面板参数区构建
+     * （预览产物先落历史、参数后填），故初始恒空；面板参数编辑防抖落库时按缓存键回写
+     * <b>最新匹配条目</b>。recall 链在 ParamHistoryCache 未命中时按同一缓存键回落本快照。
+     * 持久化（V75 实测在案）：XmlSerializer 对 LinkedHashMap 往返逐值兼容。
+     */
+    private java.util.LinkedHashMap<String, String> paramSnapshot = new java.util.LinkedHashMap<>();
+
+    /** R90：APP 历史域的项目归属；旧条目缺省空，不猜测归属。 */
+    private String projectIdentity = "";
+
+    /** R90：本条目的 EXPLAIN 计划快照（最新在前；预算上限见 SqlHistoryManager.enforcePlanBounds）。 */
+    private List<ExplainPlanSnapshot> explainPlans = new ArrayList<>();
+
     public SqlHistoryEntry() {
     }
 
@@ -139,6 +153,30 @@ public final class SqlHistoryEntry {
     /** R15：钉住态（钉住条目在非收藏分区裁剪时跳过；上限由 SqlHistoryManager.MAX_PINNED 把关）。 */
     public boolean isPinned() {
         return pinned;
+    }
+
+    public java.util.LinkedHashMap<String, String> getParamSnapshot() {
+        return paramSnapshot;
+    }
+
+    public void setParamSnapshot(java.util.LinkedHashMap<String, String> paramSnapshot) {
+        this.paramSnapshot = paramSnapshot != null ? paramSnapshot : new java.util.LinkedHashMap<>();
+    }
+
+    public String getProjectIdentity() {
+        return projectIdentity;
+    }
+
+    public void setProjectIdentity(String projectIdentity) {
+        this.projectIdentity = projectIdentity;
+    }
+
+    public List<ExplainPlanSnapshot> getExplainPlans() {
+        return explainPlans;
+    }
+
+    public void setExplainPlans(List<ExplainPlanSnapshot> explainPlans) {
+        this.explainPlans = explainPlans != null ? explainPlans : new ArrayList<>();
     }
 
     public void setPinned(boolean pinned) {
