@@ -546,9 +546,12 @@ public final class SqlLogManager implements Disposable {
             autoSaver.configure(state.getLogAutoSavePath(), state.getLogAutoSaveFileNamePattern(),
                     project.getBasePath(), state.getLogAutoSaveMaxFiles());
             buffer.setOnEntryStored(autoSaver::submit);
+            // O-147：合并是元数据升级不是新捕获——历史落盘链据此追加修订注释
+            buffer.setOnEntryMerged(autoSaver::submitMerge);
             buffer.setOnEvicted(null);
         } else {
             buffer.setOnEntryStored(null);
+            buffer.setOnEntryMerged(null);
             buffer.setOnEvicted(null);
         }
     }
@@ -671,6 +674,7 @@ public final class SqlLogManager implements Disposable {
         buffer.setHasStructureKeys(false);
         buffer.setOnEntryAccepted(null);
         buffer.setOnEntryStored(null);
+        buffer.setOnEntryMerged(null);
         buffer.setOnDedupeCountsChanged(null);
         buffer.setOnContentNotifySuppressed(null);
         uiListeners.clear();
