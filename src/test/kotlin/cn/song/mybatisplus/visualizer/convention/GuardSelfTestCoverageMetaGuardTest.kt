@@ -1060,6 +1060,14 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "writeVfTextViaDocumentNoopOnDisposedProject——项目 dispose 后预热链与文档写全链拒绝写）；" +
                     "disposedProjectProxy/refreshVf 为夹具非判定函数",
             ),
+            // ---- T-LicenseCompliance：分发包许可合规守卫（20261021） ----
+            GuardEntry(
+                "convention/DistributionComplianceGuardTest.kt",
+                emptyList(),
+                "断言直接内联在三个 @Test（根目录 LICENSE/NOTICES 在场、NOTICES 覆盖 JetBrains 图标/" +
+                    "JSqlParser/ASM 关键词、build.gradle.kts 的 jsqlparser 排除 jmh-core——防打包泄漏回潮）；" +
+                    "零平台引用，进 testFast 快桶；反向=删 NOTICES/改名关键词/摘 exclude 必红",
+            ),
             // ---- 本元守卫自身 ----
             GuardEntry(
                 "convention/GuardSelfTestCoverageMetaGuardTest.kt",

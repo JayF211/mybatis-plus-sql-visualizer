@@ -116,7 +116,13 @@ dependencies {
     // F-1/F-xx：JOIN 关系可视化图（自绘 Swing Graphics2D 渲染，零外部依赖）
     // F-xx 替代方案：移除 PlantUML 1.2024.8 (21.9MB) + Batik (~8MB)，改用自绘引擎
     // F-2：SQL 性能分析（JSqlParser 5.3 — 零依赖 SQL 解析器，静态分析用）
-    implementation("com.github.jsqlparser:jsqlparser:5.3")
+    implementation("com.github.jsqlparser:jsqlparser:5.3") {
+        // T-LicenseCompliance（20261021）：上游 POM 把 org.openjdk.jmh:jmh-core 声明为编译期
+        // 传递依赖（仅其基准测试用——jar 内 0 个类引用 org/openjdk/jmh，已逐类核对），会导致
+        // jmh-core、jopt-simple、commons-math3 三件套约 2.8MB 被打进插件运行期 lib（打包泄漏，
+        // 2026-09-20 验收文档已标注待确认）。显式排除。
+        exclude(group = "org.openjdk.jmh", module = "jmh-core")
+    }
 
     // IntelliJ Platform Gradle Plugin Dependencies Extension - read more: https://plugins.jetbrains.com/docs/intellij/tools-intellij-platform-gradle-plugin-dependencies-extension.html
     intellijPlatform {
@@ -245,6 +251,21 @@ tasks.withType<Jar>().configureEach {
         manifest.attributes["MPV-Build"] = System.currentTimeMillis().toString()
     }
     outputs.upToDateWhen { false }
+}
+
+// ---------- T-LicenseCompliance（20261021）：分发包许可合规 ----------
+// ① 插件主 jar 的 META-INF/ 打进 LICENSE 与 THIRD-PARTY-NOTICES（源码单点，避免两处副本漂移）；
+// ② buildPlugin zip 的插件目录同级再放一份（IDE 插件包惯例，安装后可见）。
+// 守卫：convention/DistributionComplianceGuardTest（源码级钉住本接线与 jsqlparser 的 jmh-core 排除）。
+tasks.named<ProcessResources>("processResources") {
+    from(layout.projectDirectory.file("LICENSE")) { into("META-INF") }
+    from(layout.projectDirectory.file("THIRD-PARTY-NOTICES.md")) { into("META-INF") }
+}
+tasks.named<org.jetbrains.intellij.platform.gradle.tasks.BuildPluginTask>("buildPlugin") {
+    // buildPlugin 的根 dest 已是 archiveBaseName（插件目录名），此处不写 into 即落在
+    // <插件目录>/LICENSE 与 <插件目录>/THIRD-PARTY-NOTICES.md（写 into 会多套一层同名目录，20261021 实测）。
+    from(layout.projectDirectory.file("LICENSE"))
+    from(layout.projectDirectory.file("THIRD-PARTY-NOTICES.md"))
 }
 
 // T-BuildScriptSplit：root 收口——tasks{} 块已全部分治（patchPluginXml/writeUpdateManifest →
