@@ -71,10 +71,8 @@ public final class WrapperAnchorDetector {
      * @param element Line marker 快速路径传入的单个叶子元素（可空：调用方 PSI 接口可能返回 null）
      */
     public static PsiElement anchorElement(PsiElement element) {
-        // F-4：Kotlin 文件快速路径（文本级匹配，O(1)，符合 M10 性能红线）
-        if (element != null && isKotlinFile(element)) {
-            return anchorElementKotlin(element);
-        }
+        // Kotlin 文本检测尚无可靠表名与列/值实参，不能给无法生成 SQL 的链挂预览图标。
+        if (element != null && isKotlinFile(element)) return null;
 
         // 场景 B 优先：变量名（PsiLocalVariable / PsiField / PsiParameter 的 nameIdentifier）
         if (element instanceof PsiIdentifier && element.getParent() instanceof PsiVariable) {
@@ -319,7 +317,7 @@ public final class WrapperAnchorDetector {
     }
 
     // ------------------------------------------------------------------
-    // F-4：Kotlin 文件 gutter 锚点检测（MVP，文本级 O(1) 匹配）
+    // Kotlin 文件判定（文本级 gutter 不再给 Kotlin 链挂锚点，仅保留扩展名判定）
     // ------------------------------------------------------------------
 
     /** 元素所在文件是否为 Kotlin 文件（按扩展名判断，O(1)）。 */
@@ -329,90 +327,4 @@ public final class WrapperAnchorDetector {
         String ext = element.getContainingFile().getVirtualFile().getExtension();
         return "kt".equals(ext) || "kts".equals(ext);
     }
-
-    /**
-     * Kotlin 文件锚点检测（F-4 MVP）。
-     *
-     * <p>策略：按行文本匹配，检测元素所在行是否包含 Wrapper 链起点（ktQuery/ktUpdate/LambdaQueryWrapper 等），
-     * 若是则返回该元素作为锚点。O(1) 文本级，无 PSI resolve，符合 M10 性能红线。</p>
-     */
-    private static PsiElement anchorElementKotlin(PsiElement element) {
-        // 只处理叶子元素（标识符/方法名）
-        String elementText = element.getText();
-        if (elementText == null || elementText.isEmpty()) return null;
-
-        // 获取元素所在行文本
-        String lineText = getLineText(element);
-        if (lineText == null) return null;
-
-        // 检查是否为 Wrapper 链起点方法名
-        boolean isChainStart = extensionFactoryMethodNames.contains(elementText)
-            && lineText.contains("." + elementText + "(");
-        boolean isConstructor = wrapperConstructorNames.contains(elementText)
-            && (lineText.contains(elementText + "<") || lineText.contains(elementText + "("));
-
-        if (!isChainStart && !isConstructor) return null;
-
-        // 检查该行是否包含 Wrapper 操作（eq/like/set 等），确认是 Wrapper 链
-        // T-Perf-23：单趟扫描 ".标识符(" 形态（24 个操作名的 contains 全是它的必要子形态），
-        // 替代每叶子 24 次 contains 全行扫描
-        if (!hasDotCallPattern(lineText)) return null;
-
-        return element;
-    }
-
-    /** 单趟扫描：行内是否存在 `.标识符(` 形态（Wrapper 操作调用的必要条件）。 */
-    private static boolean hasDotCallPattern(String s) {
-        int n = s.length();
-        int i = 0;
-        while (i < n - 1) {
-            char c = s.charAt(i);
-            if (c == '.' && i + 1 < n) {
-                int j = i + 1;
-                while (j < n && (Character.isLetterOrDigit(s.charAt(j)) || s.charAt(j) == '_')) j++;
-                if (j > i + 1 && j < n && s.charAt(j) == '(') return true;
-                i = j;
-            } else {
-                i++;
-            }
-        }
-        return false;
-    }
-
-    /** 获取元素所在行文本（O(1) 按偏移量计算）。 */
-    private static String getLineText(PsiElement element) {
-        if (element.getContainingFile() == null) return null;
-        String text = element.getContainingFile().getText();
-        if (text == null) return null;
-        int offset = element.getTextRange().getStartOffset();
-        if (offset < 0 || offset >= text.length()) return null;
-
-        // 找到行首和行尾
-        int lineStart = offset;
-        while (lineStart > 0 && text.charAt(lineStart - 1) != '\n') lineStart--;
-        int lineEnd = offset;
-        while (lineEnd < text.length() && text.charAt(lineEnd) != '\n') lineEnd++;
-
-        return text.substring(lineStart, lineEnd);
-    }
-
-    /** Kotlin 扩展函数工厂方法名（ktQuery/ktUpdate）。 */
-    private static final Set<String> extensionFactoryMethodNames = Set.of("ktQuery", "ktUpdate");
-
-    /** Wrapper 构造函数名集合。 */
-    private static final Set<String> wrapperConstructorNames = Set.of(
-        "LambdaQueryWrapper", "LambdaUpdateWrapper", "LambdaDeleteWrapper",
-        "QueryWrapper", "UpdateWrapper", "MPJLambdaWrapper", "MPJQueryWrapper"
-    );
-
-    /** Wrapper 操作条件方法名（用于确认是 Wrapper 链）。 */
-    private static final Set<String> wrapperOperationMethodNames = Set.of(
-        "eq", "ne", "gt", "ge", "lt", "le",
-        "like", "notLike", "likeLeft", "likeRight",
-        "notIn", "in", "between", "notBetween",
-        "isNull", "isNotNull",
-        "groupBy", "orderByAsc", "orderByDesc", "orderBy",
-        "having", "or", "and", "apply", "last",
-        "select", "set", "setSql"
-    );
 }

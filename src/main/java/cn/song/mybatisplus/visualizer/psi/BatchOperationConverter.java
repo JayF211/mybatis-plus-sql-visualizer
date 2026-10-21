@@ -254,7 +254,8 @@ public final class BatchOperationConverter {
                 idSource(prefix, col.getColumnName()),
                 ParamQuote.decide(col.getFieldType()),
                 checked.test(col),
-                col.isIdTypeAuto()));
+                col.isIdTypeAuto(),
+                col.getFill()));
         }
         return result;
     }
@@ -264,8 +265,8 @@ public final class BatchOperationConverter {
      * 与面板勾选重建共用唯一渲染源）。
      * T-M23.4：注入当前方言（关键字标识符引用——保留字列名按方言符号包裹；设置服务不可用时兜底 MySQL）。
      */
-    private static BatchBuild modelBuild(BatchModel model) {
-        BatchModel withDialect = model.copy(PsiDialect.currentDialect());
+    private static BatchBuild modelBuild(BatchModel model, PsiMethodCallExpression call) {
+        BatchModel withDialect = model.copy(PsiDialect.currentDialect(call.getProject()));
         Set<String> initialActive = new LinkedHashSet<>();
         for (BatchColumn column : withDialect.getToggleColumns()) {
             if (column.isChecked()) initialActive.add(column.getColumnName());
@@ -307,7 +308,7 @@ public final class BatchOperationConverter {
         // T-M20-07：Map 等值条件方法独立分支（键值静态不可得 → 占位文本；避免并入主键等值/IN 分支）
         BatchBuild build;
         if (MAP_CONDITION_METHODS.contains(methodName)) {
-            build = buildMapConditionBatch(methodName, table, injectLogicDelete);
+            build = buildMapConditionBatch(call, methodName, table, injectLogicDelete);
         } else {
             switch (operation) {
                 case UPDATE:
@@ -573,7 +574,7 @@ public final class BatchOperationConverter {
         if (versionColumn != null) groupColumns.add(versionColumn);
         String paramGroups = buildParamGroups(groupColumns);
         return modelBuild(new BatchModel(
-            BatchKind.UPDATE, table.getTableName(), toggleColumns, fixedColumns, versionColumn))
+            BatchKind.UPDATE, table.getTableName(), toggleColumns, fixedColumns, versionColumn), call)
             .withParamGroups(paramGroups);
     }
 
@@ -633,12 +634,12 @@ public final class BatchOperationConverter {
         List<String> groupColumns = new ArrayList<>();
         for (ColumnInfo column : columns) groupColumns.add(column.getColumnName());
         String paramGroups = buildParamGroups(groupColumns);
-        BatchBuild build = modelBuild(new BatchModel(BatchKind.INSERT, table.getTableName(), toggleColumns))
+        BatchBuild build = modelBuild(new BatchModel(BatchKind.INSERT, table.getTableName(), toggleColumns), call)
             .withParamGroups(paramGroups);
         // T-M2：@KeySequence 序列方言注释提示（主键列占位不变，仅追加提示行）
         String keySequence = entityClass != null ? EntityResolver.keySequenceValue(entityClass) : null;
         if (keySequence == null) return build;
-        Dialect dialect = PsiDialect.currentDialect();
+        Dialect dialect = PsiDialect.currentDialect(call.getProject());
         if (!KEY_SEQUENCE_DIALECT_NAMES.contains(dialect.getName())) return build;
         return build.withSql(build.sql
             + "\n-- @KeySequence: 主键取序列 " + keySequence
@@ -659,7 +660,7 @@ public final class BatchOperationConverter {
         boolean injectLogicDelete,
         boolean resolveVariables
     ) {
-        Dialect dialect = PsiDialect.currentDialect();
+        Dialect dialect = PsiDialect.currentDialect(call.getProject());
         ColumnInfo idColumn = firstIdColumn(table.getColumns());
         String logicColumn = injectLogicDelete ? table.getLogicDeleteColumn() : null;
         boolean singleId = SINGLE_ID_DELETE_METHODS.contains(methodName);
@@ -694,7 +695,7 @@ public final class BatchOperationConverter {
         boolean injectLogicDelete,
         boolean resolveVariables
     ) {
-        Dialect dialect = PsiDialect.currentDialect();
+        Dialect dialect = PsiDialect.currentDialect(call.getProject());
         ColumnInfo idColumn = firstIdColumn(table.getColumns());
         // T-M23.5：全列清单/表名/条件列名按方言引用
         String selectColumns = table.getColumns().stream()
@@ -733,11 +734,12 @@ public final class BatchOperationConverter {
      * 参数组说明置空（Map 键不可静态枚举）。
      */
     private static BatchBuild buildMapConditionBatch(
+        PsiMethodCallExpression call,
         String methodName,
         TableInfo table,
         boolean injectLogicDelete
     ) {
-        Dialect dialect = PsiDialect.currentDialect();
+        Dialect dialect = PsiDialect.currentDialect(call.getProject());
         boolean isDelete = methodName.startsWith("remove") || methodName.startsWith("delete");
         String logicColumn = injectLogicDelete ? table.getLogicDeleteColumn() : null;
         String condition = "<Map 等值条件: col = ? AND col = ? ...>"
@@ -776,7 +778,7 @@ public final class BatchOperationConverter {
         for (ColumnInfo column : table.getColumns()) groupColumns.add(column.getColumnName());
         String paramGroups = buildParamGroups(groupColumns);
         return modelBuild(new BatchModel(BatchKind.UPSERT, table.getTableName(), toggleColumns,
-            List.of(), null, idColumn.getColumnName(), null)).withParamGroups(paramGroups);
+            List.of(), null, idColumn.getColumnName(), null), call).withParamGroups(paramGroups);
     }
 
     // ------------------------------------------------------------------

@@ -87,57 +87,25 @@ public final class WrapperLocator {
      * T-M23.7：末尾追加 {@link #locateFromChainCall} 兜底——链中/链尾（eq/list 调用处）任意位置定位。
      */
     public static LocatedWrapper locateWithTable(PsiElement anchor, boolean resolveVariables) {
+        // Kotlin 文本检测不产出可生成 SQL 的链（无可靠表名与列/值实参），直接短路
+        String fileExtension = null;
+        if (anchor.getContainingFile() != null && anchor.getContainingFile().getVirtualFile() != null) {
+            fileExtension = anchor.getContainingFile().getVirtualFile().getExtension();
+        }
+        if ("kt".equals(fileExtension) || "kts".equals(fileExtension)) return null;
+
         PsiVariable variable = findWrapperVariable(anchor);
         if (variable != null) return buildChain(variable, resolveVariables);
         PsiNewExpression newExpr = findWrapperNewExpression(anchor);
         if (newExpr != null) return buildChainFromNew(newExpr, resolveVariables);
         PsiMethodCallExpression factoryCall = findWrapperFactoryCall(anchor);
         if (factoryCall != null) return buildChainFromFactory(factoryCall, resolveVariables);
-        LocatedWrapper fromChain = locateFromChainCall(anchor, resolveVariables);
-        if (fromChain != null) return fromChain;
-        // F-4：Kotlin 文件检测路径
-        return locateFromKotlin(anchor);
+        return locateFromChainCall(anchor, resolveVariables);
     }
 
     /** 1 参便利重载（Kotlin 默认参数 {@code resolveVariables = true}）。 */
     public static LocatedWrapper locateWithTable(PsiElement anchor) {
         return locateWithTable(anchor, true);
-    }
-
-    // ------------------------------------------------------------------
-    // F-4：Kotlin 文件检测路径
-    // ------------------------------------------------------------------
-
-    /**
-     * 从 Kotlin 文件中定位 Wrapper 链（F-4 MVP）。
-     *
-     * <p>当锚点位于 Kotlin 文件时，使用 {@link KtWrapperDetector} 按行扫描检测 Wrapper 链，
-     * 返回包含锚点偏移量的链。MVP 不解析实体类（table 为 null）。</p>
-     *
-     * <p>仅用户显式触发（快捷键/右键）时调用，无 M10 daemon 性能红线。</p>
-     */
-    private static LocatedWrapper locateFromKotlin(PsiElement anchor) {
-        PsiFile psiFile = anchor.getContainingFile();
-        if (psiFile == null) return null;
-        String fileExtension = "";
-        if (psiFile.getVirtualFile() != null && psiFile.getVirtualFile().getExtension() != null) {
-            fileExtension = psiFile.getVirtualFile().getExtension();
-        }
-        if (!"kt".equals(fileExtension) && !"kts".equals(fileExtension)) return null;
-
-        List<WrapperChain> chains = KtWrapperDetector.detect(psiFile);
-
-        // 找到包含锚点偏移量的链（MVP：按行匹配，检查锚点是否在该链所在行范围内）
-        WrapperChain chain = null;
-        for (WrapperChain c : chains) {
-            if (!c.getCalls().isEmpty() && c.getCalls().stream().anyMatch(call -> !call.getMethodName().isEmpty())) {
-                chain = c;
-                break;
-            }
-        }
-        if (chain == null && !chains.isEmpty()) chain = chains.get(0);
-
-        return chain != null ? new LocatedWrapper(chain, null, null) : null;
     }
 
     // ------------------------------------------------------------------

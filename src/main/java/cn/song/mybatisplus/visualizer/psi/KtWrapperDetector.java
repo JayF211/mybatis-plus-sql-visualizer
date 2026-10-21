@@ -144,6 +144,58 @@ public final class KtWrapperDetector {
     }
 
     /**
+     * 主动快捷入口的精确降级判据：只认光标所在行，避免文件内别处存在 Kotlin Wrapper 时误提示。
+     * 这里仍不承诺生成 SQL；命中只表示"用户确实压在当前 MVP 能识别的 Kotlin Wrapper 链上"。
+     */
+    public static boolean detectAt(PsiFile psiFile, int offset) {
+        String text = kotlinTextOrNull(psiFile);
+        if (text == null) return false;
+        if (offset < 0 || offset > text.length()) return false;
+        int lineStart = offset <= 0 ? 0 : nextLineStart(text, text.lastIndexOf('\n', offset - 1));
+        int nl = text.indexOf('\n', Math.min(offset, text.length()));
+        int lineEnd = nl < 0 ? text.length() : nl;
+        return isWrapperLine(text.substring(lineStart, lineEnd));
+    }
+
+    /** 选择区主动预览同款判据；只检查与选区相交的行，不把文件其他位置的链冒充本次命中。 */
+    public static boolean detectInRange(PsiFile psiFile, int startOffset, int endOffset) {
+        String text = kotlinTextOrNull(psiFile);
+        if (text == null) return false;
+        int start = Math.max(0, Math.min(startOffset, text.length()));
+        int end = Math.max(start, Math.min(endOffset, text.length()));
+        int lineStart = start <= 0 ? 0 : nextLineStart(text, text.lastIndexOf('\n', start - 1));
+        int nl = text.indexOf('\n', end);
+        int lineEnd = nl < 0 ? text.length() : nl;
+        String region = text.substring(lineStart, lineEnd);
+        for (String line : region.split("\n", -1)) {
+            if (isWrapperLine(line)) return true;
+        }
+        return false;
+    }
+
+    /** Kotlin 文件校验 + 取文本（非 kt/kts 返回 null）。 */
+    private static String kotlinTextOrNull(PsiFile psiFile) {
+        String extension = psiFile.getVirtualFile() != null ? psiFile.getVirtualFile().getExtension() : null;
+        if (!"kt".equals(extension) && !"kts".equals(extension)) return null;
+        return psiFile.getText();
+    }
+
+    /** 行是否为 MVP 能识别的 Kotlin Wrapper 链（扩展工厂链或构造链，且能提取出调用）。 */
+    private static boolean isWrapperLine(String line) {
+        String trimmed = line.trim();
+        if (trimmed.isEmpty() || trimmed.startsWith("//")) return false;
+        WrapperType type = detectLineExtensionChain(trimmed);
+        if (type == null) type = detectLineConstructorChain(trimmed);
+        if (type == null) return false;
+        return !extractChainCalls(trimmed).isEmpty();
+    }
+
+    /** lastIndexOf 结果（-1）归一为行首 0，行起点 = 换行符后一位。 */
+    private static int nextLineStart(String text, int lastNl) {
+        return lastNl < 0 ? 0 : lastNl + 1;
+    }
+
+    /**
      * 检测单行是否包含 ktQuery()/ktUpdate() 扩展函数链起点。
      * 匹配模式：{@code xxx.ktQuery()...} 或 {@code xxx.ktUpdate()...}
      */
