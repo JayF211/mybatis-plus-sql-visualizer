@@ -229,7 +229,9 @@ internal fun SqlPreviewPanel.rebuildLeftPanel(result: PreviewResult) {
         // showResult 在构建控件前召回普通参数；模拟值须等新预览复位、输入框建好后，
         // 才从参数预设缓存恢复，不从 SQL 历史回落恢复。
         if (paramHistoryCache.isCurrentGeneration()) {
-            historyCacheKey()?.let { paramHistoryCache.recall(it) }?.forEach { (key, value) ->
+            historyCacheKey()
+                ?.let { paramHistoryCache.recall(it) ?: paramHistoryCache.recallRecent(it) }
+                ?.forEach { (key, value) ->
                 if (key.startsWith(FieldFillSimulation.SNAPSHOT_PREFIX)) {
                     fieldFillFields[key.removePrefix(FieldFillSimulation.SNAPSHOT_PREFIX)]?.text = value
                 }
@@ -370,8 +372,13 @@ internal fun SqlPreviewPanel.syncSchemeCombo() {
         val model = DefaultComboBoxModel<String>()
         model.addElement(ParamHistoryCache.DEFAULT_SCHEME)
         paramHistoryCache.schemeNamesFor(key).forEach { model.addElement(it) }
-        combo.model = model
         val active = paramHistoryCache.activeSchemeFor(key)
+        // T-PresetMethodBinding：同一方法改了 SQL 后，该方案在新键下没有快照（靠最近键指针回落），
+        // 名单按键过滤会漏掉它，而激活态仍是它——补进名单，避免「下拉看不到却显示选中」。
+        if (active != ParamHistoryCache.DEFAULT_SCHEME && model.getIndexOf(active) < 0) {
+            model.addElement(active)
+        }
+        combo.model = model
         combo.selectedItem = active
         lastShownActiveScheme = active
     } finally {
@@ -1547,7 +1554,9 @@ internal fun SqlPreviewPanel.historyCacheKey(): String? {
     // 缺陷②修复：优先用「注入前」稳定文本当指纹种子——逻辑删除/多租户等拦截器模拟会改写
     // result.sql，直接拿它算键会让开关一切换就召回 miss（已回填参数退回占位符）。
     val rawSql = result.historyFingerprintSeed ?: result.sql
-    return paramHistoryCache.computeKey(tableName, rawSql)
+    // T-PresetMethodScope：追加声明作用域——同一段 SQL 写在两个方法里不再共用预设与参数历史；
+    // 无方法上下文（日志/历史双击）保持旧键。
+    return paramHistoryCache.computeKey(tableName, rawSql, result.originScopeKey.ifEmpty { null })
 }
 
 /**
@@ -1563,19 +1572,48 @@ internal fun SqlPreviewPanel.historyCacheKey(): String? {
 
 
 
+/**
+ * T-PresetMethodBinding：当前预览实际存在的参数来源（回落白名单——只回填这些行）。
+ *
+ * 为什么不用 `paramValues.keys`：方案切换路径先 [clearParamStateForSchemeSwitch] 清场，
+ * 到召回时 paramValues 已空，白名单会把所有参数都挡掉。这里从结果模型取「当前 SQL 有哪些来源」。
+ */
+internal fun SqlPreviewPanel.currentParamSources(): Set<String> {
+    val result = current ?: return emptySet()
+    val sources = linkedSetOf<String>()
+    sources += result.unresolvedParams
+    result.previewModel?.conditionViews.orEmpty().forEach { view ->
+        sources += view.valueSources
+        view.valueSource?.let(sources::add)
+    }
+    result.batchModel?.let { model ->
+        model.toggleColumns.forEach { sources += it.source }
+        model.fixedColumns.forEach { sources += it.source }
+    }
+    result.xmlModel?.let { model -> model.forEachViews.forEach { sources += it.collectionExpr } }
+    return sources
+}
+
 internal fun SqlPreviewPanel.recallFromHistory() {
     val key = historyCacheKey() ?: return
     val cached = paramHistoryCache.recall(key)
-    val history = cached ?: historySnapshotFallback(key) ?: return
+    // T-PresetMethodBinding：同一方法里改了 SQL（键的 SQL 指纹段变化）时，精确键与旧键都未命中，
+    // 按「该方案在该方法下最近一次保存」回落。回落只恢复参数值与 FieldFill——结构态（勾选/foreach）
+    // 不参与，见下方分支；且只回填当前面板存在的 source（白名单），防止旧参数名越积越多。
+    val recovered = if (cached == null) paramHistoryCache.recallRecent(key) else null
+    val history = cached ?: recovered ?: historySnapshotFallback(key) ?: return
     if (history.isEmpty()) return
+    // 回落来源只回填当前预览真实存在的参数（不能用 paramValues.keys：方案切换前刚被清场）
+    val allowedSources = if (recovered != null) currentParamSources() else emptySet()
     var applied = 0
     var stateRestored = false
     history.forEach { (source, value) ->
         when {
             source.startsWith(FieldFillSimulation.SNAPSHOT_PREFIX) -> {
-                // SQL 历史快照无权恢复模拟值；只接受当前代际的参数预设缓存。
+                // SQL 历史快照无权恢复模拟值；只接受当前代际的参数预设缓存（精确或同方法回落）
                 val fieldSource = source.removePrefix(FieldFillSimulation.SNAPSHOT_PREFIX)
-                if (cached != null && fieldFillPreview === current && paramHistoryCache.isCurrentGeneration() &&
+                if ((cached != null || recovered != null) && fieldFillPreview === current &&
+                    paramHistoryCache.isCurrentGeneration() &&
                     fieldSource in fieldFillFields && fieldFillValues[fieldSource].isNullOrEmpty()) {
                     fieldFillValues[fieldSource] = value
                     fieldFillFields[fieldSource]?.text = value
@@ -1583,31 +1621,42 @@ internal fun SqlPreviewPanel.recallFromHistory() {
                 }
             }
             source.startsWith(SNAPSHOT_CHK) -> {
-                val id = source.removePrefix(SNAPSHOT_CHK)
-                if (value == "1") enabledIds.add(id) else enabledIds.remove(id)
-                stateRestored = true
-            }
-            source.startsWith(SNAPSHOT_FNULL) -> {
-                val expr = source.removePrefix(SNAPSHOT_FNULL)
-                if (value == "1") xmlForEachNulls.add(expr) else xmlForEachNulls.remove(expr)
-                stateRestored = true
-            }
-            source.startsWith(SNAPSHOT_FEV) -> {
-                val expr = source.removePrefix(SNAPSHOT_FEV)
-                val values = value.split(",").map { it.trim() }.filter { it.isNotEmpty() }
-                if (values.isNotEmpty()) {
-                    xmlForEachValues[expr] = values
-                    // 首次召回尚无字段监听，必须在渲染映射前同步展开长度，不能依赖文本变更补齐。
-                    xmlForEachCounts[expr] = values.size
-                    xmlForEachValueFields.firstOrNull { it.first == expr }?.second?.text = value
+                // T-PresetMethodBinding：跨 SQL 回落不恢复勾选态——条件 id 是按解析序递增的序号，
+                // SQL 增删条件后整体移位，套用旧快照会把勾选落到别的条件上（错位比丢失更难排查）。
+                if (recovered == null) {
+                    val id = source.removePrefix(SNAPSHOT_CHK)
+                    if (value == "1") enabledIds.add(id) else enabledIds.remove(id)
                     stateRestored = true
                 }
             }
-            // 用户已输入值优先（不覆盖）
-            else -> if (paramValues[source].isNullOrEmpty()) {
-                paramValues[source] = value
-                syncParamFieldText(source, value)
-                applied++
+            source.startsWith(SNAPSHOT_FNULL) -> {
+                if (recovered == null) {
+                    val expr = source.removePrefix(SNAPSHOT_FNULL)
+                    if (value == "1") xmlForEachNulls.add(expr) else xmlForEachNulls.remove(expr)
+                    stateRestored = true
+                }
+            }
+            source.startsWith(SNAPSHOT_FEV) -> {
+                if (recovered == null) {
+                    val expr = source.removePrefix(SNAPSHOT_FEV)
+                    val values = value.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+                    if (values.isNotEmpty()) {
+                        xmlForEachValues[expr] = values
+                        // 首次召回尚无字段监听，必须在渲染映射前同步展开长度，不能依赖文本变更补齐。
+                        xmlForEachCounts[expr] = values.size
+                        xmlForEachValueFields.firstOrNull { it.first == expr }?.second?.text = value
+                        stateRestored = true
+                    }
+                }
+            }
+            // 用户已输入值优先（不覆盖）；回落来源只认当前预览存在的参数名
+            else -> {
+                if (recovered != null && source !in allowedSources) return@forEach
+                if (paramValues[source].isNullOrEmpty()) {
+                    paramValues[source] = value
+                    syncParamFieldText(source, value)
+                    applied++
+                }
             }
         }
     }

@@ -201,9 +201,14 @@ class SqlPreviewPanelHistorySnapshotFallbackTest : BasePlatformTestCase() {
             source.contains("SqlHistoryManager.getInstance().updateNewestParamSnapshot"),
         )
         assertTrue(
-            "recall 链必须把回落源接进未命中分支",
+            "recall 链必须把回落源接进未命中分支（精确缓存 → 同方法最近键 → 历史快照）",
             source.contains("val cached = paramHistoryCache.recall(key)") &&
-                source.contains("val history = cached ?: historySnapshotFallback(key) ?: return"),
+                source.contains("val history = cached ?: recovered ?: historySnapshotFallback(key) ?: return"),
+        )
+        assertTrue(
+            "T-PresetMethodBinding：同方法最近键回落必须存在且排在历史快照之前",
+            source.indexOf("paramHistoryCache.recallRecent(key)") in 0 until
+                source.indexOf("historySnapshotFallback(key) ?: return"),
         )
         assertTrue(
             "flush 链必须调用历史快照回写",

@@ -1243,6 +1243,8 @@ internal fun SqlPreviewPanel.captureExplainPlanHistory(
             sql = originalPreview.sql, compactSql = originalPreview.compactSql,
             timestamp = System.currentTimeMillis(), tableName = originalPreview.tableName.orEmpty(),
             projectIdentity = planKey.projectIdentity,
+            // T-PresetMethodScope：补建条目沿用当前预览的作用域，参数快照回落口径一致。
+            originScopeKey = originalPreview.originScopeKey,
         )).id
     }
     return explainPlanHistorySession.begin(
