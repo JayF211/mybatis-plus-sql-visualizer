@@ -1515,8 +1515,8 @@ internal fun SqlPreviewPanel.promptDataSourceThenRetryStructured(
 /** 绑定等待轮询间隔（EDT；只读判定，不碰 JDBC）。 */
 private const val EXPLAIN_DS_BIND_POLL_MS = 250
 
-/** 轮询硬上限，只防定时器泄漏；正常收口由准备链终结（已绑定或取消）驱动。 */
-private const val EXPLAIN_DS_BIND_MAX_TICKS = 480
+/** 轮询硬上限：120 拍 × 250ms = 30s（T-PerfSweep26-06 由 480 拍/2 分钟收紧）；只防定时器泄漏，正常收口由准备链终结（已绑定或取消）驱动。 */
+private const val EXPLAIN_DS_BIND_MAX_TICKS = 120
 
 /**
  * T-UI030：等待既有/新建准备链把数据源绑定落地，然后重试一次结构化 EXPLAIN。
