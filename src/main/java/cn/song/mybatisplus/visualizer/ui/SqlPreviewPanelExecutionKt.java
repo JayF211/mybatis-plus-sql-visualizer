@@ -2,15 +2,26 @@
 // （T-M53-II 2026-10-10：SqlPreviewPanel 的「预览执行链、EXPLAIN 双通道与控制台嵌入」内聚成员，
 //   以同包扩展函数形式搬出——方法体逐字符搬运，被触及的私有成员已按需放宽为 internal）
 // 扩展函数 fun SqlPreviewPanel.foo(...) → public static R foo(SqlPreviewPanel receiver, ...)。
+// 自 master 同文件 R36/R42/R91/T-PreviewSideQuery/UI023/UI025/R46/O-145/T-UI030/T-DialectGateUx/
+// T-DialectStatusLiveRefresh/T-DmlImpactProminence/R61/R90/P3a 增量移植。
 package cn.song.mybatisplus.visualizer.ui;
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings;
 import cn.song.mybatisplus.visualizer.execute.ConsoleEmbedMode;
+import cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate;
 import cn.song.mybatisplus.visualizer.execute.ExecutionErrorInfo;
+import cn.song.mybatisplus.visualizer.execute.ExecutionSubmission;
 import cn.song.mybatisplus.visualizer.execute.SqlExecutor;
 import cn.song.mybatisplus.visualizer.execute.SqlTypeClassifier;
+import cn.song.mybatisplus.visualizer.history.ExplainPlanHistorySession;
+import cn.song.mybatisplus.visualizer.history.ExplainPlanKey;
+import cn.song.mybatisplus.visualizer.history.ExplainPlanSnapshot;
+import cn.song.mybatisplus.visualizer.history.ExplainPlanSaveResult;
+import cn.song.mybatisplus.visualizer.history.SqlHistoryManager;
 import cn.song.mybatisplus.visualizer.log.SqlExportFormat;
 import cn.song.mybatisplus.visualizer.model.PreviewResult;
+import cn.song.mybatisplus.visualizer.sql.DialectDecisionEngine;
+import cn.song.mybatisplus.visualizer.sql.DialectRegistry;
 import cn.song.mybatisplus.visualizer.sql.ExplainGate;
 import cn.song.mybatisplus.visualizer.sql.ExplainSupport;
 import cn.song.mybatisplus.visualizer.sql.MySqlDialect;
@@ -23,6 +34,7 @@ import cn.song.mybatisplus.visualizer.util.EditorCommentShortcuts;
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
 import cn.song.mybatisplus.visualizer.xml.XmlPreviewModel;
 import com.intellij.notification.Notification;
+import com.intellij.notification.NotificationAction;
 import com.intellij.notification.NotificationGroupManager;
 import com.intellij.notification.NotificationType;
 import com.intellij.openapi.application.ApplicationManager;
@@ -33,6 +45,7 @@ import com.intellij.openapi.editor.Editor;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.ui.Messages;
 import com.intellij.openapi.util.Disposer;
+import com.intellij.ui.JBColor;
 import com.intellij.util.ui.JBUI;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -47,6 +60,7 @@ import java.awt.event.HierarchyEvent;
 import java.awt.event.HierarchyListener;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
 /**
@@ -101,6 +115,276 @@ public final class SqlPreviewPanelExecutionKt {
     }
 
     /**
+     * R36（V46 定案）：回放脚本导出——当前预览（或经历史 recall 回落的）SQL（参数已填回）导出为
+     * <b>可直接执行的单个 {@code .sql}</b>，方言适配取当前方言（语句本体已是生成链渲染产物，不改写），
+     * 事务包裹可选（勾选则 {@code <方言显式事务开始语句>; … COMMIT;}；方言无该语句时选项禁用并说明）。
+     *
+     * <p>与 O-91 {@link #exportPortableSql} 的关系：入口/写盘/通知三处<b>照抄同款</b>（仓纪律「新增 UI 交互
+     * 须照抄既有同类」），产物形态不同——O-91 是 CSV/TSV/TXT 行集，本件是单个 {@code .sql}。
+     * 脱敏同 R60 口径（{@code displayMaskEnabled}，投影级）：开启时脚本字面量打码并在注释头标 {@code masked}。</p>
+     */
+    public static void exportReplayScript(@NotNull SqlPreviewPanel p) {
+        String sql = currentEditorSql(p);
+        if (sql == null || sql.isBlank()) return;
+        cn.song.mybatisplus.visualizer.sql.Dialect dialect =
+                p.current != null && p.current.getEffectiveDialect() != null
+                        ? p.current.getEffectiveDialect()
+                        : MySqlDialect.INSTANCE;
+        ReplayExportDialog options = new ReplayExportDialog(p.project, dialect.getName(), dialect.transactionBegin());
+        if (!options.showAndGet()) return;
+        boolean mask = PluginSettings.getInstance().getState().getDisplayMaskEnabled();
+        cn.song.mybatisplus.visualizer.log.ReplayScriptExport.Plan plan =
+                cn.song.mybatisplus.visualizer.log.ReplayScriptExport.plan(sql, dialect, options.isWrapTransaction());
+        if (plan == null) return;
+        com.intellij.openapi.fileChooser.FileSaverDescriptor descriptor =
+                new com.intellij.openapi.fileChooser.FileSaverDescriptor(
+                        MpSqlVisualizerBundle.message("replay.export.title"),
+                        "SQL",
+                        cn.song.mybatisplus.visualizer.log.ReplayScriptExport.EXT);
+        com.intellij.openapi.fileChooser.FileSaverDialog dialog =
+                com.intellij.openapi.fileChooser.FileChooserFactory.getInstance()
+                        .createSaveFileDialog(descriptor, p.project);
+        com.intellij.openapi.vfs.VirtualFileWrapper saved =
+                dialog.save((com.intellij.openapi.vfs.VirtualFile) null, "replay.sql");
+        if (saved == null) return;
+        java.io.File target = saved.getFile();
+        final cn.song.mybatisplus.visualizer.log.ReplayScriptExport.Plan planF = plan;
+        final java.io.File targetF = target;
+        final Project projectF = p.project;
+        ApplicationManager.getApplication().executeOnPooledThread(() -> {
+            try {
+                cn.song.mybatisplus.visualizer.log.SqlExportService.exportToFile(
+                        targetF,
+                        cn.song.mybatisplus.visualizer.log.ReplayScriptExport.render(
+                                planF,
+                                mask,
+                                cn.song.mybatisplus.visualizer.log.SqlExportService.formatTime(System.currentTimeMillis())));
+                NotificationGroupManager.getInstance()
+                        .getNotificationGroup(SqlPreviewPanel.NOTIFICATION_GROUP_ID)
+                        .createNotification(
+                                MpSqlVisualizerBundle.message("log.history.export.done",
+                                        planF.statements().size(), targetF.getAbsolutePath()),
+                                NotificationType.INFORMATION)
+                        .notify(projectF);
+            } catch (Throwable failure) {
+                NotificationGroupManager.getInstance()
+                        .getNotificationGroup(SqlPreviewPanel.NOTIFICATION_GROUP_ID)
+                        .createNotification(
+                                MpSqlVisualizerBundle.message("log.history.export.failed",
+                                        failure.getMessage() != null ? failure.getMessage() : ""),
+                                NotificationType.ERROR)
+                        .notify(projectF);
+            }
+        });
+    }
+
+    /** T-PreviewSideQuery P1 测试缝：headless 无原生控制台绑定；生产为 null 走真链。 */
+    public static volatile java.util.function.Supplier<Object> dmlImpactTargetForTest = null;
+
+    /** T-PreviewSideQuery P1 测试缝：数据源选择器绑定调用（只绑定不执行）。 */
+    public interface DmlImpactPromptForTest {
+        void prompt(Project project, String sql, Consumer<String> onError);
+    }
+
+    public static volatile DmlImpactPromptForTest dmlImpactPromptForTest = null;
+
+    /** T-PreviewSideQuery P1 测试缝：绑定等待（生产走 awaitDataSourceBoundThen）。 */
+    public interface AwaitBindForTest {
+        void await(Project project, int generation, Runnable onBound, Runnable onGiveUp);
+    }
+
+    public static volatile AwaitBindForTest dmlImpactAwaitBindForTest = null;
+
+    /** T-PreviewSideQuery P2 测试缝：headless 无原生控制台绑定；生产为 null 走真链。 */
+    public static volatile java.util.function.Supplier<Object> explainTargetForTest = null;
+
+    /** T-PreviewSideQuery P2 测试缝：结构化通道的绑定数据源。 */
+    public static volatile java.util.function.Supplier<Object> explainBoundDsForTest = null;
+
+    /** T-PreviewSideQuery P2 测试缝：headless 下 Database 插件可用性。 */
+    public static volatile java.util.function.Supplier<Boolean> explainDatabaseAvailableForTest = null;
+
+    /**
+     * R42：DML 影响面预演。
+     *
+     * <p>把当前 UPDATE/DELETE 的 WHERE 谓词改写为等价只读 {@code COUNT(*)} 试算语句（改写边界与
+     * 成本防护见 {@code cn.song.mybatisplus.visualizer.execute.DmlImpactEstimator}），经<b>只读旁路
+     * 查询</b>（{@link PreviewSideQuery}）对当前绑定数据源执行——不进入共享控制台、不替换预览编辑器。
+     * 不适用形态（JOIN/多表/无 WHERE/多语句）走轻通知如实说明原因，不执行。</p>
+     */
+    public static void estimateDmlImpact(@NotNull SqlPreviewPanel p) {
+        estimateDmlImpact(p, true);
+    }
+
+    public static void estimateDmlImpact(@NotNull SqlPreviewPanel p, boolean allowDataSourcePrompt) {
+        Project proj = p.project;
+        if (proj == null) return;
+        String sql = currentEditorSql(p);
+        if (sql == null) return;
+        cn.song.mybatisplus.visualizer.sql.Dialect dialect =
+                p.current != null && p.current.getEffectiveDialect() != null
+                        ? p.current.getEffectiveDialect()
+                        : MySqlDialect.INSTANCE;
+        cn.song.mybatisplus.visualizer.execute.DmlImpactEstimator.Plan plan =
+                cn.song.mybatisplus.visualizer.execute.DmlImpactEstimator.plan(sql, dialect);
+        if (plan instanceof cn.song.mybatisplus.visualizer.execute.DmlImpactEstimator.NotApplicable notApplicable) {
+            notifyDmlImpact(p, proj,
+                    MpSqlVisualizerBundle.message("dml.impact.notApplicable.title"),
+                    MpSqlVisualizerBundle.message(notApplicable.reasonKey()));
+            // 覆盖上一次的内联结果，避免 SQL 已不可试算时仍显示旧行数。
+            p.showDmlImpactResult(MpSqlVisualizerBundle.message(notApplicable.reasonKey()), true, null);
+            return;
+        }
+        if (!(plan instanceof cn.song.mybatisplus.visualizer.execute.DmlImpactEstimator.Applicable applicable)) {
+            return;
+        }
+        cn.song.mybatisplus.visualizer.execute.DmlImpactEstimator.Probe probe = applicable.probe();
+        ExecutionDialectGate.Request dialectGateRequest = new ExecutionDialectGate.Request(
+                p.executionDialectRenderMode,
+                dialect.getName(),
+                ExecutionDialectGate.Intent.QUERY,
+                // COUNT 试算按当前方言生成，目标不一致时 fail-closed；不把另一语法族的 COUNT 送进目标库。
+                false,
+                true,
+                null);
+        String capLine = probe.rowCap() != null
+                ? MpSqlVisualizerBundle.message("dml.impact.probe.capped", probe.rowCap())
+                : MpSqlVisualizerBundle.message("dml.impact.probe.uncapped");
+        String probeBody = MpSqlVisualizerBundle.message(
+                "dml.impact.probe.body",
+                probe.probeSql(),
+                probe.targetTable(),
+                capLine);
+        // T-DmlImpactProminence（用户真机反馈）：不再发「试算语句/目标表」预演通知——
+        // 气泡讲的是探针而非结果，与内联/横幅结果并存时既冗余又易被误读。
+        // 探针详情保留在结果横幅的 tooltip（probeBody）里，需要时悬停可见。
+        Object target;
+        if (dmlImpactTargetForTest != null) {
+            target = dmlImpactTargetForTest.get();
+        } else {
+            try {
+                target = cn.song.mybatisplus.visualizer.execute.DataSourceSelector.boundConsoleDataSource();
+            } catch (Throwable t) {
+                target = null;
+            }
+        }
+        if (target == null) {
+            if (allowDataSourcePrompt) {
+                promptDataSourceThenRetryImpact(p, proj, sql);
+            } else {
+                p.showDmlImpactResult(MpSqlVisualizerBundle.message("dml.impact.noDataSource"), true, null);
+            }
+            return;
+        }
+        p.showDmlImpactResult(MpSqlVisualizerBundle.message("dml.impact.running"), false, null);
+        PreviewSideQuery.run(proj, target, probe.probeSql(), dialectGateRequest, true, (result -> {
+            if (result instanceof PreviewSideQuery.Scalar scalar) {
+                Long cap = probe.rowCap();
+                String text = cap != null
+                        ? MpSqlVisualizerBundle.message("dml.impact.inline.capped",
+                                Math.min(scalar.value(), cap))
+                        : MpSqlVisualizerBundle.message("dml.impact.inline", scalar.value());
+                p.showDmlImpactResult(text, false, probeBody);
+            } else if (result instanceof PreviewSideQuery.Blocked blocked) {
+                p.showDmlImpactResult(blocked.message(), true, null);
+            } else if (result instanceof PreviewSideQuery.Failed failed) {
+                p.showDmlImpactResult(
+                        MpSqlVisualizerBundle.message("dml.impact.inline.error", failed.message()), true, null);
+            } else if (result instanceof PreviewSideQuery.Table) {
+                p.showDmlImpactResult(
+                        MpSqlVisualizerBundle.message("dml.impact.inline.error", "unexpected tabular result"),
+                        true, null);
+            }
+        }));
+    }
+
+    /**
+     * T-PreviewSideQuery P1：无绑定数据源时复用既有数据源选择器（只绑定不执行），
+     * 绑定落地后重试一次预估；取消/超时只就地提示，不再二次弹选择器。
+     */
+    public static void promptDataSourceThenRetryImpact(@NotNull SqlPreviewPanel p,
+                                                       @NotNull Project proj, @NotNull String previewSql) {
+        p.showDmlImpactResult(MpSqlVisualizerBundle.message("dml.impact.binding"), false, null);
+        int generation = p.explainStructuredGeneration;
+        AtomicBoolean errorShown = new AtomicBoolean(false);
+        if (cn.song.mybatisplus.visualizer.execute.ExplainFallbackGuidance.shouldPromptForDataSource(
+                cn.song.mybatisplus.visualizer.execute.DataSourceSelector.isPrepareInFlight())) {
+            // executeAfterPrepare=false：只准备/绑定，不提交任何语句（DML/DDL 零自动执行）。
+            DmlImpactPromptForTest promptForTest = dmlImpactPromptForTest;
+            if (promptForTest != null) {
+                promptForTest.prompt(proj, previewSql, message -> {
+                    errorShown.set(true);
+                    p.showDmlImpactResult(message, true, null);
+                });
+            } else {
+                cn.song.mybatisplus.visualizer.execute.DataSourceSelector.prepareConsole(
+                        proj, previewSql, null, null,
+                        message -> {
+                            errorShown.set(true);
+                            p.showDmlImpactResult(message, true, null);
+                        },
+                        null, null, null, false);
+            }
+        }
+        AwaitBindForTest awaitForTest = dmlImpactAwaitBindForTest;
+        if (awaitForTest != null) {
+            awaitForTest.await(proj, generation,
+                    () -> estimateDmlImpact(p, false),
+                    () -> {
+                        if (!errorShown.get()) {
+                            p.showDmlImpactResult(MpSqlVisualizerBundle.message("dml.impact.noDataSource"), true, null);
+                        }
+                    });
+        } else {
+            awaitDataSourceBoundThen(p, proj, generation,
+                    () -> estimateDmlImpact(p, false),
+                    () -> {
+                        if (!errorShown.get()) {
+                            p.showDmlImpactResult(MpSqlVisualizerBundle.message("dml.impact.noDataSource"), true, null);
+                        }
+                    });
+        }
+    }
+
+    /** R42：影响面预演的轻通知（非模态；单测模式不弹）。 */
+    private static void notifyDmlImpact(@NotNull SqlPreviewPanel p, @NotNull Project proj,
+                                        @NotNull String title, @NotNull String body) {
+        if (ApplicationManager.getApplication().isUnitTestMode) return;
+        try {
+            new Notification(SqlPreviewPanel.NOTIFICATION_GROUP_ID, title, body,
+                    NotificationType.INFORMATION).notify(proj);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** UI023：仅观察最终通知对象，不替代校验、渲染或执行分支。 */
+    public static volatile Consumer<Notification> schemaNotificationForTest = null;
+
+    /**
+     * R46：查询链的未识别对象轻通知（非模态、不阻断执行——与 DML 确认弹窗同源同文案）。
+     * 无发现或单测模式不弹（弹窗/通知克制红线；真机才提示）。
+     */
+    private static void notifySchemaIssues(
+            @NotNull SqlPreviewPanel p,
+            @NotNull Project proj,
+            @NotNull List<cn.song.mybatisplus.visualizer.sql.schema.SchemaValidator.Issue> issues) {
+        String body = cn.song.mybatisplus.visualizer.execute.SchemaValidationGate.renderNotification(issues);
+        if (body == null) return;
+        if (ApplicationManager.getApplication().isUnitTestMode && schemaNotificationForTest == null) return;
+        try {
+            Notification notification = new Notification(
+                    SqlPreviewPanel.NOTIFICATION_GROUP_ID,
+                    MpSqlVisualizerBundle.message("schema.check.notification.title"),
+                    body,
+                    NotificationType.WARNING);
+            Consumer<Notification> observer = schemaNotificationForTest;
+            if (observer != null) observer.accept(notification);
+            else notification.notify(proj);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /**
      * O-91（缩范围首版）：当前预览的 CRUD SQL + 回滚链产物串成可移植脚本导出。
      *
      * <p>语句本体不改写（生成侧方言降级链已保证「标准语法优先」），导出只串联＋标注：
@@ -116,8 +400,8 @@ public final class SqlPreviewPanelExecutionKt {
         String sql = SqlCommentStripper.strip(raw);
         if (sql.isBlank()) return;
         cn.song.mybatisplus.visualizer.sql.Dialect dialect =
-                (p.current != null && p.current.getPreviewModel() != null)
-                        ? p.current.getPreviewModel().getDialect()
+                (p.current != null && p.current.getEffectiveDialect() != null)
+                        ? p.current.getEffectiveDialect()
                         : MySqlDialect.INSTANCE;
         List<cn.song.mybatisplus.visualizer.log.PortableSqlRow> rows =
                 cn.song.mybatisplus.visualizer.log.PortableSqlExport.collectRows(
@@ -143,7 +427,12 @@ public final class SqlPreviewPanelExecutionKt {
         ApplicationManager.getApplication().executeOnPooledThread(() -> {
             try {
                 cn.song.mybatisplus.visualizer.log.SqlExportService.exportToFile(
-                        target, cn.song.mybatisplus.visualizer.log.SqlExportService.formatPortable(rowsFinal, formatFinal));
+                        target,
+                        // R60（T-LaneB D96）：可移植导出同脱敏口径（displayMaskEnabled，投影级）
+                        cn.song.mybatisplus.visualizer.log.SqlExportService.formatPortable(
+                                rowsFinal,
+                                formatFinal,
+                                PluginSettings.getInstance().getState().getDisplayMaskEnabled()));
                 NotificationGroupManager.getInstance()
                         .getNotificationGroup(SqlPreviewPanel.NOTIFICATION_GROUP_ID)
                         .createNotification(
@@ -176,6 +465,207 @@ public final class SqlPreviewPanelExecutionKt {
         if (idx == 0) return SqlExportFormat.CSV;
         if (idx == 1) return SqlExportFormat.TSV;
         return SqlExportFormat.TXT;
+    }
+
+    // TODO(ui-sync)：master 的 copyAsAiContext（R91 AI 上下文复制）待 util/AiContextExport Java 化后补译
+    //  （AiContextExport.kt 属 util 批次，作业树暂缺；captureAiContextPlan 已在 EXPLAIN 链落地）。
+
+    public static ExecutionDialectGate.Request executionDialectGateRequest(
+            @NotNull SqlPreviewPanel p, @NotNull ExecutionDialectGate.Intent intent) {
+        PreviewResult result = p.current;
+        String currentText = currentEditorSql(p);
+        boolean untouched = currentText != null && currentText.equals(p.lastRenderedSql);
+        // 只有模型/批量（CRUD）载体能按新方言从结构重新生成；XML/纯文本与分页后处理缺重建载体，
+        // 宁可报 RERENDER_UNAVAILABLE，也不做字符串替换冒充无损。
+        boolean canRerender = result != null && result.getXmlModel() == null
+                && result.getPaginationLimitLine() == null
+                && (result.getPreviewModel() != null || result.getBatchModel() != null);
+        return new ExecutionDialectGate.Request(
+                p.executionDialectRenderMode,
+                result != null && result.getEffectiveDialect() != null ? result.getEffectiveDialect().getName() : null,
+                intent,
+                canRerender,
+                untouched,
+                p.sourceModuleKey);
+    }
+
+    public static void onExecutionDialectGate(
+            @NotNull SqlPreviewPanel p, @NotNull ExecutionDialectGate.Verdict verdict) {
+        switch (verdict.status()) {
+            case MATCH:
+            case TARGET_UNKNOWN_QUERY_CONFIRM:
+            case RENDER_UNKNOWN_QUERY_CONFIRM:
+                break;
+            case AUTO_RERENDER_REQUIRED -> {
+                String target = verdict.targetDialectName();
+                if (target != null && rerenderForExecutionTarget(p, target)) {
+                    p.resultPanel.showStatus(cn.song.mybatisplus.visualizer.execute.DataSourceSelector.dialectGateMessage(verdict));
+                } else {
+                    showDialectGateError(p, new ExecutionDialectGate.Verdict(
+                            ExecutionDialectGate.Status.RERENDER_UNAVAILABLE,
+                            verdict.renderedDialectName(), verdict.targetDialectName()));
+                }
+            }
+            // T-DialectGateUx：方言不匹配的两态给就地出口（切数据源 / 打开方言设置），
+            // 其余阻断（目标未知、渲染未知）没有可直接跳转的设置面，保持纯文案。
+            case MANUAL_CONFLICT, RERENDER_UNAVAILABLE -> showDialectGateError(p, verdict);
+            default -> p.resultPanel.showError(
+                    cn.song.mybatisplus.visualizer.execute.DataSourceSelector.dialectGateMessage(verdict));
+        }
+    }
+
+    /**
+     * T-DialectGateUx：阻断态错误 + 两个就地出口。
+     *
+     * <ul>
+     *  <li>「切换数据源」→ {@link #executeSql} 带 forceChoose 重开选择器（跳过已准备会话）；</li>
+     *  <li>「打开 SQL 方言设置」→ 平台设置页（EP id = "SQL Dialects"，按 id 取避免整棵设置树实例化）。</li>
+     * </ul>
+     *
+     * <p>文案只解释原因，动作直接通向修复点；用户不必自己翻设置或文档。</p>
+     */
+    public static void showDialectGateError(@NotNull SqlPreviewPanel p, @NotNull ExecutionDialectGate.Verdict verdict) {
+        Project proj = p.project;
+        String message = cn.song.mybatisplus.visualizer.execute.DataSourceSelector.dialectGateMessage(verdict);
+        if (proj == null) {
+            p.resultPanel.showError(message);
+            return;
+        }
+        boolean settingsAvailable;
+        try {
+            settingsAvailable = findSqlDialectConfigurable(proj) != null;
+        } catch (Throwable t) {
+            settingsAvailable = false;
+        }
+        // T-DialectGateUx：闸门在**同一次调用栈**里还会经旧 onError 通道再投一次纯文案
+        // （DataSourceSelector.allowDialectGate 先 onDialectGate 再 onError），后者会把刚挂上的
+        // 动作清掉（沙盒实证：红条只有复制、没有两个入口）。把带动作的最终呈现放到下一拍 EDT，
+        // 保证它是这次阻断的最终状态。
+        final Project projF = proj;
+        final boolean settingsAvailableF = settingsAvailable;
+        ApplicationManager.getApplication().invokeLater(() -> {
+            if (p.previewDisposed) return;
+            p.resultPanel.showErrorWithActions(
+                    message,
+                    MpSqlVisualizerBundle.message("execute.dialectGate.action.switchDataSource"),
+                    MpSqlVisualizerBundle.message("execute.dialectGate.action.switchDataSource.tip"),
+                    () -> executeSql(p, true),
+                    settingsAvailableF
+                            ? MpSqlVisualizerBundle.message("execute.dialectGate.action.openSettings")
+                            : null,
+                    MpSqlVisualizerBundle.message("execute.dialectGate.action.openSettings.tip"),
+                    () -> openSqlDialectSettings(projF));
+        });
+    }
+
+    /** 方言设置页的 Configurable EP id（Database 插件注册，见 SqlPlugin.xml）。 */
+    public static final String SQL_DIALECTS_SETTING_ID = "SQL Dialects";
+
+    /** T-DialectGateUx：打开「设置 → 语言与框架 → SQL 方言」页并选中该页。 */
+    public static void openSqlDialectSettings(@NotNull Project proj) {
+        // 平台自带的「按 id 打开并选中」入口：它在**同一个** ConfigurableGroup 实例里查找目标
+        // configurable 再建对话框。先 findById 再把 wrapper 交给 showSettingsDialog(project, Configurable)
+        // 会因两次 group 实例不同而选不中——沙盒实证只打开到设置根页。
+        boolean opened;
+        try {
+            com.intellij.ide.actions.ShowSettingsUtilImpl.showSettingsDialog(proj, SQL_DIALECTS_SETTING_ID, null);
+            opened = true;
+        } catch (Throwable t) {
+            opened = false;
+        }
+        if (!opened) {
+            com.intellij.openapi.options.ShowSettingsUtil.getInstance()
+                    .showSettingsDialog(proj, SQL_DIALECTS_SETTING_ID);
+        }
+    }
+
+    /**
+     * 按 configurable EP <b>id</b> 取方言设置页，不实例化整棵设置树。
+     *
+     * <p>{@code Settings.find(Class)} / {@code showSettingsDialog(project, Class)} 会
+     * {@code ConfigurableVisitor.findByType} 遍历并实例化全部 configurable（Kotlin scripting 页构造器会做
+     * 文件名索引 → 真机 EDT 慢操作断言）；{@code findById} 只包一层 wrapper，页面本身在展示时才实例化。</p>
+     */
+    @Nullable
+    private static com.intellij.openapi.options.Configurable findSqlDialectConfigurable(@NotNull Project proj) {
+        try {
+            com.intellij.openapi.options.ConfigurableGroup group =
+                    com.intellij.openapi.options.ex.ConfigurableExtensionPointUtil.getConfigurableGroup(proj, true);
+            return com.intellij.openapi.options.ex.ConfigurableVisitor.findById(SQL_DIALECTS_SETTING_ID,
+                    java.util.List.of(group));
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /** 模型/批量 CRUD 载体的无损目标方言重渲染；成功只改预览，不提交当前点击。 */
+    public static boolean rerenderForExecutionTarget(@NotNull SqlPreviewPanel p, @NotNull String targetDialectName) {
+        PreviewResult old = p.current;
+        if (old == null) return false;
+        cn.song.mybatisplus.visualizer.sql.Dialect target = null;
+        for (cn.song.mybatisplus.visualizer.sql.Dialect d : DialectRegistry.DIALECTS) {
+            if (d.getName().equalsIgnoreCase(targetDialectName)) {
+                target = d;
+                break;
+            }
+        }
+        if (target == null) return false;
+        PreviewResult updated;
+        if (old.getXmlModel() != null || old.getPaginationLimitLine() != null) {
+            return false;
+        } else if (old.getPreviewModel() != null) {
+            updated = new PreviewResult(
+                    old.getSql(), old.getCompactSql(), old.getUnresolvedParams(), old.getParamTable(),
+                    old.getWrapperType(), old.getTableName(), old.getWarning(), old.getColumns(),
+                    old.getColumnComments(), old.getTableComment(),
+                    old.getPreviewModel().withDialect(target),
+                    old.getParamHints(), old.getCandidateTables(), old.getBatchModel(), old.getXmlModel(),
+                    old.getInitialParamValues(), old.getPerfWarnings(), old.getFillClauses(), old.getPreviousSql(),
+                    old.getPagesColumns(), old.getNamedParamHints(), old.getStackDigest(),
+                    old.isHasDollarRawSegments(), old.getCountSql(), old.getPaginationLimitLine(),
+                    old.getPlaceholderParamNames(), old.getDuplicateParamNames(), old.getDiagramStatement(),
+                    old.getHistoryFingerprintSeed(), old.getPaginationParamSources(),
+                    target, old.getDialectDecision(), old.getHistoryEntryId(), old.getActualSql());
+        } else if (old.getBatchModel() != null) {
+            updated = new PreviewResult(
+                    old.getSql(), old.getCompactSql(), old.getUnresolvedParams(), old.getParamTable(),
+                    old.getWrapperType(), old.getTableName(), old.getWarning(), old.getColumns(),
+                    old.getColumnComments(), old.getTableComment(), old.getPreviewModel(),
+                    old.getParamHints(), old.getCandidateTables(), old.getBatchModel().withDialect(target),
+                    old.getXmlModel(), old.getInitialParamValues(), old.getPerfWarnings(), old.getFillClauses(),
+                    old.getPreviousSql(), old.getPagesColumns(), old.getNamedParamHints(), old.getStackDigest(),
+                    old.isHasDollarRawSegments(), old.getCountSql(), old.getPaginationLimitLine(),
+                    old.getPlaceholderParamNames(), old.getDuplicateParamNames(), old.getDiagramStatement(),
+                    old.getHistoryFingerprintSeed(), old.getPaginationParamSources(),
+                    target, old.getDialectDecision(), old.getHistoryEntryId(), old.getActualSql());
+        } else {
+            return false;
+        }
+        // R92: this is the same preview with a new dialect, not a fresh parameter session.
+        // Retain ownership of existing controls; storage-generation invalidation still applies.
+        if (p.fieldFillPreview == old) p.fieldFillPreview = updated;
+        p.current = updated;
+        // T-DialectStatusLiveRefresh：目标方言已被方言闸证实，决策同步升级——meta 行否则停留在
+        // 旧的「未验证/歧义」态与实际渲染方言自相矛盾（copy() 不会带上新决策）。
+        p.currentDialectDecision = new DialectDecisionEngine.Decision(
+                DialectDecisionEngine.Status.RESOLVED,
+                target.getName(),
+                DialectDecisionEngine.Confidence.EXACT,
+                DialectDecisionEngine.Source.BOUND_DATASOURCE,
+                List.of(), List.of(), null);
+        syncPreviewDialectMapping(p, updated);
+        SqlPreviewPanelSqlViewKt.renderSql(p);
+        DialectStatusRefreshKt.applyDialectStatusSegment(p);
+        Project proj = p.project;
+        String sql = p.lastRenderedSql;
+        if (proj != null && sql != null && !sql.isBlank()) {
+            final Project projF = proj;
+            final String sqlF = sql;
+            ApplicationManager.getApplication().executeOnPooledThread(() ->
+                    cn.song.mybatisplus.visualizer.execute.DataSourceSelector.prewarmExecTempFile(
+                            projF, sqlF, target.getName()));
+        }
+        return true;
     }
 
     /**

@@ -202,7 +202,7 @@ public final class XmlPreviewService {
     }
 
     /** Kotlin data class {@code copy(renderedDialect=…, dialectDecision=…)} 等价：其余字段原样保留。 */
-    private static PreviewResult copyWithDialectDecision(
+    static PreviewResult copyWithDialectDecision(
             @NotNull PreviewResult src,
             @Nullable cn.song.mybatisplus.visualizer.sql.Dialect renderedDialect,
             @Nullable cn.song.mybatisplus.visualizer.sql.DialectDecisionEngine.Decision dialectDecision) {
