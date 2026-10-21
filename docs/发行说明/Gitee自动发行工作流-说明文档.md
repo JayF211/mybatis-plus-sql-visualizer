@@ -17,7 +17,7 @@ parallel_tasks check/register
   → ⑥ Gitee API 建发行版 + 上传 zip 附件（见第三节）
   → ⑦ 回读校验 downloadUrl
   → parallel_tasks done
-  → 人工收尾：preview.update.json 拷入 update/update.json（独立单文件提交，不进发行提交）
+  → 人工收尾（**仅用户本人，AI 会话不得代改**）：preview.update.json 拷入 update/update.json（独立单文件提交，不进发行提交）
 ```
 
 跑任何 `./gradlew` 前按并行铁律先 `python C:\Users\USER\.zcode\cli\parallel_tasks.py check`，
@@ -263,8 +263,8 @@ assert r['prerelease'] and manifest_download_url in urls
 ## 四、发行后收尾
 
 1. `parallel_tasks.py done --name <任务名>` 注销登记。
-2. 人工步骤：`preview.update.json` 逐字节拷入 `update/update.json`（先 sha1 校验一致），
-   独立单文件提交随官网推送，**不进发行提交**。
+2. 人工步骤（**仅用户本人执行，AI 会话一律不得代改**）：`preview.update.json` 逐字节拷入 `update/update.json`（先 sha1 校验一致），
+   独立单文件提交随官网推送，**不进发行提交**。会话的发行职责止于建发行版 + 回读校验，收口报告只写「update.json 待用户手改」。
 3. 核对 Gitee 发行版页面：预览标记、附件可下载、正文渲染正常。
 4. 若为 beta 系列：下一发 beta 重复本流程，changeNotes 块替换为本发内容（累计）。
 

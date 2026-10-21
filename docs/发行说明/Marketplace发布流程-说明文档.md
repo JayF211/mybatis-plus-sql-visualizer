@@ -318,7 +318,7 @@ flowchart TD
 | 构建验证 | `./gradlew releaseGate`（buildPlugin → verifyGate 三目标门禁 → testShards 全量） | 发布前必做；`-PverifyOnly=true` 可跳过重打包 |
 | Marketplace 上传 | 网页手动，或 `./gradlew publishPlugin -PintellijPlatformPublishingToken=…` | 后续版本可自动化 |
 | 审核状态确认 | 登录作者后台（<https://plugins.jetbrains.com/author/me>）→ My Plugins → 版本列表 | 核对 Pending 更新的版本号与上传内容：预期内的新版本核对 changeNotes 后等审核放行；误传/过期/内容不明的包后台撤回（撤回不可逆，处置前对版本列表截图留档） |
-| 自更新清单 | `./gradlew writeUpdateManifest` → 人工补 changeNotes | 生成 `update/update.json`；changeNotes 末尾补一行 ≤60 字 Marketplace 评分引导（中性措辞，如「好用的话，欢迎到 Marketplace 页评分留言（搜 SQL Visualizer）」，无激励、无模板评语） |
+| 自更新清单 | **仅用户本人操作**：`./gradlew writeUpdateManifest` → 人工补 changeNotes | 生成 `update/update.json`（AI 会话一律不得代改，2026-09-16 用户定规）；changeNotes 末尾补一行 ≤60 字 Marketplace 评分引导（中性措辞，如「好用的话，欢迎到 Marketplace 页评分留言（搜 SQL Visualizer）」，无激励、无模板评语） |
 | Gitee Release | 网页创建 Release，附同名 zip | 自更新 downloadUrl 指向这里 |
 | Marketplace 自定义页 | 复制 `docs/发行说明/marketplace-custom-page.md` 全文（去掉首行维护者注释）→ 插件后台 Documentation 标签粘贴保存 | 该编辑器**仅渲染 Markdown**（HTML / style / CSS 被剥除）；功能文案变更时必须与 `src/main/resources/html/marketplace-custom-page.html`（IDE 内「帮助」按钮 JCEF 渲染版，完整样式）**两版同步更新，不能只改其一**；New / Ultimate 徽章为官网托管 SVG（`sql-visualizer.jvtools.cn/badges/tag-*.svg`），与 HTML 版药丸同款配色 |
 | 推送源码 | `git push origin master` | Gitee 主仓库即 Marketplace 源码链接（2026-08-18 定案）；GitHub 镜像未启用 |
