@@ -35,6 +35,13 @@ object JavaCodeGenerator {
         val className: String,
         val columnToField: Map<String, String>,
         val subEntities: Map<String, EntityTarget> = emptyMap(),
+        /** T-ReverseGroupLogicDelete：逻辑删除列（实体侧 `@TableLogic`，由 EntityResolver 解析）。
+         *  MP 会在 select/update/delete 上自动追加 `AND <列> = <未删除值>`，反向生成时该条件与
+         *  select 投影都属「框架注入」而非用户手写——命中即跳过，避免生成 `deleted = 0` 冗余条件。 */
+        val logicDeleteColumn: String? = null,
+        /** 逻辑删除的「未删除」值（设置页 `logicDeleteValue`，默认 "0"）——只有值相等才判定为
+         *  框架注入条件；用户手写 `deleted = 1` 这类真过滤条件不受影响。 */
+        val logicDeleteValue: String = "0",
     )
 
     /**
@@ -133,7 +140,9 @@ object JavaCodeGenerator {
         // 合法——MPJLambdaWrapper 无 leftJoin(String)（1.5.6 实证），不能 lambda 化时一律回落 MPJ_QUERY
         // 保证编译（含用户显式选择 MPJ_LAMBDA 的场景）
         // MConsumer 子查询形态也属于 lambda 形态，需纳入判定
-        val selectColumns = result.selectColumns?.filterNot { isIgnoredColumn(it.expr) }
+        // T-ReverseGroupLogicDelete：逻辑删除列由 MP 全列展开自动带出，显式再 select 一遍无意义
+        val selectColumns = result.selectColumns
+            ?.filterNot { isIgnoredColumn(it.expr) || isInjectedLogicDeleteProjection(it, entity) }
         // MP core 的 Lambda 列参数只接受 SFunction；别名/表达式/未映射投影和分组
         // 必须整链使用字符串 Wrapper，不能只把单个列参数换成字符串。
         // （javap 实证：MP core 3.5.14/3.5.17 的 Query/AbstractWrapper/LambdaQueryWrapper/
@@ -163,7 +172,7 @@ object JavaCodeGenerator {
         val columnEntity = if (stringCore) null else entity
         val rawMode = effectiveKind == GeneratedWrapper.MPJ_QUERY
         val chain = buildString {
-            val conditions = filterConditions(result.conditions)
+            val conditions = filterConditions(result.conditions, entity)
             if (isJoin) {
                 // 多表：主表 selectAll（列清单未显式指定时）——MPJ 语义
                 if (selectColumns == null || selectColumns.isEmpty()) {
@@ -441,7 +450,7 @@ object JavaCodeGenerator {
                         .append(")")
                 }
             }
-            filterConditions(result.conditions).forEach { append("\n    .").append(renderCondition(it, entity)) }
+            filterConditions(result.conditions, entity).forEach { append("\n    .").append(renderCondition(it, entity)) }
             renderOrderBy(result, entity).forEach { append("\n    .").append(it) }
             result.limit?.let { append("\n    .last(\"").append(javaEscape(renderLimit(it))).append("\")") }
         }
@@ -506,7 +515,7 @@ object JavaCodeGenerator {
                         .append(")")
                 }
                 renderJoins(result, entity).forEach { append("\n    .").append(it) }
-                filterConditions(result.conditions).forEach { append("\n    .").append(renderCondition(it, entity)) }
+                filterConditions(result.conditions, entity).forEach { append("\n    .").append(renderCondition(it, entity)) }
             }
             return appendWrapperAndInvocation(
                 sb,
@@ -521,7 +530,7 @@ object JavaCodeGenerator {
         }
         // 单表删除：现状不变
         val chain = buildString {
-            filterConditions(result.conditions).forEach { append("\n    .").append(renderCondition(it, entity)) }
+            filterConditions(result.conditions, entity).forEach { append("\n    .").append(renderCondition(it, entity)) }
             renderOrderBy(result, entity).forEach { append("\n    .").append(it) }
             result.limit?.let { append("\n    .last(\"").append(javaEscape(renderLimit(it))).append("\")") }
         }
@@ -833,6 +842,10 @@ object JavaCodeGenerator {
             if (unmapped.isNotEmpty()) {
                 sb.append("// 注意：以下列未在实体中找到对应字段，已回落字符串列名：${unmapped.joinToString(", ")}\n")
             }
+            // T-ReverseGroupLogicDelete：交代被跳过的逻辑删除条件，避免用户误以为生成器漏了条件
+            entity.logicDeleteColumn?.let { column ->
+                sb.append("// 逻辑删除列 $column 由 MP 依据 @TableLogic 自动追加，未重复生成该条件与投影\n")
+            }
         }
         if (wrapperKind == GeneratedWrapper.MPJ_LAMBDA && entity != null) {
             sb.append("// 需引入 MyBatis-Plus-Join（MPJ）依赖\n")
@@ -893,17 +906,25 @@ object JavaCodeGenerator {
     /**
      * T-M42：条件树过滤——命中 serialVersionUID 列的 Simple/In/Between/Like/Unary 条件跳过；
      * Group 递归过滤（子条件全被过滤的组整组跳过，避免生成空 nested/not lambda）。
+     *
+     * T-ReverseGroupLogicDelete：`entity` 非 null 时额外跳过「逻辑删除注入条件」——MP 依据
+     * `@TableLogic` 在 select/update/delete 上自动追加 `AND <列> = <未删除值>`，反解出的 SQL 里
+     * 该条件同样存在，但用户代码从未手写它，再生成一遍就是冗余（`deleted = 0 AND deleted = 0`）。
      */
-    private fun filterConditions(conditions: List<Condition>): List<Condition> =
+    private fun filterConditions(conditions: List<Condition>, entity: EntityTarget? = null): List<Condition> =
         conditions.mapNotNull { condition ->
             when (condition) {
                 is Condition.Group -> {
-                    val children = filterConditions(condition.children)
+                    val children = filterConditions(condition.children, entity)
                     if (children.isEmpty()) null else condition.copy(children = children)
                 }
-                is Condition.Simple -> condition.takeUnless { isIgnoredColumn(it.column.columnName) }
+                is Condition.Simple -> condition.takeUnless {
+                    isIgnoredColumn(it.column.columnName) || isInjectedLogicDelete(it, entity)
+                }
                 is Condition.Unary -> condition.takeUnless { isIgnoredColumn(it.column.columnName) }
-                is Condition.In -> condition.takeUnless { isIgnoredColumn(it.column.columnName) }
+                is Condition.In -> condition.takeUnless {
+                    isIgnoredColumn(it.column.columnName) || isInjectedLogicDelete(it, entity)
+                }
                 is Condition.Between -> condition.takeUnless { isIgnoredColumn(it.column.columnName) }
                 is Condition.Like -> condition.takeUnless { isIgnoredColumn(it.column.columnName) }
                 else -> condition
@@ -1092,7 +1113,7 @@ object JavaCodeGenerator {
 
     /**
      * 组渲染（T-M36.1）：`(a = 1 OR b = 2)` → `nested(w -> w.eq("a", 1).or().eq("b", 2))`；
-     * `NOT (...)` → `not(w -> ...)`；组内嵌套子组 → `.and(w2 -> ...)` / `.or(w2 -> ...)` 递归。
+     * `NOT (...)` → `not(w -> ...)`；组内嵌套子组见 [renderGroupChildren]。
      * 组连接符 OR 时子条件间以无参 `.or()` 分隔（对齐 MP `or()` 分隔符语义）。
      */
     private fun renderGroup(group: Condition.Group, entity: EntityTarget?): String {
@@ -1100,14 +1121,28 @@ object JavaCodeGenerator {
         return "$wrapper(w -> w" + renderGroupChildren(group, 2, entity) + ")"
     }
 
-    /** 组内子条件链（nextVarIndex：嵌套 lambda 变量名序号，w2/w3...）。 */
+    /**
+     * 组内子条件链（nextVarIndex：嵌套 lambda 变量名序号，w2/w3...）。
+     *
+     * 子组的方法选择按语义分三档（MP 3.5.15 `NormalSegmentList.transformList` 实证）：
+     *  - 子组取反 → `not(wN -> ...)`：`negated` 必须体现在方法名上，否则 NOT 整个丢失；
+     *  - 父组 OR 连接 → `or(wN -> ...)`：**用带 consumer 的 or 直接承载连接**，不再预发无参 `.or()`。
+     *    预发 `.or()` 再发 `.and(...)` 会命中 MP 的「上一分隔符 OR、新分隔符 AND → 移除 OR」逻辑，
+     *    把 OR 静默改成 AND（`a = 1 OR (b = 2 AND c = 3)` 会渲染成 `a = 1 AND (b = 2 AND c = 3)`）；
+     *  - 其余 → `nested(wN -> ...)`：等价于旧 `.and(wN -> ...)`，但不依赖「链首 AND 被丢弃」这一巧合。
+     */
     private fun renderGroupChildren(group: Condition.Group, nextVarIndex: Int, entity: EntityTarget?): String {
         val sb = StringBuilder()
         group.children.forEachIndexed { i, child ->
-            if (i > 0 && group.connector == Connector.OR) sb.append("\n        .or()")
+            // OR 组内子组自带 or 连接（见下），无需再预发分隔符
+            if (i > 0 && group.connector == Connector.OR && !child.isOrJoinedGroup()) sb.append("\n        .or()")
             when (child) {
                 is Condition.Group -> {
-                    val method = if (child.connector == Connector.OR) "or" else "and"
+                    val method = when {
+                        child.negated -> "not"
+                        group.connector == Connector.OR -> "or"
+                        else -> "nested"
+                    }
                     val varName = "w$nextVarIndex"
                     sb.append("\n        .$method($varName -> $varName")
                         .append(renderGroupChildren(child, nextVarIndex + 1, entity))
@@ -1117,6 +1152,45 @@ object JavaCodeGenerator {
             }
         }
         return sb.toString()
+    }
+
+    /** 该子组是否以带 consumer 的 `or(wN -> ...)` 承载父组的 OR 连接（此时不预发 `.or()` 分隔符）。 */
+    private fun Condition.isOrJoinedGroup(): Boolean =
+        this is Condition.Group && !negated
+
+    /**
+     * T-ReverseGroupLogicDelete：该条件是否为 MP 依据 `@TableLogic` 自动注入的逻辑删除条件。
+     *
+     * 判定三要素同时满足才算：列名命中实体的逻辑删除列、运算符为 `=`、值等于「未删除值」。
+     * 用户手写 `deleted = 1`（查已删除数据）不满足值条件，照常生成。
+     */
+    private fun isInjectedLogicDelete(condition: Condition.Simple, entity: EntityTarget?): Boolean {
+        val column = entity?.logicDeleteColumn ?: return false
+        if (condition.op != "=") return false
+        if (!columnNameMatches(condition.column.columnName, column)) return false
+        val literal = condition.value as? SqlValue.Literal ?: return false
+        return literal.raw.trim().trim('\'').equals(entity.logicDeleteValue.trim().trim('\''), ignoreCase = true)
+    }
+
+    /** IN 形态（`deleted IN (0)`）同样属注入——MP 个别场景以单值 IN 表达。 */
+    private fun isInjectedLogicDelete(condition: Condition.In, entity: EntityTarget?): Boolean {
+        val column = entity?.logicDeleteColumn ?: return false
+        if (condition.negated || condition.values.size != 1) return false
+        if (!columnNameMatches(condition.column.columnName, column)) return false
+        val literal = condition.values.single() as? SqlValue.Literal ?: return false
+        return literal.raw.trim().trim('\'').equals(entity.logicDeleteValue.trim().trim('\''), ignoreCase = true)
+    }
+
+    /** 列名匹配（复用 T-FixCamelMap 归一：原样 / snake_case / camelCase 三形态互认）。 */
+    private fun columnNameMatches(actual: String, expected: String): Boolean =
+        columnKeyVariants(actual).any { it.equals(expected, ignoreCase = true) } ||
+            columnKeyVariants(expected).any { it.equals(actual, ignoreCase = true) }
+
+    /** T-ReverseGroupLogicDelete：select 投影中的逻辑删除列（MP 全列展开已含，显式再列冗余）。 */
+    private fun isInjectedLogicDeleteProjection(sel: SelectColumn, entity: EntityTarget?): Boolean {
+        val column = entity?.logicDeleteColumn ?: return false
+        val name = sel.expr.substringAfterLast('.').trim('`')
+        return columnNameMatches(name, column)
     }
 
     /** 二元比较操作符 → 方法名。 */
