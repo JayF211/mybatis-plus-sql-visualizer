@@ -66,4 +66,10 @@ public final class SqlServerDialect implements Dialect {
     public String renderInsertWrapper(String tableName, String sql, IdentifierCaseSource caseSource) {
         return Dialect.identityInsertWrapper(this, tableName, sql, caseSource);
     }
+
+    /** R36：T-SQL 官方 BEGIN TRANSACTION（缩写 BEGIN TRAN）。 */
+    @Override
+    public String getTransactionBegin() {
+        return "BEGIN TRANSACTION";
+    }
 }

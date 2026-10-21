@@ -55,4 +55,10 @@ public final class MySqlDialect implements Dialect {
                                IdentifierCaseSource caseSource) {
         return Dialect.renderMySqlStyleUpsert(this, updateColumns, caseSource);
     }
+
+    /** R36：MySQL 官方 START TRANSACTION（BEGIN 亦可，取无歧义的长形态）。 */
+    @Override
+    public String getTransactionBegin() {
+        return "START TRANSACTION";
+    }
 }

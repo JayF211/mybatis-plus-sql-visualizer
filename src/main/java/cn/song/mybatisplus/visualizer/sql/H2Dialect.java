@@ -71,4 +71,10 @@ public final class H2Dialect implements Dialect {
         return "MERGE INTO " + quoteIfNeeded(tableName, caseSource) + " (" + cols + ") KEY (" +
                 quoteIfNeeded(conflictKey, caseSource) + ") VALUES (" + placeholders + ")";
     }
+
+    /** R36：H2 官方 START TRANSACTION 语法错误（expected SAVEPOINT/SCRIPT/SHUTDOWN），取 BEGIN。 */
+    @Override
+    public String getTransactionBegin() {
+        return "BEGIN";
+    }
 }
