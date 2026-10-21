@@ -101,6 +101,36 @@ public final class SqlLogParamCodec {
         }
     }
 
+    /**
+     * O-147 历史修订身份：修订仅升级元数据——匹配首次 SQL/绑定值/捕获时间，不使用可重置的 UI 序号。
+     * SHA-256（首次 rawSql/restoredSql 去尾分号 + timestamp + 参数值/类型对）的十六进制串。
+     */
+    public static String historyIdentity(LogSqlEntry entry) {
+        JsonArray original = new JsonArray();
+        original.add(entry.rawSql().trim().replaceAll(";$", "").trim());
+        original.add(entry.restoredSql().trim().replaceAll(";$", "").trim());
+        original.add(entry.timestamp());
+        JsonArray params = new JsonArray();
+        for (LogSqlParam p : entry.params()) {
+            JsonArray pair = new JsonArray();
+            pair.add(p.value() == null ? JsonNull.INSTANCE : new JsonPrimitive(p.value()));
+            pair.add(p.type() == null ? JsonNull.INSTANCE : new JsonPrimitive(p.type()));
+            params.add(pair);
+        }
+        original.add(params);
+        try {
+            java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
+            byte[] bytes = digest.digest(GSON.toJson(original).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder(bytes.length * 2);
+            for (byte b : bytes) {
+                sb.append(String.format("%02x", b));
+            }
+            return sb.toString();
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 unavailable", e);
+        }
+    }
+
     /** 编码 rawSql + params 为 Base64 载荷（无 M56 扩展字段形态，等价 encodeEntry 全默认条目）。 */
     public static String encode(String rawSql, List<LogSqlParam> params) {
         return encodeEntry(new LogSqlEntry(rawSql, rawSql, params));
