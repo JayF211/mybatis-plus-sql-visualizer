@@ -143,6 +143,14 @@ public abstract class McpToolsetSupport {
         long token = AUDIT_SEQ.incrementAndGet();
         AUDIT_CTX.put(token, new AuditContext(tool, argsSummary, System.currentTimeMillis()));
         try {
+            if (!McpToolGate.isEnabled(tool)) {
+                throwExpected(
+                    McpToolErrors.code(
+                        McpToolErrors.TOOL_DISABLED,
+                        "tool " + tool + " is disabled in SQL Visualizer settings."
+                    )
+                );
+            }
             String outcome = block.get();
             auditOk(token);
             // T-K2JWalkMcp262（KW-262B）：262 mcpServer 新形态要求返回 Properties（class kind）——

@@ -492,6 +492,22 @@ public final class McpSchemaContextService {
         }
     }
 
+    /**
+     * F77（T-PerfSweep23）：dsName 反射 Method 缓存——来源披露从每数据源一次扩为
+     * <b>每命中表一次</b>后（S3 命中表所在数据源名逐表取），Class.forName+getMethod
+     * 不再逐次付（negative 也缓存：Community/无 Database 插件下 forName 恒抛，
+     * 缓 null 后逐表零反射）。
+     */
+    private static final Method DAS_GET_NAME_METHOD = resolveDasGetNameMethod();
+
+    private static Method resolveDasGetNameMethod() {
+        try {
+            return Class.forName(DAS_DATA_SOURCE).getMethod("getName");
+        } catch (Throwable e) {
+            return null;
+        }
+    }
+
     /** 数据源显示名（S3 来源披露与日志用；取不到返回 `?`，披露侧跳过）。 */
     private static String dsName(Object ds) {
         if (dsNameForTest != null) {
@@ -501,7 +517,7 @@ public final class McpSchemaContextService {
             }
         }
         try {
-            Object name = Class.forName(DAS_DATA_SOURCE).getMethod("getName").invoke(ds);
+            Object name = (DAS_GET_NAME_METHOD != null) ? DAS_GET_NAME_METHOD.invoke(ds) : null;
             return (name instanceof String) ? (String) name : "?";
         } catch (Throwable e) {
             return "?";
