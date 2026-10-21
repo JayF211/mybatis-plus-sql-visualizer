@@ -358,7 +358,7 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
     private class BackAction extends AnAction {
         @Override
         public void update(AnActionEvent e) {
-            e.getPresentation().setIcon(AllIcons.Actions.Back);
+            e.getPresentation().setIcon(cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons.Back);
             e.getPresentation().setDescription(MpSqlVisualizerBundle.message("log.history.back.tip"));
             e.getPresentation().setVisible(!isShowingFiles());
         }
@@ -373,7 +373,7 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
     private class RefreshAction extends AnAction {
         @Override
         public void update(AnActionEvent e) {
-            e.getPresentation().setIcon(AllIcons.Actions.Refresh);
+            e.getPresentation().setIcon(cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons.Refresh);
             e.getPresentation().setDescription(MpSqlVisualizerBundle.message("log.history.refresh.tip"));
         }
 
@@ -1038,7 +1038,7 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
 
         @Override
         public void update(AnActionEvent e) {
-            e.getPresentation().setIcon(AllIcons.Actions.Diff);
+            e.getPresentation().setIcon(cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons.Diff);
             e.getPresentation().setText(MpSqlVisualizerBundle.message("log.history.compare"));
             e.getPresentation().setDescription(MpSqlVisualizerBundle.message("log.history.compare.tip"));
             e.getPresentation().setEnabled(entries.size() == 2);
@@ -1090,7 +1090,7 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
 
         @Override
         public void update(AnActionEvent e) {
-            e.getPresentation().setIcon(AllIcons.Actions.EditSource);
+            e.getPresentation().setIcon(cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons.Export);
             e.getPresentation().setText(MpSqlVisualizerBundle.message("log.history.export"));
         }
 
@@ -1146,7 +1146,9 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
         File target = saved.getFile();
         ApplicationManager.getApplication().executeOnPooledThread(() -> {
             try {
-                SqlExportService.exportToFile(target, SqlExportService.format(rows, format));
+                // R60：导出走展示脱敏（displayMaskEnabled；投影级，数据层条目不动）
+                boolean exportMask = PluginSettings.getInstance().getState().getDisplayMaskEnabled();
+                SqlExportService.exportToFile(target, SqlExportService.format(rows, format, exportMask));
                 com.intellij.notification.NotificationGroupManager.getInstance()
                         .getNotificationGroup(NOTIFICATION_GROUP_ID)
                         .createNotification(
@@ -1250,7 +1252,7 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
 
         @Override
         public void update(AnActionEvent e) {
-            e.getPresentation().setIcon(AllIcons.Actions.EditSource);
+            e.getPresentation().setIcon(cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons.Export);
             e.getPresentation().setText(MpSqlVisualizerBundle.message("log.history.jumpToJava"));
         }
 
