@@ -55,6 +55,7 @@ import com.intellij.ui.JBColor
 import cn.song.mybatisplus.visualizer.util.FatalErrors
 import cn.song.mybatisplus.visualizer.util.IconScaler
 import cn.song.mybatisplus.visualizer.util.UiTextClipboard
+import com.intellij.ui.scale.JBUIScale
 import com.intellij.util.ui.JBUI
 import com.intellij.util.ui.UIUtil
 import java.awt.BorderLayout
@@ -1816,16 +1817,20 @@ class SqlToJavaPanel(
             CALLER_BASE_MAPPER to "baseMapper：ServiceImpl 的 baseMapper 字段（生成 baseMapper.selectList(...) / baseMapper.insert(...) 等）",
         )
 
-        /** 类选择字段圆角直径（radius 5，对齐 IDEA 输入框）。UI-045 起实际弧角改取平台 `COMPONENT_ARC`。 */
+        /** 类选择字段圆角直径（保留给旧调用点；实际绘制走 [paintPickerFieldSurface] 的平台口径）。 */
         private const val PICKER_CORNER = 10
 
         /**
          * 两个类选择字段（「调用类」/「返回类型」）共用的输入框外观（UI-045）。
          *
-         * 描边粗细必须跟平台走：平台输入框用 `DarculaUIUtil.paintOutlineBorder` 画
-         * **`BW` 宽（= `Component.focusWidth`，默认 2px）** 的圆角，弧角取 `COMPONENT_ARC`
-         * （= `Component.arc`，默认 5）。早期这里用 `drawRoundRect` 画 1px 圆弧，浅色主题下
-         * 明显偏淡（用户截图实测：平台框边框像素 215,217,222，自绘框 227,228,231）。
+         * 按平台口径复刻 `DarculaUIUtil.doPaint`（2024.3.7.1 字节码实证），两个关键量：
+         * - **描边宽度** `BW` = `Component.focusWidth`，默认 **2px**（不是 1px）；
+         * - **圆角半径** 平台硬编码 `JBUIScale.scale(7.0f)`（**不是** `Component.arc = 5`），
+         *   且用 `Path2D.quadTo` 画**二次贝塞尔**而非 `drawRoundRect` 的圆弧——同一半径下
+         *   贝塞尔的过渡更平缓，圆弧在拐点处更「急」，肉眼能看出区别。
+         *
+         * 早期这里用 `drawRoundRect(…, PICKER_CORNER, PICKER_CORNER)` 画 1px 圆弧：描边偏淡
+         * （浅色主题实测平台框边框 215,217,222 vs 自绘框 227,228,231）、圆角观感偏硬。
          *
          * 不直接调 `paintOutlineBorder`：它要求传 `Outline` 枚举，而该枚举只有
          * error/warning/defaultButton/focus 四档（javap 实证），没有「普通态」成员。
@@ -1838,23 +1843,45 @@ class SqlToJavaPanel(
             try {
                 g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
                 val bw = DarculaUIUtil.BW.get()
-                val arc = DarculaUIUtil.COMPONENT_ARC.get() * 2
+                val r = JBUIScale.scale(7f)
+                val w = target.width.toFloat()
+                val h = target.height.toFloat()
+                // 底色：圆角矩形（填充用同一贝塞尔轮廓，保证内外一致）
                 g2.color = UIUtil.getTextFieldBackground()
-                g2.fillRoundRect(0, 0, target.width - 1, target.height - 1, arc, arc)
+                g2.fill(roundedOutline(0f, 0f, w - 1f, h - 1f, r))
+                // 描边：平台同款 2px 宽 + Component.borderColor
                 g2.color = JBColor.namedColor("Component.borderColor", JBColor.border())
                 val saved = g2.stroke
                 g2.stroke = java.awt.BasicStroke(bw.toFloat())
-                // 2px 描边内缩半个线宽，否则右/下侧会被组件边界裁掉一半
-                val inset = bw / 2
-                g2.drawRoundRect(
-                    inset, inset,
-                    target.width - 1 - inset * 2, target.height - 1 - inset * 2,
-                    arc, arc,
-                )
+                val inset = bw / 2f
+                g2.draw(roundedOutline(inset, inset, w - 1f - inset * 2, h - 1f - inset * 2, r))
                 g2.stroke = saved
             } finally {
                 g2.dispose()
             }
+        }
+
+        /**
+         * 圆角矩形轮廓（二次贝塞尔四角，对齐平台 `DarculaUIUtil.doPaint` 的 `Path2D` 构造）。
+         *
+         * 平台在角上各放一个 `quadTo`（控制点=角点），等价于「圆角半径 r 的四分之一圆弧」，
+         * 但曲率过渡比 `RoundRectangle2D` 的椭圆弧更平缓——这是两个框观感差异的根因。
+         */
+        private fun roundedOutline(x: Float, y: Float, w: Float, h: Float, r: Float): java.awt.Shape {
+            val p = java.awt.geom.Path2D.Float()
+            val x2 = x + w
+            val y2 = y + h
+            p.moveTo((x + r).toDouble(), y.toDouble())
+            p.lineTo((x2 - r).toDouble(), y.toDouble())
+            p.quadTo(x2.toDouble(), y.toDouble(), x2.toDouble(), (y + r).toDouble())
+            p.lineTo(x2.toDouble(), (y2 - r).toDouble())
+            p.quadTo(x2.toDouble(), y2.toDouble(), (x2 - r).toDouble(), y2.toDouble())
+            p.lineTo((x + r).toDouble(), y2.toDouble())
+            p.quadTo(x.toDouble(), y2.toDouble(), x.toDouble(), (y2 - r).toDouble())
+            p.lineTo(x.toDouble(), (y + r).toDouble())
+            p.quadTo(x.toDouble(), y.toDouble(), (x + r).toDouble(), y.toDouble())
+            p.closePath()
+            return p
         }
 
         /** 类选择字段按钮图标（12px 缩放——AllIcons 原生 16px 偏大，用户反馈）。 */
