@@ -7,6 +7,7 @@ import cn.song.mybatisplus.visualizer.ui.gutter.XmlSqlGutterLineMarkerProvider
 import com.intellij.psi.xml.XmlFile
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 
@@ -42,6 +43,28 @@ class SqlPreviewDialogTest : BasePlatformTestCase() {
         } finally {
             if (!dialog.isDisposed()) dialog.doDispose()
             dialog.panelForTest()?.clear()
+        }
+    }
+
+    fun testCopyAndCloseActionDoesNotOfferClosePanelAction() {
+        // UI-044：弹窗随即关闭，复制成功通知里不该再挂「关闭 SQL 面板」（用户真机截图即此形态：
+        // 面板已关，通知还挂着这个链接）。对照组：单纯「复制 SQL」仍应挂上。
+        val clipboard = cn.song.mybatisplus.visualizer.testutil.installFakeClipboard(testRootDisposable)
+        val dialog = SqlPreviewDialog(project, previewResult())
+        val panel = dialog.panelForTest()!!
+        val actions = mutableListOf<String>()
+        panel.copyNotificationActionsForTest = actions
+        try {
+            val label = cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message("panel.copySqlAndClose")
+            val action = dialog.actionsForTest().first { it.getValue(javax.swing.Action.NAME) == label }
+            action.actionPerformed(java.awt.event.ActionEvent(dialog, 0, ""))
+            val closeLabel = cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message("dialog.closeSqlPanel")
+            assertFalse("复制并关闭时通知不应带「关闭 SQL 面板」，实际=$actions", actions.contains(closeLabel))
+            assertTrue("复制仍应成功", dialog.isDisposed())
+        } finally {
+            panel.copyNotificationActionsForTest = null
+            if (!dialog.isDisposed()) dialog.doDispose()
+            panel.clear()
         }
     }
 

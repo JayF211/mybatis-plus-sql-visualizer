@@ -468,6 +468,39 @@ class SqlPreviewPanelTest : BasePlatformTestCase() {
         panel.clear()
     }
 
+    fun testCopySqlNotificationOffersClosePanelActionByDefault() {
+        // UI-044：单纯「复制 SQL」时通知要挂「关闭 SQL 面板」——用户还在面板里，这是顺手出口。
+        val panel = SqlPreviewPanel(null)
+        panel.showResult(result())
+        val actions = mutableListOf<String>()
+        panel.copyNotificationActionsForTest = actions
+        try {
+            assertTrue(panel.copySql())
+            val closeLabel = cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message("dialog.closeSqlPanel")
+            assertTrue("单纯复制时通知应带「关闭 SQL 面板」，实际=$actions", actions.contains(closeLabel))
+        } finally {
+            panel.copyNotificationActionsForTest = null
+            panel.clear()
+        }
+    }
+
+    fun testCopySqlCanSuppressClosePanelAction() {
+        // UI-044：调用方自己就要关面板时（「复制 SQL 并关闭」），通知不得再挂「关闭 SQL 面板」——
+        // 弹窗已关，这个链接既冗余又指不到目标。用户真机截图即此形态。
+        val panel = SqlPreviewPanel(null)
+        panel.showResult(result())
+        val actions = mutableListOf<String>()
+        panel.copyNotificationActionsForTest = actions
+        try {
+            assertTrue(panel.copySql(offerClosePanelAction = false))
+            val closeLabel = cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message("dialog.closeSqlPanel")
+            assertFalse("复制并关闭时通知不应带「关闭 SQL 面板」，实际=$actions", actions.contains(closeLabel))
+        } finally {
+            panel.copyNotificationActionsForTest = null
+            panel.clear()
+        }
+    }
+
     fun testCopySqlClosePanelCallbackInjectable() {
         // T-M23.6：onClosePanelRequested 回调默认 null、可注入（预览弹窗赋值 dispose）；
         // project null → 弹框跳过（回调不触发），注入的回调可被面板外部链路触发

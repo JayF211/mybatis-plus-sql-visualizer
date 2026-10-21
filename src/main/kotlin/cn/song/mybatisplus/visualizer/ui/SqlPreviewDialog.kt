@@ -39,7 +39,8 @@ class SqlPreviewDialog(
         MpSqlVisualizerBundle.message("panel.copySqlAndClose"),
     ) {
         override fun doAction(actionEvent: java.awt.event.ActionEvent?) {
-            panel.copySql()
+            // UI-044：弹窗随即关闭，「关闭 SQL 面板」动作已无目标，通知里不再挂它
+            panel.copySql(offerClosePanelAction = false)
             doDispose()
         }
     }
