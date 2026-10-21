@@ -68,6 +68,52 @@ class SqlPreviewDialogTest : BasePlatformTestCase() {
         }
     }
 
+    fun testConstructionTimeActionArrayHasNoNullSlots() {
+        // UI-042 补强：平台 `DialogWrapper.createSouthPanel()` 字节码里是
+        // `createActions()` → `ContainerUtil.filter(..., Conditions.notNull())`——null 元素在进按钮区
+        // 之前就被静默丢掉，不抛错、不写日志。所以「构造没崩」≠「构造正确」，而只断言
+        // 「数组里含某个按钮名」也抓不到「少了一个但目标名字还在」。
+        // 元素个数 + 无 null 槽是唯一能看见那次静默过滤的读数。
+        val dialog = SqlPreviewDialog(project, previewResult())
+        try {
+            val captured = dialog.actionsAtConstructionForTest
+            assertNotNull("构造期应已捕获动作数组", captured)
+            assertEquals("底部动作应为 执行/复制/复制并关闭/取消 四个", 4, captured!!.size)
+            assertTrue(
+                "构造期动作数组不得有空元素（字段声明序晚于 init 的典型症状）：" +
+                    captured.joinToString { it.getValue(javax.swing.Action.NAME)?.toString() ?: "<null>" },
+                captured.none { it == null },
+            )
+        } finally {
+            if (!dialog.isDisposed()) dialog.doDispose()
+            dialog.panelForTest()?.clear()
+        }
+    }
+
+    fun testNonPrimaryButtonsKeepPlatformDefaultStyle() {
+        // UI-043 补强：只有「复制 SQL 并关闭」该是主行动样式。防「修过头」——把
+        // applyPrimaryButtonStyle 误用到全部动作，会让每个按钮都变成蓝底。
+        val dialog = SqlPreviewDialog(project, previewResult())
+        try {
+            val primaryLabel = cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message("panel.copySqlAndClose")
+            dialog.actionsForTest().forEach { action ->
+                val label = action.getValue(javax.swing.Action.NAME)?.toString()
+                val button = dialog.createJButtonForActionForTest(action)
+                val styled = button.getClientProperty(
+                    com.intellij.ide.ui.laf.darcula.ui.DarculaButtonUI.DEFAULT_STYLE_KEY,
+                ) == java.lang.Boolean.TRUE
+                if (label == primaryLabel) {
+                    assertTrue("主行动「$label」应打 styleDefault", styled)
+                } else {
+                    assertFalse("非主行动「$label」不应被染成主按钮样式", styled)
+                }
+            }
+        } finally {
+            if (!dialog.isDisposed()) dialog.doDispose()
+            dialog.panelForTest()?.clear()
+        }
+    }
+
     fun testCopyAndCloseActionIsPresentAtConstructionTime() {
         // 构造期字段序回归（UI-042）：`init()` 会同步调用 createActions()，若 copyAndCloseAction
         // 声明在 init 之后则此刻为 null——动作数组出现空位，按钮不渲染且不报错（用户侧「按钮不见了」）。
