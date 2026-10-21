@@ -164,6 +164,32 @@ class SqlDockedPreviewTest : BasePlatformTestCase() {
         }
     }
 
+    /**
+     * T-PerfSweep26-05（F98，修复前必红）：同一性短路前置——同一条目展示中再来一次内容事件
+     * （流式灌入每 30 条一拍的 ListDataEvent 同路径），不得再付 isPinned() 的全文 getText；
+     * 断言走 [SqlDockedPreview.isPinnedCallCountForTest] 调用计数缝。
+     */
+    fun test同一性短路前置_同条目二次事件不再调用isPinned全文读() {
+        val f = fixture("SELECT 1")
+        val settings = PluginSettings.getInstance()
+        val before = settings.state
+        try {
+            settings.loadState(before.copy(logFormatSql = false))
+            f.list.selectedIndex = 0
+            f.host.toggle()
+            assertEquals("SELECT 1;", f.preview.displayedSqlForTest)
+            val afterFirst = f.preview.isPinnedCallCountForTest
+            assertTrue("首次展示应付过一次 isPinned 全文读（基线）", afterFirst >= 1)
+            f.preview.refreshSelection() // 同一 displayedEntry 的二次事件（ListDataEvent 同入口）
+            assertEquals("同条目二次事件不得再付 isPinned 全文读（F98 短路）",
+                afterFirst, f.preview.isPinnedCallCountForTest)
+        } finally {
+            f.host.hideHint()
+            f.preview.dispose()
+            settings.loadState(before)
+        }
+    }
+
     fun test首次单击就地提示只出现一次_双击取消_两页共用标志() {
         val first = fixture("SELECT 1")
         val second = fixture("SELECT 2")
