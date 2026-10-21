@@ -468,9 +468,11 @@ public class LogToSqlPanel extends JPanel implements Disposable {
         HibernateLogParser hibernateParser = parsers.hibernate();
         JdbcTemplateLogParser jdbcParser = parsers.jdbc();
         for (String line : text.split("\n", -1)) {
-            myBatisParser.feed(line);
-            hibernateParser.feed(line);
-            jdbcParser.feed(line);
+            // F58：同款每行一次 token 下传
+            String threadToken = LogThreadRouter.threadTokenOf(line);
+            myBatisParser.feed(line, threadToken);
+            hibernateParser.feed(line, threadToken);
+            jdbcParser.feed(line, threadToken);
             if (parsers.shardingEnabled()) {
                 parsers.sharding().feed(line);
             }

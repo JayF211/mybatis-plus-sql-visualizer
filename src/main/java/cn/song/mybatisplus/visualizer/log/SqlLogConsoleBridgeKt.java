@@ -94,13 +94,16 @@ public final class SqlLogConsoleBridgeKt {
             ctx.pendingError = null;
         }
         // 2) 喂行到四个解析器（各自忽略不匹配的行；配置快照随设置变更事件刷新，逐行零同步成本）
-        ctx.myBatisParser.feed(line);
+        // F58（T-PerfSweep18 压轴）：线程 token 每行只提一次下传——原四解析器各自 bucketFor(line)
+        // 重提同一 token（同一行最多 4 次 substring 窗口+级别锚正则+方括号扫描）。
+        String threadToken = LogThreadRouter.threadTokenOf(line);
+        ctx.myBatisParser.feed(line, threadToken);
         if (ctx.hibernateEnabled()) {
-            ctx.hibernateParser.feed(line);
+            ctx.hibernateParser.feed(line, threadToken);
         }
-        ctx.jdbcParser.feed(line);
+        ctx.jdbcParser.feed(line, threadToken);
         if (ctx.shardingEnabled) {
-            ctx.shardingParser.feed(line);
+            ctx.shardingParser.feed(line, threadToken);
         }
         // 2.5) T-ConsolePendingFlush：喂行后冲刷**已静默**桶的待产出条目。放在喂行之后是有意的——本行刚
         // 触达它自己的桶（活动时间刷新），该桶因此不会出现在冲刷名单里，本行所属语句的参数行不会被截断；
@@ -175,13 +178,16 @@ public final class SqlLogConsoleBridgeKt {
      * 条目即弃零驻留；源码标记行跳过（条目已弃，无需归属）。
      */
     private static void sniffLogTimestamp(String line, BridgeLineContext ctx) {
-        ctx.myBatisParser.feed(line);
+        // F58（T-PerfSweep18 压轴）：线程 token 每行只提一次下传——原四解析器各自 bucketFor(line)
+        // 重提同一 token（同一行最多 4 次 substring 窗口+级别锚正则+方括号扫描）。
+        String threadToken = LogThreadRouter.threadTokenOf(line);
+        ctx.myBatisParser.feed(line, threadToken);
         if (ctx.hibernateEnabled()) {
-            ctx.hibernateParser.feed(line);
+            ctx.hibernateParser.feed(line, threadToken);
         }
-        ctx.jdbcParser.feed(line);
+        ctx.jdbcParser.feed(line, threadToken);
         if (ctx.shardingEnabled) {
-            ctx.shardingParser.feed(line);
+            ctx.shardingParser.feed(line, threadToken);
         }
         List<LogSqlEntry> taken = new ArrayList<>();
         taken.addAll(ctx.myBatisParser.takeEntries());
@@ -189,9 +195,13 @@ public final class SqlLogConsoleBridgeKt {
         taken.addAll(ctx.jdbcParser.takeEntries());
         taken.addAll(ctx.shardingParser.takeEntries());
         for (LogSqlEntry e : taken) {
+            // 无时间 StdOut 的 timestamp 是 IDE 解析时刻，不能冒充应用日志时间——不入册。
+            if (e.logTimestamp() == null) {
+                continue;
+            }
             LogTimeCorrelator.put(
                     LogSqlModelsKt.logTimeKey(e),
-                    e.logTimestamp() != null ? e.logTimestamp() : e.timestamp(),
+                    e.logTimestamp(),
                     LogSqlModelsKt.logTimeParamSignature(e.params()));
         }
     }
