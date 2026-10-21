@@ -328,7 +328,7 @@ public final class SqlPreviewServiceEnhancementsKt {
             @NotNull Set<String> inClauseParams,
             @Nullable Dialect dialectOverride) {
         return buildJpaPreviewResult(p, statement, convertedSql, tableName, paramNames, method, inClauseParams,
-                dialectOverride, List.of(), Set.of(), Map.of());
+                dialectOverride, null, List.of(), Set.of(), Map.of());
     }
 
     /**
@@ -347,7 +347,7 @@ public final class SqlPreviewServiceEnhancementsKt {
             @NotNull List<String> placeholderParamNames,
             @NotNull Map<String, String> initialParamValues) {
         return buildJpaPreviewResult(p, statement, convertedSql, tableName, paramNames, method, inClauseParams,
-                null, placeholderParamNames, Set.of(), initialParamValues);
+                null, null, placeholderParamNames, Set.of(), initialParamValues);
     }
 
     /**
@@ -367,6 +367,25 @@ public final class SqlPreviewServiceEnhancementsKt {
             @Nullable PsiMethod method,
             @NotNull Set<String> inClauseParams,
             @Nullable Dialect dialectOverride,
+            @NotNull List<String> placeholderParamNames,
+            @NotNull Set<String> duplicateParamNames,
+            @NotNull Map<String, String> initialParamValues) {
+        return buildJpaPreviewResult(p, statement, convertedSql, tableName, paramNames, method, inClauseParams,
+                dialectOverride, null, placeholderParamNames, duplicateParamNames, initialParamValues);
+    }
+
+    /** Kotlin 默认参数等价全量形态：{@code dialectDecision} 显式透传（O-145 方言决策入结果）。 */
+    @NotNull
+    public static PreviewResult buildJpaPreviewResult(
+            @NotNull SqlPreviewService p,
+            @NotNull SqlStatement statement,
+            @NotNull String convertedSql,
+            @NotNull String tableName,
+            @NotNull List<String> paramNames,
+            @Nullable PsiMethod method,
+            @NotNull Set<String> inClauseParams,
+            @Nullable Dialect dialectOverride,
+            @Nullable cn.song.mybatisplus.visualizer.sql.DialectDecisionEngine.Decision dialectDecision,
             @NotNull List<String> placeholderParamNames,
             @NotNull Set<String> duplicateParamNames,
             @NotNull Map<String, String> initialParamValues) {
@@ -429,6 +448,12 @@ public final class SqlPreviewServiceEnhancementsKt {
                 usableNamedSources,
                 duplicateParamNames,
                 diagramStatement,
+                // historyFingerprintSeed 未用（JPA 链无注入前文本种子）；下方透传 renderedDialect/dialectDecision
+                null,
+                null,
+                dialect,
+                dialectDecision,
+                null,
                 null);
     }
 
@@ -469,7 +494,21 @@ public final class SqlPreviewServiceEnhancementsKt {
             @NotNull SqlStatement statement,
             @Nullable String countSql,
             @Nullable String historyFingerprintSeed) {
-        Dialect dialect = p.currentDialect();
+        return buildPreviewResult(p, wrapperType, table, statement, countSql, historyFingerprintSeed,
+                p.currentDialect(), null);
+    }
+
+    /** Kotlin 默认参数等价全量形态：{@code dialect}/{@code dialectDecision} 显式透传（O-145 方言决策入结果）。 */
+    @NotNull
+    public static PreviewResult buildPreviewResult(
+            @NotNull SqlPreviewService p,
+            @Nullable WrapperType wrapperType,
+            @NotNull TableInfo table,
+            @NotNull SqlStatement statement,
+            @Nullable String countSql,
+            @Nullable String historyFingerprintSeed,
+            @NotNull Dialect dialect,
+            @Nullable cn.song.mybatisplus.visualizer.sql.DialectDecisionEngine.Decision dialectDecision) {
         boolean compact = !p.formatSql();
         cn.song.mybatisplus.visualizer.sql.GeneratedSql generated =
                 SqlGenerator.generateWithParams(statement, compact, dialect, null);
@@ -505,7 +544,7 @@ public final class SqlPreviewServiceEnhancementsKt {
                 null,
                 Map.of(),
                 // F-2：SQL 性能分析（仅 SELECT）：委托 SqlPerfAnalyzer；UPDATE/DELETE 走既有 buildWarning 路径
-                p.analyzePerf(generated.getSql(), statement),
+                p.analyzePerf(generated.getSql(), statement, dialect),
                 fillClauses,
                 null,
                 null,
@@ -518,7 +557,12 @@ public final class SqlPreviewServiceEnhancementsKt {
                 Set.of(),
                 diagramStatement,
                 // 缺陷②修复：参数历史键指纹用「注入前」文本（开关切换不再改键，回填不丢）
-                historyFingerprintSeed);
+                historyFingerprintSeed,
+                null,
+                dialect,
+                dialectDecision,
+                null,
+                null);
     }
 
     /**
