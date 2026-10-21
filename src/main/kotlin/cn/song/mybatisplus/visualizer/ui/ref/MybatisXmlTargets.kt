@@ -83,14 +83,42 @@ object MybatisXmlTargets {
         return findIdAttributeInFile(contextFile, tagName, refId)
     }
 
-    /** 按 namespace 找 mapper XML 文件（索引 + 根元素预筛，单槽 TTL 缓存，模式同 MapperXmlLocator）。 */
+    /**
+     * 按 namespace 找 mapper XML 文件（索引 + 根元素预筛，文件清单单槽 TTL 缓存 +
+     * **namespace→文件结果级 memo**，见 [namespaceSlot]）。
+     *
+     * F96（T-PerfSweep26）：只有文件清单缓存时，同一 namespace 的重复 resolve 每次都要
+     * 逐文件 `PsiManager.findFile` + `rootTag.namespace` 比对；查找用法/重命名会批量触发，
+     * 成本相乘。结果级 memo 以**文件清单代**为戳（清单重建即失效），负结果一并缓存。
+     */
     fun findMapperFileByNamespace(project: Project, namespace: String): XmlFile? {
         if (namespace.isEmpty()) return null
-        for (vf in mapperXmlVirtualFiles(project)) {
-            val xmlFile = PsiManager.getInstance(project).findFile(vf) as? XmlFile ?: continue
-            if (xmlFile.rootTag?.getAttributeValue("namespace") == namespace) return xmlFile
+        val listing = mapperXmlListing(project)
+        namespaceSlot?.let { slot ->
+            if (slot.project.get() === project &&
+                slot.listingGeneration == listing.generation &&
+                slot.namespace == namespace
+            ) {
+                return slot.file?.takeIf { it.isValid }
+            }
         }
-        return null
+        namespaceScanCount.incrementAndGet()
+        var found: XmlFile? = null
+        for (vf in listing.files) {
+            if (!vf.isValid) continue
+            val xmlFile = PsiManager.getInstance(project).findFile(vf) as? XmlFile ?: continue
+            if (xmlFile.rootTag?.getAttributeValue("namespace") == namespace) {
+                found = xmlFile
+                break
+            }
+        }
+        namespaceSlot = NamespaceSlot(
+            project = WeakReference(project),
+            listingGeneration = listing.generation,
+            namespace = namespace,
+            file = found,
+        )
+        return found
     }
 
     /**
@@ -102,6 +130,7 @@ object MybatisXmlTargets {
     fun resolveClass(project: Project?, context: XmlAttributeValue, rawName: String): PsiClass? {
         val name = rawName.trim().substringBefore('<').substringBefore('[')
         if (project == null || name.isEmpty()) return null
+        classResolveCount.incrementAndGet()
         val facade = JavaPsiFacade.getInstance(project)
         val scope = GlobalSearchScope.allScope(project)
         val shortName = name.substringAfterLast('.')
@@ -203,6 +232,22 @@ object MybatisXmlTargets {
         val project: WeakReference<Project>,
         val files: List<VirtualFile>,
         val atMs: Long,
+        val generation: Long,
+    )
+
+    /**
+     * F96（T-PerfSweep26）：namespace → mapper 文件的**单槽结果级 memo**。
+     *
+     * 失效戳=文件清单代 [FileListSlot.generation]（清单重建即换代，含新增/删除 mapper XML 后
+     * TTL 过期重扫）；文件对象自身 invalid（被删/移动）时回落重查。单槽容量=最近一个 namespace
+     * ——引用解析天然按 refid 顺序访问、局部性强，且槽内只持一个 XmlFile 强引用（PSI 强引用
+     * 生命周期与项目一致，不额外钉住文件）。
+     */
+    private class NamespaceSlot(
+        val project: WeakReference<Project>,
+        val listingGeneration: Long,
+        val namespace: String,
+        val file: XmlFile?,
     )
 
     /** TTL 上界（毫秒）：新增 mapper XML 后至多一个窗口内解析不到（过期即重扫）。 */
@@ -212,18 +257,33 @@ object MybatisXmlTargets {
 
     internal val indexScanCount = java.util.concurrent.atomic.AtomicInteger(0)
 
+    /** F96 测试缝：namespace→文件实查次数（memo 命中不计数）。 */
+    internal val namespaceScanCount = java.util.concurrent.atomic.AtomicInteger(0)
+
+    /** F97 测试缝：`resolveClass` 实际执行次数（批内 memo 命中不计数）。 */
+    internal val classResolveCount = java.util.concurrent.atomic.AtomicInteger(0)
+
     @Volatile
     private var fileListSlot: FileListSlot? = null
 
+    @Volatile
+    private var namespaceSlot: NamespaceSlot? = null
+
+    /** 文件清单 + 其代（代在每次重扫时递增；namespace memo 以此为失效戳）。 */
+    private class Listing(val files: List<VirtualFile>, val generation: Long)
+
+    private var listingGenerationCounter: Long = 0L
+
     internal fun clearFileListCacheForTest() {
         fileListSlot = null
+        namespaceSlot = null
     }
 
-    private fun mapperXmlVirtualFiles(project: Project): List<VirtualFile> {
+    private fun mapperXmlListing(project: Project): Listing {
         val now = clockMs()
         fileListSlot?.let { slot ->
             if (slot.project.get() === project && now - slot.atMs <= fileListTtlMs && slot.files.all { it.isValid }) {
-                return slot.files
+                return Listing(slot.files, slot.generation)
             }
         }
         indexScanCount.incrementAndGet()
@@ -236,8 +296,9 @@ object MybatisXmlTargets {
                 .mapNotNull { it.virtualFile }
                 .toList()
         }.getOrDefault(emptyList())
-        fileListSlot = FileListSlot(WeakReference(project), files, now)
-        return files
+        val generation = ++listingGenerationCounter
+        fileListSlot = FileListSlot(WeakReference(project), files, now, generation)
+        return Listing(files, generation)
     }
 
     /** 测试缝：`PsiElement` 归属的 mapper 文件（供用例断言解析落点）。 */

@@ -261,6 +261,114 @@ class MybatisXmlReferenceTest : BasePlatformTestCase() {
     }
 
     // ------------------------------------------------------------------
+    // F96（T-PerfSweep26）：namespace→文件结果级 memo
+    // ------------------------------------------------------------------
+
+    /** 同一 namespace 二次解析不重复实查（memo 命中）；文件清单代不变。 */
+    @Test
+    fun testF96_同namespace二次解析_不重复实查() {
+        myFixture.addFileToProject(
+            "m/UserMapper.xml",
+            """<mapper namespace="m.user"><sql id="f">SELECT 1</sql></mapper>""",
+        )
+        myFixture.configureByText(
+            "mapper.xml",
+            """<mapper namespace="n"><select id="s">SELECT * FROM t <include refid="m.user.f"/></select></mapper>""",
+        )
+        MybatisXmlTargets.clearFileListCacheForTest()
+        MybatisXmlTargets.namespaceScanCount.set(0)
+        MybatisXmlTargets.indexScanCount.set(0)
+
+        val first = MybatisXmlTargets.findMapperFileByNamespace(project, "m.user")
+        assertNotNull("首次解析应命中", first)
+        val scansAfterFirst = MybatisXmlTargets.namespaceScanCount.get()
+        assertEquals("首次解析应有且仅有一次实查", 1, scansAfterFirst)
+
+        val second = MybatisXmlTargets.findMapperFileByNamespace(project, "m.user")
+        assertNotNull("二次解析应命中", second)
+        assertEquals(
+            "同 namespace 二次解析不得重复实查（F96 memo）",
+            scansAfterFirst,
+            MybatisXmlTargets.namespaceScanCount.get(),
+        )
+        assertEquals("二次解析不得触发文件清单重扫", 1, MybatisXmlTargets.indexScanCount.get())
+    }
+
+    /** 负结果同样入 memo：不存在的 namespace 二次解析不重复实查。 */
+    @Test
+    fun testF96_不存在namespace_负结果也入memo() {
+        myFixture.configureByText("mapper.xml", """<mapper namespace="n"><select id="s">SELECT 1</select></mapper>""")
+        MybatisXmlTargets.clearFileListCacheForTest()
+        MybatisXmlTargets.namespaceScanCount.set(0)
+
+        assertNull(MybatisXmlTargets.findMapperFileByNamespace(project, "no.such.ns"))
+        val scans = MybatisXmlTargets.namespaceScanCount.get()
+        assertNull(MybatisXmlTargets.findMapperFileByNamespace(project, "no.such.ns"))
+        assertEquals("负结果应入 memo，不重复实查", scans, MybatisXmlTargets.namespaceScanCount.get())
+    }
+
+    /** 文件清单换代（TTL 过期重扫）后 memo 失效：新增同 namespace 文件可被后续解析看到。 */
+    @Test
+    fun testF96_清单换代后memo失效_新增文件可见() {
+        myFixture.addFileToProject("m/A.xml", """<mapper namespace="m.same"><sql id="a">SELECT 1</sql></mapper>""")
+        myFixture.configureByText("mapper.xml", """<mapper namespace="n"><select id="s">SELECT 1</select></mapper>""")
+        MybatisXmlTargets.clearFileListCacheForTest()
+
+        var now = 1_000L
+        MybatisXmlTargets.clockMs = { now }
+        try {
+            assertNotNull(MybatisXmlTargets.findMapperFileByNamespace(project, "m.same"))
+            // 推进时钟越过 TTL，使文件清单重扫换代
+            now += MybatisXmlTargets.fileListTtlMs + 1
+            MybatisXmlTargets.indexScanCount.set(0)
+            val afterExpiry = MybatisXmlTargets.findMapperFileByNamespace(project, "m.same")
+            assertNotNull("换代后应重新解析到目标", afterExpiry)
+            assertEquals("TTL 过期应触发一次清单重扫", 1, MybatisXmlTargets.indexScanCount.get())
+        } finally {
+            MybatisXmlTargets.clockMs = { System.currentTimeMillis() }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // F97（T-PerfSweep26）：holderClass 祖先链批内 memo
+    // ------------------------------------------------------------------
+
+    /**
+     * 祖先链上重复出现的同一类名只解析一次（批内 memo）。
+     *
+     * 形态：多层嵌套且**每层都带同一个解析不成功的类名**——holderClass 逐层问 5 个属性名，
+     * 只有解析失败才会继续往上走满祖先链，因此这个形态才真正暴露「同名重复解析」。
+     * 修复前每层各解析一次（本例 3 次），memo 后压到 1 次。
+     */
+    @Test
+    fun testF97_同名类在祖先链重复出现_只解析一次() {
+        myFixture.configureByText(
+            "mapper.xml",
+            """<mapper namespace="n">
+  <resultMap id="rm" type="dto.Missing">
+    <association property="a" javaType="dto.Missing">
+      <association property="b" javaType="dto.Missing">
+        <result property="notThere" column="c"/>
+      </association>
+    </association>
+  </resultMap>
+</mapper>""",
+        )
+        val file = myFixture.file as XmlFile
+        val value = PsiTreeUtil.findChildrenOfType(file, XmlAttributeValue::class.java)
+            .first { (it.parent as? XmlAttribute)?.name == "property" && it.value == "notThere" }
+
+        MybatisXmlTargets.classResolveCount.set(0)
+        val target = BeanPropertyReference(value).resolve()
+        assertNull("持有者类不存在时属性应解析为 null", target)
+        assertEquals(
+            "三层同名类名应被批内 memo 合并为一次 resolveClass（F97）",
+            1,
+            MybatisXmlTargets.classResolveCount.get(),
+        )
+    }
+
+    // ------------------------------------------------------------------
     // EP 接线守卫（形态同 SqlMapperInjectorWiringTest 的 plugin.xml 正则守卫）
     // ------------------------------------------------------------------
 
