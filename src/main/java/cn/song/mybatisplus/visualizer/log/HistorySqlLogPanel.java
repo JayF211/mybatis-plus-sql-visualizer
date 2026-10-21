@@ -3,11 +3,12 @@ package cn.song.mybatisplus.visualizer.log;
 import cn.song.mybatisplus.visualizer.config.PluginSettings;
 import cn.song.mybatisplus.visualizer.model.PreviewResult;
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService;
+import cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons;
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
 import cn.song.mybatisplus.visualizer.util.MpvsUiColors;
 import cn.song.mybatisplus.visualizer.util.UiTextClipboard;
-import com.intellij.icons.AllIcons;
 import com.intellij.openapi.Disposable;
+import com.intellij.openapi.actionSystem.ActionGroup;
 import com.intellij.openapi.actionSystem.ActionManager;
 import com.intellij.openapi.actionSystem.ActionPopupMenu;
 import com.intellij.openapi.actionSystem.ActionToolbar;
@@ -383,6 +384,45 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
         }
     }
 
+    /** 与日志页同款直接动作；历史只跳转，不引入实时尾部跟随。 */
+    final AnAction scrollToEndAction = new AnAction() {
+        @Override
+        public void update(AnActionEvent e) {
+            e.getPresentation().setIcon(MpvsIcons.ScrollToEnd);
+            e.getPresentation().setText(MpSqlVisualizerBundle.message("log.panel.scrollBottom"));
+            // 日志页的 tip 描述实时跟随，历史使用同一中性动作文案，避免误导。
+            e.getPresentation().setDescription(MpSqlVisualizerBundle.message("log.panel.scrollBottom"));
+            e.getPresentation().setVisible(!isShowingFiles());
+            e.getPresentation().setEnabled(!isShowingFiles() && !sqlListModel.isEmpty() && !project.isDisposed());
+        }
+
+        @Override
+        public void actionPerformed(AnActionEvent e) {
+            if (isShowingFiles() || project.isDisposed() || sqlListModel.isEmpty()) return;
+            int generation = bgGeneration;
+            if (pendingAppendGen == generation && pendingAppendIndex < pendingEntries.size()) {
+                List<LogSqlEntry> remaining = pendingEntries.subList(pendingAppendIndex, pendingEntries.size());
+                // 一次批量模型事件；先清待写状态，防滚动/布局监听重入重复追加。
+                pendingEntries = List.of();
+                pendingAppendIndex = 0;
+                sqlListModel.addAll(remaining);
+            }
+            // 同步完成，不留下会滚动到新文件/新过滤结果的 invokeLater 请求。
+            if (generation != bgGeneration || isShowingFiles() || sqlListModel.isEmpty()) return;
+            sqlList.ensureIndexIsVisible(sqlListModel.size() - 1);
+            javax.swing.JScrollBar bar = sqlScrollPane.getVerticalScrollBar();
+            bar.setValue(bar.getMaximum());
+        }
+    };
+
+    public List<AnAction> navigationActionsForTest() {
+        ActionToolbar toolbar = _navToolbarRef;
+        if (toolbar == null) return List.of();
+        ActionGroup group = (ActionGroup) toolbar.getActionGroup();
+        AnAction[] children = group.getChildren(null);
+        return children == null ? List.of() : new ArrayList<>(Arrays.asList(children));
+    }
+
     /** 层级切换后即时刷新导航工具栏（Back 可见性走 update；组件不可见时平台跳过，无副作用）。 */
     private void refreshNavToolbar() {
         ActionToolbar toolbar = _navToolbarRef;
@@ -395,7 +435,7 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
         // 顶部工具栏：返回（仅二级可见）+ 刷新 + 搜索
         // T-UiNative T-UN-10：手摆按钮 → 平台 ActionToolbar（Back 可见性由 BackAction.update 按当前层级输出）
         ActionToolbar navToolbar = ActionManager.getInstance()
-                .createActionToolbar("mpvs.history.nav", new DefaultActionGroup(new BackAction(), new RefreshAction()), true);
+                .createActionToolbar("mpvs.history.nav", new DefaultActionGroup(new BackAction(), new RefreshAction(), scrollToEndAction), true);
         navToolbar.setTargetComponent(this);
         _navToolbarRef = navToolbar;
         JPanel toolbar = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
@@ -420,6 +460,8 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
                 scheduleSearch();
             }
         });
+        // 原生按钮只修改 FindModel，不触发 DocumentListener；切旗必须同步重验并清除过期错误。
+        nativeSearch.getFindModel().addObserver(() -> applySearch());
         // T-HistorySearchToggles：搜索框外包宿主容器（CENTER 搜索框 + EAST 正则/大小写两枚开关）
         toolbar.add(searchBar);
         // O-90：同模板聚焦提示 chip（聚焦时显示；点击清除）
@@ -507,6 +549,7 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
         currentFile = null;
         currentFileStamp = null;
         currentEntries = List.of();
+        pendingEntries = List.of(); // F85（T-PerfSweep24）：返回一级清挂起批次（有 showing 守卫不误消费，清掉免滞留）
         if (previewHost != null) previewHost.hideHint(); // 返回一级时收起迁移提示（停靠预览随卡片隐藏）
         refreshNavToolbar(); // T-UN-10：Back 可见性随层级即时刷新（原 backButton.isVisible = false）
         searchField.getTextEditor().getEmptyText().setText(MpSqlVisualizerBundle.message("log.history.search.files"));
@@ -672,6 +715,10 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
     private void updateFilesEmptyText() {
         com.intellij.util.ui.StatusText status = fileList.getEmptyText();
         status.clear();
+        if (!allFiles.isEmpty()) {
+            status.setText(MpSqlVisualizerBundle.message("log.history.search.noMatches"));
+            return;
+        }
         for (String line : MpSqlVisualizerBundle.message("log.history.files.empty").split("\n", -1)) {
             status.appendLine(line);
         }
@@ -773,6 +820,9 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
         for (HistoryFileEntry it : filtered) {
             fileListModel.addElement(it);
         }
+        // 一级仍为文件名子串搜索；从二级返回时清掉与此层无关的正则错误。
+        nativeSearch.setSearchError(null);
+        updateFilesEmptyText();
         // T-SearchToggleNativeLook：原生状态区读数（对齐 IDEA 搜索条「N results」位）
         nativeSearch.setStatusText(query.isEmpty()
                 ? ""
@@ -803,10 +853,20 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
                 regexEnabled(),
                 matchCaseEnabled(),
                 regexMemo);
-        // T-SearchToggleNativeLook：原生状态区读数（对齐 IDEA 搜索条「N results」位）
-        nativeSearch.setStatusText(searchField.getText().trim().isEmpty()
-                ? ""
-                : MpSqlVisualizerBundle.message("log.history.search.results", filteredEntries.size()));
+        String query = searchField.getText().trim();
+        boolean invalidRegex = !query.isEmpty()
+                && (regexEnabled() || query.startsWith(HistorySqlLogPanelKt.HISTORY_REGEX_PREFIX))
+                && regexMemo.compiled == null;
+        String error = invalidRegex
+                ? MpSqlVisualizerBundle.message("log.history.search.invalidRegex") : null;
+        // 过滤仍保留既有非法正则子串回退，但不能让「0 条」掩盖输入错误。
+        nativeSearch.setSearchError(error);
+        nativeSearch.setStatusText(error != null ? error
+                : (query.isEmpty()
+                        ? ""
+                        : MpSqlVisualizerBundle.message("log.history.search.results", filteredEntries.size())));
+        sqlList.getEmptyText().setText(error != null ? error : MpSqlVisualizerBundle.message(
+                currentEntries.isEmpty() ? "log.history.entries.empty" : "log.history.search.noMatches"));
         showSqlEntries(filteredEntries);
     }
 
@@ -1175,7 +1235,7 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
                 project,
                 MpSqlVisualizerBundle.message("log.history.export.choose"),
                 MpSqlVisualizerBundle.message("log.history.export"),
-                com.intellij.icons.AllIcons.Actions.EditSource,
+                MpvsIcons.Export,
                 names,
                 names[3]);
         if (idx < 0) {
@@ -1206,7 +1266,7 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
 
         @Override
         public void update(AnActionEvent e) {
-            e.getPresentation().setIcon(AllIcons.Actions.Copy);
+            e.getPresentation().setIcon(MpvsIcons.Copy);
             e.getPresentation().setText(SqlLogPanelKt.copyMenuText(
                     "log.history.copy", "log.history.copySelected", entries.size()));
         }
@@ -1228,7 +1288,7 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
 
         @Override
         public void update(AnActionEvent e) {
-            e.getPresentation().setIcon(AllIcons.Actions.Copy);
+            e.getPresentation().setIcon(MpvsIcons.Copy);
             e.getPresentation().setText(SqlLogPanelKt.copyMenuText(
                     "log.history.copyTimestamp", "log.history.copyTimestampSelected", entries.size()));
             e.getPresentation().setEnabled(!clip.isEmpty());
@@ -1300,7 +1360,7 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
      * T-M55-01：跳转到 mapper XML 语句节点。mapperStatement 非空且定位成功才显示
      * （update 内解析一次并存引用）；定位失败不显示，「跳转到 Java」承担回退，不劣化。
      */
-    private class JumpToMapperXmlAction extends AnAction {
+    class JumpToMapperXmlAction extends AnAction {
         private final LogSqlEntry entry;
         private HjtMapperXml resolved = null;
 
@@ -1310,7 +1370,7 @@ public class HistorySqlLogPanel extends JPanel implements Disposable {
 
         @Override
         public void update(AnActionEvent e) {
-            e.getPresentation().setIcon(AllIcons.FileTypes.Xml);
+            e.getPresentation().setIcon(MpvsIcons.MapperXml);
             e.getPresentation().setText(MpSqlVisualizerBundle.message("log.history.jumpToXml"));
             resolved = resolveXmlJumpTarget(entry);
             e.getPresentation().setEnabledAndVisible(resolved != null);

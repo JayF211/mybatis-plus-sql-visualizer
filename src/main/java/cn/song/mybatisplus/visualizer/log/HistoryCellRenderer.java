@@ -18,6 +18,7 @@ import java.awt.GridLayout;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * 二级 SQL 列表单元格渲染器（F-44-2；T-LogListFreeze-04 弃 HTML 通道）：
@@ -164,17 +165,21 @@ public class HistoryCellRenderer extends JPanel implements javax.swing.ListCellR
      */
     private List<List<SqlTextFragment>> sqlLineFragmentsFor(LogSqlEntry entry) {
         SqlListDisplayMode mode = PluginSettings.getInstance().sqlListDisplayMode();
-        String sql = SqlLogPanelKt.withTerminator(mode == SqlListDisplayMode.FORMATTED ? entry.restoredSql() : entry.summary());
+        // R60：只在展示投影脱敏；FORMATTED 使用完整 SQL，其他模式沿用摘要。
+        boolean maskOn = PluginSettings.getInstance().getState().getDisplayMaskEnabled();
+        String sql = SqlLogPanelKt.withTerminator(SqlListFragmentRenderer.displaySqlForList(entry, mode, maskOn));
         if (mode == SqlListDisplayMode.SINGLE_LINE) {
             List<List<SqlTextFragment>> single = new ArrayList<>();
             single.add(SqlListFragmentRenderer.renderFragments(sql));
             return single;
         }
         List<List<SqlSemanticFragment>> semantics = entry.cachedListLineFragments();
-        if (semantics == null || entry.cachedListLineFragmentsMode() != mode) {
+        if (semantics == null || entry.cachedListLineFragmentsMode() != mode
+                || !Objects.equals(entry.cachedListLineFragmentsMasked(), maskOn)) {
             semantics = SqlListFragmentRenderer.semanticLineFragments(sql, mode);
             entry.setCachedListLineFragments(semantics);
             entry.setCachedListLineFragmentsMode(mode);
+            entry.setCachedListLineFragmentsMasked(maskOn);
         }
         return SqlEntryPresentation.visibleSqlLines(SqlListFragmentRenderer.projectLineFragments(semantics), mode);
     }

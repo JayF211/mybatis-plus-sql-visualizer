@@ -209,6 +209,19 @@ public class NativeSearchTextField implements DataProvider {
         statusLabel.setVisible(!text.isEmpty());
     }
 
+    /** 搜索校验反馈：复用平台搜索错误配色，并同步实际挂载的右侧标签。null 清除错误。 */
+    public void setSearchError(@Nullable String message) {
+        if (message == null) {
+            component.setRegularBackground();
+        } else {
+            component.setNotFoundBackground();
+        }
+        statusLabel.setForeground(message == null
+                ? UIUtil.getLabelInfoForeground() : component.getStatusColor());
+        textComponent.setToolTipText(message);
+        if (message != null) setStatusText(message);
+    }
+
     /**
      * 宿主面板在过滤真正应用（防抖后）时喂词：非空去重移到队尾，容量 {@link #MAX_HISTORY} 淘汰最旧。
      * 与平台历史（全局 Find 历史）完全隔离。
