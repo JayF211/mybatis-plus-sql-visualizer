@@ -7,6 +7,7 @@ import cn.song.mybatisplus.visualizer.model.FillClause;
 import cn.song.mybatisplus.visualizer.model.JoinClause;
 import cn.song.mybatisplus.visualizer.model.JoinType;
 import cn.song.mybatisplus.visualizer.model.SelectStatement;
+import cn.song.mybatisplus.visualizer.model.SqlFragment;
 import cn.song.mybatisplus.visualizer.model.SqlStatement;
 import cn.song.mybatisplus.visualizer.model.SqlValue;
 import cn.song.mybatisplus.visualizer.model.TableInfo;
@@ -16,6 +17,7 @@ import cn.song.mybatisplus.visualizer.model.WrapperCall;
 import cn.song.mybatisplus.visualizer.model.WrapperChain;
 import cn.song.mybatisplus.visualizer.model.WrapperType;
 import cn.song.mybatisplus.visualizer.psi.EntityResolver;
+import cn.song.mybatisplus.visualizer.sql.GeneratedSql;
 import cn.song.mybatisplus.visualizer.sql.MySqlDialect;
 import cn.song.mybatisplus.visualizer.sql.SqlGenerator;
 import com.intellij.openapi.project.Project;
@@ -179,7 +181,7 @@ public final class MpjLambdaConverter implements WrapperConverter {
             if (FROM_METHOD.equals(call.getMethodName())) { fromSubQuery = parseFrom(call, table, mainAlias); break; }
         }
 
-        Pair<String, String> around = null;
+        AroundFragment around = null;
         for (WrapperCall call : chain.getCalls()) {
             if (AROUND_METHOD.equals(call.getMethodName())) { around = parseAround(call); break; }
         }
@@ -191,12 +193,17 @@ public final class MpjLambdaConverter implements WrapperConverter {
         }
         List<FillClause> fillClausesOrNull = fillClauses.isEmpty() ? null : fillClauses;
 
-        String rawAround = around != null ? around.getSecond() : null;
+        String rawAround = around != null ? around.last() : null;
         String rawFirst;
-        if (around != null && around.getFirst() != null) {
-            rawFirst = base.getRawFirst() != null ? base.getRawFirst() + " " + around.getFirst() : around.getFirst();
+        List<String> rawFirstParams;
+        if (around != null && around.first() != null) {
+            rawFirst = base.getRawFirst() != null ? base.getRawFirst() + " " + around.first() : around.first();
+            // T-UpdateSetSqlConcat：first 片段合并后来源同序拼接（base 的在前）
+            rawFirstParams = new ArrayList<>(base.getRawFirstParams());
+            rawFirstParams.addAll(around.firstParams());
         } else {
             rawFirst = base.getRawFirst();
+            rawFirstParams = base.getRawFirstParams();
         }
 
         return new SelectStatement(
@@ -212,6 +219,8 @@ public final class MpjLambdaConverter implements WrapperConverter {
                 base.getLimit(),
                 rawFirst,
                 rawAround,
+                rawFirstParams,
+                around != null ? around.lastParams() : List.of(),
                 base.getComment(),
                 unions,
                 fromSubQuery,
@@ -238,7 +247,9 @@ public final class MpjLambdaConverter implements WrapperConverter {
         if (nested == null) return null;
         SelectStatement subStatement = new QueryWrapperParser(subTable.getTableInfo()).parse(nested.getChain());
         String keyword = "unionAll".equals(call.getMethodName()) ? "UNION ALL" : "UNION";
-        return new UnionClause(keyword, SqlGenerator.INSTANCE.generate(subStatement, true, MySqlDialect.INSTANCE, null));
+        // T-UpdateSetSqlConcat：子语句的占位符来源随子句一起带出（渲染点按序登记，否则主语句后面的参数错位）
+        GeneratedSql generated = SqlGenerator.generateWithParams(subStatement, true);
+        return new UnionClause(keyword, generated.getSql(), generated.getUnresolvedParams());
     }
 
     /** from(子查询主表) → 主表替换为子查询，返回 Pair(子查询 SQL, 外层别名)。 */
@@ -258,16 +269,33 @@ public final class MpjLambdaConverter implements WrapperConverter {
         return new Pair<>(SqlGenerator.INSTANCE.generate(subStatementWithAlias, true, MySqlDialect.INSTANCE, null), outerAlias);
     }
 
-    /** around 解析：双字符串字面量或模板形态。 */
-    private Pair<String, String> parseAround(WrapperCall call) {
-        SqlValue firstVal = WrapperConverterKt.asValue(argAt(call.getArgs(), 0));
-        if (!(firstVal instanceof SqlValue.Literal lit)) return null;
-        String first = lit.getUnquoted();
-        if (!first.contains("{") && call.getArgs().size() == 2) {
-            SqlValue secondVal = WrapperConverterKt.asValue(argAt(call.getArgs(), 1));
-            if (secondVal instanceof SqlValue.Literal lit2) return new Pair<>(first, lit2.getUnquoted());
+    /**
+     * around 解析：双字符串片段或模板形态。
+     *
+     * <ul>
+     *   <li>双字符串片段形态：模板不含 {@code {i}} 占位、双参且第二参为 SQL 片段 → first/last 各带来源</li>
+     *   <li>模板形态 {@code around("sql {0}", v, ...)}（任务规约兼容）：模板 + {@code {i}} 绑定参数替换
+     *       （复用 {@link #renderJoinSql} 思路），first=null、last=替换结果</li>
+     * </ul>
+     */
+    private AroundFragment parseAround(WrapperCall call) {
+        // T-UpdateSetSqlConcat：片段位取 asSqlFragment；来源随片段带出（渲染点按序登记）
+        SqlFragment first = WrapperConverterKt.asSqlFragment(argAt(call.getArgs(), 0));
+        if (first == null) return null;
+        // 双字符串片段形态：模板不含 {i} 占位、双参且第二参为 SQL 片段
+        if (!first.getText().contains("{") && call.getArgs().size() == 2) {
+            SqlFragment second = WrapperConverterKt.asSqlFragment(argAt(call.getArgs(), 1));
+            if (second != null) {
+                return new AroundFragment(first.getText(), first.getParams(), second.getText(), second.getParams());
+            }
         }
-        return new Pair<>(null, renderJoinSql(first, call.getArgs().size() > 1 ? call.getArgs().subList(1, call.getArgs().size()) : java.util.List.of()));
+        // 模板形态：模板 + {i} 绑定参数替换
+        SqlFragment rendered = renderJoinSql(first, call.getArgs().size() > 1 ? call.getArgs().subList(1, call.getArgs().size()) : java.util.List.of());
+        return new AroundFragment(null, List.of(), rendered.getText(), rendered.getParams());
+    }
+
+    /** `around` 解析产物（T-UpdateSetSqlConcat：文本与占位符来源成对携带）。 */
+    private record AroundFragment(String first, List<String> firstParams, String last, List<String> lastParams) {
     }
 
     /** 解析 fill 调用 → FillClause（MPJ 1.5.1+）。 */
@@ -506,26 +534,32 @@ public final class MpjLambdaConverter implements WrapperConverter {
         if ("join".equals(call.getMethodName())) {
             String keyword = literalUnquoted(argAt(args, 0));
             if (keyword == null) return null;
-            String joinSql = literalUnquoted(argAt(args, 2));
+            // T-UpdateSetSqlConcat：片段位取 asSqlFragment 并带来源（join 里的 `?` 须按序登记）
+            SqlFragment joinSql = WrapperConverterKt.asSqlFragment(argAt(args, 2));
             if (joinSql == null) return null;
+            SqlFragment rendered = renderJoinSql(joinSql, args.size() > 3 ? args.subList(3, args.size()) : java.util.List.of());
             return new JoinClause(type, "", "", List.of(),
-                    renderJoinSql(joinSql, args.size() > 3 ? args.subList(3, args.size()) : java.util.List.of()), keyword, null, null);
+                    rendered.getText(), keyword, null, null, rendered.getParams());
         }
 
-        // 5. 字符串 SQL join：leftJoin("address t1 on ...", args)
+        // 5. 字符串 SQL join：leftJoin("address t1 on ...", args) /
+        //    leftJoin(condition, "sql"[, args])——首参为含 SQL 结构（空格/括号/{i} 占位）的 SQL 片段；
+        //    纯类名（CamelCase，无空格）走下方类名降级（converter 测试手工构造形态）
         WrapperArg first = argAt(args, 0);
-        if (first instanceof WrapperArg.ValueArg va) {
-            SqlValue value = va.getValue();
-            if (value instanceof SqlValue.Literal lit) {
-                String text = lit.getUnquoted();
-                if (!text.trim().endsWith(".class")
-                        && (text.contains(" ") || text.contains("(") || text.contains("{"))) {
-                    int startIndex = (args.size() >= 2 && isFlagArgument(args.get(0))) ? 1 : 0;
-                    String sql = literalUnquoted(argAt(args, startIndex));
-                    if (sql == null) return null;
-                    return new JoinClause(type, "", "", List.of(),
-                            renderJoinSql(sql, args.size() > startIndex + 1 ? args.subList(startIndex + 1, args.size()) : java.util.List.of()), null, null, null);
-                }
+        if (first instanceof WrapperArg.ValueArg) {
+            // T-UpdateSetSqlConcat：字符串 join 片段位取 asSqlFragment——首参含运行期段时
+            // 静态结构（空格/括号/{i}）仍在，不再整段丢弃
+            SqlFragment firstFragment = WrapperConverterKt.asSqlFragment(first);
+            String text = firstFragment != null ? firstFragment.getText() : null;
+            if (text == null) return null;
+            if (!text.stripTrailing().endsWith(".class")
+                    && (text.contains(" ") || text.contains("(") || text.contains("{"))) {
+                int startIndex = (args.size() >= 2 && isFlagArgument(args.get(0))) ? 1 : 0;
+                SqlFragment sql = WrapperConverterKt.asSqlFragment(argAt(args, startIndex));
+                if (sql == null) return null;
+                SqlFragment rendered = renderJoinSql(sql, args.size() > startIndex + 1 ? args.subList(startIndex + 1, args.size()) : java.util.List.of());
+                return new JoinClause(type, "", "", List.of(),
+                        rendered.getText(), null, null, null, rendered.getParams());
             }
         }
 
@@ -684,30 +718,27 @@ public final class MpjLambdaConverter implements WrapperConverter {
         return alias != null ? alias : fallback;
     }
 
-    /** 字符串 join 的 {i} 绑定参数替换。 */
-    private String renderJoinSql(String template, List<WrapperArg> values) {
-        String sql = template;
-        int idx = 0;
+    /**
+     * 字符串 join 的 `{i}` 绑定参数替换（官方示例：`leftJoin("(select ... where addr.id = {0})", 1)`）。
+     *
+     * <p>T-UpdateSetSqlConcat：统一走 {@link WrapperConverterKt#renderSqlFragment}——替换 `{i}` 的同时按序登记
+     * 占位符来源，否则 join 里的 `?` 会占用后面条件的参数位。</p>
+     */
+    private SqlFragment renderJoinSql(SqlFragment template, List<WrapperArg> values) {
+        List<SqlValue> bindings = new ArrayList<>();
         for (WrapperArg value : values) {
-            SqlValue v = WrapperConverterKt.asValue(value);
-            if (v == null) continue;
-            sql = sql.replace("{" + idx + "}", renderJoinValue(v));
-            idx++;
+            bindings.add(WrapperConverterKt.asValue(value));
         }
-        return sql;
+        return WrapperConverterKt.renderSqlFragment(template, bindings);
     }
 
-    /** join 绑定参数渲染：字面量原样，运行时值渲染为 `?`。 */
-    private static String renderJoinValue(SqlValue value) {
-        if (value instanceof SqlValue.Literal lit) return lit.getRaw();
-        if (value instanceof SqlValue.Placeholder) return "?";
-        return "";
-    }
-
-    /** 首参是否为布尔条件前缀。 */
+    /** 首参是否为布尔条件前缀；列引用（ColumnArg）恒为列。 */
     private static boolean isFlagArgument(WrapperArg arg) {
         if (arg instanceof WrapperArg.ColumnArg) return false;
         SqlValue value = WrapperConverterKt.asValue(arg);
+        // T-UpdateSetSqlConcat：带片段形态的运行期实参是 SQL 片段（`leftJoin("... " + x, ...)`），
+        // 不是布尔前缀——否则片段会被当 flag 吞掉，真正的片段位被错取成第二参
+        if (value instanceof SqlValue.Placeholder && WrapperConverterKt.asSqlFragment(arg) != null) return false;
         if (value instanceof SqlValue.Literal lit) {
             return "true".equals(lit.getUnquoted()) || "false".equals(lit.getUnquoted());
         }

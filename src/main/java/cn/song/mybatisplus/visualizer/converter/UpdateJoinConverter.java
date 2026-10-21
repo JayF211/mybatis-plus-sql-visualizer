@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.converter;
 import cn.song.mybatisplus.visualizer.model.ColumnRef;
 import cn.song.mybatisplus.visualizer.model.ColumnInfo;
 import cn.song.mybatisplus.visualizer.model.SetClause;
+import cn.song.mybatisplus.visualizer.model.SqlFragment;
 import cn.song.mybatisplus.visualizer.model.SqlStatement;
 import cn.song.mybatisplus.visualizer.model.SqlValue;
 import cn.song.mybatisplus.visualizer.model.TableInfo;
@@ -65,10 +66,13 @@ public final class UpdateJoinConverter implements WrapperConverter {
         }
         if (mainAlias == null) mainAlias = MAIN_ALIAS_DEFAULT;
 
+        // SET 赋值（按源码顺序；setUpdateEntity 展开为多列）
+        // T-UpdateSetSqlConcat：解析失败的 SET 调用原文（UI 警示用）
+        List<String> unparsedSets = new ArrayList<>();
         List<SetClause> sets = new ArrayList<>();
         for (WrapperCall call : chain.getCalls()) {
             if (SET_METHODS.contains(call.getMethodName())) {
-                sets.addAll(parseSet(call, table, mainAlias));
+                sets.addAll(parseSet(call, table, mainAlias, unparsedSets));
             }
         }
 
@@ -95,56 +99,77 @@ public final class UpdateJoinConverter implements WrapperConverter {
                 .parse(new WrapperChain(chain.getWrapperType(), chain.getEntityClass(), conditionCalls, null, false, false, false, false, null))
                 .getConditions();
 
-        String rawTail = null;
+        // last 非 limit 尾缀（U05 语义对齐）：`last("AND (... >= 0)")` 原样追加到语句末尾
+        // T-UpdateSetSqlConcat：片段位取 asSqlFragment——含运行期段的拼接不再整段丢弃
+        SqlFragment tailFragment = null;
         for (WrapperCall call : chain.getCalls()) {
             if (LAST.equals(call.getMethodName())) {
-                SqlValue v = WrapperConverterKt.asValue(argAt(call.getArgs(), 0));
-                if (v instanceof SqlValue.Literal lit && lit.getUnquoted() != null
-                        && !lit.getUnquoted().toLowerCase().startsWith("limit")) {
-                    rawTail = lit.getUnquoted();
+                SqlFragment f = WrapperConverterKt.asSqlFragment(argAt(call.getArgs(), 0));
+                if (f != null && f.getText() != null && !f.getText().regionMatches(true, 0, "limit", 0, 5)) {
+                    tailFragment = f;
+                    break;
                 }
             }
         }
 
-        return new UpdateStatement(table, sets, conditions, rawTail, mainAlias, joins);
+        return new UpdateStatement(table, sets, conditions,
+                tailFragment != null ? tailFragment.getText() : null, mainAlias, joins,
+                unparsedSets,
+                tailFragment != null ? tailFragment.getParams() : List.of());
     }
 
-    /** 解析 set 类调用为赋值子句（T-M21-08）。返回空列表表示解析失败/无列。 */
-    private List<SetClause> parseSet(WrapperCall call, TableInfo table, String mainAlias) {
+    /**
+     * 解析 set 类调用为赋值子句（T-M21-08）。
+     *
+     * @param unparsedSets 解析失败的调用原文收集器（T-UpdateSetSqlConcat：UI 警示用）
+     * @return 赋值列表（setUpdateEntity 展开为多列；解析失败返回空列表）
+     */
+    private List<SetClause> parseSet(WrapperCall call, TableInfo table, String mainAlias, List<String> unparsedSets) {
         List<WrapperArg> args = call.getArgs();
         switch (call.getMethodName()) {
             case SET, SET_IF_EXISTS -> {
                 int startIndex = (args.size() >= 3 && isFlagArgument(args.get(0))) ? 1 : 0;
                 ColumnRef column = WrapperConverterKt.asColumn(argAt(args, startIndex));
-                if (column == null) return List.of();
                 SqlValue value = WrapperConverterKt.asValue(argAt(args, startIndex + 1));
-                if (value == null) return List.of();
+                if (column == null || value == null) {
+                    unparsedSets.add(setCallSummary(call));
+                    return List.of();
+                }
                 return List.of(new SetClause(withMainAliasIfUnqualified(column, mainAlias), value, null));
             }
             case SET_SQL, SET_APPLY -> {
                 int startIndex = (args.size() >= 2 && isFlagArgument(args.get(0))) ? 1 : 0;
-                SqlValue rawV = WrapperConverterKt.asValue(argAt(args, startIndex));
-                if (!(rawV instanceof SqlValue.Literal lit)) return List.of();
-                String sql = lit.getUnquoted();
-                List<WrapperArg> tail = args.size() > startIndex + 1 ? args.subList(startIndex + 1, args.size()) : java.util.List.of();
-                for (int index = 0; index < tail.size(); index++) {
-                    SqlValue v = WrapperConverterKt.asValue(tail.get(index));
-                    if (v == null) continue;
-                    sql = sql.replace("{" + index + "}", renderSetValue(v));
+                // T-UpdateSetSqlConcat：片段位取 asSqlFragment（静态段保留、运行期段写 `?`）
+                SqlFragment fragment = WrapperConverterKt.asSqlFragment(argAt(args, startIndex));
+                if (fragment == null) {
+                    unparsedSets.add(setCallSummary(call));
+                    return List.of();
                 }
-                return List.of(new SetClause(null, null, sql));
+                // `{i}` 绑定参数替换 + 按最终文本顺序登记占位符来源
+                List<SqlValue> bindings = new ArrayList<>();
+                List<WrapperArg> tail = args.size() > startIndex + 1 ? args.subList(startIndex + 1, args.size()) : java.util.List.of();
+                for (WrapperArg a : tail) {
+                    bindings.add(WrapperConverterKt.asValue(a));
+                }
+                SqlFragment rendered = WrapperConverterKt.renderSqlFragment(fragment, bindings);
+                return List.of(new SetClause(null, null, rendered.getText(), rendered.getParams()));
             }
             case SET_INCR, SET_DECR -> {
                 int startIndex = (args.size() >= 3 && isFlagArgument(args.get(0))) ? 1 : 0;
                 ColumnRef column = WrapperConverterKt.asColumn(argAt(args, startIndex));
-                if (column == null) return List.of();
                 SqlValue value = WrapperConverterKt.asValue(argAt(args, startIndex + 1));
-                if (value == null) return List.of();
+                if (column == null || value == null) {
+                    unparsedSets.add(setCallSummary(call));
+                    return List.of();
+                }
                 // T-M23.5：列名按方言引用（保留字列名反引号包裹，如 t.`table`）
                 String qualified = withMainAliasIfUnqualified(column, mainAlias)
                         .qualifiedName(cn.song.mybatisplus.visualizer.psi.PsiDialect.currentDialect());
                 String op = SET_INCR.equals(call.getMethodName()) ? "+" : "-";
-                return List.of(new SetClause(null, null, qualified + " = " + qualified + " " + op + " " + renderSetValue(value)));
+                return List.of(new SetClause(null, null,
+                        qualified + " = " + qualified + " " + op + " " + renderSetValue(value),
+                        // T-UpdateSetSqlConcat：rawSql 里的 `?` 也要登记来源（否则后续条件整体错位）
+                        value instanceof SqlValue.Placeholder ph ? List.of(ph.getSource()) : List.of()));
             }
             case SET_UPDATE_ENTITY, SET_UPDATE_ENTITY_AND_NULL -> {
                 List<SetClause> result = new ArrayList<>();
@@ -162,6 +187,26 @@ public final class UpdateJoinConverter implements WrapperConverter {
         }
     }
 
+    /** SET 调用原文摘要（警示文案用）：`setApply("t.a = " + x)`。 */
+    private static String setCallSummary(WrapperCall call) {
+        StringBuilder sb = new StringBuilder();
+        List<WrapperArg> args = call.getArgs();
+        for (int i = 0; i < args.size(); i++) {
+            if (i > 0) sb.append(", ");
+            WrapperArg arg = args.get(i);
+            if (arg instanceof WrapperArg.ColumnArg ca) {
+                sb.append(ca.getColumn().getColumnName());
+            } else if (arg instanceof WrapperArg.ValueArg va) {
+                SqlValue v = va.getValue();
+                if (v instanceof SqlValue.Literal lit) sb.append(lit.getUnquoted());
+                else if (v instanceof SqlValue.Placeholder ph) sb.append(ph.getSource());
+            } else {
+                sb.append("…");
+            }
+        }
+        return call.getMethodName() + "(" + sb + ")";
+    }
+
     /** 列归属近似：ColumnArg（方法引用）统一补主表别名；字符串列已含表别名限定时原样保留。 */
     private ColumnRef withMainAliasIfUnqualified(ColumnRef column, String mainAlias) {
         return column.getTableAlias() == null && !column.getColumnName().contains(".")
@@ -172,6 +217,9 @@ public final class UpdateJoinConverter implements WrapperConverter {
     private static boolean isFlagArgument(WrapperArg arg) {
         if (arg instanceof WrapperArg.ColumnArg) return false;
         SqlValue value = WrapperConverterKt.asValue(arg);
+        // T-UpdateSetSqlConcat：带片段形态的运行期实参是 SQL 模板（`setApply("t.a = " + x, ...)`），
+        // 不是布尔前缀——否则模板会被当 flag 吞掉，真正的模板位被错取成第二参
+        if (value instanceof SqlValue.Placeholder && WrapperConverterKt.asSqlFragment(arg) != null) return false;
         if (value instanceof SqlValue.Literal lit) {
             return "true".equals(lit.getUnquoted()) || "false".equals(lit.getUnquoted());
         }
