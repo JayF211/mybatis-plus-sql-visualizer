@@ -123,19 +123,91 @@ public final class AnnotationSqlPreviewService {
     /** 预览注解 SQL（解析失败/降级场景返回带 warning 的空结果，不抛异常）。 */
     @NotNull
     public PreviewResult preview(@NotNull PsiAnnotation annotation, @Nullable Project project) {
+        return preview(annotation, project, null);
+    }
+
+    @NotNull
+    public PreviewResult preview(@NotNull PsiAnnotation annotation, @Nullable Project project,
+                                 @Nullable PreviewSourceContext sourceContext) {
         String qn = annotation.getQualifiedName();
         String shortName = qn != null ? qn.substring(qn.lastIndexOf('.') + 1) : null;
         if (shortName == null) return nullResult(null);
+        PreviewSourceContext context = sourceContext;
+        if (context == null && project != null) {
+            context = resolveSourceContext(annotation, project);
+        }
         return PROVIDER_ANNOTATIONS.contains(shortName)
-                ? previewProvider(annotation, shortName, project)
-                : previewLiteral(annotation, shortName, project);
+                ? previewProvider(annotation, shortName, project, context)
+                : previewLiteral(annotation, shortName, project, context);
+    }
+
+    /** UI025 链：注解预览的来源上下文（PSI 来源；owner = Provider 命中方法或注解本身）。 */
+    @NotNull
+    public PreviewSourceContext resolveSourceContext(@NotNull PsiAnnotation annotation,
+                                                     @NotNull Project project) {
+        String qn = annotation.getQualifiedName();
+        String shortName = qn != null ? qn.substring(qn.lastIndexOf('.') + 1) : null;
+        com.intellij.psi.PsiElement owner;
+        if (shortName != null && PROVIDER_ANNOTATIONS.contains(shortName)) {
+            PsiClass providerClass = resolveProviderClass(annotation, project);
+            PsiMethod mapperMethod = PsiTreeUtil.getParentOfType(annotation, PsiMethod.class);
+            List<String> noWarnings = new ArrayList<>();
+            String methodName = constantString(annotation.findDeclaredAttributeValue("method"), project, noWarnings);
+            if (methodName == null || methodName.isEmpty()) {
+                methodName = mapperMethod != null ? mapperMethod.getName() : FALLBACK_METHOD_NAME;
+            }
+            PsiMethod[] providerMethods = providerClass != null
+                    ? providerClass.findMethodsByName(methodName, false)
+                    : new PsiMethod[0];
+            owner = providerMethods.length > 0 ? providerMethods[0] : annotation;
+        } else {
+            owner = annotation;
+        }
+        PsiFile host = owner.getContainingFile();
+        PreviewSourceContext.SqlPsiResolution sqlResolution;
+        if (host == null) {
+            sqlResolution = PreviewSourceContext.SqlPsiResolution.None.INSTANCE;
+        } else {
+            PreviewSourceContext.SqlPsiResolution resolved;
+            try {
+                resolved = com.intellij.openapi.application.ReadAction.compute(
+                        () -> cn.song.mybatisplus.visualizer.context.ActualSqlPsiResolver.resolve(
+                                host, owner, owner.getTextOffset()));
+            } catch (Throwable t) {
+                if (cn.song.mybatisplus.visualizer.util.FatalErrors.isFatal(t)) {
+                    throw (Error) t;
+                }
+                resolved = null;
+            }
+            sqlResolution = resolved != null
+                    ? resolved
+                    : PreviewSourceContext.SqlPsiResolution.None.INSTANCE;
+        }
+        PreviewSourceContext.ModuleIdentityResolution moduleResolution =
+                host != null && host.getVirtualFile() != null
+                        ? cn.song.mybatisplus.visualizer.context.ModuleIdentityResolver.resolve(project, host.getVirtualFile())
+                        : null;
+        if (moduleResolution == null) {
+            moduleResolution = PreviewSourceContext.ModuleIdentityResolution.None.INSTANCE;
+        }
+        return new PreviewSourceContext(
+                project,
+                PreviewSourceOrigin.PSI,
+                host,
+                host != null ? host.getVirtualFile() : null,
+                sqlResolution,
+                moduleResolution,
+                null,
+                null);
     }
 
     // ------------------------------------------------------------------
     // 字面量注解
     // ------------------------------------------------------------------
 
-    private PreviewResult previewLiteral(@NotNull PsiAnnotation annotation, String shortName, @Nullable Project project) {
+    private PreviewResult previewLiteral(@NotNull PsiAnnotation annotation, String shortName,
+                                         @Nullable Project project,
+                                         @Nullable PreviewSourceContext sourceContext) {
         List<String> warnings = new ArrayList<>();
         checkLanguageDriver(annotation, warnings);
 
@@ -153,14 +225,16 @@ public final class AnnotationSqlPreviewService {
         }
         String sql = String.join(" ", values).trim();
         PsiMethod method = PsiTreeUtil.getParentOfType(annotation, PsiMethod.class);
-        return buildResult(sql, shortName, previewParamTypes(method), warnings, project, method);
+        return buildResult(sql, shortName, previewParamTypes(method), warnings, project, method, sourceContext);
     }
 
     // ------------------------------------------------------------------
     // Provider 注解（L1 常量折叠）
     // ------------------------------------------------------------------
 
-    private PreviewResult previewProvider(@NotNull PsiAnnotation annotation, String shortName, @Nullable Project project) {
+    private PreviewResult previewProvider(@NotNull PsiAnnotation annotation, String shortName,
+                                          @Nullable Project project,
+                                          @Nullable PreviewSourceContext sourceContext) {
         List<String> warnings = new ArrayList<>();
         checkLanguageDriver(annotation, warnings);
 
@@ -198,7 +272,8 @@ public final class AnnotationSqlPreviewService {
         if (sql == null) {
             return nullResult(MpSqlVisualizerBundle.message("annotation.provider.notSupported"));
         }
-        return buildResult(sql, shortName, previewParamTypes(mapperMethod), warnings, project, mapperMethod);
+        return buildResult(sql, shortName, previewParamTypes(mapperMethod), warnings, project, mapperMethod,
+                sourceContext);
     }
 
     /** Provider type 解析：value/type 属性（PsiClassObjectAccessExpression）→ PsiClass。 */
@@ -350,7 +425,8 @@ public final class AnnotationSqlPreviewService {
      *  k2j 适配：Java 无默认参——两个调用点都显式传 method（master 第三参默认 null 由调用方保证）。 */
     private PreviewResult buildResult(String sql, String shortName,
                                       Map<String, ParamTypeInfo> paramTypes, List<String> warnings,
-                                      @Nullable Project project, @Nullable PsiMethod method) {
+                                      @Nullable Project project, @Nullable PsiMethod method,
+                                      @Nullable PreviewSourceContext sourceContext) {
         XmlStatementKind kind;
         switch (shortName.replaceAll("Provider$", "")) {
             case "Select":
@@ -370,8 +446,15 @@ public final class AnnotationSqlPreviewService {
             Map<String, Object> staticValues = XmlPreviewService.INSTANCE.resolveStaticFields(sql, project, warnings);
             XmlPreviewModel model = new AnnotationSqlParser().parse(
                     sql, kind, new ArrayList<>(paramTypes.keySet()), staticValues, paramTypes);
+            cn.song.mybatisplus.visualizer.sql.DialectDecisionEngine.Decision dialectDecision =
+                    sourceDecision(project, sourceContext);
             return XmlPreviewService.INSTANCE.applyPaginationShared(
-                    XmlPreviewService.INSTANCE.toResult(model, warnings),
+                    XmlPreviewService.INSTANCE.copyWithDialectDecision(
+                            XmlPreviewService.INSTANCE.toResult(model, warnings),
+                            dialectDecision != null
+                                    ? DialectRegistry.INSTANCE.byName(dialectDecision.dialectName())
+                                    : null,
+                            dialectDecision),
                     project,
                     XmlPreviewService.paginationSimEnabled()
                             ? MapperPageParamLocator.fromMethod(method)
@@ -382,6 +465,15 @@ public final class AnnotationSqlPreviewService {
         } catch (XmlScriptException e) {
             return nullResult(e.getMessage() != null ? e.getMessage() : "SQL 脚本解析失败。");
         }
+    }
+
+    @Nullable
+    private cn.song.mybatisplus.visualizer.sql.DialectDecisionEngine.Decision sourceDecision(
+            @Nullable Project project, @Nullable PreviewSourceContext context) {
+        if (project == null) return null;
+        return context != null
+                ? DialectRegistry.INSTANCE.decision(context)
+                : DialectRegistry.INSTANCE.decision(project);
     }
 
     @NotNull
