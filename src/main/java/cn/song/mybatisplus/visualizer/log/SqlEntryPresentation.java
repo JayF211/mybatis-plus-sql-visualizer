@@ -34,7 +34,9 @@ public final class SqlEntryPresentation {
         if (showLogDetails) {
             add(result, SqlLogPanelKt.formatUpdateCountFragment(entry, selected));
             add(result, SqlLogPanelKt.formatErrorFragment(entry));
-            Integer count = dedupeCounts.get(entry.dedupeKey());
+            // UI013：同键的其他来源可能有丢弃计数，不能把徽章借给未参与去重的 Sharding 执行。
+            Integer count = entry.source() == SqlSource.SHARDINGSPHERE
+                    ? null : dedupeCounts.get(entry.dedupeKey());
             if (count != null && count > 0) result.add(new SqlTextFragment("⨉" + count + " ", SECONDARY));
         }
         add(result, SqlLogPanelKt.formatTemplateCountFragment(entry, templateCounts, selected));

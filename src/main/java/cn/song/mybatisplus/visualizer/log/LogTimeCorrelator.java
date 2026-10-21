@@ -133,14 +133,18 @@ public final class LogTimeCorrelator {
             MAP.remove(key);
             return miss();
         }
-        Item matched = null;
+        // 同键队列里只取参数签名一致的那条，找不到保持队列不变并记未命中——
+        // 同模板不等于同一次执行，不借用队首其他执行的时间。
+        Item item = null;
         for (Item candidate : queue) {
             if (candidate.signature.equals(signature)) {
-                matched = candidate;
+                item = candidate;
                 break;
             }
         }
-        Item item = matched != null ? matched : queue.getFirst();
+        if (item == null) {
+            return miss();
+        }
         queue.remove(item);
         items--;
         if (queue.isEmpty()) {

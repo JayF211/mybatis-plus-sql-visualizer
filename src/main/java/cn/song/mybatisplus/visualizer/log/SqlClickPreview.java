@@ -67,7 +67,18 @@ public class SqlClickPreview {
      * 先补分号再格式化（生产已验证的分号处理路径）。纯函数，开关由调用方读设置传入。
      */
     static String clickPreviewSql(String sql, boolean formatSql) {
-        return formatSql ? SqlFormatter.format(SqlLogPanelKt.withTerminator(sql)) : SqlLogPanelKt.withTerminator(sql);
+        return clickPreviewSql(sql, formatSql, false);
+    }
+
+    /**
+     * R60（T-LaneB D96）：maskSql 开时先脱敏（DisplayMasker.maskDisplay，展示层文本级）再走
+     * 分号/格式化——脱敏只动浮层展示文本，条目数据层（restoredSql/params）不动；复制按钮复制
+     * 的是脱敏后文本（安全分享语义）。
+     */
+    static String clickPreviewSql(String sql, boolean formatSql, boolean maskSql) {
+        String display = cn.song.mybatisplus.visualizer.util.DisplayMasker.maskDisplay(sql, maskSql);
+        return formatSql ? SqlFormatter.format(SqlLogPanelKt.withTerminator(display))
+                : SqlLogPanelKt.withTerminator(display);
     }
 
     /**

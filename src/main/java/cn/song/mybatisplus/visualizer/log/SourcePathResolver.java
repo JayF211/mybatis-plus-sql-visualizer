@@ -73,4 +73,43 @@ public final class SourcePathResolver {
         }
         return null;
     }
+
+    /**
+     * O-145 多模块来源恢复入口：返回全部候选，不把模块枚举顺序冒充来源证据。
+     *
+     * <p>顺序仍与 {@link #resolveVirtualFile} 的三级策略一致（项目根、content roots、source roots），并按
+     * VirtualFile 路径去重。旧导航继续调用单值方法，首命中行为完全不变；只有来源上下文链使用本入口。</p>
+     */
+    @NotNull
+    public static java.util.List<VirtualFile> resolveVirtualFiles(@NotNull Project project,
+                                                                  @NotNull String relativePath) {
+        ApplicationManager.getApplication().assertReadAccessAllowed();
+        String rel = EntrySourceMatcher.normalize(relativePath);
+        if (rel.isEmpty()) return java.util.List.of();
+        LocalFileSystem fs = LocalFileSystem.getInstance();
+        java.util.LinkedHashMap<String, VirtualFile> candidates = new java.util.LinkedHashMap<>();
+        String basePath = project.getBasePath();
+        if (basePath != null) {
+            VirtualFile direct = fs.findFileByPath(EntrySourceMatcher.normalize(basePath) + "/" + rel);
+            if (direct != null) candidates.putIfAbsent(direct.getPath(), direct);
+        }
+        try {
+            Module[] modules = ModuleManager.getInstance(project).getModules();
+            for (Module module : modules) {
+                for (VirtualFile root : ModuleRootManager.getInstance(module).getContentRoots()) {
+                    VirtualFile hit = fs.findFileByPath(root.getPath() + "/" + rel);
+                    if (hit != null) candidates.putIfAbsent(hit.getPath(), hit);
+                }
+            }
+            for (Module module : modules) {
+                for (VirtualFile root : ModuleRootManager.getInstance(module).getSourceRoots()) {
+                    VirtualFile hit = fs.findFileByPath(root.getPath() + "/" + rel);
+                    if (hit != null) candidates.putIfAbsent(hit.getPath(), hit);
+                }
+            }
+        } catch (Throwable ignored) {
+            // runCatching 等价
+        }
+        return new java.util.ArrayList<>(candidates.values());
+    }
 }

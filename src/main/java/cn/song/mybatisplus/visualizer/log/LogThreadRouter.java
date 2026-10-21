@@ -146,9 +146,19 @@ public final class LogThreadRouter<B> {
         return bucket;
     }
 
-    /** 按行路由到对应桶。 */
+    /** 按行路由到对应桶（单解析器调用方兼容薄壳；热路径请走 {@link #bucketForToken}）。 */
     public B bucketFor(String line) {
-        String token = threadTokenOf(line);
+        return bucketForToken(threadTokenOf(line));
+    }
+
+    /**
+     * 按已提取的线程 token 路由到对应桶。
+     *
+     * <p>F58（T-PerfSweep18 压轴）：控制台桥的逐行热路径把同一行喂最多四个解析器，原先每个解析器
+     * 各自 {@code bucketFor(line)} → threadTokenOf 重提同一 token（同一行最多算 4 次）。现喂行方
+     * <b>每行提一次</b>下传全部解析器，经本口路由——token=null 的 fail-open 回退语义逐字不变。</p>
+     */
+    public B bucketForToken(String token) {
         if (token != null) {
             B existing = buckets.get(token);
             if (existing != null) {

@@ -116,7 +116,7 @@ public record LogSqlEntry(
     public LogSqlEntry {
         if (captureProvenance == null) captureProvenance = CaptureProvenance.UNKNOWN;
         if (summary == null) {
-            summary = computeSummary(restoredSql);
+            summary = summarizeSql(restoredSql);
         }
     }
 
@@ -130,11 +130,33 @@ public record LogSqlEntry(
             java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
 
     /** 行片段缓存载荷（片段 + 模式一并存取，保证两值一致）。 */
-    private record LineFragmentCacheEntry(List<List<SqlSemanticFragment>> fragments, SqlListDisplayMode mode) {
+    private record LineFragmentCacheEntry(List<List<SqlSemanticFragment>> fragments, SqlListDisplayMode mode,
+                                          Boolean masked) {
     }
 
     private static final java.util.Map<LogSqlEntry, LineFragmentCacheEntry> LINE_FRAGMENT_CACHE =
             java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
+
+    /** R60：脱敏摘要缓存（完整 SQL 先打码再截断，避免旧摘要在引号中间截断后漏打码）。 */
+    private static final java.util.Map<LogSqlEntry, String> MASKED_SUMMARY_CACHE =
+            java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
+
+    public String cachedMaskedSummary() {
+        return MASKED_SUMMARY_CACHE.get(this);
+    }
+
+    /** Kotlin {@code var cachedMaskedSummary} 的 JVM 读取器等价入口。 */
+    public String getCachedMaskedSummary() {
+        return cachedMaskedSummary();
+    }
+
+    public void setCachedMaskedSummary(String maskedSummary) {
+        if (maskedSummary == null) {
+            MASKED_SUMMARY_CACHE.remove(this);
+        } else {
+            MASKED_SUMMARY_CACHE.put(this, maskedSummary);
+        }
+    }
 
     /**
      * T-CrudColor：条目语句类型（渲染热路径缓存，惰性计算一次）。
@@ -182,7 +204,8 @@ public record LogSqlEntry(
     public void setCachedListLineFragments(List<List<SqlSemanticFragment>> value) {
         synchronized (LINE_FRAGMENT_CACHE) {
             LineFragmentCacheEntry e = LINE_FRAGMENT_CACHE.get(this);
-            LINE_FRAGMENT_CACHE.put(this, new LineFragmentCacheEntry(value, e != null ? e.mode() : null));
+            LINE_FRAGMENT_CACHE.put(this, new LineFragmentCacheEntry(value, e != null ? e.mode() : null,
+                    e != null ? e.masked() : null));
         }
     }
 
@@ -195,6 +218,26 @@ public record LogSqlEntry(
     /** Kotlin {@code var cachedListLineFragmentsMode} 的 JVM 读取器等价入口（属性名读取用）。 */
     public SqlListDisplayMode getCachedListLineFragmentsMode() {
         return cachedListLineFragmentsMode();
+    }
+
+    /** 缓存对应的脱敏态（R60 T-LaneB D96）：读取处按当前 displayMaskEnabled 比对——脱敏开关
+     * 翻转后旧缓存（打码/未打码形态）自动失效重渲染，防脏缓存（V112.3 附带发现）。 */
+    public Boolean cachedListLineFragmentsMasked() {
+        LineFragmentCacheEntry e = LINE_FRAGMENT_CACHE.get(this);
+        return e != null ? e.masked() : null;
+    }
+
+    /** Kotlin {@code var cachedListLineFragmentsMasked} 的 JVM 读取器等价入口。 */
+    public Boolean getCachedListLineFragmentsMasked() {
+        return cachedListLineFragmentsMasked();
+    }
+
+    public void setCachedListLineFragmentsMasked(Boolean masked) {
+        synchronized (LINE_FRAGMENT_CACHE) {
+            LineFragmentCacheEntry e = LINE_FRAGMENT_CACHE.get(this);
+            LINE_FRAGMENT_CACHE.put(this, new LineFragmentCacheEntry(e != null ? e.fragments() : null,
+                    e != null ? e.mode() : null, masked));
+        }
     }
 
     public void setCachedListLineFragmentsMode(SqlListDisplayMode value) {
@@ -282,21 +325,21 @@ public record LogSqlEntry(
     /** 仅原始/还原 SQL + 参数（其余取默认）。 */
     public LogSqlEntry(String rawSql, String restoredSql, List<LogSqlParam> params) {
         this(rawSql, restoredSql, params, System.currentTimeMillis(), null,
-            computeSummary(restoredSql), SqlSource.UNKNOWN, null, null, 0, List.of(), List.of(), null, 0L,
+            summarizeSql(restoredSql), SqlSource.UNKNOWN, null, null, 0, List.of(), List.of(), null, 0L,
             null, null, null, null, null, null, CaptureProvenance.UNKNOWN);
     }
 
     /** 含显式时间戳。 */
     public LogSqlEntry(String rawSql, String restoredSql, List<LogSqlParam> params, long timestamp) {
         this(rawSql, restoredSql, params, timestamp, null,
-            computeSummary(restoredSql), SqlSource.UNKNOWN, null, null, 0, List.of(), List.of(), null, 0L,
+            summarizeSql(restoredSql), SqlSource.UNKNOWN, null, null, 0, List.of(), List.of(), null, 0L,
             null, null, null, null, null, null, CaptureProvenance.UNKNOWN);
     }
 
     /** 含来源。 */
     public LogSqlEntry(String rawSql, String restoredSql, List<LogSqlParam> params, SqlSource source) {
         this(rawSql, restoredSql, params, System.currentTimeMillis(), null,
-            computeSummary(restoredSql), source, null, null, 0, List.of(), List.of(), null, 0L,
+            summarizeSql(restoredSql), source, null, null, 0, List.of(), List.of(), null, 0L,
             null, null, null, null, null, null);
     }
 
@@ -304,7 +347,7 @@ public record LogSqlEntry(
     public LogSqlEntry(String rawSql, String restoredSql, List<LogSqlParam> params,
                        long timestamp, String sourceFile, int sourceLine, Long executionTimeMs) {
         this(rawSql, restoredSql, params, timestamp, null,
-            computeSummary(restoredSql), SqlSource.UNKNOWN, executionTimeMs, sourceFile, sourceLine, List.of(), List.of(), null, 0L,
+            summarizeSql(restoredSql), SqlSource.UNKNOWN, executionTimeMs, sourceFile, sourceLine, List.of(), List.of(), null, 0L,
             null, null, null, null, null, null);
     }
 
@@ -340,7 +383,7 @@ public record LogSqlEntry(
     }
 
     /** 智能截断摘要（包内可见：解析器/桥通道按 Kotlin data class 默认参数语义构造条目时复用同一口径）。 */
-    static String computeSummary(String restoredSql) {
+    public static String summarizeSql(String restoredSql) {
         int newlineIdx = restoredSql.indexOf('\n');
         int endIdx;
         if (newlineIdx >= 0 && newlineIdx < MAX_SUMMARY_LENGTH) {

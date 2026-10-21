@@ -155,10 +155,10 @@ public class SqlLogPanel extends JPanel implements Disposable {
      * T-UiCoord F2：原「排序：」标签控件同样退役（标签键转 tooltip 前缀），文本同样截尾封顶。
      */
     public final AnAction sortModeAction = new AnAction() {
-        { getTemplatePresentation().setIcon(AllIcons.RunConfigurations.SortbyDuration); }
+        { getTemplatePresentation().setIcon(cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons.Sort); }
         @Override public void update(AnActionEvent e) {
             String label = currentSortLabel();
-            e.getPresentation().setIcon(AllIcons.RunConfigurations.SortbyDuration);
+            e.getPresentation().setIcon(cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons.Sort);
             e.getPresentation().setText(label);
             e.getPresentation().setDescription(MpSqlVisualizerBundle.message("log.sort.label") + label);
         }
@@ -169,7 +169,8 @@ public class SqlLogPanel extends JPanel implements Disposable {
 
     public final ToggleAction previewToggleAction = new ToggleAction(
             MpSqlVisualizerBundle.message("log.dockedPreview.toggle"),
-            MpSqlVisualizerBundle.message("log.dockedPreview.toggle.tip"), AllIcons.Actions.Preview) {
+            MpSqlVisualizerBundle.message("log.dockedPreview.toggle.tip"),
+                cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons.DockedPreview) {
         @Override public boolean isSelected(AnActionEvent e) { return dockedPreview.isOpen(); }
         @Override public void setSelected(AnActionEvent e, boolean state) {
             if (dockedPreview.isOpen() != state) previewHost.toggle();
@@ -348,6 +349,8 @@ public class SqlLogPanel extends JPanel implements Disposable {
     private static final int DROPDOWN_TEXT_BUDGET_PX = 64;
     /** T-CaptureTruth T-CT-03：零产出诊断刷新间隔（与桥轮询同频 2s）。 */
     private static final int DIAGNOSTICS_TICK_MS = 2000;
+    /** R53：双通道状态栏两段文案之间的语义分隔符。 */
+    private static final String SEP_LABEL = "｜";
 
     // ---------- O-1 日志窗口差异化：慢查询计数器 + 耗时着色 ----------
 
@@ -364,6 +367,13 @@ public class SqlLogPanel extends JPanel implements Disposable {
     /** 工具栏动作组（T-M39：internal 供测试断言帮助入口存在性）。
      *  T-CaptureBack：捕捉开关回迁首位（捕捉/清空/设置/屏蔽管理/搜索/帮助；搜索在帮助左侧为用户指定排序）。
      *  T-SqlSuppress：屏蔽管理入口插设置旁（D1 主入口；D7 图标 AllIcons.General.Filter 漏斗）。 */
+    /**
+     * R53：增强捕获暂停/恢复动作（工具窗入口；图标/文案按 userPaused 态输出）。
+     * 语义 = 暂停只停 agent 通道（事件在入队点丢弃）、控制台通道照常；暂停≠关闭——
+     * 连接/心跳/CONFIG 链不动。增强未开启时隐藏（update 置 isVisible=false，平台不渲染）。
+     */
+    public final AnAction agentPauseAction = new AgentPauseAction();
+
     public final DefaultActionGroup toolbarGroup;
 
     // ---------- T-M55-03/04：动态聚焦过滤页签栏字段（须在 init 块之前——Kotlin 按文本序初始化，
@@ -398,6 +408,20 @@ public class SqlLogPanel extends JPanel implements Disposable {
      * 2s 与桥轮询同频（SqlLogConsoleBridge POLL_INTERVAL_MS）；命中条目或停止捕捉即停表，常态零开销。
      */
     private javax.swing.Timer diagnosticsTimer = null;
+
+    // ---------- R53：双通道捕获状态栏（字段须在 init 之前——init 里 buildStatusBar 会赋值） ----------
+
+    /** 状态栏：控制台通道段（已挂载 N 个 · 已扫描 M 行）。 */
+    private javax.swing.JLabel statusConsoleLabel = null;
+
+    /** 状态栏：增强 agent 通道段（未开启 / 暂停中 / 已挂载 pid · 已收事件 N / 等待…）。 */
+    private javax.swing.JLabel statusAgentLabel = null;
+
+    /**
+     * 状态栏宿主（非捕捉态整体隐藏——只清两段文案会留下分隔符与一条空白高度；
+     * BorderLayout 跳过 isVisible=false 的子件，故置位后需 revalidate）。
+     */
+    private javax.swing.JPanel statusBarPanel = null;
 
     /** 当前打开的类型弹窗内勾选框（全选/全不选即时同步用；弹窗每次打开重建）。 */
     private List<kotlin.Pair<StatementType, JCheckBox>> typePopupCheckBoxes = List.of();
@@ -578,7 +602,7 @@ public class SqlLogPanel extends JPanel implements Disposable {
 
         this.typeFilterButton = new JButton();
         typeFilterButton.setFocusable(false);
-        typeFilterButton.setIcon(AllIcons.General.ArrowDown);
+        typeFilterButton.setIcon(cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons.TypeFilter);
         typeFilterButton.setHorizontalTextPosition(SwingConstants.LEFT); // 图标在文字右侧（下拉按钮惯例）
         typeFilterButton.addActionListener(e -> showTypeFilterPopup());
 
@@ -626,6 +650,7 @@ public class SqlLogPanel extends JPanel implements Disposable {
         this.captureToggleAction = new CaptureAction();
         this.toolbarGroup = new DefaultActionGroup(
                 captureToggleAction, // 捕捉开关（回迁面板工具栏首位，T-CaptureBack）
+                this.agentPauseAction, // R53：暂停/恢复（方案 B 临时全隐藏——动作对象保留在组内）
                 new ClearAction(),
                 new SettingsAction(),
                 new ManageSuppressAction(), // T-SqlSuppress：屏蔽管理（设置旁，D1 主入口 + D7 漏斗图标）
@@ -658,6 +683,8 @@ public class SqlLogPanel extends JPanel implements Disposable {
         previewHost = new SqlListPreviewHost(list, buildListPane(), dockedPreview, "mpvs.logs.preview.split", true,
                 open -> Toggleable.setSelected(previewToggleAction.getTemplatePresentation(), open));
         logPanel.add(previewHost.getComponent(), BorderLayout.CENTER);
+        // R53：双通道捕获状态栏（捕捉期间常驻；非捕捉态清空隐藏——见 syncCaptureStatusBar）
+        logPanel.add(buildStatusBar(), BorderLayout.SOUTH);
 
         logsTab = tabs.addTab(new TabInfo(logPanel).setText(MpSqlVisualizerBundle.message("log.tab.logs")));
         logToSqlTab = tabs.addTab(new TabInfo(logToSqlPanel).setText(MpSqlVisualizerBundle.message("log.tab.logToSql")));
@@ -669,7 +696,9 @@ public class SqlLogPanel extends JPanel implements Disposable {
         addHistoryTab();
         add(tabs.getComponent(), BorderLayout.CENTER);
         tabs.addListener(new TabsListener() {
-            @Override public void selectionChanged(TabInfo current, TabInfo previous) {
+            // UI-004：平台参数顺序为（旧页签, 新页签）——此前首参误命名为 current，
+            // 使历史页刷新挂在「离开历史页」一拍；更名后进入历史页才刷新。
+            @Override public void selectionChanged(TabInfo previous, TabInfo current) {
                 if (current == sqlToJavaTab) sqlToJavaPanel.refreshFormatFromSettings();
                 if (current == historyTab) getHistoryPanel().refresh();
             }
@@ -886,7 +915,7 @@ public class SqlLogPanel extends JPanel implements Disposable {
         public void update(AnActionEvent e) {
             // 图标必须在 update 里写（工具栏 ActionButton 按 presentation 渲染；
             // 不设则渲染为占位圆圈——用户实测缺陷）
-            e.getPresentation().setIcon(AllIcons.Actions.Search);
+            e.getPresentation().setIcon(cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons.Search);
             e.getPresentation().setText(MpSqlVisualizerBundle.message("log.panel.search"));
         }
 
@@ -1019,13 +1048,13 @@ public class SqlLogPanel extends JPanel implements Disposable {
         @Override
         public void update(AnActionEvent e) {
             if (manager.isCapturing()) {
-                e.getPresentation().setIcon(AllIcons.Actions.Suspend);
+                e.getPresentation().setIcon(cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons.CaptureStop);
                 e.getPresentation().setText(MpSqlVisualizerBundle.message("log.panel.stop"));
                 e.getPresentation().setDescription(manager.isWaitingForConsole()
                         ? MpSqlVisualizerBundle.message("log.panel.capture.waiting.desc")
                         : null);
             } else {
-                e.getPresentation().setIcon(AllIcons.Actions.Execute);
+                e.getPresentation().setIcon(cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons.CaptureStart);
                 e.getPresentation().setText(MpSqlVisualizerBundle.message("log.panel.capture"));
                 e.getPresentation().setDescription((String) null);
             }
@@ -1041,10 +1070,37 @@ public class SqlLogPanel extends JPanel implements Disposable {
         }
     }
 
-    public class ClearAction extends AnAction {
+    /**
+     * R53：增强捕获暂停/恢复（工具窗入口）。
+     *
+     * <p>T-AgentPauseVisibility（2026-10-19，用户拍板方案 B）：<b>临时全隐藏</b>。
+     * 增强捕获已默认开启且无提示，该按钮在应用未运行时没有可暂停对象，并与捕捉按钮形成
+     * 「播放/暂停」误读；先整体隐藏，动作对象仍保留在工具栏组内（不删能力代码）。
+     * 代价：暂停 agent 通道的 UI 入口暂时不可达（关闭总开关仍会回落控制台）。
+     * 恢复条件：方案 A（agent 已挂载或暂停态才显示）落地，或新增状态栏/右键菜单入口。</p>
+     *
+     * <p>历史语义（保留在 actionPerformed）：暂停只停 agent 通道（事件在入队点丢弃）、
+     * 控制台通道照常；暂停≠关闭——连接/心跳/CONFIG 链不动。</p>
+     */
+    private class AgentPauseAction extends AnAction {
+        @Override
+        public void update(@NotNull AnActionEvent e) {
+            // 方案 B：无条件隐藏。不要改回 isEnhancedEnabled()——恢复时必须走方案 A 的条件可见。
+            e.getPresentation().setVisible(false);
+            e.getPresentation().setEnabled(false);
+        }
+
+        @Override
+        public void actionPerformed(@NotNull AnActionEvent e) {
+            AgentManager am = AgentManager.getInstance(project);
+            am.setUserPaused(!am.isUserPaused());
+        }
+    }
+
+    class ClearAction extends AnAction {
         @Override
         public void update(AnActionEvent e) {
-            e.getPresentation().setIcon(AllIcons.Actions.GC);
+            e.getPresentation().setIcon(cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons.Clear);
             e.getPresentation().setText(MpSqlVisualizerBundle.message("log.panel.clear"));
         }
 
@@ -1061,7 +1117,7 @@ public class SqlLogPanel extends JPanel implements Disposable {
     public class ScrollToEndAction extends AnAction {
         @Override
         public void update(AnActionEvent e) {
-            e.getPresentation().setIcon(AllIcons.General.ArrowDown);
+            e.getPresentation().setIcon(cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons.ScrollToEnd);
             e.getPresentation().setText(MpSqlVisualizerBundle.message("log.panel.scrollBottom"));
             e.getPresentation().setDescription(MpSqlVisualizerBundle.message("log.panel.scrollBottom.tip"));
         }
@@ -1075,7 +1131,7 @@ public class SqlLogPanel extends JPanel implements Disposable {
     public class SettingsAction extends AnAction {
         @Override
         public void update(AnActionEvent e) {
-            e.getPresentation().setIcon(AllIcons.General.Settings);
+            e.getPresentation().setIcon(cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons.Settings);
             e.getPresentation().setText(MpSqlVisualizerBundle.message("log.panel.settings"));
         }
 
@@ -1095,7 +1151,7 @@ public class SqlLogPanel extends JPanel implements Disposable {
     public class ManageSuppressAction extends AnAction {
         @Override
         public void update(AnActionEvent e) {
-            e.getPresentation().setIcon(AllIcons.General.Filter);
+            e.getPresentation().setIcon(cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons.Suppress);
             e.getPresentation().setText(MpSqlVisualizerBundle.message("log.suppress.manage"));
         }
 
@@ -1110,7 +1166,7 @@ public class SqlLogPanel extends JPanel implements Disposable {
         CommunityAction() {
             super(MpSqlVisualizerBundle.message("log.community.action"),
                     MpSqlVisualizerBundle.message("log.community.action.tip"),
-                    com.intellij.openapi.util.IconLoader.getIcon("/icons/communityChat.svg", SqlLogPanel.class));
+                    com.intellij.openapi.util.cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons.Community);
         }
 
         @Override
@@ -1127,7 +1183,7 @@ public class SqlLogPanel extends JPanel implements Disposable {
     public class HelpAction extends AnAction {
         @Override
         public void update(AnActionEvent e) {
-            e.getPresentation().setIcon(AllIcons.Actions.Help);
+            e.getPresentation().setIcon(cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons.Help);
             e.getPresentation().setText(MpSqlVisualizerBundle.message("log.panel.help"));
         }
 
@@ -1268,8 +1324,108 @@ public class SqlLogPanel extends JPanel implements Disposable {
      * 诊断行同步（EDT）：更新列表空态文案 + 管理定时器生命周期。
      * 取数全部为只读内存态（buffer 快照 / 桥计数 / AgentManager 状态），不触发平台调用。
      */
+    /**
+     * R53：双通道捕获状态栏（SQL 日志页签底部一行，捕捉期间常驻；非捕捉态整条隐藏）。
+     * 两个 JLabel（控制台通道 / 增强通道）+ 语义分隔符；文案由 {@link CaptureStatusBar#captureStatusLineText}
+     * 纯函数产出，{@link #syncCaptureStatusBar} 在 2s 诊断定时器上无锁轮询刷新（V80①：取数全为只读内存态）。
+     * 淡色（UIUtil.getContextHelpForeground）与空态诊断行标注同视觉惯例，不抢正文。
+     */
+    private javax.swing.JPanel buildStatusBar() {
+        statusConsoleLabel = new javax.swing.JLabel();
+        statusConsoleLabel.setForeground(com.intellij.util.ui.UIUtil.getContextHelpForeground());
+        statusAgentLabel = new javax.swing.JLabel();
+        statusAgentLabel.setForeground(com.intellij.util.ui.UIUtil.getContextHelpForeground());
+        javax.swing.JPanel bar = new javax.swing.JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 6, 2));
+        bar.setOpaque(false);
+        bar.add(statusConsoleLabel);
+        javax.swing.JLabel sep = new javax.swing.JLabel(SEP_LABEL);
+        sep.setForeground(com.intellij.util.ui.UIUtil.getContextHelpForeground());
+        bar.add(sep);
+        bar.add(statusAgentLabel);
+        bar.setBorder(com.intellij.util.ui.JBUI.Borders.empty(0, 6, 3, 6));
+        // 初始隐藏：面板构建时捕捉多半未起，先显示会留一条无信息的空带
+        bar.setVisible(false);
+        statusBarPanel = bar;
+        return bar;
+    }
+
+    /** R53 测试缝：双通道状态栏两段标签（第一段=控制台通道，第二段=增强通道）。 */
+    java.util.List<javax.swing.JLabel> statusBarLabelsForTest() {
+        java.util.List<javax.swing.JLabel> labels = new java.util.ArrayList<>();
+        labels.add(statusConsoleLabel);
+        labels.add(statusAgentLabel);
+        return labels;
+    }
+
+    /** R53 测试缝：同步驱动状态栏刷新（等价 2s 诊断定时器的一拍）。 */
+    void syncStatusBarForTest() {
+        syncCaptureStatusBar();
+    }
+
+    /** R53 测试缝：状态栏宿主面板（非捕捉态应整条隐藏——不留分隔符/空白高度）。 */
+    javax.swing.JPanel statusBarForTest() {
+        return statusBarPanel;
+    }
+
+    /**
+     * R53：双通道捕获状态栏刷新（EDT，挂在诊断定时器上 2s 无锁轮询）。
+     * 文案由纯函数 {@link CaptureStatusBar#captureStatusLineText} 产出（V80①：取数全为只读内存态）；
+     * 非捕捉态整条面板隐藏（只清文案会留下分隔符与空白高度）。
+     */
+    private void syncCaptureStatusBar() {
+        javax.swing.JLabel label = statusConsoleLabel;
+        if (label == null) {
+            return;
+        }
+        CaptureStatusBar.Pair texts = null;
+        if (manager.isCapturing()) {
+            try {
+                cn.song.mybatisplus.visualizer.log.agent.AgentManager am =
+                        cn.song.mybatisplus.visualizer.log.agent.AgentManager.getInstance(project);
+                texts = CaptureStatusBar.captureStatusLineText(new CaptureStatusBar.CaptureStatusLine(
+                        true,
+                        manager.getConsoleBridge().attachedConsoles.size(),
+                        manager.getConsoleBridge().consoleLinesSeen.get(),
+                        am.statusSummary(),
+                        am.healthyPids(),
+                        am.isUserPaused(),
+                        cn.song.mybatisplus.visualizer.log.agent.AgentEventAdapter.receivedEvents()));
+            } catch (Throwable ignored) {
+                texts = null; // runCatching().getOrNull() 等价
+            }
+        }
+        if (texts == null) {
+            label.setText("");
+            if (statusAgentLabel != null) {
+                statusAgentLabel.setText("");
+            }
+            setStatusBarVisible(false);
+        } else {
+            label.setText(texts.first());
+            if (statusAgentLabel != null) {
+                statusAgentLabel.setText(texts.second());
+            }
+            setStatusBarVisible(true);
+        }
+    }
+
+    /** R53：状态栏显隐（BorderLayout 跳过不可见子件，须 revalidate 才重排高度）。 */
+    private void setStatusBarVisible(boolean visible) {
+        javax.swing.JPanel bar = statusBarPanel;
+        if (bar == null || bar.isVisible() == visible) {
+            return;
+        }
+        bar.setVisible(visible);
+        java.awt.Container parent = bar.getParent();
+        if (parent != null) {
+            parent.revalidate();
+        }
+    }
+
     private void syncDiagnostics() {
-        boolean active = manager.isCapturing() && manager.getEntries().snapshot().isEmpty();
+        // R53：定时器捕捉期间常跑（状态栏持续刷新）；空态判定改 O(1) size() 而非 snapshot() 全量拷贝
+        syncCaptureStatusBar();
+        boolean active = manager.isCapturing() && manager.getEntries().size() == 0;
         String text;
         if (active) {
             String enhancedStatus;
@@ -1313,7 +1469,8 @@ public class SqlLogPanel extends JPanel implements Disposable {
         } else {
             applyEmptyTextWithEnhancedLink();
         }
-        if (active) {
+        // R53：定时器捕捉期间常跑（状态栏持续刷新）；非捕捉态停表清栏
+        if (manager.isCapturing()) {
             if (diagnosticsTimer == null) {
                 diagnosticsTimer = new javax.swing.Timer(DIAGNOSTICS_TICK_MS, e -> syncDiagnostics());
                 diagnosticsTimer.setRepeats(true);
@@ -1452,7 +1609,9 @@ public class SqlLogPanel extends JPanel implements Disposable {
         // T-SqlLogPerf P5（20261006-1020 计划）：上一轮全量重建链未走完就来了新刷新时，增量差分会被
         // 「model.size != lastRendered.size」拒绝 → 每次刷新都重启重建链，风暴期列表永远停在首屏 30 条
         // （用户体感「监听加载有延迟」的实态）。进差分前同步补完剩余批次，让差分基线对齐。
-        flushRebuildChainSync();
+        // F80：超大余量时补完让路（false＝本拍刷新挂起，链尾补跑）——单拍同步写
+        // 量不再随 logMaxCount 线性放大。
+        if (!flushRebuildChainSync()) return;
         List<LogSqlEntry> snapshot = LogPerfProbe.measure("LogPanel.refreshList.snapshot",
                 () -> "size=" + manager.getEntries().size(),
                 () -> manager.getEntries().snapshot());
@@ -1484,12 +1643,17 @@ public class SqlLogPanel extends JPanel implements Disposable {
         int evicted = manager.getEntries().drainEvictedCount();
 
         int modelSizeBefore = listModel.size();
+        long visibleTailSequenceBefore = lastRendered.isEmpty() ? 0L : lastRendered.get(lastRendered.size() - 1).sequenceNumber();
         if (!applyIncremental(newVisible, evicted)) {
             applyFullRebuild(newVisible, gen);
         }
+        boolean tailAdvancedAtCapacity = evicted > 0
+                && (!newVisible.isEmpty()
+                    && newVisible.get(newVisible.size() - 1).sequenceNumber() > visibleTailSequenceBefore);
         // T-SqlLogPerf + O-148：尾部跟随——仅当列表真的长高（新条目追加）才贴底；
-        // 搜索/过滤收窄不打扰浏览位置。
-        if (tailFollow.getShouldFollow() && listModel.size() > modelSizeBefore) {
+        // 搜索/过滤收窄不打扰浏览位置。缓冲区满时头部淘汰与尾部追加相抵，模型长度不变；
+        // 只随确有新可见条目时贴底。
+        if (tailFollow.getShouldFollow() && (listModel.size() > modelSizeBefore || tailAdvancedAtCapacity)) {
             list.ensureIndexIsVisible(listModel.size() - 1);
         }
 
@@ -1598,6 +1762,15 @@ public class SqlLogPanel extends JPanel implements Disposable {
     /** T-SqlLogPerf P5：在途全量重建链的剩余游标（null = 无在途链）。 */
     private Iterator<LogSqlEntry> rebuildRemaining = null;
 
+    /** F80（T-PerfSweep24）：flushRebuildChainSync 单拍同步补完封顶——默认设置（logMaxCount=200）
+     * 在途余量 ≤170 全量补完（行为不变）；用户调大 logMaxCount 至数千时，超出部分不再单拍
+     * 同步写数千条模型（EDT 冻结随 logMaxCount 线性放大），改由 appendRebuildChunk 逐拍链推进、
+     * 本拍刷新挂起链尾补跑。 */
+    private static final int FLUSH_SYNC_MAX = 512;
+
+    /** F80：链后补跑挂起标志（超大余量让路本拍刷新，链排空即补跑一次）。 */
+    private boolean pendingRefreshAfterChain = false;
+
     /** 追加一批（REFRESH_CHUNK_SIZE 条）；写完仍有余量则排下一拍。 */
     private void appendRebuildChunk() {
         Iterator<LogSqlEntry> remaining = rebuildRemaining;
@@ -1612,6 +1785,10 @@ public class SqlLogPanel extends JPanel implements Disposable {
         rebuildRemaining = remaining.hasNext() ? remaining : null;
         if (rebuildRemaining != null) {
             ApplicationManager.getApplication().invokeLater(this::appendRebuildChunk);
+        } else if (pendingRefreshAfterChain) {
+            // F80：链排空——补跑挂起的刷新（风暴期多次挂起合并为一次补跑）
+            pendingRefreshAfterChain = false;
+            ApplicationManager.getApplication().invokeLater(this::refreshList);
         }
     }
 
@@ -1622,21 +1799,35 @@ public class SqlLogPanel extends JPanel implements Disposable {
      * 每 200ms 的新刷新都重启重建链，链永远走不完，列表停在首屏 30 条且反复 clear/addAll 白耗 EDT。
      * 补完后 model 与 lastRendered 对齐，后续刷新走增量差分。
      */
-    private void flushRebuildChainSync() {
+    /**
+     * F80（T-PerfSweep24）补完保留分批：余量 ≤ {@link #FLUSH_SYNC_MAX}（默认设置 ≤170）照旧单拍同步
+     * 补完——默认行为逐字不变；余量超大（用户 logMaxCount 数千）不再单拍同步写数千条
+     * （EDT 冻结随 logMaxCount 线性放大），本拍刷新让路（返回 false 挂起），在途链沿用
+     * appendRebuildChunk 逐拍语义推进（每拍 30 条 EDT 脉冲），链排空补跑挂起刷新。
+     *
+     * @return true = 已补完（刷新可继续差分）；false = 超大余量让路（本拍刷新挂起）
+     */
+    private boolean flushRebuildChainSync() {
         Iterator<LogSqlEntry> remaining = rebuildRemaining;
         if (remaining == null) {
-            return;
+            return true;
+        }
+        List<LogSqlEntry> rest = new ArrayList<>();
+        remaining.forEachRemaining(rest::add);
+        if (rest.size() > FLUSH_SYNC_MAX) {
+            // 超大余量：让路——链保持推进（rebuildRemaining 不动），本拍刷新挂起
+            pendingRefreshAfterChain = true;
+            return false;
         }
         rebuildRemaining = null;
         list.setIgnoreRepaint(true);
-        List<LogSqlEntry> rest = new ArrayList<>();
-        remaining.forEachRemaining(rest::add);
         if (!rest.isEmpty()) {
             listModel.addAll(rest);
         }
         list.setIgnoreRepaint(false);
         list.revalidate();
         list.repaint();
+        return true;
     }
 
     // ---------- 排序方式（T-LogSortModes；T-UiCoord 后按钮改走动作图标组，文案由 presentation 承载） ----------
@@ -2160,6 +2351,8 @@ public class SqlLogPanel extends JPanel implements Disposable {
     public void dispose() {
         // T-Perf-24：停止搜索防抖 Timer（防晚到 apply 触碰已销毁面板）
         searchDebounceTimer.stop();
+        // F80：撤链后补跑挂起标志（防 dispose 后晚到 invokeLater 触碰已销毁面板）
+        pendingRefreshAfterChain = false;
         // T-CaptureTruth T-CT-03：停止诊断定时器（同上，防晚到 syncDiagnostics 触碰已销毁列表）
         if (diagnosticsTimer != null) {
             diagnosticsTimer.stop();

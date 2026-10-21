@@ -74,6 +74,29 @@ public class SqlLogEntryBuffer {
      *  重开必须补账，否则新窗口内的重复漏判（等价性红线，见 isDuplicate 注释）。 */
     private volatile boolean dedupeEnabled = true;
 
+    /** O-147：已存条目的元数据升级，不是新捕获；锁外回调，不追加第二条历史。 */
+    public interface EntryMergeListener {
+        void onMerged(LogSqlEntry oldEntry, LogSqlEntry merged);
+    }
+
+    private volatile EntryMergeListener onEntryMerged = null;
+
+    public EntryMergeListener getOnEntryMerged() {
+        return onEntryMerged;
+    }
+
+    public void setOnEntryMerged(EntryMergeListener listener) {
+        this.onEntryMerged = listener;
+    }
+
+    /**
+     * UI013：Logic 未绑定，文本相同不能证明同一次执行；Actual 仅属该次配对，禁止裁剪或融合。
+     * 反向验证锚点：临时改为 true，UI013 自动/手动保真用例必须变红。
+     */
+    private static boolean canDedupe(LogSqlEntry entry) {
+        return entry.source() != SqlSource.SHARDINGSPHERE;
+    }
+
     /**
      * T-SqlLogPerf P6（20261006-1020 计划）：dedupeKey → 队内**最近**时间戳索引——isDuplicate
      * 从锁内 O(n) 全表扫描（65 条/秒压测下每条线性扫 200 条 + 三通道写线程与 EDT snapshot 抢锁）
@@ -98,9 +121,14 @@ public class SqlLogEntryBuffer {
 
     /** {@code entries.lastOrNull { it.dedupeKey == k }} 的等价实现（自队尾向队首扫描取第一个同键条目）。 */
     private LogSqlEntry lastEntryWithKey(String k) {
+        return lastEntryWithKey(k, null);
+    }
+
+    /** UI013：带谓词形态——Sharding 条目不参与去重索引（{@code lastOrNull { canDedupe(it) && ... }}）。 */
+    private LogSqlEntry lastEntryWithKey(String k, java.util.function.Predicate<LogSqlEntry> predicate) {
         for (java.util.Iterator<LogSqlEntry> dit = entries.descendingIterator(); dit.hasNext(); ) {
             LogSqlEntry e = dit.next();
-            if (e.dedupeKey().equals(k)) {
+            if (e.dedupeKey().equals(k) && (predicate == null || predicate.test(e))) {
                 return e;
             }
         }
@@ -436,7 +464,7 @@ public class SqlLogEntryBuffer {
         List<LogSqlEntry> evictedEntries = new ArrayList<>();
         LogSqlEntry[] storedEntry = {null};
         synchronized (entries) {
-            if (dedupeEnabled && isDuplicate(entry)) {
+            if (dedupeEnabled && canDedupe(entry) && isDuplicate(entry)) {
                 duplicate = true;
                 LogSqlEntry existing = dedupeIndex.get(entry.dedupeKey());
                 if (existing != null) {
@@ -457,7 +485,7 @@ public class SqlLogEntryBuffer {
                 LogSqlEntry added = addNumbered(entry);
                 storedEntry[0] = added;
                 entries.addLast(added);
-                if (dedupeEnabled) {
+                if (dedupeEnabled && canDedupe(added)) {
                     // T-SqlLogPerf P6：索引 upsert（dedupeKey lazy 首触与旧版 isDuplicate 同价，
                     // 仅去重开启时支付）
                     dedupeIndex.put(added.dedupeKey(), added);
@@ -469,7 +497,7 @@ public class SqlLogEntryBuffer {
                         // 该键最新时才需要重算（队内同键余条 = 超窗重复入队形态，低频）
                         String k = evicted.dedupeKey();
                         if (dedupeIndex.get(k) == evicted) {
-                            LogSqlEntry stillThere = lastEntryWithKey(k);
+                            LogSqlEntry stillThere = lastEntryWithKey(k, SqlLogEntryBuffer::canDedupe);
                             if (stillThere != null) {
                                 dedupeIndex.put(k, stillThere);
                             } else {
@@ -491,6 +519,11 @@ public class SqlLogEntryBuffer {
             // 跨通道融合改变了保留条目的可见元数据 → 走内容通道重绘；仍非「新 SQL」。
             if (mergeChanged) {
                 notifyContentChangedThrottled();
+                // O-147：合并是元数据升级不是新捕获——历史落盘链（SqlLogAutoSaver）据此原地更新
+                EntryMergeListener mergeListener = onEntryMerged;
+                if (mergeListener != null && mergeDiagExisting != null && mergeDiagMerged != null) {
+                    mergeListener.onMerged(mergeDiagExisting, mergeDiagMerged);
+                }
                 if (mergeDiagExisting != null && mergeDiagMerged != null) {
                     final LogSqlEntry diagExisting = mergeDiagExisting;
                     final LogSqlEntry diagMerged = mergeDiagMerged;
@@ -693,6 +726,7 @@ public class SqlLogEntryBuffer {
      * ⟺ 该键最近时间戳落窗口内（最大时间戳是窗口判定的唯一有效候选，逐字等价）。
      */
     private boolean isDuplicate(LogSqlEntry entry) {
+        if (!canDedupe(entry)) return false;
         LogSqlEntry latest = dedupeIndex.get(entry.dedupeKey());
         if (latest == null) {
             return false;
@@ -792,7 +826,7 @@ public class SqlLogEntryBuffer {
         synchronized (entries) {
             boolean removed = entries.removeIf(it -> it == entry);
             // T-SqlLogPerf P6：单条删除仅重算该键（用户右键低频，O(n) 一次可接受）
-            if (removed && dedupeEnabled) {
+            if (removed && dedupeEnabled && canDedupe(entry)) {
                 String k = entry.dedupeKey();
                 LogSqlEntry stillThere = lastEntryWithKey(k);
                 if (stillThere != null) {

@@ -141,7 +141,7 @@ public final class PreviewResult {
     /** R90：本次预览实际入库条目，recordHistory 在返回结果前设置；副本保留，未知为空。 */
     private String historyEntryId = "";
     /** ShardingSphere 路由日志原文，只读附注，不参与 SQL 编辑、复制或执行。 */
-    private final String actualSql;
+    private String actualSql;
 
     public PreviewResult(String sql, String compactSql, List<String> unresolvedParams, String paramTable,
                          WrapperType wrapperType, String tableName, String warning, List<String> columns,
@@ -451,6 +451,10 @@ public final class PreviewResult {
 
     public String getActualSql() {
         return actualSql;
+    }
+
+    public void setActualSql(String actualSql) {
+        this.actualSql = actualSql;
     }
 
     /** effectiveDialect：previewModel/batchModel 方言优先，缺省取本次渲染瞬态方言。 */

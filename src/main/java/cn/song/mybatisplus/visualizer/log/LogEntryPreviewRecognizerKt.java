@@ -37,6 +37,17 @@ public static RecognizedLogPreview toRecognizedPreview(LogSqlEntry entry) {
     // 供参数行预填（面板既有 inList 逗号分支渲染出与还原 SQL 一致的形态）。
     java.util.Set<String> namedInClause = entry.rawSql().contains(":")
             ? ListParamRenderer.inClauseParamNames(entry.rawSql()) : java.util.Set.of();
+    // R90 附注：ShardingSphere 路由日志原文（actualSql）不作识别通道输入——物理 SQLUnit 的绑定
+    // 证据在应用侧，IDE 侧不猜。原文原样透传，零参数行。
+    if (entry.source() == SqlSource.SHARDINGSPHERE) {
+        return new RecognizedLogPreview(
+                entry.rawSql(),
+                entry.rawSql(),
+                List.of(),
+                java.util.Map.of(),
+                List.of(),
+                false);
+    }
     if (!recognized) {
         return new RecognizedLogPreview(
                 entry.rawSql(),
@@ -124,7 +135,13 @@ public static RecognizedLogPreview toRecognizedPreview(LogSqlEntry entry) {
      * formatSql=设置值（T-ListPreviewCopy：两页预览统一跟随「预览时格式化还原 SQL」，默认开）。
      */
     public static PreviewResult toPreviewResult(LogSqlEntry entry, boolean formatSql, boolean literalRecovery) {
-        return withExecutionError(toPreviewResultInternal(entry, formatSql, literalRecovery), entry.errorText());
+        PreviewResult result = toPreviewResultInternal(entry, formatSql, literalRecovery);
+        // R90：ShardingSphere 路由日志原文，只读附注，不参与 SQL 编辑、复制或执行
+        if (entry.source() == SqlSource.SHARDINGSPHERE
+                && entry.actualSql() != null && !entry.actualSql().isBlank()) {
+            result.setActualSql(entry.actualSql());
+        }
+        return withExecutionError(result, entry.errorText());
     }
 
     /**
@@ -233,6 +250,35 @@ public static RecognizedLogPreview toRecognizedPreview(LogSqlEntry entry) {
                     Set.of());
             }
         }
+        // Actual 是物理 SQLUnit，不是 Logic 的绑定证据。旧缓存中曾猜出的参数也不预填。
+        if (entry.source() == SqlSource.SHARDINGSPHERE) {
+            return new PreviewResult(
+                formatIfNeeded(SqlLogPanelKt.withTerminator(entry.rawSql()), formatSql),   // sql
+                entry.rawSql(),                    // compactSql
+                List.of(),                         // unresolvedParams
+                null,                              // paramTable
+                null,                              // wrapperType
+                null,                              // tableName
+                MpSqlVisualizerBundle.message("log.preview.unresolvedNoBinding.sharding"),
+                List.of(),                         // columns
+                Map.of(),                          // columnComments
+                null,                              // tableComment
+                null,                              // previewModel
+                List.of(),                         // paramHints
+                List.of(),                         // candidateTables
+                null,                              // batchModel
+                null,                              // xmlModel
+                Map.of(),                          // initialParamValues
+                List.of(),                         // perfWarnings
+                null,                              // previousSql
+                List.of(),                         // pagesColumns
+                Map.of(),                          // namedParamHints
+                entry.stackDigest(),               // stackDigest
+                false,                             // hasDollarRawSegments
+                null, null,                        // countSql / paginationLimitLine
+                List.of(), Set.of(),               // placeholderParamNames / duplicateParamNames
+                null, null);                       // diagramStatement / historyFingerprintSeed
+        }
         String base = SqlLogPanelKt.withTerminator(entry.restoredSql());
         // T-HibDualCapture：文案分流——零参数是「绑定行没抓到」（引导开 TRACE），
         // 有参数但数量不齐才是「数量不匹配」；`?` 计数 string-aware
@@ -242,7 +288,9 @@ public static RecognizedLogPreview toRecognizedPreview(LogSqlEntry entry) {
             ? MpSqlVisualizerBundle.message(entry.params().isEmpty()
                 ? (entry.source() == SqlSource.JDBC
                     ? "log.preview.unresolvedNoBinding.jdbc"
-                    : "log.preview.unresolvedNoBinding")
+                    : entry.source() == SqlSource.SHARDINGSPHERE
+                        ? "log.preview.unresolvedNoBinding.sharding"
+                        : "log.preview.unresolvedNoBinding")
                 : "log.preview.unresolvedWarning")
             : null;
         // master 具名参数新增 stackDigest = stackDigest；Java 按全参构造位置传入

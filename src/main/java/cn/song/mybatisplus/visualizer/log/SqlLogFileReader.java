@@ -262,7 +262,7 @@ public final class SqlLogFileReader {
             String databaseName = dbStr != null && !dbStr.isBlank() ? dbStr : null;
             String rawSql = rawSqlOverride != null ? rawSqlOverride : sql;
             return new LogSqlEntry(rawSql, sql, params, timestamp,
-                    logTime, LogSqlEntry.computeSummary(sql),
+                    logTime, LogSqlEntry.summarizeSql(sql),
                     decodedExt != null && decodedExt.source() != null ? decodedExt.source() : SqlSource.UNKNOWN,
                     executionTimeMs,
                     src.getFirst(), src.getSecond(),
@@ -289,7 +289,7 @@ public final class SqlLogFileReader {
             }
             String rawSql = rawSqlOverride != null ? rawSqlOverride : sql;
             return new LogSqlEntry(rawSql, sql, params, timestamp,
-                    null, LogSqlEntry.computeSummary(sql),
+                    null, LogSqlEntry.summarizeSql(sql),
                     decodedExt != null && decodedExt.source() != null ? decodedExt.source() : SqlSource.UNKNOWN,
                     null,
                     null, 0,

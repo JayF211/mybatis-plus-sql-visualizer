@@ -169,9 +169,18 @@ public class HibernateLogParser {
         this.recognizeBareSql = recognizeBareSql;
     }
 
-    /** 喂入一行控制台输出（任意线程；按线程 token 路由到独立桶——解析器实例按 console 隔离）。 */
+    /** 喂入一行控制台输出（单解析器调用方兼容薄壳；热路径走 feed(line, token) 重载——解析器实例按 console 隔离）。 */
     public void feed(String line) {
-        Bucket bucket = router.bucketFor(line);
+        feed(line, LogThreadRouter.threadTokenOf(line));
+    }
+
+    /**
+     * F58（T-PerfSweep18 压轴）：喂入一行＋<b>已提取</b>的线程 token（热路径每行一次下传，
+     * 语义与 {@code feed(line)} 自提逐字等价；token=null 走 fail-open 回退）。
+     */
+    public void feed(String line, String threadToken) {
+    public void feed(String line, String threadToken) {
+        Bucket bucket = router.bucketForToken(threadToken);
         if (bucket.collecting) {
             feedCollecting(bucket, line);
         } else {
@@ -355,7 +364,7 @@ public class HibernateLogParser {
                 params,
                 System.currentTimeMillis(),
                 logTs,
-                LogSqlEntry.computeSummary(restored),
+                LogSqlEntry.summarizeSql(restored),
                 SqlSource.HIBERNATE,
                 null, null, 0, List.of(), List.of(), null, 0L,
                 null, null, null, null, null);

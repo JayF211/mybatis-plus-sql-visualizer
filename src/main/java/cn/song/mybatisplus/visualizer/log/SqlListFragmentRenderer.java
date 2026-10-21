@@ -29,6 +29,24 @@ public final class SqlListFragmentRenderer {
         };
     }
 
+    /**
+     * R60（T-LaneB D96）：列表展示文本按脱敏态取值——展示层打码、原始条目不动。
+     * FORMATTED 直接对还原 SQL 打码；非 FORMATTED 且脱敏开时对完整 SQL 先打码再截断摘要
+     * （避免旧摘要在字面量引号中间截断后漏打码），结果缓存进条目。
+     */
+    public static String displaySqlForList(LogSqlEntry entry, SqlListDisplayMode mode, boolean masked) {
+        if (mode == SqlListDisplayMode.FORMATTED) {
+            return cn.song.mybatisplus.visualizer.util.DisplayMasker.maskDisplay(entry.restoredSql(), masked);
+        }
+        if (!masked) return entry.summary();
+        String cached = entry.cachedMaskedSummary();
+        if (cached != null) return cached;
+        String maskedSummary = LogSqlEntry.summarizeSql(
+                cn.song.mybatisplus.visualizer.util.DisplayMasker.maskSqlText(entry.restoredSql()));
+        entry.setCachedMaskedSummary(maskedSummary);
+        return maskedSummary;
+    }
+
     public static List<SqlSemanticFragment> semanticFragments(String sql) {
         if (sql.isEmpty()) return Collections.emptyList();
         SqlLexer lexer = new SqlLexer();

@@ -170,17 +170,23 @@ public class LogEntryListCellRenderer extends JPanel implements javax.swing.List
      */
     private List<List<SqlTextFragment>> sqlLineFragmentsFor(LogSqlEntry entry) {
         SqlListDisplayMode mode = PluginSettings.getInstance().sqlListDisplayMode();
-        String sql = SqlLogPanelKt.withTerminator(mode == SqlListDisplayMode.FORMATTED ? entry.restoredSql() : entry.summary());
+        // R60：展示文本打码、原始条目不动；缓存同时以模式和脱敏态为键，防切换后复用旧语义片段。
+        boolean maskOn = PluginSettings.getInstance().getState().getDisplayMaskEnabled();
+        String sql = SqlLogPanelKt.withTerminator(
+                SqlListFragmentRenderer.displaySqlForList(entry, mode, maskOn));
         if (mode == SqlListDisplayMode.SINGLE_LINE) {
             List<List<SqlTextFragment>> single = new ArrayList<>();
             single.add(SqlListFragmentRenderer.renderFragments(sql));
             return single;
         }
         List<List<SqlSemanticFragment>> semantics = entry.cachedListLineFragments();
-        if (semantics == null || entry.cachedListLineFragmentsMode() != mode) {
+        Boolean cachedMasked = entry.cachedListLineFragmentsMasked();
+        if (semantics == null || entry.cachedListLineFragmentsMode() != mode
+                || !Boolean.valueOf(maskOn).equals(cachedMasked)) {
             semantics = SqlListFragmentRenderer.semanticLineFragments(sql, mode);
             entry.setCachedListLineFragments(semantics);
             entry.setCachedListLineFragmentsMode(mode);
+            entry.setCachedListLineFragmentsMasked(maskOn);
         }
         return SqlEntryPresentation.visibleSqlLines(SqlListFragmentRenderer.projectLineFragments(semantics), mode);
     }

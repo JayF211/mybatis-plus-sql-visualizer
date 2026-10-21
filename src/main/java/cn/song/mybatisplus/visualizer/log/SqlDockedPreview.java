@@ -88,7 +88,9 @@ public final class SqlDockedPreview implements Disposable {
             return;
         }
         if (displayedEntry == entry) return;
-        String sql = SqlClickPreview.clickPreviewSql(entry.restoredSql(), PluginSettings.getInstance().getState().getLogFormatSql());
+        PluginSettings.State dockedState = PluginSettings.getInstance().getState();
+        String sql = SqlClickPreview.clickPreviewSql(entry.restoredSql(), dockedState.getLogFormatSql(),
+                dockedState.getDisplayMaskEnabled());
         if (content == null) {
             content = SqlClickPreview.buildContent(project, sql, UiTextClipboard::copy, onClose);
             content.editor().getDocument().addDocumentListener(new DocumentListener() {
