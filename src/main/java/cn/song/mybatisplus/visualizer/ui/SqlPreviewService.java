@@ -1,9 +1,16 @@
 // T-SyncK2JMaster184 自 master src/main/kotlin/cn/song/mybatisplus/visualizer/ui/SqlPreviewService.kt 移植（T-ST-02b2：历史耗时补全读路径改 sqlLogManagerIfCreated）
+// 自 master 同文件 O-145/R54/T-PerfSweep24/T-UpdateSetSqlConcat/T-DialectQuoteWarn 增量移植（来源上下文 + 方言决策 + 历史条目回填两级化）
 package cn.song.mybatisplus.visualizer.ui;
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings;
 import cn.song.mybatisplus.visualizer.config.ProjectPluginSettings;
 import cn.song.mybatisplus.visualizer.config.TableNameRule;
+import cn.song.mybatisplus.visualizer.context.ActualSqlPsiResolver;
+import cn.song.mybatisplus.visualizer.context.ModuleIdentityResolution;
+import cn.song.mybatisplus.visualizer.context.ModuleIdentityResolver;
+import cn.song.mybatisplus.visualizer.context.PreviewSourceContext;
+import cn.song.mybatisplus.visualizer.context.PreviewSourceOrigin;
+import cn.song.mybatisplus.visualizer.context.SqlPsiResolution;
 import cn.song.mybatisplus.visualizer.converter.ConverterRegistry;
 import cn.song.mybatisplus.visualizer.converter.EasyQueryConverter;
 import cn.song.mybatisplus.visualizer.converter.MdsConverter;
@@ -23,6 +30,7 @@ import cn.song.mybatisplus.visualizer.converter.jpa.SpecificationQueryConverter;
 import cn.song.mybatisplus.visualizer.history.SqlHistoryEntry;
 import cn.song.mybatisplus.visualizer.history.SqlHistoryManager;
 import cn.song.mybatisplus.visualizer.log.LogSqlEntry;
+import cn.song.mybatisplus.visualizer.log.LogSqlModelsKt;
 import cn.song.mybatisplus.visualizer.log.SqlLogManager;
 import cn.song.mybatisplus.visualizer.log.SqlLogManagerLookupKt;
 import cn.song.mybatisplus.visualizer.model.AssociationInfo;
@@ -77,6 +85,7 @@ import cn.song.mybatisplus.visualizer.psi.jpa.NamedQueryLocator;
 import cn.song.mybatisplus.visualizer.psi.jpa.JpqlQueryInfo;
 import cn.song.mybatisplus.visualizer.psi.jpa.JpqlQueryLocator;
 import cn.song.mybatisplus.visualizer.sql.Dialect;
+import cn.song.mybatisplus.visualizer.sql.DialectDecisionEngine;
 import cn.song.mybatisplus.visualizer.sql.DialectRegistry;
 import cn.song.mybatisplus.visualizer.sql.ParameterReplacer;
 import cn.song.mybatisplus.visualizer.sql.ParamHint;
@@ -372,6 +381,32 @@ public final class SqlPreviewService {
      */
     @Nullable
     public PreviewResult preview(@NotNull PsiElement anchor) {
+        return preview(anchor, null);
+    }
+
+    /** Wrapper 的 owner 是调用所在源码文件，不是实体类文件，也不是把 Java/Kotlin 当成 SQL PSI。 */
+    @NotNull
+    public PreviewSourceContext resolveWrapperSourceContext(@NotNull PsiElement anchor) {
+        PsiFile file = anchor.getContainingFile();
+        com.intellij.psi.PsiElement owner = PsiTreeUtil.getParentOfType(anchor, PsiMethod.class, false);
+        if (owner == null) owner = anchor;
+        SqlPsiResolution sqlResolution = file == null
+                ? SqlPsiResolution.None.INSTANCE
+                : ActualSqlPsiResolver.resolve(file, owner, anchor.getTextOffset());
+        ModuleIdentityResolution moduleResolution =
+                file != null && file.getVirtualFile() != null
+                        ? ModuleIdentityResolver.resolve(project, file.getVirtualFile())
+                        : null;
+        if (moduleResolution == null) {
+            moduleResolution = ModuleIdentityResolution.None.INSTANCE;
+        }
+        return new PreviewSourceContext(project, PreviewSourceOrigin.PSI, file,
+                file != null ? file.getVirtualFile() : null,
+                sqlResolution, moduleResolution, null, null);
+    }
+
+    @Nullable
+    public PreviewResult preview(@NotNull PsiElement anchor, @Nullable PreviewSourceContext sourceContext) {
         // JDBC 模板 SQL 字符串预览（正向）：queryForList/update 等方法的字符串 SQL 实参 → 预览
         // 放在最前：JDBC 分支不写 Wrapper 缓存、不依赖实体解析，与既有路径完全隔离
         boolean jdbcPreviewOff = settings != null && settings.getState() != null
@@ -385,12 +420,30 @@ public final class SqlPreviewService {
 
         PsiFile file = anchor.getContainingFile();
         if (file == null) return null;
+        PreviewSourceContext context = sourceContext != null
+                && project.equals(sourceContext.project())
+                && file.equals(sourceContext.hostPsiFile())
+                ? sourceContext
+                : resolveWrapperSourceContext(anchor);
+        // 宿主文件提供 IDEA 有效方言映射；SQL PSI 参数只在确有真实 SqlFile 时提供注入作用域。
+        DialectDecisionEngine.Decision decision =
+                (context.sqlPsiResolution() instanceof SqlPsiResolution.Ambiguous
+                        || context.moduleResolution() instanceof ModuleIdentityResolution.Ambiguous)
+                        ? new DialectDecisionEngine.Decision(
+                        DialectDecisionEngine.Status.AMBIGUOUS, null,
+                        DialectDecisionEngine.Confidence.FALLBACK, null, List.of(), List.of(), null)
+                        : DialectRegistry.INSTANCE.decision(project, context.hostVirtualFile(),
+                        context.sqlPsiFile(), context.canonicalModuleKey());
+        Dialect dialect = DialectRegistry.INSTANCE.byName(decision.dialectName());
         // 缓存键含锚点偏移：同文件多个 Wrapper（查询/删除/修改）各自独立缓存，避免串结果
         // M14.6：缓存键含「替换 ? 占位符」开关，开关切换后不命中旧结果
-        // T-M19.4（用户实测：表名配置修改后预览不生效）：缓存键含**表配置签名**——设置变更后不再命中旧结果
+        // T-M19.4（用户实测：表名配置修改后预览不生效）：缓存键含**表配置签名**——设置变更
+        // （文件戳不变的场景）不再命中旧结果
         boolean resolveVariables = effectiveReplaceParams();
         LocatedWrapper located = cache.getOrCompute(
-                file, anchor.getTextRange().getStartOffset(), resolveVariables, tableConfigSignature(),
+                file, anchor.getTextRange().getStartOffset(), resolveVariables,
+                tableConfigSignature() + "|" + decision.status() + "|" + decision.dialectName()
+                        + "|" + decision.source() + "|" + decision.dataSourceIds(),
                 () -> WrapperLocator.locateWithTable(anchor, resolveVariables));
         // T-M19.4（用户实测：实体文件新增/修改 @TableName 后预览不生效——缓存按**锚点文件**戳失效，
         // 实体文件变化不触发）：命中缓存时校验实体文件戳，变更则重算
@@ -405,10 +458,14 @@ public final class SqlPreviewService {
                 // 返回带显式警示的空结果（面板红字），不再静默 return null——
                 // 「返回 null = 非 wrapper 锚点」契约收窄保留：仅 located 带 entityResolutionFailed
                 // 标记（服务链形态）时降级，工厂/Kotlin/构造形态与其余锚点行为不变
-                if (effectiveLocated.entityResolutionFailed()) {
+                if (effectiveLocated.entityResolutionFailed() || "kotlin".equalsIgnoreCase(file.getLanguage().getID())) {
                     LOG.info("preview: DEGRADE table=null, wrapperType="
                             + (effectiveLocated.getChain() != null ? effectiveLocated.getChain().getWrapperType() : null)
                             + ", anchor=" + anchor.getTextRange());
+                    String degradeWarning = effectiveLocated.entityResolutionFailed()
+                            ? "⚠ 字符串服务链无法推断实体表：Wrapper 链未携带实体类型"
+                            + "（无 <实体> 类型实参，服务接口/调用返回类型也无实体泛型），SQL 无法生成"
+                            : "Kotlin 源码无法推断实体表；SQL 无法生成";
                     return new PreviewResult(
                             "",
                             "",
@@ -416,10 +473,12 @@ public final class SqlPreviewService {
                             null,
                             effectiveLocated.getChain() != null ? effectiveLocated.getChain().getWrapperType() : null,
                             null,
-                            "⚠ 字符串服务链无法推断实体表：Wrapper 链未携带实体类型"
-                                    + "（无 <实体> 类型实参，服务接口/调用返回类型也无实体泛型），SQL 无法生成",
+                            degradeWarning,
                             List.of(), Map.of(), null, null, List.of(), List.of(), null, null, Map.of(),
-                            List.of(), List.of(), null, null);
+                            List.of(), List.of(), null, null,
+                            Map.of(), null, false, null, null,
+                            List.of(), java.util.Set.of(), null, null,
+                            null, dialect, decision, null, null);
                 }
                 LOG.info("preview: RETURN_NULL table=null, wrapperType="
                         + (effectiveLocated.getChain() != null ? effectiveLocated.getChain().getWrapperType() : null)
@@ -472,7 +531,7 @@ public final class SqlPreviewService {
             // 缺陷②修复：参数历史键指纹取「注入前」语句文本——下面这一串注入（逻辑删除 / 乐观锁 /
             // 多租户 / 数据权限 / 分页 LIMIT）都会改写 SQL 文本，而历史键原先是 SHA-256(SQL 全文)，
             // 用户一开这些开关键就变 → 已回填参数召回 miss 退回占位符（且防抖后新键以空值覆盖落库）。
-            String historyFingerprintSeed = SqlGenerator.generate(statement, true, currentDialect(), null);
+            String historyFingerprintSeed = SqlGenerator.generate(statement, true, dialect, null);
 
             // T-M15-07：逻辑删除注入（@TableLogic 实体 + 配置开启）
             LogicDeleteState logicDelete = evaluateLogicDeleteState(chain.getCalls());
@@ -503,9 +562,10 @@ public final class SqlPreviewService {
                     ? dataPermissionStatement : applyPageLimit(dataPermissionStatement, chain.getPageLimit());
             // R12 T-PaginationSim：分页 COUNT 包裹预览（D1=A 预览附第二条语句；D2=A 基础包裹形态；
             // D3=A searchCount=false 跳过；count/exists 消费不产 COUNT——复用 T-M29-02/03 分页消费口径）
-            String countSql = paginationCountSql(chain, pagedStatement);
+            String countSql = paginationCountSql(chain, pagedStatement, dialect);
             PreviewResult result = SqlPreviewServiceEnhancementsKt.buildPreviewResult(
-                    this, chain.getWrapperType(), table, pagedStatement, countSql, historyFingerprintSeed);
+                    this, chain.getWrapperType(), table, pagedStatement, countSql, historyFingerprintSeed,
+                    dialect, decision);
             recordHistory(result, anchor);
             // exists 消费：外层包裹 SELECT EXISTS
             if (chain.getExistsConsumed() && isQueryLike(chain.getWrapperType())) {
@@ -541,9 +601,10 @@ public final class SqlPreviewService {
             SpecificationQueryConverter.SpecificationPreview specPreview =
                     SpecificationQueryConverter.convert(batchCall, resolveVariables);
             if (specPreview != null) {
+                DialectDecisionEngine.Decision specDecision = jpaSourceDecision(batchCall);
                 PreviewResult result = new PreviewResult(
                         specPreview.getSql(),
-                        specPreview.getSql().replaceAll("\\s+", " ").trim(),
+                        SQL_WHITESPACE_RUN.matcher(specPreview.getSql()).replaceAll(" ").trim(),
                         specPreview.getParamSources(),
                         ParameterReplacer.buildParamTable(specPreview.getParamSources()),
                         null,
@@ -561,6 +622,20 @@ public final class SqlPreviewService {
                         null,
                         null,
                         null,
+                        null,
+                        Map.of(),
+                        null,
+                        false,
+                        null,
+                        null,
+                        List.of(),
+                        java.util.Set.of(),
+                        null,
+                        null,
+                        null,
+                        dialectOf(specDecision),
+                        specDecision,
+                        null,
                         null);
                 recordHistory(result, anchor);
                 return result;
@@ -568,9 +643,10 @@ public final class SqlPreviewService {
             QueryByExampleConverter.ExamplePreview examplePreview =
                     QueryByExampleConverter.convert(batchCall, resolveVariables);
             if (examplePreview != null) {
+                DialectDecisionEngine.Decision exampleDecision = jpaSourceDecision(batchCall);
                 PreviewResult result = new PreviewResult(
                         examplePreview.getSql(),
-                        examplePreview.getSql().replaceAll("\\s+", " ").trim(),
+                        SQL_WHITESPACE_RUN.matcher(examplePreview.getSql()).replaceAll(" ").trim(),
                         examplePreview.getParamSources(),
                         ParameterReplacer.buildParamTable(examplePreview.getParamSources()),
                         null,
@@ -587,6 +663,20 @@ public final class SqlPreviewService {
                         Map.of(),
                         null,
                         null,
+                        null,
+                        null,
+                        Map.of(),
+                        null,
+                        false,
+                        null,
+                        null,
+                        List.of(),
+                        java.util.Set.of(),
+                        null,
+                        null,
+                        null,
+                        dialectOf(exampleDecision),
+                        exampleDecision,
                         null,
                         null);
                 recordHistory(result, anchor);
@@ -694,7 +784,7 @@ public final class SqlPreviewService {
         PartTree partTree = PartTreeParser.parse(methodInfo.getMethodName());
         SqlStatement statement = DerivedQueryConverter.INSTANCE.convert(partTree, table);
         // T-PS5-03：入口求一次方言（分页分析/方法级增强/结果构建共用同一实例，不再各求一次）
-        Dialect dialect = currentDialect();
+        Dialect dialect = DialectRegistry.INSTANCE.effective(project, file.getVirtualFile());
         // T-J10：Pageable/Page/Sort/Limit 参数全路径——Pageable/Page → LIMIT 占位（调用点形态静态求值）、
         // Sort → ORDER BY（Sort.by 字面量内联）、Limit（3.2） → 仅 LIMIT 无 OFFSET
         JpaQueryEnhancer.PageSortEval pageSort = JpaQueryEnhancer.evaluatePageSort(method, callArgs, dialect, table);
@@ -726,7 +816,7 @@ public final class SqlPreviewService {
             paramNames.addAll(pageSort.getExtraParamNames());
         }
         // DerivedQueryConverter 解析条件树，SqlGenerator 生成的 SQL 含 ? 占位符
-        String sql = SqlGenerator.generate(statement);
+        String sql = SqlGenerator.generate(statement, false, dialect, null);
         // T-J4：IN/NOT IN 条件参数接线——inClauseParameterOrdinals 序号对齐方法参数名
         // （过滤 Pageable 后的 paramNames 序），把 IN 参数挂进 buildJpaPreviewResult 的
         // inClauseParams（面板回填按逗号分割多值，对齐 JPQL/HQL 路径的 Result.inClauseParams 惯例）
@@ -782,9 +872,7 @@ public final class SqlPreviewService {
      */
     public String detectMainAlias(@NotNull String sql, @NotNull TableInfo table) {
         try {
-            java.util.regex.Pattern regex =
-                    Pattern.compile("(?i)\\bFROM\\s+[`\"(]*([\\w.]+)[`\"]*)\\s+([a-zA-Z_][\\w$]*)");
-            java.util.regex.Matcher match = regex.matcher(sql);
+            java.util.regex.Matcher match = FROM_TABLE_ALIAS.matcher(sql);
             String alias = match.find() ? match.group(2) : null;
             boolean isKeyword = false;
             if (alias != null) {
@@ -799,6 +887,45 @@ public final class SqlPreviewService {
         } catch (Throwable t) {
             return table.getTableName();
         }
+    }
+
+    /**
+     * JPQL/HQL 字符串的宿主是 Java 源文件，不是 DatabaseTools SqlFile。跨文件命名查询
+     * 使用定义所在文件；无文件/模块歧义时保留项目级兼容回退，不猜测调用点模块。
+     */
+    @NotNull
+    public PreviewSourceContext jpaSourceContext(@Nullable com.intellij.psi.PsiElement owner) {
+        com.intellij.psi.PsiFile host = owner != null ? owner.getContainingFile() : null;
+        com.intellij.openapi.vfs.VirtualFile file = host != null ? host.getVirtualFile() : null;
+        ModuleIdentityResolution module;
+        if (file != null) {
+            ModuleIdentityResolution resolved = com.intellij.openapi.application.ReadAction.compute(
+                    () -> ModuleIdentityResolver.resolve(project, file));
+            module = resolved != null ? resolved : ModuleIdentityResolution.None.INSTANCE;
+        } else {
+            module = ModuleIdentityResolution.None.INSTANCE;
+        }
+        return new PreviewSourceContext(
+                project,
+                PreviewSourceOrigin.PSI,
+                host,
+                file,
+                SqlPsiResolution.None.INSTANCE,
+                module,
+                null,
+                null);
+    }
+
+    @NotNull
+    public DialectDecisionEngine.Decision jpaSourceDecision(@Nullable com.intellij.psi.PsiElement owner) {
+        return DialectRegistry.INSTANCE.decision(jpaSourceContext(owner));
+    }
+
+    @NotNull
+    private Dialect dialectOf(@NotNull DialectDecisionEngine.Decision decision) {
+        return decision.dialectName() != null
+                ? DialectRegistry.INSTANCE.byName(decision.dialectName())
+                : DialectRegistry.INSTANCE.byName(null);
     }
 
     /**
@@ -820,8 +947,9 @@ public final class SqlPreviewService {
         PsiClass entityClass = info.getEntityClass();
         TableInfo table = info.isNative() ? (entityClass != null ? new JpaEntityResolver().resolve(entityClass) : null)
                 : SqlPreviewServiceEnhancementsKt.resolveHqlTable(this, entityClass, null, jpql, method);
-        // T-PS5-03：入口求一次方言（分页分析/方法级增强/结果构建共用）
-        Dialect dialect = currentDialect();
+        // O-145：Java 方法宿主的非 URL 来源证据；不将 JPQL 字面量冒充 SqlFile。
+        DialectDecisionEngine.Decision decision = jpaSourceDecision(method);
+        Dialect dialect = dialectOf(decision);
         // T-J10：分页/排序参数占位名（无参数时空列表，存量行为零变化）
         JpaQueryEnhancer.PageSortEval pageSortEval = JpaQueryEnhancer.evaluatePageSort(method, null, dialect, table);
         List<String> extraParamNames = (pageSortEval != null && pageSortEval.getExtraParamNames() != null)
@@ -845,20 +973,25 @@ public final class SqlPreviewService {
             return new PreviewResult(
                     enhancedSql,
                     // 无增强时保持旧字节级行为（convertedSql 原样），有增强时压缩多行空白
-                    enhancedSql.equals(convertedSql) ? convertedSql : enhancedSql.replaceAll("\\s+", " ").trim(),
+                    enhancedSql.equals(convertedSql) ? convertedSql
+                            : SQL_WHITESPACE_RUN.matcher(enhancedSql).replaceAll(" ").trim(),
                     allParamNames,
                     ParameterReplacer.buildParamTable(allParamNames),
                     null, tableName, null,
                     table != null ? table.getAllColumnNames() : List.of(),
+                    // O-145：方言决策随行入结果（面板指示行/执行闸消费）
                     Map.of(), null, null,
-                    hints, List.of(), null, null, Map.of(), null, null, null, null);
+                    hints, List.of(), null, null, Map.of(), null, null, null, null,
+                    Map.of(), null, false, null, null,
+                    List.of(), java.util.Set.of(), null, null,
+                    null, dialect, decision, null, null);
         }
         // Wave1 第三参 project：激活 PSI 级 JOIN ON（@JoinColumn 真实化）与子查询实体映射
         JpqlConverter.Result result = JpqlConverter.convert(jpql, table, project, method);
         // T-J10/J15/J22：方法级增强（LIMIT/ORDER BY/FOR UPDATE/EntityGraph JOIN/notes/count SQL）
         String enhancedSql = SqlPreviewServiceEnhancementsKt.applyJpaMethodEnhancements(this, method, result.getSql(), table, false, dialect);
         return SqlPreviewServiceEnhancementsKt.buildJpaPreviewResult(this, result.getStatement(), enhancedSql, table != null ? table.getTableName() : "",
-                allParamNames, method, result.getInClauseParams(), dialect);
+                allParamNames, method, result.getInClauseParams(), dialect, decision);
     }
 
     /**
@@ -903,6 +1036,32 @@ public final class SqlPreviewService {
     // T-JpaParamOrder F6：静态值字面量形态（数字含 Java 类型后缀 / 枚举常量引用）
     private static final Pattern NUMERIC_LITERAL = Pattern.compile("-?\\d+(\\.\\d+)?[LlFfDd]?");
     private static final Pattern ENUM_CONSTANT_REF = Pattern.compile("[A-Za-z_$][A-Za-z0-9_$.]*\\.[A-Z][A-Z0-9_]*");
+
+    // T-PerfSweep24 F84：函数体内现场 Regex 提常量（本文件 18 处收敛；含 :1289 命名参数
+    // 与既有 NATIVE_NAMED_PARAM 同 pattern 直接收编复用）。
+    /** 预览 SQL 折叠空白（compactSql 构建处共用，12 处）。 */
+    private static final Pattern SQL_WHITESPACE_RUN = Pattern.compile("\\s+");
+
+    /** JPA 查询内顶层分页子句探测（LIMIT/OFFSET/FETCH）。 */
+    private static final Pattern LIMIT_OFFSET_FETCH_CLAUSE = Pattern.compile("(?i)\\b(LIMIT|OFFSET|FETCH)\\b");
+
+    /** JPA 查询内顶层 ORDER BY 探测。 */
+    private static final Pattern ORDER_BY_CLAUSE = Pattern.compile("(?i)\\bORDER\\s+BY\\b");
+
+    /**
+     * 主表别名探测：{@code FROM t_user u}（detectMainAlias 用）。
+     * F84 附带修正：原函数体内字面量带一个多余的 {@code )}（unbalanced paren——PatternSyntaxException
+     * 被 detectMainAlias 的 runCatching 长期吞掉，别名探测实际一直走表名兜底）；提常量后构造期
+     * 即爆出，顺手摘除多余括号恢复 KDoc 声明的探测语义。
+     */
+    private static final Pattern FROM_TABLE_ALIAS =
+            Pattern.compile("(?i)\\bFROM\\s+[`\"(]*([\\w.]+)[`\"]*\\s+([a-zA-Z_][\\w$]*)");
+
+    /** HQL 位置参数 {@code ?N}（extractParamNamesFromHql 用）。 */
+    private static final Pattern POSITIONAL_PARAM_INDEX = Pattern.compile("\\?(\\d+)");
+
+    /** 集合元素类型提取：{@code Collection<X>}/{@code List<X>}/{@code Set<X>}（参数数字面量判定用）。 */
+    private static final Pattern GENERIC_COLLECTION_TYPE = Pattern.compile("(?:Collection|List|Set)<(.+)>");
 
     /**
      * T-JpaParamOrder F6：setParameter 静态值求值——参数框初值自动回显。
@@ -1011,8 +1170,9 @@ public final class SqlPreviewService {
         List<String> paramNames = (hostMethod != null)
                 ? Arrays.stream(hostMethod.getParameterList().getParameters()).map(PsiParameter::getName).toList()
                 : List.<String>of();
-        // T-PS5-03：入口求一次方言（分页分析/方法级增强/结果构建共用）
-        Dialect dialect = currentDialect();
+        // Criteria 源是 createQuery 所在 Java 文件；不能把生成的 SQL 伪装成 SqlFile。
+        DialectDecisionEngine.Decision decision = jpaSourceDecision(anchor);
+        Dialect dialect = dialectOf(decision);
         // T-J10：宿主方法分页参数 → LIMIT 子句（criteria 路径是语句模型，直接挂 limit）
         JpaQueryEnhancer.PageSortEval pageSort = JpaQueryEnhancer.evaluatePageSort(hostMethod, null, dialect, null);
         if (pageSort != null) {
@@ -1024,7 +1184,7 @@ public final class SqlPreviewService {
             if (limited != null) statement = limited;
         }
         // CriteriaQueryConverter 解析条件树，SqlGenerator 生成的 SQL 含 ? 占位符
-        String sql = SqlGenerator.generate(statement);
+        String sql = SqlGenerator.generate(statement, false, dialect, null);
         TableInfo resolvedTable = (model.getEntityClass() != null)
                 ? new JpaEntityResolver().resolve(model.getEntityClass()) : null;
         String tableName = (model.getEntityClassName() != null)
@@ -1040,7 +1200,7 @@ public final class SqlPreviewService {
         if (pageSort != null && pageSort.getExtraParamNames() != null) {
             allParamNames.addAll(pageSort.getExtraParamNames());
         }
-        return SqlPreviewServiceEnhancementsKt.buildJpaPreviewResult(this, statement, enhancedSql, tableName, allParamNames, hostMethod, Set.of(), dialect);
+        return SqlPreviewServiceEnhancementsKt.buildJpaPreviewResult(this, statement, enhancedSql, tableName, allParamNames, hostMethod, Set.of(), dialect, decision);
     }
 
     /**
@@ -1052,7 +1212,7 @@ public final class SqlPreviewService {
         if (info == null) return null;
         // 双重检测：isNativeQuery 标志 + 方法名 fallback
         if (info.isNativeQuery() || "createNativeQuery".equals(info.getCreateQueryMethodName())) {
-            return previewNativeSql(info);
+            return previewNativeSql(info, anchor);
         }
         // T-PreviewShortcut：createNamedQuery("name") 按名回查实体 @NamedQuery，解析真实 JPQL；
         // 跨文件 / 命名不规范解析不到时优雅降级为把名字当 HQL 处理（不抛、不挂起）。
@@ -1069,8 +1229,9 @@ public final class SqlPreviewService {
                 JpqlConverter.Result namedResult = JpqlConverter.convert(named.getQuery(), namedTable, project,
                         info.getMethod() != null ? info.getMethod() : anchor);
                 List<String> namedParams = extractParamNamesFromHql(named.getQuery());
-                // T-PS5-03：本分支入口求一次方言
-                Dialect dialect = currentDialect();
+                // 命名查询以定义注解的文件为 owner，而非 createNamedQuery 的调用文件。
+                DialectDecisionEngine.Decision decision = jpaSourceDecision(named.getAnnotation());
+                Dialect dialect = dialectOf(decision);
                 // T-J10/J15/J22：宿主方法级增强
                 String namedEnhancedSql = SqlPreviewServiceEnhancementsKt.applyJpaMethodEnhancements(this, info.getMethod(), namedResult.getSql(), namedTable, false, dialect);
                 JpaQueryEnhancer.PageSortEval namedPageSort =
@@ -1081,13 +1242,19 @@ public final class SqlPreviewService {
                 namedAllParams.addAll(namedExtraParams);
                 return SqlPreviewServiceEnhancementsKt.buildJpaPreviewResult(this, namedResult.getStatement(), namedEnhancedSql,
                         namedTable != null ? namedTable.getTableName() : "", namedAllParams,
-                        info.getMethod(), namedResult.getInClauseParams(), dialect);
+                        info.getMethod(), namedResult.getInClauseParams(), dialect, decision);
             }
             // T-H3：Java @NamedQuery 未命中 → hbm 命名查询 fallback（hbm 纯 POJO 项目无注解可查）
             HbmXmlMapping.NamedQuery hbmNamed = HbmXmlEntityResolver.findNamedQuery(info.getHql(), project,
                     info.getMethod() != null ? info.getMethod() : anchor);
             if (hbmNamed != null) {
-                return previewHbmNamedQuery(hbmNamed, info.getMethod(), info.getMethod() != null ? info.getMethod() : anchor);
+                return previewHbmNamedQuery(hbmNamed, info.getMethod(), null,
+                        info.getMethod() != null ? info.getMethod() : anchor);
+            }
+            // 同名 hbm 定义歧义不能把首项 SQL 或查询名误当 HQL 发给用户。
+            if (HbmXmlEntityResolver.hasAmbiguousNamedQuery(info.getHql(), project,
+                    info.getMethod() != null ? info.getMethod() : anchor)) {
+                return null;
             }
         }
         PsiElement context = info.getMethod() != null ? info.getMethod() : anchor;
@@ -1098,8 +1265,8 @@ public final class SqlPreviewService {
         // 2. 若为空（链式调用场景），直接从 HQL 提取
         List<String> paramNames = extractHqlParamNames(info.getParameters());
         if (paramNames.isEmpty()) paramNames = extractParamNamesFromHql(info.getHql());
-        // T-PS5-03：本分支入口求一次方言
-        Dialect dialect = currentDialect();
+        DialectDecisionEngine.Decision decision = jpaSourceDecision(info.getMethod() != null ? info.getMethod() : anchor);
+        Dialect dialect = dialectOf(decision);
         // T-J10/J15/J22：宿主方法级增强
         String enhancedSql = SqlPreviewServiceEnhancementsKt.applyJpaMethodEnhancements(this, info.getMethod(), result.getSql(), table, false, dialect);
         JpaQueryEnhancer.PageSortEval pageSort = JpaQueryEnhancer.evaluatePageSort(info.getMethod(), null, dialect, table);
@@ -1109,7 +1276,7 @@ public final class SqlPreviewService {
         allParamNames.addAll(extraParams);
         // 关键：使用 HqlConverter 转换后的 SQL 字符串（含 ? 占位符），而非从 statement 重新生成。
         return SqlPreviewServiceEnhancementsKt.buildJpaPreviewResult(this, result.getStatement(), enhancedSql, table != null ? table.getTableName() : "",
-                allParamNames, info.getMethod(), result.getInClauseParams(), dialect,
+                allParamNames, info.getMethod(), result.getInClauseParams(), dialect, decision,
                 result.getPlaceholderParamNames(), info.getDuplicateParamNames(),
                 // T-JpaParamOrder F6：字面量/枚举常量自动预填参数框（变量引用不入表，保持待填）
                 staticParamValues(info.getParameters()));
@@ -1120,15 +1287,15 @@ public final class SqlPreviewService {
      * 不做实体→表名映射，仅替换 :param → ? 并解析实体表名。
      * T-J10/J15：宿主方法级增强（Pageable/Limit → LIMIT、@Lock → FOR UPDATE、notes）。
      */
-    private PreviewResult previewNativeSql(@NotNull HqlQueryInfo info) {
+    private PreviewResult previewNativeSql(@NotNull HqlQueryInfo info, @NotNull PsiElement anchor) {
         String sql = convertNativeSqlParameters(info.getHql());
         List<String> paramNames = extractHqlParamNames(info.getParameters());
         if (paramNames.isEmpty()) paramNames = extractParamNamesFromHql(info.getHql());
         // 解析实体表名（用于显示）
         String tableName = resolveHqlEntityTable(info.getEntityClass());
         if (tableName == null) tableName = (info.getEntityClassName() != null) ? info.getEntityClassName() : "";
-        // T-PS5-03：入口求一次方言（方法级增强与分页分析共用）
-        Dialect dialect = currentDialect();
+        DialectDecisionEngine.Decision decision = jpaSourceDecision(info.getMethod() != null ? info.getMethod() : anchor);
+        Dialect dialect = dialectOf(decision);
         // T-J10/J15/J22：方法级增强（native 路径：EntityGraph 仅注释说明）
         String enhancedSql = SqlPreviewServiceEnhancementsKt.applyJpaMethodEnhancements(this, info.getMethod(), sql, null, true, dialect);
         JpaQueryEnhancer.PageSortEval pageSort = JpaQueryEnhancer.evaluatePageSort(info.getMethod(), null, dialect, null);
@@ -1139,7 +1306,7 @@ public final class SqlPreviewService {
         // T-JpaParamOrder F3：native 命名参数名序透传（全部 `?` 来自 :name 替换时启用按名回填）
         List<String> usableNamedSources = usableNamedPlaceholderSources(enhancedSql, extractNativeParamNames(info.getHql()));
         return new PreviewResult(
-                enhancedSql, enhancedSql.replaceAll("\\s+", " ").trim(), allParamNames,
+                enhancedSql, SQL_WHITESPACE_RUN.matcher(enhancedSql).replaceAll(" ").trim(), allParamNames,
                 ParameterReplacer.buildParamTable(allParamNames),
                 null, tableName, null,
                 List.of(), Map.of(), null, null,
@@ -1151,7 +1318,10 @@ public final class SqlPreviewService {
                 null, null, null, null,
                 Map.of(), null, false,
                 usableNamedSources != null ? usableNamedSources : List.of(),
-                info.getDuplicateParamNames());
+                info.getDuplicateParamNames(),
+                // diagramStatement/historyFingerprintSeed 未用；O-145：方言决策随行入结果
+                null, null,
+                null, dialect, decision, null, null);
     }
 
     /**
@@ -1190,9 +1360,10 @@ public final class SqlPreviewService {
         TableInfo table = SqlPreviewServiceEnhancementsKt.resolveHqlTable(this, cls, null, jpql, annotation);
         JpqlConverter.Result result = JpqlConverter.convert(jpql, table, project, annotation);
         List<String> paramNames = extractParamNamesFromHql(jpql);
+        DialectDecisionEngine.Decision decision = jpaSourceDecision(info.getAnnotation() != null ? info.getAnnotation() : annotation);
         return SqlPreviewServiceEnhancementsKt.buildJpaPreviewResult(this, result.getStatement(), result.getSql(),
                 table != null ? table.getTableName() : "", paramNames,
-                null, result.getInClauseParams());
+                null, result.getInClauseParams(), dialectOf(decision), decision);
     }
 
     /**
@@ -1231,15 +1402,22 @@ public final class SqlPreviewService {
                 JpqlConverter.Result namedResult = JpqlConverter.convert(named.getQuery(), namedTable, project,
                         info.getMethod() != null ? info.getMethod() : anchor);
                 List<String> namedParams = extractParamNamesFromHql(named.getQuery());
+                DialectDecisionEngine.Decision decision = jpaSourceDecision(named.getAnnotation());
                 return SqlPreviewServiceEnhancementsKt.buildJpaPreviewResult(this, namedResult.getStatement(), namedResult.getSql(),
                         namedTable != null ? namedTable.getTableName() : "", namedParams,
-                        info.getMethod(), namedResult.getInClauseParams());
+                        info.getMethod(), namedResult.getInClauseParams(), dialectOf(decision), decision);
             }
             // T-H3：Java @NamedQuery 未命中 → hbm 命名查询 fallback（与 previewHql 同款）
             HbmXmlMapping.NamedQuery hbmNamed = HbmXmlEntityResolver.findNamedQuery(info.getHql(), project,
                     info.getMethod() != null ? info.getMethod() : anchor);
             if (hbmNamed != null) {
-                return previewHbmNamedQuery(hbmNamed, info.getMethod(), info.getMethod() != null ? info.getMethod() : anchor);
+                return previewHbmNamedQuery(hbmNamed, info.getMethod(), null,
+                        info.getMethod() != null ? info.getMethod() : anchor);
+            }
+            // 同名 hbm 定义歧义不能把首项 SQL 或查询名误当 HQL 发给用户。
+            if (HbmXmlEntityResolver.hasAmbiguousNamedQuery(info.getHql(), project,
+                    info.getMethod() != null ? info.getMethod() : anchor)) {
+                return null;
             }
             // 回查失败：优雅降级占位（跨文件/命名不规范），不出错误 SQL
             return placeholderPreview(
@@ -1251,11 +1429,13 @@ public final class SqlPreviewService {
         HqlConverter.Result result = HqlConverter.convert(info.getHql(), table, project, extractEntityNameFromHql(info.getHql()), context);
         List<String> paramNames = extractHqlParamNames(info.getParameters());
         if (paramNames.isEmpty()) paramNames = extractParamNamesFromHql(info.getHql());
+        DialectDecisionEngine.Decision decision = jpaSourceDecision(info.getMethod() != null ? info.getMethod() : anchor);
         return SqlPreviewServiceEnhancementsKt.buildJpaPreviewResult(this, result.getStatement(), result.getSql(), table != null ? table.getTableName() : "",
                 paramNames, info.getMethod(), result.getInClauseParams(),
+                dialectOf(decision), decision,
                 result.getPlaceholderParamNames(),
                 // T-JpaParamOrder F6：自定义 DAO 链同样预填静态常量
-                staticParamValues(info.getParameters()));
+                Set.of(), staticParamValues(info.getParameters()));
     }
 
     /** T-J21：可读占位预览卡（优雅降级：无 SQL 模板时给出解释性注释，不抛异常）。 */
@@ -1300,22 +1480,28 @@ public final class SqlPreviewService {
 
     @Nullable
     public PreviewResult previewHbmNamedQuery(@NotNull HbmXmlMapping.NamedQuery query, @Nullable PsiMethod hostMethod) {
-        return previewHbmNamedQuery(query, hostMethod, hostMethod);
+        return previewHbmNamedQuery(query, hostMethod, null, hostMethod);
     }
 
     @Nullable
     public PreviewResult previewHbmNamedQuery(@NotNull HbmXmlMapping.NamedQuery query, @Nullable PsiMethod hostMethod,
-                                               @Nullable PsiElement context) {
+                                               @Nullable XmlTag definitionTag, @Nullable PsiElement context) {
         if (query.getQueryText().isBlank()) return null;
+        // 命名查询的 owner 是定义 XML 标签，绝不是跨文件 createNamedQuery 调用方法。
+        XmlTag owner = definitionTag != null
+                ? definitionTag
+                : HbmXmlEntityResolver.findNamedQueryDefinition(query, project, context);
+        DialectDecisionEngine.Decision decision = jpaSourceDecision(owner);
+        Dialect dialect = dialectOf(decision);
         List<String> paramNames = extractParamNamesFromHql(query.getQueryText());
         if (query.getKind() == HbmXmlMapping.QueryKind.NATIVE) {
             String sql = convertNativeSqlParameters(query.getQueryText());
-            String enhancedSql = SqlPreviewServiceEnhancementsKt.applyJpaMethodEnhancements(this, hostMethod, sql, null, true);
+            String enhancedSql = SqlPreviewServiceEnhancementsKt.applyJpaMethodEnhancements(this, hostMethod, sql, null, true, dialect);
             // T-JpaParamOrder F3：native 命名参数名序透传（与 previewNativeSql 同款判定）
             List<String> usableNamedSources = usableNamedPlaceholderSources(enhancedSql, extractNativeParamNames(query.getQueryText()));
             return new PreviewResult(
                     enhancedSql,
-                    enhancedSql.replaceAll("\\s+", " ").trim(),
+                    SQL_WHITESPACE_RUN.matcher(enhancedSql).replaceAll(" ").trim(),
                     paramNames,
                     ParameterReplacer.buildParamTable(paramNames),
                     null,
@@ -1339,15 +1525,15 @@ public final class SqlPreviewService {
                     null,
                     false,
                     usableNamedSources != null ? usableNamedSources : List.of(),
-                    Set.of());
+                    Set.of(),
+                    null, null,
+                    null, dialect, decision, null, null);
         }
         String entityName = extractEntityNameFromHql(query.getQueryText());
         TableInfo table = SqlPreviewServiceEnhancementsKt.resolveHqlTable(this, null, entityName, query.getQueryText(), context);
         HqlConverter.Result result = HqlConverter.convert(query.getQueryText(), table, project, entityName, context);
-        // T-PS5-03：本分支入口求一次方言
-        Dialect dialect = currentDialect();
         String enhancedSql = SqlPreviewServiceEnhancementsKt.applyJpaMethodEnhancements(this, hostMethod, result.getSql(), table, false, dialect);
-        return SqlPreviewServiceEnhancementsKt.buildJpaPreviewResult(this, 
+        return SqlPreviewServiceEnhancementsKt.buildJpaPreviewResult(this,
                 result.getStatement(),
                 enhancedSql,
                 table != null ? table.getTableName() : "",
@@ -1355,6 +1541,7 @@ public final class SqlPreviewService {
                 hostMethod,
                 result.getInClauseParams(),
                 dialect,
+                decision,
                 result.getPlaceholderParamNames(),
                 Set.of(),
                 Map.of());
@@ -1370,7 +1557,7 @@ public final class SqlPreviewService {
         // 文本提取复用 resolver 的解析口径（直属 XmlText、CDATA 剥包裹、排除子标签）；
         // tag 与 findNamedQuery 同源
         String text = XmlDirectText.directTextOf(tag);
-        return previewHbmNamedQuery(new HbmXmlMapping.NamedQuery(name, kind, text), null, tag);
+        return previewHbmNamedQuery(new HbmXmlMapping.NamedQuery(name, kind, text), null, tag, tag);
     }
 
     /**
@@ -1392,9 +1579,10 @@ public final class SqlPreviewService {
                 SpecificationQueryConverter.convert(call,
                         (settings != null && settings.getState() != null) ? settings.getState().getReplaceParams() : true);
         if (preview == null) return null;
+        DialectDecisionEngine.Decision specDecision = jpaSourceDecision(call);
         PreviewResult result = new PreviewResult(
                 preview.getSql(),
-                preview.getSql().replaceAll("\\s+", " ").trim(),
+                SQL_WHITESPACE_RUN.matcher(preview.getSql()).replaceAll(" ").trim(),
                 preview.getParamSources(),
                 ParameterReplacer.buildParamTable(preview.getParamSources()),
                 null,
@@ -1411,6 +1599,20 @@ public final class SqlPreviewService {
                 Map.of(),
                 null,
                 null,
+                null,
+                null,
+                Map.of(),
+                null,
+                false,
+                null,
+                null,
+                List.of(),
+                java.util.Set.of(),
+                null,
+                null,
+                null,
+                dialectOf(specDecision),
+                specDecision,
                 null,
                 null);
         recordHistory(result, anchor);
@@ -1434,9 +1636,10 @@ public final class SqlPreviewService {
                 QueryByExampleConverter.convert(call,
                         (settings != null && settings.getState() != null) ? settings.getState().getReplaceParams() : true);
         if (preview == null) return null;
+        DialectDecisionEngine.Decision exampleDecision = jpaSourceDecision(call);
         PreviewResult result = new PreviewResult(
                 preview.getSql(),
-                preview.getSql().replaceAll("\\s+", " ").trim(),
+                SQL_WHITESPACE_RUN.matcher(preview.getSql()).replaceAll(" ").trim(),
                 preview.getParamSources(),
                 ParameterReplacer.buildParamTable(preview.getParamSources()),
                 null,
@@ -1453,6 +1656,20 @@ public final class SqlPreviewService {
                 Map.of(),
                 null,
                 null,
+                null,
+                null,
+                Map.of(),
+                null,
+                false,
+                null,
+                null,
+                List.of(),
+                java.util.Set.of(),
+                null,
+                null,
+                null,
+                dialectOf(exampleDecision),
+                exampleDecision,
                 null,
                 null);
         recordHistory(result, anchor);
@@ -1485,9 +1702,10 @@ public final class SqlPreviewService {
                     .append("（注册为 OUT 参数，执行后按名取值）");
         }
         String sqlText = sql.toString();
+        DialectDecisionEngine.Decision procedureDecision = jpaSourceDecision(method);
         PreviewResult result = new PreviewResult(
                 sqlText,
-                sqlText.replaceAll("\\s+", " ").trim(),
+                SQL_WHITESPACE_RUN.matcher(sqlText).replaceAll(" ").trim(),
                 List.of(),
                 null,
                 null,
@@ -1504,6 +1722,20 @@ public final class SqlPreviewService {
                 Map.of(),
                 null,
                 null,
+                null,
+                null,
+                Map.of(),
+                null,
+                false,
+                null,
+                null,
+                List.of(),
+                java.util.Set.of(),
+                null,
+                null,
+                null,
+                dialectOf(procedureDecision),
+                procedureDecision,
                 null,
                 null);
         recordHistory(result, method);
@@ -1526,10 +1758,10 @@ public final class SqlPreviewService {
      */
     private List<String> extractParamNamesFromHql(@NotNull String hql) {
         Set<String> named = new LinkedHashSet<>();
-        Matcher m = Pattern.compile("(?<!:):([a-zA-Z_][a-zA-Z0-9_]*)").matcher(hql);
+        Matcher m = NATIVE_NAMED_PARAM.matcher(hql);
         while (m.find()) named.add(m.group(1));
         Set<String> positional = new LinkedHashSet<>();
-        Matcher pm = Pattern.compile("\\?(\\d+)").matcher(hql);
+        Matcher pm = POSITIONAL_PARAM_INDEX.matcher(hql);
         while (pm.find()) positional.add("param" + pm.group(1));
         List<String> all = new ArrayList<>(named);
         for (String p : positional) if (!all.contains(p)) all.add(p);
@@ -1550,7 +1782,7 @@ public final class SqlPreviewService {
         String elementType;
         if (type instanceof PsiClassType) {
             String className = ((PsiClassType) type).getCanonicalText();
-            Matcher m = Pattern.compile("(?:Collection|List|Set)<(.+)>").matcher(className);
+            Matcher m = GENERIC_COLLECTION_TYPE.matcher(className);
             elementType = m.find() ? m.group(1) : className;
         } else if (type instanceof PsiArrayType) {
             elementType = ((PsiArrayType) type).getComponentType().getCanonicalText();
@@ -1593,8 +1825,12 @@ public final class SqlPreviewService {
      * {@link #boundAnsiQuotesOrNull}）。</p>
      */
     public List<PerfWarning> analyzePerf(@NotNull String sql, @NotNull SqlStatement statement) {
+        return analyzePerf(sql, statement, currentDialect());
+    }
+
+    public List<PerfWarning> analyzePerf(@NotNull String sql, @NotNull SqlStatement statement, @NotNull Dialect dialect) {
         if (!(statement instanceof SelectStatement)) return null;
-        List<PerfWarning> warnings = SqlPerfAnalyzer.analyze(sql, currentDialect(), boundAnsiQuotesOrNull());
+        List<PerfWarning> warnings = SqlPerfAnalyzer.analyze(sql, dialect, boundAnsiQuotesOrNull());
         return warnings.isEmpty() ? null : warnings;
     }
 
@@ -1651,7 +1887,7 @@ public final class SqlPreviewService {
      * 包裹体取 **去掉 LIMIT 的原语句** 紧凑形态（运行时 COUNT 先于 LIMIT 执行）。</p>
      */
     private String paginationCountSql(@NotNull cn.song.mybatisplus.visualizer.model.WrapperChain chain,
-                                      @NotNull SqlStatement statement) {
+                                      @NotNull SqlStatement statement, @NotNull Dialect dialect) {
         // settings?.state?.paginationSimEnabled == false → null（设置服务缺席时按默认开）
         if (settings != null && settings.getState() != null
                 && !settings.getState().getPaginationSimEnabled()) return null;
@@ -1668,7 +1904,7 @@ public final class SqlPreviewService {
                 select.getOrderBy(), null, select.getRawFirst(), select.getRawAround(),
                 select.getComment(), select.getUnions(), select.getFromSubQuery(),
                 select.getFillClauses());
-        String base = SqlGenerator.generate(withoutLimit, true, currentDialect(), null);
+        String base = SqlGenerator.generate(withoutLimit, true, dialect, null);
         return PaginationSimulator.wrapCountSql(base);
     }
 
@@ -2083,21 +2319,19 @@ public final class SqlPreviewService {
                 sourceLine = 0;
             }
             String tableName = (result.getTableName() != null) ? result.getTableName() : "";
-            // 尝试从最近日志条目补全耗时（SQL 指纹匹配）
+            // 尝试从最近日志条目补全耗时（SQL 指纹匹配；R54 两级化——exact 优先＋结构指纹兜底）
             // T-ST-02b2：读路径经 sqlLogManagerIfCreated（永不发起创建）；取不到即不做耗时补全（等同未命中）
             Long executionTimeMs = null;
             SqlLogManager logManager = SqlLogManagerLookupKt.sqlLogManagerIfCreated(anchor.getProject());
             if (logManager != null) {
-                executionTimeMs = logManager.getEntries().snapshot().stream()
-                        .filter(e -> Objects.equals(e.restoredSql(), result.getSql()))
-                        .findFirst()
-                        .map(LogSqlEntry::executionTimeMs)
-                        .orElse(null);
+                executionTimeMs = backfillExecutionTimeMs(logManager.getEntries().snapshot(), result.getSql());
             }
             SqlHistoryEntry entry = new SqlHistoryEntry("", result.getSql(), result.getCompactSql(), System.currentTimeMillis(),
                     sourceFile, sourceLine, tableName, false, List.of());
             entry.setExecutionTimeMs(executionTimeMs);
-            manager.add(entry);
+            // TODO(history)：master 另传 projectIdentity = ExplainPlanKey.projectIdentity(project.basePath)
+            //  （SqlHistoryEntry.kt:50 字段）——history 包归主控批次，字段就位后在此接线。
+            result.setHistoryEntryId(manager.add(entry).getId());
         } catch (Throwable e) {
             // 服务不可用时静默跳过（不阻塞预览）
         }
@@ -2134,7 +2368,8 @@ public final class SqlPreviewService {
     }
 
     /**
-     * 风险警示（F-09/F-10 + F-6 Phase C BlockAttack 增强 + DataPermission 占位提示）。
+     * 风险警示（F-09/F-10 + F-6 Phase C BlockAttack 增强 + DataPermission 占位提示
+     * + T-UpdateSetSqlConcat SET 解析失败留痕）。
      */
     public String buildWarning(@NotNull SqlStatement statement) {
         String baseWarning = null;
@@ -2147,10 +2382,21 @@ public final class SqlPreviewService {
                 baseWarning = "⚠ [BlockAttack] 无 WHERE 条件，将删除全表数据！";
             }
         }
+        // T-UpdateSetSqlConcat：SET 片段解析失败留痕（`setSql(sqlVar)` 这类纯运行期片段静态不可还原）。
+        // 省略是唯一正确选择，但不能静默产出「无 SET」的非法 SQL——用户至少要看到少了什么。
+        String setWarning = null;
+        if (statement instanceof UpdateStatement) {
+            List<String> unparsedSets = ((UpdateStatement) statement).getUnparsedSets();
+            if (unparsedSets != null && !unparsedSets.isEmpty()) {
+                setWarning = "⚠ [预览] 有 " + unparsedSets.size() + " 处 SET 片段无法静态解析，已省略："
+                        + String.join("；", unparsedSets);
+            }
+        }
         String dataPermissionWarning = DataPermissionPlaceholder.buildWarning(
                 settings != null && settings.getState() != null && settings.getState().getDataPermissionHint());
         List<String> parts = new ArrayList<>();
         if (baseWarning != null) parts.add(baseWarning);
+        if (setWarning != null) parts.add(setWarning);
         if (dataPermissionWarning != null) parts.add(dataPermissionWarning);
         String joined = String.join("\n", parts);
         return joined.isEmpty() ? null : joined;
@@ -2161,6 +2407,36 @@ public final class SqlPreviewService {
     // ------------------------------------------------------------------
 
     public static final Logger LOG = Logger.getInstance(SqlPreviewService.class);
+
+    /**
+     * R54（O-108）：历史耗时回填匹配键两级化——exact 命中优先（原全文精确匹配，现行为
+     * 零回退），未命中（或命中条目无耗时值）改比 {@link LogSqlEntry#getStructureKey}
+     * （{@code LogSqlModelsKt.structureFingerprint}：字面量/数字参数化，{@code ?} 占位与实值归一同
+     * token——V81① 判实在案）取同键<b>中位数</b>兜底（V81③：同模板循环 N 次时首条可能是冷启动
+     * 离群值，中位数取样代表性优于 firstOrNull；无耗时的同键条目不参与取样）。
+     * O-108 根因：10.6 起预览默认空参填 {@code ?}，全文匹配对实值日志必失配——耗时列默认
+     * 配置恒空。
+     */
+    public static Long backfillExecutionTimeMs(@NotNull List<LogSqlEntry> entries, @NotNull String previewSql) {
+        for (LogSqlEntry e : entries) {
+            if (previewSql.equals(e.restoredSql())) {
+                Long exact = e.executionTimeMs();
+                if (exact != null) return exact;
+                break;
+            }
+        }
+        String key = LogSqlModelsKt.structureFingerprint(previewSql);
+        List<Long> durations = new ArrayList<>();
+        for (LogSqlEntry e : entries) {
+            Long duration = e.executionTimeMs();
+            if (duration == null) continue;
+            if (key.equals(e.structureKey())) durations.add(duration);
+        }
+        if (durations.isEmpty()) return null;
+        durations.sort(Long::compare);
+        int n = durations.size();
+        return n % 2 == 1 ? durations.get(n / 2) : (durations.get(n / 2 - 1) + durations.get(n / 2)) / 2L;
+    }
 
     /**
      * T-PreviewFast P7：最近一次预览请求的起始时刻（点击/快捷键入口记时）。三段耗时的锚点：
@@ -2305,7 +2581,9 @@ public final class SqlPreviewService {
                     && cn.song.mybatisplus.visualizer.execute.ExecuteSqlSupport.isAvailable()) {
                 ApplicationManager.getApplication().executeOnPooledThread(() -> {
                     try {
-                        cn.song.mybatisplus.visualizer.execute.DataSourceSelector.prewarmExecTempFile(project, r.getSql());
+                        cn.song.mybatisplus.visualizer.execute.DataSourceSelector.prewarmExecTempFile(
+                                project, r.getSql(),
+                                r.getEffectiveDialect() != null ? r.getEffectiveDialect().getName() : null);
                     } catch (Throwable t) {
                         // T-FatalPassthrough T-FP-02b（独立复核阻断 2 同族）：本 runCatching 包住整条
                         // 预热链——不放行 fatal 会让 DataSourceSelector 预热链的 6 处透传（缓存命中

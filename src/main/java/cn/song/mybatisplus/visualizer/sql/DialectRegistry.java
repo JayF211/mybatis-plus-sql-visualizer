@@ -55,6 +55,12 @@ public final class DialectRegistry {
         return effective(project, null, null, null);
     }
 
+    /** Kotlin 默认参数等价重载：宿主源文件的方言探测目标（O-145 源码链：effective(project, sourceFile)）。 */
+    public Dialect effective(com.intellij.openapi.project.Project project,
+                             com.intellij.openapi.vfs.VirtualFile sourceFile) {
+        return effective(project, sourceFile, null, null);
+    }
+
     /**
      * T-TS-FixC 全参决策入口（O-136 泛化形态）：项目候选共识 + 模块学习 + IDEA 事实桥接入统一决策。
      */
