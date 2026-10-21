@@ -34,6 +34,31 @@ class PerfRulesBatch1Test {
         assertTrue(warnings.isEmpty())
     }
 
+    // T-McpPerfWhereCase：SQL 关键字大小写不敏感，mapper 渲染产物多为小写形态
+    @Test
+    fun `missing_where_小写where_UPDATE不触发`() {
+        val warnings = PerfRulesBatch1.MissingWhereRule.check("update user set name = 'x' where id = 1", null)
+        assertTrue(warnings.isEmpty())
+    }
+
+    @Test
+    fun `missing_where_小写where_DELETE不触发`() {
+        val warnings = PerfRulesBatch1.MissingWhereRule.check("delete from user where id = 1", null)
+        assertTrue(warnings.isEmpty())
+    }
+
+    @Test
+    fun `missing_where_混合大小写where不触发`() {
+        val warnings = PerfRulesBatch1.MissingWhereRule.check("Update user SET name = ? Where id = ? and deleted = 0", null)
+        assertTrue(warnings.isEmpty())
+    }
+
+    @Test
+    fun `missing_where_括号内where不算顶层`() {
+        val warnings = PerfRulesBatch1.MissingWhereRule.check("DELETE FROM user WHERE id IN (SELECT id FROM t WHERE x = 1)", null)
+        assertTrue(warnings.isEmpty())
+    }
+
     @Test
     fun `missing_where_DELETE有WHERE不触发`() {
         val warnings = PerfRulesBatch1.MissingWhereRule.check("DELETE FROM user WHERE id = 1", null)
