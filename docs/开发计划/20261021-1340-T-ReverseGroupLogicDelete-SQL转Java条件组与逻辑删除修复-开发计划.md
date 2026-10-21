@@ -105,3 +105,84 @@
 | 2026-10-21 | **反向验证（三探针，各自单独验）**：①撤掉组渲染修复（回旧 `.or()`+`.and()`）→ **恰 5 红**（OR 两条 + 嵌套组 + NOT + AND 组）；②仅撤 NOT 分支 → **恰 1 红**（子组取反用例）；③仅撤条件侧逻辑删除过滤 → **恰 2 红**（注入条件跳过 + 自定义值识别）。恢复后全部复绿。 |
 | 2026-10-21 | 端到端复核（用户原始 SQL 同形态）：产物不再出现 `getDeleted` 与 `deleted = 0`，注释头出现「逻辑删除列 deleted 由 MP 依据 @TableLogic 自动追加」；`nested(w -> w.likeRight(...).or().likeRight(...))` 结构与原代码一致。 |
 | 2026-10-21 | 残留（不在本次范围）：`between(getCreateTime, "1", "1")` 仍是字符串字面量——SQL 里只有 `'1'`，生成器无从推断 `LocalDateTime`，需手工替换；`@TableLogic(delval=…)` 实体级自定义值未覆盖（`TableInfo` 未携带，前提 2 记为残留）；JOIN 副表逻辑删除仍走既有 `isSubLogicalDelete`（ON 条件容忍），与本次主表过滤口径独立但互不冲突。 |
+
+## 七、复盘：三个缺陷为什么没被测试拦住
+
+用户 2026-10-21 追问「为什么这些问题没有通过测试用例覆盖」。逐条取证结论如下（全部以合并前 `6f3d0e83` 的测试代码为据）。
+
+### 缺口 1：组渲染只验代码文本，不验 MP 语义
+
+`JavaCodeGeneratorTest.嵌套组_渲染递归lambda` 断言的是**生成出来的 Java 字符串**长什么样：
+
+```kotlin
+code.contains(".nested(w -> w\n        .and(w2 -> w2\n        .eq(\"a\", 1)\n        .eq(\"b\", 2))\n        .or()\n        .eq(\"c\", 3))")
+```
+
+它把「`.or()` 后面跟 `.and(w2 -> …)`」当成**期望**写进了断言。缺陷被固化成规格——只要生成器保持这个形状，测试就绿。而 MP 在这串调用上实际渲染出的是 `a AND (b AND c)`，OR 消失了。文本断言对「MP 如何解释这串调用」完全无感。
+
+同一用例还叠加了位置巧合：AND 子组恰在索引 0，链首的 AND 分隔符被 MP 丢弃，所以连「OR 被替换」这个现象都没显现。
+
+### 缺口 2：往返门禁整条链没经过 Java 生成器
+
+`ReverseRoundTripGateTest.ROUND_TRIP档_全语料往返规范化等价` 的链路是：
+
+```
+SQL → SqlReverseParser → toSqlStatement() → SqlGenerator → 与输入比对
+```
+
+`JavaCodeGenerator` 不在其中。另一个门禁 `全语料_生成代码不抛异常且非空` 只检查「非空、不抛异常」——它连 `getSqlSegment()` 都没取，自然看不见语义错。
+
+两个门禁叠起来的效果是：**生成器可以任意错误地翻译条件树，只要产出非空字符串就算通过**。
+
+### 缺口 3：语料里没有触发形态
+
+合并前 `ReverseRoundTripCorpus` 的组形态只有 `(a = 1 OR b = 2)`、`(a = 1 OR b = 2) AND c = 3`、`NOT (a = 1 OR b = 2)`、`((a = 1 AND b = 2) OR c = 3)` 四条，**没有一条是「顶层 OR 后接括号组」**——而 `X OR (Y AND Z)` 正是 OR 被吞的触发形态。缺这条语料，即使门禁改对了也照样漏。
+
+### 缺口 4：取反子组零覆盖
+
+合并前 `JavaCodeGeneratorTest` 里 `negated = true` 只出现在**顶层** `NOT组_渲染not`（`Condition.Group(..., negated = true)` 作为 `conditions` 的直接元素）和 `In`/`Like` 的 negated 参数上，**没有任何一条用例把取反组放在父组内部**。`renderGroupChildren` 的子组分支从不读 `negated`，这个漏洞因此从未被触碰。
+
+### 缺口 5：反向链路的 `@TableLogic` 覆盖为零
+
+合并前 reverse 包测试里 `logicDelete` / `TableLogic` 出现次数为 **0**——`EntityTarget` 连字段都没有，测试自然也写不出相关断言。逻辑删除的测试全在正向链路（`SqlPreviewServiceLogicDeleteTest` 等），反向侧是空白区。跨链路的同一概念，只在一条链上被测，另一条链裸奔。
+
+### 共同根因
+
+三类断言强度依次递减，而这次三条缺陷恰好都落在最弱的一档：
+
+| 断言方式 | 能发现什么 | 本次缺陷 |
+|---|---|---|
+| 文本 `contains` | 生成器输出形状变了 | 缺陷被写进期望值，永久绿 |
+| 编译通过 | 代码能编译 | `deleted = 0` 重复条件可编译，绿 |
+| 真实 MP 渲染语义 | 生成代码在 MP 上的实际行为 | 旧用例**完全未使用** |
+
+结论：**「能编译」和「形状对」都不等于「语义对」**。凡涉及 Wrapper 条件树的生成，必须以真实 MP 的 `getSqlSegment()` 为准。
+
+## 八、补测与治理（T-ReverseGroupCoverage）
+
+| 补测项 | 覆盖缺口 | 位置 |
+|---|---|---|
+| `条件组语义矩阵_四维组合在真实MP上语义正确` | 缺口 1/3/4：父组 AND/OR × 子组 AND/OR × 取反 × 子组位置 = **16 组合**，每条编译并在 MP 上断言连接词与操作数 | `JavaCodeGeneratorTest` |
+| `结构性守卫_生成代码不得出现or紧跟and组的反模式` | 缺口 1：把反模式钉成文本守卫（纯文本、快），与语义矩阵互补 | `JavaCodeGeneratorTest` |
+| `逻辑删除_UPDATE与DELETE同样不重复生成条件` | 缺口 5：跨语句类型 | `JavaCodeGeneratorTest` |
+| `逻辑删除_嵌套组内注入条件同样跳过` | 缺口 5：组内递归过滤 | `JavaCodeGeneratorTest` |
+| `逻辑删除_IN单值形态同样识别` / `多值IN不是注入条件_必须保留` | 缺口 5：识别边界正反两侧 | `JavaCodeGeneratorTest` |
+| `ANSI类型字面量_渲染为Java字符串而非裸拼` | 新发现：`DATE '…'` 裸拼致编译失败 | `JavaCodeGeneratorTest` |
+| `派生表无实体上下文_明确报错` / `有实体上下文_正常生成` | 新发现：`FROM (SELECT …)` 生成不可编译类名 | `JavaCodeGeneratorTest` |
+| `Java生成闭环_条件段连接词签名与原SQL一致` | **缺口 2 根治**：SQL → 反解 → 生成 Java → 真实 MP 渲染 → 连接词签名与原 SQL 比对，全语料 35 条 SELECT 逐条验证 | `ReverseRoundTripGateTest` + `GeneratedProjectionCompiler.sqlSegmentOf/connectorSignature` |
+| 语料补 4 条（`X OR (Y AND Z)` / `X OR (Y)` / `X AND NOT (Y OR Z)` / `X OR NOT (Y OR Z)`） | 缺口 3 | `ReverseRoundTripCorpus`（ROUND_TRIP 52 → 56） |
+
+补测过程中新门禁直接抓出两处**此前未知**的产品缺陷，均已修复：
+
+- `javaValue` 对 ANSI 类型字面量（`DATE '2024-01-01'` / `TIMESTAMP '…'`）原样裸拼进 Java，产生未闭合字符字面量，编译失败。修：识别前缀，只取引号内值渲染为 Java 字符串。
+- `FROM (SELECT …) t` 派生表无法推断实体类名，生成 `QueryWrapper<(SELECT …)>`，编译失败。修：`generate` 入口 `requireConcreteTable` 明确抛 `SqlReverseException`（有实体上下文时不受影响）。
+
+反向验证（每条新用例单独撤修复验红）：
+
+| 探针 | 结果 |
+|---|---|
+| 撤组渲染修复 + NOT 分支 | **7 红**（含语义矩阵、Java 生成闭环门禁） |
+| 撤 ANSI 字面量处理 | **2 红**（ANSI 用例 + 闭环门禁） |
+| 撤条件侧逻辑删除过滤（Simple+In） | **5 红**（注入跳过 / UPDATE / DELETE / IN 单值 / 组内） |
+
+定向终局：`reverse.*` + `log.SqlToJavaPanel*` + `actions.*` **全绿**。

@@ -95,11 +95,15 @@ object JavaCodeGenerator {
         entity: EntityTarget?,
         wrapperKind: GeneratedWrapper = GeneratedWrapper.LAMBDA,
         invocation: InvocationTarget? = null,
-    ): String = when (result.kind) {
-        ReverseStatementKind.SELECT -> generateSelect(result, entity, wrapperKind, invocation)
-        ReverseStatementKind.UPDATE -> generateUpdate(result, entity, wrapperKind, invocation)
-        ReverseStatementKind.DELETE -> generateDelete(result, entity, wrapperKind, invocation)
-        ReverseStatementKind.INSERT -> generateInsert(result, entity, wrapperKind, invocation)
+    ): String {
+        // 派生表无实体上下文时无法推断类名——在分发前拦下，避免产出不可编译代码
+        requireConcreteTable(result.tableName, entity)
+        return when (result.kind) {
+            ReverseStatementKind.SELECT -> generateSelect(result, entity, wrapperKind, invocation)
+            ReverseStatementKind.UPDATE -> generateUpdate(result, entity, wrapperKind, invocation)
+            ReverseStatementKind.DELETE -> generateDelete(result, entity, wrapperKind, invocation)
+            ReverseStatementKind.INSERT -> generateInsert(result, entity, wrapperKind, invocation)
+        }
     }
 
     // ------------------------------------------------------------------
@@ -1205,16 +1209,28 @@ object JavaCodeGenerator {
     }
 
     /** 值渲染：字符串（引号字面量）→ Java 字符串；数字/布尔 → 原样。 */
+    /**
+     * 值渲染：字符串（引号字面量）→ Java 字符串；数字/布尔 → 原样。
+     *
+     * ANSI 类型字面量（`DATE '2024-01-01'` / `TIMESTAMP '...'`，解析侧 raw 保留前缀）不能原样
+     * 拼进 Java——`DATE '2024-01-01'` 在 Java 里是未闭合字符字面量，编译不过。这里只取引号内的
+     * 值渲染为字符串，交由驱动/数据库按列类型隐式转换（与 MP 传 String 参数的实际用法一致）。
+     */
     private fun javaValue(value: SqlValue): String = when (value) {
         is SqlValue.Placeholder -> "\"?\""
         is SqlValue.Literal -> {
-            if (value.raw.startsWith("'") && value.raw.endsWith("'") && value.raw.length >= 2) {
-                javaString(value.unquoted)
-            } else {
-                value.raw
+            val ansiTyped = ANSI_TYPED_LITERAL.matchEntire(value.raw.trim())
+            when {
+                ansiTyped != null -> javaString(ansiTyped.groupValues[2].replace("''", "'"))
+                value.raw.startsWith("'") && value.raw.endsWith("'") && value.raw.length >= 2 ->
+                    javaString(value.unquoted)
+                else -> value.raw
             }
         }
     }
+
+    /** ANSI 类型字面量：`DATE '2024-01-01'` / `TIMESTAMP '2024-01-01 10:00:00'`（分组 2 = 引号内原文）。 */
+    private val ANSI_TYPED_LITERAL = Regex("^(DATE|TIME|TIMESTAMP|DATETIME)\\s+'((?:[^']|'')*)'$", RegexOption.IGNORE_CASE)
 
     // ------------------------------------------------------------------
     // 参数化 apply（T-SqlToJavaPromote G7）
@@ -1338,4 +1354,19 @@ object JavaCodeGenerator {
         tableName.removeSurrounding("\"").split('_').joinToString("") { seg ->
             seg.replaceFirstChar { it.uppercase() }
         }
+
+    /**
+     * 派生表（`FROM (SELECT …) t`）无法推断实体类名——生成 `QueryWrapper<(SELECT …)>` 必然编译不过。
+     * 无实体上下文时明确报错，优于产出不可编译代码（有实体上下文则由用户选定实体，不受影响）。
+     */
+    private fun requireConcreteTable(tableName: String, entity: EntityTarget?) {
+        if (entity != null) return
+        if (tableName.trimStart().startsWith("(")) {
+            throw SqlReverseException(
+                0,
+                SqlReverseParser.KEY_UNSUPPORTED,
+                "FROM 派生表（子查询）无法推断实体类名，请选择实体或改写为 JOIN 形态",
+            )
+        }
+    }
 }
