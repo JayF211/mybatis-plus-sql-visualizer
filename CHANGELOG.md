@@ -36,6 +36,7 @@
 - **执行前限定目标 Schema 预检（UI023）**：预览真实执行入口在提交前校验目标 Schema 与执行目标，拒绝 CTE、`DELETE ... USING` 等歧义形态，缓存按精确目标隔离。
 - **历史列表直达末条**：工具栏新增动作，一次跳到当前过滤结果的最后一条，长列表不再靠滚。
 - **FieldFill 安全模拟面板**：CRUD/MP 批量参数区展示填充元信息与逐列模拟值，`[fill=…]` 角标与字段名同行，模拟值优先于普通输入框（普通框置灰），模拟值行只在勾选安全模拟时出现。
+- **复制 SQL 并关闭（UI-042/UI-043/UI-044）**：预览面板底部新增蓝色主行动按钮，一次复制当前 SQL 并关闭面板；按钮按平台 LAF 绘制，复制后的通知不再附带「关闭 SQL 面板」动作。
 
 ### Changed
 - **增强捕获暂停按钮临时隐藏（T-AgentPauseVisibility，方案 B）**：增强捕获已默认开启，暂停/恢复按钮在应用未运行时没有可暂停对象，并与捕捉按钮形成播放/暂停误读；先整体隐藏，动作对象保留在工具栏组内（能力代码不删）。暂停 agent 通道的 UI 入口暂时不可达，关闭总开关仍回落控制台；恢复路径为方案 A（agent 挂载或暂停态才显示）或状态栏/右键菜单入口。
@@ -63,6 +64,8 @@
 - **执行链生命周期**：exec 预暖链与文档写全链挂项目 dispose 生命周期守卫，文档写零窗口化，消除门禁冲突与项目关闭后的迟到写入
 - **导航工具栏测试访问器绕过 override-only API**：`HistorySqlLogPanel` 的测试缝不再在生产字节码里调用 `ActionGroup.getChildren`，改为只暴露动作组、由测试侧取子项；插件校验报告的 override-only 用法由 1 项归零
 - **模块身份解析改用公开 API**：`ModuleIdentityResolver` 不再调用 `Module.getModuleFilePath`（`@Internal`），改走公开的 `ModuleUtilCore.getModuleDirPath`，「目录 + 模块名」作模块身份键（`ModuleKeySource.MODULE_DIR`）；插件校验报告的 internal API 用法由 1 项归零
+- **SQL 转 Java 条件组与逻辑删除（T-ReverseGroupLogicDelete）**：`or()` 不再被后续 `and(...)` 静默吞掉，嵌套条件组保留 `NOT`，逻辑删除列不再重复生成 `AND deleted = 0`（此前 MP 注入的默认条件被当成手写条件重复输出）
+- **SQL 转 Java 类选择字段（UI-045）**：类名输入框描边与圆角改用平台口径（2px 描边 + 贝塞尔圆角），消除与原生输入框的观感差异
 
 
 
