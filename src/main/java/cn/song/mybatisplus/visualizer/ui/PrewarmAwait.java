@@ -1,6 +1,7 @@
 // T-SyncK2JMaster309 自 master src/main/kotlin/cn/song/mybatisplus/visualizer/ui/PrewarmAwait.kt 移植
 // T-SyncK2JMaster115 自 master src/main/kotlin/cn/song/mybatisplus/visualizer/ui/PrewarmAwait.kt 移植（T-FixN1 派发通道 KDoc：模态改 defaultModalityState 的理由）
 // T-SyncK2JMaster184 自 master src/main/kotlin/cn/song/mybatisplus/visualizer/ui/PrewarmAwait.kt 移植（T-PrewarmLateRecover F1：complete 返回交付结果 + 迟到产物通道）
+// 自 master 同文件 T-DegradedPreviewUx P0 增量移植（timedOut/failure 终态 + failureOrNull/isTimedOut）
 package cn.song.mybatisplus.visualizer.ui;
 
 import org.jetbrains.annotations.Nullable;
@@ -42,6 +43,15 @@ public class PrewarmAwait<T> {
     private final AtomicBoolean scheduled = new AtomicBoolean();
 
     /**
+     * T-DegradedPreviewUx P0：超时与失败此前都表现为 {@code joinOrNull() == null}，消费侧无法区分
+     * 「产物还在路上」与「已经失败」。这里记录终态：超时位由 {@code completeOnTimeout} 的 null 完成置位，
+     * 失败对象由 {@link #fail} 保存（PreviewPrewarmException 携带具体原因）。
+     */
+    private final AtomicBoolean timedOut = new AtomicBoolean();
+
+    private volatile Throwable failure = null;
+
+    /**
      * T-PrewarmLateRecover F1：迟到产物接收方——消费侧已放弃（超时以 null 完成 / 失败完成）之后
      * 产物才到达时，由 {@link #complete} 同步回调（<b>在预热线程上</b>，线程归位由登记方负责）。
      * 与 {@link #scheduleOnce} 的 onFallback 互补：onFallback 负责「先装配成降级态」，本通道负责
@@ -71,7 +81,19 @@ public class PrewarmAwait<T> {
 
     /** 预热线程判定失败 → 快速降级（原 prewarmFailed 标志同语义）。 */
     public void fail(Throwable error) {
+        this.failure = error;
         future.completeExceptionally(error);
+    }
+
+    /** T-DegradedPreviewUx P0：失败对象（成功/未完成时为 null）；用于区分超时与硬失败。 */
+    @Nullable
+    public Throwable failureOrNull() {
+        return failure;
+    }
+
+    /** T-DegradedPreviewUx P0：是否因超时放弃（产物可能仍在途——宽限期语义的判据）。 */
+    public boolean isTimedOut() {
+        return timedOut.get();
     }
 
     /** 是否已出结果（成功或失败；区分用 {@link #joinOrNull}）。 */
@@ -100,11 +122,15 @@ public class PrewarmAwait<T> {
     public boolean scheduleOnce(Consumer<T> onReady, Runnable onFallback) {
         if (!scheduled.compareAndSet(false, true)) return false;
         future.completeOnTimeout(null, timeoutMs, TimeUnit.MILLISECONDS)
-                .whenComplete((value, error) ->
-                        dispatcher.accept(() -> {
-                            if (value != null) onReady.accept(value);
-                            else onFallback.run();
-                        }));
+                .whenComplete((value, error) -> {
+                    // T-DegradedPreviewUx P0：value=null 且无异常 = 超时（产物在途）；
+                    // 异常 = 预热真失败。两者都走 onFallback，但消费侧可据此选文案与宽限期。
+                    if (value == null && error == null) timedOut.set(true);
+                    dispatcher.accept(() -> {
+                        if (value != null) onReady.accept(value);
+                        else onFallback.run();
+                    });
+                });
         return true;
     }
 
@@ -128,10 +154,14 @@ public class PrewarmAwait<T> {
         // 在 headless 下不可达（`get` 超时不会完成 future，迟到产物会被判成「首次交付」），
         // 同一份代码在测试与生产上就分叉在这条通道上。语义与生产 scheduleOnce 一致。
         future.completeOnTimeout(null, timeoutMs, TimeUnit.MILLISECONDS);
+        T value;
         try {
-            return future.get(timeoutMs, TimeUnit.MILLISECONDS);
+            value = future.get(timeoutMs, TimeUnit.MILLISECONDS);
         } catch (Throwable t) {
-            return null;
+            value = null;
         }
+        // T-DegradedPreviewUx P0：测试后门与生产 scheduleOnce 同口径——null 且无失败对象即超时
+        if (value == null && failure == null) timedOut.set(true);
+        return value;
     }
 }
