@@ -132,6 +132,14 @@ data class PreviewResult(
     var historyEntryId: String = "",
     /** ShardingSphere 路由日志原文，只读附注，不参与 SQL 编辑、复制或执行。 */
     val actualSql: String? = null,
+    /**
+     * T-PresetMethodScope：参数预设/历史缓存键的**声明作用域**（[cn.song.mybatisplus.visualizer.psi.PreviewOriginScope.of]）。
+     *
+     * 空串 = 无方法上下文（日志/历史双击、纯文本预览等），键退回「表名 + SQL 指纹」旧格式。
+     * 非空时键尾追加 `|@<scope>`，同一段 SQL 写在两个方法里不再共享预设与参数历史。
+     * `var` 供 [cn.song.mybatisplus.visualizer.ui.SqlPreviewService] 的 recordHistory 回写（同 [historyEntryId]）。
+     */
+    var originScopeKey: String = "",
 ) {
     val effectiveDialect: Dialect? get() = previewModel?.dialect ?: batchModel?.dialect ?: renderedDialect
 }

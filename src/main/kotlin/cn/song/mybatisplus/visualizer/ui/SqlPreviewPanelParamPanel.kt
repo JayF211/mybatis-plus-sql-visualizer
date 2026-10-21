@@ -1547,7 +1547,9 @@ internal fun SqlPreviewPanel.historyCacheKey(): String? {
     // 缺陷②修复：优先用「注入前」稳定文本当指纹种子——逻辑删除/多租户等拦截器模拟会改写
     // result.sql，直接拿它算键会让开关一切换就召回 miss（已回填参数退回占位符）。
     val rawSql = result.historyFingerprintSeed ?: result.sql
-    return paramHistoryCache.computeKey(tableName, rawSql)
+    // T-PresetMethodScope：追加声明作用域——同一段 SQL 写在两个方法里不再共用预设与参数历史；
+    // 无方法上下文（日志/历史双击）保持旧键。
+    return paramHistoryCache.computeKey(tableName, rawSql, result.originScopeKey.ifEmpty { null })
 }
 
 /**

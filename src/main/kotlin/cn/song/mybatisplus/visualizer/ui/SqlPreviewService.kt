@@ -1866,6 +1866,15 @@ class SqlPreviewService(internal val project: Project) {
                 sqlLogManagerIfCreated(anchor.project)?.entries?.snapshot().orEmpty(),
                 result.sql,
             )
+            // T-PresetMethodScope：方法身份随结果与历史条目落库——面板据此算带作用域的缓存键，
+            // R51 历史快照回落按同一口径匹配条目。
+            val originScopeKey = runCatching {
+                cn.song.mybatisplus.visualizer.psi.PreviewOriginScope.of(
+                    PsiTreeUtil.getParentOfType(anchor, PsiMethod::class.java, false),
+                    anchor.project,
+                )
+            }.getOrDefault("")
+            result.originScopeKey = originScopeKey
             result.historyEntryId = manager.add(
                 SqlHistoryEntry(
                     sql = result.sql,
@@ -1876,6 +1885,7 @@ class SqlPreviewService(internal val project: Project) {
                     tableName = result.tableName ?: "",
                     executionTimeMs = executionTimeMs,
                     projectIdentity = cn.song.mybatisplus.visualizer.history.ExplainPlanKey.projectIdentity(project.basePath),
+                    originScopeKey = originScopeKey,
                 ),
             ).id
         }

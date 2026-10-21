@@ -14,6 +14,7 @@ import com.intellij.ui.HideableTitledPanel
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
@@ -624,10 +625,12 @@ class SqlPreviewPanelParamSchemesTest : BasePlatformTestCase() {
     // ==== T-DevAcceptFix ⑤：方案切换参数回写（source 锚点显式映射，禁插入序对位） ====
 
     /** 普通参数语料（无 xml/batch 模型 → 走参数行主链；paramFields 行序 = unresolvedParams 序）。
-     *  [sql] 可指定不同语句文本以模拟「不同方法」（缓存键 = SQL 指纹 → 预设按方法隔离的判别面）。 */
+     *  [sql] 可指定不同语句文本以模拟「不同方法」（缓存键 = SQL 指纹 → 预设按方法隔离的判别面）。
+     *  T-PresetMethodScope：[originScopeKey] 模拟「同一段 SQL 写在哪个方法里」。 */
     private fun buildPlainParamsResult(
         params: List<String>,
         sql: String = "SELECT * FROM t_order WHERE alpha = ? AND beta = ? AND gamma = ?",
+        originScopeKey: String = "",
     ): PreviewResult = PreviewResult(
         sql = sql,
         compactSql = sql,
@@ -636,6 +639,7 @@ class SqlPreviewPanelParamSchemesTest : BasePlatformTestCase() {
         wrapperType = null,
         tableName = null,
         xmlModel = null,
+        originScopeKey = originScopeKey,
     )
 
     /**
@@ -714,5 +718,88 @@ class SqlPreviewPanelParamSchemesTest : BasePlatformTestCase() {
         assertEquals("alpha 框应显示方案甲中 alpha 的值", "A", p.paramFieldForSourceForTest("alpha")?.text)
         assertEquals("beta 框应显示方案甲中 beta 的值", "B", p.paramFieldForSourceForTest("beta")?.text)
         assertEquals("gamma 框应显示方案甲中 gamma 的值", "G", p.paramFieldForSourceForTest("gamma")?.text)
+    }
+
+    // ==== T-PresetMethodScope：同一段 SQL 写在两个方法里也要隔离（20261021 沙盒报障） ====
+
+    /**
+     * 报障原形态：`WmsInventoryJarQueryService` 两个方法渲染出的 SQL 逐字相同，旧键只有
+     * 「表名 + SQL 指纹」，于是预设、激活态、参数历史全部共享。既有
+     * [testDevAcceptFix2_预设按方法隔离_同名跨方法各自存值] 用**不同 SQL** 模拟两个方法，
+     * 覆盖不到本形态——本用例刻意保持 SQL 文本完全相同，只改声明作用域。
+     */
+    fun testPresetMethodScope_同SQL跨方法预设互不可见() {
+        val p = SqlPreviewPanel(project)
+        panel = p
+        Disposer.register(testRootDisposable, p)
+        val sql = "SELECT * FROM t_order WHERE alpha = ? AND beta = ?"
+
+        p.showResult(buildPlainParamsResult(listOf("alpha", "beta"), sql, originScopeKey = "scope-a"))
+        com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+        val cache = p.paramHistoryCacheForTest()
+        val keyA = p.historyCacheKeyForTest()!!
+        assertTrue("键尾应带声明作用域", keyA.endsWith("|@scope-a"))
+        cache.saveAsScheme("方法A预设", keyA, linkedMapOf("alpha" to "1"))
+        p.onSchemesChangedForTest()
+        assertEquals("A 方法应看到自己的预设", 2, p.schemeComboForTest()!!.itemCount)
+        assertEquals("方法A预设", p.schemeComboForTest()!!.selectedItem)
+
+        // 切到方法 B：同一段 SQL，不同作用域
+        p.showResult(buildPlainParamsResult(listOf("alpha", "beta"), sql, originScopeKey = "scope-b"))
+        com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+        val keyB = p.historyCacheKeyForTest()!!
+        assertNotEquals("同 SQL 不同方法必须是不同缓存键", keyA, keyB)
+        assertEquals("B 方法不应看到 A 的预设", 1, p.schemeComboForTest()!!.itemCount)
+        assertEquals(
+            "B 方法无自己的预设时激活态回落默认",
+            ParamHistoryCache.DEFAULT_SCHEME,
+            p.schemeComboForTest()!!.selectedItem,
+        )
+
+        // 同名预设跨方法各自存值（查重口径仍是「该键下是否已有同名」）
+        assertEquals(
+            ParamHistoryCache.SchemeOpResult.OK,
+            cache.saveAsScheme("方法A预设", keyB, linkedMapOf("alpha" to "2")),
+        )
+        p.onSchemesChangedForTest()
+        assertEquals("A 键下值不受 B 影响", "1", cache.recallFromScheme("方法A预设", keyA)!!["alpha"])
+        assertEquals("B 键下是自己的值", "2", cache.recallFromScheme("方法A预设", keyB)!!["alpha"])
+
+        // 切回 A：名单与激活态各归其位
+        p.showResult(buildPlainParamsResult(listOf("alpha", "beta"), sql, originScopeKey = "scope-a"))
+        com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+        assertEquals("切回 A 应恢复自己的激活预设", "方法A预设", p.schemeComboForTest()!!.selectedItem)
+        assertEquals("切回 A 名单仍只含自己的预设", 2, p.schemeComboForTest()!!.itemCount)
+    }
+
+    /**
+     * 升级兼容：升级前写入的预设挂在旧键（无作用域）上。带作用域预览首次打开时仍要能看到它
+     * （读时回落），并把快照复制到新键（惰性迁移）——之后两侧独立，旧预设不再持续共享。
+     */
+    fun testPresetMethodScope_旧键预设在带作用域预览下可见并完成惰性迁移() {
+        val p = SqlPreviewPanel(project)
+        panel = p
+        Disposer.register(testRootDisposable, p)
+        val sql = "SELECT * FROM t_order WHERE alpha = ? AND beta = ?"
+
+        // 升级前形态：无作用域键
+        p.showResult(buildPlainParamsResult(listOf("alpha", "beta"), sql))
+        com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+        val cache = p.paramHistoryCacheForTest()
+        val legacyKey = p.historyCacheKeyForTest()!!
+        assertFalse("无方法上下文时键保持旧格式", legacyKey.contains("|@"))
+        cache.saveAsScheme("旧预设", legacyKey, linkedMapOf("alpha" to "old"))
+
+        // 升级后：同一段 SQL 带作用域打开
+        p.showResult(buildPlainParamsResult(listOf("alpha", "beta"), sql, originScopeKey = "scope-a"))
+        com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+        val scopedKey = p.historyCacheKeyForTest()!!
+        assertEquals("旧预设在带作用域预览下仍可见（读时回落）", 2, p.schemeComboForTest()!!.itemCount)
+        assertEquals(
+            "旧预设在带作用域预览下仍可召回",
+            "old",
+            cache.recallFromScheme("旧预设", scopedKey)!!["alpha"],
+        )
+        assertEquals("迁移不动旧键（旧条目保留）", "old", cache.recallFromScheme("旧预设", legacyKey)!!["alpha"])
     }
 }

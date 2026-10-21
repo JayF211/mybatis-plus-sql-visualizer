@@ -49,6 +49,12 @@ data class SqlHistoryEntry(
     /** R90：APP 历史域的项目归属；旧条目缺省空，不猜测归属。 */
     var projectIdentity: String = "",
     var explainPlans: MutableList<ExplainPlanSnapshot> = mutableListOf(),
+    /**
+     * T-PresetMethodScope：预览语句的声明作用域（方法身份短哈希，见
+     * [cn.song.mybatisplus.visualizer.psi.PreviewOriginScope]）。参数快照回落（R51）按同一口径
+     * 匹配历史条目；旧条目缺省空 → 只参与旧键匹配，不参与带 scope 键的精确匹配。
+     */
+    var originScopeKey: String = "",
 ) {
     /** 分配唯一 id（仅当当前为空白时）。 */
     fun ensureId() {

@@ -469,14 +469,30 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
         historySnapshotFallbackSource?.let { return it(key) }
         if (ApplicationManager.getApplication().isUnitTestMode) return null
         return runCatching {
-            SqlHistoryManager.getInstance().newestParamSnapshot { entrySnapshotKey(it) == key }
+            SqlHistoryManager.getInstance().newestParamSnapshot { entry -> this@historySnapshotFallback.matchesSnapshotKey(entry, key) }
         }.getOrNull()
     }
 
     /** R51：历史条目 → 缓存键（与 [historyCacheKey] 同口径——tableName 空串与 null 同走
-     *  `sql:` 指纹路径，recordHistory 落表 `result.tableName ?: ""`，故空串回 null 复算一致）。 */
+     *  `sql:` 指纹路径，recordHistory 落表 `result.tableName ?: ""`，故空串回 null 复算一致）。
+     *  T-PresetMethodScope：条目自带作用域时按同一口径追加，否则回落旧键（存量条目）。 */
     internal fun SqlPreviewPanel.entrySnapshotKey(entry: SqlHistoryEntry): String? =
-        paramHistoryCache.computeKey(entry.tableName.ifEmpty { null }, entry.sql)
+        paramHistoryCache.computeKey(
+            entry.tableName.ifEmpty { null },
+            entry.sql,
+            entry.originScopeKey.ifEmpty { null },
+        )
+
+    /**
+     * T-PresetMethodScope：带 scope 键也认「同一条 SQL 的旧条目」——升级前落的历史条目没有作用域，
+     * 若只做精确匹配，面板参数快照的回写与回落都会与它们失联（旧条目永远不再更新、也回落不到）。
+     */
+    internal fun SqlPreviewPanel.matchesSnapshotKey(entry: SqlHistoryEntry, key: String): Boolean {
+        val entryKey = entrySnapshotKey(entry) ?: return false
+        if (entryKey == key) return true
+        val legacy = paramHistoryCache.legacyKeyOf(key)
+        return legacy != key && entryKey == legacy
+    }
 
     /** R51：参数快照回写——面板参数编辑防抖落库时同步进最新匹配历史条目（会话内闭环：
      *  编辑→flush→历史条目快照；单测态走 [historySnapshotSink] seam，真服务同上禁用）。 */
@@ -485,7 +501,7 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
         if (ApplicationManager.getApplication().isUnitTestMode) return
         runCatching {
             SqlHistoryManager.getInstance().updateNewestParamSnapshot(
-                { entrySnapshotKey(it) == key },
+                { entry -> matchesSnapshotKey(entry, key) },
                 snapshot,
             )
         }
