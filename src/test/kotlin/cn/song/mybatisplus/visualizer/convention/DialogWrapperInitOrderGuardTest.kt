@@ -119,13 +119,50 @@ class DialogWrapperInitOrderGuardTest {
         return out
     }
 
-    /** init 块/函数体结束行（不含）。 */
+    /**
+     * init 块/函数体结束行（不含）。
+     *
+     * 表达式体函数（`override fun createActions(): Array<Action> = arrayOf(` … `)`）**没有大括号**，
+     * 只按 `{}` 深度算会立刻在声明行后结束，函数体被截成一行——2026-10-21 的 UI-042 真缺陷
+     * （`copyAndCloseAction` 声明在 init 之后、createActions 用表达式体返回）正是这样从扫描面
+     * 整段漏掉的：守卫「零违规」绿着，用户侧按钮却不见了。故表达式体按「括号配平 + 缩进回退」界定。
+     */
     private fun blockEnd(lines: List<String>, dep: IntArray, start: Int): Int {
+        val head = lines[start]
+        // 表达式体：`=` 位于签名右括号之后，且整行无 `{`（`fun f(a: Int = 1) {` 的 `=` 在括号内，不算）
+        val eqPos = head.indexOf('=')
+        val closeParen = head.lastIndexOf(')')
+        val exprBody = eqPos >= 0 && closeParen in 0 until eqPos && !head.substring(0, eqPos).contains('{')
+        if (exprBody) {
+            val headIndent = indentOf(head)
+            var parens = 0
+            var i = start
+            while (i < lines.size) {
+                val l = lines[i]
+                parens += l.count { it == '(' } - l.count { it == ')' }
+                if (i > start && parens <= 0 && l.isNotBlank() && indentOf(l) <= headIndent && dep[i] == dep[start]) {
+                    return i
+                }
+                i++
+            }
+            return i
+        }
         val d = dep[start]
         var i = start + 1
+        // 签名跨行（`) {` 落在下一行）时，起始行尚未进块体，直接按 dep 比较会立刻结束、
+        // 把函数体截成签名那几行——嵌套 fun 体的「跳过」随之失效（UI-042 排查中实测命中）。
+        if (!head.contains('{')) {
+            while (i < lines.size && !lines[i].contains('{') && dep[i] == d) i++
+            if (i >= lines.size || !lines[i].contains('{')) return i
+            i++
+        }
         while (i < lines.size && dep[i] > d) i++
         return i
     }
+
+    /** 行首缩进（空格数；制表符按 4 计）。 */
+    private fun indentOf(line: String): Int =
+        line.takeWhile { it == ' ' || it == '\t' }.fold(0) { acc, c -> acc + if (c == '\t') 4 else 1 }
 
     /** init 块（下标 [idx]）的归属类名：向上找最近一条**顶格**类/对象声明（T-M53-II 跨文件解析用）。 */
     private fun ownerClassAt(lines: List<String>, dep: IntArray, idx: Int): String? {
@@ -370,12 +407,30 @@ class DialogWrapperInitOrderGuardTest {
                 private lateinit var modeButton: Any
             }
         """.trimIndent()
+        // UI-042 真缺陷形态：表达式体函数（无大括号）+ 多行 arrayOf，第三元素声明在 init 之后。
+        // 早期 blockEnd 只按 {} 深度算，函数体被截成一行 → 该属性整段落在扫描面外（假绿）。
+        val exprBody = """
+            class SyntheticExprBody {
+                init {
+                    init()
+                }
+                override fun createActions(): Array<Any> = arrayOf(
+                    firstAction,
+                    secondAction,
+                    thirdAction,
+                    cancelAction,
+                )
+                private val firstAction: Any = Any()
+                private val thirdAction: Any = Any()
+            }
+        """.trimIndent()
 
         val result = scan(listOf(
             "src/main/kotlin/SyntheticDefect.kt" to defect,
             "src/main/kotlin/SyntheticDefaultValued.kt" to defaultValued,
             "src/main/kotlin/SyntheticDeferred.kt" to deferred,
             "src/main/kotlin/SyntheticWrittenFirst.kt" to writtenFirst,
+            "src/main/kotlin/SyntheticExprBody.kt" to exprBody,
         ))
         val names = result.violations.map { it.name }
         assertTrue(

@@ -28,6 +28,30 @@ class SqlPreviewDialog(
 
     private val panel = SqlPreviewPanel(project)
 
+    /**
+     * T-DmlImpactProminence：底部蓝色主行动——复制 SQL 并关闭（复制成功提示随之关闭面板）。
+     *
+     * 必须声明在 [init] 之前：Kotlin 字段按声明序初始化，而 `init()` 会在构造期同步调用
+     * `createActions()`，声明在后则该字段此刻仍为 null，动作数组里出现空位、按钮不渲染
+     * （UI-042：用户侧表现为「复制 SQL 并关闭」按钮整个不见）。
+     */
+    private val copyAndCloseAction = object : DialogWrapperAction(
+        MpSqlVisualizerBundle.message("panel.copySqlAndClose"),
+    ) {
+        override fun doAction(actionEvent: java.awt.event.ActionEvent?) {
+            panel.copySql()
+            doDispose()
+        }
+    }
+
+    /**
+     * 构造期首次 [createActions] 的产出（UI-042 回归缝）。
+     *
+     * 必须声明在 [init] 之前：`init()` 同步触发 `createActions()`，若本字段声明在后，
+     * 其初始化表达式会在捕获之后执行、把捕获结果抹掉，回归缝自身失效。
+     */
+    internal var actionsAtConstructionForTest: Array<Action>? = null
+
     init {
         title = MpSqlVisualizerBundle.message("dialog.preview.title")
         panel.setSourceLocation(sourceLocation)
@@ -61,16 +85,6 @@ class SqlPreviewDialog(
     /** T-M23.6：internal 测试访问器（面板「关闭 SQL 面板」回调链路断言，仿 SqlPreviewPanel.editorForTest）。 */
     internal fun panelForTest(): SqlPreviewPanel? = panel
 
-    /** T-DmlImpactProminence：底部蓝色主行动——复制 SQL 并关闭（复制成功提示随之关闭面板）。 */
-    private val copyAndCloseAction = object : DialogWrapperAction(
-        MpSqlVisualizerBundle.message("panel.copySqlAndClose"),
-    ) {
-        override fun doAction(actionEvent: java.awt.event.ActionEvent?) {
-            panel.copySql()
-            doDispose()
-        }
-    }
-
     override fun createActions(): Array<Action> = arrayOf(
         // 执行 SQL（M17：选择数据源 → 临时文件 → 可执行；提示由面板/支持层统一处理）
         object : DialogWrapperAction(MpSqlVisualizerBundle.message("panel.executeSql")) {
@@ -87,7 +101,7 @@ class SqlPreviewDialog(
         copyAndCloseAction,
         // 关闭
         cancelAction,
-    )
+    ).also { actionsAtConstructionForTest = actionsAtConstructionForTest ?: it }
 
     /** 复制并关闭按钮按主行动样式渲染（蓝色实底）；其余按钮保持平台默认。 */
     override fun createJButtonForAction(action: Action): javax.swing.JButton {

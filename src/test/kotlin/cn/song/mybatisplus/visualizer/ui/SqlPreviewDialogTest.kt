@@ -45,6 +45,24 @@ class SqlPreviewDialogTest : BasePlatformTestCase() {
         }
     }
 
+    fun testCopyAndCloseActionIsPresentAtConstructionTime() {
+        // 构造期字段序回归（UI-042）：`init()` 会同步调用 createActions()，若 copyAndCloseAction
+        // 声明在 init 之后则此刻为 null——动作数组出现空位，按钮不渲染且不报错（用户侧「按钮不见了」）。
+        // 断言必须落在构造期真实产出的那批动作上：事后重调 createActions() 字段已赋值，只能证明
+        // 数组写得对、证不了按钮区（早期版本就是这样假绿的）。
+        val dialog = SqlPreviewDialog(project, previewResult())
+        try {
+            val label = cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message("panel.copySqlAndClose")
+            val captured = dialog.actionsAtConstructionForTest
+            assertNotNull("构造期应已捕获动作数组", captured)
+            val names = captured!!.map { it.getValue(javax.swing.Action.NAME) }
+            assertTrue("构造期动作应含「$label」，实际=$names", names.contains(label))
+        } finally {
+            if (!dialog.isDisposed()) dialog.doDispose()
+            dialog.panelForTest()?.clear()
+        }
+    }
+
     fun testClosePanelCallbackInjectedToPanel() {
         // T-M23.6：面板 onClosePanelRequested 已被弹窗注入（复制/执行 SQL 提示点「关闭 SQL 面板」
         // → 回调 dispose 关闭预览弹窗）；面板持有与对话框一致的当前结果
