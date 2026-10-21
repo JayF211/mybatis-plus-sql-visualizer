@@ -11,6 +11,7 @@ import cn.song.mybatisplus.visualizer.util.UiTextClipboard
 import cn.song.mybatisplus.visualizer.ui.search.NativeSearchTextField
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.Disposable
+import com.intellij.openapi.actionSystem.ActionGroup
 import com.intellij.openapi.actionSystem.ActionManager
 import com.intellij.openapi.actionSystem.ActionToolbar
 import com.intellij.openapi.actionSystem.AnAction
@@ -261,8 +262,14 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         }
     }
 
-    internal val navigationActionsForTest: List<AnAction>
-        get() = _navToolbarRef?.actionGroup?.getChildren(null)?.toList().orEmpty()
+    /**
+     * 测试缝：导航工具栏动作组。
+     *
+     * `ActionGroup.getChildren` 是 override-only API，不能在插件字节码里出现（Marketplace 校验
+     * 报 override-only usage）——生产侧只暴露组对象，取子项由测试代码自行调用。
+     */
+    internal val navigationToolbarGroupForTest: ActionGroup?
+        get() = _navToolbarRef?.actionGroup
 
     /** 层级切换后即时刷新导航工具栏（Back 可见性走 update；组件不可见时平台跳过，无副作用）。 */
     private fun refreshNavToolbar() {

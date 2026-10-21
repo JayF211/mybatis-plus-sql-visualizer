@@ -113,13 +113,13 @@ class ModuleIdentityResolverTest : HeavyPlatformTestCase() {
         )
     }
 
-    fun test无外部系统属性时退到模块文件而非只用模块名() {
+    fun test无外部系统属性时退到模块目录而非只用模块名() {
         val standalone = createAdditionalModule("standalone")
         val identity = ModuleIdentityResolver.identityOf(standalone)
 
-        assertEquals(ModuleKeySource.MODULE_FILE, identity.keySource)
-        assertTrue(identity.canonicalKey.startsWith("module-file:"))
-        assertTrue(identity.canonicalKey.endsWith("standalone.iml"))
+        assertEquals(ModuleKeySource.MODULE_DIR, identity.keySource)
+        assertTrue(identity.canonicalKey.startsWith("module-dir:"))
+        assertTrue(identity.canonicalKey.endsWith("/standalone"))
     }
 
     fun testDisposedModuleIsNotReturnedAsSourceOwner() {

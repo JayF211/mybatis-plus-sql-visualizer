@@ -1,7 +1,7 @@
 {
-  "version": "2026.10.16",
-  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.10.16/mybatis-plus-sql-visualizer-2026.10.16.zip",
-  "changeNotes": "SQL 日志与历史列表跟随编辑器配色，窄侧栏展示更紧凑\n单击列表只选中，快速预览按需打开，双击完整预览保持不变\n手动浏览暂停尾部跟随，点击滚动到底部即可恢复\n新增同结构聚类与按目标库分组排序，以及只看慢查询筛选\n日志工具窗页签保持单行，历史首次进入即加载已有文件\n调用栈优先显示业务帧，内部帧可展开，摘要可单击打开\n修复 SQL 日志与历史列表的正常耗时颜色被灰色覆盖\n修复预览准备期后台预热导致 IDE 卡死，预热增加超时兜底\n移除校验报告中的三项仅供覆写 API 直接调用\n同名实体按查询所在模块解析，不再误选其他模块的同名类\n依赖 JAR 内实体可按表名反查，嵌入列命名约定可跨模块识别\nSQL 日志工具栏新增交流群入口，扫码说明按需加载\n好用的话，欢迎到 Marketplace 页评分留言",
-  "publishDate": "2026-10-16",
+  "version": "2026.10.23-beta.1",
+  "downloadUrl": "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases/download/2026.10.23-beta.1/mybatis-plus-sql-visualizer-2026.10.23-beta.1.zip",
+  "changeNotes": "参数预设与参数历史按声明方法隔离，预设永久绑定方法，改 SQL 不再丢参数\n预览面板的只读动作走旁路，不再替换正在看的 SQL；影响行数改为顶部横幅\n回滚快照支持表格与文本双态，并可在 CSV 编辑器中打开；无数据源时直接弹选择器\n方言与数据源不匹配时给出「切换数据源」「方言设置」两个就地入口，绑定后自动重渲染\n预览执行按目标数据源方言出 Runner，达梦等方言的数据源也能直接执行\nEXPLAIN 计划可跨会话保存并对比两次执行的变化，预览可标注无法解析的列\nAI 上下文复制新增「含表列名」出口，日志与导出支持选择性脱敏\nFieldFill 字段填充可安全模拟字面量，不执行用户 Handler\n新增执行前 Schema 预检、方言能力自检、DML 影响面试算与一键诊断报告\n增强捕获默认开启，打开即授权，不再逐次确认\n历史检索与日志列表性能优化，大历史目录不再卡顿\nSQL 日志时间、ShardingSphere 路由、反向转换与设置页一批问题修复\n分发包补齐 LICENSE 与第三方声明，体积减少约 20%\n好用的话，欢迎到 Marketplace 页评分留言",
+  "publishDate": "2026-10-23",
   "sinceBuild": "243"
 }

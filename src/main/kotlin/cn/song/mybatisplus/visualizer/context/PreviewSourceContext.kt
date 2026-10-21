@@ -68,7 +68,7 @@ data class ModuleIdentity(
 enum class ModuleKeySource {
     EXTERNAL_SYSTEM_ID,
     EXTERNAL_SYSTEM_PATH,
-    MODULE_FILE,
+    MODULE_DIR,
     MODULE_NAME,
 }
 
