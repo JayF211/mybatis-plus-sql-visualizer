@@ -1,6 +1,8 @@
 package cn.song.mybatisplus.visualizer.psi;
 
+import cn.song.mybatisplus.visualizer.model.SqlFragment;
 import cn.song.mybatisplus.visualizer.model.SqlValue;
+import cn.song.mybatisplus.visualizer.sql.PlaceholderPositionsKt;
 import com.intellij.psi.JavaTokenType;
 import com.intellij.psi.PsiClassObjectAccessExpression;
 import com.intellij.psi.PsiElement;
@@ -10,10 +12,13 @@ import com.intellij.psi.PsiMethodCallExpression;
 import com.intellij.psi.PsiPolyadicExpression;
 import com.intellij.psi.PsiPrefixExpression;
 import com.intellij.psi.PsiReferenceExpression;
+import com.intellij.psi.PsiType;
 import com.intellij.psi.PsiVariable;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * 表达式求值器（F-02 前置）：把 Wrapper 方法实参表达式求值为 {@link SqlValue}。
@@ -34,6 +39,9 @@ public final class ExpressionEvaluator {
 
     /** 变量追踪最大深度，防止循环引用死循环。 */
     private static final int MAX_TRACE_DEPTH = 5;
+
+    /** 片段中用户自写、无可追溯来源的占位符所用的中性来源名（保持参数表与 `?` 数量对齐）。 */
+    private static final String UNKNOWN_PARAM = "?";
 
     private ExpressionEvaluator() {
     }
@@ -101,7 +109,7 @@ public final class ExpressionEvaluator {
      * 求值字符串拼接表达式（清单 P11 {@code selectAs("alias.col" ...)}、P12 {@code last("LIMIT " + N)}）。
      *
      * <p>仅当连接符全为 {@code +} 且所有操作数可静态求值（字面量/可追踪变量/嵌套拼接）时拼接为字符串；
-     * 否则降级为占位符（运行时值）。
+     * 否则降级为占位符（运行时值），同时尽力给出该表达式的<b>原始 SQL 片段</b>形态（{@link #fragmentOf}）。</p>
      */
     private SqlValue evaluatePolyadic(PsiPolyadicExpression expr) {
         if (expr.getOperationTokenType() != JavaTokenType.PLUS) {
@@ -113,11 +121,88 @@ public final class ExpressionEvaluator {
             if (v instanceof SqlValue.Literal) {
                 parts.add(((SqlValue.Literal) v).getUnquoted());
             } else {
-                return new SqlValue.Placeholder(expr.getText());
+                return new SqlValue.Placeholder(expr.getText(), fragmentOf(expr));
             }
         }
         String joined = String.join("", parts);
         return new SqlValue.Literal("'" + joined.replace("'", "''") + "'", joined);
+    }
+
+    /**
+     * 拼接表达式的「原始 SQL 片段」形态（T-UpdateSetSqlConcat）：静态段保留、运行期段写 {@code ?}，
+     * 同时按文本顺序记录每个占位符的来源（片段里的 {@code ?} 不登记进参数表就会让面板回填整体错位）。
+     *
+     * <p>例：{@code "amount = amount * " + rate} → 文本 {@code amount = amount * ?}、来源 {@code [rate]}。</p>
+     *
+     * <p>来源按<b>真实占位符位点</b>收敛：字符串字面量/注释内的 {@code ?} 不计（{@code first("/*+ ...(" + ms + ") *&#47;")}
+     * 的 {@code ?} 在块注释里，不能凭空多出一个来源——那会让面板把后面的值填错位）。</p>
+     *
+     * <p>只在整体是字符串拼接时才给值——数值算术（{@code 1 + n}）不是 SQL 片段，给 null 以免拼出 {@code 1?}。</p>
+     */
+    private SqlFragment fragmentOf(PsiPolyadicExpression expr) {
+        if (expr.getOperationTokenType() != JavaTokenType.PLUS) return null;
+        if (!isStringConcat(expr)) return null;
+        StringBuilder text = new StringBuilder();
+        // 文本位点 → 来源（仅用于最终按真实占位符位点过滤；注释/引号内的会被丢弃）
+        List<Integer> markPositions = new ArrayList<>();
+        List<String> markSources = new ArrayList<>();
+        for (PsiExpression operand : expr.getOperands()) {
+            SqlValue v = evaluateInternal(operand);
+            if (v instanceof SqlValue.Literal lit) {
+                // 字面量里用户自写的 `?` 也是一次占位（注释/引号内的会被最终过滤掉）
+                String unquoted = lit.getUnquoted();
+                for (int index = 0; index < unquoted.length(); index++) {
+                    if (unquoted.charAt(index) == '?') {
+                        markPositions.add(text.length() + index);
+                        markSources.add(UNKNOWN_PARAM);
+                    }
+                }
+                text.append(unquoted);
+            } else if (v instanceof SqlValue.Placeholder ph) {
+                SqlFragment nested = ph.getFragment();
+                if (nested != null) {
+                    // 嵌套拼接：按嵌套文本的**真实占位符位点**逐位对齐来源（引号/注释内的 `?` 不参与）
+                    List<Integer> realOffsets = PlaceholderPositionsKt.placeholderPositions(nested.getText());
+                    List<String> nestedParams = nested.getParams();
+                    for (int i = 0; i < nestedParams.size(); i++) {
+                        if (i < realOffsets.size()) {
+                            markPositions.add(text.length() + realOffsets.get(i));
+                            markSources.add(nestedParams.get(i));
+                        }
+                    }
+                    text.append(nested.getText());
+                } else {
+                    // 运行期段：写 `?` 并登记来源
+                    markPositions.add(text.length());
+                    markSources.add(ph.getSource());
+                    text.append('?');
+                }
+            }
+        }
+        Set<Integer> effective = new HashSet<>(PlaceholderPositionsKt.placeholderPositions(text.toString()));
+        List<String> out = new ArrayList<>();
+        for (int i = 0; i < markPositions.size(); i++) {
+            if (effective.contains(markPositions.get(i))) {
+                out.add(markSources.get(i));
+            }
+        }
+        return new SqlFragment(text.toString(), out);
+    }
+
+    /**
+     * 是否为字符串拼接：类型可解析时按 {@code String} 判定（Java 里 {@code String + 任意类型} 结果恒为 String），
+     * 类型解析不到（light fixture 缺 classpath 等）时回落到「任一操作数静态求值为字符串/字符字面量」
+     * ——判据取求值结果而非 PSI 字面量，这样变量追踪到的静态前缀（{@code String p = "a = "; p + x}）也能识别。
+     */
+    private boolean isStringConcat(PsiPolyadicExpression expr) {
+        PsiType type = expr.getType();
+        if (type != null && type.equalsToText("java.lang.String")) return true;
+        for (PsiExpression operand : expr.getOperands()) {
+            SqlValue value = evaluateInternal(operand);
+            // 字符串/字符字面量的 raw 带单引号（见 SqlValue.Literal KDoc），数值原样
+            if (value instanceof SqlValue.Literal lit && lit.getRaw().startsWith("'")) return true;
+        }
+        return false;
     }
 
     /**
