@@ -471,8 +471,8 @@ public class SqlLogAutoSaver {
         }
     }
 
-    private void writeEntryText(java.io.Writer w, LogSqlEntry entry, String historyId) {
-        try {
+    private static void writeEntryText(java.io.Writer w, LogSqlEntry entry, String historyId)
+            throws java.io.IOException {
             // 头部：源码位置 | 耗时 | 时间戳 | 日志原始时间（可选）
             String source;
             if (entry.sourceFile() != null) {
@@ -507,7 +507,9 @@ public class SqlLogAutoSaver {
                     || !entry.sourceCandidates().isEmpty() || entry.stackDigest() != null
                     || entry.actualSql() != null
                     || entry.source() == SqlSource.MCP || entry.source() == SqlSource.SHARDINGSPHERE) {
-                w.write("-- pd: " + SqlLogParamCodec.encodeEntry(entry) + " --\n");
+                w.write("-- pd: ");
+                SqlLogParamCodec.writeEncodedEntry(entry, w);
+                w.write(" --\n");
             }
             // O-147：已写入条目的随机标识（修订追加的定位锚；修订还须 historyIdentity 对账才生效）
             if (historyId != null) {
@@ -516,9 +518,6 @@ public class SqlLogAutoSaver {
             w.write(SqlLogPanelKt.withTerminator(entry.restoredSql()));
             w.write("\n\n");
             // T-Perf-12：flush 上移到批末（writeBatch）/同步 API（write）——写线程逐条 flush 磁盘已移除
-        } catch (Throwable t) {
-            LOG.warn("自动保存历史 SQL：写入失败", t);
-        }
     }
 
     // ---------- O-147：修订追加（元数据升级只追加修订注释，不重写旧字节，不追加第二条 SQL） ----------
@@ -707,7 +706,7 @@ public class SqlLogAutoSaver {
         }
 
         @Override
-        public void write(int b) {
+        public void write(int b) throws java.io.IOException {
             if (size() >= limit) {
                 throw new RevisionLimitExceeded();
             }
@@ -715,7 +714,7 @@ public class SqlLogAutoSaver {
         }
 
         @Override
-        public void write(byte[] b, int off, int len) {
+        public void write(byte[] b, int off, int len) throws java.io.IOException {
             if (len > limit - size()) {
                 throw new RevisionLimitExceeded();
             }
@@ -734,25 +733,17 @@ public class SqlLogAutoSaver {
     }
 
     static void writeRevision(LogSqlEntry entry, java.io.OutputStream output) {
-        java.io.ByteArrayOutputStream utf8 = new java.io.ByteArrayOutputStream();
-        java.io.Writer w = new java.io.OutputStreamWriter(utf8, java.nio.charset.StandardCharsets.UTF_8);
+        java.io.OutputStream encoded = java.util.Base64.getEncoder().wrap(output);
+        java.io.Writer w = new SqlLogParamCodec.ChunkedWriter(
+                new java.io.OutputStreamWriter(encoded, java.nio.charset.StandardCharsets.UTF_8));
         try {
             writeEntryText(w, entry, null);
-            w.flush();
+            w.close();
         } catch (Throwable t) {
             if (cn.song.mybatisplus.visualizer.util.FatalErrors.isFatal(t)) {
                 throw (Error) t;
             }
             throw new RuntimeException(t);
-        }
-        byte[] raw = utf8.toByteArray();
-        java.util.Base64.Encoder encoder = java.util.Base64.getEncoder();
-        byte[] ascii = encoder.encode(raw);
-        for (byte b : ascii) {
-            if (output.size() >= SqlLogFileReader.MAX_REVISION_PAYLOAD) {
-                throw new RevisionLimitExceeded();
-            }
-            output.write(b);
         }
     }
 

@@ -141,63 +141,132 @@ public final class SqlLogParamCodec {
      * requestTag/updateCount）仅非默认时落键，旧版本插件解码端忽略未知键（gson 宽松解析）。
      */
     public static String encodeEntry(LogSqlEntry entry) {
-        JsonObject obj = new JsonObject();
-        obj.addProperty(RAW_FIELD, entry.rawSql());
-        JsonArray arr = new JsonArray();
-        for (LogSqlParam p : entry.params()) {
-            JsonArray pair = new JsonArray();
-            pair.add(p.value() == null ? JsonNull.INSTANCE : new JsonPrimitive(p.value()));
-            pair.add(p.type() == null ? JsonNull.INSTANCE : new JsonPrimitive(p.type()));
-            arr.add(pair);
-        }
-        obj.add(PARAMS_FIELD, arr);
-        if (entry.mapperStatement() != null) {
-            obj.addProperty(MAPPER_FIELD, entry.mapperStatement());
-        }
-        if (entry.errorText() != null) {
-            obj.addProperty(ERROR_FIELD, entry.errorText());
-        }
-        if (entry.requestTag() != null) {
-            obj.addProperty(TAG_FIELD, entry.requestTag());
-        }
-        if (entry.updateCount() != null) {
-            obj.addProperty(UPDATE_COUNT_FIELD, entry.updateCount());
-        }
-        // T-SourceJumpFunnel：候选/栈快照（非默认才落键，旧版本解码端忽略未知键）
-        if (!entry.sourceCandidates().isEmpty()) {
-            JsonArray cands = new JsonArray();
-            for (Pair<String, Integer> candidate : entry.sourceCandidates()) {
-                JsonArray pair = new JsonArray();
-                pair.add(candidate.getFirst());
-                pair.add(candidate.getSecond());
-                cands.add(pair);
+        java.io.StringWriter out = new java.io.StringWriter();
+        writeEncodedEntry(entry, out);
+        return out.toString();
+    }
+
+    /** JSON → UTF-8 → Base64 均增量写入，修订调用方可以在任意字节预算处中止。 */
+    public static void writeEncodedEntry(LogSqlEntry entry, java.io.Writer target) {
+        java.io.OutputStream ascii = new java.io.OutputStream() {
+            @Override
+            public void write(int b) throws java.io.IOException {
+                target.write(b);
             }
-            obj.add(CANDS_FIELD, cands);
-        }
-        if (!entry.candidateClasses().isEmpty()) {
-            JsonArray classes = new JsonArray();
-            for (String cls : entry.candidateClasses()) {
-                classes.add(cls);
+
+            @Override
+            public void write(byte[] b, int off, int len) throws java.io.IOException {
+                int at = off;
+                while (at < off + len) {
+                    int n = Math.min(1024, off + len - at);
+                    target.write(new String(b, at, n, StandardCharsets.US_ASCII));
+                    at += n;
+                }
             }
-            obj.add(CAND_CLASSES_FIELD, classes);
+        };
+        java.io.OutputStream encoded = Base64.getEncoder().wrap(ascii);
+        java.io.Writer utf8 = new java.io.OutputStreamWriter(encoded, StandardCharsets.UTF_8);
+        com.google.gson.stream.JsonWriter json = GSON.newJsonWriter(new ChunkedWriter(utf8));
+        try {
+            json.beginObject();
+            json.name(RAW_FIELD).value(entry.rawSql());
+            json.name(PARAMS_FIELD).beginArray();
+            for (LogSqlParam p : entry.params()) {
+                json.beginArray().value(p.value()).value(p.type()).endArray();
+            }
+            json.endArray();
+            if (entry.mapperStatement() != null) {
+                json.name(MAPPER_FIELD).value(entry.mapperStatement());
+            }
+            if (entry.errorText() != null) {
+                json.name(ERROR_FIELD).value(entry.errorText());
+            }
+            if (entry.requestTag() != null) {
+                json.name(TAG_FIELD).value(entry.requestTag());
+            }
+            if (entry.updateCount() != null) {
+                json.name(UPDATE_COUNT_FIELD).value(entry.updateCount());
+            }
+            // T-SourceJumpFunnel：候选/栈快照（非默认才落键，旧版本解码端忽略未知键）
+            if (!entry.sourceCandidates().isEmpty()) {
+                json.name(CANDS_FIELD).beginArray();
+                for (Pair<String, Integer> candidate : entry.sourceCandidates()) {
+                    json.beginArray().value(candidate.getFirst()).value(candidate.getSecond()).endArray();
+                }
+                json.endArray();
+            }
+            if (!entry.candidateClasses().isEmpty()) {
+                json.name(CAND_CLASSES_FIELD).beginArray();
+                for (String cls : entry.candidateClasses()) {
+                    json.value(cls);
+                }
+                json.endArray();
+            }
+            if (entry.stackDigest() != null) {
+                json.name(STACK_DIGEST_FIELD).value(entry.stackDigest());
+            }
+            if (entry.actualSql() != null) {
+                json.name(ACTUAL_SQL_FIELD).value(entry.actualSql());
+            }
+            // 捕获路径仅非 UNKNOWN 落键（枚举名而非序号，新增常量不使旧文件失效）
+            if (entry.captureProvenance() != null && entry.captureProvenance() != CaptureProvenance.UNKNOWN) {
+                json.name(PROVENANCE_FIELD).value(entry.captureProvenance().name());
+            }
+            // T-McpAuditTrail T-MAT-03：来源标记——仅 MCP 落键（本任务范围：其余来源的读回口径
+            // 维持 UNKNOWN 不变，不做未立项的行为扩张）。枚举名而非序号：新增常量不使旧文件失效。
+            // R10：SHARDINGSPHERE 同样落键——控制台解析产出的来源若无键，历史读回退化为 UNKNOWN。
+            if (entry.source() == SqlSource.MCP || entry.source() == SqlSource.SHARDINGSPHERE) {
+                json.name(SOURCE_FIELD).value(entry.source().name());
+            }
+            json.endObject();
+            json.close(); // 输出 Base64 尾块，不关闭外部 target。
+        } catch (java.io.IOException e) {
+            throw new java.io.UncheckedIOException(e);
         }
-        if (entry.stackDigest() != null) {
-            obj.addProperty(STACK_DIGEST_FIELD, entry.stackDigest());
+    }
+
+    /** 避免 OutputStreamWriter.write(String) 将巨型 String 一次转成 char[]。 */
+    public static final class ChunkedWriter extends java.io.Writer {
+        private final java.io.Writer target;
+
+        public ChunkedWriter(java.io.Writer target) {
+            this.target = target;
         }
-        if (entry.actualSql() != null) {
-            obj.addProperty(ACTUAL_SQL_FIELD, entry.actualSql());
+
+        @Override
+        public void write(char[] cbuf, int off, int len) throws java.io.IOException {
+            int at = off;
+            while (at < off + len) {
+                int n = Math.min(1024, off + len - at);
+                target.write(cbuf, at, n);
+                at += n;
+            }
         }
-        // 捕获路径仅非 UNKNOWN 落键（枚举名而非序号，新增常量不使旧文件失效）
-        if (entry.captureProvenance() != null && entry.captureProvenance() != CaptureProvenance.UNKNOWN) {
-            obj.addProperty(PROVENANCE_FIELD, entry.captureProvenance().name());
+
+        @Override
+        public void write(String str, int off, int len) throws java.io.IOException {
+            int at = off;
+            while (at < off + len) {
+                int n = Math.min(1024, off + len - at);
+                target.write(str, at, n);
+                at += n;
+            }
         }
-        // T-McpAuditTrail T-MAT-03：来源标记——仅 MCP 落键（本任务范围：其余来源的读回口径
-        // 维持 UNKNOWN 不变，不做未立项的行为扩张）。枚举名而非序号：新增常量不使旧文件失效。
-        // R10：SHARDINGSPHERE 同样落键——控制台解析产出的来源若无键，历史读回退化为 UNKNOWN。
-        if (entry.source() == SqlSource.MCP || entry.source() == SqlSource.SHARDINGSPHERE) {
-            obj.addProperty(SOURCE_FIELD, entry.source().name());
+
+        @Override
+        public void write(int c) throws java.io.IOException {
+            target.write(c);
         }
-        return Base64.getEncoder().encodeToString(GSON.toJson(obj).getBytes(StandardCharsets.UTF_8));
+
+        @Override
+        public void flush() throws java.io.IOException {
+            target.flush();
+        }
+
+        @Override
+        public void close() throws java.io.IOException {
+            target.close();
+        }
     }
 
     /**
