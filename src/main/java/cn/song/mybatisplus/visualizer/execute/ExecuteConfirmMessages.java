@@ -86,9 +86,9 @@ public final class ExecuteConfirmMessages {
         return MpSqlVisualizerBundle.message("execute.confirm.unbounded.summary", keyword, String.join("\n", merged));
     }
 
-    /** 发现类别 → 文案键（单一映射点；键值见 bundle execute.confirm.unbounded.* 段）。 */
-    @org.jetbrains.annotations.NotNull
-    static String messageKeyOf(@org.jetbrains.annotations.NotNull UnboundedWriteDetector.FindingKind kind) {
+    /** 发现类别 → 文案键（单一映射点；键值见 bundle execute.confirm.unbounded.* 段）。
+     *  跨包公开：share.format 诊断报告直接复用本映射（Kotlin 侧为 internal）。 */
+    public static String messageKeyOf(@org.jetbrains.annotations.NotNull UnboundedWriteDetector.FindingKind kind) {
         switch (kind) {
             case MISSING_WHERE: return "execute.confirm.unbounded.missingWhere";
             case TAUTOLOGY: return "execute.confirm.unbounded.tautology";

@@ -12,6 +12,7 @@ import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.application.ModalityState;
 import com.intellij.openapi.project.Project;
 import java.util.function.Consumer;
+import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 /**
@@ -125,6 +126,28 @@ public final class FeedbackReporting {
                     PluginVersion.current(),
                     (submission, selectedItems, onResult) ->
                             submitInBackground(submission, onResult::accept));
+            dialog.show();
+        });
+    }
+
+    /** R94：诊断反馈入口（逐段审阅 + 显式同意后提交；无附件）。 */
+    public static void openDiagnosticDialog(@Nullable Project project,
+                                            @NotNull cn.song.mybatisplus.visualizer.share.DiagnosticShareDraft draft) {
+        ApplicationManager.getApplication().invokeLater(() -> {
+            if (project != null && project.isDisposed()) {
+                return;
+            }
+            ErrorReportDialog dialog = new ErrorReportDialog(
+                    null,
+                    null,
+                    null,
+                    ideVersion(),
+                    PluginVersion.current(),
+                    draft,
+                    (submission, selectedItems, onResult) -> submitInBackground(submission, outcome -> {
+                        onResult.accept(outcome);
+                        notifyOutcome(project, outcome);
+                    }));
             dialog.show();
         });
     }

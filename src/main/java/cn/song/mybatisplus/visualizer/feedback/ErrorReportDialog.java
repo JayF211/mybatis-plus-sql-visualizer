@@ -1,5 +1,7 @@
 package cn.song.mybatisplus.visualizer.feedback;
 
+import cn.song.mybatisplus.visualizer.share.DiagnosticShareDraft;
+import cn.song.mybatisplus.visualizer.share.ui.DiagnosticReviewPanel;
 import cn.song.mybatisplus.visualizer.ui.CopyFeedback;
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
 import cn.song.mybatisplus.visualizer.util.MpvsUiColors;
@@ -34,6 +36,8 @@ import javax.swing.JComponent;
 import javax.swing.JPanel;
 import javax.swing.JTextField;
 import javax.swing.SwingUtilities;
+import javax.swing.event.DocumentEvent;
+import javax.swing.event.DocumentListener;
 import kotlin.Pair;
 import org.jetbrains.annotations.Nullable;
 
@@ -130,7 +134,12 @@ public class ErrorReportDialog extends DialogWrapper {
     private final @Nullable String fingerprint;
     private final @Nullable String ideVersion;
     private final @Nullable String pluginVersion;
+    /** R94：诊断反馈草稿（null = 普通报告形态）。 */
+    private final @Nullable DiagnosticShareDraft diagnosticDraft;
     private final OnSubmit onSubmit;
+
+    /** R94：诊断审阅面板（仅诊断草稿形态非 null；构造期在 init() 之前建好）。 */
+    public @Nullable DiagnosticReviewPanel diagnosticReview = null;
 
     /** 对话框全部输入控件（T-FeedbackDlg 可测试性抽取，headless 测试直接构造）。 */
     public final ReportFormFields fields = new ReportFormFields();
@@ -151,11 +160,22 @@ public class ErrorReportDialog extends DialogWrapper {
     /** 提交进行中标记：重复点提交直接忽略（T-FeedbackErr 状态机）。 */
     private boolean isSubmitting = false;
 
+    /** 普通报告形态（Kotlin 默认参数 {@code diagnosticDraft = null} 的重载）。 */
     public ErrorReportDialog(@Nullable ErrorReportComposer.Prefill prefill,
                              @Nullable String stackText,
                              @Nullable String fingerprint,
                              @Nullable String ideVersion,
                              @Nullable String pluginVersion,
+                             OnSubmit onSubmit) {
+        this(prefill, stackText, fingerprint, ideVersion, pluginVersion, null, onSubmit);
+    }
+
+    public ErrorReportDialog(@Nullable ErrorReportComposer.Prefill prefill,
+                             @Nullable String stackText,
+                             @Nullable String fingerprint,
+                             @Nullable String ideVersion,
+                             @Nullable String pluginVersion,
+                             @Nullable DiagnosticShareDraft diagnosticDraft,
                              OnSubmit onSubmit) {
         super(true);
         this.prefill = prefill;
@@ -163,6 +183,7 @@ public class ErrorReportDialog extends DialogWrapper {
         this.fingerprint = fingerprint;
         this.ideVersion = ideVersion;
         this.pluginVersion = pluginVersion;
+        this.diagnosticDraft = diagnosticDraft;
         this.onSubmit = onSubmit;
 
         setTitle(MpSqlVisualizerBundle.message("error.report.dialog.title"));
@@ -235,6 +256,44 @@ public class ErrorReportDialog extends DialogWrapper {
         fields.anonymousCheck.setSelected(fields.nameField.getText().isBlank());
 
         fields.browserLink.setText(MpSqlVisualizerBundle.message("error.report.dialog.browser"));
+        if (diagnosticDraft != null) {
+            if (prefill != null || stackText != null || fingerprint != null) {
+                throw new IllegalArgumentException("diagnostic draft requires a blank manual report");
+            }
+            fields.titleField.setText(MpSqlVisualizerBundle.message("share.review.title"));
+            fields.attachStackCheck.setVisible(false);
+            fields.attachStackCheck.setSelected(false);
+            fields.attachMessageCheck.setVisible(false);
+            diagnosticReview = new DiagnosticReviewPanel(diagnosticDraft, fields.descriptionArea);
+            DocumentListener revokeOnEdit = new DocumentListener() {
+                @Override
+                public void insertUpdate(DocumentEvent e) {
+                    if (diagnosticReview != null) diagnosticReview.revokeConsent();
+                }
+
+                @Override
+                public void removeUpdate(DocumentEvent e) {
+                    if (diagnosticReview != null) diagnosticReview.revokeConsent();
+                }
+
+                @Override
+                public void changedUpdate(DocumentEvent e) {
+                    if (diagnosticReview != null) diagnosticReview.revokeConsent();
+                }
+            };
+            fields.titleField.getDocument().addDocumentListener(revokeOnEdit);
+            fields.nameField.getDocument().addDocumentListener(revokeOnEdit);
+            fields.emailField.getDocument().addDocumentListener(revokeOnEdit);
+            fields.typeCombo.addActionListener(e -> {
+                if (diagnosticReview != null) diagnosticReview.revokeConsent();
+            });
+            fields.categoryCombo.addActionListener(e -> {
+                if (diagnosticReview != null) diagnosticReview.revokeConsent();
+            });
+            fields.anonymousCheck.addActionListener(e -> {
+                if (diagnosticReview != null) diagnosticReview.revokeConsent();
+            });
+        }
 
         init();
     }
@@ -253,7 +312,15 @@ public class ErrorReportDialog extends DialogWrapper {
 
     @Override
     protected @Nullable JComponent createCenterPanel() {
-        return buildCenterPanel(fields);
+        JComponent form = buildCenterPanel(fields);
+        DiagnosticReviewPanel review = diagnosticReview;
+        if (review == null) {
+            return form;
+        }
+        JPanel panel = new JPanel(new BorderLayout());
+        panel.add(review, BorderLayout.NORTH);
+        panel.add(form, BorderLayout.CENTER);
+        return panel;
     }
 
     @Override
@@ -344,7 +411,10 @@ public class ErrorReportDialog extends DialogWrapper {
     protected @Nullable ValidationInfo doValidate() {
         String key = validateForm(fields.titleField.getText(), fields.descriptionArea.getText());
         if (key == null) {
-            return null;
+            key = diagnosticReview != null ? diagnosticReview.validationKey() : null;
+            if (key == null) {
+                return null;
+            }
         }
         JComponent component = VALIDATION_TITLE_KEY.equals(key) ? fields.titleField : fields.descriptionArea;
         return new ValidationInfo(MpSqlVisualizerBundle.message(key), component);
@@ -374,6 +444,9 @@ public class ErrorReportDialog extends DialogWrapper {
      * （用户自行粘贴，T-FeedbackDlg3）——勾选但内容为空视同不附带。
      */
     public @Nullable FeedbackApi.StackAttachment collectStackAttachment() {
+        if (diagnosticDraft != null) {
+            return null;
+        }
         if (!fields.attachStackCheck.isSelected()) {
             return null;
         }
@@ -397,13 +470,31 @@ public class ErrorReportDialog extends DialogWrapper {
         if (isSubmitting) {
             return;
         }
+        if (diagnosticReview != null) {
+            String reviewKey = diagnosticReview.validationKey();
+            if (reviewKey != null) {
+                finishSubmitting(new FeedbackApi.SubmissionOutcome(
+                        new FeedbackApi.SubmitResult.Failure(MpSqlVisualizerBundle.message(reviewKey))));
+                return;
+            }
+        }
         // T-ErrReportSubmitNoOp：组装段整体纳入兜底——任一步抛错都必须落到状态行，不许再出现
         // 「点了没反应」（真机：容器越界异常外溢到 EDT，平台只记 SEVERE 日志，用户零反馈）
         FeedbackApi.Submission submission;
         try {
-            submission = composeSubmission(
-                    new FeedbackApi.Submission(collectRequest(), collectStackAttachment()),
-                    selectedBatchItems());
+            DiagnosticReviewPanel review = diagnosticReview;
+            if (review != null) {
+                DiagnosticShareDraft.Snapshot reviewed = review.takeSubmission();
+                if (reviewed == null) {
+                    throw new IllegalStateException("Diagnostic consent is no longer valid");
+                }
+                submission = new FeedbackApi.Submission(
+                        collectRequest().withDescription(reviewed.description()), null);
+            } else {
+                submission = composeSubmission(
+                        new FeedbackApi.Submission(collectRequest(), collectStackAttachment()),
+                        selectedBatchItems());
+            }
         } catch (Throwable error) {
             LOG.warn("报告提交前置组装失败", error);
             finishSubmitting(new FeedbackApi.SubmissionOutcome(

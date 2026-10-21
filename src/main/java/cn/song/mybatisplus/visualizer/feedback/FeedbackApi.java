@@ -224,6 +224,12 @@ public final class FeedbackApi {
                     source, ideVersion, pluginVersion, attachments);
         }
 
+        /** 仅替换描述（Kotlin {@code copy(description = ...)} 的等价形态；R94 诊断草稿提交用）。 */
+        public PostRequest withDescription(String description) {
+            return new PostRequest(title, description, type, category, submitterName, submitterEmail, isAnonymous,
+                    source, ideVersion, pluginVersion, attachments);
+        }
+
         @Override
         public boolean equals(Object o) {
             if (this == o) {
