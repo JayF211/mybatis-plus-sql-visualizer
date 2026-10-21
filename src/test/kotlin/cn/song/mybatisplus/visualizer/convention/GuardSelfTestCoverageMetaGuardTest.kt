@@ -785,6 +785,20 @@ class GuardSelfTestCoverageMetaGuardTest {
                 "判定函数名不命中命名形状（叫 scan，:178）——正是「登记表为主识别面」的实证；自证 :363",
             ),
             GuardEntry(
+                "convention/ManualButtonPaintGuardTest.kt",
+                listOf(
+                    DecisionFn("scan", FnKind.VIOLATIONS),
+                    DecisionFn(
+                        "isRendererFile",
+                        FnKind.HELPER,
+                        "渲染器文件判定（Boolean 形态谓词），是判定内核 scan 的豁免输入；自证经该转发边到达",
+                        via = listOf("scan"),
+                    ),
+                ),
+                "按钮手工铺底色形态守卫（UI-043）：判定内核 scan 返回命中集合，自证用例 test_扫描器灵敏度与豁免自证 " +
+                    "喂合成源码（isOpaque/自选色必红、命名色与渲染器必走豁免）。",
+            ),
+            GuardEntry(
                 "convention/EnumReachabilityGuardTest.kt",
                 listOf(
                     DecisionFn("scan", FnKind.VIOLATIONS),
