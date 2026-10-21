@@ -47,6 +47,13 @@ public final class UpdateSource {
     /** Gitee 发布页（T-M28.4 变更日志链接目标——设置页/通知可点击跳转）。 */
     public static final String GITEE_RELEASES_URL = "https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer/releases";
 
+    /**
+     * JetBrains Marketplace 插件页（R62 兜底链接之一——更新通道 404 时的稳定版下载入口）。
+     * 值与仓内发行页 {@code src/main/resources/html/marketplace-custom-page.html} 的 Marketplace 链接
+     * 同源（此前无 Kotlin 常量，V114② 半数证伪——本常量为首个可复用落点）。
+     */
+    public static final String MARKETPLACE_URL = "https://plugins.jetbrains.com/plugin/33633-sql-visualizer";
+
     /** 插件安装目录名（2026-08-20 修复）：zip 顶层目录名（= 插件安装时解压出的目录名）。 */
     public static final String INSTALL_DIR_NAME = "mybatis-plus-sql-visualizer";
 

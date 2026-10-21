@@ -25,7 +25,7 @@ public final class PluginUpdateRunner {
 
     /** 检查结果。 */
     public sealed interface CheckResult {
-        /** 已是最新（清单缺失/解析失败/比较异常等一切降级，不打扰用户）。 */
+        /** 已是最新（清单获取/解析成功且版本不高于当前）。 */
         public static final class UpToDate implements CheckResult {
             public static final UpToDate INSTANCE = new UpToDate();
             private UpToDate() {}
@@ -34,8 +34,20 @@ public final class PluginUpdateRunner {
         /** 发现新版本。 */
         public record Available(UpdateManifest manifest) implements CheckResult {}
 
-        /** 明确失败（网络不可达等），message 面向用户展示。 */
-        public record Failure(String message) implements CheckResult {}
+        /**
+         * 明确失败（R62 三态可诊断化）：kind 区分网络不通 / 通道 404 / 清单损坏 / 版本不可读，
+         * message 面向用户展示（网络态含原始描述或 HTTP 状态码）。
+         */
+        public record Failure(FailureKind kind, String message) implements CheckResult {}
+    }
+
+    /**
+     * 失败分类（R62，V121.3）：NETWORK=网络不通（含非 404 HTTP 错误的诚实降级，消息带状态码）；
+     * CHANNEL_MISSING=更新通道缺失（HTTP 404/410——清单 URL 断链，用户应走兜底链接手动下载）；
+     * MANIFEST_MALFORMED=取到响应但清单解析失败；VERSION_UNREADABLE=当前插件版本不可读。
+     */
+    public enum FailureKind {
+        NETWORK, CHANNEL_MISSING, MANIFEST_MALFORMED, VERSION_UNREADABLE
     }
 
     /** 安装结果（T-DynUpdate 扩容：热生效 / 回退重启 / 失败三分支）。 */
@@ -58,30 +70,41 @@ public final class PluginUpdateRunner {
      * @param currentVersion 当前插件版本（[PluginVersion.current]）；不可读视为失败。
      */
     public static CheckResult check(String currentVersion) {
-        return check(currentVersion, it -> UpdateApi.INSTANCE.fetchManifest(it));
+        return check(currentVersion, UpdateApi.INSTANCE::fetchOutcome);
     }
 
     /**
      * 检查更新：拉取清单 → 解析 → 与当前版本比较。
      *
+     * <p>R62：fetch seam 改 {@link UpdateApi.FetchOutcome}（网络/HTTP 状态分层），失败按 {@link FailureKind}
+     * 映射——404/410 → CHANNEL_MISSING（通道缺失，设置页给兜底链接），其余 HTTP 错误 →
+     * NETWORK（消息带状态码，诚实降级不冒充通道缺失）。</p>
+     *
      * @param currentVersion 当前插件版本（[PluginVersion.current]）；不可读视为失败。
-     * @param fetch 清单获取 seam（默认 [UpdateApi.fetchManifest]）。
+     * @param fetch 清单获取 seam（默认 [UpdateApi.fetchOutcome]）。
      */
-    public static CheckResult check(String currentVersion, Function<String, String> fetch) {
+    public static CheckResult check(String currentVersion, Function<String, UpdateApi.FetchOutcome> fetch) {
         if (!VersionComparator.INSTANCE.isRecognizable(currentVersion)) {
-            return new CheckResult.Failure("current version unavailable");
+            return new CheckResult.Failure(FailureKind.VERSION_UNREADABLE, "current version unavailable");
         }
         String url = UpdateSource.INSTANCE.manifestUrl();
         UpdateSource.logOverrideIfAny(url);
-        String json = fetch.apply(url);
-        if (json == null) return new CheckResult.Failure("network unavailable");
-        UpdateManifest manifest = UpdateManifest.parseManifest(json);
-        if (manifest == null) return new CheckResult.Failure("manifest malformed");
+        UpdateApi.FetchOutcome outcome = fetch.apply(url);
+        if (outcome instanceof UpdateApi.FetchOutcome.NetworkError networkError) {
+            return new CheckResult.Failure(FailureKind.NETWORK, networkError.description());
+        }
+        if (outcome instanceof UpdateApi.FetchOutcome.HttpError httpError) {
+            if (httpError.status() == 404 || httpError.status() == 410) {
+                return new CheckResult.Failure(FailureKind.CHANNEL_MISSING, "HTTP " + httpError.status());
+            }
+            return new CheckResult.Failure(FailureKind.NETWORK, "HTTP " + httpError.status());
+        }
+        UpdateManifest manifest = UpdateManifest.parseManifest(((UpdateApi.FetchOutcome.Success) outcome).text());
+        if (manifest == null) return new CheckResult.Failure(FailureKind.MANIFEST_MALFORMED, "manifest malformed");
         if (VersionComparator.INSTANCE.compare(manifest.version(), currentVersion) > 0) {
             return new CheckResult.Available(manifest);
-        } else {
-            return CheckResult.UpToDate.INSTANCE;
         }
+        return CheckResult.UpToDate.INSTANCE;
     }
 
     /**
