@@ -130,7 +130,6 @@ public final class JavaCodeGenerator {
             InvocationTarget invocation
     ) {
         StringBuilder sb = new StringBuilder();
-        appendHeader(sb, result, entity, wrapperKind, invocation);
         boolean isJoin = !result.joins().isEmpty();
         // T-MapResultVo v2：返回类型声明原文的 TYPED 档（非 Map/Object 族 → 按类名走 VO 语义；
         // voClass 优先保留既有 API 兼容）
@@ -155,20 +154,43 @@ public final class JavaCodeGenerator {
                     "多表 JOIN 需要 MyBatis-Plus-Join（MPJ）依赖，但调用类 " + invocation.callerClass() + " 无 MPJ 能力");
         }
         boolean forceMpjQuery = isJoin && !result.joins().stream().allMatch(j -> canLambdaJoin(j, entity) || canMConsumerJoin(j, entity));
+        // T-M42：serialVersionUID 系列列过滤后渲染（全部被过滤 → 空列表 → 自然回落 selectAll/不生成
+        // select 调用，MP 全列语义）
+        List<SelectColumn> selectColumns = result.selectColumns();
+        if (selectColumns != null) {
+            selectColumns = selectColumns.stream().filter(c -> !isIgnoredColumn(c.expr())).toList();
+        }
+        // MP core 的 Lambda 列参数只接受 SFunction；别名/表达式/未映射投影和分组
+        // 必须整链使用字符串 Wrapper，不能只把单个列参数换成字符串。
+        // （javap 实证：MP core 3.5.14/3.5.17 的 Query/AbstractWrapper/LambdaQueryWrapper/
+        //  QueryWrapper 均无 selectAs 重载——lambda 链无法表达 `列 AS 别名`，只能整链回落。）
+        boolean needsStringProjection = result.distinct()
+                || (selectColumns != null && selectColumns.stream().anyMatch(it ->
+                        it.alias() != null || renderSelectRef(it, entity).startsWith("\"")))
+                || result.groupBy().stream().anyMatch(it ->
+                        resolveColumn(it.getColumnName(), entity, it.getTableAlias()) == null);
         GeneratedWrapper effectiveKind;
         if (forceMpjQuery) effectiveKind = GeneratedWrapper.MPJ_QUERY;
         else if (JOIN_WRAPPERS.contains(wrapperKind)) effectiveKind = wrapperKind;
         else if (isJoin && entity != null) effectiveKind = GeneratedWrapper.MPJ_LAMBDA;
         else if (isJoin) effectiveKind = GeneratedWrapper.MPJ_QUERY;
         else if (voQuery) effectiveKind = entity != null ? GeneratedWrapper.MPJ_LAMBDA : GeneratedWrapper.MPJ_QUERY;
-        else effectiveKind = wrapperKind;
+        else if (wrapperKind == GeneratedWrapper.WRAPPERS_LAMBDA && (entity == null || needsStringProjection)) {
+            effectiveKind = GeneratedWrapper.WRAPPERS_QUERY;
+        } else if (wrapperKind == GeneratedWrapper.LAMBDA && entity != null && needsStringProjection) {
+            effectiveKind = GeneratedWrapper.QUERY;
+        } else effectiveKind = wrapperKind;
 
+        appendHeader(sb, result, entity, effectiveKind, invocation);
+        if (effectiveKind != wrapperKind && !isJoin && !voQuery && !JOIN_WRAPPERS.contains(wrapperKind)) {
+            sb.append("// 投影或分组需要字符串列，整条查询已回落字符串 Wrapper，保留全部投影及别名\n");
+        }
+        // 字符串形态只改变列渲染，不丢弃实体类型或调用上下文。
+        boolean stringCore = effectiveKind == GeneratedWrapper.QUERY || effectiveKind == GeneratedWrapper.WRAPPERS_QUERY
+                || (effectiveKind == GeneratedWrapper.LAMBDA && entity == null);
+        EntityTarget columnEntity = stringCore ? null : entity;
         boolean rawMode = effectiveKind == GeneratedWrapper.MPJ_QUERY;
         StringBuilder chain = new StringBuilder();
-        List<SelectColumn> selectColumns = result.selectColumns();
-        if (selectColumns != null) {
-            selectColumns = selectColumns.stream().filter(c -> !isIgnoredColumn(c.expr())).toList();
-        }
         List<Condition> conditions = filterConditions(result.conditions());
         if (isJoin) {
             if (selectColumns == null || selectColumns.isEmpty()) {
@@ -179,10 +201,10 @@ public final class JavaCodeGenerator {
                 }
             }
             for (String j : renderJoins(result, entity)) chain.append("\n    .").append(j);
-            for (Condition c : conditions) chain.append("\n    .").append(renderCondition(c, entity));
-            for (String g : renderGroupBy(result, entity)) chain.append("\n    .").append(g);
-            if (result.having() != null) chain.append("\n    .").append(renderHaving(result.having(), entity));
-            for (String o : renderOrderBy(result, entity)) chain.append("\n    .").append(o);
+            for (Condition c : conditions) chain.append("\n    .").append(renderCondition(c, columnEntity));
+            for (String g : renderGroupBy(result, columnEntity)) chain.append("\n    .").append(g);
+            if (result.having() != null) chain.append("\n    .").append(renderHaving(result.having(), columnEntity));
+            for (String o : renderOrderBy(result, columnEntity)) chain.append("\n    .").append(o);
             // 分页调用形态（invocation 存在）由 page 参数承载，不再生成 last("LIMIT...")
             if (result.limit() != null && invocation == null) {
                 chain.append("\n    .last(\"").append(javaEscape(renderLimitTail(result.limit(), result.forUpdate()))).append("\")");
@@ -197,6 +219,12 @@ public final class JavaCodeGenerator {
                             .append(javaString("DISTINCT " + selectColumns.stream()
                                     .map(JavaCodeGenerator::renderSelectRaw).collect(Collectors.joining(", "))))
                             .append(")");
+                } else if (stringCore) {
+                    // MP core select 是覆盖，不是追加；所有投影必须在一次调用中提交。
+                    chain.append("\n    .select(")
+                            .append(selectColumns.stream()
+                                    .map(it -> javaString(renderSelectRaw(it))).collect(Collectors.joining(", ")))
+                            .append(")");
                 } else if (selectColumns.stream().anyMatch(it -> it.alias() != null)) {
                     // 含 AS 别名的列无法并入单个 .select(...)，逐列渲染 .select/.selectAs（T-M46）
                     for (SelectColumn it : selectColumns) {
@@ -208,10 +236,10 @@ public final class JavaCodeGenerator {
                             .append(")");
                 }
             }
-            for (Condition c : conditions) chain.append("\n    .").append(renderCondition(c, entity));
-            for (String g : renderGroupBy(result, entity)) chain.append("\n    .").append(g);
-            if (result.having() != null) chain.append("\n    .").append(renderHaving(result.having(), entity));
-            for (String o : renderOrderBy(result, entity)) chain.append("\n    .").append(o);
+            for (Condition c : conditions) chain.append("\n    .").append(renderCondition(c, columnEntity));
+            for (String g : renderGroupBy(result, columnEntity)) chain.append("\n    .").append(g);
+            if (result.having() != null) chain.append("\n    .").append(renderHaving(result.having(), columnEntity));
+            for (String o : renderOrderBy(result, columnEntity)) chain.append("\n    .").append(o);
             // 分页调用形态（invocation 存在）由 page 参数承载，不再生成 last("LIMIT...")
             if (result.limit() != null && invocation == null) {
                 chain.append("\n    .last(\"").append(javaEscape(renderLimitTail(result.limit(), result.forUpdate()))).append("\")");
@@ -1245,10 +1273,15 @@ public final class JavaCodeGenerator {
         return sb.toString();
     }
 
-    /** 表名 → 实体类名推断（下划线 → 驼峰首字母大写）。 */
+    /** 表名 → 实体类名推断（下划线 → 驼峰首字母大写）：`car_device_info` → `CarDeviceInfo`。 */
     public static String entityClassName(String tableName) {
+        // 带引号表名（`"user"`）先剥包裹再分段驼峰（Kotlin removeSurrounding("\"") 语义）
+        String name = tableName;
+        if (name.length() >= 2 && name.startsWith("\"") && name.endsWith("\"")) {
+            name = name.substring(1, name.length() - 1);
+        }
         StringBuilder sb = new StringBuilder();
-        for (String seg : tableName.split("_")) {
+        for (String seg : name.split("_")) {
             if (!seg.isEmpty()) sb.append(seg.substring(0, 1).toUpperCase()).append(seg.substring(1));
         }
         return sb.toString();
