@@ -14,6 +14,7 @@ import cn.song.mybatisplus.visualizer.ui.EntitySelectionDialog;
 import cn.song.mybatisplus.visualizer.ui.JavaCodeFormatter;
 import cn.song.mybatisplus.visualizer.ui.SqlInputEditor;
 import cn.song.mybatisplus.visualizer.ui.SqlSelectionDialog;
+import cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons;
 import cn.song.mybatisplus.visualizer.util.FatalErrors;
 import cn.song.mybatisplus.visualizer.util.IconScaler;
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle;
@@ -167,6 +168,96 @@ public class SqlToJavaPanel extends JPanel implements Disposable {
     private List<SqlToJavaConverter.EntityCandidate> cacheCandidates = null;
     private Map<String, JavaCodeGenerator.EntityTarget> cacheSubEntities = Collections.emptyMap();
 
+    /**
+     * UI010：一次转换请求的不可变快照。
+     *
+     * <p>代次只在 EDT 读写；后台任务只持有快照，不读取输入组件——后台回来时输入/形态/调用类/
+     * 返回类型任一项已变，结果一律丢弃（旧请求的渲染不得覆盖新请求）。</p>
+     */
+    private static final class ConversionRequest {
+        final long generation;
+        final String text;
+        final ReverseWrapperFormat format;
+        final String caller;
+        final String returnType;
+
+        ConversionRequest(long generation, String text, ReverseWrapperFormat format,
+                          String caller, String returnType) {
+            this.generation = generation;
+            this.text = text;
+            this.format = format;
+            this.caller = caller;
+            this.returnType = returnType;
+        }
+    }
+
+    private long requestGeneration = 0L;
+
+    /** 后台调度宿主（测试替换；生产走 pooled thread）。 */
+    public interface RunnableDispatcher {
+        void dispatch(Runnable block);
+    }
+
+    /** 实体选择弹窗宿主（测试替换；生产走 {@link EntitySelectionDialog}）。 */
+    public interface EntityDialogHost {
+        void show(List<EntitySelectionDialog.TableRow> rows, EntitySelectionDialog.ConfirmCallback onConfirm);
+    }
+
+    // 测试仅替换调度/弹窗宿主；解析、实体查询、缓存回填和渲染仍走同一生产闭包。
+    public RunnableDispatcher backgroundDispatcherForTest = null;
+    public RunnableDispatcher uiDispatcherForTest = null;
+    public EntityDialogHost entityDialogForTest = null;
+
+    private void invalidateRequests(boolean clearCache) {
+        requestGeneration++;
+        if (clearCache) {
+            cacheText = null;
+            cacheResult = null;
+            cacheCandidates = null;
+            cacheSubEntities = Collections.emptyMap();
+        }
+    }
+
+    private void invalidateRequests() {
+        invalidateRequests(false);
+    }
+
+    private ConversionRequest requestSnapshot() {
+        return new ConversionRequest(
+                requestGeneration, inputEditor.getText(), reverseFormat(),
+                callerField.getText(), voField.getText());
+    }
+
+    private boolean isCurrent(ConversionRequest request) {
+        return !disposed && !project.isDisposed()
+                && request.generation == requestGeneration
+                && Objects.equals(request.text, inputEditor.getText())
+                && request.format == reverseFormat()
+                && Objects.equals(request.caller, callerField.getText())
+                && Objects.equals(request.returnType, voField.getText());
+    }
+
+    private void dispatchBackground(Runnable block) {
+        RunnableDispatcher dispatcher = backgroundDispatcherForTest;
+        if (dispatcher != null) {
+            dispatcher.dispatch(block);
+        } else {
+            ApplicationManager.getApplication().executeOnPooledThread(block);
+        }
+    }
+
+    private void dispatchUi(ConversionRequest request, Runnable block) {
+        Runnable guarded = () -> {
+            if (isCurrent(request)) block.run();
+        };
+        RunnableDispatcher dispatcher = uiDispatcherForTest;
+        if (dispatcher != null) {
+            dispatcher.dispatch(guarded);
+        } else {
+            ApplicationManager.getApplication().invokeLater(guarded, ModalityState.nonModal());
+        }
+    }
+
     /** 调用类 MPJ 能力（后台 ReadAction 继承链实证；QUERY 形态/未解析默认 false）。 */
     private boolean callerMpj = false;
 
@@ -203,6 +294,7 @@ public class SqlToJavaPanel extends JPanel implements Disposable {
                 project,
                 MpSqlVisualizerBundle.message("reverse.panel.voHint"),
                 () -> {
+                    invalidateRequests();
                     if (cacheResult != null) regenerateWithNewFormat();
                     return Unit.INSTANCE;
                 });
@@ -236,6 +328,7 @@ public class SqlToJavaPanel extends JPanel implements Disposable {
         inputEditor.getEditor().getDocument().addDocumentListener(new DocumentListener() {
             @Override
             public void documentChanged(@NotNull DocumentEvent e) {
+                invalidateRequests(true);
                 inputHintLabel.setVisible(inputEditor.getText().isBlank());
             }
         }, this);
@@ -347,7 +440,7 @@ public class SqlToJavaPanel extends JPanel implements Disposable {
     private class ConvertAction extends AnAction {
         @Override
         public void update(@NotNull AnActionEvent e) {
-            e.getPresentation().setIcon(AllIcons.Actions.Execute);
+            e.getPresentation().setIcon(MpvsIcons.Convert);
             e.getPresentation().setText(MpSqlVisualizerBundle.message("reverse.panel.convert"));
         }
 
@@ -361,7 +454,7 @@ public class SqlToJavaPanel extends JPanel implements Disposable {
     private class FormatAction extends AnAction {
         @Override
         public void update(@NotNull AnActionEvent e) {
-            e.getPresentation().setIcon(AllIcons.Actions.ReformatCode);
+            e.getPresentation().setIcon(MpvsIcons.Format);
             e.getPresentation().setText(MpSqlVisualizerBundle.message("reverse.panel.format"));
         }
 
@@ -376,7 +469,7 @@ public class SqlToJavaPanel extends JPanel implements Disposable {
     private class ClearInputAction extends AnAction {
         @Override
         public void update(@NotNull AnActionEvent e) {
-            e.getPresentation().setIcon(AllIcons.Actions.GC);
+            e.getPresentation().setIcon(MpvsIcons.Clear);
             e.getPresentation().setText(MpSqlVisualizerBundle.message("reverse.panel.clearInput"));
         }
 
@@ -389,7 +482,7 @@ public class SqlToJavaPanel extends JPanel implements Disposable {
     private class CopyAction extends AnAction {
         @Override
         public void update(@NotNull AnActionEvent e) {
-            e.getPresentation().setIcon(AllIcons.Actions.Copy);
+            e.getPresentation().setIcon(MpvsIcons.Copy);
             e.getPresentation().setText(MpSqlVisualizerBundle.message("reverse.panel.copy"));
             e.getPresentation().setEnabled(!resultEditor.getDocument().getText().isBlank());
         }
@@ -406,7 +499,7 @@ public class SqlToJavaPanel extends JPanel implements Disposable {
     private class FormatCodeAction extends AnAction {
         @Override
         public void update(@NotNull AnActionEvent e) {
-            e.getPresentation().setIcon(AllIcons.Actions.ReformatCode);
+            e.getPresentation().setIcon(MpvsIcons.Format);
             e.getPresentation().setText(MpSqlVisualizerBundle.message("reverse.panel.formatCode"));
             e.getPresentation().setEnabled(!resultEditor.getDocument().getText().isBlank());
         }
@@ -420,12 +513,13 @@ public class SqlToJavaPanel extends JPanel implements Disposable {
     private class ClearResultAction extends AnAction {
         @Override
         public void update(@NotNull AnActionEvent e) {
-            e.getPresentation().setIcon(AllIcons.Actions.GC);
+            e.getPresentation().setIcon(MpvsIcons.Clear);
             e.getPresentation().setText(MpSqlVisualizerBundle.message("reverse.panel.clearResult"));
         }
 
         @Override
         public void actionPerformed(@NotNull AnActionEvent e) {
+            invalidateRequests(true);
             setResultText("");
             status(" ", false);
         }
@@ -1316,7 +1410,10 @@ public class SqlToJavaPanel extends JPanel implements Disposable {
     // ------------------------------------------------------------------
 
     private void convert() {
-        String text = inputEditor.getText();
+        if (disposed || project.isDisposed()) return;
+        invalidateRequests(true);
+        final ConversionRequest request = requestSnapshot();
+        String text = request.text;
         if (text.isBlank()) {
             status(MpSqlVisualizerBundle.message("reverse.panel.empty"), true);
             return;
@@ -1324,7 +1421,7 @@ public class SqlToJavaPanel extends JPanel implements Disposable {
         // T-BatchSql：顶层分号拆分 → 多语句走批量路径
         List<String> statements = SqlToJavaConverter.INSTANCE.splitStatements(text);
         if (statements.size() > 1) {
-            convertBatch(statements);
+            convertBatch(statements, request);
             return;
         }
         // 单条 SQL：尝试快速 parse 提供精确错误提示（保持既有单条错误行号定位体验）
@@ -1341,20 +1438,20 @@ public class SqlToJavaPanel extends JPanel implements Disposable {
         // T-M36.6：缓存成功解析（输入文本未变时切换形态复用）
         cacheText = text;
         cacheResult = result;
-        ReverseWrapperFormat format = reverseFormat();
+        ReverseWrapperFormat format = request.format;
         if (format == ReverseWrapperFormat.QUERY) {
             cacheCandidates = null;
-            render(result, Collections.emptyList(), format, Collections.emptyMap());
+            render(result, Collections.emptyList(), format, Collections.emptyMap(), request);
             return;
         }
-        ApplicationManager.getApplication().executeOnPooledThread(() -> {
+        dispatchBackground(() -> {
             // Kotlin val payload = try {...} catch {...} 的 Java 等价——单次赋值须 genuinely final
             // 才能被下方 EDT lambda 捕获，故把 try/catch 折进辅助方法一次求值（语义不变：fatal 透传、
             // 失败降级「无候选」）。
             final Triple<List<SqlToJavaConverter.EntityCandidate>,
                     Map<String, List<SqlToJavaConverter.EntityCandidate>>,
-                    Pair<Boolean, Set<String>>> payload = resolveReversePayload(project, result);
-            ApplicationManager.getApplication().invokeLater(() -> {
+                    Pair<Boolean, Set<String>>> payload = resolveReversePayload(project, result, request.caller);
+            dispatchUi(request, () -> {
                 cacheCandidates = payload.getFirst();
                 callerMpj = payload.getThird().getFirst();
                 callerMethods = payload.getThird().getSecond();
@@ -1378,22 +1475,23 @@ public class SqlToJavaPanel extends JPanel implements Disposable {
                         cacheSubEntities = subEntities;
                         // T-TS-03：写体显式过闸——render 内的 setResultText 写结果区文档；本拍由 BGT 派发
                         DocWriteContext.runWriteSafe(project, "reverse render dispatch (auto infer)", () ->
-                                render(result, payload.getFirst(), format, subEntities));
+                                render(result, payload.getFirst(), format, subEntities, request));
                     } else {
-                        showEntitySelection(result, payload.getFirst(), payload.getSecond(), format);
+                        showEntitySelection(result, payload.getFirst(), payload.getSecond(), format, request);
                     }
                     return;
                 }
                 if (manualEnabled && payload.getFirst().isEmpty()) {
-                    showEntitySelection(result, payload.getFirst(), payload.getSecond(), format);
+                    showEntitySelection(result, payload.getFirst(), payload.getSecond(), format, request);
                     return;
                 }
                 // 现状：副表候选逐表处理（开关关闭时多候选不弹窗，取第一个）
-                resolveSubEntities(payload.getSecond(), result.joins(), subEntities -> {
+                resolveSubEntities(payload.getSecond(), result.joins(), request, subEntities -> {
+                    if (!isCurrent(request)) return Unit.INSTANCE;
                     cacheSubEntities = subEntities;
                     // T-TS-03：同上一处——本回调可能由模态选择弹窗关闭后触发，写体统一过闸
                     DocWriteContext.runWriteSafe(project, "reverse render dispatch (sub entities)", () ->
-                            render(result, payload.getFirst(), format, subEntities));
+                            render(result, payload.getFirst(), format, subEntities, request));
                     return Unit.INSTANCE;
                 });
             });
@@ -1408,7 +1506,7 @@ public class SqlToJavaPanel extends JPanel implements Disposable {
     private Triple<List<SqlToJavaConverter.EntityCandidate>,
             Map<String, List<SqlToJavaConverter.EntityCandidate>>,
             Pair<Boolean, Set<String>>> resolveReversePayload(
-            Project project, SqlReverseResult result) {
+            Project project, SqlReverseResult result, String caller) {
         try {
             return ReadAction.compute(() -> {
                 List<SqlToJavaConverter.EntityCandidate> candidates =
@@ -1417,9 +1515,9 @@ public class SqlToJavaPanel extends JPanel implements Disposable {
                 Map<String, List<SqlToJavaConverter.EntityCandidate>> subCandidates =
                         SqlToJavaConverter.INSTANCE.findSubEntityCandidates(project, result.joins());
                 // 调用类 MPJ 能力（继承链实证）——VO 查询/多表生成据此选合法方法
-                boolean callerMpjLocal = SqlToJavaConverter.INSTANCE.invocationHasMpj(project, callerField.getText());
+                boolean callerMpjLocal = SqlToJavaConverter.INSTANCE.invocationHasMpj(project, caller);
                 // T-M44：调用类真实方法集（继承链）——生成器按真实 API 选择调用方法（selectPage 缺失回落 selectJoinPage 族）
-                Set<String> callerMethodsLocal = SqlToJavaConverter.INSTANCE.invocationMethods(project, callerField.getText());
+                Set<String> callerMethodsLocal = SqlToJavaConverter.INSTANCE.invocationMethods(project, caller);
                 return new Triple<>(candidates, subCandidates, new Pair<>(callerMpjLocal, callerMethodsLocal));
             });
         } catch (Throwable t) {
@@ -1445,17 +1543,17 @@ public class SqlToJavaPanel extends JPanel implements Disposable {
      *  - 不缓存（cacheResult/cacheText 仅单条路径使用）；
      *  - 超过 20 条时状态行提示「语句较多，实体查找可能耗时较长」。
      */
-    private void convertBatch(List<String> statements) {
+    private void convertBatch(List<String> statements, ConversionRequest request) {
         // 1. 批量解析（EDT 纯函数；错误隔离——失败项 error 非 null）
         List<SqlToJavaConverter.BatchItemResult> parseResults = SqlToJavaConverter.INSTANCE.parseBatch(statements);
         // 2. 后台单次 ReadAction 实体查找（所有语句共享）
-        ApplicationManager.getApplication().executeOnPooledThread(() -> {
+        dispatchBackground(() -> {
             Pair<Map<Integer, List<SqlToJavaConverter.EntityCandidate>>,
                     Map<Integer, Map<String, List<SqlToJavaConverter.EntityCandidate>>>> pair =
                     ReadAction.compute(() -> SqlToJavaConverter.INSTANCE.findCandidatesBatch(project, parseResults));
             // 3. EDT 生成 + 拼接
-            ApplicationManager.getApplication().invokeLater(() -> {
-                ReverseWrapperFormat format = reverseFormat();
+            dispatchUi(request, () -> {
+                ReverseWrapperFormat format = request.format;
                 String code = SqlToJavaConverter.INSTANCE.generateBatchCode(
                         parseResults,
                         pair.getFirst(),
@@ -1464,7 +1562,7 @@ public class SqlToJavaPanel extends JPanel implements Disposable {
                         buildInvocation());
                 // T-TS-03：写体显式过闸（setResultText 内同样过闸，这里是「哪次活动在写」的语义
                 // 声明点：本拍由 BGT 派发，模态进度下 defaultModalityState 可能取到写不安全模态）
-                DocWriteContext.runWriteSafe(project, "reverse batch result write", () -> setResultText(code));
+                setResultText(code, request);
                 long finalSuccess = parseResults.stream().filter(it -> it.result() != null).count();
                 int failed = statements.size() - (int) finalSuccess;
                 String msg;
@@ -1506,9 +1604,11 @@ public class SqlToJavaPanel extends JPanel implements Disposable {
             SqlReverseResult result,
             List<SqlToJavaConverter.EntityCandidate> mainCandidates,
             Map<String, List<SqlToJavaConverter.EntityCandidate>> subCandidates,
-            ReverseWrapperFormat format) {
+            ReverseWrapperFormat format,
+            ConversionRequest request) {
+        if (!isCurrent(request)) return;
         // 先回落显示（弹窗取消 → 保持字符串列名结果）
-        setResultText(generateCode(result, null, format, Collections.emptyMap()));
+        setResultText(generateCode(result, null, format, Collections.emptyMap()), request);
         status(joinStatus(result, MpSqlVisualizerBundle.message("reverse.panel.status.noEntity")), false);
         List<EntitySelectionDialog.TableRow> rows = new ArrayList<>();
         rows.add(new EntitySelectionDialog.TableRow(
@@ -1534,11 +1634,12 @@ public class SqlToJavaPanel extends JPanel implements Disposable {
                 ));
             }
         }
-        new EntitySelectionDialog(project, rows, (Map<String, PsiClass> selections) -> {
+        EntitySelectionDialog.ConfirmCallback onConfirm = selections -> {
+            if (!isCurrent(request)) return;
             // T-Perf-08：实体确认回调解析移后台——candidateOf 的 EntityResolver.resolve 遍历继承链
             // 全部字段 + 每字段注解 resolve，大实体（50+ 字段）耗时线性，EDT 直解析构成确认停顿；
             // 后台 ReadAction 解析后回 EDT 回填缓存并渲染（对齐 convert 的既有异步模式）。
-            com.intellij.openapi.application.ApplicationManager.getApplication().executeOnPooledThread(() -> {
+            dispatchBackground(() -> {
                 // T-M52：ReadAction.compute(ThrowableComputable) 在 262 标 deprecated；243 编译目标仅此重载可用
                 Object[] resolved = ReadAction.compute(() -> {
                     PsiClass mainPsi = selections.get(EntitySelectionDialog.MAIN_KEY);
@@ -1560,22 +1661,27 @@ public class SqlToJavaPanel extends JPanel implements Disposable {
                             main != null ? Collections.singletonList(main)
                                     : Collections.<SqlToJavaConverter.EntityCandidate>emptyList()};
                 });
+                @SuppressWarnings("unchecked")
+                java.util.List<SqlToJavaConverter.EntityCandidate> candidates =
+                        (java.util.List<SqlToJavaConverter.EntityCandidate>) resolved[2];
+                @SuppressWarnings("unchecked")
+                Map<String, JavaCodeGenerator.EntityTarget> subEnts =
+                        (Map<String, JavaCodeGenerator.EntityTarget>) resolved[1];
                 // T-WSC-02：render → setResultText → WriteCommandAction 写结果区文档，属文档写入回调，
                 // 不能用 any()（恒 write-unsafe，见 DocWriteContext KDoc）——改 nonModal。
-                ApplicationManager.getApplication().invokeLater(() -> {
-                    if (project.isDisposed()) return;
-                    @SuppressWarnings("unchecked")
-                    java.util.List<SqlToJavaConverter.EntityCandidate> candidates =
-                            (java.util.List<SqlToJavaConverter.EntityCandidate>) resolved[2];
-                    @SuppressWarnings("unchecked")
-                    Map<String, JavaCodeGenerator.EntityTarget> subEnts =
-                            (Map<String, JavaCodeGenerator.EntityTarget>) resolved[1];
+                dispatchUi(request, () -> {
                     cacheCandidates = candidates;
                     cacheSubEntities = subEnts;
-                    render(result, candidates, format, subEnts);
-                }, com.intellij.openapi.application.ModalityState.nonModal());
+                    render(result, candidates, format, subEnts, request);
+                });
             });
-        }).show();
+        };
+        EntityDialogHost dialogHost = entityDialogForTest;
+        if (dialogHost != null) {
+            dialogHost.show(rows, onConfirm);
+        } else {
+            new EntitySelectionDialog(project, rows, onConfirm).show();
+        }
     }
 
     /**
@@ -1589,6 +1695,7 @@ public class SqlToJavaPanel extends JPanel implements Disposable {
     private void resolveSubEntities(
             Map<String, List<SqlToJavaConverter.EntityCandidate>> subCandidates,
             List<ReverseJoin> joins,
+            ConversionRequest request,
             Function1<Map<String, JavaCodeGenerator.EntityTarget>, Unit> onComplete) {
         // 按 joins 顺序的别名列表（无别名的 join 无候选，直接跳过）
         List<String> aliases = joins.stream()
@@ -1596,7 +1703,7 @@ public class SqlToJavaPanel extends JPanel implements Disposable {
                 .filter(Objects::nonNull)
                 .collect(Collectors.toList());
         Map<String, JavaCodeGenerator.EntityTarget> subEntities = new HashMap<>();
-        resolveSubNext(subCandidates, aliases, subEntities, 0, onComplete);
+        resolveSubNext(subCandidates, aliases, subEntities, 0, request, onComplete);
     }
 
     private void resolveSubNext(
@@ -1604,7 +1711,9 @@ public class SqlToJavaPanel extends JPanel implements Disposable {
             List<String> aliases,
             Map<String, JavaCodeGenerator.EntityTarget> subEntities,
             int index,
+            ConversionRequest request,
             Function1<Map<String, JavaCodeGenerator.EntityTarget>, Unit> onComplete) {
+        if (!isCurrent(request)) return;
         for (int i = index; i < aliases.size(); i++) {
             String alias = aliases.get(i);
             List<SqlToJavaConverter.EntityCandidate> candidates =
@@ -1631,9 +1740,10 @@ public class SqlToJavaPanel extends JPanel implements Disposable {
                             cn.song.mybatisplus.visualizer.ui.SqlSelectionDialogKt.entityCandidateSubtitle(c.psiClass())
                     )).collect(Collectors.toList()));
             new SqlSelectionDialog<>(project, candidates, displayTexts, (SqlToJavaConverter.EntityCandidate selected) -> {
+                if (!isCurrent(request)) return;
                 JavaCodeGenerator.EntityTarget sub = toSubEntity(selected);
                 if (sub != null) subEntities.put(alias, sub);
-                resolveSubNext(subCandidates, aliases, subEntities, nextIndex, onComplete);
+                resolveSubNext(subCandidates, aliases, subEntities, nextIndex, request, onComplete);
             }).show();
             return;
         }
@@ -1656,6 +1766,7 @@ public class SqlToJavaPanel extends JPanel implements Disposable {
      * （不自动触发转换——用户点「转换」或切换形态后生成）。
      */
     public void setInputSql(String sql) {
+        invalidateRequests(true);
         inputEditor.setSql(sql);
         setResultText("");
         status(" ", false);
@@ -1666,24 +1777,27 @@ public class SqlToJavaPanel extends JPanel implements Disposable {
      * 无缓存（QUERY 路径未查过实体）或输入已变化 → 走完整转换流程。
      */
     private void regenerateWithNewFormat() {
-        String text = inputEditor.getText();
+        if (disposed || project.isDisposed()) return;
+        invalidateRequests();
+        final ConversionRequest request = requestSnapshot();
+        String text = request.text;
         if (text.isBlank()) return;
         if (cacheText == null || !cacheText.equals(text) || cacheResult == null) {
             convert();
             return;
         }
-        ReverseWrapperFormat format = reverseFormat();
+        ReverseWrapperFormat format = request.format;
         List<SqlToJavaConverter.EntityCandidate> candidates = cacheCandidates;
         if (format == ReverseWrapperFormat.QUERY || candidates == null) {
             // QUERY 形态或从未查过实体（QUERY 切换来）→ 重新走完整流程（同步/后台自适应）
             if (format == ReverseWrapperFormat.QUERY) {
-                render(cacheResult, Collections.emptyList(), format, Collections.emptyMap());
+                render(cacheResult, Collections.emptyList(), format, Collections.emptyMap(), request);
             } else {
                 convert();
             }
             return;
         }
-        render(cacheResult, candidates, format, cacheSubEntities);
+        render(cacheResult, candidates, format, cacheSubEntities, request);
     }
 
     /** T-M37：多表 JOIN 状态提示（生成 MPJ 形态说明）。 */
@@ -1701,14 +1815,17 @@ public class SqlToJavaPanel extends JPanel implements Disposable {
      * 断言），完成后 EDT 派发重生成；特殊值 this/baseMapper 恒 MPJ 能力（与反查同语义，同步分支）。
      */
     private void refreshCallerCapabilityThenRegenerate() {
-        String caller = callerField.getText().trim();
+        if (disposed || project.isDisposed()) return;
+        invalidateRequests();
+        final ConversionRequest request = requestSnapshot();
+        String caller = request.caller.trim();
         if (caller.isEmpty() || "this".equals(caller) || "baseMapper".equals(caller)) {
             callerMpj = !caller.isEmpty();
             callerMethods = Collections.emptySet();
             if (cacheResult != null) regenerateWithNewFormat();
             return;
         }
-        ApplicationManager.getApplication().executeOnPooledThread(() -> {
+        dispatchBackground(() -> {
             Pair<Boolean, Set<String>> pair;
             try {
                 pair = ReadAction.compute(() -> new Pair<>(
@@ -1720,7 +1837,7 @@ public class SqlToJavaPanel extends JPanel implements Disposable {
                 pair = new Pair<>(false, Collections.<String>emptySet());
             }
             Pair<Boolean, Set<String>> resolved = pair;
-            ApplicationManager.getApplication().invokeLater(() -> {
+            dispatchUi(request, () -> {
                 callerMpj = resolved.getFirst();
                 callerMethods = resolved.getSecond();
                 if (cacheResult != null) regenerateWithNewFormat();
@@ -1738,8 +1855,15 @@ public class SqlToJavaPanel extends JPanel implements Disposable {
      * 投递一拍。写体幂等（重投递写入的是同一份文本，文档内容不变），重跑无害。
      */
     private void setResultText(String text) {
-        DocWriteContext.runWriteSafe(project, "reverse panel result write", () ->
-                WriteCommandAction.runWriteCommandAction(project, () -> resultEditor.getDocument().setText(text)));
+        setResultText(text, requestSnapshot());
+    }
+
+    private void setResultText(String text, ConversionRequest request) {
+        DocWriteContext.runWriteSafe(project, "reverse panel result write", () -> {
+            // 写安全闸门也可能再派发一拍，必须在真正写文档时复查，不能只守上游回调。
+            if (!isCurrent(request)) return;
+            WriteCommandAction.runWriteCommandAction(project, () -> resultEditor.getDocument().setText(text));
+        });
     }
 
     /** T-M45：复制文本 = 剥离注释后的结果区内容（复制按钮经此取文本）。 */
@@ -1751,10 +1875,12 @@ public class SqlToJavaPanel extends JPanel implements Disposable {
     private void formatResult() {
         // T-Perf-11：格式化（PSI 创建 + 全量 reformat）移 Task.Backgroundable 后台执行，
         // 结果回 EDT 写回——批量转换 20+ 条语句拼大代码块时 EDT 不再随体积线性冻结。
+        final ConversionRequest request = requestSnapshot();
         String code = resultEditor.getDocument().getText();
         JavaCodeFormatter.INSTANCE.formatAsync(project, code, formatted -> {
-            if (!formatted.equals(resultEditor.getDocument().getText())) {
-                setResultText(formatted);
+            if (isCurrent(request) && code.equals(resultEditor.getDocument().getText())
+                    && !formatted.equals(code)) {
+                setResultText(formatted, request);
             }
         });
     }
@@ -1773,21 +1899,31 @@ public class SqlToJavaPanel extends JPanel implements Disposable {
         return new JavaCodeGenerator.InvocationTarget(caller, null, callerMpj, callerMethods, false, vo);
     }
 
-    /** 结果分发：0 候选回落 QueryWrapper；1 候选直接生成；多候选选择后生成。 */
     private void render(
             SqlReverseResult result,
             List<SqlToJavaConverter.EntityCandidate> candidates,
             ReverseWrapperFormat format,
             Map<String, JavaCodeGenerator.EntityTarget> subEntities) {
+        render(result, candidates, format, subEntities, requestSnapshot());
+    }
+
+    /** 结果分发：0 候选回落 QueryWrapper；1 候选直接生成；多候选选择后生成。 */
+    private void render(
+            SqlReverseResult result,
+            List<SqlToJavaConverter.EntityCandidate> candidates,
+            ReverseWrapperFormat format,
+            Map<String, JavaCodeGenerator.EntityTarget> subEntities,
+            ConversionRequest request) {
+        if (!isCurrent(request)) return;
         if (candidates.isEmpty()) {
             String code0 = generateCodeOrReport(result, null, format, subEntities);
             if (code0 == null) return;
-            setResultText(code0);
+            setResultText(code0, request);
             status(joinStatus(result, MpSqlVisualizerBundle.message("reverse.panel.status.noEntity")), false);
         } else if (candidates.size() == 1) {
 String code1 = generateCodeOrReport(result, candidates.get(0), format, subEntities);
             if (code1 == null) return;
-            setResultText(code1);
+            setResultText(code1, request);
             status(joinStatus(result, MpSqlVisualizerBundle.message(
                     "reverse.panel.status.entity",
                     candidates.get(0).psiClass().getName() != null ? candidates.get(0).psiClass().getName() : "")), false);
@@ -1796,7 +1932,7 @@ String code1 = generateCodeOrReport(result, candidates.get(0), format, subEntiti
             if (!manualEntitySelectionEnabled()) {
                 String code2 = generateCodeOrReport(result, candidates.get(0), format, subEntities);
                 if (code2 == null) return;
-                setResultText(code2);
+                setResultText(code2, request);
                 // T-FixEntityAmbiguity：多候选静默取首须明示——真机实证同表多实体（User/UserDO）
                 // 静默取到字段子集实体，用户只见「回落字符串列名」大列表误判为映射缺陷
                 String msg;
@@ -1825,9 +1961,10 @@ String code1 = generateCodeOrReport(result, candidates.get(0), format, subEntiti
                             cn.song.mybatisplus.visualizer.ui.SqlSelectionDialogKt.entityCandidateSubtitle(c.psiClass())
                     )).collect(Collectors.toList()));
             new SqlSelectionDialog<>(project, candidates, displayTexts, (SqlToJavaConverter.EntityCandidate selected) -> {
+                if (!isCurrent(request)) return;
                 String codeSel = generateCodeOrReport(result, selected, format, subEntities);
                 if (codeSel == null) return;
-                setResultText(codeSel);
+                setResultText(codeSel, request);
                 status(MpSqlVisualizerBundle.message(
                         "reverse.panel.status.entity",
                         selected.psiClass().getName() != null ? selected.psiClass().getName() : ""), false);
@@ -1916,6 +2053,7 @@ String code1 = generateCodeOrReport(result, candidates.get(0), format, subEntiti
         if (option == null) option = formatOptions()[0];
         FormatOption sel = (FormatOption) formatCombo.getSelectedItem();
         if (sel == null || !sel.persisted().equals(option.persisted())) {
+            invalidateRequests();
             suppressFormatSync = true;
             try {
                 formatCombo.setSelectedItem(option);
@@ -2045,6 +2183,7 @@ String code1 = generateCodeOrReport(result, candidates.get(0), format, subEntiti
     public void dispose() {
         if (disposed) return;
         disposed = true;
+        invalidateRequests(true);
         inputEditor.dispose();
         EditorFactory.getInstance().releaseEditor(resultEditor);
     }
