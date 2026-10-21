@@ -37,6 +37,25 @@ public class SqlLogAutoSaver {
 
     /** 时钟（测试注入用），默认系统时钟。 */
     private final LongSupplier clock;
+
+    // ---------- O-147：历史修订追加（元数据升级只追加修订注释，不重写旧字节） ----------
+
+    /** 已写入条目的身份索引：实例身份→文件+随机 ID+fileKey+historyIdentity（上限 2048 条防无界）。 */
+    private record WrittenBlock(java.io.File file, String id, Object key, String identity) {
+    }
+
+    private final java.util.IdentityHashMap<LogSqlEntry, WrittenBlock> writtenBlocks =
+            new java.util.IdentityHashMap<>();
+    private final java.util.Queue<java.util.AbstractMap.SimpleEntry<LogSqlEntry, LogSqlEntry>> pendingMerges =
+            new java.util.concurrent.ConcurrentLinkedQueue<>();
+    private final java.util.ArrayDeque<LogSqlEntry> writtenOrder = new java.util.ArrayDeque<>();
+
+    private record WaitingMerge(LogSqlEntry merged, long expires) {
+    }
+
+    private final java.util.IdentityHashMap<LogSqlEntry, WaitingMerge> waitingMerges =
+            new java.util.IdentityHashMap<>();
+    private final java.util.ArrayDeque<LogSqlEntry> waitingOrder = new java.util.ArrayDeque<>();
     /** 单文件滚动阈值（默认 100MB），测试注入小值用。 */
     private final long rollThresholdBytes;
     /**
@@ -137,6 +156,8 @@ public class SqlLogAutoSaver {
      */
     private synchronized void drainAndWrite() {
         drainScheduled.set(false);
+        // O-147：修订追加先于正文排水（同一写线程串行，防交错）
+        drainMerges();
         List<LogSqlEntry> batch = new java.util.ArrayList<>();
         while (true) {
             LogSqlEntry e = pendingEntries.poll();
@@ -434,6 +455,24 @@ public class SqlLogAutoSaver {
      */
     private void writeEntry(BufferedWriter w, LogSqlEntry entry) {
         try {
+            // O-147：捕获路径条目生成随机 ID + 登记 WrittenBlock（修订追加定位用）
+            String id = entry.captureProvenance() != cn.song.mybatisplus.visualizer.log.CaptureProvenance.UNKNOWN
+                    ? java.util.UUID.randomUUID().toString() : null;
+            writeEntryText(w, entry, id);
+            if (id != null && currentFile != null) {
+                Object key = fileKey(currentFile);
+                if (key != null) {
+                    remember(entry, new WrittenBlock(currentFile, id, key,
+                            SqlLogParamCodec.historyIdentity(entry)));
+                }
+            }
+        } catch (Throwable t) {
+            LOG.warn("自动保存历史 SQL：写入失败", t);
+        }
+    }
+
+    private void writeEntryText(java.io.Writer w, LogSqlEntry entry, String historyId) {
+        try {
             // 头部：源码位置 | 耗时 | 时间戳 | 日志原始时间（可选）
             String source;
             if (entry.sourceFile() != null) {
@@ -470,11 +509,250 @@ public class SqlLogAutoSaver {
                     || entry.source() == SqlSource.MCP || entry.source() == SqlSource.SHARDINGSPHERE) {
                 w.write("-- pd: " + SqlLogParamCodec.encodeEntry(entry) + " --\n");
             }
+            // O-147：已写入条目的随机标识（修订追加的定位锚；修订还须 historyIdentity 对账才生效）
+            if (historyId != null) {
+                w.write("-- pd: o147-id: " + historyId + " --\n");
+            }
             w.write(SqlLogPanelKt.withTerminator(entry.restoredSql()));
             w.write("\n\n");
             // T-Perf-12：flush 上移到批末（writeBatch）/同步 API（write）——写线程逐条 flush 磁盘已移除
         } catch (Throwable t) {
             LOG.warn("自动保存历史 SQL：写入失败", t);
+        }
+    }
+
+    // ---------- O-147：修订追加（元数据升级只追加修订注释，不重写旧字节，不追加第二条 SQL） ----------
+
+    /** 元数据升级排入待处理队列并唤醒写线程。 */
+    public void submitMerge(LogSqlEntry oldEntry, LogSqlEntry merged) {
+        pendingMerges.add(new java.util.AbstractMap.SimpleEntry<>(oldEntry, merged));
+        if (drainScheduled.compareAndSet(false, true)) {
+            ensureExecutor().execute(this::drainAndWrite);
+        }
+    }
+
+    private void awaitStore(LogSqlEntry oldEntry, LogSqlEntry merged) {
+        synchronized (writtenBlocks) {
+            waitingMerges.put(oldEntry, new WaitingMerge(merged, clock.getAsLong() + 60_000));
+            waitingOrder.removeIf(it -> it == oldEntry);
+            waitingOrder.addLast(oldEntry);
+            while (waitingOrder.size() > 2048) {
+                waitingMerges.remove(waitingOrder.removeFirst());
+            }
+        }
+    }
+
+    private void forgetWritten(LogSqlEntry entry) {
+        synchronized (writtenBlocks) {
+            writtenBlocks.remove(entry);
+            writtenOrder.removeIf(it -> it == entry);
+        }
+    }
+
+    private void remember(LogSqlEntry entry, WrittenBlock block) {
+        synchronized (writtenBlocks) {
+            writtenBlocks.put(entry, block);
+            writtenOrder.removeIf(it -> it == entry);
+            writtenOrder.addLast(entry);
+            while (writtenOrder.size() > 2048) {
+                writtenBlocks.remove(writtenOrder.removeFirst());
+            }
+            WaitingMerge waiting = waitingMerges.remove(entry);
+            if (waiting != null) {
+                waitingOrder.removeIf(it -> it == entry);
+                if (waiting.expires() >= clock.getAsLong()) {
+                    pendingMerges.add(new java.util.AbstractMap.SimpleEntry<>(entry, waiting.merged()));
+                }
+            }
+        }
+    }
+
+    /** 文件身份键（fileKey 或创建时间；仅常规非符号链接文件）。 */
+    private Object fileKey(java.io.File file) {
+        try {
+            java.nio.file.attribute.BasicFileAttributes a = Files.readAttributes(file.toPath(),
+                    java.nio.file.attribute.BasicFileAttributes.class,
+                    java.nio.file.LinkOption.NOFOLLOW_LINKS);
+            if (a.isRegularFile() && !a.isSymbolicLink()) {
+                return a.fileKey() != null ? a.fileKey() : a.creationTime();
+            }
+            return null;
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    private void drainMerges() {
+        long now = clock.getAsLong();
+        synchronized (writtenBlocks) {
+            waitingMerges.entrySet().removeIf(e -> e.getValue().expires() < now);
+            waitingOrder.removeIf(it -> !waitingMerges.containsKey(it));
+        }
+        while (true) {
+            java.util.AbstractMap.SimpleEntry<LogSqlEntry, LogSqlEntry> pair = pendingMerges.poll();
+            if (pair == null) {
+                break;
+            }
+            LogSqlEntry oldEntry = pair.getKey();
+            LogSqlEntry merged = pair.getValue();
+            WrittenBlock block;
+            synchronized (writtenBlocks) {
+                block = writtenBlocks.get(oldEntry);
+            }
+            if (block == null) {
+                awaitStore(oldEntry, merged);
+                continue;
+            }
+            if (oldEntry.sequenceNumber() != merged.sequenceNumber()
+                    || !SqlLogParamCodec.historyIdentity(merged).equals(block.identity())) {
+                continue;
+            }
+            try {
+                // 不 CREATE：删除/替换/重配后的文件不恢复、不认领。APPEND 永不覆盖其字节；
+                // 修订还须 ID + 原条目摘要匹配才在读取时生效。
+                Object currentKey = fileKey(block.file());
+                if (currentKey == null || !currentKey.equals(block.key())) {
+                    throw new IllegalStateException("file identity mismatch");
+                }
+                if (currentFile == block.file() && writer != null) {
+                    writer.flush();
+                }
+                // Windows 创建时间可能被文件系统隧道复用；必须再找到本实例写出的随机标识。
+                try (java.io.BufferedReader verify = Files.newBufferedReader(block.file().toPath(),
+                        StandardCharsets.UTF_8)) {
+                    if (!containsExactLine(verify, "-- pd: o147-id: " + block.id() + " --")) {
+                        throw new IllegalStateException("id line not found");
+                    }
+                }
+                String payload = revisionPayload(merged);
+                String line = "\n-- pd: o147-revision: " + block.id() + " " + block.identity() + " " + payload + " --\n";
+                java.nio.channels.FileChannel channel = java.nio.channels.FileChannel.open(
+                        block.file().toPath(),
+                        java.nio.file.StandardOpenOption.WRITE,
+                        java.nio.file.StandardOpenOption.APPEND,
+                        java.nio.file.LinkOption.NOFOLLOW_LINKS);
+                try (java.nio.channels.FileLock lock = channel.lock()) {
+                    Object recheck = fileKey(block.file());
+                    if (recheck == null || !recheck.equals(block.key())) {
+                        throw new IllegalStateException("file identity mismatch (post-lock)");
+                    }
+                    java.nio.ByteBuffer bytes = java.nio.ByteBuffer.wrap(line.getBytes(StandardCharsets.UTF_8));
+                    while (bytes.hasRemaining()) {
+                        channel.write(bytes);
+                    }
+                }
+                forgetWritten(oldEntry);
+                remember(merged, block);
+            } catch (Exception e) {
+                if (cn.song.mybatisplus.visualizer.util.FatalErrors.isFatal(e)) {
+                    throw (Error) e;
+                }
+                forgetWritten(oldEntry);
+                LOG.warn("自动保存历史 SQL：融合修订未追加，保留原历史", e);
+            }
+        }
+    }
+
+    /** 固定内存逐字符比较；不论外部行多长均不累积，CRLF/LF/EOF 都支持。 */
+    static boolean containsExactLine(java.io.Reader reader, String expected) {
+        int index = 0;
+        boolean matches = true;
+        boolean cr = false;
+        while (true) {
+            int c;
+            try {
+                c = reader.read();
+            } catch (java.io.IOException e) {
+                return false;
+            }
+            if (c == -1 || c == '\n') {
+                if (matches && index == expected.length()) {
+                    return true;
+                }
+                if (c == -1) {
+                    return false;
+                }
+                index = 0;
+                matches = true;
+                cr = false;
+            } else if (matches) {
+                if (index < expected.length() && c == expected.charAt(index) && !cr) {
+                    index++;
+                } else if (index == expected.length() && c == '\r' && !cr) {
+                    cr = true;
+                } else {
+                    matches = false;
+                }
+            }
+        }
+    }
+
+    static class RevisionLimitExceeded extends java.io.IOException {
+        RevisionLimitExceeded() {
+            super("history revision exceeds byte budget");
+        }
+    }
+
+    /** Base64 最终输出硬封顶；超额在流写时抛出，绝不先生成完整 payload。 */
+    static class RevisionOutput extends java.io.OutputStream {
+        private final int limit;
+        private final java.io.ByteArrayOutputStream data = new java.io.ByteArrayOutputStream(1024);
+
+        RevisionOutput(int limit) {
+            this.limit = limit;
+        }
+
+        int size() {
+            return data.size();
+        }
+
+        @Override
+        public void write(int b) {
+            if (size() >= limit) {
+                throw new RevisionLimitExceeded();
+            }
+            data.write(b);
+        }
+
+        @Override
+        public void write(byte[] b, int off, int len) {
+            if (len > limit - size()) {
+                throw new RevisionLimitExceeded();
+            }
+            data.write(b, off, len);
+        }
+
+        String text() {
+            return data.toString(java.nio.charset.StandardCharsets.US_ASCII);
+        }
+    }
+
+    static String revisionPayload(LogSqlEntry entry) {
+        RevisionOutput output = new RevisionOutput(SqlLogFileReader.MAX_REVISION_PAYLOAD);
+        writeRevision(entry, output);
+        return output.text();
+    }
+
+    static void writeRevision(LogSqlEntry entry, java.io.OutputStream output) {
+        java.io.ByteArrayOutputStream utf8 = new java.io.ByteArrayOutputStream();
+        java.io.Writer w = new java.io.OutputStreamWriter(utf8, java.nio.charset.StandardCharsets.UTF_8);
+        try {
+            writeEntryText(w, entry, null);
+            w.flush();
+        } catch (Throwable t) {
+            if (cn.song.mybatisplus.visualizer.util.FatalErrors.isFatal(t)) {
+                throw (Error) t;
+            }
+            throw new RuntimeException(t);
+        }
+        byte[] raw = utf8.toByteArray();
+        java.util.Base64.Encoder encoder = java.util.Base64.getEncoder();
+        byte[] ascii = encoder.encode(raw);
+        for (byte b : ascii) {
+            if (output.size() >= SqlLogFileReader.MAX_REVISION_PAYLOAD) {
+                throw new RevisionLimitExceeded();
+            }
+            output.write(b);
         }
     }
 
