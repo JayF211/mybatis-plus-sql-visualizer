@@ -1075,12 +1075,19 @@ public final class EasyQueryConverter {
             return generatedKeyColumnsCache;
         }
 
-        /** 布尔前缀标志解析（true/false 字面量或运行时布尔占位）。 */
+        /**
+         * 布尔前缀标志解析（true/false 字面量或运行时布尔占位）。
+         *
+         * <p>R49 口径统一：字面量 true 与 false 一样携带源码文本（{@code "true"}/{@code "false"}）——null 保留给
+         * 「非布尔重载」（见 ConditionToggle.flagSource 契约）。此前 true 被折叠成 null，与 QueryWrapperParser 侧
+         * 不一致，且使同一用户表达式在两条解析链上标注不同（R49 Wrapper 布尔条件探镜据此显示）。
+         * {@code enabled} 语义不变（字面量 true 仍默认勾选）。
+         */
         Flag flagOf(PsiExpression expr) {
             SqlValue value = ExpressionEvaluator.evaluate(expr);
             if (value instanceof SqlValue.Literal literal) {
                 if ("true".equals(literal.getUnquoted())) {
-                    return new Flag(null, true);
+                    return new Flag("true", true);
                 }
                 if ("false".equals(literal.getUnquoted())) {
                     return new Flag("false", false);
@@ -1104,7 +1111,7 @@ public final class EasyQueryConverter {
             }
             if (value instanceof SqlValue.Literal literal) {
                 if ("true".equals(literal.getUnquoted())) {
-                    return new Flag(null, true);
+                    return new Flag("true", true);
                 }
                 if ("false".equals(literal.getUnquoted())) {
                     return new Flag("false", false);
