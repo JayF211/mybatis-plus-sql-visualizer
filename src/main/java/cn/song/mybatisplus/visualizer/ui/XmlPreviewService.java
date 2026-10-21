@@ -1,6 +1,12 @@
 package cn.song.mybatisplus.visualizer.ui;
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings;
+import cn.song.mybatisplus.visualizer.context.ActualSqlPsiResolver;
+import cn.song.mybatisplus.visualizer.context.ModuleIdentityResolution;
+import cn.song.mybatisplus.visualizer.context.ModuleIdentityResolver;
+import cn.song.mybatisplus.visualizer.context.PreviewSourceContext;
+import cn.song.mybatisplus.visualizer.context.PreviewSourceOrigin;
+import cn.song.mybatisplus.visualizer.context.SqlPsiResolution;
 import cn.song.mybatisplus.visualizer.model.PreviewResult;
 import cn.song.mybatisplus.visualizer.psi.XmlCrossNsFragmentResolver;
 import cn.song.mybatisplus.visualizer.sql.DialectRegistry;
@@ -22,12 +28,15 @@ import cn.song.mybatisplus.visualizer.xml.XmlPreviewModel;
 import cn.song.mybatisplus.visualizer.xml.XmlScriptException;
 import cn.song.mybatisplus.visualizer.xml.XmlStatement;
 import cn.song.mybatisplus.visualizer.xml.XmlStatementKind;
+import com.intellij.openapi.application.ReadAction;
 import com.intellij.openapi.project.Project;
 import com.intellij.psi.JavaPsiFacade;
 import com.intellij.psi.PsiClass;
 import com.intellij.psi.PsiField;
 import com.intellij.psi.PsiExpression;
 import com.intellij.psi.search.GlobalSearchScope;
+import com.intellij.psi.xml.XmlFile;
+import com.intellij.psi.xml.XmlTag;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -67,17 +76,65 @@ public final class XmlPreviewService {
 
     @NotNull
     public PreviewResult preview(@NotNull String fileText, @Nullable String statementId) {
-        return preview(fileText, statementId, null, null);
+        return preview(fileText, statementId, null, null, null);
     }
 
     @NotNull
     public PreviewResult preview(@NotNull String fileText, @Nullable String statementId, @Nullable Project project) {
-        return preview(fileText, statementId, project, null);
+        return preview(fileText, statementId, project, null, null);
     }
 
     @NotNull
     public PreviewResult preview(@NotNull String fileText, @Nullable String statementId,
                                  @Nullable Project project, @Nullable SqlCompletionContext entityContext) {
+        return preview(fileText, statementId, project, entityContext, null);
+    }
+
+    /**
+     * O-145 W1：只在选定的 mapper 语句域解析实际 SQL 注入；文件内其他语句不能充当 owner。
+     * 光标不在该语句内时不传精确偏移，由解析器完整扫描 owner 并对多注入返回歧义。
+     * 仅在本次预览中携带 PSI，不写入模型、面板或历史。
+     */
+    @NotNull
+    public PreviewSourceContext resolveSourceContext(@NotNull XmlFile file, @NotNull XmlTag tag,
+                                                     @Nullable Integer caretOffset) {
+        Project project = file.getProject();
+        return ReadAction.compute(() -> {
+            boolean validOwner = tag.isValid() && tag.getContainingFile() == file
+                    && tag.getParentTag() != null && "mapper".equals(tag.getParentTag().getName())
+                    && ("select".equals(tag.getName()) || "insert".equals(tag.getName())
+                    || "update".equals(tag.getName()) || "delete".equals(tag.getName()));
+            Integer offset = caretOffset;
+            if (offset != null && !(validOwner
+                    && offset >= tag.getTextRange().getStartOffset()
+                    && offset < tag.getTextRange().getEndOffset())) {
+                offset = null;
+            }
+            SqlPsiResolution resolution = validOwner
+                    ? ActualSqlPsiResolver.resolve(file, tag, offset)
+                    : SqlPsiResolution.None.INSTANCE;
+            ModuleIdentityResolution module = file.getVirtualFile() != null
+                    ? ModuleIdentityResolver.resolve(project, file.getVirtualFile())
+                    : null;
+            if (module == null) {
+                module = PreviewSourceContext.ModuleIdentityResolution.None.INSTANCE;
+            }
+            return new PreviewSourceContext(
+                    project,
+                    PreviewSourceOrigin.XML,
+                    file,
+                    file.getVirtualFile(),
+                    resolution,
+                    module,
+                    null,
+                    null);
+        });
+    }
+
+    @NotNull
+    public PreviewResult preview(@NotNull String fileText, @Nullable String statementId,
+                                 @Nullable Project project, @Nullable SqlCompletionContext entityContext,
+                                 @Nullable PreviewSourceContext sourceContext) {
         // R12 T-PaginationSim：解析产物三元组（namespace/语句 id/语句类型）透出 try 块——分页模拟后处理用
         ParsedRef[] parsedRef = new ParsedRef[1];
         XmlPreviewModel model;
@@ -120,14 +177,70 @@ public final class XmlPreviewService {
             return emptyResult(e.getMessage() != null ? e.getMessage() : "SQL 脚本解析失败。");
         }
 
+        PreviewResult preview = toResult(model, staticWarnings, entityContext);
+        PreviewResult result = preview;
+        if (project != null) {
+            PreviewSourceContext contextForDecision = sourceContext != null && project.equals(sourceContext.project())
+                    ? sourceContext
+                    : null;
+            cn.song.mybatisplus.visualizer.sql.DialectDecisionEngine.Decision decision =
+                    contextForDecision != null
+                            ? DialectRegistry.INSTANCE.decision(contextForDecision)
+                            : DialectRegistry.INSTANCE.decision(project);
+            result = copyWithDialectDecision(preview,
+                    DialectRegistry.INSTANCE.byName(decision.dialectName()), decision);
+        }
+
         ParsedRef ref = parsedRef[0];
-        if (ref == null) return toResult(model, staticWarnings, entityContext);
+        if (ref == null) return result;
         return applyPagination(
-                toResult(model, staticWarnings, entityContext),
+                result,
                 project,
                 ref.namespace(),
                 ref.statementId(),
                 ref.kind());
+    }
+
+    /** Kotlin data class {@code copy(renderedDialect=…, dialectDecision=…)} 等价：其余字段原样保留。 */
+    private static PreviewResult copyWithDialectDecision(
+            @NotNull PreviewResult src,
+            @Nullable cn.song.mybatisplus.visualizer.sql.Dialect renderedDialect,
+            @Nullable cn.song.mybatisplus.visualizer.sql.DialectDecisionEngine.Decision dialectDecision) {
+        return new PreviewResult(
+                src.getSql(),
+                src.getCompactSql(),
+                src.getUnresolvedParams(),
+                src.getParamTable(),
+                src.getWrapperType(),
+                src.getTableName(),
+                src.getWarning(),
+                src.getColumns(),
+                src.getColumnComments(),
+                src.getTableComment(),
+                src.getPreviewModel(),
+                src.getParamHints(),
+                src.getCandidateTables(),
+                src.getBatchModel(),
+                src.getXmlModel(),
+                src.getInitialParamValues(),
+                src.getPerfWarnings(),
+                src.getFillClauses(),
+                src.getPreviousSql(),
+                src.getPagesColumns(),
+                src.getNamedParamHints(),
+                src.getStackDigest(),
+                src.isHasDollarRawSegments(),
+                src.getCountSql(),
+                src.getPaginationLimitLine(),
+                src.getPlaceholderParamNames(),
+                src.getDuplicateParamNames(),
+                src.getDiagramStatement(),
+                src.getHistoryFingerprintSeed(),
+                src.getPaginationParamSources(),
+                renderedDialect,
+                dialectDecision,
+                src.getHistoryEntryId(),
+                src.getActualSql());
     }
 
     /**
@@ -177,7 +290,10 @@ public final class XmlPreviewService {
             if (PaginationSimulator.hasExistingLimit(result.getSql())) return result;
             cn.song.mybatisplus.visualizer.model.LimitClause limitClause =
                     PaginationSimulator.placeholderLimitClause(pageParamName);
-            String limitLine = DialectRegistry.INSTANCE.effective(project).renderLimit(limitClause);
+            cn.song.mybatisplus.visualizer.sql.Dialect effectiveDialect = result.getEffectiveDialect();
+            String limitLine = (effectiveDialect != null
+                    ? effectiveDialect
+                    : DialectRegistry.INSTANCE.effective(project)).renderLimit(limitClause);
             String countSql = paginationCountEnabled()
                     ? PaginationSimulator.wrapCountSql(WHITESPACE_REGEX.matcher(result.getSql()).replaceAll(" ").trim())
                     : null;
@@ -186,6 +302,8 @@ public final class XmlPreviewService {
             unresolvedParams.addAll(extraSources);
             List<ParamHint> paramHints = new ArrayList<>(result.getParamHints());
             for (String s : extraSources) paramHints.add(new ParamHint(false));
+            // Kotlin data class copy 语义：未覆盖字段（含 diagramStatement/historyFingerprintSeed/
+            // renderedDialect/dialectDecision/historyEntryId/actualSql）原样保留。
             return new PreviewResult(
                     trimEnd(result.getSql()) + "\n" + limitLine,
                     trimEnd(result.getCompactSql()) + " " + limitLine,
@@ -213,7 +331,14 @@ public final class XmlPreviewService {
                     countSql,
                     limitLine,
                     result.getPlaceholderParamNames(),
-                    result.getDuplicateParamNames());
+                    result.getDuplicateParamNames(),
+                    result.getDiagramStatement(),
+                    result.getHistoryFingerprintSeed(),
+                    extraSources,
+                    result.getRenderedDialect(),
+                    result.getDialectDecision(),
+                    result.getHistoryEntryId(),
+                    result.getActualSql());
         } catch (Throwable t) {
             return result;
         }
