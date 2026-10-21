@@ -358,6 +358,34 @@ public record LogSqlEntry(
             mapperStatement, errorText, requestTag, updateCount, databaseName, actualSql, captureProvenance);
     }
 
+    /** O-147：修订应用拷贝原语——rawSql 覆写（其余字段同 {@link #withSequenceNumber} 形态）。 */
+    public LogSqlEntry withRawSql(String newRawSql) {
+        return new LogSqlEntry(newRawSql, restoredSql, params, timestamp, logTimestamp, summary, source,
+            executionTimeMs, sourceFile, sourceLine, sourceCandidates, candidateClasses, stackDigest, sequenceNumber,
+            mapperStatement, errorText, requestTag, updateCount, databaseName, actualSql, captureProvenance);
+    }
+
+    /** O-147：修订应用拷贝原语——restoredSql 覆写。 */
+    public LogSqlEntry withRestoredSql(String newRestoredSql) {
+        return new LogSqlEntry(rawSql, newRestoredSql, params, timestamp, logTimestamp, summary, source,
+            executionTimeMs, sourceFile, sourceLine, sourceCandidates, candidateClasses, stackDigest, sequenceNumber,
+            mapperStatement, errorText, requestTag, updateCount, databaseName, actualSql, captureProvenance);
+    }
+
+    /** O-147：修订应用拷贝原语——params 覆写。 */
+    public LogSqlEntry withParams(List<LogSqlParam> newParams) {
+        return new LogSqlEntry(rawSql, restoredSql, newParams, timestamp, logTimestamp, summary, source,
+            executionTimeMs, sourceFile, sourceLine, sourceCandidates, candidateClasses, stackDigest, sequenceNumber,
+            mapperStatement, errorText, requestTag, updateCount, databaseName, actualSql, captureProvenance);
+    }
+
+    /** O-147：修订应用拷贝原语——timestamp 覆写。 */
+    public LogSqlEntry withTimestamp(long newTimestamp) {
+        return new LogSqlEntry(rawSql, restoredSql, params, newTimestamp, logTimestamp, summary, source,
+            executionTimeMs, sourceFile, sourceLine, sourceCandidates, candidateClasses, stackDigest, sequenceNumber,
+            mapperStatement, errorText, requestTag, updateCount, databaseName, actualSql, captureProvenance);
+    }
+
     /** T-AgentLogTime：以本条为原型返回带日志原始时间的副本（copy(logTimestamp=…) 的 Java 等价）。 */
     public LogSqlEntry withLogTimestamp(Long newLogTimestamp) {
         return new LogSqlEntry(rawSql, restoredSql, params, timestamp, newLogTimestamp, summary, source,

@@ -70,6 +70,15 @@ public final class SqlLogFileReader {
     private static final String PD_PREFIX = "-- pd: ";
     private static final String PD_SUFFIX = " --";
 
+    /** O-147：历史修订块前缀（`-- pd: o147-id: <uuid>` / `-- pd: o147-revision: <uuid> <sha> <b64>`）。 */
+    private static final String ID_PREFIX = "-- pd: o147-id: ";
+    private static final String REVISION_PREFIX = "-- pd: o147-revision: ";
+    static final int MAX_REVISION_PAYLOAD = 65536;
+    static final int MAX_REVISIONS = 2048;
+    private static final int MAX_REVISION_TOTAL = 8 * 1024 * 1024;
+    private static final java.util.regex.Pattern ID_REGEX =
+            java.util.regex.Pattern.compile("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}");
+
     /**
      * 读取目录下所有 .sql 文件，返回按时间戳排序的 LogSqlEntry 列表。
      */
@@ -90,6 +99,179 @@ public final class SqlLogFileReader {
         return all;
     }
 
+    /** O-147 修订记录（identity = 首次 SQL/绑定/时间的 SHA-256，见 SqlLogParamCodec.historyIdentity）。 */
+    private static final class Revision {
+        final String identity;
+        final LogSqlEntry entry;
+
+        Revision(String identity, LogSqlEntry entry) {
+            this.identity = identity;
+            this.entry = entry;
+        }
+    }
+
+    /** 修订容器：按文件读入的修订块（限流：条数/字节双上限；超限行折叠为裸前缀）。 */
+    private static final class Revisions {
+        final java.util.Map<String, Revision> values = new java.util.HashMap<>();
+        private long bytes = 0;
+        private int count = 0;
+
+        void offer(String line) {
+            if (!line.startsWith(REVISION_PREFIX)) {
+                return;
+            }
+            // 文件流把超长修订折叠成裸前缀；直接传入完整字符串也按同一前缀成本计费。
+            int chargedLength = line.length() > MAX_REVISION_PAYLOAD + 150 ? REVISION_PREFIX.length() : line.length();
+            if (count >= MAX_REVISIONS || bytes + chargedLength > MAX_REVISION_TOTAL) {
+                return;
+            }
+            count++;
+            bytes += chargedLength;
+            if (line.length() > MAX_REVISION_PAYLOAD + 150) {
+                return;
+            }
+            try {
+                String stripped = line.substring(REVISION_PREFIX.length());
+                if (stripped.endsWith(PD_SUFFIX)) {
+                    stripped = stripped.substring(0, stripped.length() - PD_SUFFIX.length());
+                }
+                String[] parts = stripped.split(" ", 3);
+                if (parts.length != 3 || !ID_REGEX.matcher(parts[0]).matches()
+                        || !parts[1].matches("[0-9a-f]{64}") || parts[2].length() > MAX_REVISION_PAYLOAD) {
+                    return;
+                }
+                String decoded = new String(java.util.Base64.getDecoder().decode(parts[2]),
+                        java.nio.charset.StandardCharsets.UTF_8);
+                // 禁止递归修订，且只接受一个完整原生历史块。
+                if (decoded.contains(ID_PREFIX) || decoded.contains(REVISION_PREFIX)) {
+                    return;
+                }
+                EntryBlockScanner scanner = new EntryBlockScanner(false);
+                List<LogSqlEntry> parsed = new ArrayList<>();
+                for (String revLine : decoded.split("\n", -1)) {
+                    LogSqlEntry e = scanner.offer(revLine);
+                    if (e != null) {
+                        parsed.add(e);
+                    }
+                }
+                LogSqlEntry last = scanner.finish();
+                if (last != null) {
+                    parsed.add(last);
+                }
+                if (parsed.size() != 1) {
+                    return;
+                }
+                LogSqlEntry entry = parsed.get(0);
+                if (!SqlLogParamCodec.historyIdentity(entry).equals(parts[1])) {
+                    return;
+                }
+                values.put(parts[0], new Revision(parts[1], entry));
+            } catch (Throwable ignored) {
+                // runCatching 等价：损坏修订块按不存在处理
+            }
+        }
+
+        /** 身份匹配则应用元数据升级（SQL/绑定/时间/序号永远来自原始块）；否则原样返回。 */
+        LogSqlEntry apply(String id, LogSqlEntry original) {
+            Revision revision = id != null ? values.get(id) : null;
+            if (revision == null || !SqlLogParamCodec.historyIdentity(original).equals(revision.identity)) {
+                return original;
+            }
+            LogSqlEntry merged = cn.song.mybatisplus.visualizer.log.LogSqlModelsKt.mergeDuplicateEntry(
+                    original, revision.entry);
+            return merged
+                    .withRawSql(original.rawSql())
+                    .withRestoredSql(original.restoredSql())
+                    .withParams(original.params())
+                    .withTimestamp(original.timestamp())
+                    .withSequenceNumber(original.sequenceNumber());
+        }
+    }
+
+    /** 修订行超限即丢弃剩余字符，不先 readLine 分配任意大小的外部载荷。普通 SQL 不截断。 */
+    private static java.util.Iterator<String> boundedLines(java.io.BufferedReader reader) {
+        return new java.util.Iterator<String>() {
+            final StringBuilder text = new StringBuilder();
+            boolean revision = false;
+            boolean overLimit = false;
+            String next = null;
+            boolean eof = false;
+
+            private void advance() {
+                if (next != null || eof) {
+                    return;
+                }
+                while (true) {
+                    int c;
+                    try {
+                        c = reader.read();
+                    } catch (java.io.IOException e) {
+                        c = -1;
+                    }
+                    if (c == -1 || c == '\n') {
+                        if (text.length() > 0 || c != -1) {
+                            String out = text.toString();
+                            if (out.endsWith("\r")) {
+                                out = out.substring(0, out.length() - 1);
+                            }
+                            next = overLimit ? REVISION_PREFIX : out;
+                        }
+                        text.setLength(0);
+                        revision = false;
+                        overLimit = false;
+                        if (c == -1) {
+                            eof = true;
+                        }
+                        return;
+                    }
+                    if (!overLimit) {
+                        text.append((char) c);
+                        if (text.length() == REVISION_PREFIX.length()) {
+                            revision = text.toString().equals(REVISION_PREFIX);
+                        }
+                        // 最后一个 CR 暂不计入逻辑长度：若随后 LF/EOF，出行时剥除；
+                        // 若随后仍有字符，它会重新计入。只宽限单个尾 CR，不截断普通 SQL。
+                        int logicalLength = text.length() - (c == '\r' ? 1 : 0);
+                        if (revision && logicalLength > MAX_REVISION_PAYLOAD + 150) {
+                            text.setLength(0);
+                            overLimit = true;
+                        }
+                    }
+                }
+            }
+
+            @Override
+            public boolean hasNext() {
+                advance();
+                return next != null;
+            }
+
+            @Override
+            public String next() {
+                advance();
+                String out = next;
+                next = null;
+                return out;
+            }
+        };
+    }
+
+    private static Revisions revisionsIn(File file) {
+        Revisions revisions = new Revisions();
+        if (!file.exists()) {
+            return revisions;
+        }
+        try (java.io.BufferedReader reader = Files.newBufferedReader(file.toPath(), StandardCharsets.UTF_8)) {
+            java.util.Iterator<String> lines = boundedLines(reader);
+            while (lines.hasNext()) {
+                revisions.offer(lines.next());
+            }
+        } catch (Exception ignored) {
+            // 读失败按无修订处理
+        }
+        return revisions;
+    }
+
     public List<LogSqlEntry> readFromFile(File file) {
         if (!file.exists()) {
             return List.of();
@@ -101,7 +283,9 @@ public final class SqlLogFileReader {
                 () -> file.getName() + " " + file.length() + "B",
                 () -> {
                     try (java.io.BufferedReader reader = Files.newBufferedReader(file.toPath(), StandardCharsets.UTF_8)) {
-                        return parseContent(reader.lines());
+                        // O-147：修订已整文件预扫（revisionsIn），正文再过 boundedLines 时不重复收集。
+                        Revisions revisions = revisionsIn(file);
+                        return parseContent(boundedLines(reader), revisions, false);
                     } catch (Exception e) {
                         return List.of();
                     }
@@ -163,53 +347,162 @@ public final class SqlLogFileReader {
      * 序号是读取层派生的展示属性，不持久化；搜索过滤只删不改造条目实例，序号天然稳定。
      */
     public List<LogSqlEntry> parseContent(java.util.stream.Stream<String> lines) {
+        return parseContent(lines, new Revisions());
+    }
+
+    public List<LogSqlEntry> parseContent(java.util.stream.Stream<String> lines, Revisions revisions) {
+        return parseContent(lines, revisions, true);
+    }
+
+    /**
+     * O-147：解析内容并应用/收集修订块（readFromFile 路径 revisions 已预扫故 collectRevisions=false）。
+     * 条目序号按文件内解析顺序注入（防御：已有序号的条目不覆盖）。
+     */
+    public List<LogSqlEntry> parseContent(java.util.stream.Stream<String> lines, Revisions revisions,
+                                          boolean collectRevisions) {
         List<LogSqlEntry> entries = new ArrayList<>();
-        // T-SqlLogPerf（20261006-1020 计划 P2）：块累积不再走 joinToString → lines() → joinToString
-        // 三份全量拷贝——头部行与正文行分开持有，parseBlockLines 直收行序列，单块只剩
-        // 组装 restoredSql 那一次必要拷贝。判定逻辑与逐字语义与旧双拷贝版完全一致（round-trip 测试钉）。
-        String header = null;
-        List<String> bodyLines = new ArrayList<>();
+        List<String> ids = new ArrayList<>();
+        // 共享块切分状态机（parseContent 与 forEachEntry 单一实现源）：逐行喂入，头部行
+        // 开新块并吐出上一块的解析结果。
+        EntryBlockScanner scanner = new EntryBlockScanner(true);
         for (java.util.Iterator<String> it = lines.iterator(); it.hasNext(); ) {
             String line = it.next();
-            // 检测新版头部（兼容 2/3 个 `-`：-- source 或 --- source）
-            // 此处不能用 startsWith 严格判别「-- source」——旧版 F-43 的「-- 2026-08-31 ...」也会匹配，
-            // 故先看是否为新版结构（含 "source:" 与 "time:" 关键字）——具体交由正则捕获 timestamp/format ，
-            // parseBlockLines 中先 NEW 后 OLD 顺序尝试，任一正则匹配即可。
-            String trimmed = line.stripLeading();
-            if (trimmed.startsWith("--") && trimmed.contains("source:") && trimmed.contains("time:")) {
-                flushBlock(header, bodyLines, entries);
-                header = line;
+            if (collectRevisions) {
+                revisions.offer(line);
             }
-            // 检测旧版头部（F-43：`-- yyyy-MM-dd HH:mm:ss`）；`-- pd: ` 是参数持久化行非头部，
-            // 不排除会被当作旧头部把条目劈成两块（T-HistParam）
-            else if (line.startsWith("-- ") && !line.contains("source:") && !line.startsWith(PD_PREFIX)) {
-                flushBlock(header, bodyLines, entries);
-                header = line;
-            }
-            // 非头部行（SQL 正文或空行）
-            else if (header != null) {
-                bodyLines.add(line);
+            LogSqlEntry done = scanner.offer(line);
+            if (done != null) {
+                entries.add(done);
+                ids.add(scanner.completedId);
             }
         }
-        flushBlock(header, bodyLines, entries);
-        // T-LogHistoryRowNo：按文件内解析顺序注入序号（防御：已有序号的条目不覆盖）
+        LogSqlEntry last = scanner.finish();
+        if (last != null) {
+            entries.add(last);
+            ids.add(scanner.completedId);
+        }
         List<LogSqlEntry> numbered = new ArrayList<>(entries.size());
         for (int i = 0; i < entries.size(); i++) {
-            LogSqlEntry entry = entries.get(i);
+            LogSqlEntry entry = revisions.apply(ids.get(i), entries.get(i));
             numbered.add(entry.sequenceNumber() == 0L ? entry.withSequenceNumber(i + 1L) : entry);
         }
         return numbered;
     }
 
-    private void flushBlock(String header, List<String> bodyLines, List<LogSqlEntry> out) {
-        if (header == null) {
+    /**
+     * O-147：逐条迭代器——回调形，action 返回 false 即停止读取（扫描封顶/提前收束），
+     * 文件随迭代及时关闭（use 语义，中途停止不漏句柄）。
+     *
+     * <p>与 {@link #parseContent(java.util.stream.Stream)} 共用同一 {@link EntryBlockScanner}
+     * 状态机（单遍化、逐字节同语义，round-trip 测试钉），条目序号按产出顺序注入。
+     * 旧接口全部原样保留。</p>
+     */
+    public void forEachEntry(File file, java.util.function.Predicate<LogSqlEntry> action) {
+        if (!file.exists()) {
             return;
         }
-        LogSqlEntry e = parseBlockLines(header, bodyLines);
-        if (e != null) {
-            out.add(e);
+        LogPerfProbe.measure("SqlLogFileReader.forEachEntry",
+                () -> file.getName() + " " + file.length() + "B",
+                () -> {
+                    Revisions revisions = revisionsIn(file);
+                    try (java.io.BufferedReader reader = Files.newBufferedReader(file.toPath(), StandardCharsets.UTF_8)) {
+                        EntryBlockScanner scanner = new EntryBlockScanner(true);
+                        long seq = 0L;
+                        java.util.Iterator<String> lines = boundedLines(reader);
+                        while (lines.hasNext()) {
+                            LogSqlEntry original = scanner.offer(lines.next());
+                            if (original == null) {
+                                continue;
+                            }
+                            LogSqlEntry entry = revisions.apply(scanner.completedId, original);
+                            seq++;
+                            LogSqlEntry numbered = entry.sequenceNumber() == 0L
+                                    ? entry.withSequenceNumber(seq) : entry;
+                            if (!action.test(numbered)) {
+                                return null;
+                            }
+                        }
+                        LogSqlEntry tail = scanner.finish();
+                        if (tail != null) {
+                            LogSqlEntry entry = revisions.apply(scanner.completedId, tail);
+                            seq++;
+                            LogSqlEntry numbered = entry.sequenceNumber() == 0L
+                                    ? entry.withSequenceNumber(seq) : entry;
+                            action.test(numbered);
+                        }
+                    } catch (Exception ignored) {
+                        // use 语义：读失败即收束
+                    }
+                    return null;
+                });
+    }
+
+    /**
+     * 共享块切分状态机（parseContent 与 forEachEntry 单一实现源）：逐行喂入，头部行
+     * 开新块并吐出上一块的解析结果（无上一块/头部不合规解析失败返回 null）。
+     * 头部判定与 {@code countInFile} 的计数判据保持一致（含 source:/time: 的新版头部、
+     * {@code -- 日期} 的旧版头部、排除 {@code -- pd: } 参数持久化行）。
+     */
+    final class EntryBlockScanner {
+        private String header = null;
+        private String id = null;
+        private String completedId = null;
+        private final List<String> bodyLines = new ArrayList<>();
+        private final boolean skipRevisions;
+
+        EntryBlockScanner(boolean skipRevisions) {
+            this.skipRevisions = skipRevisions;
         }
-        bodyLines.clear();
+
+        /** 喂一行；若该行开启新块则返回上一块解析结果（无上一块或解析失败返回 null）。 */
+        LogSqlEntry offer(String line) {
+            if (skipRevisions && line.startsWith(REVISION_PREFIX)) {
+                return null;
+            }
+            if (line.startsWith(ID_PREFIX)) {
+                if (header != null) {
+                    String stripped = line.substring(ID_PREFIX.length());
+                    if (stripped.endsWith(PD_SUFFIX)) {
+                        stripped = stripped.substring(0, stripped.length() - PD_SUFFIX.length());
+                    }
+                    id = ID_REGEX.matcher(stripped).matches() ? stripped : null;
+                }
+                return null;
+            }
+            String trimmed = line.stripLeading();
+            if (trimmed.startsWith("--") && trimmed.contains("source:") && trimmed.contains("time:")) {
+                LogSqlEntry done = flush();
+                header = line;
+                return done;
+            }
+            if (line.startsWith("-- ") && !line.contains("source:") && !line.startsWith(PD_PREFIX)) {
+                LogSqlEntry done = flush();
+                header = line;
+                return done;
+            }
+            if (header != null) {
+                bodyLines.add(line);
+            }
+            return null;
+        }
+
+        /** 收尾：吐出最后一个未闭合块（无块/解析失败返回 null）。 */
+        LogSqlEntry finish() {
+            return flush();
+        }
+
+        private LogSqlEntry flush() {
+            String h = header;
+            if (h == null) {
+                return null;
+            }
+            LogSqlEntry e = parseBlockLines(h, bodyLines);
+            completedId = id;
+            id = null;
+            header = null;
+            bodyLines.clear();
+            return e;
+        }
     }
 
     private LogSqlEntry parseBlockLines(String header, List<String> contentLines) {
