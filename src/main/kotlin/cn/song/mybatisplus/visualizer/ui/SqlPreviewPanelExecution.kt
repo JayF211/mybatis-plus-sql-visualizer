@@ -18,7 +18,6 @@ import cn.song.mybatisplus.visualizer.util.EditorCommentShortcuts
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.xml.XmlPreviewModel
 import com.intellij.notification.Notification
-import com.intellij.ui.JBColor
 import com.intellij.notification.NotificationAction
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.application.ApplicationManager
@@ -2124,15 +2123,25 @@ internal fun SqlPreviewPanel.smallButton(text: String, action: () -> Unit): JBut
 
 /**
  * T-DmlImpactProminence：主行动按钮样式（蓝色实底）——用于「返回预览」「复制 SQL 并关闭」
- * 这类需要一眼看到的显式出口。主题键缺失时回退固定蓝；文字用白/深色由主题键决定。
+ * 这类需要一眼看到的显式出口。
+ *
+ * UI-043：**必须交给平台绘制**，不能手工涂底色。早期实现是 `isOpaque = true` + `background`
+ * 填主题蓝，而 Darcula 按钮边框是**内缩 4px 的圆角**（`DarculaButtonPainter.getOffset() == 4`）：
+ * 底色按整个矩形铺满，圆角之外就多出一圈方形蓝边（用户截图所见）。
+ *
+ * 平台的标准入口是 client property `JButton.styleDefault`（= [DarculaButtonUI.DEFAULT_STYLE_KEY]）：
+ * `DarculaButtonPainter` 在 `paintBorder` 里认这个键，走原生 default 样式的圆角填充与配色。
+ * 平台自身的 ButtonPanel、OnboardingDialogButtons 都是这么打的标。
  */
 internal fun applyPrimaryButtonStyle(button: JButton) {
-    button.isOpaque = true
-    button.background = JBColor.namedColor(
-        "Button.default.startBackground", JBColor(0x3574F0, 0x548AF7),
+    button.putClientProperty(
+        com.intellij.ide.ui.laf.darcula.ui.DarculaButtonUI.DEFAULT_STYLE_KEY,
+        java.lang.Boolean.TRUE,
     )
-    button.foreground = JBColor.namedColor("Button.default.foreground", JBColor.WHITE)
+    // 底色/前景交给 LAF；显式清掉，防止外层（如 resultPanel 主题覆盖）残留手工涂色
+    button.isOpaque = false
     button.isFocusPainted = false
+    button.repaint()
 }
 
 internal fun primaryButton(text: String, action: () -> Unit): JButton = JButton(text).apply {

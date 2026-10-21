@@ -110,6 +110,9 @@ class SqlPreviewDialog(
         return button
     }
 
+    /** UI-043 测试访问器（createJButtonForAction 在 DialogWrapper 内为 protected）。 */
+    internal fun createJButtonForActionForTest(action: Action): javax.swing.JButton = createJButtonForAction(action)
+
     /** T-DmlImpactProminence：测试访问器（createActions 在 DialogWrapper 内为 protected）。 */
     internal fun actionsForTest(): Array<Action> = createActions()
 

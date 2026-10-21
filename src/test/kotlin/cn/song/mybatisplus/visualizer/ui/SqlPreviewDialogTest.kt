@@ -63,6 +63,31 @@ class SqlPreviewDialogTest : BasePlatformTestCase() {
         }
     }
 
+    fun testPrimaryButtonUsesPlatformStyleInsteadOfPaintedBackground() {
+        // UI-043：主行动按钮必须走平台原生绘制（client property `JButton.styleDefault`）。
+        // 手工涂底色的形态（isOpaque=true + background）会让圆角按钮外面多出一圈方形蓝边——
+        // DarculaButtonPainter 的边框是内缩 4px 圆角，底色按整矩形铺满就溢出到圆角之外。
+        val dialog = SqlPreviewDialog(project, previewResult())
+        try {
+            val label = cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message("panel.copySqlAndClose")
+            val action = dialog.actionsForTest().first { it.getValue(javax.swing.Action.NAME) == label }
+            val button = dialog.createJButtonForActionForTest(action)
+            assertTrue(
+                "主行动按钮应打平台 styleDefault 标记（否则 LAF 不会画原生蓝色圆角）",
+                button.getClientProperty(
+                    com.intellij.ide.ui.laf.darcula.ui.DarculaButtonUI.DEFAULT_STYLE_KEY,
+                ) == java.lang.Boolean.TRUE,
+            )
+            assertTrue(
+                "主行动按钮不得靠手工铺底色（会在圆角外溢出成方角蓝边）",
+                !button.isOpaque,
+            )
+        } finally {
+            if (!dialog.isDisposed()) dialog.doDispose()
+            dialog.panelForTest()?.clear()
+        }
+    }
+
     fun testClosePanelCallbackInjectedToPanel() {
         // T-M23.6：面板 onClosePanelRequested 已被弹窗注入（复制/执行 SQL 提示点「关闭 SQL 面板」
         // → 回调 dispose 关闭预览弹窗）；面板持有与对话框一致的当前结果
