@@ -437,6 +437,16 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
          */
         var paramActiveSchemeByKey: String = "",
 
+        /**
+         * T-PresetMethodBinding：**方案 × 方法 → 最近一次保存的完整缓存键**，形态
+         * `{"方案名":{"<scope>":"<缓存键>"}, ...}`（嵌套 JSON，避免方案名与 scope 拼串）。
+         *
+         * 用途：同一方法里改了 SQL（键的 SQL 指纹段变了）后，精确键未命中时按本表把该预设
+         * 在该方法下最近一次保存的快照找回来——「预设永久绑定方法、改 SQL 也不丢」。
+         * 消费方 = [cn.song.mybatisplus.visualizer.ui.ParamHistoryCache.recallRecent]。
+         */
+        var paramSchemeRecentKey: String = "",
+
         // ---------- Hibernate/JPA 日志捕获 ----------
 
         /** 启用 Hibernate/JPA 日志解析（默认开）。 */

@@ -802,4 +802,54 @@ class SqlPreviewPanelParamSchemesTest : BasePlatformTestCase() {
         )
         assertEquals("迁移不动旧键（旧条目保留）", "old", cache.recallFromScheme("旧预设", legacyKey)!!["alpha"])
     }
+
+    // ==== T-PresetMethodBinding：同一方法改 SQL 后预设不丢 ====
+
+    /**
+     * 绑定语义：预设归「方法」，SQL 只作适用性标签。同一方法把 SQL 改了（参数行从 alpha+gamma
+     * 变成 alpha+beta），切回预设仍应召回 alpha；不在当前 SQL 里的 gamma 不得被注入；
+     * 勾选态不回落（条件 id 是按解析序递增的序号，跨 SQL 套用会张冠李戴）。
+     */
+    fun testPresetMethodBinding_同方法改SQL后预设仍召回参数且不恢复结构态() {
+        val p = SqlPreviewPanel(project)
+        panel = p
+        Disposer.register(testRootDisposable, p)
+        val cache = p.paramHistoryCacheForTest()
+
+        p.showResult(
+            buildPlainParamsResult(
+                listOf("alpha", "gamma"),
+                "SELECT * FROM t_order WHERE alpha = ? AND gamma = ?",
+                originScopeKey = "scope-a",
+            ),
+        )
+        com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+        val oldKey = p.historyCacheKeyForTest()!!
+        cache.saveAsScheme(
+            "改SQL前的预设",
+            oldKey,
+            linkedMapOf("alpha" to "1", "gamma" to "9", "__chk__:c1" to "1"),
+        )
+        p.onSchemesChangedForTest()
+
+        // 同一方法改 SQL：参数行变成 alpha + beta
+        p.showResult(
+            buildPlainParamsResult(
+                listOf("alpha", "beta"),
+                "SELECT * FROM t_order WHERE alpha = ? AND beta = ?",
+                originScopeKey = "scope-a",
+            ),
+        )
+        com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+        assertEquals("改 SQL 后预设仍在下拉里", 2, p.schemeComboForTest()!!.itemCount)
+
+        p.switchSchemeForTest("改SQL前的预设")
+        assertEquals(
+            "参数按名召回（预设绑方法，不绑 SQL）",
+            "1",
+            p.paramFieldForSourceForTest("alpha")?.text,
+        )
+        assertTrue("当前 SQL 没有的参数名不得被注入", "gamma" !in p.paramValuesForTest())
+        assertTrue("跨 SQL 回落不恢复勾选态（条件 id 会移位）", p.enabledIdsForTest().isEmpty())
+    }
 }

@@ -72,6 +72,16 @@ class ParamHistoryCache(private val maxSize: Int = MAX_HISTORY_SIZE) {
     private val activeSchemeByKey = java.util.concurrent.ConcurrentHashMap<String, String>()
 
     /**
+     * T-PresetMethodBinding：方案 × 声明作用域 → 该预设在该方法下**最近一次保存**的完整键。
+     *
+     * 用途与「改 SQL 不丢」：同一方法里改了 SQL（键的 SQL 指纹段变化），精确键未命中时按本表
+     * 找回上次那份快照。与 [activeSchemeByKey] 同层（都是指针，不存内容），随命名方案一起持久化。
+     * 顶层 CHM + 内层 CHM：写只在保存路径（持 storageMutationLock），读在召回路径（bucketLock 内探测）。
+     */
+    private val recentKeyBySchemeScope =
+        java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.ConcurrentHashMap<String, String>>()
+
+    /**
      * 旧全局单值激活方案（持久化兼容 + 未记录键的回落；语义见 [activeSchemeFor]）。
      * F54 微（性能十八轮 :51）：@Volatile——EDT 写 / pooled 读窗口窄但真实（写未发布时
      * 读侧可能长眼看旧值），引用写原子性由 volatile 发布补齐。
@@ -129,6 +139,42 @@ class ParamHistoryCache(private val maxSize: Int = MAX_HISTORY_SIZE) {
      */
     internal fun legacyKeyOf(key: String): String = key.substringBefore(SCOPE_SEPARATOR, key)
 
+    /** T-PresetMethodBinding：键里的声明作用域（无 scope 键返回 null）。 */
+    internal fun scopeOf(key: String): String? =
+        if (key.contains(SCOPE_SEPARATOR)) key.substringAfter(SCOPE_SEPARATOR) else null
+
+    /**
+     * T-PresetMethodBinding：记录「该方案在该方法下最近一次保存的键」。无 scope 键（日志/历史
+     * 双击链路）不记——它们没有方法归属，回落目标只对方法键有意义。调用方须持 [bucketLock]。
+     */
+    private fun recordRecentKeyLocked(scheme: String, key: String) {
+        val scope = scopeOf(key) ?: return
+        recentKeyBySchemeScope
+            .computeIfAbsent(scheme) { java.util.concurrent.ConcurrentHashMap() }[scope] = key
+    }
+
+    /**
+     * T-PresetMethodBinding：**改 SQL 不丢**的召回入口——按当前键的作用域找该预设（当前激活方案）
+     * 最近一次保存的快照。
+     *
+     * 与 [recall] 的分工：`recall` 只做精确键 + 旧键回落（语义是「同一条 SQL 的快照」）；
+     * 本方法才跨 SQL 形态，返回的是「这个方法上次用的参数」。面板据此只恢复参数值与 FieldFill，
+     * 结构态（勾选/foreach）不参与——Wrapper 条件 id 是按解析序递增的，跨 SQL 套用会错位。
+     *
+     * @return 回落快照；无指针 / 指针键就是精确键或旧键（已由 recall 覆盖）/ 桶内已淘汰 → null
+     */
+    fun recallRecent(key: String): Map<String, String>? {
+        val scope = scopeOf(key) ?: return null
+        val legacy = legacyKeyOf(key)
+        return synchronized(bucketLock) {
+            val active = activeSchemeFor(key)
+            val recentKey = recentKeyBySchemeScope[active]?.get(scope) ?: return null
+            if (recentKey == key || recentKey == legacy) return null
+            val entries = if (active == DEFAULT_SCHEME) cache else schemes[active] ?: return null
+            entries[recentKey]?.also { enforceMaxSize(entries) }
+        }
+    }
+
     /**
      * 保存参数值到缓存（LRU 淘汰 + 持久化）。
      *
@@ -171,6 +217,8 @@ class ParamHistoryCache(private val maxSize: Int = MAX_HISTORY_SIZE) {
                 val entries = entriesForScheme(scheme)
                 entries[key] = params
                 enforceMaxSize(entries)
+                // T-PresetMethodBinding：记下「该方案在该方法下最近保存的键」，供改 SQL 后回落
+                recordRecentKeyLocked(scheme, key)
             }
             persistToStorage()
             true
@@ -227,6 +275,7 @@ class ParamHistoryCache(private val maxSize: Int = MAX_HISTORY_SIZE) {
             schemes.clear()
             schemeOrder.clear()
             activeSchemeByKey.clear()
+            recentKeyBySchemeScope.clear()
             legacyActiveScheme = DEFAULT_SCHEME
         }
     }
@@ -291,6 +340,7 @@ class ParamHistoryCache(private val maxSize: Int = MAX_HISTORY_SIZE) {
                     val snapshot = entries[legacy] ?: continue
                     entries[key] = snapshot
                     enforceMaxSize(entries)
+                    recordRecentKeyLocked(name, key)
                     migrated = true
                 }
                 if (migrated && activeSchemeByKey[key] == null) {
@@ -311,12 +361,18 @@ class ParamHistoryCache(private val maxSize: Int = MAX_HISTORY_SIZE) {
     fun activeSchemeFor(key: String?): String {
         if (key.isNullOrEmpty()) return DEFAULT_SCHEME
         val legacy = legacyKeyOf(key)
+        val scope = scopeOf(key)
         val stored = activeSchemeByKey[key] ?: activeSchemeByKey[legacy] ?: legacyActiveScheme
         if (stored == DEFAULT_SCHEME) return DEFAULT_SCHEME
-        return if (synchronized(bucketLock) {
-                val entries = schemes[stored]
-                entries != null && (entries.containsKey(key) || entries.containsKey(legacy))
-            }) stored else DEFAULT_SCHEME
+        val hasEntry = synchronized(bucketLock) {
+            val entries = schemes[stored] ?: return@synchronized false
+            if (entries.containsKey(key) || entries.containsKey(legacy)) return@synchronized true
+            // T-PresetMethodBinding：改了 SQL 的键在桶里没有条目，但指针指向该方案在本方法下最近
+            // 保存的键——仍视为「该方案在此键下有效」，否则回落链会在 activeSchemeFor 处断掉。
+            val recentKey = scope?.let { recentKeyBySchemeScope[stored]?.get(it) }
+            recentKey != null && entries.containsKey(recentKey)
+        }
+        return if (hasEntry) stored else DEFAULT_SCHEME
     }
 
     /** 是否存在指定命名方案。 */
@@ -380,6 +436,8 @@ class ParamHistoryCache(private val maxSize: Int = MAX_HISTORY_SIZE) {
                 val entries = entriesForScheme(name)
                 entries[key] = params
                 enforceMaxSize(entries)
+                // T-PresetMethodBinding：另存为同时刷新「最近保存键」指针
+                recordRecentKeyLocked(name, key)
             }
             activeSchemeByKey[key] = name
             legacyActiveScheme = name
@@ -503,11 +561,14 @@ class ParamHistoryCache(private val maxSize: Int = MAX_HISTORY_SIZE) {
         }
         val active = legacyActiveScheme
         val activeByKey = serializeActiveByKey()
+        // T-PresetMethodBinding：指针表随方案集合一起落盘（内容未变时也重序列化，量小可忽略）
+        val recentKeys = serializeRecentKeys()
         val written = runCatching {
             val state = PluginSettings.getInstance().state
             state.paramSchemesJson = schemesJson
             state.paramActiveScheme = active
             state.paramActiveSchemeByKey = activeByKey
+            state.paramSchemeRecentKey = recentKeys
         }.isSuccess
         if (!written) {
             // 测试环境（无 IDE 服务）：回落静态存储，保证持久化往返可测
@@ -515,6 +576,7 @@ class ParamHistoryCache(private val maxSize: Int = MAX_HISTORY_SIZE) {
                 fallbackStorage[SCHEMES_STORAGE_KEY] = schemesJson
                 fallbackStorage[ACTIVE_SCHEME_STORAGE_KEY] = active
                 fallbackStorage[ACTIVE_BY_KEY_STORAGE_KEY] = activeByKey
+                fallbackStorage[RECENT_KEY_STORAGE_KEY] = recentKeys
             }
         }
         // 旧字段保持既有语义：默认方案快照继续写 paramHistoryJson（旧版构建可读，存量零迁移的另一面）
@@ -576,6 +638,51 @@ class ParamHistoryCache(private val maxSize: Int = MAX_HISTORY_SIZE) {
         return result
     }
 
+    /**
+     * T-PresetMethodBinding：`{"方案名":{"<scope>":"<键>"}}` 序列化。
+     * 空表返回空串（对齐其余参数字段「无数据 = 空串」）；方案与 scope 均排序，持久化不漂移。
+     */
+    private fun serializeRecentKeys(): String {
+        if (recentKeyBySchemeScope.isEmpty()) return ""
+        val sb = StringBuilder("{")
+        var firstScheme = true
+        for (scheme in recentKeyBySchemeScope.keys.sorted()) {
+            val scopeKeys = recentKeyBySchemeScope[scheme] ?: continue
+            if (scopeKeys.isEmpty()) continue
+            if (!firstScheme) sb.append(",")
+            firstScheme = false
+            sb.append("\"").append(escapeJson(scheme)).append("\":{")
+            var firstScope = true
+            for (scope in scopeKeys.keys.sorted()) {
+                val key = scopeKeys[scope] ?: continue
+                if (!firstScope) sb.append(",")
+                firstScope = false
+                sb.append("\"").append(escapeJson(scope)).append("\":\"").append(escapeJson(key)).append("\"")
+            }
+            sb.append("}")
+        }
+        sb.append("}")
+        return if (firstScheme) "" else sb.toString()
+    }
+
+    /** T-PresetMethodBinding：最近键指针反序列化（损坏/空 → 空表，不崩溃）。 */
+    private fun deserializeRecentKeys(json: String): Map<String, Map<String, String>> {
+        val trimmed = json.trim()
+        if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return emptyMap()
+        val result = linkedMapOf<String, Map<String, String>>()
+        for ((name, valueText) in splitTopLevelEntries(trimmed.substring(1, trimmed.length - 1))) {
+            if (!valueText.startsWith("{") || !valueText.endsWith("}")) continue
+            val inner = linkedMapOf<String, String>()
+            for ((scope, keyText) in splitTopLevelEntries(valueText.substring(1, valueText.length - 1))) {
+                val key = unescapeJson(keyText.removeSurrounding("\""))
+                val scopeName = unescapeJson(scope)
+                if (scopeName.isNotEmpty() && key.isNotEmpty()) inner[scopeName] = key
+            }
+            if (inner.isNotEmpty()) result[unescapeJson(name)] = inner
+        }
+        return result
+    }
+
     /** 从持久化恢复内存缓存（IDE 环境）；测试环境回落静态存储。
      *  R22 T-04（D2 定案）：旧 `paramHistoryJson` 数据自动成为「默认方案」——零迁移损失，老用户无感。 */
     private fun restoreFromPersistence() {
@@ -606,6 +713,15 @@ class ParamHistoryCache(private val maxSize: Int = MAX_HISTORY_SIZE) {
         if (byKeyJson.isNotBlank()) {
             runCatching {
                 deserializeActiveByKey(byKeyJson).forEach { (k, v) -> activeSchemeByKey[k] = v }
+            }
+        }
+        // T-PresetMethodBinding：最近保存键指针恢复（缺字段/损坏 → 空表，回落链退化为「精确 + 旧键」）
+        val recentJson = readPersisted(RECENT_KEY_STORAGE_KEY) { PluginSettings.getInstance().state.paramSchemeRecentKey }
+        if (recentJson.isNotBlank()) {
+            runCatching {
+                deserializeRecentKeys(recentJson).forEach { (scheme, scopeKeys) ->
+                    recentKeyBySchemeScope[scheme] = java.util.concurrent.ConcurrentHashMap(scopeKeys)
+                }
             }
         }
         // 全方案统一执行上限（含 D2 迁入的默认方案）；F54：构造期 this 未逃逸、并发未起，
@@ -889,6 +1005,7 @@ class ParamHistoryCache(private val maxSize: Int = MAX_HISTORY_SIZE) {
                         paramSchemesJson = ""
                         paramActiveScheme = DEFAULT_SCHEME
                         paramActiveSchemeByKey = ""
+                        paramSchemeRecentKey = ""
                     }
                 }
                 val app = runCatching { com.intellij.openapi.application.ApplicationManager.getApplication() }.getOrNull()
@@ -898,6 +1015,7 @@ class ParamHistoryCache(private val maxSize: Int = MAX_HISTORY_SIZE) {
                     fallbackStorage[SCHEMES_STORAGE_KEY] = ""
                     fallbackStorage[ACTIVE_SCHEME_STORAGE_KEY] = DEFAULT_SCHEME
                     fallbackStorage[ACTIVE_BY_KEY_STORAGE_KEY] = ""
+                    fallbackStorage[RECENT_KEY_STORAGE_KEY] = ""
                 }
             }
         }
@@ -934,6 +1052,9 @@ class ParamHistoryCache(private val maxSize: Int = MAX_HISTORY_SIZE) {
 
         /** T-DevAcceptFix2 ①：按键激活指针的测试环境静态存储键（IDE 环境走 PluginSettings 同名字段）。 */
         private const val ACTIVE_BY_KEY_STORAGE_KEY = "paramActiveSchemeByKey"
+
+        /** T-PresetMethodBinding：方案×方法最近保存键的测试环境静态存储键（IDE 环境走同名字段）。 */
+        private const val RECENT_KEY_STORAGE_KEY = "paramSchemeRecentKey"
 
         /** 持久化 key（IDE 环境：PluginSettings.State.paramHistoryJson 字段；测试环境：静态存储 key）。 */
         private const val STORAGE_KEY = "paramHistory"

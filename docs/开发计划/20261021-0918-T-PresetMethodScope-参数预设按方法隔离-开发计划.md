@@ -206,3 +206,14 @@ fun computeKey(tableName: String?, rawSql: String): String? {
 - 定向：同方法改 SQL 后切回预设仍能召回同名参数；改名前参数名不在白名单时不回填；勾选态不回落（构造「改 SQL 后条件 id 移位」语料，断言不会把旧勾选套到新条件上）。
 - 反向：摘掉指针回落 → 改 SQL 用例红；摘掉白名单过滤 → 脏键累积用例红；摘掉结构态排除 → 错位用例红。
 
+### 实施记录
+
+| 日期 | 事项 |
+|---|---|
+| 2026-10-21 | 绑定阶段实施（同分支后续提交）。`paramSchemeRecentKey` 嵌套 JSON 持久化；三条写路径（`saveForScheme` / `saveAsScheme` / 惰性迁移）刷新 `(方案, scope) → 键` 指针；`recallRecent` 只做指针回落，与 `recall`（精确 + 旧键）分工。 |
+| 2026-10-21 | 实施中发现并修掉一个衔接缺口：改 SQL 后新键在方案桶里没有条目，`activeSchemeFor` 按「桶里有无条目」判定会回落默认方案，回落链在这里就断了。改为「最近键指针命中也算该方案在此键下有效」。反向探针 B4 证明该兜底不可省。 |
+| 2026-10-21 | 面板收敛：`recallFromHistory` 分三段（精确缓存 → 同方法最近键 → 历史快照）；回落来源只回填 `currentParamSources()`（从结果模型取，不能用刚被清场的 `paramValues.keys`），且不恢复 `__chk__`/`__fnull__`/`__fev__` 结构态。`syncSchemeCombo` 把「已激活但名单里没有」的方案补进下拉。 |
+| 2026-10-21 | 定向 **98/0/0/0**：`ParamHistoryCacheBindingTest` 7、`ParamHistoryCacheScopeTest` 11、`ParamHistoryCacheTest` 28、`SqlPreviewPanelParamSchemesTest` 29、`ParamSchemeManagerDialogTest` 11、`SqlPreviewPanelHistorySnapshotFallbackTest` 7、`PreviewOriginScopeTest` 4、`SqlPreviewServiceOriginScopeTest` 1。 |
+| 2026-10-21 | 反向：B1 摘指针写入 → 5 红（4 数据层 + 1 面板）；B2 摘回落白名单 → 1 红；B3 摘结构态排除 → 1 红；B4 摘激活指针兜底 → 5 红。恢复后复绿。 |
+| 2026-10-21 | R51 守卫 `testR51_生产接线在位` 同步升级：回落链文本从两级改三级，并新增一条「同方法最近键回落必须排在历史快照之前」的顺序断言（放开文本不等于放松顺序约束）。 |
+
