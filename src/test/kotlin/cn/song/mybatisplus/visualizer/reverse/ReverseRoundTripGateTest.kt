@@ -102,7 +102,7 @@ class ReverseRoundTripGateTest {
     fun `基线分布_四档计数`() {
         val counts = ReverseRoundTripCorpus.counts()
         val expected = mapOf(
-            RoundTripExpectation.ROUND_TRIP to 52,
+            RoundTripExpectation.ROUND_TRIP to 56,
             RoundTripExpectation.PARSE_OK to 7,
             RoundTripExpectation.RAW_DEGRADE to 6,
             RoundTripExpectation.PARSE_ERROR to 5,

@@ -114,6 +114,7 @@ object SqlToJavaConverter {
         subCandidates: Map<Int, Map<String, List<EntityCandidate>>>,
         format: ReverseWrapperFormat,
         invocation: JavaCodeGenerator.InvocationTarget? = null,
+        logicDeleteValue: String = DEFAULT_LOGIC_DELETE_VALUE,
     ): String {
         return results.mapIndexed { index, item ->
             val result = item.result
@@ -131,9 +132,11 @@ object SqlToJavaConverter {
                     subEntities[alias] = JavaCodeGenerator.EntityTarget(
                         className = className,
                         columnToField = first.tableInfo.columns.associate { it.columnName to it.fieldName },
+                        logicDeleteColumn = first.tableInfo.logicDeleteColumn,
+                        logicDeleteValue = logicDeleteValue,
                     )
                 }
-                generateCode(result, candidates.firstOrNull(), format, invocation, subEntities)
+                generateCode(result, candidates.firstOrNull(), format, invocation, subEntities, logicDeleteValue)
             }
         }.joinToString("\n\n")
     }
@@ -273,6 +276,9 @@ object SqlToJavaConverter {
      * @param format      设置页形态配置（QUERY 形态的调用方应跳过实体查找直接传 null 候选）
      * @param invocation  T-M36.7：调用上下文（Service/Mapper + 可选 VO），null → 纯表达式
      * @param subEntities T-M37：联表副实体（别名 → 实体），多表列归属用
+     * @param logicDeleteValue T-ReverseGroupLogicDelete：逻辑删除「未删除」值（设置页
+     *                    `logicDeleteValue`，默认 "0"）——生成器据此识别 MP 自动注入的
+     *                    `AND <列> = <值>` 并跳过；由调用方读取配置传入，保持本组件纯函数。
      */
     fun generateCode(
         result: SqlReverseResult,
@@ -280,6 +286,7 @@ object SqlToJavaConverter {
         format: ReverseWrapperFormat,
         invocation: JavaCodeGenerator.InvocationTarget? = null,
         subEntities: Map<String, JavaCodeGenerator.EntityTarget> = emptyMap(),
+        logicDeleteValue: String = DEFAULT_LOGIC_DELETE_VALUE,
     ): String {
         val isJoin = result.joins.isNotEmpty()
         val wrapper = when {
@@ -292,8 +299,13 @@ object SqlToJavaConverter {
                 className = it.psiClass.name ?: JavaCodeGenerator.entityClassName(result.tableName),
                 columnToField = it.tableInfo.columns.associate { col -> col.columnName to col.fieldName },
                 subEntities = subEntities,
+                logicDeleteColumn = it.tableInfo.logicDeleteColumn,
+                logicDeleteValue = logicDeleteValue,
             )
         }
         return JavaCodeGenerator.generate(result, target, wrapper, invocation)
     }
+
+    /** 逻辑删除「未删除」值默认值（与 MP `logic-not-delete-value` 默认一致）。 */
+    const val DEFAULT_LOGIC_DELETE_VALUE = "0"
 }

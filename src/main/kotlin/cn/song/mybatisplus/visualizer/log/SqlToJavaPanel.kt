@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.log
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
+import cn.song.mybatisplus.visualizer.config.ProjectPluginSettings
 import cn.song.mybatisplus.visualizer.execute.DocWriteContext
 import cn.song.mybatisplus.visualizer.reverse.JavaCodeGenerator
 import cn.song.mybatisplus.visualizer.reverse.JavaCommentStripper
@@ -1227,6 +1228,7 @@ class SqlToJavaPanel(
                     subCandidates,
                     format,
                     buildInvocation(),
+                    reverseLogicDeleteValue(),
                 )
                 // T-TS-03：写体显式过闸（[setResultText] 内同样过闸，这里是「哪次活动在写」的语义
                 // 声明点：本拍由 BGT 派发，模态进度下 defaultModalityState 可能取到写不安全模态）
@@ -1395,8 +1397,19 @@ class SqlToJavaPanel(
         return JavaCodeGenerator.EntityTarget(
             className = className,
             columnToField = candidate.tableInfo.columns.associate { it.columnName to it.fieldName },
+            logicDeleteColumn = candidate.tableInfo.logicDeleteColumn,
+            logicDeleteValue = reverseLogicDeleteValue(),
         )
     }
+
+    /**
+     * T-ReverseGroupLogicDelete：逻辑删除「未删除」值（项目级优先 → 全局 → 兜底 "0"）——
+     * 生成器据此识别 MP 依据 `@TableLogic` 自动注入的 `AND <列> = <值>` 并跳过。
+     * 与正向注入 `effectiveLogicDeleteValue().ifBlank { "0" }` 同口径。
+     */
+    private fun reverseLogicDeleteValue(): String = runCatching {
+        ProjectPluginSettings.getInstance(project).effectiveLogicDeleteValue()
+    }.getOrNull()?.takeIf { it.isNotBlank() } ?: SqlToJavaConverter.DEFAULT_LOGIC_DELETE_VALUE
 
     /**
      * 供 SQL 日志列表联动（T-M37 P1）：写入输入区，并清空结果区与状态行提示
@@ -1612,6 +1625,7 @@ class SqlToJavaPanel(
         format,
         buildInvocation(),
         subEntities,
+        reverseLogicDeleteValue(),
     )
 
     /**
