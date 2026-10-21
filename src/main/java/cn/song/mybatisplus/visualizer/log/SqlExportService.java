@@ -46,15 +46,36 @@ public final class SqlExportService {
 
     /** 行集格式化（四格式分发）。 */
     public static String format(List<SqlExportRow> rows, SqlExportFormat format) {
+        return format(rows, format, false);
+    }
+
+    /**
+     * 行集格式化（四格式分发）。
+     *
+     * <p>R60（T-LaneB D96）：mask 开时对行集 sql 字段做<b>投影级</b>脱敏（DisplayMasker.maskDisplay，
+     * 与采集侧 Desensitizer 双条件同规则）——只改本次导出文本，调用方行集与数据层条目不动；
+     * 开关值由调用方读设置传入（本类纯逻辑不触平台设置）。</p>
+     */
+    public static String format(List<SqlExportRow> rows, SqlExportFormat format, boolean mask) {
+        java.util.List<SqlExportRow> effective = rows;
+        if (mask) {
+            java.util.List<SqlExportRow> masked = new java.util.ArrayList<>(rows.size());
+            for (SqlExportRow row : rows) {
+                masked.add(new SqlExportRow(row.time(),
+                        cn.song.mybatisplus.visualizer.util.DisplayMasker.maskDisplay(row.sql(), true),
+                        row.source(), row.durationMs()));
+            }
+            effective = masked;
+        }
         switch (format) {
             case CSV:
-                return formatCsv(rows);
+                return formatCsv(effective);
             case TSV:
-                return formatTsv(rows);
+                return formatTsv(effective);
             case TXT:
-                return formatTxt(rows);
+                return formatTxt(effective);
             case SQL:
-                return formatSql(rows);
+                return formatSql(effective);
             default:
                 throw new IllegalStateException("SqlExportService.format: unknown format " + format);
         }
@@ -196,13 +217,27 @@ public final class SqlExportService {
      * 作列（机器可读形态），SQL 字段沿用既有转义/扁平化口径。
      */
     public static String formatPortable(List<PortableSqlRow> rows, SqlExportFormat format) {
+        return formatPortable(rows, format, false);
+    }
+
+    /** R60（T-LaneB D96）：mask 开时行集 sql 投影级脱敏（同 {@code format} 口径）。 */
+    public static String formatPortable(List<PortableSqlRow> rows, SqlExportFormat format, boolean mask) {
+        java.util.List<PortableSqlRow> effective = rows;
+        if (mask) {
+            java.util.List<PortableSqlRow> masked = new java.util.ArrayList<>(rows.size());
+            for (PortableSqlRow row : rows) {
+                masked.add(new PortableSqlRow(row.dialect(), row.kind(), row.upsert(),
+                        cn.song.mybatisplus.visualizer.util.DisplayMasker.maskDisplay(row.sql(), true)));
+            }
+            effective = masked;
+        }
         switch (format) {
             case CSV:
-                return formatPortableFlat(rows, ",", SqlExportService::csvField);
+                return formatPortableFlat(effective, ",", SqlExportService::csvField);
             case TSV:
-                return formatPortableFlat(rows, "\t", SqlExportService::flattenTsv);
+                return formatPortableFlat(effective, "\t", SqlExportService::flattenTsv);
             case TXT:
-                return formatPortableTxt(rows);
+                return formatPortableTxt(effective);
             // T-ExportSqlFormat 枚举扩员波及此 when：可移植导出是 O-91 独立通道（预览面板自己的
             // 三选对话框，不提供 SQL 选项），与历史/日志导出的 SQL 格式不合并互不替代（计划 §三
             // 边界写死防顺手统一）——UI 不可能传入 SQL，防御性显式失败而非静默伪装成 TXT。
