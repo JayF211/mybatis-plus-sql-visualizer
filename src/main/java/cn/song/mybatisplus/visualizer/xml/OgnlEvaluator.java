@@ -173,6 +173,54 @@ public final class OgnlEvaluator {
         return out;
     }
 
+    /** 只识别无法静态读取的对象属性载体，不反射执行用户 getter。 */
+    public static Set<String> unsupportedPropertyPaths(String text, Map<String, Object> bindings) {
+        ParseResult parsed = parse(text);
+        if (!(parsed instanceof ParseResult.Ok ok)) {
+            return Set.of();
+        }
+        Set<String> paths = new java.util.LinkedHashSet<>();
+        walkUnsupportedPropertyPaths(ok.expr(), bindings, paths);
+        return paths;
+    }
+
+    private static void walkUnsupportedPropertyPaths(OgnlExpr expr, Map<String, Object> bindings, Set<String> paths) {
+        if (expr instanceof OgnlExpr.Chain c) {
+            walkUnsupportedPropertyPaths(c.base(), bindings, paths);
+            Object value = c.base() instanceof OgnlExpr.RootRef rootRef ? bindings.get(rootRef.name()) : null;
+            String path = c.base() instanceof OgnlExpr.RootRef root ? root.name() : "";
+            for (ChainStep step : c.steps()) {
+                if (step instanceof ChainStep.Property p) {
+                    path = path.isEmpty() ? p.name() : path + "." + p.name();
+                    if (value != null && !(value instanceof MockObject) && !(value instanceof Map<?, ?>)
+                            && !(value instanceof Collection<?>) && !(value instanceof Object[])
+                            && !(value instanceof CharSequence)) {
+                        paths.add(path);
+                    }
+                    value = property(value, p.name());
+                } else if (step instanceof ChainStep.Method m) {
+                    for (OgnlExpr a : m.args()) {
+                        walkUnsupportedPropertyPaths(a, bindings, paths);
+                    }
+                    value = null;
+                } else if (step instanceof ChainStep.Index idx) {
+                    walkUnsupportedPropertyPaths(idx.expr(), bindings, paths);
+                    value = null;
+                }
+            }
+        } else if (expr instanceof OgnlExpr.Unary u) {
+            walkUnsupportedPropertyPaths(u.operand(), bindings, paths);
+        } else if (expr instanceof OgnlExpr.Binary b) {
+            walkUnsupportedPropertyPaths(b.left(), bindings, paths);
+            walkUnsupportedPropertyPaths(b.right(), bindings, paths);
+        } else if (expr instanceof OgnlExpr.ListLiteral l) {
+            for (OgnlExpr item : l.items()) {
+                walkUnsupportedPropertyPaths(item, bindings, paths);
+            }
+        }
+        // Literal / RootRef / StaticFieldRef：无属性链，不收集
+    }
+
     private static void collectStaticRefs(OgnlExpr expr, Set<String> out) {
         if (expr instanceof OgnlExpr.StaticFieldRef s) {
             out.add(s.className() + "@" + s.fieldName());

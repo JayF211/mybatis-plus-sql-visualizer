@@ -40,6 +40,12 @@ public final class IfSqlNode implements SqlNode {
     }
 
     private boolean evaluate(DynamicContext context) {
+        // T-ExprAstPrecheck：表达式引用了静态读不到的对象属性载体 → 预警（求值照旧，展开行为不变）
+        java.util.Set<String> unknownPaths = OgnlEvaluator.unsupportedPropertyPaths(test, context.getBindings());
+        if (!unknownPaths.isEmpty()) {
+            context.getErrors().add("条件表达式无法静态读取对象属性 " + String.join(", ", unknownPaths)
+                    + "：'" + test + "'；请核对运行时 SQL 或在预览面板覆盖条件");
+        }
         EvalResult result = OgnlEvaluator.evaluate(test, context.getBindings(), context.getStaticFieldValues());
         if (result instanceof EvalResult.Ok ok) {
             return OgnlEvaluator.isTrue(ok.value());
