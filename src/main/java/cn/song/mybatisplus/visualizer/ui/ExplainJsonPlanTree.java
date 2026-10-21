@@ -199,4 +199,124 @@ public final class ExplainJsonPlanTree {
         }
         return true;
     }
+
+    // ---------- R61（V113①）：计划节点稳定标识与结构化提取 ----------
+
+    /**
+     * R61（V113①）：JSON 计划节点的<b>结构化视图</b>（跨次对比的对齐底座）。
+     *
+     * <p>节点稳定标识双档：</p>
+     * <ul>
+     *  <li>{@link #path()}＝结构位置路径（{@code "0"}、{@code "0.2"}——根序.子序，同次结果内唯一；</li>
+     *  <li>{@link #matchKey()}＝对齐键 {@code nodeType on relation#出现序}（同键多次出现按前序
+     *      遍历出现序消歧）——跨次对比按本键对齐，兄弟增删只挪 path 不影响同键节点配对。</li>
+     * </ul>
+     */
+    public record PlanNodeInfo(
+            /** 结构位置路径（根序.子序.……，同次结果内稳定唯一）。 */
+            @NotNull String path,
+            /** 对齐键（nodeType + relation + 出现序——跨次对比的节点身份）。 */
+            @NotNull String matchKey,
+            /** 人读标签（与展示树 planLabel 同口径）。 */
+            @NotNull String label,
+            @NotNull String nodeType,
+            @Nullable String relation,
+            /** Plan Rows，缺省退 Actual Rows（EXPLAIN ANALYZE）。 */
+            @Nullable Long rows,
+            /** Total Cost（PG JSON 档；缺 null 不虚标）。 */
+            @Nullable Double cost,
+            /** 其余标量键值（diff 细节比对面；对象/数组值跳过——标量才可比）。 */
+            @NotNull Map<String, String> extras) {
+    }
+
+    /**
+     * 把 EXPLAIN 结果行扁平化为计划节点清单（前序遍历；解析失败/非计划对象 → 空清单——
+     * 诚实降级：没有可对齐的结构就没有对比，调用方按无可比处理）。
+     */
+    @NotNull
+    public static List<PlanNodeInfo> flattenPlanNodes(@NotNull List<List<String>> rows) {
+        List<PlanNodeInfo> out = new ArrayList<>();
+        Map<String, Integer> ordinals = new java.util.HashMap<>();
+        int[] rootOrdinal = {0};
+        for (List<String> row : rows) {
+            for (String cell : row) {
+                String text = cell == null ? "" : cell.trim();
+                if (text.isEmpty()) continue;
+                JsonElement parsed;
+                try {
+                    parsed = JsonParser.parseString(text);
+                } catch (Throwable t) {
+                    parsed = null;
+                }
+                if (parsed == null) continue;
+                collectPlanObjects(parsed, obj -> {
+                    String nodeType = stringOf(obj, "Node Type");
+                    if (nodeType == null) return;
+                    String relation = stringOf(obj, "Relation Name");
+                    if (relation == null) relation = stringOf(obj, "Alias");
+                    String base = nodeType + (relation != null ? " on " + relation : "");
+                    int ord = ordinals.merge(base, 1, Integer::sum) - 1;
+                    Long rowsVal = longOf(obj, "Plan Rows");
+                    if (rowsVal == null) rowsVal = longOf(obj, "Actual Rows");
+                    Double costVal = doubleOf(obj, "Total Cost");
+                    Map<String, String> extras = new java.util.LinkedHashMap<>();
+                    for (Map.Entry<String, JsonElement> e : obj.entrySet()) {
+                        String k = e.getKey();
+                        JsonElement v = e.getValue();
+                        if (!LABEL_KEYS.contains(k) && !"Plans".equals(k) && !"Total Cost".equals(k)
+                                && v.isJsonPrimitive()) {
+                            extras.put(k, primitiveText(v));
+                        }
+                    }
+                    out.add(new PlanNodeInfo(
+                            String.valueOf(rootOrdinal[0]),
+                            base + "#" + ord,
+                            base + (rowsVal != null ? " (rows=" + rowsVal + ")" : ""),
+                            nodeType,
+                            relation,
+                            rowsVal,
+                            costVal,
+                            extras));
+                    rootOrdinal[0]++;
+                });
+            }
+        }
+        return out;
+    }
+
+    /** 递归收集计划对象（顶层包装塌缩语义与展示树一致：数组摊平、{@code {"Plan": …}} 单键包装下钻）。 */
+    private static void collectPlanObjects(@NotNull JsonElement el,
+                                           @NotNull java.util.function.Consumer<JsonObject> sink) {
+        if (el.isJsonArray()) {
+            for (JsonElement item : el.getAsJsonArray()) {
+                collectPlanObjects(item, sink);
+            }
+        } else if (el.isJsonObject()) {
+            JsonObject obj = el.getAsJsonObject();
+            if (obj.get("Node Type") != null) {
+                sink.accept(obj);
+                JsonElement plans = obj.get("Plans");
+                if (plans != null) {
+                    collectPlanObjects(plans, sink);
+                }
+            } else if (obj.size() == 1) {
+                collectPlanObjects(obj.entrySet().iterator().next().getValue(), sink);
+            }
+        }
+    }
+
+    @Nullable
+    private static Double doubleOf(@NotNull JsonObject obj, @NotNull String key) {
+        JsonElement el = obj.get(key);
+        if (el == null || !el.isJsonPrimitive()) return null;
+        try {
+            return el.getAsDouble();
+        } catch (Throwable t) {
+            try {
+                return Double.parseDouble(el.getAsString().trim());
+            } catch (Throwable t2) {
+                return null;
+            }
+        }
+    }
 }
