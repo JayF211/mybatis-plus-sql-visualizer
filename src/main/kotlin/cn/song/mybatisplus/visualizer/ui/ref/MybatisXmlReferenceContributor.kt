@@ -160,10 +160,16 @@ class BeanPropertyReference(value: XmlAttributeValue) : SoftXmlAttributeReferenc
         val project = value.project
         var tag: XmlTag? = (value.parent as? XmlAttribute)?.parent as? XmlTag
         var depth = 0
+        // F97（T-PerfSweep26）：同一 resolve 会话内的类名解析结果 memo——祖先链每层最多问
+        // HOLDER_ATTRIBUTES.size 个属性，最坏 24×5 次 resolveClass；同层多属性常解析出同一类，
+        // 局部 Map 把重复 resolveClass 压成查表（会话级、无 stale 面：跨 resolve 不保留）。
+        val resolved = HashMap<String, PsiClass?>(HOLDER_ATTRIBUTES.size * 2)
         while (tag != null && depth++ < MAX_ANCESTOR_DEPTH) {
             for (name in HOLDER_ATTRIBUTES) {
                 val raw = tag.getAttributeValue(name) ?: continue
-                MybatisXmlTargets.resolveClass(project, value, raw)?.let { return it }
+                val hit = if (resolved.containsKey(raw)) resolved[raw] else MybatisXmlTargets.resolveClass(project, value, raw)
+                resolved[raw] = hit
+                if (hit != null) return hit
             }
             tag = tag.parentTag
         }

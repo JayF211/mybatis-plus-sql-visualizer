@@ -243,4 +243,31 @@ class EntityClassResolverHeavyTest : HeavyPlatformTestCase() {
         assertEquals(2, notices.size)
         assertEquals(setOf(myModule.name, b.name), notices.map { it.first }.toSet())
     }
+
+    /**
+     * F102（T-PerfSweep26）：歧义提示去重集有界。
+     *
+     * 造 [max] + 5 个互不相同的歧义实体名，逐一触发提示后断言去重集条目数不超过上界
+     * （修复前是无界 Set，条目数会随实体数线性增长）。
+     */
+    fun testAmbiguityNoticeDedupSetIsBounded() {
+        val max = EntityClassResolver.ambiguityNoticeMaxForTest()
+        val context = source(myModule, "host.Query")
+        val count = max + 5
+        for (i in 0 until count) {
+            // 同名双份 → 每次解析都是歧义；不同序号 → 不同的去重键
+            source(myModule, "a$i.Amb$i")
+            source(myModule, "b$i.Amb$i")
+        }
+        ready()
+        for (i in 0 until count) {
+            assertNull(
+                "同名双份应 fail closed（$i）",
+                EntityClassResolver.resolveClassByName(project, "Amb$i", context),
+            )
+        }
+        val size = EntityClassResolver.ambiguityNoticeCountForTest(project)
+        assertTrue("去重集应有条目（实际 $size）", size > 0)
+        assertTrue("去重集条目数 $size 不得超过上界 $max（F102 有界 LRU）", size <= max)
+    }
 }
