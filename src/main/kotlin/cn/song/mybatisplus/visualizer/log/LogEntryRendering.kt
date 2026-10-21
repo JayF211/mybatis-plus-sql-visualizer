@@ -280,10 +280,13 @@ internal fun formatUpdateCountFragment(entry: LogSqlEntry, isSelected: Boolean):
     return "(${u} rows) " to SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, color)
 }
 
+/** T-PerfSweep26-07（F105）：报错片段空白折叠正则提文件级常量——原 inline 构造在渲染热路径每次重建，提常量后一次复用。 */
+private val ERROR_FRAGMENT_WHITESPACE_REGEX = Regex("\\s+")
+
 /** M56 T-M56-05：报错片段（errorText 同列展示；红字截断首段，悬停完整文本在预览窗）。 */
 internal fun formatErrorFragment(entry: LogSqlEntry): Pair<String, SimpleTextAttributes>? {
     val err = entry.errorText ?: return null
-    val oneLine = err.replace(Regex("\\s+"), " ")
+    val oneLine = err.replace(ERROR_FRAGMENT_WHITESPACE_REGEX, " ")
     val text = if (oneLine.length > 80) oneLine.substring(0, 80) + "…" else oneLine
     return "⛔ $text " to SimpleTextAttributes(SimpleTextAttributes.STYLE_PLAIN, Color(0xD32F2F))
 }
