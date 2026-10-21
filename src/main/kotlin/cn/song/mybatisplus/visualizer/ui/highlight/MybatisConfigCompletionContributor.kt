@@ -6,8 +6,10 @@ import com.intellij.codeInsight.completion.CompletionProvider
 import com.intellij.codeInsight.completion.CompletionResultSet
 import com.intellij.codeInsight.completion.CompletionType
 import com.intellij.codeInsight.lookup.LookupElementBuilder
+import com.intellij.lang.xml.XMLLanguage
 import com.intellij.openapi.project.DumbAware
 import com.intellij.patterns.PlatformPatterns
+import com.intellij.patterns.PsiElementPattern
 import com.intellij.psi.PsiElement
 import com.intellij.psi.util.PsiTreeUtil
 import com.intellij.psi.xml.XmlAttribute
@@ -40,7 +42,7 @@ class MybatisConfigCompletionContributor : CompletionContributor(), DumbAware {
     init {
         extend(
             CompletionType.BASIC,
-            PlatformPatterns.psiElement(),
+            completionPositionPattern,
             object : CompletionProvider<CompletionParameters>() {
                 override fun addCompletions(
                     parameters: CompletionParameters,
@@ -98,6 +100,19 @@ class MybatisConfigCompletionContributor : CompletionContributor(), DumbAware {
     internal fun configChildTags(parentTagName: String?): List<String> = CONFIG_CHILD_TAGS[parentTagName].orEmpty()
 
     internal companion object {
+        /**
+         * T-PerfSweep26 F101：补全位置模式——限定 XML 语言元素。
+         *
+         * 原为无约束 `PlatformPatterns.psiElement()`：全 IDE 任意语言每次补全调用都进 provider 体，
+         * 靠首行 `as? XmlFile` O(1) 早退兜底。`withLanguage` 是 [PsiElementPattern] 上最小可用的
+         * 语言约束（243 sources jar `PsiElementPattern.java:268`，accepts 即 `t.getLanguage().equals(language)`）；
+         * mybatis-config.xml 是标准 XML 语言，文件内任意补全位（XmlToken 等）语言均为 XMLLanguage，
+         * 约束后行为不变；注入片段（如 mapper.xml 里的 SQL）语言非 XML，本就不该进本贡献器。
+         */
+        internal val completionPositionPattern: PsiElementPattern.Capture<PsiElement> =
+            PlatformPatterns.psiElement().withLanguage(XMLLanguage.INSTANCE)
+
+
         /** 29 个 `<setting name>` 键（MyBatis 3.5.19 实测，见类 KDoc）。 */
         internal val SETTING_NAMES: List<String> = listOf(
             "cacheEnabled", "lazyLoadingEnabled", "aggressiveLazyLoading", "useColumnLabel",
