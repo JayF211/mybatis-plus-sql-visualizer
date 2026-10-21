@@ -4,6 +4,7 @@ import cn.song.mybatisplus.visualizer.model.BatchColumn;
 import cn.song.mybatisplus.visualizer.model.BatchKind;
 import cn.song.mybatisplus.visualizer.model.BatchModel;
 import cn.song.mybatisplus.visualizer.model.ColumnInfo;
+import cn.song.mybatisplus.visualizer.model.LimitClause;
 import cn.song.mybatisplus.visualizer.model.SqlValue;
 import cn.song.mybatisplus.visualizer.model.TableInfo;
 import cn.song.mybatisplus.visualizer.psi.ExpressionEvaluator;
@@ -329,7 +330,7 @@ public final class JpaCrudOperationConverter {
             if (entityClass == null) return null;
             TableInfo table = new JpaEntityResolver().resolve(entityClass);
             if (table.getEntityClassName().isBlank()) return null;
-            Dialect dialect = PsiDialect.currentDialect();
+            Dialect dialect = PsiDialect.currentDialect(method.getProject());
             ColumnInfo idColumn = firstIdColumn(table);
             Build build = buildRepositoryMethod(
                     methodName, table, idColumn, new PsiExpression[0], "", dialect, resolveVariables);
@@ -477,7 +478,7 @@ public final class JpaCrudOperationConverter {
         if (entityClass == null) return null;
         TableInfo table = new JpaEntityResolver().resolve(entityClass);
         if (table.getEntityClassName().isBlank()) return null;
-        Dialect dialect = PsiDialect.currentDialect();
+        Dialect dialect = PsiDialect.currentDialect(call.getProject());
         ColumnInfo idColumn = firstIdColumn(table);
         PsiExpression[] args = call.getArgumentList().getExpressions();
         String prefix = columnParamPrefix(call);
@@ -558,9 +559,9 @@ public final class JpaCrudOperationConverter {
                         args.length > 0 ? args[0] : null, idColumn, null, resolveVariables, dialect);
                 build = new Build(
                         "SELECT 1\nFROM " + dialect.quoteIfKeyword(table.getTableName())
-                                + "\nWHERE " + condition.where + "\nLIMIT 1",
+                                + "\nWHERE " + condition.where + "\n" + dialect.renderLimit(new LimitClause(null, 1L)),
                         condition.params,
-                        List.of("existsById：命中即真语义（Spring Data 运行时渲染 SELECT 1 ... LIMIT 1 形态）"));
+                        List.of("existsById：命中即真语义（按当前方言只取首行，运行时语句以实际日志为准）"));
                 break;
             }
             case "count":
@@ -659,7 +660,7 @@ public final class JpaCrudOperationConverter {
     private static JpaCrudPreview convertEntityManagerCall(
             PsiMethodCallExpression call, String methodName, boolean resolveVariables) {
         if (!ENTITY_MANAGER_METHODS.contains(methodName)) return null;
-        Dialect dialect = PsiDialect.currentDialect();
+        Dialect dialect = PsiDialect.currentDialect(call.getProject());
         PsiExpression[] args = call.getArgumentList().getExpressions();
 
         // 存储过程（T-J16 基础形态）：过程名直传 + ? 占位（@StoredProcedureParameter 静态不可得）
@@ -760,7 +761,7 @@ public final class JpaCrudOperationConverter {
         // HQL / NAMED_QUERY 字符串承载 → 交回 previewCustomDaoHql 管道（本转换器不认领）
         if (kind != DaoQueryKind.ENTITY_OP) return null;
 
-        Dialect dialect = PsiDialect.currentDialect();
+        Dialect dialect = PsiDialect.currentDialect(call.getProject());
         PsiExpression[] args = call.getArgumentList().getExpressions();
 
         // 实体操作均需实体（Class 字面量实参或实体类型实参，isJpaMappedEntity 负例守卫）
