@@ -116,11 +116,26 @@ function Invoke-Push {
     return @{ Name = $Name; Ok = $false; Detail = ($output | Select-Object -Last 3) -join ' / ' }
 }
 
-# GitHub 专用：直连（含重试）→ 失败回退本地代理（含重试）；-NoProxy 时只直连
+# GitHub 专用：代理优先（含重试）→ 代理不通时回落直连（含重试）
 #
-# 为什么必须带重试：本机到 github.com:443 的失败是**间歇性传输层中断**（实测同一分钟内前 4 次
-# "Couldn't connect / Connection was reset / SSL_ERROR_SYSCALL"，第 5 次直接成功；同期 curl 打
-# api.github.com 3/3 都是 200）。这不是配置错误，重试就能过——不重试会把偶发抖动报成「推送失败」。
+# 传输策略（2026-10-22 用户口径：网络问题用本地代理解决）：
+#   先探测代理是否真的能出去（不是只看端口在听），探通就走代理；探不通再回落直连。
+#   探测选 5 秒超时的一次 HEAD 请求——mihomo 节点失效时端口照常在听、但握手一律 000，
+#   只看端口会把「代理挂了」误判成「能用」。
+#
+# 为什么还要重试：两个方向都会间歇性中断（实测同一分钟内直连前 4 次
+# "Couldn't connect / Connection was reset / SSL_ERROR_SYSCALL"、第 5 次成功）。
+# 不重试会把偶发抖动报成「推送失败」。
+function Test-ProxyUsable {
+    param([int]$TimeoutSec = 5)
+    if ($NoProxy) { return $false }
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    $code = & curl.exe -s -x "http://127.0.0.1:$ProxyPort" -m $TimeoutSec -o NUL -w "%{http_code}" "https://api.github.com/zen" 2>$null
+    $ErrorActionPreference = $prevEap
+    return ($code -eq '200')
+}
+
 function Invoke-PushWithFallback {
     param(
         [string]$Name,
@@ -143,14 +158,21 @@ function Invoke-PushWithFallback {
         return $r
     }
 
-    $r = Attempt -Label $Name -ExtraGitArgs @('-c', 'credential.helper=')
-    if ($r.Ok -or $NoProxy) { return $r }
-
-    Write-Note "$Name 直连 $MaxAttempts 次均失败，改走本地代理 127.0.0.1:$ProxyPort"
-    return Attempt -Label "$Name(proxy)" -ExtraGitArgs @(
+    $proxyArgs = @(
         '-c', "http.proxy=http://127.0.0.1:$ProxyPort",
         '-c', 'credential.helper='
     )
+    $directArgs = @('-c', 'credential.helper=')
+
+    if (Test-ProxyUsable) {
+        Write-Note "$Name 走本地代理 127.0.0.1:$ProxyPort"
+        $r = Attempt -Label $Name -ExtraGitArgs $proxyArgs
+        if ($r.Ok) { return $r }
+        Write-Note "$Name 代理 $MaxAttempts 次均失败，回落直连"
+    } else {
+        Write-Note "$Name 代理探测不通（或 -NoProxy），走直连"
+    }
+    return Attempt -Label "$Name(direct)" -ExtraGitArgs $directArgs
 }
 
 # ---- 1. Gitee（主仓）----
