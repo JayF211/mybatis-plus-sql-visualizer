@@ -85,6 +85,8 @@
 
 **只克隆插件仓库直接跑 `testShards` 会失败。** 分片里有 5 个 `Demo*` 用例会硬断言兄弟目录 `../mybatis-plus-sql-visualizer-demo` 下的真实源码存在；`testDatabase` / `testDb*` 和 `e2eFakeIde` 还需要本地 MySQL。`testFast` 不需要这些前置。
 
+测试 demo 是独立仓库 [mybatis-plus-sql-visualizer-demo](https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer-demo)（MIT），包含 MP / MPJ / JPA / 多 ORM 等各主题的 Spring Boot 示例工程；插件仓库不复制它的源码，只钉定版本。
+
 | 测试入口 | 测试 demo | 本地 MySQL | 缺省行为 |
 |---|---|---|---|
 | `./gradlew testFast` | 不需要 | 不需要 | 直接跑 |
@@ -109,7 +111,14 @@ bash dev-support/test-demo/setup-test-env.sh
 
 `testShards` 与 `testDatabase` 会先执行 `verifyDemoFixture`：缺 demo 时在测试启动前失败并给出上述设置命令，不会等 5 个分片各跑一遍才在 `Demo*` 断言上报红。确实要跳过预检时加 `-PskipDemoFixtureCheck=true`（测试仍可能因缺 demo 失败）。
 
-demo 默认放在插件仓库的兄弟目录，版本钉在 `dev-support/test-demo/demo-revision.txt`。如果放在别处，用 `-PmpDemoProjectDir=<路径>`（`testShards` / `testDatabase`）或环境变量 `MPSV_DEMO_ROOT`（`e2eFakeIde`）覆盖。
+demo 默认放在插件仓库的兄弟目录，版本钉在 `dev-support/test-demo/demo-revision.txt`。手动检出：
+
+```bash
+git clone https://gitee.com/songrenshuo/mybatis-plus-sql-visualizer-demo.git \
+  ../mybatis-plus-sql-visualizer-demo
+```
+
+如果放在别处，用 `-PmpDemoProjectDir=<路径>`（`testShards` / `testDatabase`）或环境变量 `MPSV_DEMO_ROOT`（`e2eFakeIde`）覆盖。
 
 ### 数据库与 SQL 脚本
 
