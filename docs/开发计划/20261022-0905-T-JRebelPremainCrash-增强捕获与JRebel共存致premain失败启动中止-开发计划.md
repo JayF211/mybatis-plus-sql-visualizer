@@ -453,3 +453,50 @@ prepare面织入_JdbcConnection零类加载   FAILED
 修法：改为在**独立 `URLClassLoader`**（只含 H2 code source）里 `Class.forName(name, false, loader)` 取同名类。类名仍逐字命中登记表（谓词只按名字判定），但系统加载器的 `findLoadedClass` 保持 null，守卫的鉴别力完全保留。
 
 这与 §10.10 是同一类错误的两个面：**新增测试对共享状态（项目级服务字段 / 类加载器状态）的副作用，必须限定在自己的作用域内**。两处都是我新用例造成、既有守卫正确报警，改的都是新用例而非既有断言。
+
+### 10.12 用户日常 IDE 真机验收（2026-10-22）
+
+用户已把 **2026.10.23-beta.1** 装进日常 IDEA（`~/AppData/Roaming/JetBrains/IntelliJIdea2026.2/plugins/mybatis-plus-sql-visualizer`，lib 下 jar 时间戳 10:28）。核实安装产物确含本次修复：
+
+| 检查项 | 旧版 2026.10.16 | 已装 2026.10.23-beta.1 |
+|---|---|---|
+| 内嵌 agent 条目数 | 137 | **138** |
+| `asm/Opcodes.class` | 在位 | 在位 |
+| `WeaveSpecs.class`（本次修复标志） | **无** | **有** |
+
+真机对照（Corretto 21.0.12.1，把已装 jar 内嵌 agent 释放出来直接 `-javaagent`）：
+
+| 组 | 产物 | 结果 |
+|---|---|---|
+| A | 已装 agent，完整 | `matched=0` + 应用正常启动 |
+| B | 已装 agent **删掉 `asm/Opcodes`**（等价现场 ASM 不可见） | **应用正常启动**，`matched=0`，无 FATAL |
+| C（负对照） | 旧版 2026.10.16 agent 同样删掉 `Opcodes` | **`NoClassDefFoundError: ...asm/Opcodes` @ `DriverRegistry.isStatementWeavable:61` → `FATAL ERROR ... processJavaStart failed`** |
+
+C 组与用户报障日志逐字同形，B 组同一缺陷形态下正常启动——修复在**用户已安装的真实产物**上成立。
+
+**给用户的操作口径**：`ReproMain#main` 不能直接 Run（需 `格名 + agentJar` 两个参数，缺参即打印 usage）；它是复现装置（模拟敌意加载器），不是真机验收入口。真机验收应直接在日常 IDEA 里用**开启增强捕获 + JRebel 启动器**跑真实应用。
+
+### 10.13 用户日常 IDEA 成功启动（2026-10-22 10:43）与决定性对照
+
+用户在 IDEA 里带 **JRebel 2026.4.0（`-agentpath:jrebel64.dll`）+ 调试器 + async-profiler + Cool Request 两个 agent** 启动 `mybatis-plus-demo`（JDK 8），结果：
+
+```
+[SqlVisAgent] attach retransform: matched=0 wove=0 ...
+Tomcat started on port(s): 8081 (http)
+Started MybatisPlusDemoApplication in 10.859 seconds
+```
+
+**应用正常启动，无 FATAL。** 所用 agent 经核实为修复版：`~/AppData/Roaming/JetBrains/IntelliJIdea2026.2/plugins/mpsv-agent/mps-sql-agent-783177132.jar`，**138 条目、含 `WeaveSpecs`**。
+
+**但 `matched=0` 意味着这次没走到崩溃点**——premain 时 `getAllLoadedClasses()` 里还没有语句面类，三连谓词未被调用。仅凭该次成功不足以证明修复命中用户路径，故追加决定性对照（Corretto 21.0.12.1）：
+
+前置 agent 在 premain 里 `Class.forName("com.mysql.cj.jdbc.StatementImpl")` 预热语句类（复刻「premain 时语句类已加载」），然后再挂本插件 agent：
+
+| 组 | 产物 | 读数 |
+|---|---|---|
+| 决定组 | **已装修复版** agent + jar 内删掉 `asm/Opcodes` | **`matched=1 wove=1 ... transformFailed=1` + `[App] OK`，正常启动** |
+| 负对照 | **旧版 2026.10.16** agent + 同样删掉 `Opcodes` | `NoClassDefFoundError: ...asm/Opcodes` @ `DriverRegistry.isStatementWeavable:61` → **`FATAL ERROR ... processJavaStart failed`** |
+
+两组的唯一差别是 agent 版本，其余（前置预载、缺失类、JDK）完全相同。`matched=1` 证明循环确实进入并走到了用户崩溃的那一行；决定组在同一行失败后仍完成启动（`transformFailed=1` 即该次织入被兜住），负对照则致命。
+
+**结论**：修复在「用户已安装的真实产物」+「故障点确实被触达」的条件下成立。用户现场未崩的直接原因可能是其 premain 时刻恰好无语句类命中（`matched=0`），但一旦命中即会崩——这正是本次修复要消除的风险面。
