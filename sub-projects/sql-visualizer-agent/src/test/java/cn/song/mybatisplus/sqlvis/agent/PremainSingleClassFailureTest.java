@@ -57,12 +57,25 @@ public class PremainSingleClassFailureTest {
     private PrintStream originalErr;
     private ByteArrayOutputStream capturedErr;
 
-    /** 隔离加载器：只含 H2 所在 code source。 */
+    /**
+     * 隔离加载器：只含 H2 所在 code source。
+     *
+     * <p><b>不得用 {@code Class.forName("org.h2.Driver")} 取 code source</b>：那会把
+     * {@code org.h2.Driver} 装进系统加载器，直接破坏 {@code ZeroLoadClassWriterWeaveTest}
+     * 「h2.Driver 未被装载」的前置断言（20261022 全量实测：同 JVM 内本类先跑即令该守卫 3 例误红，
+     * 单类跑全绿——正是这条 {@code Class.forName} 造成的）。改为按资源定位 jar：
+     * {@code getResource} 只解析 URL，不加载也不初始化任何 H2 类。
+     */
     private static URL[] isolatedClasspath() {
         try {
-            final URL loc = Class.forName("org.h2.Driver")
-                    .getProtectionDomain().getCodeSource().getLocation();
-            return new URL[]{loc};
+            final ClassLoader cl = PremainSingleClassFailureTest.class.getClassLoader();
+            final URL resource = cl.getResource("org/h2/Driver.class");
+            if (resource == null) {
+                return new URL[0];
+            }
+            final String url = resource.toString();
+            final int sep = url.indexOf("!/");
+            return new URL[]{new URL(sep >= 0 ? url.substring(0, sep + 2) : url)};
         } catch (Throwable t) {
             return new URL[0];
         }

@@ -208,19 +208,29 @@ class AgentManagerAttachAfterDegradeTest : BasePlatformTestCase() {
 
         val pid = 8_100_005L
         val attachCalls = AtomicInteger()
+        // 只统计**目标 pid** 的工厂调用：AgentManager 是项目级服务，同 JVM 内其他测试类
+        // 排队的迟到任务（真实 dispatcher 上的 3s 静默等待）会带着自己的 pid 打到本类的
+        // 工厂缝上——计全量会把别人的调用算成本用例的，实测同包全跑时稳定 +1 误红。
+        val probedPids = java.util.Collections.synchronizedList(mutableListOf<Long>())
         // 让身份探测放行、去抖窗归零、任务同步执行——把链路收束到「判定 → 排队 → attach」
         manager.attachTargetInspector = { _, _, _ -> AgentAttachTarget.Decision.APPLICATION }
         manager.attachDebounceMs = 0L
         manager.attachTaskDispatcher = { it.run() }
         manager.attachSessionFactory = { p ->
-            attachCalls.incrementAndGet()
-            if (p == pid) newSession(p) else null
+            probedPids.add(p)
+            if (p == pid) {
+                attachCalls.incrementAndGet()
+                newSession(p)
+            } else {
+                null
+            }
         }
 
         manager.onProcessAppeared(FakeProcessHandler(pid))
 
         assertEquals(
-            "降级后真实入口必须仍走到 attach（把判定改成提前 return 即红）",
+            "降级后真实入口必须仍走到 attach（把判定改成提前 return 即红）；" +
+                "目标 pid 调用次数；观测到的全部 pid=$probedPids",
             1, attachCalls.get(),
         )
         assertTrue("会话应已建立", manager.sessions.isNotEmpty())
