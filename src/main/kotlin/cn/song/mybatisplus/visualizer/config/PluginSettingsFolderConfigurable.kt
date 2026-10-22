@@ -93,7 +93,7 @@ class PluginSettingsFolderConfigurable : Configurable {
             border = JBUI.Borders.empty(10, 16, 10, 16)
             add(JBLabel("<html><b>增强捕获</b>：运行即采集真实参数、耗时、影响行数与目标库</html>"))
             add(JBLabel("<html><b>免库预览</b>：Wrapper / mapper XML / JPA·HQL / 注解 SQL 写前静态还原</html>"))
-            add(JBLabel("<html><b>MCP 十工具</b>：AI agent 直连渲染 / 审计 / 执行计划（Ultimate）</html>"))
+            add(JBLabel("<html><b>MCP 十一工具</b>：AI agent 直连渲染 / 审计 / 执行计划（Ultimate）</html>"))
             add(JBLabel("<html>兼容矩阵与文档：<a href=\"https://sql-visualizer.jvtools.cn\">sql-visualizer.jvtools.cn</a></html>"))
         }
 
