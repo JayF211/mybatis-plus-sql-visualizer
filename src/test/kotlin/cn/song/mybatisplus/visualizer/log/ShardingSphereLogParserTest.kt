@@ -129,11 +129,16 @@ class ShardingSphereLogParserTest {
         val row = SqlExportRow("", entry.restoredSql, entry.source.name)
         for (format in SqlExportFormat.values()) {
             val exported = SqlExportService.format(listOf(row), format)
-            assertEquals(entry.rawSql.count { it == '?' }, exported.count { it == '?' })
-            assertTrue(!exported.contains(" ::: "))
-            assertTrue(!exported.contains("BOOK"))
-            assertTrue(!exported.contains("001"))
-            assertTrue(!exported.contains("[0, 30]"))
+            // SQL 格式文件头带 `-- Exported N ... at yyyy-MM-dd HH:mm:ss.SSS` 的实时时间戳，
+            // 毫秒恰为 001 时会让整串断言假红（曾在本仓全量门禁偶发）。判据只看 SQL 内容区。
+            val content = exported.lineSequence()
+                .filterNot { it.startsWith("-- Exported ") }
+                .joinToString("\n")
+            assertEquals(entry.rawSql.count { it == '?' }, content.count { it == '?' })
+            assertTrue(!content.contains(" ::: "))
+            assertTrue(!content.contains("BOOK"))
+            assertTrue(!content.contains("001"))
+            assertTrue(!content.contains("[0, 30]"))
         }
     }
 
