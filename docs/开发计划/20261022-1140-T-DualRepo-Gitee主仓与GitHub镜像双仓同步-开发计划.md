@@ -178,4 +178,43 @@ git grep -n -iE "MBCHP|com\.ccnode\.codegenerator|i\.b\.c\(|BatsLogConfig|maxPre
 
 ## 十一、实施记录
 
-（实施时回填）
+### 11.1 完成情况（2026-10-22）
+
+| 项 | 结果 |
+|---|---|
+| GitHub 插件仓 | `SongRenShuo/mybatis-plus-sql-visualizer`，Public，默认分支 `master`，8 个 topics |
+| 首次镜像 | master / dev / feature/kotlin-to-java 三支 + 28 个 tag，SHA 与 Gitee 逐一相同 |
+| GitHub demo 仓 | `SongRenShuo/mybatis-plus-sql-visualizer-demo`，默认分支 `master`，7 个 topics |
+| demo 镜像 | 按 Gitee 当时的 head `74cc257` 首推，随后两端同步至 `af346ad` |
+| 提交 | 插件仓 `e45294eb`（14 文件）；demo 仓 `ef94e97` + `af346ad` |
+| 定向测试 | `XmlSynHiGatePlatformProbeTest` 17 + `XmlSynHiGateRangeTest` 10 = **27/0/0/0** |
+| 置顶引导 | GitHub Issue #1 已 pin（GraphQL `pinIssue`，`isPinned: true`）；Gitee Issue `#IKPMBU` 已建，**置顶待网页操作** |
+
+### 11.2 实施中踩到的三个坑（都是脚本层，已修进 `push-all.ps1`）
+
+**① PowerShell 把 git 的 stderr 当致命错误。** `$ErrorActionPreference = 'Stop'` 下，`git push` 输出 `Everything up-to-date`（走 stderr）会被包成 `NativeCommandError` 终止脚本——表现是 Gitee 段成功后整个脚本退出，GitHub 段根本没执行，但退出码看着正常。修法：调 git 的代码块内局部降为 `Continue`，只用 `$LASTEXITCODE` 判成败。
+
+**② 本机代理对 github.com:443 间歇性 `SSL_ERROR_SYSCALL`。** 同一分钟内多次失败、直连反而稳定。修法：GitHub 端改为**直连优先、失败回退代理**（`Invoke-PushWithFallback`），`-NoProxy` 可强制只直连。
+
+**③ DryRun 输出过令牌明文。** 首版 `-DryRun` 把完整 URL（含 `x-access-token:gho_...@`）打到屏幕。修法：display 字符串统一 `-replace 'x-access-token:[^@]+@', 'x-access-token:***@'`，并实测 `grep -c "gho_"` 为 0。
+
+另有一处非脚本坑：`.ps1` 若存为无 BOM 的 UTF-8，PowerShell 5.1 按 GBK 解码中文注释会导致语法解析失败（报 `Missing closing '}'`）。本仓 `dev-support/*.ps1` 统一 UTF-8 BOM + CRLF，新脚本照此保存。
+
+### 11.3 竞品名处置的实际落地
+
+| 位置 | 动作 |
+|---|---|
+| `XmlSynHiGate.kt` 注释块 | 去 `plugin.xml:484` / `ultimateVersionChecker` / `i.b.c()` / `MCH-Pro 3.6.7`，技术结论保留为「某商业插件的社区轨注入器被其自身平台让位门挡住」 |
+| `src/test/.../com/ccnode/fakeprobe/` | 整体迁至 `com/example/thirdparty/fakeprobe/`，`FakeCodeHelperInjector` 更名 `FakeThirdPartyInjector`。生产判定只看 `SELF_PACKAGE_PREFIX`，夹具包名无功能含义 |
+| `docs/MEMORY.md` 第 251 行 | 「（已移出公开仓）+ 文件名」占位指针 → 「第一轮 XML 语法补全与高亮能力对照调研（内部资料库）」 |
+| `docs/MEMORY.md` 第 324 行 | 「MBCHP-Pro 反编译对照」→「商业闭源插件能力对照」 |
+| `docs/memory-archive/.../project-competitive-round7.md` | 「深度解剖 / 源码解剖 / 入场解剖」→「源码通读」；zMyBatis 经 Marketplace API 核实**有公开 GitHub 仓**（104 提交），属公开源码引用 |
+
+**未动**：README 的「参考与致谢」6 项（正当致谢）、`plugin.xml` 与若干 Kotlin 注释里的名字级提及（「参考 X 的设置项」）、26 份竞品横向对比调研报告（Marketplace 公开数据 + 能力矩阵）、`reference-competitor-plugin-links.md`（公开 id 与下载数）。判据见 §8.1。
+
+### 11.4 遗留
+
+- **Gitee Issue 置顶**需网页操作（API 不支持 `pinned` 字段，PATCH 返 400）。
+- **Marketplace Source code 字段**待用户在有权限的后台改为 GitHub 地址。
+- `dev-support/push-all.ps1` 未接 GitHub demo 仓（demo 是独立仓，脚本只处理当前仓库）。若日后频繁改 demo，可复制一份到 demo 仓或加 `-Repo` 参数。
+
