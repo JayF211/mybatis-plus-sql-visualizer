@@ -183,20 +183,25 @@ git grep -n -iE "MBCHP|com\.ccnode\.codegenerator|i\.b\.c\(|BatsLogConfig|maxPre
 | 项 | 结果 |
 |---|---|
 | GitHub 插件仓 | `SongRenShuo/mybatis-plus-sql-visualizer`，Public，默认分支 `master`，8 个 topics |
-| 首次镜像 | master / dev / feature/kotlin-to-java 三支 + 28 个 tag，SHA 与 Gitee 逐一相同 |
+| 首次镜像 | master / dev / feature/kotlin-to-java 三支 + 28 个 tag |
+| 最终镜像 | 三支 SHA 三端逐一相同（master `4b50fa27` / dev `a7ef5b76` / feature `a37ef021`），tag **29/29/29** 齐平 |
 | GitHub demo 仓 | `SongRenShuo/mybatis-plus-sql-visualizer-demo`，默认分支 `master`，7 个 topics |
-| demo 镜像 | 按 Gitee 当时的 head `74cc257` 首推，随后两端同步至 `af346ad` |
-| 提交 | 插件仓 `e45294eb`（14 文件）；demo 仓 `ef94e97` + `af346ad` |
+| demo 镜像 | 按 Gitee head `74cc257` 首推，随后两端同步至 `af346ad` |
+| 提交 | 插件仓 `e45294eb` / `5b4d8b65` / `d1edf65f` / `5c39034e` / `4b50fa27`；demo 仓 `ef94e97` + `af346ad` |
 | 定向测试 | `XmlSynHiGatePlatformProbeTest` 17 + `XmlSynHiGateRangeTest` 10 = **27/0/0/0** |
 | 置顶引导 | GitHub Issue #1 已 pin（GraphQL `pinIssue`，`isPinned: true`）；Gitee Issue `#IKPMBU` 已建，**置顶待网页操作** |
 
-### 11.2 实施中踩到的三个坑（都是脚本层，已修进 `push-all.ps1`）
+### 11.2 实施中踩到的四个坑（前三个在脚本层，已修进 `push-all.ps1`）
 
 **① PowerShell 把 git 的 stderr 当致命错误。** `$ErrorActionPreference = 'Stop'` 下，`git push` 输出 `Everything up-to-date`（走 stderr）会被包成 `NativeCommandError` 终止脚本——表现是 Gitee 段成功后整个脚本退出，GitHub 段根本没执行，但退出码看着正常。修法：调 git 的代码块内局部降为 `Continue`，只用 `$LASTEXITCODE` 判成败。
 
-**② 本机代理对 github.com:443 间歇性 `SSL_ERROR_SYSCALL`。** 同一分钟内多次失败、直连反而稳定。修法：GitHub 端改为**直连优先、失败回退代理**（`Invoke-PushWithFallback`），`-NoProxy` 可强制只直连。
+**② 网络双向间歇中断。** 实测同一分钟内直连前 4 次 `Couldn't connect / Connection was reset / SSL_ERROR_SYSCALL`、第 5 次成功；同期 `curl` 打 `api.github.com` 又稳定 200。修法：`Invoke-PushWithFallback` 带重试（默认 5 次，间隔 5 秒）。
 
 **③ DryRun 输出过令牌明文。** 首版 `-DryRun` 把完整 URL（含 `x-access-token:gho_...@`）打到屏幕。修法：display 字符串统一 `-replace 'x-access-token:[^@]+@', 'x-access-token:***@'`，并实测 `grep -c "gho_"` 为 0。
+
+**④ 代理「端口在听」≠「能用」（2026-10-22 用户口径：网络问题用本地代理解决）。** 本机 `mihomo`（ClashParty 1.9.6）进程在跑、`127.0.0.1:7890` LISTENING，但对 `api.github.com` / `google.com` / `1.1.1.1` 全部返回 `000`（5/5 轮）——上游节点失效。此时若只看端口会不会听就会误判「代理可用」。修法：新增 `Test-ProxyUsable`，实打一次 5 秒超时的 HEAD 探通再决定走哪条路；顺序改为**代理优先 → 探不通回落直连**。
+
+另有一处非脚本坑：`.ps1` 若存为无 BOM 的 UTF-8，PowerShell 5.1 按 GBK 解码中文注释会导致语法解析失败（报 `Missing closing '}'`）。本仓 `dev-support/*.ps1` 统一 UTF-8 BOM + CRLF，新脚本照此保存。
 
 另有一处非脚本坑：`.ps1` 若存为无 BOM 的 UTF-8，PowerShell 5.1 按 GBK 解码中文注释会导致语法解析失败（报 `Missing closing '}'`）。本仓 `dev-support/*.ps1` 统一 UTF-8 BOM + CRLF，新脚本照此保存。
 
