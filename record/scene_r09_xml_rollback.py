@@ -1,0 +1,85 @@
+# -*- coding: utf-8 -*-
+"""R09 XML 预览「回滚 SQL」重录（T-DocsRefresh1023）。
+
+**不用 gutter**：RoleMapper.xml 的 gutter 图标很小（约 8x9 px），合成点击实测三次全部落空。
+改为「先点编辑器语句行内，再按 Alt+Shift+Q」——光标落进 `<insert id="insertBatch">` 后
+快捷键直接打开该语句预览，不弹候选框。
+
+分镜（约 12 秒）：
+1. 点 `<insert id="insertBatch">` 行内，`Alt+Shift+Q` → 预览面板（INSERT + foreach 参数），停 1.8s
+2. 「更多」菜单 → 「回滚 SQL」（首项）→ 回滚弹窗（警示 + COUNT 自查 + 逆向 DELETE），停 2.2s
+3. 点「复制」→ 复制回滚 SQL，停 0.9s
+4. 关闭回滚弹窗，停 0.7s
+5. 点蓝色主行动「复制 SQL 并关闭」，停 1.2s
+
+前置（prep）：RoleMapper.xml 打开、goto(28)、无弹窗。
+"""
+import os
+import sys
+import time
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import pyautogui
+from gifkit import Recorder, click, goto_line, wait_stable
+from robot import find_components
+
+REGION = (277, 25, 1370, 984)
+BASE = os.path.dirname(os.path.abspath(__file__))
+OUT = os.path.join(BASE, "perf", "r09_xml_rollback.mp4")
+
+OX, OY = REGION[0], REGION[1]
+
+INSERT_LINE_CLICK = (400, 660)     # <insert id="insertBatch"> 行内（region 相对）
+MORE_MENU = (1223, 208)            # 预览顶部「更多」（实测）
+ROLLBACK_ITEM = (1215, 236)        # 「更多」菜单首项 = 回滚 SQL
+RB_COPY = (890, 706)               # 回滚弹窗「复制」
+RB_CLOSE = (987, 706)              # 回滚弹窗「关闭」
+COPY_AND_CLOSE = (1115, 806)       # 预览底部蓝色主行动
+
+
+def abs_pt(p):
+    return (p[0] + OX, p[1] + OY)
+
+
+def has(xp):
+    return len(find_components(xp)) > 0
+
+
+def main():
+    goto_line(28)
+    time.sleep(0.8)
+
+    rec = Recorder(REGION, OUT)
+    time.sleep(1.0)
+    rec.start()
+    try:
+        time.sleep(0.4)
+        # 1. 光标进语句行 -> 快捷键开预览
+        click(*abs_pt(INSERT_LINE_CLICK), move_dur=0.25, pauses=(0.15, 0.5))
+        pyautogui.hotkey("alt", "shift", "q")
+        wait_stable(REGION)
+        time.sleep(1.8)
+
+        if not has("//div[@accessiblename='SQL Visualizer - SQL 预览']"):
+            raise RuntimeError("预览未打开——快捷键失效，中止录制")
+
+        # 2. 更多 -> 回滚 SQL
+        click(*abs_pt(MORE_MENU), move_dur=0.3, pauses=(0.2, 1.0))
+        click(*abs_pt(ROLLBACK_ITEM), move_dur=0.25, pauses=(0.15, 2.2))
+
+        # 3. 复制回滚 SQL
+        click(*abs_pt(RB_COPY), move_dur=0.3, pauses=(0.15, 0.9))
+        # 4. 关闭回滚弹窗
+        click(*abs_pt(RB_CLOSE), move_dur=0.3, pauses=(0.15, 0.8))
+
+        # 5. 复制 SQL 并关闭
+        click(*abs_pt(COPY_AND_CLOSE), move_dur=0.3)
+        time.sleep(1.2)
+    finally:
+        rec.stop()
+        print(f"frames={rec.frames} out={OUT}")
+
+
+if __name__ == "__main__":
+    main()
