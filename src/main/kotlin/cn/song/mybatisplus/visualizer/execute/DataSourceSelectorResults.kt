@@ -167,6 +167,21 @@ internal fun DataSourceSelector.startResultTabRetry(
 
 /** M36.5：读取 last-used 数据源名（prepareConsole 静默复用；异常兜底 null）。 */
 
+/**
+ * T-DialectGateExit：是否允许复用已准备好的共享控制台。
+ *
+ * `forceChoose`（用户显式要求换数据源）必须跳过复用，否则「切换数据源」会静默回到原目标。
+ */
+internal fun allowsSharedConsoleReuse(forceChoose: Boolean): Boolean = !forceChoose
+
+/**
+ * T-DialectGateExit：是否允许 last-used 数据源静默命中。
+ *
+ * 显式执行路径本来就不静默（保持弹窗可选）；预览准备链在 `forceChoose` 时同样不静默。
+ */
+internal fun allowsSilentLastUsed(executeAfterPrepare: Boolean, forceChoose: Boolean): Boolean =
+    !executeAfterPrepare && !forceChoose
+
 internal fun DataSourceSelector.chooseAndPrepare(
     project: Project,
     sql: String,
@@ -180,6 +195,8 @@ internal fun DataSourceSelector.chooseAndPrepare(
     dialectGateRequest: ExecutionDialectGate.Request? = null,
     onDialectGate: ((ExecutionDialectGate.Verdict) -> Unit)? = null,
     onSubmission: ((ExecutionSubmission) -> Unit)? = null,
+    /** T-DialectGateExit：强制弹数据源选择器（跳过共享控制台复用与 last-used 静默命中）。 */
+    forceChoose: Boolean = false,
 ) {
     val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
     if (!ExecuteSqlSupport.isAvailable()) {
@@ -228,7 +245,7 @@ internal fun DataSourceSelector.chooseAndPrepare(
     // M36.5.5：共享控制台命中（last-used 数据源一致且控制台仍有效）→ 直接复用——
     // 不同步 session/连接/临时文件/方言映射，规避"第二个会话连接永不发起"挂死（见字段注释）。
     // 显式执行路径同样复用（结果落在已嵌入面板）；用户切换数据源走弹窗 → 新建并替换共享缓存。
-    if (reuseSharedConsole(
+    if (allowsSharedConsoleReuse(forceChoose) && reuseSharedConsole(
             project, submitSql, executeAfterPrepare, onConsole, onEditor, onError, callback, onErrorRich,
             wholeScriptExec, dialectGateRequest, onDialectGate, onSubmission, prepareOwner,
         )) {
@@ -299,7 +316,8 @@ internal fun DataSourceSelector.chooseAndPrepare(
     // M36.5：last-used 数据源静默命中（仅 prepareConsole 路径；显式执行保持弹窗可选）
     // T-SI-02：命中判定升级为「UUID 精确命中 → 名字唯一命中」，同名多条判歧义弃记忆走弹窗
     //（旧实现 firstOrNull 静默取首条，选错数据源时用户无从察觉）。
-    if (!executeAfterPrepare) {
+    // T-DialectGateExit：forceChoose（用户点「切换数据源」）同样跳过——否则点了等于没点。
+    if (allowsSilentLastUsed(executeAfterPrepare, forceChoose)) {
         val memory = lastUsedRunner(project)
         val resolution = resolveLastUsedRunnerIndex(memory, runners.map { getRunnerName(it) }) { id ->
             runCatching {
@@ -1844,6 +1862,14 @@ internal fun DataSourceSelector.extractConsoleError(console: Any?, LOG: com.inte
 
 internal fun DataSourceSelector.runRunner(project: Project, runner: Any, silent: Boolean = false, onError: ((String) -> Unit)? = null) {
     val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
+    // 空操作 Runner（平台组项的 EmptyRunnable）不能执行：run() 立即返回且永不回调 session，
+    // 只会把准备门拖到 60s 超时。立即结算错误，让面板红字给出可行动原因。
+    if (ExecDialectRouting.isNoOpRunner(runner)) {
+        val name = getRunnerName(runner)
+        LOG.warn("[M36] runner '$name' has EmptyRunnable; refusing to run (would wait for prepare timeout)")
+        onError?.invoke(MpSqlVisualizerBundle.message("execute.datasource.noRunnable", name))
+        return
+    }
     runCatching {
         val method = runner.javaClass.getMethod("run")
         method.isAccessible = true

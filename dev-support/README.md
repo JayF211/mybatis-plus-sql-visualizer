@@ -39,6 +39,7 @@
 | 文件 | 用途 |
 |---|---|
 | `test-shard-weights.tsv` | 分片时长权重表（`testShards` 贪心均衡分区的输入） |
+| `test-demo/` | 全量测试前置：测试 demo 检出/校验脚本、`mpj_demo`/`mp_demo` 初始化 SQL、`dataSources` 模板；见其 `README.md` |
 | `weight-refresh.ps1` | 刷新上表（按历史测试 XML 重新统计） |
 | `test-shard-aggregate.py` | `testShards` 聚合公式的仓外替身 |
 | `sleep-audit.py` | 固定 `sleep` 审计（扫 `src/test` 里的睡眠等待） |

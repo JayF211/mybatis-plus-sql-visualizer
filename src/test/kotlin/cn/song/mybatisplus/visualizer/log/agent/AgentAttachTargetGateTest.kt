@@ -27,7 +27,6 @@ class AgentAttachTargetGateTest : BasePlatformTestCase() {
         manager.attachSessionFactory = { attachCalls++; null }
         manager.attachTaskDispatcher = { tasks.add(it) }
         PluginSettings.getInstance().state.enhancedCaptureEnabled = true
-        PluginSettings.getInstance().state.enhancedCaptureConfirmed = true
     }
 
     override fun tearDown() {
@@ -38,12 +37,11 @@ class AgentAttachTargetGateTest : BasePlatformTestCase() {
             manager.attachSessionFactory = originalFactory
             manager.attachTaskDispatcher = originalDispatcher
             PluginSettings.getInstance().state.enhancedCaptureEnabled = false
-            PluginSettings.getInstance().state.enhancedCaptureConfirmed = false
         } finally { super.tearDown() }
     }
 
-    fun testProcessStarted真实Helper已授权仍不排队不Attach() {
-        RunConfigurationProcessListener.offerStartedProcess(project, Handler(pid, AgentAttachTargetTest.REAL_HELPER), false)
+    fun testProcessStarted真实Helper已开启仍不排队不Attach() {
+        RunConfigurationProcessListener.offerStartedProcess(project, Handler(pid, AgentAttachTargetTest.REAL_HELPER))
         assertRejected()
     }
 
@@ -87,7 +85,7 @@ class AgentAttachTargetGateTest : BasePlatformTestCase() {
 
     fun test业务携带相同驱动Classpath可排队且最终可到Attach边界() {
         val command = AgentAttachTargetTest.REAL_HELPER.replace(AgentAttachTargetTest.HELPER, AgentAttachTargetTest.APP)
-        RunConfigurationProcessListener.offerStartedProcess(project, Handler(pid, command), true)
+        RunConfigurationProcessListener.offerStartedProcess(project, Handler(pid, command))
         assertTrue(manager.pendingPids.containsKey(pid))
         assertEquals(1, tasks.size)
         // 最终入口用相同判定，factory 代替真正注入，避免以不可达PID假绿。
@@ -98,7 +96,7 @@ class AgentAttachTargetGateTest : BasePlatformTestCase() {
 
     fun test未知身份保留既有项目候选与授权边界() {
         manager.attachTargetInspector = { _, _, _ -> AgentAttachTarget.Decision.UNKNOWN }
-        manager.onProcessAppeared(Handler(pid, ""), false)
+        manager.onProcessAppeared(Handler(pid, ""))
         assertTrue(manager.pendingPids.containsKey(pid))
         manager.attachToPid(pid)
         assertEquals(1, attachCalls)

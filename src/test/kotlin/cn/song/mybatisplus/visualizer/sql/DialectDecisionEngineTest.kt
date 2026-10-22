@@ -161,4 +161,72 @@ class DialectDecisionEngineTest {
         assertEquals(DialectDecisionEngine.TargetStatus.AUTO_RERENDER_REQUIRED,
             DialectDecisionEngine.checkTarget(unavailable, "MySQL").status)
     }
+
+    // T-DialectStatusLiveRefresh（方案 B）：已绑定/上次使用数据源作为决策信号。
+
+    @Test
+    fun boundDataSourceDialectResolvesOverLearnedModuleAndCandidates() {
+        val decision = DialectDecisionEngine.decide(DialectDecisionEngine.Input(
+            learnedModule = ds("learned", "Oracle"),
+            projectCandidates = listOf(ds("jpa", "PostgreSQL"), ds("mpj", "Oracle")),
+            boundDataSourceDialect = "MySQL",
+        ))
+        assertEquals(DialectDecisionEngine.Status.RESOLVED, decision.status)
+        assertEquals("MySQL", decision.dialectName)
+        assertEquals(DialectDecisionEngine.Source.BOUND_DATASOURCE, decision.source)
+        assertEquals(DialectDecisionEngine.Confidence.STRONG, decision.confidence)
+    }
+
+    @Test
+    fun manualDialectStillBeatsBoundDataSourceSignal() {
+        val decision = DialectDecisionEngine.decide(DialectDecisionEngine.Input(
+            manualDialect = "Oracle", boundDataSourceDialect = "MySQL",
+        ))
+        assertEquals(DialectDecisionEngine.Status.MANUAL, decision.status)
+        assertEquals("Oracle", decision.dialectName)
+        assertEquals(DialectDecisionEngine.Source.MANUAL, decision.source)
+    }
+
+    @Test
+    fun capturedRuntimeUrlStillBeatsBoundDataSourceSignal() {
+        val decision = DialectDecisionEngine.decide(DialectDecisionEngine.Input(
+            capturedDialect = "PostgreSQL", boundDataSourceDialect = "MySQL",
+        ))
+        assertEquals(DialectDecisionEngine.Status.RESOLVED, decision.status)
+        assertEquals("PostgreSQL", decision.dialectName)
+        assertEquals(DialectDecisionEngine.Source.CAPTURED_URL, decision.source)
+    }
+
+    @Test
+    fun explicitScopeAmbiguityIsNotSilentlyResolvedByBoundSignal() {
+        // 显式 scope 内部意见分歧（MySQL vs PostgreSQL）是 AMBIGUOUS 终态：绑定信号不得绕过
+        // 用户可见的 scope 分歧（该信号只在无 scope 决策时兜底）。
+        val decision = DialectDecisionEngine.decide(DialectDecisionEngine.Input(
+            explicitScope = true,
+            scopeCandidates = listOf(ds("my", "MySQL"), ds("pg", "PostgreSQL")),
+            boundDataSourceDialect = "MySQL",
+        ))
+        assertEquals(DialectDecisionEngine.Status.AMBIGUOUS, decision.status)
+        assertNull(decision.dialectName)
+    }
+
+    @Test
+    fun scopeResolvedDecisionBeatsBoundDataSourceSignal() {
+        val decision = DialectDecisionEngine.decide(DialectDecisionEngine.Input(
+            explicitScope = true, scopeCandidates = listOf(ds("pg", "PostgreSQL")),
+            boundDataSourceDialect = "MySQL",
+        ))
+        assertEquals(DialectDecisionEngine.Status.RESOLVED, decision.status)
+        assertEquals("PostgreSQL", decision.dialectName)
+        assertEquals(DialectDecisionEngine.Source.IDEA_SCOPE, decision.source)
+    }
+
+    @Test
+    fun unknownBoundDialectNameIsIgnored() {
+        val decision = DialectDecisionEngine.decide(DialectDecisionEngine.Input(
+            learnedModule = ds("learned", "Oracle"), boundDataSourceDialect = "Generic SQL",
+        ))
+        assertEquals("Oracle", decision.dialectName)
+        assertEquals(DialectDecisionEngine.Source.LEARNED_MODULE, decision.source)
+    }
 }

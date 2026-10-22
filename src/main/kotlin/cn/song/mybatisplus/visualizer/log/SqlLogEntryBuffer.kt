@@ -71,16 +71,50 @@ class SqlLogEntryBuffer(
      */
     private val dedupeIndex = HashMap<String, LogSqlEntry>()
 
+    /**
+     * T-PerfSweep26-01（F83）：dedupeKey → **队内现存条数**计数——淘汰回扫的短路判据。被淘汰者恰为
+     * 索引最新时，仅当同键仍有余条（计数 >0）才付 O(maxEntries) 全队反扫重指次新；唯一键稳态计数
+     * 归零，直接摘索引跳过必空的反扫（原状：唯一键下每接受一条新 SQL 都在 `synchronized(entries)`
+     * 内付一次 O(maxEntries) 反扫且结果必空）。
+     *
+     * 有界性：键域 = [dedupeIndex] 键域（canDedupe 条目的 dedupeKey），随索引同步增删、[clear] 一并
+     * 清空，不引入新增长面。维护面（全部在 `synchronized(entries)` 内、与索引同条件）：接受入队 +1 /
+     * 头部淘汰 -1（先减后判）/ removeEntry -1 / [rebuildDedupeIndexLocked] 与
+     * [rebuildDedupeIndexAfterHandoff] 全量重建 / [clear] 清空。dedupeEnabled=false 期间不维护也不读
+     * （stale 值零消费，重开时随索引补账）；接管沿重建按「队内现存」口径补账（索引按 grace 截断只留
+     * 新鲜键，条目仍留队的陈旧键计数不缺账）。融合（mergeDuplicateEntry）原位替换不改键
+     * （restoredSql 保留），计数不动。
+     */
+    private val dedupeKeyPresence = HashMap<String, Int>()
+
+    /** T-PerfSweep26-01（F83）测试缝：淘汰路径全队反扫（`entries.lastOrNull` 扫描）执行计数——
+     *  唯一键稳态下应恒 0，仅测试断言用（V38 计数缝同款形态），生产零读。 */
+    private val evictionRescanCount = AtomicInteger()
+    internal val evictionRescanCountForTest: Int get() = evictionRescanCount.get()
+
     // UI013：Logic 未绑定，文本相同不能证明同一次执行；Actual 仅属该次配对，禁止裁剪或融合。
     // 反向验证锚点：临时改为 true，UI013 自动/手动保真用例必须变红。
     private fun canDedupe(entry: LogSqlEntry): Boolean = entry.source != SqlSource.SHARDINGSPHERE
 
     private fun rebuildDedupeIndexLocked() {
         dedupeIndex.clear()
+        rebuildDedupeKeyPresenceLocked() // F83：计数随索引一并全量重建
         for (e in entries) {
             if (!canDedupe(e)) continue
             val latest = dedupeIndex[e.dedupeKey]
             if (latest == null || e.timestamp > latest.timestamp) dedupeIndex[e.dedupeKey] = e
+        }
+    }
+
+    /**
+     * F83：键级在队计数全量重建——按「队内现存」口径统计（不看索引成员资格：接管沿重建只把陈旧键
+     * 摘出索引、条目仍留队，计数必须把这类在队不在索引的实例也补上）。调用方须已持 `synchronized(entries)`。
+     */
+    private fun rebuildDedupeKeyPresenceLocked() {
+        dedupeKeyPresence.clear()
+        for (e in entries) {
+            if (!canDedupe(e)) continue
+            dedupeKeyPresence[e.dedupeKey] = (dedupeKeyPresence[e.dedupeKey] ?: 0) + 1
         }
     }
 
@@ -115,6 +149,7 @@ class SqlLogEntryBuffer(
         synchronized(entries) {
             dedupeIndex.clear()
             if (!dedupeEnabled) return
+            rebuildDedupeKeyPresenceLocked() // F83：计数按队内现存全量补账（与索引的 grace 截断口径不同，条目仍留队的陈旧键不缺账）
             val cutoff = nowMs - graceMs
             for (e in entries) {
                 if (!canDedupe(e) || e.timestamp < cutoff) continue
@@ -290,16 +325,30 @@ class SqlLogEntryBuffer(
                     // T-SqlLogPerf P6：索引 upsert（dedupeKey lazy 首触与旧版 isDuplicate 同价，
                     // 仅去重开启时支付）
                     dedupeIndex[added.dedupeKey] = added
+                    // F83：键级在队计数 +1（与索引同条件同锁维护）
+                    dedupeKeyPresence[added.dedupeKey] = (dedupeKeyPresence[added.dedupeKey] ?: 0) + 1
                 }
                 while (entries.size > maxEntries) {
                     val evicted = entries.removeFirst()
                     if (dedupeEnabled) {
-                        // T-SqlLogPerf P6：淘汰回扫——索引存的是「最近」实例，仅当被淘汰者恰为
-                        // 该键最新时才需要重算（队内同键余条 = 超窗重复入队形态，低频）
                         val k = evicted.dedupeKey
+                        // F83：键级在队计数随淘汰同步 -1（canDedupe=false 条目从未入计）。先减后判：
+                        // 淘汰者自身出队后剩余 >0 才算「队内仍有同键余条」。
+                        if (canDedupe(evicted)) {
+                            val remaining = (dedupeKeyPresence[k] ?: 0) - 1
+                            if (remaining > 0) dedupeKeyPresence[k] = remaining else dedupeKeyPresence.remove(k)
+                        }
+                        // T-SqlLogPerf P6：索引存的是「最近」实例，仅当被淘汰者恰为该键最新时才需要重算；
+                        // F83：队内仍有同键余条（计数 >0）才付 O(maxEntries) 反扫重指次新（超窗重复入队
+                        // 形态，低频）——唯一键稳态计数归零，直接摘索引跳过必空的反扫（每接受一条省一次锁内全队扫）。
                         if (dedupeIndex[k] === evicted) {
-                            val stillThere = entries.lastOrNull { canDedupe(it) && it.dedupeKey == k }
-                            if (stillThere != null) dedupeIndex[k] = stillThere else dedupeIndex.remove(k)
+                            if ((dedupeKeyPresence[k] ?: 0) > 0) {
+                                evictionRescanCount.incrementAndGet() // F83 测试缝：全队反扫执行计数
+                                val stillThere = entries.lastOrNull { canDedupe(it) && it.dedupeKey == k }
+                                if (stillThere != null) dedupeIndex[k] = stillThere else dedupeIndex.remove(k)
+                            } else {
+                                dedupeIndex.remove(k)
+                            }
                         }
                     }
                     evictedEntries.add(evicted)
@@ -438,6 +487,7 @@ class SqlLogEntryBuffer(
         synchronized(entries) {
             entries.clear()
             dedupeIndex.clear() // T-SqlLogPerf P6：索引随队清空
+            dedupeKeyPresence.clear() // F83：键级在队计数随队清空
         }
         resetDedupeCounts()
         sequenceCounter.set(0)
@@ -486,6 +536,11 @@ class SqlLogEntryBuffer(
             // T-SqlLogPerf P6：单条删除仅重算该键（用户右键低频，O(n) 一次可接受）
             if (removed && dedupeEnabled) {
                 val k = entry.dedupeKey
+                // F83：键级在队计数 -1（回扫本身用户右键低频保留 O(n) 一次，不属本券热路径）
+                if (canDedupe(entry)) {
+                    val remaining = (dedupeKeyPresence[k] ?: 0) - 1
+                    if (remaining > 0) dedupeKeyPresence[k] = remaining else dedupeKeyPresence.remove(k)
+                }
                 val stillThere = entries.lastOrNull { canDedupe(it) && it.dedupeKey == k }
                 if (stillThere != null) dedupeIndex[k] = stillThere else dedupeIndex.remove(k)
             }

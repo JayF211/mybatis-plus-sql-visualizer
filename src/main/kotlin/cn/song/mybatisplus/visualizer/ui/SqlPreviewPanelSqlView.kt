@@ -430,9 +430,15 @@ internal fun SqlPreviewPanel.toggleCompact(): Boolean {
     return compactMode
 }
 
-/** 一键复制当前 SQL（取编辑器当前内容，含手动编辑与参数回填）。 */
+/**
+ * 一键复制当前 SQL（取编辑器当前内容，含手动编辑与参数回填）。
+ *
+ * @param offerClosePanelAction 复制成功通知里是否附带「关闭 SQL 面板」动作。仅当调用方**不**关闭
+ *   面板时才有意义——「复制 SQL 并关闭」本身就会关掉弹窗，再挂一个「关闭 SQL 面板」既冗余、
+ *   点击也无目标可关（UI-044：用户复制后弹窗已关，通知里还留着这个链接）。
+ */
 
-internal fun SqlPreviewPanel.copySql(): Boolean {
+internal fun SqlPreviewPanel.copySql(offerClosePanelAction: Boolean = true): Boolean {
     // M36.4：优先取原生编辑器文档，兜底自研编辑器
     val raw = nativeEditorDoc?.text?.takeIf { it.isNotBlank() }
         ?: editor?.document?.text?.takeIf { it.isNotBlank() }
@@ -440,6 +446,11 @@ internal fun SqlPreviewPanel.copySql(): Boolean {
     // 复制时剥离 SQL 注释（-- 行注释 + /* */ 块注释），与 Java 代码复制对齐
     val text = SqlCommentStripper.strip(raw)
     UiTextClipboard.copy(text)
+    // UI-044 测试缝：非 null 时记录「本次通知会挂哪些动作」，绕开单测模式下不弹通知的分支
+    val actionSink = copyNotificationActionsForTest
+    if (actionSink != null) {
+        if (offerClosePanelAction) actionSink += MpSqlVisualizerBundle.message("dialog.closeSqlPanel")
+    }
     project?.let {
         // T-UiNative T-UN-02：复制成功提示改轻通知 + 「关闭 SQL 面板」动作（T-M23.6 原双按钮
         // 模态改为非模态——点动作等价原 index==1 分支，回调关闭预览弹窗）；
@@ -452,17 +463,34 @@ internal fun SqlPreviewPanel.copySql(): Boolean {
                     MpSqlVisualizerBundle.message("dialog.copy.done"),
                     NotificationType.INFORMATION,
                 )
-                notification.addAction(
-                    NotificationAction.createSimpleExpiring(
-                        MpSqlVisualizerBundle.message("dialog.closeSqlPanel"),
-                    ) { onClosePanelRequested?.invoke() },
-                )
+                if (offerClosePanelAction) {
+                    notification.addAction(
+                        NotificationAction.createSimpleExpiring(
+                            MpSqlVisualizerBundle.message("dialog.closeSqlPanel"),
+                        ) { onClosePanelRequested?.invoke() },
+                    )
+                }
                 notification.notify(it)
             }
         }
     }
     return true
 }
+
+/**
+ * UI-044 测试缝：复制通知「动作文案」采集器（按面板实例挂，null/缺席 = 不采集）。
+ *
+ * 单测模式不弹真通知，若只断言点击行为就看不到「通知挂了哪些动作」——UI-044 正是这样漏掉的。
+ * 置非 null 后 [copySql] 会把将要挂上的动作文案记进来，供用例断言「复制并关闭」不带关闭链接。
+ * 用 WeakHashMap 而非扩展属性字段：扩展属性不能有 backing field（编译期硬拦）。
+ */
+private val copyNotificationSinks = java.util.WeakHashMap<SqlPreviewPanel, MutableList<String>>()
+
+internal var SqlPreviewPanel.copyNotificationActionsForTest: MutableList<String>?
+    get() = copyNotificationSinks[this]
+    set(value) {
+        if (value == null) copyNotificationSinks.remove(this) else copyNotificationSinks[this] = value
+    }
 
 /**
  * O-4：一键复制可执行 SQL（替换 `?` 为带类型处理的字面值，复制到剪贴板 + toast 提示）。
@@ -580,6 +608,13 @@ internal fun SqlPreviewPanel.clear() {
     metaLineDigest = ""
     metaPerfSegments = emptyList()
     lastMetaBudget = -1
+    // T-DialectStatusLiveRefresh：方言决策与分段缓存同源复位，不跨预览残留
+    currentDialectDecision = null
+    metaCoreText = ""
+    metaTooltipCore = ""
+    metaTooltipSuffix = ""
+    // T-DmlImpactProminence：影响行数试算横幅随清空复位（下次试算重新挂）
+    clearDmlImpactBanner()
     // T-SourceJumpFunnel P6：tooltip 基线同步复位（行内提示态据此拼接，不复用上一份预览的残留）
     metaTooltipBase = ""
     metaLabel.toolTipText = null

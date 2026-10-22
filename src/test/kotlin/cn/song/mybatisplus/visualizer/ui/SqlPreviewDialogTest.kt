@@ -7,6 +7,7 @@ import cn.song.mybatisplus.visualizer.ui.gutter.XmlSqlGutterLineMarkerProvider
 import com.intellij.psi.xml.XmlFile
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 
@@ -25,6 +26,136 @@ class SqlPreviewDialogTest : BasePlatformTestCase() {
         tableName = "tbl",
         columns = listOf("id"),
     )
+
+    fun testCopyAndCloseActionCopiesSqlAndDisposesDialog() {
+        // T-DmlImpactProminence：底部新增蓝色「复制 SQL 并关闭」——复制原文并关闭弹窗。
+        val clipboard = cn.song.mybatisplus.visualizer.testutil.installFakeClipboard(testRootDisposable)
+        val dialog = SqlPreviewDialog(project, previewResult())
+        val label = cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message("panel.copySqlAndClose")
+        val action = dialog.actionsForTest().first { it.getValue(javax.swing.Action.NAME) == label }
+        try {
+            action.actionPerformed(java.awt.event.ActionEvent(dialog, 0, ""))
+            val copied = clipboard.getContents()
+                ?.getTransferData(java.awt.datatransfer.DataFlavor.stringFlavor) as? String
+            assertTrue("应复制 SQL 原文：$copied", copied?.contains("SELECT") == true)
+            assertTrue("应复制 SQL 原文：$copied", copied?.contains("FROM tbl") == true)
+            assertTrue("复制后应关闭弹窗", dialog.isDisposed())
+        } finally {
+            if (!dialog.isDisposed()) dialog.doDispose()
+            dialog.panelForTest()?.clear()
+        }
+    }
+
+    fun testCopyAndCloseActionDoesNotOfferClosePanelAction() {
+        // UI-044：弹窗随即关闭，复制成功通知里不该再挂「关闭 SQL 面板」（用户真机截图即此形态：
+        // 面板已关，通知还挂着这个链接）。对照组：单纯「复制 SQL」仍应挂上。
+        val clipboard = cn.song.mybatisplus.visualizer.testutil.installFakeClipboard(testRootDisposable)
+        val dialog = SqlPreviewDialog(project, previewResult())
+        val panel = dialog.panelForTest()!!
+        val actions = mutableListOf<String>()
+        panel.copyNotificationActionsForTest = actions
+        try {
+            val label = cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message("panel.copySqlAndClose")
+            val action = dialog.actionsForTest().first { it.getValue(javax.swing.Action.NAME) == label }
+            action.actionPerformed(java.awt.event.ActionEvent(dialog, 0, ""))
+            val closeLabel = cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message("dialog.closeSqlPanel")
+            assertFalse("复制并关闭时通知不应带「关闭 SQL 面板」，实际=$actions", actions.contains(closeLabel))
+            assertTrue("复制仍应成功", dialog.isDisposed())
+        } finally {
+            panel.copyNotificationActionsForTest = null
+            if (!dialog.isDisposed()) dialog.doDispose()
+            panel.clear()
+        }
+    }
+
+    fun testConstructionTimeActionArrayHasNoNullSlots() {
+        // UI-042 补强：平台 `DialogWrapper.createSouthPanel()` 字节码里是
+        // `createActions()` → `ContainerUtil.filter(..., Conditions.notNull())`——null 元素在进按钮区
+        // 之前就被静默丢掉，不抛错、不写日志。所以「构造没崩」≠「构造正确」，而只断言
+        // 「数组里含某个按钮名」也抓不到「少了一个但目标名字还在」。
+        // 元素个数 + 无 null 槽是唯一能看见那次静默过滤的读数。
+        val dialog = SqlPreviewDialog(project, previewResult())
+        try {
+            val captured = dialog.actionsAtConstructionForTest
+            assertNotNull("构造期应已捕获动作数组", captured)
+            assertEquals("底部动作应为 执行/复制/复制并关闭/取消 四个", 4, captured!!.size)
+            assertTrue(
+                "构造期动作数组不得有空元素（字段声明序晚于 init 的典型症状）：" +
+                    captured.joinToString { it.getValue(javax.swing.Action.NAME)?.toString() ?: "<null>" },
+                captured.none { it == null },
+            )
+        } finally {
+            if (!dialog.isDisposed()) dialog.doDispose()
+            dialog.panelForTest()?.clear()
+        }
+    }
+
+    fun testNonPrimaryButtonsKeepPlatformDefaultStyle() {
+        // UI-043 补强：只有「复制 SQL 并关闭」该是主行动样式。防「修过头」——把
+        // applyPrimaryButtonStyle 误用到全部动作，会让每个按钮都变成蓝底。
+        val dialog = SqlPreviewDialog(project, previewResult())
+        try {
+            val primaryLabel = cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message("panel.copySqlAndClose")
+            dialog.actionsForTest().forEach { action ->
+                val label = action.getValue(javax.swing.Action.NAME)?.toString()
+                val button = dialog.createJButtonForActionForTest(action)
+                val styled = button.getClientProperty(
+                    com.intellij.ide.ui.laf.darcula.ui.DarculaButtonUI.DEFAULT_STYLE_KEY,
+                ) == java.lang.Boolean.TRUE
+                if (label == primaryLabel) {
+                    assertTrue("主行动「$label」应打 styleDefault", styled)
+                } else {
+                    assertFalse("非主行动「$label」不应被染成主按钮样式", styled)
+                }
+            }
+        } finally {
+            if (!dialog.isDisposed()) dialog.doDispose()
+            dialog.panelForTest()?.clear()
+        }
+    }
+
+    fun testCopyAndCloseActionIsPresentAtConstructionTime() {
+        // 构造期字段序回归（UI-042）：`init()` 会同步调用 createActions()，若 copyAndCloseAction
+        // 声明在 init 之后则此刻为 null——动作数组出现空位，按钮不渲染且不报错（用户侧「按钮不见了」）。
+        // 断言必须落在构造期真实产出的那批动作上：事后重调 createActions() 字段已赋值，只能证明
+        // 数组写得对、证不了按钮区（早期版本就是这样假绿的）。
+        val dialog = SqlPreviewDialog(project, previewResult())
+        try {
+            val label = cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message("panel.copySqlAndClose")
+            val captured = dialog.actionsAtConstructionForTest
+            assertNotNull("构造期应已捕获动作数组", captured)
+            val names = captured!!.map { it.getValue(javax.swing.Action.NAME) }
+            assertTrue("构造期动作应含「$label」，实际=$names", names.contains(label))
+        } finally {
+            if (!dialog.isDisposed()) dialog.doDispose()
+            dialog.panelForTest()?.clear()
+        }
+    }
+
+    fun testPrimaryButtonUsesPlatformStyleInsteadOfPaintedBackground() {
+        // UI-043：主行动按钮必须走平台原生绘制（client property `JButton.styleDefault`）。
+        // 手工涂底色的形态（isOpaque=true + background）会让圆角按钮外面多出一圈方形蓝边——
+        // DarculaButtonPainter 的边框是内缩 4px 圆角，底色按整矩形铺满就溢出到圆角之外。
+        val dialog = SqlPreviewDialog(project, previewResult())
+        try {
+            val label = cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle.message("panel.copySqlAndClose")
+            val action = dialog.actionsForTest().first { it.getValue(javax.swing.Action.NAME) == label }
+            val button = dialog.createJButtonForActionForTest(action)
+            assertTrue(
+                "主行动按钮应打平台 styleDefault 标记（否则 LAF 不会画原生蓝色圆角）",
+                button.getClientProperty(
+                    com.intellij.ide.ui.laf.darcula.ui.DarculaButtonUI.DEFAULT_STYLE_KEY,
+                ) == java.lang.Boolean.TRUE,
+            )
+            assertTrue(
+                "主行动按钮不得靠手工铺底色（会在圆角外溢出成方角蓝边）",
+                !button.isOpaque,
+            )
+        } finally {
+            if (!dialog.isDisposed()) dialog.doDispose()
+            dialog.panelForTest()?.clear()
+        }
+    }
 
     fun testClosePanelCallbackInjectedToPanel() {
         // T-M23.6：面板 onClosePanelRequested 已被弹窗注入（复制/执行 SQL 提示点「关闭 SQL 面板」

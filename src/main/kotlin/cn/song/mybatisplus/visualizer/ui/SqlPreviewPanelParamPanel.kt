@@ -71,9 +71,9 @@ import cn.song.mybatisplus.visualizer.model.wrapperFlagOutcomeTooltip
 // 以同包扩展函数形式搬出——方法体逐字符搬运，被触及的私有成员已按需放宽为 internal。
 
 /** UI-006: keep the safety explanation visible, including unbroken identifiers in errors. */
-private fun fieldFillText(text: String, font: java.awt.Font): String {
+private fun fieldFillText(text: String, font: java.awt.Font, limitPx: Int = JBUI.scale(260)): String {
     val metrics = javax.swing.JLabel().getFontMetrics(font)
-    val limit = JBUI.scale(260)
+    val limit = limitPx
     val lines = mutableListOf<String>()
     var line = StringBuilder()
     for (character in text) {
@@ -88,6 +88,16 @@ private fun fieldFillText(text: String, font: java.awt.Font): String {
         it.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     } + "</html>"
 }
+
+/** 名称单元：字段名/复选框 + [fill=...] 角标同一行（角标不再单独占一行）。 */
+private fun fieldFillNameCell(name: JComponent, fill: String): JBPanel<JBPanel<*>> =
+    JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 6, 0)).apply {
+        alignmentX = java.awt.Component.LEFT_ALIGNMENT
+        add(name)
+        add(JBLabel("[fill=$fill]").apply {
+            toolTipText = MpSqlVisualizerBundle.message("fieldFill.simulation.annotation.tooltip")
+        })
+    }
 
 /** Wrap the control in the same left-anchored row geometry as the other BoxLayout children. */
 private fun fieldFillRow(control: JComponent): JBPanel<JBPanel<*>> =
@@ -120,8 +130,11 @@ internal fun SqlPreviewPanel.rebuildLeftPanel(result: PreviewResult) {
     resetFieldFillSimulation()
     fieldFillPreview = result
     fieldFillFields.clear()
+    fieldFillNormalFields.clear()
+    fieldFillSimulationComponents.clear()
     fieldFillCheckBox = null
     fieldFillStatus = null
+    impactResultLabel = null
     paramPanel.removeAll()
     paramFields.clear()
     paramWarnLabels.clear()
@@ -191,6 +204,7 @@ internal fun SqlPreviewPanel.rebuildLeftPanel(result: PreviewResult) {
                 toolTipText = MpSqlVisualizerBundle.message("fieldFill.simulation.enabled.tooltip")
                 addActionListener {
                     fieldFillEnabled = isSelected
+                    applyFieldFillSimulationVisibility()
                     renderSql()
                 }
             }
@@ -199,6 +213,7 @@ internal fun SqlPreviewPanel.rebuildLeftPanel(result: PreviewResult) {
                 name = "fieldFillStatus"
                 toolTipText = text
                 text = fieldFillText(text, font)
+                foreground = UIUtil.getContextHelpForeground()
             }
             paramPanel.add(fieldFillRow(fieldFillStatus!!))
         }
@@ -214,7 +229,9 @@ internal fun SqlPreviewPanel.rebuildLeftPanel(result: PreviewResult) {
         // showResult 在构建控件前召回普通参数；模拟值须等新预览复位、输入框建好后，
         // 才从参数预设缓存恢复，不从 SQL 历史回落恢复。
         if (paramHistoryCache.isCurrentGeneration()) {
-            historyCacheKey()?.let { paramHistoryCache.recall(it) }?.forEach { (key, value) ->
+            historyCacheKey()
+                ?.let { paramHistoryCache.recall(it) ?: paramHistoryCache.recallRecent(it) }
+                ?.forEach { (key, value) ->
                 if (key.startsWith(FieldFillSimulation.SNAPSHOT_PREFIX)) {
                     fieldFillFields[key.removePrefix(FieldFillSimulation.SNAPSHOT_PREFIX)]?.text = value
                 }
@@ -355,8 +372,13 @@ internal fun SqlPreviewPanel.syncSchemeCombo() {
         val model = DefaultComboBoxModel<String>()
         model.addElement(ParamHistoryCache.DEFAULT_SCHEME)
         paramHistoryCache.schemeNamesFor(key).forEach { model.addElement(it) }
-        combo.model = model
         val active = paramHistoryCache.activeSchemeFor(key)
+        // T-PresetMethodBinding：同一方法改了 SQL 后，该方案在新键下没有快照（靠最近键指针回落），
+        // 名单按键过滤会漏掉它，而激活态仍是它——补进名单，避免「下拉看不到却显示选中」。
+        if (active != ParamHistoryCache.DEFAULT_SCHEME && model.getIndexOf(active) < 0) {
+            model.addElement(active)
+        }
+        combo.model = model
         combo.selectedItem = active
         lastShownActiveScheme = active
     } finally {
@@ -545,11 +567,20 @@ internal fun SqlPreviewPanel.buildBatchColumnRow(col: BatchColumn, isToggle: Boo
                 renderSql()
             }
         }
-        if (hasFill) checkBox.text = fieldFillText(col.source, checkBox.font)
+        if (hasFill) {
+            // 角标并入字段名文本：名称、[fill=...]、普通值输入保持同一行；长名称按 200px 换行。
+            checkBox.text = fieldFillText("${col.source} [fill=${col.fill}]", checkBox.font, JBUI.scale(200))
+            checkBox.toolTipText = listOfNotNull(
+                if (checkBoxText(col.source) != col.source) col.source else col.columnName,
+                MpSqlVisualizerBundle.message("fieldFill.simulation.annotation.tooltip"),
+            ).joinToString("\n")
+        }
         batchCheckBoxes += checkBox
-        addCell(checkBox, 0, 0, 2)
+        addCell(checkBox, 0, 0)
+    } else if (hasFill) {
+        addCell(fieldFillNameCell(paramLabel(col.source, labelWidth), col.fill!!), 0, 0)
     } else {
-        addCell(paramLabel(col.source, labelWidth), 0, 0, 2)
+        addCell(paramLabel(col.source, labelWidth), 0, 0)
     }
     val field = JBTextField(8).apply {
         toolTipText = "#${col.source}"
@@ -562,36 +593,95 @@ internal fun SqlPreviewPanel.buildBatchColumnRow(col: BatchColumn, isToggle: Boo
         })
     }
     paramFields += field
-    addCell(field, 1, if (hasFill) 1 else 0)
-    if (hasFill) {
-        // The source occupies its own line; normal and simulated inputs stay in the same
-        // compact value column instead of extending one FlowLayout row beyond the viewport.
-        addCell(JBLabel("[fill=${col.fill}]").apply {
-            toolTipText = MpSqlVisualizerBundle.message("fieldFill.simulation.annotation.tooltip")
-        }, 0, 1)
-        if (isToggle) {
-            val simulation = JBTextField(8).apply {
-                name = "fieldFill:${col.source}"
-                toolTipText = MpSqlVisualizerBundle.message("fieldFill.simulation.value.tooltip")
-                document.addDocumentListener(object : DocumentListener {
-                    private fun changed() {
-                        if (fieldFillSyncing) return
-                        fieldFillValues[col.source] = text
-                        renderSql()
-                        saveToHistory()
-                    }
-                    override fun insertUpdate(e: DocumentEvent?) = changed()
-                    override fun removeUpdate(e: DocumentEvent?) = changed()
-                    override fun changedUpdate(e: DocumentEvent?) = changed()
-                })
-            }
-            fieldFillFields[col.source] = simulation
-            addCell(JBLabel(MpSqlVisualizerBundle.message("fieldFill.simulation.value.label")), 0, 2)
-            addCell(simulation, 1, 2)
+    addCell(field, 1, 0)
+    if (hasFill && isToggle) {
+        fieldFillNormalFields[col.source] = field
+        val simulation = JBTextField(8).apply {
+            name = "fieldFill:${col.source}"
+            toolTipText = MpSqlVisualizerBundle.message("fieldFill.simulation.value.tooltip")
+            document.addDocumentListener(object : DocumentListener {
+                private fun changed() {
+                    if (fieldFillSyncing) return
+                    fieldFillValues[col.source] = text
+                    syncFieldFillNormalEnabled()
+                    renderSql()
+                    saveToHistory()
+                }
+                override fun insertUpdate(e: DocumentEvent?) = changed()
+                override fun removeUpdate(e: DocumentEvent?) = changed()
+                override fun changedUpdate(e: DocumentEvent?) = changed()
+            })
         }
+        fieldFillFields[col.source] = simulation
+        // 模拟值行默认隐藏，只有勾选「FieldFill 安全模拟」时才出现（用户定案）。
+        val simulationRow = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 8, 0)).apply {
+            add(JBLabel(MpSqlVisualizerBundle.message("fieldFill.simulation.value.label")))
+            add(simulation)
+            isVisible = fieldFillEnabled
+        }
+        addCell(simulationRow, 0, 1, 2)
+        fieldFillSimulationComponents += simulationRow
     }
+    syncFieldFillNormalEnabled()
     row.border = JBUI.Borders.empty(0, 8, 2, 8)
     return row
+}
+
+/** T-PreviewSideQuery P1：预估影响行数内联结果；不触碰编辑器/控制台。 */
+internal fun SqlPreviewPanel.showDmlImpactResult(text: String, error: Boolean, tooltip: String? = null) {
+    val label = impactResultLabel ?: JBLabel().also {
+        it.name = "dmlImpactResult"
+        it.alignmentX = java.awt.Component.LEFT_ALIGNMENT
+        it.border = JBUI.Borders.empty(4, 16, 4, 8)
+        paramPanel.add(it)
+        impactResultLabel = it
+    }
+    label.text = fieldFillText(text, label.font, JBUI.scale(260))
+    label.toolTipText = tooltip ?: text
+    label.foreground = if (error) JBColor.RED else UIUtil.getContextHelpForeground()
+    // T-DmlImpactProminence（用户真机反馈：左下角灰字不够明显）：结果同时挂到顶部独立横幅
+    // （蓝色加粗；失败红色），与降级/渲染警示各占一行、互不抢位。
+    showDmlImpactBanner(text, error)
+    paramPanel.revalidate()
+    paramPanel.repaint()
+}
+
+/** T-DmlImpactProminence：影响行数结果横幅显隐与配色（独立行，见 [SqlPreviewPanel.dmlImpactBanner]）。 */
+internal fun SqlPreviewPanel.showDmlImpactBanner(text: String, error: Boolean) {
+    dmlImpactBannerLabel.text = text
+    dmlImpactBannerLabel.foreground = if (error) JBColor.RED
+    else JBColor.namedColor("Link.activeForeground", JBColor.BLUE)
+    val base = com.intellij.util.ui.UIUtil.getLabelFont()
+    dmlImpactBannerLabel.font = if (error) base else base.deriveFont(java.awt.Font.BOLD)
+    dmlImpactBanner.isVisible = true
+    dmlImpactBanner.revalidate()
+    dmlImpactBanner.repaint()
+}
+
+internal fun SqlPreviewPanel.clearDmlImpactBanner() {
+    dmlImpactBanner.isVisible = false
+    dmlImpactBannerLabel.text = ""
+}
+
+/** 模拟值在场时置灰对应的普通参数输入框；清空模拟值后恢复。 */
+internal fun SqlPreviewPanel.syncFieldFillNormalEnabled() {
+    fieldFillNormalFields.forEach { (source, field) ->
+        val overridden = fieldFillEnabled && !fieldFillValues[source].isNullOrBlank()
+        field.isEnabled = !overridden
+        field.toolTipText = if (overridden) {
+            MpSqlVisualizerBundle.message("fieldFill.simulation.overrides")
+        } else {
+            "#$source"
+        }
+    }
+}
+
+/** 模拟值行显隐：仅「FieldFill 安全模拟」勾选时显示；开关切换后立即重排。 */
+internal fun SqlPreviewPanel.applyFieldFillSimulationVisibility() {
+    fieldFillSimulationComponents.forEach { it.isVisible = fieldFillEnabled }
+    syncFieldFillNormalEnabled()
+    paramPanel.revalidate()
+    paramPanel.repaint()
 }
 
 /** R92：先清可见输入框再清状态表，并抑制文档监听器回写。 */
@@ -613,9 +703,12 @@ internal fun SqlPreviewPanel.fieldFillOverlay(): FieldFillSimulation.Overlay {
         fieldFillEnabled = false
         fieldFillCheckBox?.isSelected = false
         fieldFillValues.clear()
+        syncFieldFillNormalEnabled()
     }
     val model = current?.batchModel ?: return FieldFillSimulation.Overlay(emptyMap(), emptySet())
-    val overlay = FieldFillSimulation.overlay(model, enabledIds, paramValues, fieldFillValues, fieldFillEnabled)
+    // 模拟值优先由模型层统一裁决（非空即覆盖普通参数；普通输入已置灰并给出覆盖提示），
+    // 面板不再预剔 explicitValues——旧做法会漏掉 UPDATE 预览里的 [fill=INSERT] 字段。
+    val overlay = FieldFillSimulation.overlay(model, enabledIds, fieldFillValues, fieldFillEnabled)
     fieldFillStatus?.apply {
         val message = if (overlay.invalidSources.isEmpty()) {
             MpSqlVisualizerBundle.message("fieldFill.simulation.status")
@@ -634,6 +727,7 @@ internal fun SqlPreviewPanel.fieldFillOverlay(): FieldFillSimulation.Overlay {
             paramScroll.revalidate()
             paramScroll.repaint()
         }
+        foreground = if (overlay.invalidSources.isEmpty()) UIUtil.getContextHelpForeground() else JBColor.RED
         toolTipText = message
     }
     return overlay
@@ -1259,13 +1353,26 @@ internal fun SqlPreviewPanel.importParamsFromClipboard() {
  */
 
 internal fun SqlPreviewPanel.serializeParamsToJson(): String {
+    val allSources = buildAllSources()
     val entries = paramValues.entries
         .filter { it.value.isNotEmpty() }
         .joinToString(",\n") { (key, value) ->
+            val outKey = shortestUniqueKey(key, allSources)
             val escaped = value.replace("\\", "\\\\").replace("\"", "\\\"")
-            """  "${key}": "${escaped}""""
+            """  "$outKey": "${escaped}""""
         }
     return if (entries.isEmpty()) "" else "{\n$entries\n}"
+}
+
+/**
+ * T-ParamImportColumnKey：预填键取最短唯一形态——末段在全部 source 中唯一时用列名
+ * （`status`），否则保留完整 source（多实体同名列需要前缀消歧）。导入侧
+ * [resolveSource] 同时接受两种形态。
+ */
+private fun shortestUniqueKey(source: String, sources: Set<String>): String {
+    val segment = source.substringAfterLast('.')
+    if (segment == source || segment.isEmpty()) return source
+    return if (sources.count { it.substringAfterLast('.') == segment } == 1) segment else source
 }
 
 /**
@@ -1336,6 +1443,15 @@ internal fun SqlPreviewPanel.resolveSource(key: String, sources: Set<String>): S
     if (sources.contains(snake)) return snake
     val camel = CaseFormatUtil.snakeToCamel(stripped)
     if (sources.contains(camel)) return camel
+    // 4. 末段唯一匹配（T-ParamImportColumnKey）：wrapper 预览的 source 带实体变量前缀
+    //    （`order.status`——BatchOperationConverter.entityPrefix 取调用首参表达式，不是 SQL 别名），
+    //    用户按列名导入（`status`）应唯一命中；多实体同名列（歧义）保持未匹配，不猜。
+    val segment = stripped.substringAfterLast('.')
+    if (segment.isNotEmpty()) {
+        val variants = setOf(segment, CaseFormatUtil.camelToSnake(segment), CaseFormatUtil.snakeToCamel(segment))
+        val matches = sources.filter { it.substringAfterLast('.') in variants }
+        if (matches.size == 1) return matches.single()
+    }
     return null
 }
 
@@ -1438,7 +1554,9 @@ internal fun SqlPreviewPanel.historyCacheKey(): String? {
     // 缺陷②修复：优先用「注入前」稳定文本当指纹种子——逻辑删除/多租户等拦截器模拟会改写
     // result.sql，直接拿它算键会让开关一切换就召回 miss（已回填参数退回占位符）。
     val rawSql = result.historyFingerprintSeed ?: result.sql
-    return paramHistoryCache.computeKey(tableName, rawSql)
+    // T-PresetMethodScope：追加声明作用域——同一段 SQL 写在两个方法里不再共用预设与参数历史；
+    // 无方法上下文（日志/历史双击）保持旧键。
+    return paramHistoryCache.computeKey(tableName, rawSql, result.originScopeKey.ifEmpty { null })
 }
 
 /**
@@ -1454,19 +1572,48 @@ internal fun SqlPreviewPanel.historyCacheKey(): String? {
 
 
 
+/**
+ * T-PresetMethodBinding：当前预览实际存在的参数来源（回落白名单——只回填这些行）。
+ *
+ * 为什么不用 `paramValues.keys`：方案切换路径先 [clearParamStateForSchemeSwitch] 清场，
+ * 到召回时 paramValues 已空，白名单会把所有参数都挡掉。这里从结果模型取「当前 SQL 有哪些来源」。
+ */
+internal fun SqlPreviewPanel.currentParamSources(): Set<String> {
+    val result = current ?: return emptySet()
+    val sources = linkedSetOf<String>()
+    sources += result.unresolvedParams
+    result.previewModel?.conditionViews.orEmpty().forEach { view ->
+        sources += view.valueSources
+        view.valueSource?.let(sources::add)
+    }
+    result.batchModel?.let { model ->
+        model.toggleColumns.forEach { sources += it.source }
+        model.fixedColumns.forEach { sources += it.source }
+    }
+    result.xmlModel?.let { model -> model.forEachViews.forEach { sources += it.collectionExpr } }
+    return sources
+}
+
 internal fun SqlPreviewPanel.recallFromHistory() {
     val key = historyCacheKey() ?: return
     val cached = paramHistoryCache.recall(key)
-    val history = cached ?: historySnapshotFallback(key) ?: return
+    // T-PresetMethodBinding：同一方法里改了 SQL（键的 SQL 指纹段变化）时，精确键与旧键都未命中，
+    // 按「该方案在该方法下最近一次保存」回落。回落只恢复参数值与 FieldFill——结构态（勾选/foreach）
+    // 不参与，见下方分支；且只回填当前面板存在的 source（白名单），防止旧参数名越积越多。
+    val recovered = if (cached == null) paramHistoryCache.recallRecent(key) else null
+    val history = cached ?: recovered ?: historySnapshotFallback(key) ?: return
     if (history.isEmpty()) return
+    // 回落来源只回填当前预览真实存在的参数（不能用 paramValues.keys：方案切换前刚被清场）
+    val allowedSources = if (recovered != null) currentParamSources() else emptySet()
     var applied = 0
     var stateRestored = false
     history.forEach { (source, value) ->
         when {
             source.startsWith(FieldFillSimulation.SNAPSHOT_PREFIX) -> {
-                // SQL 历史快照无权恢复模拟值；只接受当前代际的参数预设缓存。
+                // SQL 历史快照无权恢复模拟值；只接受当前代际的参数预设缓存（精确或同方法回落）
                 val fieldSource = source.removePrefix(FieldFillSimulation.SNAPSHOT_PREFIX)
-                if (cached != null && fieldFillPreview === current && paramHistoryCache.isCurrentGeneration() &&
+                if ((cached != null || recovered != null) && fieldFillPreview === current &&
+                    paramHistoryCache.isCurrentGeneration() &&
                     fieldSource in fieldFillFields && fieldFillValues[fieldSource].isNullOrEmpty()) {
                     fieldFillValues[fieldSource] = value
                     fieldFillFields[fieldSource]?.text = value
@@ -1474,31 +1621,42 @@ internal fun SqlPreviewPanel.recallFromHistory() {
                 }
             }
             source.startsWith(SNAPSHOT_CHK) -> {
-                val id = source.removePrefix(SNAPSHOT_CHK)
-                if (value == "1") enabledIds.add(id) else enabledIds.remove(id)
-                stateRestored = true
-            }
-            source.startsWith(SNAPSHOT_FNULL) -> {
-                val expr = source.removePrefix(SNAPSHOT_FNULL)
-                if (value == "1") xmlForEachNulls.add(expr) else xmlForEachNulls.remove(expr)
-                stateRestored = true
-            }
-            source.startsWith(SNAPSHOT_FEV) -> {
-                val expr = source.removePrefix(SNAPSHOT_FEV)
-                val values = value.split(",").map { it.trim() }.filter { it.isNotEmpty() }
-                if (values.isNotEmpty()) {
-                    xmlForEachValues[expr] = values
-                    // 首次召回尚无字段监听，必须在渲染映射前同步展开长度，不能依赖文本变更补齐。
-                    xmlForEachCounts[expr] = values.size
-                    xmlForEachValueFields.firstOrNull { it.first == expr }?.second?.text = value
+                // T-PresetMethodBinding：跨 SQL 回落不恢复勾选态——条件 id 是按解析序递增的序号，
+                // SQL 增删条件后整体移位，套用旧快照会把勾选落到别的条件上（错位比丢失更难排查）。
+                if (recovered == null) {
+                    val id = source.removePrefix(SNAPSHOT_CHK)
+                    if (value == "1") enabledIds.add(id) else enabledIds.remove(id)
                     stateRestored = true
                 }
             }
-            // 用户已输入值优先（不覆盖）
-            else -> if (paramValues[source].isNullOrEmpty()) {
-                paramValues[source] = value
-                syncParamFieldText(source, value)
-                applied++
+            source.startsWith(SNAPSHOT_FNULL) -> {
+                if (recovered == null) {
+                    val expr = source.removePrefix(SNAPSHOT_FNULL)
+                    if (value == "1") xmlForEachNulls.add(expr) else xmlForEachNulls.remove(expr)
+                    stateRestored = true
+                }
+            }
+            source.startsWith(SNAPSHOT_FEV) -> {
+                if (recovered == null) {
+                    val expr = source.removePrefix(SNAPSHOT_FEV)
+                    val values = value.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+                    if (values.isNotEmpty()) {
+                        xmlForEachValues[expr] = values
+                        // 首次召回尚无字段监听，必须在渲染映射前同步展开长度，不能依赖文本变更补齐。
+                        xmlForEachCounts[expr] = values.size
+                        xmlForEachValueFields.firstOrNull { it.first == expr }?.second?.text = value
+                        stateRestored = true
+                    }
+                }
+            }
+            // 用户已输入值优先（不覆盖）；回落来源只认当前预览存在的参数名
+            else -> {
+                if (recovered != null && source !in allowedSources) return@forEach
+                if (paramValues[source].isNullOrEmpty()) {
+                    paramValues[source] = value
+                    syncParamFieldText(source, value)
+                    applied++
+                }
             }
         }
     }

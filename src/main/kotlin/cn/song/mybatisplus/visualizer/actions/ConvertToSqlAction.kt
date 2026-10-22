@@ -27,6 +27,7 @@ import cn.song.mybatisplus.visualizer.xml.XmlInlineSqlDetector
 import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
+import com.intellij.lang.injection.InjectedLanguageManager
 import com.intellij.openapi.actionSystem.CommonDataKeys
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ReadAction
@@ -38,6 +39,7 @@ import com.intellij.openapi.project.Project
 import com.intellij.psi.PsiAnnotation
 import com.intellij.psi.PsiClass
 import com.intellij.psi.PsiElement
+import com.intellij.psi.PsiFile
 import com.intellij.psi.PsiJavaFile
 import com.intellij.psi.PsiMethod
 import com.intellij.psi.PsiMethodCallExpression
@@ -153,7 +155,7 @@ class ConvertToSqlAction : AnAction() {
 
         // 分支 B（现状）：光标处定位（内部增强：eq/list 调用处同样可触发）
         val offset = editor.caretModel.offset
-        val element = file.findElementAt(offset) ?: return
+        val element = resolveCaretElement(project, file, offset) ?: return
 
         // T-M25-03：光标在 MyBatis SQL 注解内 → 注解预览（@Select/@Update/Provider 族）
         val annotation = PsiTreeUtil.getParentOfType(element, PsiAnnotation::class.java, false)
@@ -771,3 +773,21 @@ class ConvertToSqlAction : AnAction() {
     }
 }
 
+
+/**
+ * T-EntryInjectedSql：把光标 PSI 归位到宿主元素。
+ *
+ * 注解 SQL（@Select/@Update/@Delete…）在编辑器里是**注入片段**——光标落在字符串内时
+ * `file.findElementAt(offset)` 返回注入 SQL 文件的 PSI，父链上没有宿主 `PsiAnnotation`，
+ * 注解预览分支因此误报「未在光标处找到可预览的 SQL 源」（真机 20261019 走查复现）。
+ * 注入元素先取 `getInjectionHost` 回到字符串字面量，注解/Wrapper 两条定位链才能看到宿主上下文。
+ * 非注入位置原样返回，行为不变。
+ */
+internal fun resolveCaretElement(project: Project, file: PsiFile, offset: Int): PsiElement? {
+    val injections = InjectedLanguageManager.getInstance(project)
+    // 动作拿到的 file 可能是注入文件（真机形态）；offset 仍是编辑器（宿主文档）偏移，
+    // 故先回到顶层宿主文件再定位，不能拿宿主偏移去查注入文件自己的树。
+    val hostFile = runCatching { injections.getTopLevelFile(file) }.getOrDefault(file)
+    val element = hostFile.findElementAt(offset) ?: return null
+    return runCatching { injections.getInjectionHost(element) }.getOrNull() ?: element
+}

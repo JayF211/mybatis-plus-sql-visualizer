@@ -90,7 +90,11 @@ class SettingsRealityGuardTest {
         // （logListSqlDisplayMode → sqlListDisplayMode()，消费点 SqlLogPanel.kt / HistorySqlLogPanel.kt）。
         // 显式登记而非泛化匹配——新增别名须留注释可审计。
         val alias = mapOf("logListSqlDisplayMode" to "sqlListDisplayMode")
-        val dead = fields.filter { f ->
+        // T-EnhancedCaptureDefaultOn（2026-10-19）：两个字段只用于旧配置兼容归一——loadState 内
+        // 写为固定值、运行期零读取，因此没有也不应有非 config 消费点。保留字段是为了旧 XML/JSON
+        // 与旧版本回退，不是假配置；下线条件 = 确认不再需要兼容旧配置。显式登记而非泛化匹配。
+        val compatOnly = setOf("enhancedCaptureConfirmed", "enhancedCaptureRejectedAtMs")
+        val dead = fields.filter { it !in compatOnly }.filter { f ->
             val probe = alias[f] ?: f
             // 词边界判定：`tablePrefix` 不再被 `removeTablePrefix` 这类更长标识符兜住（子串口径后门）
             val identifier = Regex("""(?<![\w$])${Regex.escape(probe)}(?![\w$])""")
@@ -121,9 +125,6 @@ class SettingsRealityGuardTest {
             "updateSection", "shortcutEditor", "reverseShortcutEditor",
             // T-SettingsTruth P1：autoInjectInterceptorCheck 为纯动作开关（勾选即注入、无论成败终态复位），不进 apply/reset
             "autoInjectInterceptorCheck",
-            // T-CaptureTruth T-CT-02：enhancedReauthButton 为纯动作按钮（点击即清零拒绝冷却并重走确认流，
-            // 无自身状态可存可回填），与 clearCacheButton / crudColorResetButton 同类。
-            "enhancedReauthButton",
             // T-PrefixValidate（master 7b51d57，20260926）：前缀校验结果行与一键修复按钮——
             // label 纯展示（可见性随校验结果翻转）、button 纯动作（点击回写两栏后自隐），
             // 均无自身状态可存可回填，按本白名单既有口径豁免（20260927 T-TestPerf7 合流树首轮全量红补登记）

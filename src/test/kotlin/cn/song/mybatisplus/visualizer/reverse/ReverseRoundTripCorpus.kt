@@ -80,6 +80,16 @@ object ReverseRoundTripCorpus {
         RoundTripCorpusCase("select_not_group", "SELECT id FROM member WHERE NOT (a = 1 OR b = 2)", RoundTripExpectation.ROUND_TRIP),
         RoundTripCorpusCase("select_and_priority",
             "SELECT id FROM member WHERE ((a = 1 AND b = 2) OR c = 3)", RoundTripExpectation.ROUND_TRIP),
+        // T-ReverseGroupLogicDelete：OR 后接括号组（旧生成器把 OR 渲染成 AND 的触发形态）。
+        // 语料按正向渲染的规范形书写：顶层 OR 组带外层括号、单条件括号被解包。
+        RoundTripCorpusCase("select_or_then_and_group",
+            "SELECT id FROM member WHERE (a = 1 OR (b = 2 AND c = 3))", RoundTripExpectation.ROUND_TRIP),
+        RoundTripCorpusCase("select_or_then_single_group",
+            "SELECT id FROM member WHERE (a = 1 OR b = 2)", RoundTripExpectation.ROUND_TRIP),
+        RoundTripCorpusCase("select_and_then_not_group",
+            "SELECT id FROM member WHERE a = 1 AND NOT (b = 2 OR c = 3)", RoundTripExpectation.ROUND_TRIP),
+        RoundTripCorpusCase("select_or_then_not_group",
+            "SELECT id FROM member WHERE (a = 1 OR NOT (b = 2 OR c = 3))", RoundTripExpectation.ROUND_TRIP),
         RoundTripCorpusCase("select_column_alias", "SELECT id AS uid, name AS n FROM member", RoundTripExpectation.ROUND_TRIP),
         RoundTripCorpusCase("select_qualified",
             "SELECT t.id, t.name FROM member t WHERE t.status = 1", RoundTripExpectation.ROUND_TRIP),

@@ -3,6 +3,7 @@ package cn.song.mybatisplus.visualizer.log
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService
+import cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons
 import cn.song.mybatisplus.visualizer.ui.diff.SqlDiffer
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import cn.song.mybatisplus.visualizer.util.MpvsUiColors
@@ -10,6 +11,7 @@ import cn.song.mybatisplus.visualizer.util.UiTextClipboard
 import cn.song.mybatisplus.visualizer.ui.search.NativeSearchTextField
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.Disposable
+import com.intellij.openapi.actionSystem.ActionGroup
 import com.intellij.openapi.actionSystem.ActionManager
 import com.intellij.openapi.actionSystem.ActionToolbar
 import com.intellij.openapi.actionSystem.AnAction
@@ -190,12 +192,10 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
 
     /** 导航工具栏引用（层级切换后即时刷新 Back 可见性；T-UN-10）。 */
     private var _navToolbarRef: ActionToolbar? = null
-    /** 导航动作原始清单：测试直接读它，避免调用 override-only 的 getChildren。 */
-    private var _navActionsForTest: List<AnAction> = emptyList()
     internal val previewToggleAction: ToggleAction = object : ToggleAction(
         MpSqlVisualizerBundle.message("log.dockedPreview.toggle"),
         MpSqlVisualizerBundle.message("log.dockedPreview.toggle.tip"),
-        AllIcons.Actions.Preview,
+        MpvsIcons.DockedPreview,
     ) {
         override fun isSelected(e: AnActionEvent): Boolean = dockedPreview.isOpen
 
@@ -212,7 +212,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     /** 返回一级（原 backButton）：图标 Back、tooltip 沿用 log.history.back.tip；可见性 = 二级列表（update 输出）。 */
     private inner class BackAction : AnAction() {
         override fun update(e: AnActionEvent) {
-            e.presentation.icon = AllIcons.Actions.Back
+            e.presentation.icon = MpvsIcons.Back
             e.presentation.description = MpSqlVisualizerBundle.message("log.history.back.tip")
             e.presentation.isVisible = !isShowingFiles
         }
@@ -225,7 +225,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     /** 刷新（原 refreshButton）：图标 Refresh、tooltip 沿用 log.history.refresh.tip。 */
     private inner class RefreshAction : AnAction() {
         override fun update(e: AnActionEvent) {
-            e.presentation.icon = AllIcons.Actions.Refresh
+            e.presentation.icon = MpvsIcons.Refresh
             e.presentation.description = MpSqlVisualizerBundle.message("log.history.refresh.tip")
         }
 
@@ -237,7 +237,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     /** 与日志页同款直接动作；历史只跳转，不引入实时尾部跟随。 */
     internal val scrollToEndAction: AnAction = object : AnAction() {
         override fun update(e: AnActionEvent) {
-            e.presentation.icon = AllIcons.General.ArrowDown
+            e.presentation.icon = MpvsIcons.ScrollToEnd
             e.presentation.text = MpSqlVisualizerBundle.message("log.panel.scrollBottom")
             // 日志页的 tip 描述实时跟随，历史使用同一中性动作文案，避免误导。
             e.presentation.description = MpSqlVisualizerBundle.message("log.panel.scrollBottom")
@@ -262,8 +262,14 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
         }
     }
 
-    internal val navigationActionsForTest: List<AnAction>
-        get() = _navActionsForTest
+    /**
+     * 测试缝：导航工具栏动作组。
+     *
+     * `ActionGroup.getChildren` 是 override-only API，不能在插件字节码里出现（Marketplace 校验
+     * 报 override-only usage）——生产侧只暴露组对象，取子项由测试代码自行调用。
+     */
+    internal val navigationToolbarGroupForTest: ActionGroup?
+        get() = _navToolbarRef?.actionGroup
 
     /** 层级切换后即时刷新导航工具栏（Back 可见性走 update；组件不可见时平台跳过，无副作用）。 */
     private fun refreshNavToolbar() {
@@ -388,10 +394,8 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     private fun buildUI() {
         // 顶部工具栏：返回（仅二级可见）+ 刷新 + 搜索
         // T-UiNative T-UN-10：手摆按钮 → 平台 ActionToolbar（Back 可见性由 BackAction.update 按当前层级输出）
-        val navActions = listOf(BackAction(), RefreshAction(), scrollToEndAction, previewToggleAction)
-        _navActionsForTest = navActions
         val navToolbar = ActionManager.getInstance()
-            .createActionToolbar("mpvs.history.nav", DefaultActionGroup(*navActions.toTypedArray()), true)
+            .createActionToolbar("mpvs.history.nav", DefaultActionGroup(BackAction(), RefreshAction(), scrollToEndAction, previewToggleAction), true)
             .apply { targetComponent = this@HistorySqlLogPanel }
         _navToolbarRef = navToolbar
         val toolbar = JPanel(FlowLayout(FlowLayout.LEFT, 4, 0))
@@ -949,7 +953,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
      */
     internal inner class CompareSelectedAction(private val entries: List<LogSqlEntry>) : AnAction() {
         override fun update(e: AnActionEvent) {
-            e.presentation.icon = AllIcons.Actions.Diff
+            e.presentation.icon = MpvsIcons.Diff
             e.presentation.text = MpSqlVisualizerBundle.message("log.history.compare")
             e.presentation.description = MpSqlVisualizerBundle.message("log.history.compare.tip")
             e.presentation.isEnabled = entries.size == 2
@@ -989,7 +993,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
 
     private inner class ExportSqlAction(private val entries: List<LogSqlEntry>) : AnAction() {
         override fun update(e: AnActionEvent) {
-            e.presentation.icon = AllIcons.Actions.EditSource
+            e.presentation.icon = MpvsIcons.Export
             e.presentation.text = MpSqlVisualizerBundle.message("log.history.export")
         }
 
@@ -1066,7 +1070,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
             project,
             MpSqlVisualizerBundle.message("log.history.export.choose"),
             MpSqlVisualizerBundle.message("log.history.export"),
-            com.intellij.icons.AllIcons.Actions.EditSource,
+            MpvsIcons.Export,
             names,
             names[3],
         )
@@ -1084,7 +1088,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
 
     private inner class CopySqlAction(private val entries: List<LogSqlEntry>) : AnAction() {
         override fun update(e: AnActionEvent) {
-            e.presentation.icon = AllIcons.Actions.Copy
+            e.presentation.icon = MpvsIcons.Copy
             e.presentation.text = copyMenuText("log.history.copy", "log.history.copySelected", entries.size)
         }
 
@@ -1095,7 +1099,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
 
     private inner class CopyTimestampAction(private val entries: List<LogSqlEntry>, private val clip: String) : AnAction() {
         override fun update(e: AnActionEvent) {
-            e.presentation.icon = AllIcons.Actions.Copy
+            e.presentation.icon = MpvsIcons.Copy
             e.presentation.text = copyMenuText("log.history.copyTimestamp", "log.history.copyTimestampSelected", entries.size)
             e.presentation.isEnabled = clip.isNotEmpty()
         }
@@ -1110,7 +1114,7 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
     /** 跳转到 Java 调用方（T-M55-01：与「跳转到 XML」拆分为双目标，与日志页同套）。 */
     private inner class JumpToSourceAction(private val entry: LogSqlEntry) : AnAction() {
         override fun update(e: AnActionEvent) {
-            e.presentation.icon = AllIcons.Actions.EditSource
+            e.presentation.icon = MpvsIcons.EditSource
             e.presentation.text = MpSqlVisualizerBundle.message("log.history.jumpToJava")
         }
 
@@ -1143,11 +1147,11 @@ class HistorySqlLogPanel(private val project: Project) : JPanel(BorderLayout()),
      * T-M55-01：跳转到 mapper XML 语句节点。mapperStatement 非空且定位成功才显示
      * （update 内解析一次并存引用）；定位失败不显示，「跳转到 Java」承担回退，不劣化。
      */
-    private inner class JumpToMapperXmlAction(private val entry: LogSqlEntry) : AnAction() {
+    internal inner class JumpToMapperXmlAction(private val entry: LogSqlEntry) : AnAction() {
         private var resolved: HistoryJumpTarget.MapperXml? = null
 
         override fun update(e: AnActionEvent) {
-            e.presentation.icon = AllIcons.FileTypes.Xml
+            e.presentation.icon = MpvsIcons.MapperXml
             e.presentation.text = MpSqlVisualizerBundle.message("log.history.jumpToXml")
             resolved = resolveXmlJumpTarget(entry)
             e.presentation.isEnabledAndVisible = resolved != null

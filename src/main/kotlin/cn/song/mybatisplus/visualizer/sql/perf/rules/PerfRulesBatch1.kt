@@ -42,8 +42,10 @@ object PerfRulesBatch1 {
             val isDelete = normalized.uppercase().startsWith("DELETE ")
             if (!isUpdate && !isDelete) return emptyList()
 
-            // 检测顶层 WHERE（不在括号内）
-            if (hasTopLevelKeyword(normalized, "WHERE")) return emptyList()
+            // 检测顶层 WHERE（不在括号内）。T-McpPerfWhereCase：hasTopLevelKeyword 按大写比对
+            // （形参名 upperSql 即约定），此处必须传大写串——SQL 关键字大小写不敏感，而 mapper
+            // 渲染产物普遍小写（`update ... where id = ?`），传原文会导致「有 WHERE 却报全表操作」。
+            if (hasTopLevelKeyword(normalized.uppercase(), "WHERE")) return emptyList()
 
             val stmtType = if (isUpdate) "UPDATE" else "DELETE"
             return listOf(

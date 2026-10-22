@@ -95,7 +95,8 @@ class EmptyTextRenderTest {
     fun test空态起步引导三径齐全() {
         // P1-4 摩擦 #1：空面板起步引导必须三径同段——自动捕捉 / 手动粘贴 / 增强捕获发现径
         //（增强捕获是插件「运行即采集」的头条通道，空态只提两径时新用户无从得知其存在；
-        //  引导不弹窗，弹窗克制红线不动 EnhancedCaptureConfirmDialog）。摘掉任一径本用例转红。
+        //  T-EnhancedCaptureDefaultOn 后增强捕获默认开启且不再弹注入确认，本引导保持不弹窗）。
+        //  摘掉任一径本用例转红。
         val zhBundle = repoFile("src/main/resources/messages/MpSqlVisualizerBundle_zh.properties").readText()
         val enBundle = repoFile("src/main/resources/messages/MpSqlVisualizerBundle.properties").readText()
         val zhLine = Regex("^log\\.panel\\.empty=(.*)$", RegexOption.MULTILINE).find(zhBundle)!!.groupValues[1]

@@ -16,7 +16,6 @@ import com.intellij.psi.PsiElement
 import com.intellij.psi.PsiFile
 import com.intellij.psi.search.GlobalSearchScope
 import com.intellij.psi.search.PsiShortNamesCache
-import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Resolve entity names inside the query's module, dependencies and libraries.
@@ -109,12 +108,31 @@ object EntityClassResolver {
     private fun notifyAmbiguityOnce(project: Project, entityName: String, module: Module?, pool: List<PsiClass>) {
         val names = pool.map { it.qualifiedName ?: it.name ?: "?" }
         val key = NoticeKey(module, entityName, pool.map { it.containingFile?.virtualFile?.url.orEmpty() })
+        // F102（T-PerfSweep26）：去重集改有界 LRU——此前按 (module, entity, urls) 元组在项目
+        // 生命周期内只增不减（量级=项目内歧义实体数，实际很小但无上界）。超出 MAX 后淘汰最旧，
+        // 代价=极老歧义项可能再次提示一次（可接受：提示是幂等告知，非状态机）。
         val seen = synchronized(project) {
-            project.getUserData(AMBIGUITY_NOTIFIED_KEY) ?: ConcurrentHashMap.newKeySet<NoticeKey>().also {
+            project.getUserData(AMBIGUITY_NOTIFIED_KEY) ?: object : LinkedHashMap<NoticeKey, Boolean>(
+                AMBIGUITY_NOTICE_MAX + 1,
+                0.75f,
+                true,
+            ) {
+                override fun removeEldestEntry(eldest: MutableMap.MutableEntry<NoticeKey, Boolean>?): Boolean =
+                    size > AMBIGUITY_NOTICE_MAX
+            }.also {
                 project.putUserData(AMBIGUITY_NOTIFIED_KEY, it)
             }
         }
-        if (!seen.add(key)) return
+        val firstTime = synchronized(seen) {
+            if (seen.containsKey(key)) {
+                seen[key] = true // accessOrder：命中即刷新 LRU 位置
+                false
+            } else {
+                seen[key] = true
+                true
+            }
+        }
+        if (!firstTime) return
         val scopeDescription = module?.name ?: "project / libraries"
         LOG.info("Entity name $entityName is ambiguous in $scopeDescription; no class selected: ${names.joinToString()}")
         val sink = ambiguitySinkForTest
@@ -131,7 +149,10 @@ object EntityClassResolver {
             ).notify(project)
     }
 
-    private val AMBIGUITY_NOTIFIED_KEY = Key.create<MutableSet<NoticeKey>>("mp-visualizer.entityNameAmbiguityNotified")
+    private val AMBIGUITY_NOTIFIED_KEY = Key.create<MutableMap<NoticeKey, Boolean>>("mp-visualizer.entityNameAmbiguityNotified")
+
+    /** F102：歧义提示去重集容量上界（超出按 LRU 淘汰最旧）。 */
+    private const val AMBIGUITY_NOTICE_MAX = 64
     private const val PREVIEW_NOTIFICATION_GROUP = "cn.song.mybatisplus.visualizer.preview"
 
     /** Callback arguments: project, entity name, scope label, all candidates (none selected). */
@@ -141,4 +162,11 @@ object EntityClassResolver {
     internal fun clearAmbiguityNotifiedForTest(project: Project) {
         synchronized(project) { project.putUserData(AMBIGUITY_NOTIFIED_KEY, null) }
     }
+
+    /** F102 测试缝：当前去重集条目数（有界性断言用；未初始化返回 0）。 */
+    internal fun ambiguityNoticeCountForTest(project: Project): Int =
+        synchronized(project) { project.getUserData(AMBIGUITY_NOTIFIED_KEY)?.size ?: 0 }
+
+    /** F102 测试缝：去重集容量上界（与实现常量同源，避免用例写死数字漂移）。 */
+    internal fun ambiguityNoticeMaxForTest(): Int = AMBIGUITY_NOTICE_MAX
 }

@@ -681,6 +681,16 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "offenders 列表在用例内联累积，无独立「返回违规点集合」的具名判定函数，故 decisionFns 留空；" +
                     "灵敏度=按用例内合成样本自证（含合法/违规两向样本），实施轮已实测。",
             ),
+            GuardEntry(
+                "convention/EnhancedCaptureDefaultOnGuardTest.kt",
+                emptyList(),
+                "增强捕获默认开启/确认流删除守卫（T-EnhancedCaptureDefaultOn）：判定内核内联于三个用例——" +
+                    "扫 src/main 全量 .kt/.java（先剥注释）断言确认流符号零命中；扫中英 bundle 断言确认/" +
+                    "重新授权/未授权键零命中且 enableDone/tip 键在场；断言默认值与 loadState 归一在场。" +
+                    "无独立「返回违规点集合」的具名判定函数，故 decisionFns 留空；" +
+                    "灵敏度=反向三组各恰 1 红（恢复 confirmed 闸门 / 恢复 requestReauthorization 符号 / " +
+                    "摘 loadState 归一）已实测。",
+            ),
             // ---- 判定内核类（有可注入合成样本的判定函数） ----
             GuardEntry(
                 "convention/BannedApiScanSupport.kt",
@@ -773,6 +783,20 @@ class GuardSelfTestCoverageMetaGuardTest {
                     ),
                 ),
                 "判定函数名不命中命名形状（叫 scan，:178）——正是「登记表为主识别面」的实证；自证 :363",
+            ),
+            GuardEntry(
+                "convention/ManualButtonPaintGuardTest.kt",
+                listOf(
+                    DecisionFn("scan", FnKind.VIOLATIONS),
+                    DecisionFn(
+                        "isRendererFile",
+                        FnKind.HELPER,
+                        "渲染器文件判定（Boolean 形态谓词），是判定内核 scan 的豁免输入；自证经该转发边到达",
+                        via = listOf("scan"),
+                    ),
+                ),
+                "按钮手工铺底色形态守卫（UI-043）：判定内核 scan 返回命中集合，自证用例 test_扫描器灵敏度与豁免自证 " +
+                    "喂合成源码（isOpaque/自选色必红、命名色与渲染器必走豁免）。",
             ),
             GuardEntry(
                 "convention/EnumReachabilityGuardTest.kt",
@@ -1007,7 +1031,13 @@ class GuardSelfTestCoverageMetaGuardTest {
                 "ui/ExplainPanelWiringGuardTest.kt",
                 emptyList(),
                 "断言直接内联在 @Test（R33 接线四断言：ExplainPanelChannel.decide 可达/submitExplainDirect 直送链单函数收敛/" +
-                    "embedExplainView 结构化视图嵌入/ExplainIndexAdvisor.advise 面板侧建议接入）",
+                    "ExplainPlanDialog/showExplainDialog 非模态展示不替换编辑器/ExplainIndexAdvisor.advise 面板侧建议接入）",
+            ),
+            GuardEntry(
+                "ui/DialectStatusRefreshWiringGuardTest.kt",
+                emptyList(),
+                "断言直接内联在 @Test（T-DialectStatusLiveRefresh 两断言：embedConsole 钩子与绑定行刷新同拍调用 " +
+                    "refreshDialectStatusRow / rerenderForExecutionTarget 在 renderSql 前升级 currentDialectDecision）",
             ),
             // ---- O-93 全局手动方言残值泄漏守卫（2026-10-02 T-BatchTestLeak 补登记——漏登记由 R33 修复轮元守卫红抓出） ----
             GuardEntry(
@@ -1042,6 +1072,14 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "prewarmRawCreateRefusedOnDisposedProject/docWriteOnceRefusedOnDisposedProject/" +
                     "writeVfTextViaDocumentNoopOnDisposedProject——项目 dispose 后预热链与文档写全链拒绝写）；" +
                     "disposedProjectProxy/refreshVf 为夹具非判定函数",
+            ),
+            // ---- T-LicenseCompliance：分发包许可合规守卫（20261021） ----
+            GuardEntry(
+                "convention/DistributionComplianceGuardTest.kt",
+                emptyList(),
+                "断言直接内联在三个 @Test（根目录 LICENSE/NOTICES 在场、NOTICES 覆盖 JetBrains 图标/" +
+                    "JSqlParser/ASM 关键词、build.gradle.kts 的 jsqlparser 排除 jmh-core——防打包泄漏回潮）；" +
+                    "零平台引用，进 testFast 快桶；反向=删 NOTICES/改名关键词/摘 exclude 必红",
             ),
             // ---- 本元守卫自身 ----
             GuardEntry(

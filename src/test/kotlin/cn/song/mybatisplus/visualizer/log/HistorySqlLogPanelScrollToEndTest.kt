@@ -1,9 +1,11 @@
 package cn.song.mybatisplus.visualizer.log
 
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.actionSystem.ActionPlaces
 import com.intellij.openapi.actionSystem.ActionUpdateThread
+import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.DataContext
 import com.intellij.openapi.actionSystem.DefaultActionGroup
@@ -41,9 +43,12 @@ class HistorySqlLogPanelScrollToEndTest : BasePlatformTestCase() {
         panel.scrollToEndAction, null, ActionPlaces.TOOLBAR, DataContext.EMPTY_CONTEXT,
     )
 
+    private fun navigationActions(): List<AnAction> =
+        panel.navigationToolbarGroupForTest?.getChildren(null)?.toList().orEmpty()
+
     private fun clickBottom() {
         // 从实际 ActionToolbar 的组取回动作，不绕过 actionPerformed 直测辅助函数。
-        val action = panel.navigationActionsForTest.single { it === panel.scrollToEndAction }
+        val action = navigationActions().single { it === panel.scrollToEndAction }
         val event = event()
         action.update(event)
         assertTrue(event.presentation.isVisible)
@@ -69,11 +74,11 @@ class HistorySqlLogPanelScrollToEndTest : BasePlatformTestCase() {
     }
 
     fun testActionIsDirectAndReusesLogIconTextAndEdtUpdate() {
-        assertFalse(panel.navigationActionsForTest.any { it is DefaultActionGroup })
-        assertEquals(1, panel.navigationActionsForTest.count { it === panel.scrollToEndAction })
+        assertFalse(navigationActions().any { it is DefaultActionGroup })
+        assertEquals(1, navigationActions().count { it === panel.scrollToEndAction })
         val event = event()
         panel.scrollToEndAction.update(event)
-        assertSame(AllIcons.General.ArrowDown, event.presentation.icon)
+        assertSame(MpvsIcons.ScrollToEnd, event.presentation.icon)
         assertEquals(MpSqlVisualizerBundle.message("log.panel.scrollBottom"), event.presentation.text)
         assertEquals(MpSqlVisualizerBundle.message("log.panel.scrollBottom"), event.presentation.description)
         assertEquals(ActionUpdateThread.EDT, panel.scrollToEndAction.actionUpdateThread)

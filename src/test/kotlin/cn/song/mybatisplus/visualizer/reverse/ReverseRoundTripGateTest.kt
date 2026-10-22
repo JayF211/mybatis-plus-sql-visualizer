@@ -102,7 +102,7 @@ class ReverseRoundTripGateTest {
     fun `基线分布_四档计数`() {
         val counts = ReverseRoundTripCorpus.counts()
         val expected = mapOf(
-            RoundTripExpectation.ROUND_TRIP to 52,
+            RoundTripExpectation.ROUND_TRIP to 56,
             RoundTripExpectation.PARSE_OK to 7,
             RoundTripExpectation.RAW_DEGRADE to 6,
             RoundTripExpectation.PARSE_ERROR to 5,
@@ -127,10 +127,68 @@ class ReverseRoundTripGateTest {
                 if (code.isBlank()) {
                     failures += "${case.name}: 生成代码为空"
                 }
+            } catch (e: SqlReverseException) {
+                // 设计内拒绝（如派生表无法推断实体类名）：明确报错优于产出不可编译代码，不计失败
+                continue
             } catch (e: Throwable) {
                 failures += "${case.name}: 生成异常 ${e.message}"
             }
         }
         assertTrue("生成层失败 ${failures.size} 项:\n${failures.joinToString("\n")}", failures.isEmpty())
+    }
+
+    /**
+     * T-ReverseGroupCoverage：**Java 生成闭环**——SQL → 反解 → 生成 Java → 真实 MP 渲染，
+     * 条件段连接词签名必须与原 SQL 一致。
+     *
+     * 这是旧门禁最大的盲区：`ROUND_TRIP` 只比对「反解 → 正向 SqlGenerator 再渲染」的 SQL 文本，
+     * 整条链里根本没经过 `JavaCodeGenerator`；而 `全语料_生成代码不抛异常且非空` 只检查
+     * 「非空、不抛异常」。两者叠加的结果是：生成器把 OR 渲染成 AND、把 NOT 整个丢掉，
+     * 门禁依然全绿——这正是 T-ReverseGroupLogicDelete 三个缺陷能上线的直接原因。
+     *
+     * 覆盖范围：语料中所有可解析的 SELECT（有 WHERE 的才有连接词可验）；UPDATE/DELETE 的
+     * 条件链同一套渲染函数，由 `JavaCodeGeneratorTest` 的矩阵用例覆盖。
+     */
+    @Test
+    fun `Java生成闭环_条件段连接词签名与原SQL一致`() {
+        val failures = mutableListOf<String>()
+        var checked = 0
+        for (case in corpus) {
+            if (case.expectation == RoundTripExpectation.PARSE_ERROR) continue
+            val result = try {
+                SqlReverseParser.parse(case.sql)
+            } catch (e: Throwable) {
+                continue
+            }
+            // 只验单表 SELECT：JOIN 需 MPJ 依赖、多表删除需实体上下文，均不属本闭环范围
+            if (result.kind != ReverseStatementKind.SELECT || result.joins.isNotEmpty()) continue
+            if (result.conditions.isEmpty()) continue
+            val originalSignature = try {
+                GeneratedProjectionCompiler.connectorSignature(SqlGenerator.generate(result.toSqlStatement()))
+            } catch (e: Throwable) {
+                continue
+            }
+            // 语料 SQL 侧签名取「反解后正向再渲染」的规范形——与生成器输入同一条件树，口径一致
+            val code = try {
+                JavaCodeGenerator.generate(result, null, GeneratedWrapper.QUERY)
+            } catch (e: SqlReverseException) {
+                // 设计内拒绝（如派生表无法推断实体类名）——生成器明确报错而非产出坏代码，不计失败
+                continue
+            } catch (e: Throwable) {
+                failures += "${case.name}: 生成异常 ${e.message}"
+                continue
+            }
+            checked++
+            val generatedSignature = try {
+                GeneratedProjectionCompiler.connectorSignature(GeneratedProjectionCompiler.sqlSegmentOf(code))
+            } catch (e: Throwable) {
+                failures += "${case.name}: 编译/渲染失败 ${e.message?.take(400)}"
+                continue
+            }
+            if (originalSignature != generatedSignature) {
+                failures += "${case.name}: 连接词签名不一致\n  原 SQL: $originalSignature\n  生成后: $generatedSignature\n  SQL: ${case.sql}\n  代码:\n$code"
+            }
+        }
+        assertTrue("覆盖 $checked 条；Java 生成闭环失败 ${failures.size} 项:\n${failures.joinToString("\n\n")}", failures.isEmpty())
     }
 }

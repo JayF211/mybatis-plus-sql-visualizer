@@ -4,11 +4,26 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class FieldFillSimulationTest {
-    @Test fun operationMatrix() {
-        for (kind in BatchKind.entries) for (fill in listOf("INSERT", "UPDATE", "INSERT_UPDATE", "DEFAULT", null, "UNKNOWN")) {
-            val expected = kind != BatchKind.UPSERT && (fill == kind.name || fill == "INSERT_UPDATE")
-            assertEquals("$kind/$fill", expected, FieldFillSimulation.applies(kind, fill))
-        }
+    @Test fun overlayHonorsUserSimulationRegardlessOfFillKind() {
+        // 用户真机反馈（UPDATE 预览里 [fill=INSERT] 的 create_time）：面板为该字段提供了
+        // 模拟行并置灰普通输入，旧实现按 fill 策略过滤 → 模拟值被静默忽略、SQL 回落灰框值。
+        val insertOnly = BatchColumn("created", "e.created", true, true, fill = "INSERT")
+        val model = BatchModel(BatchKind.UPDATE, "t", listOf(insertOnly),
+            listOf(BatchColumn("id", "e.id", false, true, fill = "INSERT_UPDATE")))
+        val overlay = FieldFillSimulation.overlay(
+            model, setOf("created"), mapOf("e.created" to "2026-10-19 12:00:00"), true,
+        )
+        assertEquals(mapOf(0 to "'2026-10-19 12:00:00'"), overlay.literals)
+        assertTrue(overlay.invalidSources.isEmpty())
+    }
+
+    @Test fun overlayStillExcludesUpsert() {
+        val write = BatchColumn("stamp", "e.stamp", false, true, fill = "INSERT_UPDATE")
+        val model = BatchModel(BatchKind.UPSERT, "t", listOf(write), listOf())
+        val overlay = FieldFillSimulation.overlay(
+            model, setOf("stamp"), mapOf("e.stamp" to "42"), true,
+        )
+        assertTrue("UPSERT 运行期分支不可知，仍不模拟", overlay.literals.isEmpty())
     }
 
     @Test fun numericAndInjectionNegatives() {
@@ -23,19 +38,18 @@ class FieldFillSimulationTest {
         assertNull(FieldFillSimulation.literal("a\nb", true))
     }
 
-    @Test fun overlayRespectsWritesSelectionsExplicitValuesAndDisable() {
+    @Test fun overlayRespectsSelectionsDisableAndValidation() {
         val write = BatchColumn("stamp", "e.stamp", false, true, fill = "INSERT_UPDATE")
         val fixed = BatchColumn("id", "e.id", false, true, fill = "INSERT_UPDATE")
         val model = BatchModel(BatchKind.UPDATE, "t", listOf(write), listOf(fixed))
         val values = mapOf("e.stamp" to "42", "e.id" to "99")
-        fun overlay(active: Set<String> = setOf("stamp"), explicit: Map<String, String> = emptyMap(), enabled: Boolean = true) =
-            FieldFillSimulation.overlay(model, active, explicit, values, enabled)
+        fun overlay(active: Set<String> = setOf("stamp"), enabled: Boolean = true) =
+            FieldFillSimulation.overlay(model, active, values, enabled)
         assertEquals(mapOf(0 to "42"), overlay().literals)
         assertTrue(overlay(emptySet()).literals.isEmpty())
-        assertTrue(overlay(explicit = mapOf("e.stamp" to "7")).literals.isEmpty())
         assertTrue(overlay(enabled = false).literals.isEmpty())
         assertEquals("42", values["e.stamp"])
-        val invalid = FieldFillSimulation.overlay(model, setOf("stamp"), emptyMap(), mapOf("e.stamp" to "1;select 1"), true)
+        val invalid = FieldFillSimulation.overlay(model, setOf("stamp"), mapOf("e.stamp" to "1;select 1"), true)
         assertEquals(mapOf(0 to "?"), invalid.literals)
         assertEquals(setOf("e.stamp"), invalid.invalidSources)
     }

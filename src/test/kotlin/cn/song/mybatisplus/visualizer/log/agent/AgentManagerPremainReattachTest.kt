@@ -59,8 +59,6 @@ class AgentManagerPremainReattachTest : BasePlatformTestCase() {
     private fun resetState() {
         val state = PluginSettings.getInstance().state
         state.enhancedCaptureEnabled = false
-        state.enhancedCaptureConfirmed = false
-        state.enhancedCaptureRejectedAtMs = 0
         manager.clockMs = { System.currentTimeMillis() }
     }
 
@@ -68,7 +66,7 @@ class AgentManagerPremainReattachTest : BasePlatformTestCase() {
 
     /** 反向验证锚点：移除 shutdownAll 的暂停分流（退回 closePremainChannels）本用例必红。 */
     fun test关闭增强_claimed通道转暂停_监听保留() {
-        enableAndConfirm()
+        enableCapture()
         val port = portOf(manager.preparePremainVmOption()!!)
         val channel = manager.premainChannels[0]
         connectAndClaim(port, selfPid)
@@ -90,7 +88,7 @@ class AgentManagerPremainReattachTest : BasePlatformTestCase() {
     }
 
     fun test关闭增强_未认领通道照旧关闭() {
-        enableAndConfirm()
+        enableCapture()
         manager.preparePremainVmOption()
         assertEquals(1, manager.premainChannels.size)
         val channel = manager.premainChannels[0]
@@ -103,7 +101,7 @@ class AgentManagerPremainReattachTest : BasePlatformTestCase() {
 
     /** 收窄语义：pid 未知的 claimed 通道无法被 resume（查表按 pid），照旧关闭、不驻留到 TTL。 */
     fun test关闭增强_pid未知的claimed通道_照旧关闭不暂停() {
-        enableAndConfirm()
+        enableCapture()
         val port = portOf(manager.preparePremainVmOption()!!)
         val channel = manager.premainChannels[0]
         connectAndClaim(port, 0L)
@@ -121,7 +119,7 @@ class AgentManagerPremainReattachTest : BasePlatformTestCase() {
      * PORT_ABANDONED 永久放弃端口），也不得建会话——连接停在内核 backlog，resume 后取回。
      */
     fun test暂停期重连到达_连接停泊_不建会话不关闭() {
-        enableAndConfirm()
+        enableCapture()
         val port = portOf(manager.preparePremainVmOption()!!)
         val channel = manager.premainChannels[0]
         connectAndClaim(port, selfPid)
@@ -155,7 +153,7 @@ class AgentManagerPremainReattachTest : BasePlatformTestCase() {
 
     /** 反向验证锚点：移除 resume 入口（resumePausedPremainChannelIfHit）本用例必红。 */
     fun test重开增强_pid命中暂停通道_resume取回停泊连接重建会话() {
-        enableAndConfirm()
+        enableCapture()
         val port = portOf(manager.preparePremainVmOption()!!)
         val channel = manager.premainChannels[0]
         connectAndClaim(port, selfPid)
@@ -168,7 +166,7 @@ class AgentManagerPremainReattachTest : BasePlatformTestCase() {
         writeFrame(parked, AgentProtocol.CMD_HELLO, """{"pid":$selfPid}""")
 
         // 重开增强（上升沿语义：开关与确认态恢复）→ pid 命中暂停表 → resume
-        enableAndConfirm()
+        enableCapture()
         assertTrue("resume 应命中暂停通道", manager.resumePausedPremainChannelIfHit(selfPid))
         assertFalse("恢复后不得仍是暂停态", channel.paused)
 
@@ -184,13 +182,14 @@ class AgentManagerPremainReattachTest : BasePlatformTestCase() {
 
     /** 双路径收口：settings-rescan（onProcessAppeared）与进程启动钩子同经 doAttachAsync，单点命中。 */
     fun test重开增强_onProcessAppeared命中暂停通道_resume且不进attach排队() {
-        enableAndConfirm()
+        enableCapture()
         val port = portOf(manager.preparePremainVmOption()!!)
         val channel = manager.premainChannels[0]
         connectAndClaim(port, selfPid)
         awaitClaimReady(channel)
         manager.shutdownAll()
 
+        // 生产安全闸在恢复入口之前拒绝 HELPER；本用例要验 resume 分流，故用受控 APPLICATION 目标。
         enableAndConfirm()
         withAllowedApplicationTarget {
             manager.onProcessAppeared(FakeProcessHandler(selfPid))
@@ -203,7 +202,7 @@ class AgentManagerPremainReattachTest : BasePlatformTestCase() {
     fun test_pid未命中暂停通道_照常走attach排队() {
         var now = 3_000_000L
         manager.clockMs = { now }
-        enableAndConfirm()
+        enableCapture()
         manager.preparePremainVmOption()
         // 推出 premain 跳过窗，排除「通道在场压制 attach」的既有语义干扰
         now += AgentManager.PREMAIN_SKIP_ATTACH_WINDOW_MS + 1
@@ -217,7 +216,7 @@ class AgentManagerPremainReattachTest : BasePlatformTestCase() {
     // ---------- S4：暂停通道巡检 ----------
 
     fun test巡检回收pid消亡的暂停通道() {
-        enableAndConfirm()
+        enableCapture()
         val port = portOf(manager.preparePremainVmOption()!!)
         val channel = manager.premainChannels[0]
         connectAndClaim(port, selfPid)
@@ -235,7 +234,7 @@ class AgentManagerPremainReattachTest : BasePlatformTestCase() {
     fun test巡检回收超兜底TTL的暂停通道() {
         var now = 5_000_000L
         manager.clockMs = { now }
-        enableAndConfirm()
+        enableCapture()
         val port = portOf(manager.preparePremainVmOption()!!)
         connectAndClaim(port, selfPid)
         awaitClaimReady(manager.premainChannels[0])
@@ -249,7 +248,7 @@ class AgentManagerPremainReattachTest : BasePlatformTestCase() {
     }
 
     fun test巡检不动健康的暂停通道() {
-        enableAndConfirm()
+        enableCapture()
         val port = portOf(manager.preparePremainVmOption()!!)
         val channel = manager.premainChannels[0]
         connectAndClaim(port, selfPid)
@@ -264,7 +263,7 @@ class AgentManagerPremainReattachTest : BasePlatformTestCase() {
 
     /** 运行结束信号仍关闭暂停通道（通道生命周期 = 绑定到本次运行的既有语义不回退）。 */
     fun test运行结束仍关闭暂停通道() {
-        enableAndConfirm()
+        enableCapture()
         val port = portOf(manager.preparePremainVmOption()!!)
         val channel = manager.premainChannels[0]
         connectAndClaim(port, selfPid)
@@ -279,7 +278,7 @@ class AgentManagerPremainReattachTest : BasePlatformTestCase() {
 
     /** S4 巡检驻留：有暂停通道时巡检保持运行；全部清空后恢复 T-PS6-08 的巡检复位语义。 */
     fun test巡检随暂停通道驻留_清空后复位() {
-        enableAndConfirm()
+        enableCapture()
         val port = portOf(manager.preparePremainVmOption()!!)
         val channel = manager.premainChannels[0]
         connectAndClaim(port, selfPid)
@@ -302,7 +301,7 @@ class AgentManagerPremainReattachTest : BasePlatformTestCase() {
      * 恢复路径是原端口 re-bind 起 accept 循环接住回连（loadAgent 注不进去：agentmain 不重入）。
      */
     fun testP4_attach装载关再开_原端口rebind接住回连重建会话() {
-        enableAndConfirm()
+        enableCapture()
         // 取一个空闲端口再放掉（listen-only 无连接，关闭即干净释放、无 TIME_WAIT）——
         // 模拟「attach 一次性 ServerSocket 已死、agent 的 SenderLoop 仍认它」的现场形态
         val deadAttachPort = ServerSocket(0, 1, InetAddress.getLoopbackAddress()).let { s ->
@@ -331,7 +330,7 @@ class AgentManagerPremainReattachTest : BasePlatformTestCase() {
         // 统一性：恢复后的通道就是 claimed 通道——关再开第二循环走 premain 暂停/恢复路径
         manager.shutdownAll()
         assertTrue("恢复通道关闭期应转暂停（监听保留）", channel.paused)
-        enableAndConfirm()
+        enableCapture()
         assertTrue("第二循环应命中暂停表 resume", manager.resumePausedPremainChannelIfHit(selfPid))
         val redial2 = Socket("127.0.0.1", deadAttachPort)
         writeFrame(redial2, AgentProtocol.CMD_HELLO, """{"pid":$selfPid}""")
@@ -342,7 +341,7 @@ class AgentManagerPremainReattachTest : BasePlatformTestCase() {
 
     /** 反向验证锚点：摘除 doAttachAsync 的 P4 钩子（resumeAttachPortIfHit 调用）本用例必红。 */
     fun testP4_onProcessAppeared命中attach登记_resume且不进attach排队() {
-        enableAndConfirm()
+        enableCapture()
         val port = ServerSocket(0, 1, InetAddress.getLoopbackAddress()).let { s ->
             val p = s.localPort
             s.close()
@@ -419,6 +418,11 @@ class AgentManagerPremainReattachTest : BasePlatformTestCase() {
         }
     }
 
+    private fun enableCapture() {
+        PluginSettings.getInstance().state.enhancedCaptureEnabled = true
+    }
+
+    /** 需要越过「未确认即弹框」分支的用例：直接置已确认，避免 EDT 弹窗。 */
     private fun enableAndConfirm() {
         val state = PluginSettings.getInstance().state
         state.enhancedCaptureEnabled = true

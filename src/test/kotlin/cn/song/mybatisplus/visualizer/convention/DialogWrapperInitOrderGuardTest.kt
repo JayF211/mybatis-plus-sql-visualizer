@@ -15,9 +15,10 @@ import java.io.File
  * **不是声明初值**。非空类型不拦（编译期静默通过），平台对 null 也常常容忍，于是表现为静默失效。
  *
  * 真机实证（T-CT-07）：243 平台 `com/intellij/openapi/ui/DialogWrapper` 字节码直证 `init()` 方法体
- * 内调用 `createActions()`；`EnhancedCaptureConfirmDialog` 把 `init()` 写在 Kotlin `init {}` 块里，
- * 而第三动作 `disableCaptureAction` 声明在其后 → 传进动作数组的是 null → 平台**静默不渲染该按钮**
- * （沙盒日志无「确认框异常」为证：平台容忍 null 而非抛错），用户真机看不到按钮，误以为功能没做。
+ * 内调用 `createActions()`；历史案例 `EnhancedCaptureConfirmDialog`（已随 T-EnhancedCaptureDefaultOn
+ * 删除）把 `init()` 写在 Kotlin `init {}` 块里，而第三动作 `disableCaptureAction` 声明在其后 →
+ * 传进动作数组的是 null → 平台**静默不渲染该按钮**（沙盒日志无「确认框异常」为证：平台容忍 null
+ * 而非抛错），用户真机看不到按钮，误以为功能没做。
  *
  * 运行期测试覆盖不到本陷阱：平台不保存 createActions 的返回数组（243 字节码核实无 Action[] 字段，
  * 数组直接进 createSouthPanel），构造完成后反射读到的永远是「已初始化」的字段值——只能源码级把关。
@@ -107,37 +108,6 @@ class DialogWrapperInitOrderGuardTest {
         return decls
     }
 
-    /** 平台 `init()` 调用行号（`init {}` 块本身不算）。 */
-    private fun platformInitCallLine(lines: List<String>): Int? =
-        lines.indexOfFirst { Regex("^\\s*init\\(\\)\\s*$").matches(it) }.takeIf { it >= 0 }
-
-    /** `createActions` 覆写体文本（表达式体读到括号配平；块体读到函数收尾）。 */
-    private fun createActionsBody(lines: List<String>): Pair<Int, String>? {
-        val start = lines.indexOfFirst { it.contains("fun createActions") }
-        if (start < 0) return null
-        val head = lines[start]
-        if (head.contains("= arrayOf(") || head.contains("= listOf(") || head.contains("=")) {
-            val sb = StringBuilder()
-            var depth = 0
-            var i = start
-            while (i < lines.size) {
-                sb.append(lines[i]).append('\n')
-                depth += lines[i].count { it == '(' } - lines[i].count { it == ')' }
-                if (i > start && depth <= 0) break
-                i++
-            }
-            return start to sb.toString()
-        }
-        val sb = StringBuilder()
-        var i = start
-        while (i < lines.size) {
-            sb.append(lines[i]).append('\n')
-            if (i > start && Regex("^ {4}\\}").containsMatchIn(lines[i])) break
-            i++
-        }
-        return start to sb.toString()
-    }
-
     /** 每行「进入时」的大括号深度（用于界定 init 块范围与类级成员层级）。 */
     private fun depths(lines: List<String>): IntArray {
         val out = IntArray(lines.size)
@@ -149,12 +119,72 @@ class DialogWrapperInitOrderGuardTest {
         return out
     }
 
-    /** init 块/函数体结束行（不含）。 */
+    /**
+     * init 块/函数体结束行（不含）。
+     *
+     * 表达式体函数（`override fun createActions(): Array<Action> = arrayOf(` … `)`）**没有大括号**，
+     * 只按 `{}` 深度算会立刻在声明行后结束，函数体被截成一行——2026-10-21 的 UI-042 真缺陷
+     * （`copyAndCloseAction` 声明在 init 之后、createActions 用表达式体返回）正是这样从扫描面
+     * 整段漏掉的：守卫「零违规」绿着，用户侧按钮却不见了。故表达式体按「括号配平 + 缩进回退」界定。
+     */
     private fun blockEnd(lines: List<String>, dep: IntArray, start: Int): Int {
+        val head = lines[start]
+        // 表达式体：括号深度为 0 处出现 `=`（排除 `fun f(a: Int = 1)` 的默认值），且同一深度没有 `{`。
+        // 注意 `= arrayOf(okAction)` 的 `)` 在 `=` **之后**，早期用 `closeParen in 0 until eqPos` 判会漏，
+        // 于是落进块路径、一路吞到文件尾（复盘 P2-#13 实测把下一个成员也算进本函数体）。
+        val eqAtTop = topLevelCharIndex(head, '=')
+        val exprBody = eqAtTop >= 0 && topLevelCharIndex(head, '{') < 0
+        if (exprBody) {
+            val headIndent = indentOf(head)
+            var parens = 0
+            var i = start
+            while (i < lines.size) {
+                val l = lines[i]
+                parens += l.count { it == '(' } - l.count { it == ')' }
+                // 单行表达式体（`= arrayOf(okAction)`）在本行内即配平：必须停在本行之后，
+                // 不能继续扫到下一行——否则会把下一个成员（可能是普通函数）吞进本函数体，
+                // 造成误报（复盘 P2-#13 实测：`laterThing` 被算进 createActions）。
+                if (i == start && parens <= 0 && head.isNotBlank()) return start + 1
+                if (i > start && parens <= 0 && l.isNotBlank() && indentOf(l) <= headIndent && dep[i] == dep[start]) {
+                    return i
+                }
+                i++
+            }
+            return i
+        }
         val d = dep[start]
         var i = start + 1
+        // 签名跨行（`) {` 落在下一行）时，起始行尚未进块体，直接按 dep 比较会立刻结束、
+        // 把函数体截成签名那几行——嵌套 fun 体的「跳过」随之失效（UI-042 排查中实测命中）。
+        if (!head.contains('{')) {
+            while (i < lines.size && !lines[i].contains('{') && dep[i] == d) i++
+            if (i >= lines.size || !lines[i].contains('{')) return i
+            i++
+        }
         while (i < lines.size && dep[i] > d) i++
         return i
+    }
+
+    /** 行首缩进（空格数；制表符按 4 计）。 */
+    private fun indentOf(line: String): Int =
+        line.takeWhile { it == ' ' || it == '\t' }.fold(0) { acc, c -> acc + if (c == '\t') 4 else 1 }
+
+    /**
+     * 在**括号深度为 0** 处查找字符 [target]，返回下标（无则 -1）。
+     *
+     * 用于区分「函数签名的默认参数 `=`」（`fun f(a: Int = 1)`，深度 > 0）与「表达式体的 `=`」，
+     * 以及「签名里有 `{`」（lambda 参数/默认值）与「块体的 `{`」。
+     */
+    private fun topLevelCharIndex(line: String, target: Char): Int {
+        var depth = 0
+        line.forEachIndexed { i, c ->
+            when (c) {
+                '(', '<' -> depth++
+                ')', '>' -> if (depth > 0) depth--
+                else -> if (c == target && depth == 0) return i
+            }
+        }
+        return -1
     }
 
     /** init 块（下标 [idx]）的归属类名：向上找最近一条**顶格**类/对象声明（T-M53-II 跨文件解析用）。 */
@@ -227,8 +257,30 @@ class DialogWrapperInitOrderGuardTest {
                 val scope = (idx + 1 until end).filter { it !in skip }.joinToString("\n") { lines[it] }
                 val invoked = INVOKED.findAll(scope).map { it.groupValues[1] }
                     .filter { it !in KOTLIN_KEYWORDS }.toMutableSet()
-                // 平台契约：DialogWrapper.init() 内部回调 createActions()（243 字节码直证）
-                if ("init" in invoked) invoked.add("createActions")
+                // 平台契约：DialogWrapper.init() 内部回调这些方法（2024.3.7.1 字节码直证）。
+                // UI-042 复盘补面：此前只建模了 createActions，而 init() 同时调用 createCenterPanel
+                // （offset 204）与 createSouthPanel（offset 388，其内 createButtons → createJButtonForAction）。
+                // 读点落在后三者里时，旧扫描面完全看不见（探针实测：createCenterPanel 形态 0 命中）。
+                if ("init" in invoked) invoked.addAll(DIALOG_WRAPPER_CONSTRUCTION_CALLBACKS)
+                // init 可能经同类 helper 间接调用（`init { buildUi() }` + `buildUi() { init() }`）。
+                // **只做一层且只认「helper 体内自己调了 init()」**——不能把 helper 里调用的所有方法
+                // 都并进构造期集合：那会把 `buildUI()` 里挂的监听回调体（如滚动事件里调用的
+                // `appendPendingIfNearBottom`）也当成构造期执行，误报后声明字段
+                //（HistorySqlLogPanel.APPEND_TRIGGER_PIXELS 实测被这样误伤）。
+                val helperInits = lines.filterIndexed { fi, l ->
+                    dep[fi] >= d && FUN_DEF.find(l)?.takeIf { it.range.first == 0 }
+                        ?.groupValues?.get(2) in invoked
+                }.filter { l ->
+                    val fi = lines.indexOf(l)
+                    val body = lines.subList(fi, blockEnd(lines, dep, fi)).joinToString("\n")
+                    INVOKED.findAll(body).any { it.groupValues[1] == "init" }
+                }.mapNotNull { l -> FUN_DEF.find(l)?.groupValues?.get(2) }
+                helperInits.forEach { invoked.add(it) }
+                // 经 helper 间接触发的平台回调同样纳入（`init { buildUi() }` 里 buildUi 调 init()）
+                if (helperInits.isNotEmpty()) invoked.addAll(DIALOG_WRAPPER_CONSTRUCTION_CALLBACKS)
+                // init 块内**直接**读后声明字段（无方法间接）也要进扫描面（复盘 P1-#9）：
+                // 用哨兵键承载 init 块自身语句，读点检查走同一条 readBy 路径。
+                if (scope.isNotBlank()) invoked.add(INIT_SCOPE_SENTINEL)
                 val decls = mutableMapOf<String, Int>()
                 var i = end
                 while (i < lines.size && dep[i] >= d) {
@@ -240,6 +292,8 @@ class DialogWrapperInitOrderGuardTest {
                 }
                 if (decls.isEmpty()) return@forEachIndexed
                 val bodies = mutableMapOf<String, String>()
+                // init 块自身语句也是构造期读点（复盘 P1-#9：`init { add(laterWidget) }` 无方法间接）
+                invoked.remove(INIT_SCOPE_SENTINEL)?.let { bodies[INIT_SCOPE_LABEL] = scope }
                 lines.forEachIndexed { fi, _ ->
                     val fm = FUN_DEF.find(lines[fi]) ?: return@forEachIndexed
                     if (fm.range.first == 0 && fm.groupValues[2] in invoked && dep[fi] >= d) {
@@ -342,54 +396,6 @@ class DialogWrapperInitOrderGuardTest {
         )
     }
 
-    @Test
-    fun test_增强捕获确认框第三动作已就位且早于init块() {
-        val (_, lines) = dialogSources().firstOrNull { it.first.endsWith("EnhancedCaptureConfirmDialog.kt") }
-            ?: error("未找到 EnhancedCaptureConfirmDialog.kt")
-        val initLine = platformInitCallLine(lines) ?: error("未找到平台 init() 调用")
-        val declLine = lines.indexOfFirst { it.contains("val disableCaptureAction") }
-        assertTrue("disableCaptureAction 应存在（第三动作「关闭增强捕获并不再询问」）", declLine >= 0)
-        assertTrue(
-            "disableCaptureAction 必须声明在 init() 调用之前（当前 声明@${declLine + 1} vs init()@${initLine + 1}）",
-            declLine < initLine,
-        )
-        val body = createActionsBody(lines) ?: error("未找到 createActions")
-        assertTrue(
-            "createActions 应包含 disableCaptureAction（三动作：同意/关闭增强/取消）",
-            body.second.contains("disableCaptureAction"),
-        )
-    }
-
-    /**
-     * T-ConsentTruth T-CN-02：**状态可达性守卫**——确认框枚举的每个常量都必须存在写入点。
-     *
-     * 现场：T-PS4-01 三态化把 `showAndGet()` 换成 `show()` + 读 outcome，只接上 DISABLE_CAPTURE，
-     * `ACCEPTED` 全仓无赋值 → `confirm()` 恒 false → 增强捕获经 UI 完全不可达（用户报障
-     * 「点确认但开启标识没变且不生效」）。
-     *
-     * 守卫数据驱动（遍历枚举 values），因此**将来新增状态而忘了接线，本守卫自动红**——
-     * 不必为每个状态各写一条断言。豁免：字段初值本身就是产出点的那一态（REJECTED = X 关闭按拒绝）。
-     */
-    @Test
-    fun test_确认框每个结果态都必须存在写入点() {
-        val (_, lines) = dialogSources().firstOrNull { it.first.endsWith("EnhancedCaptureConfirmDialog.kt") }
-            ?: error("未找到 EnhancedCaptureConfirmDialog.kt")
-        val src = lines.joinToString("\n")
-        val initializer = Regex("var outcome: EnhancedCaptureConsent = EnhancedCaptureConsent\\.(\\w+)")
-            .find(src)?.groupValues?.get(1)
-        assertTrue("应能从字段初值读出默认态（正则失效？）", initializer != null)
-
-        val unreachable = cn.song.mybatisplus.visualizer.config.EnhancedCaptureConsent.values()
-            .filter { it.name != initializer }
-            .filterNot { src.contains("outcome = EnhancedCaptureConsent.${it.name}") }
-            .map { it.name }
-        assertTrue(
-            "确认框存在不可达结果态（枚举加了状态却忘了接线）：$unreachable——" +
-                "默认态（$initializer）之外的每一态都必须有 `outcome = EnhancedCaptureConsent.X` 写入点",
-            unreachable.isEmpty(),
-        )
-    }
-
     /**
      * 扫描器灵敏度与豁免自证（合成源码）：四种形态喂给同一实现，断言各自落位。
      *
@@ -448,16 +454,120 @@ class DialogWrapperInitOrderGuardTest {
                 private lateinit var modeButton: Any
             }
         """.trimIndent()
+        // UI-042 真缺陷形态：表达式体函数（无大括号）+ 多行 arrayOf，第三元素声明在 init 之后。
+        // 早期 blockEnd 只按 {} 深度算，函数体被截成一行 → 该属性整段落在扫描面外（假绿）。
+        val exprBody = """
+            class SyntheticExprBody {
+                init {
+                    init()
+                }
+                override fun createActions(): Array<Any> = arrayOf(
+                    firstAction,
+                    secondAction,
+                    thirdAction,
+                    cancelAction,
+                )
+                private val firstAction: Any = Any()
+                private val thirdAction: Any = Any()
+            }
+        """.trimIndent()
+
+        // 复盘 P0-#7 / P1-#9 / P1-#10 补的四种「旧扫描面看不见」形态：
+        // a) 读点只在 createCenterPanel（init() 字节码 offset 204 同样构造期回调）
+        val viaCenterPanel = """
+            class SyntheticViaCenterPanel {
+                init {
+                    init()
+                }
+                override fun createCenterPanel(): Any = panelWidget
+                private val panelWidget: Any = Any()
+            }
+        """.trimIndent()
+        // b) init 块内直接读后声明字段（无方法间接）
+        val directRead = """
+            class SyntheticDirectRead {
+                init {
+                    add(laterWidget)
+                }
+                private val laterWidget: Any = Any()
+            }
+        """.trimIndent()
+        // c) init 经同类 helper 间接调用（`init { buildUi() }` → `buildUi() { init() }`）
+        val viaHelper = """
+            class SyntheticViaHelper {
+                init {
+                    buildUi()
+                }
+                private fun buildUi() {
+                    init()
+                }
+                override fun createActions(): Array<Any> = arrayOf(thirdAction)
+                private val thirdAction: Any = Any()
+            }
+        """.trimIndent()
+        // d) 表达式体 `=` 落在下一行（旧 blockEnd 判定恰好成立，但无样本钉住）
+        val eqNextLine = """
+            class SyntheticEqNextLine {
+                init {
+                    init()
+                }
+                override fun createActions(): Array<Any>
+                    = arrayOf(
+                        firstAction,
+                        thirdAction,
+                    )
+                private val firstAction: Any = Any()
+                private val thirdAction: Any = Any()
+            }
+        """.trimIndent()
+        // e) 尾随 lambda 表达式体（`= buildList { … }`）
+        val trailingLambda = """
+            class SyntheticTrailingLambda {
+                init {
+                    init()
+                }
+                override fun createActions(): Array<Any> = buildList {
+                    add(thirdAction)
+                }
+                private val thirdAction: Any = Any()
+            }
+        """.trimIndent()
 
         val result = scan(listOf(
             "src/main/kotlin/SyntheticDefect.kt" to defect,
             "src/main/kotlin/SyntheticDefaultValued.kt" to defaultValued,
             "src/main/kotlin/SyntheticDeferred.kt" to deferred,
             "src/main/kotlin/SyntheticWrittenFirst.kt" to writtenFirst,
+            "src/main/kotlin/SyntheticExprBody.kt" to exprBody,
+            "src/main/kotlin/SyntheticViaCenterPanel.kt" to viaCenterPanel,
+            "src/main/kotlin/SyntheticDirectRead.kt" to directRead,
+            "src/main/kotlin/SyntheticViaHelper.kt" to viaHelper,
+            "src/main/kotlin/SyntheticEqNextLine.kt" to eqNextLine,
+            "src/main/kotlin/SyntheticTrailingLambda.kt" to trailingLambda,
         ))
         val names = result.violations.map { it.name }
         assertTrue(
             "T-CT-07 形态（init() → createActions 读后声明对象属性）必须被判定为违规：$names",
+            "thirdAction" in names,
+        )
+        assertTrue(
+            "读点只在 createCenterPanel 的形态必须被判违规（init() 同样构造期回调它）：$names",
+            "panelWidget" in names,
+        )
+        assertTrue(
+            "init 块内直接读后声明字段必须被判违规（无方法间接）：$names",
+            "laterWidget" in names,
+        )
+        assertTrue(
+            "init 经同类 helper 间接调用 init() 的形态必须被判违规：$names",
+            "thirdAction" in names,
+        )
+        assertTrue(
+            "表达式体 `=` 落在下一行的形态必须被判违规：$names",
+            "thirdAction" in names,
+        )
+        assertTrue(
+            "尾随 lambda 表达式体（= buildList { … }）形态必须被判违规：$names",
             "thirdAction" in names,
         )
         assertTrue(
@@ -474,6 +584,35 @@ class DialogWrapperInitOrderGuardTest {
         )
     }
 
+    /**
+     * 误报负样本（复盘 P2-#13）：单行表达式体后紧跟的**非构造期**函数不得被吞进前者的函数体。
+     *
+     * 旧 `blockEnd()` 的括号配平在单行内 `parens` 从 0 出发先加后减，`i > start` 时
+     * `parens <= 0` 且缩进相同 → 返回**下一行**而非 `start + 1`，把下一个成员算进 createActions。
+     * 当前仓内无命中，但这是精度缺陷，需一条负样本钉住（否则将来「守卫一红就加白名单」）。
+     */
+    @Test
+    fun test_单行表达式体不得吞掉后续成员() {
+        val singleLine = """
+            class SyntheticSingleLine {
+                init {
+                    init()
+                }
+                override fun createActions(): Array<Any> = arrayOf(okAction)
+                private fun notConstructionTime(): Any = laterThing
+                private val okAction: Any = Any()
+                private val laterThing: Any = Any()
+            }
+        """.trimIndent()
+        val result = scan(listOf("src/main/kotlin/SyntheticSingleLine.kt" to singleLine))
+        val names = result.violations.map { it.name }
+        assertTrue("单行表达式体内引用的后声明字段仍应判违规：$names", "okAction" in names)
+        assertTrue(
+            "非构造期函数读到的后声明字段不得被判违规（误报）：${result.violations.map { "${it.name}@${it.line}" }}",
+            "laterThing" !in names,
+        )
+    }
+
     private companion object {
         /** 类级属性声明（`@Anno val x` / `private var x` 形态；行首匹配）。 */
         val DECL = Regex(
@@ -481,6 +620,28 @@ class DialogWrapperInitOrderGuardTest {
                 "(val|var)\\s+(\\w+)"
         )
         val INIT_BLOCK = Regex("( *)init\\s*\\{")
+
+        /**
+         * `DialogWrapper.init()` 构造期同步回调的方法（2024.3.7.1 字节码直证）：
+         * `createActions` / `createCenterPanel` / `createSouthPanel`（其内 `createButtons` →
+         * `createJButtonForAction`）/ `createNorthPanel` / `createTitlePane`。
+         *
+         * UI-042 复盘补面：此前只建模 createActions，读点落在其余方法里时整段看不见。
+         */
+        val DIALOG_WRAPPER_CONSTRUCTION_CALLBACKS = setOf(
+            "createActions",
+            "createCenterPanel",
+            "createSouthPanel",
+            "createJButtonForAction",
+            "createNorthPanel",
+            "createTitlePane",
+        )
+
+        /** 哨兵：init 块自身语句作为一个「方法体」参与读点检查（复盘 P1-#9）。 */
+        const val INIT_SCOPE_SENTINEL = "\u0000init-scope\u0000"
+
+        /** 哨兵在 [ScanResult]/报错文案里的可读名。 */
+        const val INIT_SCOPE_LABEL = "init 块自身"
         val FUN_DEF = Regex(
             "^( *)(?:(?:private|internal|protected|public|open|override|suspend|inline|tailrec" +
                 "|operator|abstract)\\s+)*fun\\s+(?:<[^>]+>\\s+)?(\\w+)\\s*\\("

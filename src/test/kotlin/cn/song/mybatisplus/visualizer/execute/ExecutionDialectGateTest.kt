@@ -275,11 +275,15 @@ class ExecutionDialectGateTest {
         assertEquals(1, logBody.countOccurrences("dialectGateRequest = dialectGateRequest"))
         val impactBody = sourceSlice(
             preview,
-            "internal fun SqlPreviewPanel.estimateDmlImpact()",
+            "internal fun SqlPreviewPanel.estimateDmlImpact(",
             "/** R42：影响面预演的轻通知",
         )
-        assertEquals(1, impactBody.countOccurrences("SqlExecutor.execute("))
-        assertEquals(1, impactBody.countOccurrences("dialectGateRequest = dialectGateRequest"))
+        assertEquals(0, impactBody.countOccurrences("SqlExecutor.execute("))
+        assertTrue(
+            "影响面预演必须走只读旁路查询，不能进共享控制台（会替换预览编辑器）",
+            impactBody.contains("PreviewSideQuery.run("),
+        )
+        assertTrue("影响面预演仍须携带方言闸请求", impactBody.contains("dialectGateRequest"))
 
         val adhocBody = sourceSlice(
             preview,

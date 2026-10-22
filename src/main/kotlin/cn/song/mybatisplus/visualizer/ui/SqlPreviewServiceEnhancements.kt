@@ -93,12 +93,23 @@ import cn.song.mybatisplus.visualizer.ui.SqlPreviewService.LogicDeleteState
 // T-M53-II（2026-10-10）：以下为 SqlPreviewService 的「ORM 增强/条件注入/结果装配」内聚成员，
 // 以同包扩展函数形式搬出——方法体逐字符搬运，被触及的私有成员已按需放宽为 internal。
 
+// T-PerfSweep26 F104：本文件原六处函数体内现场 Regex(...) 构造提为文件级属性单例
+// （同一 Regex 实例跨调用复用，模式逐字保留）。命名对齐 SqlPreviewService 伴生对象同款常量
+// （SQL_WHITESPACE_RUN / LIMIT_OFFSET_FETCH_CLAUSE / ORDER_BY_CLAUSE，模式相同）；
+// 不直接引用彼处常量：其为 private，且本文件是扩展函数文件无 companion——以文件级 private val
+// 为同构形态。
+private val SQL_WHITESPACE_RUN = Regex("\\s+")
+
+private val LIMIT_OFFSET_FETCH_CLAUSE = Regex("(?i)\\b(LIMIT|OFFSET|FETCH)\\b")
+
+private val ORDER_BY_CLAUSE = Regex("(?i)\\bORDER\\s+BY\\b")
+
 internal fun SqlPreviewService.convertOtherOrm(call: PsiMethodCallExpression, resolveVariables: Boolean): PreviewResult? {
     val eq = EasyQueryConverter.convert(call, resolveVariables)
     if (eq != null) {
         return PreviewResult(
             sql = eq.sql,
-            compactSql = eq.sql.replace(Regex("\\s+"), " ").trim(),
+            compactSql = eq.sql.replace(SQL_WHITESPACE_RUN, " ").trim(),
             unresolvedParams = eq.paramSources,
             paramTable = ParameterReplacer.buildParamTable(eq.paramSources),
             paramHints = eq.paramHints,
@@ -113,7 +124,7 @@ internal fun SqlPreviewService.convertOtherOrm(call: PsiMethodCallExpression, re
     if (mds != null) {
         return PreviewResult(
             sql = mds.sql,
-            compactSql = mds.sql.replace(Regex("\\s+"), " ").trim(),
+            compactSql = mds.sql.replace(SQL_WHITESPACE_RUN, " ").trim(),
             unresolvedParams = mds.paramSources,
             paramTable = ParameterReplacer.buildParamTable(mds.paramSources),
             paramHints = mds.paramHints,
@@ -127,7 +138,7 @@ internal fun SqlPreviewService.convertOtherOrm(call: PsiMethodCallExpression, re
     if (qd != null) {
         return PreviewResult(
             sql = qd.sql,
-            compactSql = qd.sql.replace(Regex("\\s+"), " ").trim(),
+            compactSql = qd.sql.replace(SQL_WHITESPACE_RUN, " ").trim(),
             unresolvedParams = qd.paramSources,
             paramTable = ParameterReplacer.buildParamTable(qd.paramSources),
             paramHints = qd.paramHints,
@@ -195,7 +206,7 @@ internal fun SqlPreviewService.applyJpaMethodEnhancements(
             notes += pageSort.notes
             pageSort.limit?.let { limit ->
                 if (limitAppliedInModel ||
-                    JpaQueryEnhancer.containsTopLevelClause(enhanced, Regex("(?i)\\b(LIMIT|OFFSET|FETCH)\\b"))
+                    JpaQueryEnhancer.containsTopLevelClause(enhanced, LIMIT_OFFSET_FETCH_CLAUSE)
                 ) {
                     if (!limitAppliedInModel) {
                         notes += "查询内已含分页子句，方法分页参数以查询内为准（预览不重复追加）"
@@ -205,7 +216,7 @@ internal fun SqlPreviewService.applyJpaMethodEnhancements(
                 }
             }
             if (pageSort.orderBy.isNotEmpty()) {
-                if (JpaQueryEnhancer.containsTopLevelClause(enhanced, Regex("(?i)\\bORDER\\s+BY\\b"))) {
+                if (JpaQueryEnhancer.containsTopLevelClause(enhanced, ORDER_BY_CLAUSE)) {
                     notes += "查询内已含 ORDER BY，Sort 参数运行时与其合并"
                 } else {
                     enhanced += "\nORDER BY " + pageSort.orderBy.joinToString(", ") {
@@ -272,7 +283,7 @@ internal fun SqlPreviewService.buildJpaPreviewResult(
     } else emptyList()
     return PreviewResult(
         sql = convertedSql,
-        compactSql = convertedSql.replace(Regex("\\s+"), " ").trim(),
+        compactSql = convertedSql.replace(SQL_WHITESPACE_RUN, " ").trim(),
         unresolvedParams = paramNames,
         paramTable = ParameterReplacer.buildParamTable(paramNames),
         paramHints = paramHints,
@@ -288,6 +299,9 @@ internal fun SqlPreviewService.buildJpaPreviewResult(
         placeholderParamNames = usableNamedSources,
         duplicateParamNames = duplicateParamNames,
         initialParamValues = initialParamValues,
+        // T-PresetMethodScope：HQL/JPA 链路不落历史条目（recordHistory 未调用），作用域必须在此写入，
+        // 否则同一段 HQL 写在两个方法里仍共用「表名 + SQL 指纹」键。
+        originScopeKey = cn.song.mybatisplus.visualizer.psi.PreviewOriginScope.of(method, project),
     )
 }
 

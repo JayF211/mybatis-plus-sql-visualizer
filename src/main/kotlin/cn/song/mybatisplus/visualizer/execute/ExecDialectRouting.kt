@@ -26,6 +26,11 @@ import com.intellij.openapi.project.Project
  */
 internal object ExecDialectRouting {
 
+    private val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(ExecDialectRouting::class.java)
+
+    /** 组 Runner 展开最大轮数：平台当前最多两级（`DatabaseRunners$4 → $4$1`）。 */
+    private const val MAX_GROUP_DEPTH = 3
+
     /** 平台 MySQL SQL 方言 language id（[DialectPreMapping.findMySql] 同款判定口径）。 */
     internal const val MYSQL_LANGUAGE_ID = "MySQL"
     internal const val GENERIC_LANGUAGE_ID = "GenericSQL"
@@ -215,17 +220,70 @@ internal object ExecDialectRouting {
 
     /**
      * 组 Runner 展开生产链：反射 `getSubRunners()`（平台组 Runner 标志方法，
-     * DatabaseRunners$3 字节码实证），非组 Runner / 反射失败按普通项保留。
+     * DatabaseRunners$3 字节码实证）。
+     *
+     * 可访问性（2026-10-19 真机回归）：`DatabaseRunners$3` / `$4$1` 是包私有类，
+     * `Method.invoke` 前必须 `isAccessible = true`。缺这一行时 `IllegalAccessException`
+     * 被 runCatching 吞掉，组项被当成普通项保留；其 `run()` 绑定 EmptyRunnable，
+     * 于是「runRunner invoked OK」后永远等不到 session，直到准备门 60s 超时。
+     *
+     * 展开最多 [MAX_GROUP_DEPTH] 轮（平台存在两级组）；超过深度仍是组项（含自引用）时
+     * 剔除并记录——保留空操作组只会把 60s 悬挂留回给用户，剔除后上层走空 Runner 归因文案。
      */
-    internal fun expandGroupRunners(runners: List<Any>): List<Any> =
-        expandGroupRunners(
-            runners,
-            nameOf = { ds -> DataSourceSelector.getRunnerName(ds) },
-            subRunnersOf = { runner ->
-                runCatching {
-                    @Suppress("UNCHECKED_CAST")
-                    runner.javaClass.getMethod("getSubRunners").invoke(runner) as? List<Any>
-                }.getOrNull()
-            },
-        )
+    internal fun expandGroupRunners(runners: List<Any>): List<Any> {
+        var current = runners
+        repeat(MAX_GROUP_DEPTH) {
+            current = expandGroupRunners(
+                current,
+                nameOf = { ds -> DataSourceSelector.getRunnerName(ds) },
+                subRunnersOf = { runner -> subRunnersOf(runner) },
+            )
+            if (current.none { isGroupRunner(it) }) return current
+        }
+        current.filter { isGroupRunner(it) }.forEach { runner ->
+            LOG.warn(
+                "[M36] unexpanded group runner dropped after $MAX_GROUP_DEPTH passes: " +
+                    "${runner.javaClass.name} (subs=${subRunnersOf(runner)?.size})",
+            )
+        }
+        return current.filterNot { isGroupRunner(it) }
+    }
+
+    /** 组 Runner 判定：`getSubRunners()` 返回非空列表；反射失败按非组项处理（保持旧行为）。 */
+    private fun isGroupRunner(runner: Any): Boolean = !subRunnersOf(runner).isNullOrEmpty()
+
+    private fun subRunnersOf(runner: Any): List<Any>? {
+        // 桩对象/非平台 Runner 没有该方法：属正常形态，不记日志（生产 Runner 继承基类方法）。
+        val method = runCatching { runner.javaClass.getMethod("getSubRunners") }.getOrNull() ?: return null
+        return runCatching {
+            // 平台组 Runner（DatabaseRunners$3/$4$1）是包私有类：不设 accessible 会抛
+            // IllegalAccessException，展开整链静默降级成「保留组项 → 执行空操作 → 60s 超时」。
+            method.isAccessible = true
+            @Suppress("UNCHECKED_CAST")
+            method.invoke(runner) as? List<Any>
+        }.onFailure { e ->
+            LOG.warn(
+                "[M36] getSubRunners reflection failed: ${runner.javaClass.name} " +
+                    "${e.javaClass.simpleName}: ${e.message}",
+            )
+        }.getOrNull()
+    }
+
+    /**
+     * 空操作 Runner 识别：平台组项（"All"）的 runnable 恒为 `EmptyRunnable`。
+     * 选中它执行等于什么都不做，必须立即报错，而不是等准备门 60s 超时。
+     * 字段声明在 `DatabaseRunners$MyRunner`（父类），按继承链查找。
+     */
+    internal fun isNoOpRunner(runner: Any): Boolean = runCatching {
+        var type: Class<*>? = runner.javaClass
+        while (type != null) {
+            val field = runCatching { type.getDeclaredField("runnable") }.getOrNull()
+            if (field != null) {
+                field.isAccessible = true
+                return@runCatching field.get(runner) is com.intellij.openapi.util.EmptyRunnable
+            }
+            type = type.superclass
+        }
+        false
+    }.getOrDefault(false)
 }

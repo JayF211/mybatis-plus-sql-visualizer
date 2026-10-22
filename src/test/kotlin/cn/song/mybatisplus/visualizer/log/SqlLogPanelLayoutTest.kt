@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.log
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons
 import com.intellij.openapi.actionSystem.ActionPlaces
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.DataContext
@@ -64,7 +65,7 @@ class SqlLogPanelLayoutTest : BasePlatformTestCase() {
             assertTrue("搜索应直达", main.any { it is SqlLogPanel.ShowSearchAction })
             assertTrue("预览应归入左侧动作组", main.contains(panel.previewToggleAction))
             assertSame("预览动作必须带平台图标，不能渲染占位圆圈",
-                com.intellij.icons.AllIcons.Actions.Preview, panel.previewToggleAction.templatePresentation.icon)
+                MpvsIcons.DockedPreview, panel.previewToggleAction.templatePresentation.icon)
             assertEquals(MpSqlVisualizerBundle.message("log.dockedPreview.toggle.tip"),
                 panel.previewToggleAction.templatePresentation.description)
             assertTrue("设置应直达", main.any { it is SqlLogPanel.SettingsAction })
@@ -701,6 +702,48 @@ class SqlLogPanelLayoutTest : BasePlatformTestCase() {
             }
             assertTrue("未开启自动保存时历史 tab 也应常驻（R19）", found)
         } finally {
+            panel.dispose()
+        }
+    }
+
+    /**
+     * T-AgentPauseVisibility（2026-10-19，方案 B）：增强暂停/恢复动作临时全隐藏。
+     * 动作对象仍在工具栏组内（能力代码保留），但 update 恒置不可见/不可用；
+     * 恢复方案 A 时改回条件可见并更新本用例。
+     */
+    @Test
+    fun test增强暂停动作在方案B下始终不可见() {
+        val panel = SqlLogPanel(project, manager)
+        val state = PluginSettings.getInstance().state
+        val oldEnabled = state.enhancedCaptureEnabled
+        val am = cn.song.mybatisplus.visualizer.log.agent.AgentManager.getInstance(project)
+        val oldPaused = am.userPaused
+        try {
+            for (enabled in listOf(true, false)) {
+                for (paused in listOf(true, false)) {
+                    state.enhancedCaptureEnabled = enabled
+                    am.setUserPaused(paused)
+                    val event = AnActionEvent.createFromAnAction(
+                        panel.agentPauseAction, null, ActionPlaces.TOOLBAR, DataContext.EMPTY_CONTEXT,
+                    )
+                    panel.agentPauseAction.update(event)
+                    assertFalse(
+                        "方案 B：enabled=$enabled paused=$paused 时都不得显示暂停按钮",
+                        event.presentation.isVisible,
+                    )
+                    assertFalse(
+                        "方案 B：enabled=$enabled paused=$paused 时都不得可用",
+                        event.presentation.isEnabled,
+                    )
+                }
+            }
+            assertTrue(
+                "动作对象仍应留在工具栏组内（能力代码保留，恢复方案 A 时复用）",
+                panel.toolbarGroup.childActionsOrStubs.contains(panel.agentPauseAction),
+            )
+        } finally {
+            state.enhancedCaptureEnabled = oldEnabled
+            am.setUserPaused(oldPaused)
             panel.dispose()
         }
     }

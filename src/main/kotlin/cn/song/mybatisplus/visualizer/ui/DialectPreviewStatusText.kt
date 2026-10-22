@@ -38,6 +38,8 @@ internal object DialectPreviewStatusText {
         DialectDecisionEngine.Source.IDEA_DIALECT, DialectDecisionEngine.Source.IDEA_EFFECTIVE_DIALECT ->
             MpSqlVisualizerBundle.message("panel.meta.dialectStatus.ideaDialect")
         DialectDecisionEngine.Source.LEARNED_MODULE -> MpSqlVisualizerBundle.message("panel.meta.dialectStatus.module")
+        DialectDecisionEngine.Source.BOUND_DATASOURCE ->
+            MpSqlVisualizerBundle.message("panel.meta.dialectStatus.boundSource")
         DialectDecisionEngine.Source.PROJECT_AGENT -> MpSqlVisualizerBundle.message("panel.meta.dialectStatus.agent")
         DialectDecisionEngine.Source.PROJECT_CONSENSUS ->
             MpSqlVisualizerBundle.message("panel.meta.dialectStatus.projectConsensus")

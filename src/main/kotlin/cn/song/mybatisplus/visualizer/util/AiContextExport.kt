@@ -39,8 +39,9 @@ object AiContextExport {
         currentKey: cn.song.mybatisplus.visualizer.history.ExplainPlanKey? = null,
         plans: List<cn.song.mybatisplus.visualizer.history.ExplainPlanSnapshot> = emptyList(),
         schema: StaticSchema? = null,
+        includeIdentifiers: Boolean = false,
     ): Result {
-        val projection = cn.song.mybatisplus.visualizer.share.ShareContentProjection.sql(sql)
+        val projection = cn.song.mybatisplus.visualizer.share.ShareContentProjection.sql(sql, includeIdentifiers)
         val safeDialect = cn.song.mybatisplus.visualizer.sql.DialectRegistry.dialects
             .firstOrNull { it.name == dialect }?.name ?: "not obtained"
         val matching = currentKey?.takeIf { it.persistable }?.let { key ->
@@ -52,17 +53,32 @@ object AiContextExport {
                     .getOrNull()?.let { AiContextPlanSummary.summarize(raw, it) }
             }
         }
+        val visibility = if (includeIdentifiers) {
+            "identifiers visible as written (quoted tokens stay hidden)"
+        } else {
+            "identifiers hidden"
+        }
+        val staticSchema = schema?.takeIf { it.table.isNotBlank() && it.columns.isNotEmpty() }?.let {
+            if (!includeIdentifiers) {
+                "-- Static schema: tables=1; columns=${it.columns.distinct().size}; " +
+                    "identifiers hidden; static preview metadata only"
+            } else {
+                val columns = it.columns.distinct()
+                val shown = columns.take(MAX_SCHEMA_COLUMNS)
+                val suffix = if (columns.size > shown.size) " …(+${columns.size - shown.size})" else ""
+                "-- Static schema: table=${it.table}; columns=${columns.size}: " +
+                    shown.joinToString(", ") + suffix
+            }
+        } ?: "-- Static schema: not obtained"
         val sections = linkedMapOf(
             "SQL" to (projection.sql?.let { "-- SQL (strict projection)\n$it" }
                 ?: "-- SQL: omitted (unsupported syntax or budget)"),
             "EXPLAIN" to (plan?.let { "-- EXPLAIN (already acquired; exact match)\n$it" }
                 ?: "-- EXPLAIN: not obtained (no matching structured summary)"),
-            "Static schema" to (schema?.takeIf { it.table.isNotBlank() && it.columns.isNotEmpty() }?.let {
-                "-- Static schema: tables=1; columns=${it.columns.distinct().size}; identifiers hidden; static preview metadata only"
-            } ?: "-- Static schema: not obtained"),
+            "Static schema" to staticSchema,
         )
         val header = "-- SQL Visualizer AI context v2\n-- dialect: $safeDialect\n" +
-            "-- identifiers hidden; values masked=${projection.maskedValues}; local-only; no acquisition\n"
+            "-- $visibility; values masked=${projection.maskedValues}; local-only; no acquisition\n"
         fun block() = header + sections.values.joinToString("\n")
         // Drop whole sections, never truncate into a raw fragment or restore the original SQL.
         for (section in listOf("EXPLAIN", "Static schema", "SQL")) {
@@ -72,6 +88,9 @@ object AiContextExport {
         }
         return Result(block(), projection.maskedValues)
     }
+
+    /** 含表列名模式的列数上限；超出追加 `…(+N)`，仍受 16 KiB 整段省略预算约束。 */
+    private const val MAX_SCHEMA_COLUMNS = 50
 
     /** 头部来源声明（固定，AI 可溯源到插件）。 */
     private const val HEADER = "-- SQL Visualizer AI context (sensitive literals masked)"

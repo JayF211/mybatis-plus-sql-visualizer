@@ -10,6 +10,7 @@ internal object IdeaSqlDialectDecision {
         fallbackProjectCandidates: List<DialectDecisionEngine.Candidate> = emptyList(),
         lastAgentDialect: String? = null,
         singleModuleProven: Boolean = false,
+        boundDataSourceDialect: String? = null,
     ): DialectDecisionEngine.Decision {
         // 无法证明配置 scope 的候选边界时不得借有效方言/已学绑定/项目候选绕过。
         // 手动与事件精确事实仍走原优先级；真实 provider 在桥中优先，不进入此分支。
@@ -46,6 +47,7 @@ internal object IdeaSqlDialectDecision {
             projectCandidates = projects,
             lastAgentDialect = lastAgentDialect,
             singleModuleProven = singleModuleProven,
+            boundDataSourceDialect = boundDataSourceDialect,
         ))
     }
 }

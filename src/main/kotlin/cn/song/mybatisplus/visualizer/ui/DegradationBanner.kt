@@ -15,8 +15,10 @@ import java.awt.BorderLayout
  * 文案三要素由各 i18n 键完整承载：哪段没还原 / 为什么 / 用户能做什么，绝不静默失败。
  *
  * 视觉照既有同类实现（LogToSqlPanel statusLabel / SqlPreviewPanel meta 警示同款）：
- * `ErrorForeground` 命名色 + JBUI 内边距，明暗主题自适应；文案自带 `⚠ ` 前缀（同 meta 行
- * 警示风格），不引入新图标形态。
+ * 命名色 + JBUI 内边距，明暗主题自适应；文案自带 `⚠ ` 前缀（同 meta 行警示风格），不引入新图标形态。
+ * T-DegradedPreviewUx P2：**按类别分色**——RENDER_WARNING 是错误（`ErrorForeground` 红），
+ * DEGRADED 是「能力受限的提示」（`WarningForeground` 橙），避免把「慢/降级」呈现成故障。
+ * 两者共用同一 label，故颜色在 [show] 内按 Kind 设置，不在构造期定死。
  *
  * 消息类别与优先级（[Kind]，高优先不被低优先覆盖/清除）：
  *  DEGRADED（降级链，最高）> RENDER_WARNING（渲染警示）> DOLLAR_INJECT（`${}` 直替
@@ -103,13 +105,21 @@ class DegradationBanner : JBPanel<DegradationBanner>(BorderLayout()) {
     }
 
     /** 显示提示（文案由调用方按 i18n 键组装三要素）。 */
-    fun show(kind: Kind, message: String) {
+    fun show(kind: Kind, message: String, tooltip: String? = null) {
         // 高优先类别挂起期间，低优先提示不覆盖（DEGRADED 常驻语义的泛化——
         // RENDER_WARNING 挂起时 DOLLAR_INJECT 信息提示同样让位，警示清除后下次更新再回）
         val current = currentKind
         if (current != null && priority(current) > priority(kind)) return
         currentKind = kind
         label.text = message
+        // T-DegradedPreviewUx P2：降级=提示色、渲染警示=错误色（同一 label 按类别切换）
+        label.foreground = if (kind == Kind.DEGRADED) {
+            JBColor.namedColor("WarningForeground", JBColor(0xB26A00, 0xE0A94D))
+        } else {
+            JBColor.namedColor("ErrorForeground", JBColor.RED)
+        }
+        // 宽度不足时正文会被裁：调用方传入完整文案作 tooltip（不新造「详情」控件）
+        label.toolTipText = tooltip
         dismissButton.isVisible = kind == Kind.DOLLAR_INJECT
         dismissButton.toolTipText = message
         // T-PrewarmLateRecover F2：动作只在「有回调的降级提示」上出现

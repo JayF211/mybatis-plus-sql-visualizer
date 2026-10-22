@@ -94,6 +94,8 @@ internal fun SqlPreviewPanel.moreActions(): List<Pair<String, () -> Unit>> = lis
         MpSqlVisualizerBundle.message("panel.replayExport") to { exportReplayScript() },
         // R37（T-LaneB D95）：安全 AI 上下文交递——脱敏参数化块进剪贴板（未接 MCP 用户的安全出口）
         MpSqlVisualizerBundle.message("panel.aiContext") to { copyAsAiContext() },
+        // T-AiContextLegibility B：显式含表列名出口（值仍打码，引号内容不复制）
+        MpSqlVisualizerBundle.message("panel.aiContext.identifiers") to { copyAsAiContext(includeIdentifiers = true) },
         // R42（阶段二合并批）：DML 影响面预演——UPDATE/DELETE 执行前的只读 COUNT 试算
         MpSqlVisualizerBundle.message("panel.dmlImpact") to { estimateDmlImpact() },
 )
@@ -543,17 +545,15 @@ internal fun SqlPreviewPanel.updateMeta(result: PreviewResult) {
     // metaLineDigest）：预算不足时先截摘要、主体仅在自身超预算时才中段省略（复核 20260920 修正
     // ——把摘要直接拼进单段文本会让 F3 的中段省略在窄窗下连主体一起挤掉，只剩「…」+ 栈底帧，
     // 优先级倒挂）。
-    val dialectStatus = result.dialectDecision?.let { DialectPreviewStatusText.describe(it) }
-    metaLineHead = if (dialectStatus == null) meta + warningLine
-        else dialectStatus.visible + "   " + meta + warningLine
+    // T-DialectStatusLiveRefresh：方言决策与其余分段分开缓存——执行/绑定后只重组方言段
+    // （recomposeDialectStatusText），不重跑本函数的警示/横幅/错误按钮全链。
+    currentDialectDecision = result.dialectDecision
+    metaCoreText = meta + warningLine
     metaLineDigest = stackInline
-    metaLineText = metaLineHead + metaLineDigest
     metaPerfSegments = buildPerfSegments(result)
-    metaTooltipBase = meta + warningLine +
-        metaPerfSegments.joinToString("；") { it.text } +
-        dialectStatus?.let { "\n\n${it.details}" }.orEmpty() +
-        dialectCapabilityTooltipSection(result)
-    metaLabel.toolTipText = metaTooltipBase
+    metaTooltipCore = metaCoreText + metaPerfSegments.joinToString("；") { it.text }
+    metaTooltipSuffix = dialectCapabilityTooltipSection(result)
+    applyDialectStatusSegment()
     stackHover.updateDigest(result.stackDigest)
     metaLabel.foreground = if (currentWarning != null) {
         // T-DarkTheme：IDE 标准错误前景命名色（亮暗主题自适应；暗色下非亮红不刺眼）

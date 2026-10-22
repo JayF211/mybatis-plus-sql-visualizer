@@ -1661,7 +1661,8 @@ class SqlPreviewService(internal val project: Project) {
                         projectSettings?.effectiveIgnoredFields())
 
     /**
-     * 风险警示（F-09/F-10 + F-6 Phase C BlockAttack 增强 + DataPermission 占位提示）。
+     * 风险警示（F-09/F-10 + F-6 Phase C BlockAttack 增强 + DataPermission 占位提示
+     * + T-UpdateSetSqlConcat SET 解析失败留痕）。
      *
      * BlockAttackInnerInterceptor 阻止无 WHERE 的 UPDATE/DELETE——现有警示已覆盖核心功能；
      * 增强：标记为 BlockAttack 风格（拦截器名称标注）+ DataPermission 运行时差异提示。
@@ -1672,8 +1673,16 @@ class SqlPreviewService(internal val project: Project) {
             is DeleteStatement -> if (statement.conditions.isEmpty()) "⚠ [BlockAttack] 无 WHERE 条件，将删除全表数据！" else null
             else -> null
         }
+        // T-UpdateSetSqlConcat：SET 片段解析失败留痕（`setSql(sqlVar)` 这类纯运行期片段静态不可还原）。
+        // 省略是唯一正确选择，但不能静默产出「无 SET」的非法 SQL——用户至少要看到少了什么。
+        val setWarning = (statement as? UpdateStatement)
+            ?.takeIf { it.unparsedSets.isNotEmpty() }
+            ?.let {
+                "⚠ [预览] 有 ${it.unparsedSets.size} 处 SET 片段无法静态解析，已省略：" +
+                    it.unparsedSets.joinToString("；")
+            }
         val dataPermissionWarning = DataPermissionPlaceholder.buildWarning(settings?.state?.dataPermissionHint ?: false)
-        return listOfNotNull(baseWarning, dataPermissionWarning).joinToString("\n").ifBlank { null }
+        return listOfNotNull(baseWarning, setWarning, dataPermissionWarning).joinToString("\n").ifBlank { null }
     }
 
     /**
@@ -1857,6 +1866,15 @@ class SqlPreviewService(internal val project: Project) {
                 sqlLogManagerIfCreated(anchor.project)?.entries?.snapshot().orEmpty(),
                 result.sql,
             )
+            // T-PresetMethodScope：方法身份随结果与历史条目落库——面板据此算带作用域的缓存键，
+            // R51 历史快照回落按同一口径匹配条目。
+            val originScopeKey = runCatching {
+                cn.song.mybatisplus.visualizer.psi.PreviewOriginScope.of(
+                    PsiTreeUtil.getParentOfType(anchor, PsiMethod::class.java, false),
+                    anchor.project,
+                )
+            }.getOrDefault("")
+            result.originScopeKey = originScopeKey
             result.historyEntryId = manager.add(
                 SqlHistoryEntry(
                     sql = result.sql,
@@ -1867,6 +1885,7 @@ class SqlPreviewService(internal val project: Project) {
                     tableName = result.tableName ?: "",
                     executionTimeMs = executionTimeMs,
                     projectIdentity = cn.song.mybatisplus.visualizer.history.ExplainPlanKey.projectIdentity(project.basePath),
+                    originScopeKey = originScopeKey,
                 ),
             ).id
         }

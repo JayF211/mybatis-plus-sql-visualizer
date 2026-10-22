@@ -28,6 +28,31 @@ class SqlPreviewDialog(
 
     private val panel = SqlPreviewPanel(project)
 
+    /**
+     * T-DmlImpactProminence：底部蓝色主行动——复制 SQL 并关闭（复制成功提示随之关闭面板）。
+     *
+     * 必须声明在 [init] 之前：Kotlin 字段按声明序初始化，而 `init()` 会在构造期同步调用
+     * `createActions()`，声明在后则该字段此刻仍为 null，动作数组里出现空位、按钮不渲染
+     * （UI-042：用户侧表现为「复制 SQL 并关闭」按钮整个不见）。
+     */
+    private val copyAndCloseAction = object : DialogWrapperAction(
+        MpSqlVisualizerBundle.message("panel.copySqlAndClose"),
+    ) {
+        override fun doAction(actionEvent: java.awt.event.ActionEvent?) {
+            // UI-044：弹窗随即关闭，「关闭 SQL 面板」动作已无目标，通知里不再挂它
+            panel.copySql(offerClosePanelAction = false)
+            doDispose()
+        }
+    }
+
+    /**
+     * 构造期首次 [createActions] 的产出（UI-042 回归缝）。
+     *
+     * 必须声明在 [init] 之前：`init()` 同步触发 `createActions()`，若本字段声明在后，
+     * 其初始化表达式会在捕获之后执行、把捕获结果抹掉，回归缝自身失效。
+     */
+    internal var actionsAtConstructionForTest: Array<Action>? = null
+
     init {
         title = MpSqlVisualizerBundle.message("dialog.preview.title")
         panel.setSourceLocation(sourceLocation)
@@ -74,9 +99,23 @@ class SqlPreviewDialog(
                 panel.copySql()
             }
         },
+        copyAndCloseAction,
         // 关闭
         cancelAction,
-    )
+    ).also { actionsAtConstructionForTest = actionsAtConstructionForTest ?: it }
+
+    /** 复制并关闭按钮按主行动样式渲染（蓝色实底）；其余按钮保持平台默认。 */
+    override fun createJButtonForAction(action: Action): javax.swing.JButton {
+        val button = super.createJButtonForAction(action)
+        if (action === copyAndCloseAction) applyPrimaryButtonStyle(button)
+        return button
+    }
+
+    /** UI-043 测试访问器（createJButtonForAction 在 DialogWrapper 内为 protected）。 */
+    internal fun createJButtonForActionForTest(action: Action): javax.swing.JButton = createJButtonForAction(action)
+
+    /** T-DmlImpactProminence：测试访问器（createActions 在 DialogWrapper 内为 protected）。 */
+    internal fun actionsForTest(): Array<Action> = createActions()
 
     /** 尺寸记忆 key（非 null → DialogWrapper 经 DimensionService 记忆用户拉伸尺寸，下次打开保持）。 */
     override fun getDimensionServiceKey(): String = DIMENSION_KEY

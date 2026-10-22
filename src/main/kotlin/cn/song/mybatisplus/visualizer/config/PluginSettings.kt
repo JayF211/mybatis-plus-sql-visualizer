@@ -437,6 +437,16 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
          */
         var paramActiveSchemeByKey: String = "",
 
+        /**
+         * T-PresetMethodBinding：**方案 × 方法 → 最近一次保存的完整缓存键**，形态
+         * `{"方案名":{"<scope>":"<缓存键>"}, ...}`（嵌套 JSON，避免方案名与 scope 拼串）。
+         *
+         * 用途：同一方法里改了 SQL（键的 SQL 指纹段变了）后，精确键未命中时按本表把该预设
+         * 在该方法下最近一次保存的快照找回来——「预设永久绑定方法、改 SQL 也不丢」。
+         * 消费方 = [cn.song.mybatisplus.visualizer.ui.ParamHistoryCache.recallRecent]。
+         */
+        var paramSchemeRecentKey: String = "",
+
         // ---------- Hibernate/JPA 日志捕获 ----------
 
         /** 启用 Hibernate/JPA 日志解析（默认开）。 */
@@ -585,27 +595,30 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
 
         /**
          * M56 T-M56-08：增强捕获开关（**默认开**——2026-09-16 用户定案，增强捕获为主通道）。
-         * 开启且经注入确认后，agent 接管捕获源（参数实参直取/精确耗时/影响行数/报错同列/
+         * 开关打开即授权：agent 直接接管捕获源（参数实参直取/精确耗时/影响行数/报错同列/
          * 精确跳转）；attach 不可用/连接丢失自动回落现有控制台捕获，零劣化。
-         * 注：本项默认开而 [enhancedCaptureConfirmed] 默认 false——首次挂载（项目运行）时弹一次
-         * 注入确认，同意后才真正 attach（知情同意不放宽，见 AgentManager 的首次挂载确认请求）。
+         * T-EnhancedCaptureDefaultOn（2026-10-19）：注入确认弹窗已整体移除——开关打开即生效，
+         * 不再有「默认开但需同意」的中间态。
          */
         var enhancedCaptureEnabled: Boolean = true,
 
         /**
-         * M56 T-M56-08：注入确认记忆（确认后置 true，不再重复弹）。
-         * 关闭增强不重置本值（重开不再弹）；确认对话框含采集范围/数据留本机/JEP 451 告警预告。
-         * 默认 false：配合 enabled 默认开，首次运行项目时弹一次（设置页手动勾选时亦可确认）。
+         * M56 T-M56-08：注入确认记忆。
+         *
+         * T-EnhancedCaptureDefaultOn（2026-10-19）：运行期语义已废弃——授权只看
+         * [enhancedCaptureEnabled]。本字段保留仅为 XML/JSON 兼容与旧版本回退（旧版读到 true
+         * 不再弹框）；[loadState] 会把它归一为 true。
          */
-        var enhancedCaptureConfirmed: Boolean = false,
+        @Deprecated("T-EnhancedCaptureDefaultOn：授权语义已收敛到 enhancedCaptureEnabled，本字段不再参与判定")
+        var enhancedCaptureConfirmed: Boolean = true,
 
         /**
          * T-PS4-01：注入确认「拒绝时刻」毫秒时间戳（持久化，随本 XML 跨 IDE 重启存活）；0 = 无拒绝记忆。
-         * 拒绝后进入 24h 冷却（窗口在 AgentManager.DEFAULT_REJECT_COOLDOWN_MS）：冷却期内不再重复弹
-         * 确认框（冷却只作用于弹窗频率、不改变同意门槛——保守口径，冷却过期后再弹一次）。
-         * 设置页「关闭 → 再开启」增强捕获时由 AgentManager 的 SETTINGS_CHANGE_TOPIC 监听清零重置，
-         * 保留用户改主意的入口；增强捕获总开关关闭时本值无意义（关闭增强 > 冷却）。
+         *
+         * T-EnhancedCaptureDefaultOn（2026-10-19）：拒绝冷却随确认流整体移除，本字段不再被读取；
+         * 保留仅为 XML/JSON 兼容，[loadState] 会把它归一为 0。
          */
+        @Deprecated("T-EnhancedCaptureDefaultOn：拒绝冷却已移除，本字段不再参与判定")
         var enhancedCaptureRejectedAtMs: Long = 0L,
 
         /**
@@ -670,8 +683,14 @@ class PluginSettings : PersistentStateComponent<PluginSettings.State> {
 
     override fun getState(): State = state
 
+    @Suppress("DEPRECATION") // T-EnhancedCaptureDefaultOn：旧字段仅用于兼容归一
     override fun loadState(state: State) {
         this.state = state
+        // T-EnhancedCaptureDefaultOn（2026-10-19）：旧配置兼容归一——确认记忆与拒绝冷却不再
+        // 参与任何判定，加载时幂等清零，避免 XML/JSON 继续携带误导值。**只碰这两个字段**：
+        // 用户显式关闭的 enhancedCaptureEnabled 必须原样保留（关闭增强 > 一切默认）。
+        this.state.enhancedCaptureConfirmed = true
+        this.state.enhancedCaptureRejectedAtMs = 0L
         // F47（T-PerfQuick5）：注入器喂入税消解的快照刷新漏斗——设置页 apply（面板末尾恒
         // loadState(s.copy())）与 JSON 导入（fromJson）均汇入本点，XmlSynHiGate 每元素
         // 服务查找（85ns/元素，V38 基准）由此降为快照直读（14ns/元素）。

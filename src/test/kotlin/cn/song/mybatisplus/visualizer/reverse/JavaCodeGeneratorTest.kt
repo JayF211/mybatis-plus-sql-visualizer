@@ -273,8 +273,8 @@ class JavaCodeGeneratorTest {
     @Test
     fun `嵌套组_渲染递归lambda`() {
         val result = SqlReverseResult(
-            tableName = "t",
-            selectColumns = null,
+            tableName = "user",
+            selectColumns = listOf(SelectColumn("id")),
             conditions = listOf(
                 Condition.Group(
                     Connector.OR,
@@ -292,11 +292,412 @@ class JavaCodeGeneratorTest {
             ),
         )
         val code = JavaCodeGenerator.generate(result)
-        // 嵌套子组 → .and(w2 -> w2 ...)；OR 组第二子条件前 .or()（嵌套内统一 8 空格缩进）
+        // T-ReverseGroupLogicDelete：OR 组内子组用带 consumer 的 or 承载连接（旧 .and(w2 ->) 会把
+        // OR 静默改成 AND——MP NormalSegmentList 对「上一分隔符 OR、新分隔符 AND」会移除 OR）
         assertTrue(
             code,
-            code.contains(".nested(w -> w\n        .and(w2 -> w2\n        .eq(\"a\", 1)\n        .eq(\"b\", 2))\n        .or()\n        .eq(\"c\", 3))"),
+            code.contains(".nested(w -> w\n        .or(w2 -> w2\n        .eq(\"a\", 1)\n        .eq(\"b\", 2))\n        .or()\n        .eq(\"c\", 3))"),
         )
+        // 真实 MP 语义：OR 必须保留（文本匹配证不了这点，用 MP 3.5.x 实跑 getSqlSegment 断言）
+        GeneratedProjectionCompiler.assertProjection(code, "id", " OR ", "(a = ", " AND b = ")
+    }
+
+    // ------------------------------------------------------------------
+    // T-ReverseGroupLogicDelete：条件组语义（OR 不被吞 / NOT 不丢失）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `OR组的AND子组_OR不得被吞成AND`() {
+        // 目标 SQL：a = 1 OR (b = 2 AND c = 3)
+        // 旧实现 .or().and(w2 -> …) 会被 MP 归一成 a = 1 AND (b = 2 AND c = 3)——查询结果直接错
+        val result = SqlReverseResult(
+            tableName = "user",
+            selectColumns = listOf(SelectColumn("id")),
+            conditions = listOf(
+                Condition.Group(
+                    Connector.OR,
+                    listOf(
+                        Condition.Simple(ColumnRef(columnName = "a"), "=", SqlValue.Literal("1")),
+                        Condition.Group(
+                            Connector.AND,
+                            listOf(
+                                Condition.Simple(ColumnRef(columnName = "b"), "=", SqlValue.Literal("2")),
+                                Condition.Simple(ColumnRef(columnName = "c"), "=", SqlValue.Literal("3")),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val code = JavaCodeGenerator.generate(result)
+        assertFalse("不应再出现 .or() 后紧跟 .and( 的组合：\n$code", code.contains(".or()\n        .and("))
+        GeneratedProjectionCompiler.assertProjection(code, "id", "a = ", " OR ", "(b = ", " AND c = ")
+    }
+
+    @Test
+    fun `OR组的单条件子组_OR不得被吞成AND`() {
+        // 最小复现：a = 1 OR (b = 2)——带括号的 OR 分支即触发（旧实现渲染成 AND）
+        val result = SqlReverseResult(
+            tableName = "user",
+            selectColumns = listOf(SelectColumn("id")),
+            conditions = listOf(
+                Condition.Group(
+                    Connector.OR,
+                    listOf(
+                        Condition.Simple(ColumnRef(columnName = "a"), "=", SqlValue.Literal("1")),
+                        Condition.Group(
+                            Connector.AND,
+                            listOf(Condition.Simple(ColumnRef(columnName = "b"), "=", SqlValue.Literal("2"))),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val code = JavaCodeGenerator.generate(result)
+        GeneratedProjectionCompiler.assertProjection(code, "id", "a = ", " OR ", "b = ")
+    }
+
+    @Test
+    fun `子组取反_NOT不得丢失`() {
+        // 目标 SQL：a = 1 AND NOT (b = 2 OR c = 3)
+        // 旧实现只看 connector 不看 negated → NOT 整个消失
+        val result = SqlReverseResult(
+            tableName = "user",
+            selectColumns = listOf(SelectColumn("id")),
+            conditions = listOf(
+                Condition.Group(
+                    Connector.AND,
+                    listOf(
+                        Condition.Simple(ColumnRef(columnName = "a"), "=", SqlValue.Literal("1")),
+                        Condition.Group(
+                            Connector.OR,
+                            listOf(
+                                Condition.Simple(ColumnRef(columnName = "b"), "=", SqlValue.Literal("2")),
+                                Condition.Simple(ColumnRef(columnName = "c"), "=", SqlValue.Literal("3")),
+                            ),
+                            negated = true,
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val code = JavaCodeGenerator.generate(result)
+        assertTrue("应生成 not(w2 -> …)：\n$code", code.contains(".not(w2 -> w2"))
+        GeneratedProjectionCompiler.assertProjection(code, "id", " NOT ", " OR ")
+    }
+
+    @Test
+    fun `AND组子组_仍用nested且语义等价`() {
+        // 目标 SQL：a = 1 AND (b = 2 OR c = 3)——nested 与旧 and 等价，不依赖「链首 AND 被丢弃」
+        val result = SqlReverseResult(
+            tableName = "user",
+            selectColumns = listOf(SelectColumn("id")),
+            conditions = listOf(
+                Condition.Group(
+                    Connector.AND,
+                    listOf(
+                        Condition.Simple(ColumnRef(columnName = "a"), "=", SqlValue.Literal("1")),
+                        Condition.Group(
+                            Connector.OR,
+                            listOf(
+                                Condition.Simple(ColumnRef(columnName = "b"), "=", SqlValue.Literal("2")),
+                                Condition.Simple(ColumnRef(columnName = "c"), "=", SqlValue.Literal("3")),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val code = JavaCodeGenerator.generate(result)
+        assertTrue("AND 组内子组应用 nested：\n$code", code.contains(".nested(w2 -> w2"))
+        GeneratedProjectionCompiler.assertProjection(code, "id", "a = ", " AND ", "(b = ", " OR ")
+    }
+
+    // ------------------------------------------------------------------
+    // T-ReverseGroupLogicDelete：@TableLogic 注入条件不重复生成
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `逻辑删除注入条件_不生成eq与select`() {
+        // 实体 deleted 标 @TableLogic：MP 自动追加 AND deleted = 0，反向不应再生成一遍
+        val result = SqlReverseParser.parse(
+            "SELECT id, deleted FROM biz_order WHERE station_id = 1 AND deleted = 0",
+        )
+        val entity = JavaCodeGenerator.EntityTarget(
+            className = "BizOrder",
+            columnToField = mapOf("id" to "id", "station_id" to "stationId", "deleted" to "deleted"),
+            logicDeleteColumn = "deleted",
+        )
+        val code = JavaCodeGenerator.generate(result, entity)
+        assertFalse("不应生成 .eq(BizOrder::getDeleted, 0)：\n$code", code.contains("getDeleted"))
+        assertTrue("应生成其他条件：\n$code", code.contains(".eq(BizOrder::getStationId, 1)"))
+        assertTrue("应说明跳过缘由：\n$code", code.contains("@TableLogic"))
+        assertTrue("应只 select id：\n$code", code.contains(".select(BizOrder::getId)"))
+    }
+
+    @Test
+    fun `逻辑删除真过滤条件_值不等于未删除值则保留`() {
+        // deleted = 1 是用户手写的真过滤（查已删除数据），不是 MP 注入，必须保留
+        val result = SqlReverseParser.parse(
+            "SELECT id FROM biz_order WHERE deleted = 1",
+        )
+        val entity = JavaCodeGenerator.EntityTarget(
+            className = "BizOrder",
+            columnToField = mapOf("id" to "id", "deleted" to "deleted"),
+            logicDeleteColumn = "deleted",
+        )
+        val code = JavaCodeGenerator.generate(result, entity)
+        assertTrue("deleted = 1 应保留：\n$code", code.contains(".eq(BizOrder::getDeleted, 1)"))
+    }
+
+    @Test
+    fun `实体无逻辑删除列_行为不变`() {
+        // 无 @TableLogic 的实体：deleted = 0 是普通列条件，必须照常生成
+        val result = SqlReverseParser.parse(
+            "SELECT id FROM biz_order WHERE deleted = 0",
+        )
+        val entity = JavaCodeGenerator.EntityTarget(
+            className = "BizOrder",
+            columnToField = mapOf("id" to "id", "deleted" to "deleted"),
+            logicDeleteColumn = null,
+        )
+        val code = JavaCodeGenerator.generate(result, entity)
+        assertTrue("无 @TableLogic 时不应过滤：\n$code", code.contains(".eq(BizOrder::getDeleted, 0)"))
+    }
+
+    @Test
+    fun `自定义逻辑删除值_按配置识别`() {
+        // 项目把 logic-delete-value 配成 "N"：MP 注入 AND deleted = 'N'，应同样识别并跳过
+        val result = SqlReverseParser.parse(
+            "SELECT id FROM biz_order WHERE deleted = 'N'",
+        )
+        val entity = JavaCodeGenerator.EntityTarget(
+            className = "BizOrder",
+            columnToField = mapOf("id" to "id", "deleted" to "deleted"),
+            logicDeleteColumn = "deleted",
+            logicDeleteValue = "N",
+        )
+        val code = JavaCodeGenerator.generate(result, entity)
+        assertFalse("自定义值应被识别为注入条件：\n$code", code.contains("getDeleted"))
+    }
+
+    // ------------------------------------------------------------------
+    // T-ReverseGroupCoverage：条件组语义矩阵（父组 × 子组 × 取反 × 位置）
+    // ------------------------------------------------------------------
+
+    /**
+     * 条件组语义矩阵：把「父组连接符 × 子组连接符 × 子组是否取反 × 子组位置」四维枚举，
+     * 每条都在真实 MP 上编译并断言 `getSqlSegment()`。
+     *
+     * 这是对 T-ReverseGroupLogicDelete 的补测——旧用例只有「OR 组 + AND 子组 + 位置 0」
+     * 一种组合，且断言的是代码文本而非 MP 渲染语义，故 OR 被吞、NOT 丢失两类缺陷都能全绿通过。
+     */
+    @Test
+    fun `条件组语义矩阵_四维组合在真实MP上语义正确`() {
+        data class Case(
+            val label: String,
+            val parent: Connector,
+            val child: Connector,
+            val childNegated: Boolean,
+            val childFirst: Boolean,
+            val mustContain: List<String>,
+            val mustNotContain: List<String> = emptyList(),
+        )
+        fun simple(name: String, value: String) =
+            Condition.Simple(ColumnRef(columnName = name), "=", SqlValue.Literal(value))
+        val childGroup = { c: Connector, negated: Boolean ->
+            Condition.Group(c, listOf(simple("b", "2"), simple("c", "3")), negated = negated)
+        }
+
+        val cases = buildList<Case> {
+            for (parent in listOf(Connector.AND, Connector.OR)) {
+                for (child in listOf(Connector.AND, Connector.OR)) {
+                    for (negated in listOf(false, true)) {
+                        for (first in listOf(true, false)) {
+                            val label = "父=${parent.name} 子=${child.name} 取反=$negated 子组在首位=$first"
+                            // 期望语义：父组连接符决定子组与相邻条件的连接；子组内部连接符决定组内连接
+                            val expectedJoin = if (parent == Connector.OR) " OR " else " AND "
+                            val must = mutableListOf("a = ", expectedJoin, "b = ")
+                            if (child == Connector.OR) must += " OR c = " else must += " AND c = "
+                            if (negated) must += "NOT "
+                            add(Case(label, parent, child, negated, first, must))
+                        }
+                    }
+                }
+            }
+        }
+
+        val failures = mutableListOf<String>()
+        for (case in cases) {
+            val children = mutableListOf<Condition>()
+            val group = childGroup(case.child, case.childNegated)
+            if (case.childFirst) {
+                children += group
+                children += simple("a", "1")
+            } else {
+                children += simple("a", "1")
+                children += group
+            }
+            val result = SqlReverseResult(
+                tableName = "user",
+                selectColumns = listOf(SelectColumn("id")),
+                conditions = listOf(Condition.Group(case.parent, children)),
+            )
+            val code = JavaCodeGenerator.generate(result)
+            try {
+                GeneratedProjectionCompiler.assertProjection(code, "id", *case.mustContain.toTypedArray())
+                case.mustNotContain.forEach { assertFalse("${case.label} 不应含 $it", code.contains(it)) }
+            } catch (e: AssertionError) {
+                failures += "${case.label}:\n${e.message}"
+            }
+        }
+        assertTrue("条件组语义矩阵失败 ${failures.size}/${cases.size} 项:\n${failures.joinToString("\n\n")}", failures.isEmpty())
+    }
+
+    /**
+     * 结构性守卫：生成代码中不得出现「无参 `.or()` 紧跟带 consumer 的 `.and(`」。
+     *
+     * MP 的 `NormalSegmentList.transformList` 判定「上一分隔符 OR、新分隔符 AND」时移除 OR 换成 AND，
+     * 该组合会让 OR 语义静默丢失。此守卫独立于语义断言存在——语义断言依赖真实 MP 编译（慢），
+     * 守卫用纯文本快速兜住同一反模式的回归。
+     */
+    @Test
+    fun `结构性守卫_生成代码不得出现or紧跟and组的反模式`() {
+        val nestedChild = Condition.Group(
+            Connector.AND,
+            listOf(
+                Condition.Simple(ColumnRef(columnName = "b"), "=", SqlValue.Literal("2")),
+                Condition.Simple(ColumnRef(columnName = "c"), "=", SqlValue.Literal("3")),
+            ),
+        )
+        val shapes = listOf(
+            "OR组含AND子组" to listOf(
+                Condition.Group(Connector.OR, listOf(Condition.Simple(ColumnRef(columnName = "a"), "=", SqlValue.Literal("1")), nestedChild)),
+            ),
+            "OR组AND子组在首位" to listOf(
+                Condition.Group(Connector.OR, listOf(nestedChild, Condition.Simple(ColumnRef(columnName = "a"), "=", SqlValue.Literal("1")))),
+            ),
+            "顶层OR序列" to listOf(
+                Condition.Group(Connector.OR, listOf(Condition.Simple(ColumnRef(columnName = "a"), "=", SqlValue.Literal("1")), nestedChild)),
+            ),
+        )
+        val offenders = mutableListOf<String>()
+        for ((label, conditions) in shapes) {
+            val code = JavaCodeGenerator.generate(
+                SqlReverseResult(tableName = "user", selectColumns = listOf(SelectColumn("id")), conditions = conditions),
+            )
+            // 反模式：无参 or() 之后（忽略空白）紧跟 .and(
+            if (Regex("\\.or\\(\\)\\s*\\.and\\(").containsMatchIn(code)) offenders += "$label:\n$code"
+        }
+        assertTrue("生成代码出现 .or() 紧跟 .and( 的反模式（MP 会把 OR 换成 AND）：\n${offenders.joinToString("\n\n")}", offenders.isEmpty())
+    }
+
+    // ------------------------------------------------------------------
+    // T-ReverseGroupCoverage：逻辑删除跨语句类型矩阵
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `逻辑删除_UPDATE与DELETE同样不重复生成条件`() {
+        val entity = JavaCodeGenerator.EntityTarget(
+            className = "BizOrder",
+            columnToField = mapOf("id" to "id", "status" to "status", "deleted" to "deleted"),
+            logicDeleteColumn = "deleted",
+        )
+        // MP 对 UPDATE/DELETE 同样注入 AND deleted = 0
+        val update = JavaCodeGenerator.generate(
+            SqlReverseParser.parse("UPDATE biz_order SET status = 1 WHERE id = 1 AND deleted = 0"), entity,
+        )
+        val delete = JavaCodeGenerator.generate(
+            SqlReverseParser.parse("DELETE FROM biz_order WHERE id = 1 AND deleted = 0"), entity,
+        )
+        assertFalse("UPDATE 不应重复生成逻辑删除条件：\n$update", update.contains("getDeleted"))
+        assertFalse("DELETE 不应重复生成逻辑删除条件：\n$delete", delete.contains("getDeleted"))
+        assertTrue("UPDATE 应保留真实条件：\n$update", update.contains(".eq(BizOrder::getId, 1)"))
+        assertTrue("DELETE 应保留真实条件：\n$delete", delete.contains(".eq(BizOrder::getId, 1)"))
+    }
+
+    @Test
+    fun `逻辑删除_嵌套组内注入条件同样跳过`() {
+        // 注入条件若落在括号组内（如 (deleted = 0 OR x = 1)），过滤须递归生效
+        val result = SqlReverseParser.parse(
+            "SELECT id FROM biz_order WHERE deleted = 0 AND (deleted = 0 AND status = 1)",
+        )
+        val entity = JavaCodeGenerator.EntityTarget(
+            className = "BizOrder",
+            columnToField = mapOf("id" to "id", "status" to "status", "deleted" to "deleted"),
+            logicDeleteColumn = "deleted",
+        )
+        val code = JavaCodeGenerator.generate(result, entity)
+        assertFalse("组内注入条件也应跳过：\n$code", code.contains("getDeleted"))
+        assertTrue("组内真实条件应保留：\n$code", code.contains(".eq(BizOrder::getStatus, 1)"))
+    }
+
+    @Test
+    fun `逻辑删除_IN单值形态同样识别`() {
+        // MP 个别场景以 deleted IN (0) 表达注入
+        val result = SqlReverseParser.parse("SELECT id FROM biz_order WHERE deleted IN (0)")
+        val entity = JavaCodeGenerator.EntityTarget(
+            className = "BizOrder",
+            columnToField = mapOf("id" to "id", "deleted" to "deleted"),
+            logicDeleteColumn = "deleted",
+        )
+        val code = JavaCodeGenerator.generate(result, entity)
+        assertFalse("单值 IN 形态也应识别为注入：\n$code", code.contains("getDeleted"))
+    }
+
+    @Test
+    fun `逻辑删除_多值IN不是注入条件_必须保留`() {
+        // deleted IN (0, 1) 是用户显式查询两种状态，不是 MP 注入，必须保留
+        val result = SqlReverseParser.parse("SELECT id FROM biz_order WHERE deleted IN (0, 1)")
+        val entity = JavaCodeGenerator.EntityTarget(
+            className = "BizOrder",
+            columnToField = mapOf("id" to "id", "deleted" to "deleted"),
+            logicDeleteColumn = "deleted",
+        )
+        val code = JavaCodeGenerator.generate(result, entity)
+        assertTrue("多值 IN 应保留：\n$code", code.contains(".in(BizOrder::getDeleted"))
+    }
+
+    // ------------------------------------------------------------------
+    // T-ReverseGroupCoverage：生成层可编译性（新门禁发现的两处坏代码）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `ANSI类型字面量_渲染为Java字符串而非裸拼`() {
+        // DATE '2024-01-01' 直接拼进 Java 是未闭合字符字面量——编译不过
+        for ((sql, expected) in listOf(
+            "SELECT id FROM user WHERE create_time = DATE '2024-01-01'" to "\"2024-01-01\"",
+            "SELECT id FROM user WHERE create_time = TIMESTAMP '2024-01-01 10:00:00'" to "\"2024-01-01 10:00:00\"",
+        )) {
+            val code = JavaCodeGenerator.generate(SqlReverseParser.parse(sql))
+            assertTrue("应渲染为 Java 字符串字面量：\n$code", code.contains(expected))
+            assertFalse("不应裸拼 ANSI 前缀：\n$code", Regex("=\\s*(DATE|TIMESTAMP)\\s+'").containsMatchIn(code))
+            // 真实编译：这是文本断言证不了的部分
+            GeneratedProjectionCompiler.assertProjection(code, "id", "create_time =")
+        }
+    }
+
+    @Test
+    fun `派生表无实体上下文_明确报错而非产出坏代码`() {
+        // FROM (SELECT …) t 无法推断实体类名，旧实现生成 QueryWrapper<(SELECT …)>——编译不过
+        val result = SqlReverseParser.parse(
+            "SELECT t.id FROM (SELECT id FROM user WHERE id >= 0) t WHERE t.id >= 1",
+        )
+        val error = runCatching { JavaCodeGenerator.generate(result, null, GeneratedWrapper.QUERY) }
+            .exceptionOrNull()
+        assertTrue("应抛 SqlReverseException：${error?.javaClass?.name}", error is SqlReverseException)
+        assertEquals(SqlReverseParser.KEY_UNSUPPORTED, (error as SqlReverseException).key)
+    }
+
+    @Test
+    fun `派生表有实体上下文_正常生成`() {
+        // 用户显式选定实体后，派生表不再阻断（类名有来源）
+        val result = SqlReverseParser.parse(
+            "SELECT t.id FROM (SELECT id FROM user WHERE id >= 0) t WHERE t.id >= 1",
+        )
+        val entity = JavaCodeGenerator.EntityTarget("User", mapOf("id" to "id"))
+        val code = JavaCodeGenerator.generate(result, entity)
+        assertTrue("有实体上下文应正常生成：\n$code", code.contains("QueryWrapper<User>"))
     }
 
     // ------------------------------------------------------------------

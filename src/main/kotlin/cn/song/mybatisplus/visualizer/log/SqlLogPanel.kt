@@ -7,6 +7,7 @@ import cn.song.mybatisplus.visualizer.config.SettingsChangeListener
 import cn.song.mybatisplus.visualizer.log.agent.AgentManager
 import cn.song.mybatisplus.visualizer.model.PreviewResult
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService
+import cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons
 // T-UiCoord F2：下拉按钮文本截尾省略复用 meta 行的同款纯函数（避免第二份省略实现）
 import cn.song.mybatisplus.visualizer.ui.clipTailToWidth
 import com.intellij.util.ui.JBUI
@@ -41,7 +42,6 @@ import com.intellij.notification.NotificationAction
 import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.util.IconLoader
 import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.intellij.openapi.fileEditor.OpenFileDescriptor
@@ -239,7 +239,7 @@ class SqlLogPanel(
      */
     private val typeFilterButton = JButton().apply {
         isFocusable = false
-        icon = AllIcons.General.ArrowDown
+        icon = MpvsIcons.TypeFilter
         horizontalTextPosition = SwingConstants.LEFT // 图标在文字右侧（下拉按钮惯例）
         addActionListener { showTypeFilterPopup() }
     }
@@ -256,12 +256,12 @@ class SqlLogPanel(
      */
     internal val sortModeAction: AnAction = object : AnAction() {
         init {
-            templatePresentation.icon = AllIcons.RunConfigurations.SortbyDuration
+            templatePresentation.icon = MpvsIcons.Sort
         }
 
         override fun update(e: AnActionEvent) {
             val label = currentSortLabel()
-            e.presentation.icon = AllIcons.RunConfigurations.SortbyDuration
+            e.presentation.icon = MpvsIcons.Sort
             e.presentation.text = label
             e.presentation.description = MpSqlVisualizerBundle.message("log.sort.label") + label
         }
@@ -477,7 +477,7 @@ class SqlLogPanel(
     internal val previewToggleAction: ToggleAction = object : ToggleAction(
         MpSqlVisualizerBundle.message("log.dockedPreview.toggle"),
         MpSqlVisualizerBundle.message("log.dockedPreview.toggle.tip"),
-        AllIcons.Actions.Preview,
+        MpvsIcons.DockedPreview,
     ) {
         override fun isSelected(e: AnActionEvent): Boolean = dockedPreview.isOpen
 
@@ -829,7 +829,7 @@ class SqlLogPanel(
         override fun update(e: AnActionEvent) {
             // 图标必须在 update 里写（工具栏 ActionButton 按 presentation 渲染；
             // 不设则渲染为占位圆圈——用户实测缺陷）
-            e.presentation.icon = AllIcons.Actions.Search
+            e.presentation.icon = MpvsIcons.Search
             e.presentation.text = MpSqlVisualizerBundle.message("log.panel.search")
         }
 
@@ -1071,12 +1071,12 @@ class SqlLogPanel(
     internal inner class CaptureAction : AnAction() {
         override fun update(e: AnActionEvent) {
             if (manager.capturing) {
-                e.presentation.icon = AllIcons.Actions.Suspend
+                e.presentation.icon = MpvsIcons.CaptureStop
                 e.presentation.text = MpSqlVisualizerBundle.message("log.panel.stop")
                 e.presentation.description = if (manager.isWaitingForConsole)
                     MpSqlVisualizerBundle.message("log.panel.capture.waiting.desc") else null
             } else {
-                e.presentation.icon = AllIcons.Actions.Execute
+                e.presentation.icon = MpvsIcons.CaptureStart
                 e.presentation.text = MpSqlVisualizerBundle.message("log.panel.capture")
                 e.presentation.description = null
             }
@@ -1093,24 +1093,21 @@ class SqlLogPanel(
 
     /**
      * R53：增强捕获暂停/恢复（工具窗入口）。
-     * - 增强未开启（总开关关）→ 隐藏（暂停对「增强不开」无意义，V80③ 三态不冲突）；
-     * - 开启 → 按 [AgentManager.userPaused] 输出暂停/恢复图标与文案；
-     * - 切换后经 [AgentManager.setUserPaused] 即时重算桥闸门并广播（状态栏 2s 轮询跟上）。
+     *
+     * T-AgentPauseVisibility（2026-10-19，用户拍板方案 B）：**临时全隐藏**。
+     * 增强捕获已默认开启且无提示，该按钮在应用未运行时没有可暂停对象，并与捕捉按钮形成
+     * 「播放/暂停」误读；先整体隐藏，动作对象仍保留在工具栏组内（不删能力代码）。
+     * 代价：暂停 agent 通道的 UI 入口暂时不可达（关闭总开关仍会回落控制台）。
+     * 恢复条件：方案 A（agent 已挂载或暂停态才显示）落地，或新增状态栏/右键菜单入口。
+     *
+     * 历史语义（保留在 [actionPerformed]）：暂停只停 agent 通道（事件在入队点丢弃）、
+     * 控制台通道照常；暂停≠关闭——连接/心跳/CONFIG 链不动。
      */
     private inner class AgentPauseAction : AnAction() {
         override fun update(e: AnActionEvent) {
-            val am = runCatching { AgentManager.getInstance(project) }.getOrNull()
-            val enabled = am?.isEnhancedEnabled() == true
-            e.presentation.isVisible = enabled
-            e.presentation.isEnabled = enabled
-            if (!enabled) return
-            if (am!!.userPaused) {
-                e.presentation.icon = AllIcons.Actions.Resume
-                e.presentation.text = MpSqlVisualizerBundle.message("log.panel.agentResume")
-            } else {
-                e.presentation.icon = AllIcons.Actions.Pause
-                e.presentation.text = MpSqlVisualizerBundle.message("log.panel.agentPause")
-            }
+            // 方案 B：无条件隐藏。不要改回 isEnhancedEnabled()——恢复时必须走方案 A 的条件可见。
+            e.presentation.isVisible = false
+            e.presentation.isEnabled = false
         }
 
         override fun actionPerformed(e: AnActionEvent) {
@@ -1119,9 +1116,9 @@ class SqlLogPanel(
         }
     }
 
-    internal inner class ClearAction : AnAction(AllIcons.Actions.GC) {
+    internal inner class ClearAction : AnAction(MpvsIcons.Clear) {
         override fun update(e: AnActionEvent) {
-            e.presentation.icon = AllIcons.Actions.GC
+            e.presentation.icon = MpvsIcons.Clear
             e.presentation.text = MpSqlVisualizerBundle.message("log.panel.clear")
         }
 
@@ -1133,11 +1130,11 @@ class SqlLogPanel(
 
     /**
      * T-SqlLogPerf：「滚动到底部」动作（跳列表底 + 恢复尾部跟随）。
-     * 图标复用 [AllIcons.General.ArrowDown]（本文件 SQL类型/排序按钮同款下箭头，向下语义一致）。
+     * 图标 = [MpvsIcons.ScrollToEnd]（列表 + 向下箭头；原先复用 [AllIcons.General.ArrowDown]）。
      */
     internal inner class ScrollToEndAction : AnAction() {
         override fun update(e: AnActionEvent) {
-            e.presentation.icon = AllIcons.General.ArrowDown
+            e.presentation.icon = MpvsIcons.ScrollToEnd
             e.presentation.text = MpSqlVisualizerBundle.message("log.panel.scrollBottom")
             e.presentation.description = MpSqlVisualizerBundle.message(
                 if (tailFollow.shouldFollow) "log.panel.scrollBottom.tip" else "log.panel.scrollBottom.paused.tip",
@@ -1151,7 +1148,7 @@ class SqlLogPanel(
 
     internal inner class SettingsAction : AnAction() {
         override fun update(e: AnActionEvent) {
-            e.presentation.icon = AllIcons.General.Settings
+            e.presentation.icon = MpvsIcons.Settings
             e.presentation.text = MpSqlVisualizerBundle.message("log.panel.settings")
         }
 
@@ -1163,13 +1160,13 @@ class SqlLogPanel(
     }
 
     /**
-     * T-SqlSuppress（O-69）：屏蔽管理入口（D1 定案主入口，插设置旁；D7 图标漏斗
-     * `AllIcons.General.Filter`——262 jar 实渲染比对后用户选定，全栏无漏斗形不撞车）。
+     * T-SqlSuppress（O-69）：屏蔽管理入口（D1 定案主入口，插设置旁；图标 = [MpvsIcons.Suppress]
+     * 自绘「眼睛 + 红斜线」，原先复用 [AllIcons.General.Filter] 漏斗——漏斗让给 SQL 类型过滤）。
      * 打开与右键「管理屏蔽规则…」同一非模态对话框。
      */
     internal inner class ManageSuppressAction : AnAction() {
         override fun update(e: AnActionEvent) {
-            e.presentation.icon = AllIcons.General.Filter
+            e.presentation.icon = MpvsIcons.Suppress
             e.presentation.text = MpSqlVisualizerBundle.message("log.suppress.manage")
         }
 
@@ -1181,7 +1178,7 @@ class SqlLogPanel(
     internal inner class CommunityAction : AnAction(
         MpSqlVisualizerBundle.message("log.community.action"),
         MpSqlVisualizerBundle.message("log.community.action.tip"),
-        IconLoader.getIcon("/icons/communityChat.svg", SqlLogPanel::class.java),
+        MpvsIcons.Community,
     ) {
         override fun actionPerformed(e: AnActionEvent) {
             CommunityDialog(project).apply { startLoading() }.show()
@@ -1189,7 +1186,7 @@ class SqlLogPanel(
     }
 
     /** T-M39：帮助入口（? 按钮，位于设置按钮旁）→ 内嵌浏览器打开本地 HTML 帮助文档。
-     *  图标用 AllIcons.Actions.Help（纯灰 #6E6E6E 问号，与设置/清空按钮同色系；
+     *  图标 = [MpvsIcons.Help]（AllIcons.Actions.Help，纯灰问号，与设置/清空按钮同色系；
      *  ContextHelp 为灰蓝圆圈 #9AA7B0，与旁边按钮色相不一致——用户反馈）。
      *
      *  打开逻辑（2026-08-31 定稿：本地 HTML 为主路径，零网络依赖）：
@@ -1206,7 +1203,7 @@ class SqlLogPanel(
      *  不发起任何外部请求，不存在资源加载失败导致缺样式。 */
     internal inner class HelpAction : AnAction() {
         override fun update(e: AnActionEvent) {
-            e.presentation.icon = AllIcons.Actions.Help
+            e.presentation.icon = MpvsIcons.Help
             e.presentation.text = MpSqlVisualizerBundle.message("log.panel.help")
         }
 
@@ -1925,7 +1922,11 @@ class SqlLogPanel(
     }
 
     /** R4（W3 历史工作流包）：导出当前可见行集（lastRendered=面板过滤/搜索/排序后的实际可见集）。 */
-    internal inner class ExportVisibleAction : AnAction(MpSqlVisualizerBundle.message("log.export.visible")) {
+    internal inner class ExportVisibleAction : AnAction(
+        MpSqlVisualizerBundle.message("log.export.visible"),
+        null,
+        MpvsIcons.Export,
+    ) {
         override fun actionPerformed(e: AnActionEvent) {
             exportVisibleEntries()
         }

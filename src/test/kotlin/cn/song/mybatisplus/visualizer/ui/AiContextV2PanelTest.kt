@@ -75,6 +75,36 @@ class AiContextV2PanelTest : BasePlatformTestCase() {
         } finally { Disposer.dispose(panel) }
     }
 
+    fun testIncludeIdentifiersCopyKeepsNamesButMasksValues() {
+        val panel = SqlPreviewPanel(project)
+        try {
+            val sql = "SELECT private_column FROM private_table WHERE id = 42"
+            panel.current = PreviewResult(sql, sql, emptyList(), null, null, "private_table",
+                columns = listOf("private_column"), renderedDialect = MySqlDialect)
+            panel.nativeEditorDoc = EditorFactory.getInstance().createDocument(sql)
+            panel.copyAsAiContext(includeIdentifiers = true)
+            val copied = UiTextClipboard.readText()!!
+            assertTrue(copied.contains("identifiers visible as written"))
+            assertTrue("含名出口应保留表名：$copied", copied.contains("private_table"))
+            assertTrue("含名出口应保留列名：$copied", copied.contains("private_column"))
+            assertTrue(
+                "含名出口的 SQL 段本身应保留表列名（不能只靠静态摘要带出）：$copied",
+                copied.contains("SELECT private_column FROM private_table"),
+            )
+            assertTrue(
+                "含名出口的静态摘要应列出表列名：$copied",
+                copied.contains("Static schema: table=private_table; columns=1: private_column"),
+            )
+            assertFalse("含名出口仍须遮蔽字面量：$copied", copied.contains("42"))
+            // 默认出口保持全隐藏，两个入口互不影响。
+            panel.copyAsAiContext()
+            val strict = UiTextClipboard.readText()!!
+            assertTrue(strict.contains("identifiers hidden"))
+            assertFalse(strict.contains("private_table"))
+            assertFalse(strict.contains("private_column"))
+        } finally { Disposer.dispose(panel) }
+    }
+
     @Suppress("DEPRECATION")
     fun testCopyPerformsNoSocketOrJdbcAcquisitionWithLiveCanaries() {
         val panel = SqlPreviewPanel(project)

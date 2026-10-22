@@ -29,6 +29,12 @@ class RollbackSqlDialogTest : BasePlatformTestCase() {
 
     private val panel = lazy { SqlPreviewPanel(project) }
 
+    /** 必须是 public：生产反射按 getUrl 取目标方言，private 嵌套类会让 invoke 失败。 */
+    class SnapshotTarget {
+        @Suppress("unused")
+        fun getUrl(): String = "jdbc:mysql://localhost:3306/demo"
+    }
+
     override fun tearDown() {
         if (panel.isInitialized()) panel.value.dispose()
         super.tearDown()
@@ -98,6 +104,7 @@ class RollbackSqlDialogTest : BasePlatformTestCase() {
 
             assertEquals(RollbackSqlGenerator.Rating.COMPLETE, dialog.currentResult.rating)
             assertEquals("UPDATE user SET age = 20 WHERE id = 1 AND age = 3;", dialog.sqlTextForTest())
+            assertTrue("手动粘贴成功后应切到表格视图", dialog.snapshotTableShownForTest())
             assertTrue("生成成功后应启用执行动作", dialog.executeActionForTest().isEnabled)
             assertTrue(
                 "横幅应转为可执行",
@@ -108,8 +115,324 @@ class RollbackSqlDialogTest : BasePlatformTestCase() {
         }
     }
 
-    fun testGenerateFromPasteRejectsNonTsv() {
+    // T-RollbackSnapshotAutoFill：执行快照查询走只读旁路，自动填充并生成回滚。
+
+    fun testRunSnapshotQueryUsesSideQueryAndAutoFillsRollback() {
         val dialog = newDialog(unableUpdateResult(), "UPDATE")
+        dialog.snapshotQueryTargetForTest = { SnapshotTarget() }
+        val raw = cn.song.mybatisplus.visualizer.mcp.McpExplainFormatter.RawResult(
+            headers = listOf("id", "age"),
+            rows = listOf(listOf("1", "20")),
+        )
+        val oldRunner = PreviewSideQuery.runnerForTest
+        PreviewSideQuery.runnerForTest = { _, _, _, scalar, cb ->
+            assertFalse("快照查询必须是整表旁路（非标量）", scalar)
+            cb(PreviewSideQuery.Result.Table(raw))
+        }
+        try {
+            dialog.runSnapshotQuery()
+            assertTrue(
+                "快照框应自动填充 TSV：${dialog.pasteAreaForTest().text}",
+                dialog.pasteAreaForTest().text.contains("id\tage"),
+            )
+            assertTrue(
+                "回滚 SQL 应自动生成：${dialog.sqlTextForTest()}",
+                dialog.sqlTextForTest().contains("UPDATE user SET age = 20"),
+            )
+            assertTrue("生成成功后应启用执行动作", dialog.executeActionForTest().isEnabled)
+            // 未填主键列时整行等值定位存在误匹配风险，告警是设计内披露（文案中性，不再写死 DELETE）。
+            assertTrue(
+                "整行定位风险应披露：${dialog.warningsTextForTest()}",
+                dialog.warningsTextForTest().contains("整行等值谓词"),
+            )
+        } finally {
+            PreviewSideQuery.runnerForTest = oldRunner
+            dialog.doDispose()
+        }
+    }
+
+    fun testSnapshotTableViewShowsColumnsAndRowsAndToggles() {
+        // T-RollbackSnapshotView：自动查询结果默认表格展示（列值对应），可切回文本再切回表格。
+        val dialog = newDialog(unableUpdateResult(), "UPDATE")
+        dialog.snapshotQueryTargetForTest = { SnapshotTarget() }
+        val raw = cn.song.mybatisplus.visualizer.mcp.McpExplainFormatter.RawResult(
+            headers = listOf("id", "age"),
+            rows = listOf(listOf("1", "20")),
+        )
+        val oldRunner = PreviewSideQuery.runnerForTest
+        PreviewSideQuery.runnerForTest = { _, _, _, _, cb ->
+            cb(PreviewSideQuery.Result.Table(raw))
+        }
+        try {
+            dialog.runSnapshotQuery()
+            assertTrue("自动查询后应切到表格视图", dialog.snapshotTableShownForTest())
+            assertEquals("表格行数", 1, dialog.snapshotTableForTest().rowCount)
+            assertEquals("表格列数", 2, dialog.snapshotTableForTest().columnCount)
+            assertEquals(
+                MpSqlVisualizerBundle.message("rollback.snapshot.summary", 1, 2),
+                dialog.snapshotSummaryTextForTest(),
+            )
+            dialog.snapshotToggleForTest().doClick()
+            assertFalse("应切回文本视图", dialog.snapshotTableShownForTest())
+            dialog.snapshotToggleForTest().doClick()
+            assertTrue("应再切回表格视图（按文本重解析）", dialog.snapshotTableShownForTest())
+            assertEquals(1, dialog.snapshotTableForTest().rowCount)
+        } finally {
+            PreviewSideQuery.runnerForTest = oldRunner
+            dialog.doDispose()
+        }
+    }
+
+    fun testRunSnapshotQueryKeepsPreviewEditorUntouched() {
+        // 只读旁路：不调用 executeAdhocSql → 预览编辑器文档不变、不换入控制台。
+        val p = panel.value
+        val sql = "UPDATE user SET age = 3 WHERE id = 1"
+        p.showResult(
+            cn.song.mybatisplus.visualizer.model.PreviewResult(
+                sql, sql, emptyList(), null, null, "user",
+                renderedDialect = cn.song.mybatisplus.visualizer.sql.MySqlDialect,
+            ),
+        )
+        p.nativeEditorDoc = com.intellij.openapi.editor.EditorFactory.getInstance().createDocument(sql)
+        val beforeDoc = p.nativeEditorDoc?.text
+        val beforeConsole = p.embeddedConsole
+        val dialog = newDialog(unableUpdateResult(), "UPDATE")
+        dialog.snapshotQueryTargetForTest = { SnapshotTarget() }
+        val oldRunner = PreviewSideQuery.runnerForTest
+        var sideQueryCalled = false
+        PreviewSideQuery.runnerForTest = { _, _, _, _, cb ->
+            sideQueryCalled = true
+            cb(
+                PreviewSideQuery.Result.Table(
+                    cn.song.mybatisplus.visualizer.mcp.McpExplainFormatter.RawResult(
+                        listOf("id", "age"), listOf(listOf("1", "20")),
+                    ),
+                ),
+            )
+        }
+        try {
+            dialog.runSnapshotQuery()
+            assertTrue("必须走只读旁路查询（旧 executeAdhocSql 路径不会调用 runner）", sideQueryCalled)
+            assertEquals("只读快照查询不得替换预览编辑器", beforeDoc, p.nativeEditorDoc?.text)
+            assertEquals(sql, p.currentEditorSql())
+            assertSame("只读快照查询不得换入控制台", beforeConsole, p.embeddedConsole)
+        } finally {
+            PreviewSideQuery.runnerForTest = oldRunner
+            dialog.doDispose()
+            p.clear()
+        }
+    }
+
+    fun testRunSnapshotQueryWithoutDataSourcePromptsSelectorAndRetries() {
+        // 用户真机反馈：无数据源时应直接弹选择器并自动重试，而不是只报错。
+        val dialog = newDialog(unableUpdateResult(), "UPDATE")
+        var target: Any? = null
+        var prompted = false
+        dialog.snapshotQueryTargetForTest = { target }
+        dialog.snapshotPromptForTest = { _, _, _ -> prompted = true }
+        dialog.snapshotAwaitBindForTest = { _, _, onBound, _ ->
+            target = SnapshotTarget()
+            onBound()
+        }
+        val oldRunner = PreviewSideQuery.runnerForTest
+        PreviewSideQuery.runnerForTest = { _, _, _, _, cb ->
+            cb(
+                PreviewSideQuery.Result.Table(
+                    cn.song.mybatisplus.visualizer.mcp.McpExplainFormatter.RawResult(
+                        listOf("id", "age"), listOf(listOf("1", "20")),
+                    ),
+                ),
+            )
+        }
+        try {
+            dialog.runSnapshotQuery()
+            assertTrue("无数据源应先弹数据源选择器", prompted)
+            assertTrue("绑定后应自动重试并填充表格", dialog.snapshotTableShownForTest())
+            assertTrue(
+                "重试后不应残留无数据源告警：${dialog.warningsTextForTest()}",
+                !dialog.warningsTextForTest().contains(
+                    MpSqlVisualizerBundle.message("rollback.snapshot.noDataSource"),
+                ),
+            )
+        } finally {
+            PreviewSideQuery.runnerForTest = oldRunner
+            dialog.snapshotPromptForTest = null
+            dialog.snapshotAwaitBindForTest = null
+            dialog.doDispose()
+        }
+    }
+
+    fun testRunSnapshotQueryWithoutDataSourceGiveUpShowsHint() {
+        val dialog = newDialog(unableUpdateResult(), "UPDATE")
+        try {
+            dialog.snapshotQueryTargetForTest = { null }
+            dialog.snapshotPromptForTest = { _, _, _ -> }
+            dialog.snapshotAwaitBindForTest = { _, _, _, onGiveUp -> onGiveUp() }
+            dialog.runSnapshotQuery()
+            assertTrue(
+                "取消选择后应提示：${dialog.warningsTextForTest()}",
+                dialog.warningsTextForTest().contains(
+                    MpSqlVisualizerBundle.message("rollback.snapshot.noDataSource"),
+                ),
+            )
+            assertTrue("快照框保持为空", dialog.pasteAreaForTest().text.isEmpty())
+        } finally {
+            dialog.snapshotPromptForTest = null
+            dialog.snapshotAwaitBindForTest = null
+            dialog.doDispose()
+        }
+    }
+
+    // ======================== T-DialectGateExit（UI-040） ========================
+
+    private fun gateRequest(
+        rendered: String? = "PostgreSQL",
+        mode: cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.RenderMode =
+            cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.RenderMode.AUTO,
+        canRerender: Boolean = true,
+    ) = cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Request(
+        renderMode = mode,
+        renderedDialectName = rendered,
+        intent = cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Intent.QUERY,
+        canLosslesslyRerender = canRerender,
+        userTextUntouched = true,
+    )
+
+    private fun tableResult() = PreviewSideQuery.Result.Table(
+        cn.song.mybatisplus.visualizer.mcp.McpExplainFormatter.RawResult(
+            listOf("id", "age"), listOf(listOf("1", "20")),
+        ),
+    )
+
+    fun testDialectConflictShowsExitRowAndRerenderRetries() {
+        // 方言冲突（PostgreSQL 渲染 vs MySQL 目标）→ 露出两个出口；点重渲染 → 重渲染并重试一次。
+        val dialog = newDialog(unableUpdateResult(), "UPDATE")
+        dialog.snapshotQueryTargetForTest = { SnapshotTarget() } // MySQL
+        dialog.snapshotGateRequestForTest = { gateRequest() }
+        var rerenderedTo: String? = null
+        dialog.snapshotRerenderForTest = { name ->
+            rerenderedTo = name
+            true
+        }
+        var runnerCalls = 0
+        val oldRunner = PreviewSideQuery.runnerForTest
+        PreviewSideQuery.runnerForTest = { _, _, _, _, cb ->
+            runnerCalls++
+            cb(tableResult())
+        }
+        try {
+            dialog.runSnapshotQuery()
+            assertTrue("方言冲突应露出出口行", dialog.gateExitRowVisibleForTest())
+            assertTrue("重渲染按钮应可见", dialog.rerenderButtonForTest().isVisible)
+            assertTrue("切换数据源按钮应可见", dialog.switchSourceButtonForTest().isVisible)
+            assertEquals("阻断时不得提交查询", 0, runnerCalls)
+
+            // 重渲染成功后，重试用的请求已是目标方言 → 匹配并填表
+            dialog.snapshotGateRequestForTest = { gateRequest(rendered = "MySQL") }
+            dialog.rerenderButtonForTest().doClick()
+
+            assertEquals("应按目标数据源方言重渲染", "MySQL", rerenderedTo)
+            assertEquals("重渲染后应重试一次", 1, runnerCalls)
+            assertTrue(
+                "重试成功应填充快照：${dialog.pasteAreaForTest().text}",
+                dialog.pasteAreaForTest().text.contains("id\tage"),
+            )
+            assertFalse("成功后应收起出口行", dialog.gateExitRowVisibleForTest())
+        } finally {
+            PreviewSideQuery.runnerForTest = oldRunner
+            dialog.snapshotGateRequestForTest = null
+            dialog.snapshotRerenderForTest = null
+            dialog.doDispose()
+        }
+    }
+
+    fun testManualDialectConflictHidesRerenderButton() {
+        // 用户手动选了方言 → 闸门语义是「插件不覆盖手动选择」→ 不给重渲染，只给切换数据源。
+        val dialog = newDialog(unableUpdateResult(), "UPDATE")
+        dialog.snapshotQueryTargetForTest = { SnapshotTarget() }
+        dialog.snapshotGateRequestForTest = {
+            gateRequest(mode = cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.RenderMode.MANUAL)
+        }
+        try {
+            dialog.runSnapshotQuery()
+            assertTrue("手动方言冲突也应露出出口行", dialog.gateExitRowVisibleForTest())
+            assertFalse("手动方言不给重渲染按钮", dialog.rerenderButtonForTest().isVisible)
+            assertTrue("切换数据源仍可用", dialog.switchSourceButtonForTest().isVisible)
+        } finally {
+            dialog.snapshotGateRequestForTest = null
+            dialog.doDispose()
+        }
+    }
+
+    fun testNonDialectBlockHidesExitRow() {
+        // 渲染方言未知（非冲突）→ 出口行不出现（重渲染/换目标都解决不了这类阻断）。
+        val dialog = newDialog(unableUpdateResult(), "UPDATE")
+        dialog.snapshotQueryTargetForTest = { SnapshotTarget() }
+        dialog.snapshotGateRequestForTest = {
+            gateRequest(
+                rendered = null,
+                mode = cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.RenderMode.UNKNOWN,
+            )
+        }
+        try {
+            dialog.runSnapshotQuery()
+            assertFalse("非方言冲突不露出出口行", dialog.gateExitRowVisibleForTest())
+            assertTrue("仍应给出阻断原因：${dialog.warningsTextForTest()}", dialog.warningsTextForTest().isNotEmpty())
+        } finally {
+            dialog.snapshotGateRequestForTest = null
+            dialog.doDispose()
+        }
+    }
+
+    fun testSwitchDataSourceButtonInvokesPicker() {
+        // 「切换数据源」必须真的走选择器链路（而不是静默复用上次目标）。
+        val dialog = newDialog(unableUpdateResult(), "UPDATE")
+        dialog.snapshotQueryTargetForTest = { SnapshotTarget() }
+        dialog.snapshotGateRequestForTest = { gateRequest() }
+        var prompted = false
+        dialog.snapshotPromptForTest = { _, _, _ -> prompted = true }
+        dialog.snapshotAwaitBindForTest = { _, _, _, onGiveUp -> onGiveUp() }
+        try {
+            dialog.runSnapshotQuery()
+            assertTrue("前置：方言冲突露出出口行", dialog.gateExitRowVisibleForTest())
+            dialog.switchSourceButtonForTest().doClick()
+            assertTrue("切换数据源应触发选择器", prompted)
+        } finally {
+            dialog.snapshotGateRequestForTest = null
+            dialog.snapshotPromptForTest = null
+            dialog.snapshotAwaitBindForTest = null
+            dialog.doDispose()
+        }
+    }
+
+    fun testRunSnapshotQueryEmptyResultShowsHint() {        val dialog = newDialog(unableUpdateResult(), "UPDATE")
+        dialog.snapshotQueryTargetForTest = { SnapshotTarget() }
+        val oldRunner = PreviewSideQuery.runnerForTest
+        PreviewSideQuery.runnerForTest = { _, _, _, _, cb ->
+            cb(
+                PreviewSideQuery.Result.Table(
+                    cn.song.mybatisplus.visualizer.mcp.McpExplainFormatter.RawResult(
+                        listOf("id", "age"), emptyList(),
+                    ),
+                ),
+            )
+        }
+        try {
+            dialog.runSnapshotQuery()
+            assertTrue(
+                "空结果应提示：${dialog.warningsTextForTest()}",
+                dialog.warningsTextForTest().contains(
+                    MpSqlVisualizerBundle.message("rollback.snapshot.emptyResult"),
+                ),
+            )
+            assertEquals("空结果不生成回滚", RollbackSqlGenerator.Rating.UNABLE, dialog.currentResult.rating)
+        } finally {
+            PreviewSideQuery.runnerForTest = oldRunner
+            dialog.doDispose()
+        }
+    }
+
+    fun testGenerateFromPasteRejectsNonTsv() {        val dialog = newDialog(unableUpdateResult(), "UPDATE")
         try {
             dialog.pasteAreaForTest().text = "只有一行无制表符"
             dialog.generateFromPaste()
@@ -545,6 +868,135 @@ class RollbackSqlDialogTest : BasePlatformTestCase() {
             assertEquals("只读编辑器无选中 Ctrl+C 应复制整条回滚 SQL", dialog.sqlTextForTest(), clip)
         } finally {
             dialog.doDispose()
+        }
+    }
+
+    // ---------- T-RollbackSnapshotCsvView：表格增强 / CSV 打开 / 布局修复 ----------
+
+    private fun dialogWithSnapshot(tsv: String): RollbackSqlDialog {
+        val dialog = newDialog(unableUpdateResult(), "UPDATE")
+        dialog.pasteAreaForTest().text = tsv
+        // 文本 → 表格（按文本重解析），复用既有切换链。
+        dialog.snapshotToggleForTest().doClick()
+        return dialog
+    }
+
+    fun testSnapshotTableSortsAndKeepsModelOrder() {
+        val dialog = dialogWithSnapshot("id\tname\n2\tB\n1\tA")
+        try {
+            val table = dialog.snapshotTableForTest()
+            assertEquals("装载后保持原始顺序", "2", table.getValueAt(0, 0))
+            table.rowSorter.toggleSortOrder(0)
+            assertEquals("列头排序后视图升序", "1", table.getValueAt(0, 0))
+            assertEquals("2", table.getValueAt(1, 0))
+            assertEquals("排序不得改模型顺序", "2", table.model.getValueAt(0, 0))
+            assertEquals("行号按视图顺序重排", "1",
+                dialog.snapshotRowHeaderForTest().model.getElementAt(0))
+        } finally {
+            dialog.doDispose()
+        }
+    }
+
+    fun testSnapshotCopySelectionCopiesTsv() {
+        val clipboard = cn.song.mybatisplus.visualizer.testutil.installFakeClipboard(testRootDisposable)
+        val dialog = dialogWithSnapshot("id\tname\n1\tA\n2\tB")
+        try {
+            val table = dialog.snapshotTableForTest()
+            table.setRowSelectionInterval(0, 0)
+            table.setColumnSelectionInterval(0, 1)
+            assertTrue("复制选择应成功", dialog.copySnapshotSelectionForTest())
+            val copied = clipboard.getContents()
+                ?.getTransferData(java.awt.datatransfer.DataFlavor.stringFlavor) as? String
+            assertEquals("选中单元格应复制为 TSV", "1\tA", copied)
+        } finally {
+            dialog.doDispose()
+        }
+    }
+
+    fun testSnapshotAutoFitWidensLongColumns() {
+        val long = "x".repeat(60)
+        val dialog = dialogWithSnapshot("id\tname\n1\t$long")
+        try {
+            val table = dialog.snapshotTableForTest()
+            dialog.autoFitSnapshotColumnsForTest()
+            assertTrue("长内容列应被加宽：${table.columnModel.getColumn(1).preferredWidth}",
+                table.columnModel.getColumn(1).preferredWidth > 120)
+            assertTrue("短内容列应有下限", table.columnModel.getColumn(0).preferredWidth >= 48)
+        } finally {
+            dialog.doDispose()
+        }
+    }
+
+    fun testOpenSnapshotInCsvEditorWritesTsvAndCleansUp() {
+        val dialog = newDialog(unableUpdateResult(), "UPDATE")
+        val latch = java.util.concurrent.CountDownLatch(1)
+        var opened: java.io.File? = null
+        var content: String? = null
+        dialog.snapshotOpenInEditorForTest = { _, file ->
+            opened = file
+            content = runCatching { file.readText() }.getOrNull()
+            latch.countDown()
+        }
+        try {
+            val tsv = "id\tname\n1\tA"
+            dialog.pasteAreaForTest().text = tsv
+            dialog.openSnapshotInCsvEditorForTest()
+            val deadline = System.currentTimeMillis() + 10_000
+            while (System.currentTimeMillis() < deadline && latch.count > 0) {
+                com.intellij.util.ui.UIUtil.dispatchAllInvocationEvents()
+                Thread.sleep(20)
+            }
+            assertTrue(
+                "临时文件应被写出并打开；warnings=" + dialog.warningsTextForTest() +
+                    " tempFiles=" + dialog.snapshotTempFilesForTest().map { it.path },
+                latch.count == 0L,
+            )
+            assertEquals("临时文件内容应为快照 TSV", tsv, content)
+            val file = opened!!
+            assertTrue(file.exists())
+            dialog.doDispose()
+            assertTrue("dispose 后未打开的临时文件应清理", !file.exists())
+        } finally {
+            dialog.snapshotOpenInEditorForTest = null
+        }
+    }
+
+    fun testSnapshotToggleVisibleAtNarrowWidth() {
+        val dialog = newDialog(unableUpdateResult(), "UPDATE")
+        try {
+            val center = dialog.centerPanelForTest()
+            center.setSize(640, 460)
+            layoutTree(center)
+            val toggle = dialog.snapshotToggleForTest()
+            assertTrue("切换按钮应可见", toggle.isVisible)
+            val bounds = javax.swing.SwingUtilities.convertRectangle(toggle.parent, toggle.bounds, center)
+            assertTrue("切换按钮宽度应大于 0：$bounds", bounds.width > 0)
+            assertTrue("切换按钮应在面板内：$bounds", bounds.x + bounds.width <= center.width + 2)
+        } finally {
+            dialog.doDispose()
+        }
+    }
+
+    fun testSnapshotCsvViewButtonsPresent() {
+        val dialog = newDialog(unableUpdateResult(), "UPDATE")
+        try {
+            assertEquals(
+                MpSqlVisualizerBundle.message("rollback.snapshot.openCsv"),
+                dialog.snapshotOpenCsvForTest().text,
+            )
+            assertEquals(
+                MpSqlVisualizerBundle.message("rollback.snapshot.autofit"),
+                dialog.snapshotAutofitForTest().text,
+            )
+        } finally {
+            dialog.doDispose()
+        }
+    }
+
+    private fun layoutTree(component: java.awt.Component) {
+        if (component is java.awt.Container) {
+            component.doLayout()
+            component.components.forEach { layoutTree(it) }
         }
     }
 

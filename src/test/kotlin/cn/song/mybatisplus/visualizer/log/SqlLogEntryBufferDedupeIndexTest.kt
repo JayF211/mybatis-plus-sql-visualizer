@@ -278,6 +278,59 @@ class SqlLogEntryBufferDedupeIndexTest {
         assertEquals("且该行升级为带源码（可跳转）", "a/A.java", rows.single().sourceFile)
     }
 
+    // ---------- T-PerfSweep26-01（F83）：淘汰回扫键级计数化 ----------
+
+    /**
+     * F83 用例①（B 案写错即红）：同键多条在队，淘汰恰为索引最新的队首实例后，索引必须重指队内次新——
+     * 计数结构少加账/多减账把「队内仍有同键余条」误判成「唯一键」时，索引被误摘，本用例红。
+     */
+    @Test
+    fun `同键多条在队_淘汰最新_索引重指次新`() {
+        val b = SqlLogEntryBuffer(maxEntries = 2)
+        val sql = "SELECT * FROM rescan WHERE id = 1"
+        b.dedupeEnabled = false
+        b.addEntry(entry(sql, 70_000))
+        b.addEntry(entry(sql, 0)) // 入队序 [A@70s, A@0]：索引最新（A@70s）落在队首
+        b.dedupeEnabled = true // 翻 true 全量重建：索引指向队内最新 A@70s
+        assertTrue(b.addEntry(entry("SELECT * FROM rescan WHERE id = 2", 500))) // 挤掉队首 A@70s
+        // 索引若未重指队内次新 A@0（被误摘）→ 30s 相对空索引必收（红）；正确基线（A@0）→ 30s < 60s 必丢
+        assertFalse("淘汰最新后索引应重指队内次新 A@0（窗口内必丢）", b.addEntry(entry(sql, 30_000)))
+    }
+
+    /**
+     * F83 用例②（修复前必红）：唯一键稳态淘汰不得触发全队反扫——唯一键下每接受一条新 SQL 都在
+     * synchronized(entries) 内付一次 O(maxEntries) 反扫且结果必空。断言走 [SqlLogEntryBuffer.evictionRescanCountForTest]
+     * 计数缝（测试专用读数，V38 计数缝同款形态）。
+     */
+    @Test
+    fun `唯一键稳态淘汰_零全队反扫`() {
+        val b = SqlLogEntryBuffer(maxEntries = 3)
+        b.addEntry(entry("SELECT * FROM stable1 WHERE id = 1", 0))
+        b.addEntry(entry("SELECT * FROM stable2 WHERE id = 2", 1))
+        b.addEntry(entry("SELECT * FROM stable3 WHERE id = 3", 2))
+        val before = b.evictionRescanCountForTest
+        b.addEntry(entry("SELECT * FROM stable4 WHERE id = 4", 3)) // 淘汰 stable1：唯一键稳态
+        assertEquals("唯一键淘汰不得触发全队反扫", before, b.evictionRescanCountForTest)
+    }
+
+    /**
+     * F83 交互面：接管沿重建（[SqlLogEntryBuffer.rebuildDedupeIndexAfterHandoff]）只把陈旧键摘出索引、
+     * 条目仍留队内——计数结构重建时必须按「队内现存」全量补账（不看 grace 截断），否则淘汰该陈旧
+     * 在队实例时计数被减成 0 走「唯一键」短路，把仍新鲜的索引误摘（短窗重复漏折叠）。
+     */
+    @Test
+    fun `接管沿重建后_陈旧在队条目淘汰_不误摘新鲜键索引`() {
+        val b = SqlLogEntryBuffer(maxEntries = 2)
+        val sql = "SELECT * FROM handoffCount WHERE id = 1"
+        assertTrue(b.addEntry(entry(sql, 0))) // 陈旧（ts=0）
+        b.rebuildDedupeIndexAfterHandoff(graceMs = 5_000, nowMs = 100_000) // 索引清掉陈旧键，条目仍在队
+        assertTrue("接管沿后首批照常入队", b.addEntry(entry(sql, 100_005))) // 队内 [A@0, A@100.005s]，索引→A@100.005s
+        assertTrue(b.addEntry(entry("SELECT * FROM handoffCount WHERE id = 2", 100_006))) // 挤掉队首 A@0（在队但不在索引）
+        // 计数若漏掉 A@0（重建只统计新鲜键）→ 淘汰 A@0 时 remaining==0 误摘索引 → 下条必收（红）
+        assertFalse("淘汰不在索引的陈旧在队条目后，新鲜键索引须保留（短窗重复必丢）",
+            b.addEntry(entry(sql, 100_007)))
+    }
+
     private fun entry(sql: String, ts: Long) = LogSqlEntry(
         rawSql = sql,
         restoredSql = sql,

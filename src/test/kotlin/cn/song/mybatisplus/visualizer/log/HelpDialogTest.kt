@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.log
 
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
+import cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.actionSystem.ActionPlaces
 import com.intellij.openapi.actionSystem.AnActionEvent
@@ -35,7 +36,7 @@ class HelpDialogTest : BasePlatformTestCase() {
                 AnActionEvent.createFromAnAction(it, null, ActionPlaces.TOOLBAR, DataContext.EMPTY_CONTEXT)
             }
             children.forEachIndexed { i, action -> action.update(events[i]) }
-            val helpIndex = events.indexOfFirst { it.presentation.icon === AllIcons.Actions.Help }
+            val helpIndex = events.indexOfFirst { it.presentation.icon === MpvsIcons.Help }
             assertEquals("帮助动作应位于工具栏末尾", children.lastIndex, helpIndex)
             assertEquals(
                 MpSqlVisualizerBundle.message("log.panel.help"),

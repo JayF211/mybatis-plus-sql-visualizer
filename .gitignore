@@ -35,6 +35,8 @@ build/
 !**/src/main/**/build/
 !**/src/test/**/build/
 !**/src/reloc/**/build/
+# T-TestShardParallel：每条并行 lane 的 buildSrc 独立输出目录（-PmpvBuildSrcDir）
+buildSrc/build-lane*/
 
 ### VS Code ###
 .vscode/
@@ -107,3 +109,5 @@ gitee-token.*
 # 竞品逆向分析等不宜公开的内容；本地可读，父仓不跟踪。
 # 注意：git clean -x 会连此目录一并删除，清理时勿带 -x。
 docs/内部/
+record/*.run.log
+record/_elev_ac.log

@@ -126,4 +126,46 @@ class SqlMapperFoldingBuilderTest : BasePlatformTestCase() {
             ).containsMatchIn(xml),
         )
     }
+
+    // ------------------------------------------------------------------
+    // T-PerfSweep26-02（F95）：quick 短路 + 体量熔断
+    // ------------------------------------------------------------------
+
+    /**
+     * F95：`quick=true`（编辑器打开瞬间的快速折叠重建 pass，平台契约要求避免复杂检查，
+     * 随后 daemon `CodeFoldingPass` 会以 `quick=false` 全量重建）必须短路返回空集，
+     * 不做全 PSI 子树遍历；折叠区由后续 quick=false 重建补齐（平台 XML 折叠兜底）。
+     */
+    @Test
+    fun testF95_quickTrue_短路返回空() {
+        myFixture.configureByText("mapper.xml", multiLineSelect)
+        val file = myFixture.file
+        val document: Document = PsiDocumentManager.getInstance(project).getDocument(file)!!
+        val quick = SqlMapperFoldingBuilder().buildFoldRegions(file, document, quick = true)
+        assertEquals("quick=true 须短路返回零 fold 区（全量区由 quick=false 重建补齐）", 0, quick.size)
+    }
+
+    /** F95 反向对照：`quick=false`（含键入后的常规重建）行为不回归，正常 mapper 仍产折叠区。 */
+    @Test
+    fun testF95_quickFalse_正常mapper仍建区() {
+        myFixture.configureByText("mapper.xml", multiLineSelect)
+        val file = myFixture.file
+        val document: Document = PsiDocumentManager.getInstance(project).getDocument(file)!!
+        val regions = SqlMapperFoldingBuilder().buildFoldRegions(file, document, quick = false)
+        assertEquals("quick=false 行为不变：多行 select 恰一个 fold 区", 1, regions.size)
+        assertEquals("select#findById", regions.single().placeholderText)
+    }
+
+    /** F95 体量熔断：文本超 `XmlSynHiGate.MAX_TEXT_LENGTH`（100K）不建区（与注入族同阈值）。 */
+    @Test
+    fun testF95_超长文本_体量熔断返回空() {
+        val stmt = "<select id=\"s\">\n  SELECT 1\n</select>\n"
+        val xml = "<mapper namespace=\"n\">\n" + stmt.repeat(3000) + "</mapper>"
+        assertTrue("夹具自检：文本须超熔断阈值", xml.length > XmlSynHiGate.MAX_TEXT_LENGTH)
+        myFixture.configureByText("mapper.xml", xml)
+        val file = myFixture.file
+        val document: Document = PsiDocumentManager.getInstance(project).getDocument(file)!!
+        val regions = SqlMapperFoldingBuilder().buildFoldRegions(file, document, quick = false)
+        assertEquals("超长 mapper 体量熔断 → 零 fold 区", 0, regions.size)
+    }
 }

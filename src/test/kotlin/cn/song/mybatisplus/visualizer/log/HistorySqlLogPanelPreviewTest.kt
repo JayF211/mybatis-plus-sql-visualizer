@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.log
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
+import cn.song.mybatisplus.visualizer.ui.icons.MpvsIcons
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -147,7 +148,7 @@ class HistorySqlLogPanelPreviewTest : BasePlatformTestCase() {
             panel.openFileForTest(panel.fileListEntries.single())
             panel.previewToggleAction.update(actionEvent)
             assertTrue("二级 SQL 列表应显示快速预览图标", actionEvent.presentation.isVisible)
-            assertSame(com.intellij.icons.AllIcons.Actions.Preview, actionEvent.presentation.icon)
+            assertSame(MpvsIcons.DockedPreview, actionEvent.presentation.icon)
             val list = panel.sqlListForTest
             list.selectedIndex = 0
             panel.previewToggleAction.setSelected(actionEvent, true)

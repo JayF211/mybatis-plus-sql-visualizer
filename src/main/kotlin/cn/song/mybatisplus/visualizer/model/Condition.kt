@@ -103,10 +103,14 @@ sealed class Condition {
 
     /**
      * 原始 SQL 片段（apply / last 等透传），不解析直接渲染。
+     *
+     * @param params 片段中占位符 `?` 的来源（按出现顺序，与 `?` 一一对应）。渲染时必须按序登记进参数表，
+     *               否则面板按位置回填会整体错位（片段里的 `?` 会被当成下一个条件的参数）。
      */
     data class Raw(
         val sqlText: String,
         override val toggle: ConditionToggle? = null,
+        val params: List<String> = emptyList(),
     ) : Condition()
 }
 

@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.actions
 
 import cn.song.mybatisplus.visualizer.config.PluginSettings
+import cn.song.mybatisplus.visualizer.config.ProjectPluginSettings
 import cn.song.mybatisplus.visualizer.reverse.JavaCodeGenerator
 import cn.song.mybatisplus.visualizer.reverse.ReverseWrapperFormat
 import cn.song.mybatisplus.visualizer.reverse.SqlReverseException
@@ -124,6 +125,7 @@ class ConvertSqlToJavaAction : AnAction() {
                     mainCandidates,
                     subCandidates,
                     format,
+                    logicDeleteValue = reverseLogicDeleteValue(project),
                 )
                 JavaCodePreviewDialog(project, code).show()
             }
@@ -134,6 +136,15 @@ class ConvertSqlToJavaAction : AnAction() {
     private fun reverseFormat(): ReverseWrapperFormat = runCatching {
         ReverseWrapperFormat.fromPersisted(PluginSettings.getInstance().state.reverseWrapperFormat)
     }.getOrDefault(ReverseWrapperFormat.AUTO)
+
+    /**
+     * T-ReverseGroupLogicDelete：逻辑删除「未删除」值（项目级优先 → 全局 → 兜底 "0"）——
+     * 生成器据此识别 MP 依据 `@TableLogic` 自动注入的 `AND <列> = <值>` 并跳过。
+     * 与正向注入 `effectiveLogicDeleteValue().ifBlank { "0" }` 同口径。
+     */
+    private fun reverseLogicDeleteValue(project: Project): String = runCatching {
+        ProjectPluginSettings.getInstance(project).effectiveLogicDeleteValue()
+    }.getOrNull()?.takeIf { it.isNotBlank() } ?: SqlToJavaConverter.DEFAULT_LOGIC_DELETE_VALUE
 
     /** 手动选择实体类开关（测试环境 settings 未注册时默认开）。 */
     private fun manualEntitySelectionEnabled(): Boolean = runCatching {
@@ -187,7 +198,10 @@ class ConvertSqlToJavaAction : AnAction() {
                         result.joins.forEach { join ->
                             val alias = join.alias ?: return@forEach
                             selections[alias]?.let { psi ->
-                                toSubEntity(SqlToJavaConverter.candidateOf(psi))?.let { subEntities[alias] = it }
+                                toSubEntity(
+                                    SqlToJavaConverter.candidateOf(psi),
+                                    reverseLogicDeleteValue(project),
+                                )?.let { subEntities[alias] = it }
                             }
                         }
                         main to (subEntities as Map<String, JavaCodeGenerator.EntityTarget>)
@@ -228,11 +242,16 @@ class ConvertSqlToJavaAction : AnAction() {
     }
 
     /** 手动选择实体 → 生成用副实体目标（类名缺失跳过）。 */
-    private fun toSubEntity(candidate: SqlToJavaConverter.EntityCandidate): JavaCodeGenerator.EntityTarget? {
+    private fun toSubEntity(
+        candidate: SqlToJavaConverter.EntityCandidate,
+        logicDeleteValue: String = SqlToJavaConverter.DEFAULT_LOGIC_DELETE_VALUE,
+    ): JavaCodeGenerator.EntityTarget? {
         val className = candidate.psiClass.name ?: return null
         return JavaCodeGenerator.EntityTarget(
             className = className,
             columnToField = candidate.tableInfo.columns.associate { it.columnName to it.fieldName },
+            logicDeleteColumn = candidate.tableInfo.logicDeleteColumn,
+            logicDeleteValue = logicDeleteValue,
         )
     }
 
@@ -244,7 +263,12 @@ class ConvertSqlToJavaAction : AnAction() {
         format: ReverseWrapperFormat,
         subEntities: Map<String, JavaCodeGenerator.EntityTarget> = emptyMap(),
     ) {
-        JavaCodePreviewDialog(project, SqlToJavaConverter.generateCode(result, candidate, format, subEntities = subEntities)).show()
+        val code = SqlToJavaConverter.generateCode(
+            result, candidate, format,
+            subEntities = subEntities,
+            logicDeleteValue = reverseLogicDeleteValue(project),
+        )
+        JavaCodePreviewDialog(project, code).show()
     }
 
     private fun showNoSelection(project: Project) {

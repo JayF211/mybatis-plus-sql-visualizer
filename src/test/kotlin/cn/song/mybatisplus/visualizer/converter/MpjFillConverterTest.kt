@@ -300,6 +300,11 @@ class MpjFillConverterTest {
                     WrapperArg.ColumnArg(ColumnRef(tableAlias = "t", columnName = "station_id")),
                     WrapperArg.ColumnArg(ColumnRef(tableAlias = "s", columnName = "id")),
                 )),
+                // 主语句带一个运行期条件，用于断言「fill 不占主语句的来源槽」
+                WrapperCall("eq", listOf(
+                    WrapperArg.ColumnArg(ColumnRef(tableAlias = "t", columnName = "id")),
+                    WrapperArg.ValueArg(SqlValue.Placeholder("deviceId")),
+                )),
             ),
         )
         val statement = MpjLambdaConverter.convert(chain, table) as SelectStatement
@@ -321,6 +326,21 @@ class MpjFillConverterTest {
         val fillSql = SqlGenerator.generateFill(fills[0])
         assertEquals("SELECT s.id, s.station_name FROM station s WHERE s.id IN (?)", fillSql)
 
+        // T-UpdateSetSqlConcat（计划 11.5 fill 项显式关闭）：fill 段的 `IN (?)` 是运行时收集键集合的
+        // **合成占位符**，没有可命名的来源；它由面板在主 SQL 回填之后才追加（appendFillSection），
+        // 不可能让主语句来源前移。这里钉住两条性质：主语句参数表只有 deviceId；主 SQL 占位符数与之相等。
+        val generated = SqlGenerator.generateWithParams(statement)
+        assertEquals(
+            "fill 的合成占位符不得进入主语句参数表：${generated.unresolvedParams}",
+            listOf("deviceId"),
+            generated.unresolvedParams,
+        )
+        assertEquals(
+            "主 SQL 占位符数与来源数须一一对应（fill 段不在其中）",
+            cn.song.mybatisplus.visualizer.sql.placeholderPositions(generated.sql).size,
+            generated.unresolvedParams.size,
+        )
+        assertTrue("fill 段不得混入主 SQL：$mainSql", !mainSql.contains("IN (?)"))
     }
 
     // ------------------------------------------------------------------

@@ -30,6 +30,34 @@ internal object GeneratedProjectionCompiler {
         }
     }
 
+    /** 生成代码在真实 MP 上渲染出的条件段原文（`Wrapper.getSqlSegment()`）——供语义签名比对用。 */
+    fun sqlSegmentOf(code: String): String {
+        var segment: String? = null
+        compile(code) { exit, diagnostics, output, classpath ->
+            assertEquals("Generated Java must compile:\n$code\n$diagnostics", 0, exit)
+            URLClassLoader((listOf(output) + classpath).map { it.toURI().toURL() }.toTypedArray(), ClassLoader.getPlatformClassLoader()).use { loader ->
+                val actual = loader.loadClass("GeneratedProjection").getMethod("inspect").invoke(null) as Array<*>
+                segment = actual[1].toString()
+            }
+        }
+        return requireNonNull(segment, code)
+    }
+
+    private fun requireNonNull(value: String?, code: String): String =
+        value ?: error("Wrapper.getSqlSegment() returned null for:\n$code")
+
+    /**
+     * 条件段的连接词签名：按出现顺序抽出 `AND` / `OR` / `NOT`，忽略列名与字面量。
+     *
+     * 用途：把「SQL 反解 → 生成 Java → 真实 MP 渲染」与原 SQL 做结构比对——
+     * OR 被吞成 AND、NOT 丢失这类缺陷会改变签名，而列名/参数顺序的无关差异不会。
+     * `BETWEEN … AND …` 会贡献一个 AND，两侧同源故不影响比对（原 SQL 侧同样计入）。
+     */
+    fun connectorSignature(sqlSegment: String): List<String> =
+        Regex("(?<![A-Z_])(AND|OR|NOT)(?![A-Z_])").findAll(sqlSegment.uppercase())
+            .map { it.groupValues[1] }
+            .toList()
+
     /** 与 O147 同源策略：PathClassLoader 的 CodeSource 可为 null，资源 URL 才是可靠后备。
      * 不猜缓存版本；候选 JAR 必须含有与当前类资源逐字节一致的真实 class。 */
     private fun locateArtifact(anchor: Class<*>): File {
@@ -123,6 +151,8 @@ internal object GeneratedProjectionCompiler {
                         public String getPsnName() { return "fixture"; }
                         public Integer getAge() { return 1; }
                     }
+                    /** 往返语料统一用 member 表——实体名由表名推断为 Member，故夹具需同名类。 */
+                    public static class Member extends User {}
                     public static String[] inspect() {
                         Wrapper<?> wrapper =
                         $code
