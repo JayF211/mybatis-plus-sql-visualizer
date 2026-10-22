@@ -223,9 +223,82 @@
 - 多 owner 场景（P1）的口径分歧见 4.2，默认不做。
 - 反编译形态凡是「只靠 mirror 才可达」的能力，都带一层额外依赖（平台 mirror 机制、反编译文本质量）。P0 不依赖它，故 W1 的收益与形态无关；W2 若发现某处只在 mirror 下失效，处置是**补兜底而不是改口径**。
 
-## 十、实施记录（待实施后回填）
+## 十、实施记录（2026-10-22，已实施）
 
-（实施时在此追加：W0 探针三条读数、改动清单落点、定向与反向读数、门禁读数、真机走查结论。）
+### 10.1 W0 取证矩阵：**计划的核心前提被实测修正**
+
+在 `mpsv-shadow-entity` 工作树（分支 `t-shadow-entity-resolve`）用 heavy 夹具（javac 造库 class 根 + 库源码根、
+`addModuleLibrary` 双根挂载）跑七个变体。宿主恒在库源码根（`inLibSrc=true`、`inContent=false`、`contextModule=null`，
+P-1 成立）：
+
+| 变体 | 形态 | 修复前读数 | 修复后 |
+| --- | --- | --- | --- |
+| V1 | 同 FQN 影子在**同一模块** | 候选 1，工程胜出，**不复现** | 不变 |
+| V2 | 同 FQN 影子在**另一模块** | 2 候选 → 降级 | **修复** |
+| V3 | 异 FQN 双 `@Entity` 同模块 | 2 候选 → 降级 | 不变（真歧义，fail closed 正确） |
+| V4 | 异 FQN 双 `@Entity` 跨模块 | 2 候选 → 降级 | 不变（同上） |
+| V5 | HQL 写全限定名 | 仍降级 | **修复** |
+| V6 | 同 FQN 影子在**依赖 jar 模块的业务模块** | 2 候选 → 降级 | **修复**（最贴近用户） |
+| V7 | 影子是**非实体类**（普通 DTO） | 2 候选 → 降级 | **修复** |
+
+**P-2 部分被推翻**：原假设「同 FQN 双份一律 2 候选」只在**跨模块**成立。同一模块内
+`PsiShortNamesCacheImpl.getClassesByName`（平台源码）自己对同 FQN 组做 classpath 序消解
+（`scope.compare`），工程内容胜出——所以 V1 不复现。跨模块时 `ProjectAndLibrariesScope.compare`
+对「order-entry 数不同」或「各 entry 比较结果不一致」的组**返回 0**（平台源码明写），于是两份都留。
+⇒ 原计划的 P0 方向正确但**适用范围写错了**（不是「所有同 FQN」，是「跨模块/跨 order-entry 的同 FQN」）。
+
+**新增发现（原计划没覆盖）**：V7 表明真正的病根比同 FQN 更宽——**任何同短名的非实体类都会制造假歧义**。
+Hibernate 解析 `FROM <名>` 只认映射实体，普通 DTO 根本不是候选。
+
+### 10.2 改动清单（2 个生产文件 + 2 个 bundle + 1 个新测试）
+
+`psi/EntityClassResolver.kt`：
+1. **P0a** `preferProjectContent`——逐 FQN 组内「工程内容优先于依赖库」（治 V2/V5/V6）；
+2. **P0b** 同短名候选里**非映射实体不参与歧义**（`JpaMetadataReader.isLikelyMappedEntityClass`，治 V7）；
+3. **门控 `context != null`**：无宿主元素（外部工具按名反查）时两条规则都**不生效**，保持既有
+   「跨源码/库必须唯一」的 fail-closed 契约。这条门控是回归逼出来的（见 10.4 的首次失败）。
+4. **P2** 歧义通知的**用户可见文案**带 `[工程]`/`[库]` 来源标签；**测试缝与日志保留原始 FQN**
+   （标签属展示层，不进可编程契约——第一版把标签塞进 sink，破坏了既有用例的 FQN 断言）。
+
+`messages/MpSqlVisualizerBundle{,_zh}.properties`：新增 `preview.entityNameAmbiguity.originProject/originLibrary`。
+
+`src/test/.../psi/ShadowEntityResolveTest.kt`：5 条新护栏（同 FQN 依赖模块胜出、全限定名查找、
+非实体影子不制造歧义、双真实体仍 fail closed、单份库实体正常解析）。
+
+### 10.3 定向测试读数（干净沙盒，2026-10-22 21:5x）
+
+`EntityClassResolverHeavyTest` **13/0/0/0**、`ShadowEntityResolveTest` **5/0/0/0**、
+`BundleParityGuardTest` **5/0/0/0**、`SqlPreviewEntityScopeHeavyTest` 见 10.6。
+
+### 10.4 反向验证（三组，各贴两次读数）
+
+- **A 摘掉 P0a**：`ShadowEntityResolveTest` 5 例 → **恰 2 红**（`testSameFqnShadowInDependentModuleWins`、
+  `testSameFqnShadowResolvesForQualifiedNameLookup`），其余 3 绿。恢复后回 5/0/0/0。
+- **B 摘掉 P0b**：同一组 → **恰 1 红**（`testNonEntityShadowDoesNotCreateAmbiguity`）。恢复后回 5/0/0/0。
+- **C 摘掉两处 `context == null` 门控**：`EntityClassResolverHeavyTest` 13 例 → **恰 1 红**
+  （`testContextlessLookupRequiresUniqueAcrossSourceAndLibrary`），`ShadowEntityResolveTest` 仍全绿
+  ⇒ 门控确实只被这条既有契约守护，反向对照成立。
+
+### 10.5 实施期踩到的三个坑（都会伪装成产品缺陷）
+
+1. **`PsiTestUtil.addLibrary(module, name, libDir, classRoots, sourceRoots)` 的 URL 拼接**：该重载内部是
+   `parentUrl + classRoot` 字符串相加，`constructUrl` 只补 `protocol://`、不补尾斜杠 ⇒ 拼出
+   `.../xxxclasses` 这种不存在的路径。改用 `ModuleRootModificationUtil.addModuleLibrary(module, name, classesUrls, sourceUrls)` 直接给 URL。
+2. **javac 产物要递归 refresh**：`refreshAndFindFileByIoFile(classes)` 后不 `refresh(false, true)`，
+   子目录不在 VFS 里 → 库类不进短名索引 → 探针读到「只有工程一份」（我第一次就是这样拿到假读数）。
+3. **OOM 后残留测试 JVM 会锁住沙盒 jar**：`prepareTestSandbox` 报「请求的操作无法在使用用户映射区域打开的文件上执行」，
+   真因是上一轮 OOM 留下的 `java.exe` 仍持着 `.intellijPlatform/sandbox/.../jsqlparser-5.3.jar`。
+   处置＝按命令行核对自己工作树后 kill，再删整个 sandbox 目录（否则 `PersistentEnumeratorBase: CorruptedException`
+   会把后续用例全染红，看起来像产品缺陷）。
+
+### 10.6 未做 / 待办
+
+- **W2（反编译形态）未做**：P-8/P-9 仍未取证。demo 仓复现用例已备好两种形态的走查步骤（子智能体交付，
+  提交 `cb9279b2`/`089b5a06`/`9764328a`/`04e0c189`），真机走查由用户执行。
+- **P1（库文件 → 消费者模块上下文）未做**：按 §4.0 的决定单独一轮；且现在看它的收益面进一步收窄
+  （P0a 已治同 FQN 跨模块），只剩「异 FQN 假歧义」那一类。
+- `EntityClassFinder`（表名→实体反查）、`NamedQueryLocator` 等 §7 同族站点仍按原计划登记未动。
+- 全量 `testShards` 待跑。
 
 ## 十一、附：本轮未做的事
 
