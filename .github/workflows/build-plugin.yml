@@ -1,0 +1,63 @@
+name: 手动构建插件
+run-name: 构建插件 · ${{ inputs.branch || github.ref_name }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: '要构建的分支（留空使用上方选择的分支）'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: 检出目标分支
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.branch || github.ref_name }}
+          persist-credentials: false
+
+      - name: 安装 JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: 配置 CI 下载环境
+        run: |
+          # 仅修改 Runner 中的副本，移除本地代理并使用 Gradle 官方下载源。
+          $propertiesPath = 'gradle.properties'
+          $properties = Get-Content -LiteralPath $propertiesPath
+          $properties | Where-Object { $_ -notmatch '^systemProp\.(http|https)\.proxy(Host|Port)=' } |
+            Set-Content -LiteralPath $propertiesPath -Encoding utf8
+
+          $wrapperPath = 'gradle/wrapper/gradle-wrapper.properties'
+          $wrapper = Get-Content -LiteralPath $wrapperPath -Raw
+          $wrapper.Replace('mirrors.cloud.tencent.com/gradle/', 'services.gradle.org/distributions/') |
+            Set-Content -LiteralPath $wrapperPath -Encoding utf8 -NoNewline
+
+      - name: 配置 Gradle 缓存
+        uses: gradle/actions/setup-gradle@v5
+
+      - name: 打包插件
+        run: ./gradlew.bat :buildPlugin -PgifRecord=false --no-daemon --console=plain
+
+      - name: 上传插件 ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: plugin-${{ github.run_number }}
+          path: build/distributions/*.zip
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
