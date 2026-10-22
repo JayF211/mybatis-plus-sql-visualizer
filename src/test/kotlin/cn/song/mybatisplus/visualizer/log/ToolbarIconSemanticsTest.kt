@@ -57,6 +57,8 @@ class ToolbarIconSemanticsTest : BasePlatformTestCase() {
             "Diff" to MpvsIcons.Diff,
             "EditSource" to MpvsIcons.EditSource,
             "MapperXml" to MpvsIcons.MapperXml,
+            "MapperMethod" to MpvsIcons.MapperMethod,
+            "MapperStatement" to MpvsIcons.MapperStatement,
         )
         icons.forEach { (name, icon) ->
             assertEquals("$name 宽度", 16, icon.iconWidth)

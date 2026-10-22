@@ -97,4 +97,10 @@ object MpvsIcons {
 
     /** 跳转 Mapper XML：XML 文件图标。 */
     val MapperXml: Icon = icon("mapperXml")
+
+    /** Mapper 接口方法侧的配对跳转标记（红头）。 */
+    val MapperMethod: Icon = icon("mapperMethod")
+
+    /** Mapper XML 语句侧的配对跳转标记（青头）。 */
+    val MapperStatement: Icon = icon("mapperStatement")
 }
