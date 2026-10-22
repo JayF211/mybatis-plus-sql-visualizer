@@ -219,9 +219,51 @@ git grep -n -iE "MBCHP|com\.ccnode\.codegenerator|i\.b\.c\(|BatsLogConfig|maxPre
 
 ### 11.4 遗留
 
-- **Gitee Issue 置顶**需网页操作（API 不支持 `pinned` 字段，PATCH 返 400）。
-- **Marketplace Source code 字段**待用户在有权限的后台改为 GitHub 地址。
+- ~~**Gitee Issue 置顶**需网页操作~~ → **用户已完成（2026-10-22）**。
+- ~~**Marketplace Source code 字段**待用户改 GitHub~~ → **用户已完成（2026-10-22）**，见 §11.7。
 - `dev-support/push-all.ps1` 未接 GitHub demo 仓（demo 是独立仓，脚本只处理当前仓库）。若日后频繁改 demo，可复制一份到 demo 仓或加 `-Repo` 参数。
+
+### 11.7 Marketplace 源码链接改填 GitHub + 发布文档订正（2026-10-22 追加）
+
+**用户反馈两件事**：① Gitee Issue 置顶已完成；② 「Source Code 不是空的，目前指向 Gitee，推荐改成 GitHub 吗？目前好像没影响」。
+
+#### 先纠正我上一轮的错误
+
+我此前说「Marketplace Source code 字段是空的」是**查错了层级**——该字段在 `GET /api/plugins/33633` 的 `urls` 子对象里（`urls.sourceCodeUrl`），不在顶层。实际值一直是 Gitee 地址，用户没记错。
+
+#### 判断：该换，但「目前没影响」在事实上成立
+
+- **没影响的依据**：官方要求只有「公网可达、公开可访问」一条；该字段填 Gitee 从 2026-08-18 首版起 **9 个版本一路过审**，审核从未要求换。所以这不是缺陷修复。
+- **仍建议换的三条**：①受众匹配（Marketplace 是全球平台，海外用户见到 Gitee 多半不点）；②可达性（Gitee 境外不稳、GitHub 境内不稳，此字段选 GitHub 给全球一个默认能打开的面）；③口径风险（官方文档举例只列 GitHub/GitLab，未列 Gitee）。
+
+#### 已完成
+
+- 用户在作者后台把 Source Code URL 改为 `https://github.com/SongRenShuo/mybatis-plus-sql-visualizer`；
+- 线上复核：`GET /api/plugins/33633` → `urls.sourceCodeUrl` = GitHub 地址 ✅；`vendor.url` 仍为 Gitee（两个独立字段，未一并改）。
+
+#### 文档订正（这项之前自相矛盾，必须修）
+
+`docs/发行说明/Marketplace发布流程-说明文档.md` 原本四处口径冲突：§1.2 说「源码字段填 GitHub」，§5.1/§5.4/§10.2 又说 2026-08-18 定案「直接用 Gitee，GitHub 镜像未启用」，还附「仓库未配置 github 远程、`scripts/push-all.sh` 不存在」——**这三句在双仓落地后全部不成立**。
+
+| 位置 | 订正 |
+|---|---|
+| §1.2 结论表 | 「Gitee 能否作源码链接」改为「能，且实测 9 版过审」，并注明 2026-10-22 改填 GitHub 及其理由 |
+| §5 标题与导读 | 「Gitee 直连；GitHub 镜像可选未启用」→「GitHub 镜像；Gitee 仍为主仓」，旧定案标为**已废止**并说明三个前提为何不成立 |
+| §5.1 新增「为什么换成 GitHub」 | 显式写明「换不是因为它不改就会出问题」+ 三条理由（受众 / 可达性 / 口径），避免后人误以为是修 bug |
+| §5.2 现状与依据 | 保留「Gitee 曾过审」这一事实，标注为可达性优化而非合规修复 |
+| §5.3 / §5.4 | 原「GitHub 镜像未启用」的建仓步骤改为「已就位，仅换机重建时备忘」；日常同步改为 `push-all.ps1` 并补脚本要点 |
+| §5.5 协作约定表 | 「Gitee 唯一写源 + 源码链接」拆开：Gitee 是写源（Release/清单/部署），GitHub 是源码链接载体 |
+| §10.2 推送源码行 | `git push origin master` → `push-all.ps1`，补「镜像过期等于给用户看旧代码」 |
+| §10.1 收尾清单第 5 项 | 旧手工命令 → `push-all.ps1 -All -Tags` 同 SHA 核对 |
+| `T-ReleaseChecklist-发行检查清单.md` RC-R4 | 「源码链接（公网可达）」→ 写死 GitHub 地址 + 注明 Gitee 仍为主仓 |
+| `marketplace-custom-page.html` + `.md` 两版 | 「源码：Gitee」→「GitHub（镜像）· Gitee（主仓）」双链（两版同改是红线；**线上 Documentation 标签要用户重新粘贴才生效**，随下一版 zip 进包） |
+| `docs/MEMORY.md` 两处重复索引行 | 补「2026-10-22 双仓订正」摘要 |
+| 顺手修两处既有失效引用 | §1.1「详见 §5.7」→ §10.2（§5 从无 5.7）；§1.2「见 §5.4」→ §7（代码签名在 7 节） |
+| `docs/memory-archive/.../project-marketplace-publishing.md` | 2026-08-18 的「Gitee 作源码链接」决策后追加**现状变更警示**（历史记录不改写，但必须标出已被取代） |
+
+**未改动**：`docs/开发计划/20260919-0449-T-ReleaseChecklist-*` 里「GitHub 条目降级或删除」那条——它是当时对账结论的正确记录（那时确实没有 github 远程），属于已交付计划的历史事实。
+
+
 
 ### 11.5 官网文档站同步（2026-10-22 追加）
 
