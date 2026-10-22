@@ -28,12 +28,30 @@ PREVIEW = "//div[@accessiblename='SQL Visualizer - SQL 预览']"
 
 # 顺序有讲究：N02/N03 共用同一次预览会话（先打开一次，两张连拍），
 # N11 需要先做一次 UPDATE 预览，N12 走设置页。
+# 每张图的「隐藏前提」——不满足时不要硬跑，否则会录出与图题不符的画面。
+PRECONDITIONS = {
+    "n02": ["预览绑 mpj_demo@localhost（该库 URL 带 sql_mode=ANSI_QUOTES）",
+            "预览语句为 UPDATE / DELETE（SELECT 不支持影响面预演）"],
+    "n03": ["设置页『SQL 预览 → 预览面板内结构化渲染 EXPLAIN』已开启（实验特性，默认关）",
+            "『与上次执行对比』入口只存在于结构化视图（ExplainPlanResultView）"],
+    "n11": ["预览语句为 UPDATE（INSERT 走自动回滚，没有快照查询入口）",
+            "快照查询需要可用数据源"],
+    "n12": ["SQL 日志列表里已有含 password / 手机号形态的条目"],
+    "n08": ["插件方言已手工改为 PostgreSQL，目标是 MySQL 的 mpj_demo",
+            "闸门在点『执行 SQL』时触发，不在渲染时"],
+    "r10": ["AI Assistant 对话面板已开（右侧工具窗，不是主工具栏 AI 按钮）",
+            "agent（如 Codex）已完成认证，能看到 agent 名与认证行",
+            "能调通 MCP 工具（sqlv_check_sql 等），且 idea.log 出现 [MCP-AUDIT] 行"],
+}
+
 STEPS = [
     ("n02", "scene_n02_dml_impact.py", "DML 影响面预演 → dml-impact.gif"),
     ("n03", "scene_n03_explain_history.py", "EXPLAIN 跨次对比 → explain-history-compare.gif"),
     ("n11", "scene_n11_rollback_snapshot.py", "回滚快照双态 → rollback-snapshot-dual.gif"),
     ("n12", "scene_n12_display_mask.py", "展示脱敏 → display-mask.gif"),
     ("n08", "scene_n08_dialect_gate.py", "方言闸门 → dialect-gate.gif"),
+    # R10 依赖 ACP agent 认证，脚本未写；登记在此以便清单完整（脚本缺失时 preflight 会报 MISS）
+    ("r10", "scene_r10_mcp_agent.py", "MCP agent 真实调用 → mcp-agent.gif"),
 ]
 
 
@@ -42,21 +60,29 @@ def preflight():
     lines = []
     ok = True
 
-    # 1. robot-server 可达
+    # 1. robot-server 可达（不可达不提前返回：离线也要能审阅脚本与人工前提）
+    robot_ok = False
     try:
         roots = find_components("//div[@classname='com.intellij.openapi.wm.impl.IdeFrameImpl']")
         lines.append(f"[OK] robot-server 可达，IdeFrame 节点 {len(roots)} 个")
+        robot_ok = True
     except Exception as e:
         lines.append(f"[FAIL] robot-server 不可达：{e}")
-        return False, lines
+        ok = False
 
     # 2. 预览是否已开（不是前置要求，只报状态）
-    if find_components(PREVIEW):
-        lines.append("[INFO] 预览已打开——N02/N03 可直接跑")
-    else:
-        lines.append("[INFO] 预览未打开——脚本会自行打开（需光标先落在 Wrapper 链上）")
+    if robot_ok:
+        if find_components(PREVIEW):
+            lines.append("[INFO] 预览已打开——N02/N03 可直接跑")
+        else:
+            lines.append("[INFO] 预览未打开——需手工开好再跑")
 
-    # 3. 场景脚本齐备性
+    # 3. 隐藏前提提示（人工核对项，本脚本无法自动判定）
+    for key, _, _ in STEPS:
+        for pre in PRECONDITIONS.get(key, []):
+            lines.append(f"[MANUAL] {key}: {pre}")
+
+    # 4. 场景脚本齐备性
     for key, script, desc in STEPS:
         p = os.path.join(HERE, script)
         lines.append(f"[{'OK' if os.path.isfile(p) else 'MISS'}] {key}: {script}  ({desc})")

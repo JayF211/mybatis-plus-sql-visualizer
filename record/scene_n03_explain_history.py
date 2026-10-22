@@ -1,8 +1,13 @@
 # -*- coding: utf-8 -*-
 """N03「EXPLAIN 跨次对比」新增录制（T-DocsRefresh1023 / R61 + R90）。
 
-前置（硬）：预览绑 **mpj_demo@localhost**（带 ANSI_QUOTES）；
-           设置页「跨会话保留原始 EXPLAIN 计划」**可关**（默认关，脚本演示会话内对比即可）。
+前置（硬）：
+1. 预览绑 **mpj_demo@localhost**（带 ANSI_QUOTES）；
+2. **设置页「SQL 预览 → 预览面板内结构化渲染 EXPLAIN」必须开启**——「与上次执行对比」
+   这个入口长在 `ExplainPlanResultView`（结构化视图）里，默认关闭时 EXPLAIN 走原生控制台，
+   面板内没有对比入口（源码：ExplainPlanResultView.showComparison → panel.explain.compare.title）。
+   这是本轮查证的硬前提，未开启则本脚本只能录到控制台计划、录不到对比。
+3. 「跨会话保留原始 EXPLAIN 计划」可关（默认关）——会话内对比不需要它。
 
 分镜（约 10 秒）：
 1. 预览已开（联表 SELECT），点「执行计划」→ 结构化/控制台计划出现，停 2.4s
@@ -10,8 +15,8 @@
 3. 点「与上次执行对比」→ 计划树逐节点标注 cost/rows 变化，停 2.2s
 4. 关预览，停 0.9s
 
-坑：EXPLAIN 走原生控制台时计划在 Output 页签；开启结构化渲染（默认关）才在面板内出树。
-本脚本按**默认配置**（原生控制台 + 对比入口）录，不依赖实验特性。
+坑：结构化渲染是**实验特性、默认关闭**。录 N03 前必须先在设置页开启，录完还原。
+若只想录「原生控制台计划」，那不是本图的主题（本图主题是跨次对比），不要用那张冒充。
 """
 import os
 import sys
