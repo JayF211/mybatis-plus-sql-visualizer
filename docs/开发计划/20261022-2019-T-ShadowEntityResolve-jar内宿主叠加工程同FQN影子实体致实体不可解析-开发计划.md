@@ -291,14 +291,42 @@ Hibernate 解析 `FROM <名>` 只认映射实体，普通 DTO 根本不是候选
    处置＝按命令行核对自己工作树后 kill，再删整个 sandbox 目录（否则 `PersistentEnumeratorBase: CorruptedException`
    会把后续用例全染红，看起来像产品缺陷）。
 
-### 10.6 未做 / 待办
+### 10.6 W2 反编译形态取证（已做，20261022）
 
-- **W2（反编译形态）未做**：P-8/P-9 仍未取证。demo 仓复现用例已备好两种形态的走查步骤（子智能体交付，
-  提交 `cb9279b2`/`089b5a06`/`9764328a`/`04e0c189`），真机走查由用户执行。
+用户明确两种 jar 形态都要识别，本轮补齐第二形态的实测。夹具＝**只挂 class 根**（无 source 根）的库，
+实体与宿主 DAO 都在其中；读数逐条：
+
+| 读数 | 值 | 含义 |
+| --- | --- | --- |
+| `psiClass` / `isCompiled` | `ClsFileImpl` / `true` | 打开 `.class` 得到的是编译文件 PSI |
+| `stubClass` / `stubMethods` | `ClsClassImpl` / 三个方法**全 body=false** | **桩 PSI 没有方法体** ⇒ 桩上不可能看见 HQL（机制证据，非推断） |
+| `mirrorClass` | `PsiJavaFileImpl` | `getDecompiledPsiFile()` 给的是**真 Java PSI** |
+| `mirrorText(head)` | FernFlower 反编译头 + `package com.acme;` | mirror 由反编译文本构成 |
+| `mirrorCalls` | `[Collections.emptyList(), this.findByQuery(...)]` | mirror 里**调用表达式可见** |
+| `locatorAccepted` | `FROM WmsTask task WHERE task.status = :status AND task.type = :type` | 生产 locator 在 mirror 上**正常认领** |
+| `table` / `sql` | `wms_task_jar` / `SELECT task.id, task.status, task.type FROM wms_task_jar task ...` | 产物与 sources 形态**一致** |
+| `DEGRADED` | `false` | 反编译形态**不降级** |
+
+**结论**：反编译形态下「HQL 提取 → 实体解析 → 预览渲染」整链在 mirror PSI 上可达且产物正确
+（与 §1 的平台机制推论一致）。**剩余未证**：编辑器 gutter 图标在反编译视图里是否真的出现——那属平台
+daemon 的 LineMarker 行为，本仓 headless 夹具证不了，须真机走查（用户执行；demo 仓两种形态的走查步骤已备好）。
+
+**P-9 附带证伪**：反编译文本里 HQL 字面量**没有**消失——`String hql = "..."` 编译后局部变量名退化成
+`var1`，但字面量本身保留在反编译文本里，locator 的变量引用解析照常取到完整 HQL。故「常量折叠致字面量消失」
+这条假设在本形态**不成立**，不必单独立项。
+
+新增护栏 `DecompiledJarHostPreviewTest`（1 例）：桩 PSI 无 body（机制）+ mirror 可达（链路）+ 产物与
+sources 形态一致（表名列名、不降级、无 fallback 表）。
+
+### 10.7 未做 / 待办
+
 - **P1（库文件 → 消费者模块上下文）未做**：按 §4.0 的决定单独一轮；且现在看它的收益面进一步收窄
-  （P0a 已治同 FQN 跨模块），只剩「异 FQN 假歧义」那一类。
+  （P0a 已治同 FQN 跨模块），只剩「异 FQN 假歧义」那一类。**注意**：P0a 的「工程内容优先」是**全工程范围**的，
+  不依赖消费者模块——多 owner 场景下 P1 若上，须先解决它与 P0a 的优先级（见 §4.2）。
+- **真机走查未做**：两种形态的 gutter 图标出现与否、点击产物，均由用户执行。demo 仓复现用例已交付
+  （子智能体，提交 `cb9279b2`/`089b5a06`/`9764328a`/`04e0c189`，两个模块 + 两种形态操作步骤 + 对照组）。
 - `EntityClassFinder`（表名→实体反查）、`NamedQueryLocator` 等 §7 同族站点仍按原计划登记未动。
-- 全量 `testShards` 待跑。
+- 全量 `testShards` 已跑：**8162/0/0/9**（5 片 1691+1638+1608+1684+1470 + external 31 + 定向 40），零失败。
 
 ## 十一、附：本轮未做的事
 
