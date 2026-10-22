@@ -22,7 +22,8 @@ param(
     [switch]$DryRun,
     [switch]$GiteeOnly,
     [string]$Branch,
-    [int]$ProxyPort = 7890
+    [int]$ProxyPort = 7890,
+    [switch]$NoProxy
 )
 
 $ErrorActionPreference = 'Stop'
@@ -97,9 +98,15 @@ function Invoke-Push {
         return @{ Name = $Name; Ok = $true; Detail = 'dry-run' }
     }
     Write-Note "[$Name] $display"
-    # 令牌走环境变量注入的 URL 里，这里屏蔽输出避免落日志
+    # git 把进度与 "Everything up-to-date" 都写到 stderr。在 $ErrorActionPreference='Stop' 下，
+    # PowerShell 5.1 会把非空 stderr 当成 NativeCommandError 抛成终止错误，脚本会在第一端就中断、
+    # 后面的 GitHub 段根本不执行（2026-10-22 实测：Gitee up-to-date → 整个脚本退出）。
+    # 故此处局部放宽为 Continue，只用 $LASTEXITCODE 判成败。
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
     $output = & git -C $repoRoot @GitArgs 2>&1
     $code = $LASTEXITCODE
+    $ErrorActionPreference = $prevEap
     if ($code -eq 0) {
         Write-Ok "$Name 推送成功"
         return @{ Name = $Name; Ok = $true; Detail = 'ok' }
@@ -107,6 +114,43 @@ function Invoke-Push {
     Write-Fail "$Name 推送失败（exit $code）"
     $output | Select-Object -Last 6 | ForEach-Object { Write-Host "         $_" -ForegroundColor DarkYellow }
     return @{ Name = $Name; Ok = $false; Detail = ($output | Select-Object -Last 3) -join ' / ' }
+}
+
+# GitHub 专用：直连（含重试）→ 失败回退本地代理（含重试）；-NoProxy 时只直连
+#
+# 为什么必须带重试：本机到 github.com:443 的失败是**间歇性传输层中断**（实测同一分钟内前 4 次
+# "Couldn't connect / Connection was reset / SSL_ERROR_SYSCALL"，第 5 次直接成功；同期 curl 打
+# api.github.com 3/3 都是 200）。这不是配置错误，重试就能过——不重试会把偶发抖动报成「推送失败」。
+function Invoke-PushWithFallback {
+    param(
+        [string]$Name,
+        [string]$Refspec,
+        [int]$MaxAttempts = 5,
+        [int]$RetryDelaySec = 5
+    )
+
+    function Attempt([string]$Label, [string[]]$ExtraGitArgs) {
+        # 注意：不能起名 $args（PowerShell 自动变量，赋值会污染并报错）
+        $pushArgs = $ExtraGitArgs + @('push', $script:ghUrl, $Refspec)
+        for ($i = 1; $i -le $MaxAttempts; $i++) {
+            if ($i -gt 1) {
+                Write-Note "$Label 第 $i/$MaxAttempts 次重试…"
+                Start-Sleep -Seconds $RetryDelaySec
+            }
+            $r = Invoke-Push -Name $Label -GitArgs $pushArgs
+            if ($r.Ok) { return $r }
+        }
+        return $r
+    }
+
+    $r = Attempt -Label $Name -ExtraGitArgs @('-c', 'credential.helper=')
+    if ($r.Ok -or $NoProxy) { return $r }
+
+    Write-Note "$Name 直连 $MaxAttempts 次均失败，改走本地代理 127.0.0.1:$ProxyPort"
+    return Attempt -Label "$Name(proxy)" -ExtraGitArgs @(
+        '-c', "http.proxy=http://127.0.0.1:$ProxyPort",
+        '-c', 'credential.helper='
+    )
 }
 
 # ---- 1. Gitee（主仓）----
@@ -126,20 +170,16 @@ if ($GiteeOnly) {
     Write-Note "创建 $tokenFile，内容形如：{ ""github_personal_access_token"": ""gho_..."", ""owner"": ""SongRenShuo"", ""repo"": ""mybatis-plus-sql-visualizer"" }"
 } else {
     Write-Step "推送 GitHub（镜像）"
-    $ghUrl = "https://x-access-token:${ghToken}@github.com/${ghOwner}/${ghRepo}.git"
+    $script:ghUrl = "https://x-access-token:${ghToken}@github.com/${ghOwner}/${ghRepo}.git"
+    # 传输策略：先直连，失败再挂本地代理重试一次。
+    # 为什么不是「先代理」：本机代理对 github.com:443 会间歇性 SSL_ERROR_SYSCALL（2026-10-22 实测
+    # 同一分钟内多次失败），而直连稳定可达；但部分网络环境只有代理能出去，故保留回退。
+    # -NoProxy 强制只走直连，跳过回退。
     foreach ($b in $branches) {
-        $results += Invoke-Push -Name "GitHub:$b" -GitArgs @(
-            '-c', "http.proxy=http://127.0.0.1:$ProxyPort",
-            '-c', 'credential.helper=',
-            'push', $ghUrl, "${b}:${b}"
-        )
+        $results += Invoke-PushWithFallback -Name "GitHub:$b" -Refspec "${b}:${b}"
     }
     if ($Tags) {
-        $results += Invoke-Push -Name 'GitHub:tags' -GitArgs @(
-            '-c', "http.proxy=http://127.0.0.1:$ProxyPort",
-            '-c', 'credential.helper=',
-            'push', $ghUrl, '--tags'
-        )
+        $results += Invoke-PushWithFallback -Name 'GitHub:tags' -Refspec '--tags'
     }
 }
 
