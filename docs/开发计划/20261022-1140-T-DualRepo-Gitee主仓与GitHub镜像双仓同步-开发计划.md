@@ -1,0 +1,181 @@
+# T-DualRepo：Gitee 主仓 + GitHub 镜像双仓同步
+
+**创建时间**：2026-10-22 11:40
+**触发源**：用户令「将插件仓库同步到 github 了，之后就是双仓同步，gitee 是主仓」
+**基线**：`master@21ac0f28`（Gitee 与本地一致，0 提交差；28 个 tag 两边一致）
+**状态**：GitHub 仓库已建并完成首次推送（master / dev / feature 三支 + 28 tag）；文档与模板侧改动本计划覆盖，尚未全部落地。
+
+## 一、目标与边界
+
+- **Gitee 是主仓**：发行（Release + 自更新清单）、Issue 受理、日常开发提交的权威源。GitHub 只做镜像。
+- **GitHub 是镜像 + 源码链接载体**：Marketplace 开源许可证要求「源码链接公网可达」，官方文档只举例 GitHub/GitLab，未明确列 Gitee——镜像的首要作用是满足这条。
+- **不做的事**（本轮明确不引入）：
+  - 不做 GitHub Actions 自动构建/校验。理由见 `docs/开发计划/20260906-0170-CI自动verifyPlugin与适配承诺-开发计划.md` §2.1：`gradle.properties` 硬编码 `127.0.0.1:7890` 代理、`VerifyPluginTask` 对 verifier 子进程硬编码同地址代理、`-Xmx4096m` 对免费 runner 偏紧，三项改造代价远超收益。CI 仍走本机计划任务（`dev-support/ci-verify.ps1`）。
+  - 不做 GitHub Release 回填。自更新清单 `update/update.json` 的 `downloadUrl` 指向 Gitee Release，GitHub Release 无消费方；回填 28 版附件约需多推数十 MB 且长期无收益。后续版本是否顺带同步 GitHub Release，留待有实际需求时再定。
+  - 不推 `t-sql-insight`（本地独有分支，Gitee 上也没有，无镜像义务）。
+
+## 二、本机已完成的配置改动（一次性，不进仓库）
+
+| 项 | 动作 | 验证 |
+|---|---|---|
+| 全局 URL 重写 | `git config --global --unset url."https://ghfast.top/https://github.com/".insteadOf` | `git config --global --get-regexp "url\."` 返回空 |
+| GitHub 令牌 | 写入 `.local/github-token.json`（字段 `github_personal_access_token` / `owner` / `repo` / `login`），整目录被 `.gitignore` 的 `.local/*` 忽略 | `git check-ignore -v` 命中 `.gitignore:98`；`git status` 中零命中 |
+| remote | `git remote add github https://github.com/SongRenShuo/mybatis-plus-sql-visualizer.git` | `git remote -v` 四条 |
+
+**为什么去掉 ghfast 重写而不是绕开**：原配置把 `https://github.com/` 重写到 `ghfast.top` 只读加速代理，push 会被拒（Connection reset）。绕法是用 `https://<login>@github.com/...` 形态躲过前缀匹配，但那只是让每条 push 命令都变成特例。用户 2026-10-22 明确要求「ghfast.top 去掉，用正常的 https://github.com/」。去掉后 fetch/push 都走直连 + 本地代理（`127.0.0.1:7890`），代价是 clone 大仓时慢一些。
+
+**令牌来源**：Windows 凭据管理器里已有的 `git:https://github.com`（GCM 存的用户名标签是 `XiaoSongTX`，实际 login 是 `SongRenShuo`，两者不一致是既有已知现象）。scope 实测为 `gist, repo, workflow`，够建仓与推送。**未新建令牌**。
+
+## 三、推送方案
+
+### 3.1 首次推送（已完成）
+
+```bash
+TOK=$(python -c "import json;print(json.load(open('.local/github-token.json',encoding='utf-8'))['github_personal_access_token'])")
+
+# master（GitHub 建仓默认分支是 main，先推 master 再切默认分支）
+git -c http.proxy=http://127.0.0.1:7890 -c credential.helper= \
+  push "https://x-access-token:${TOK}@github.com/SongRenShuo/mybatis-plus-sql-visualizer.git" master:master
+
+# dev + feature
+git -c http.proxy=http://127.0.0.1:7890 -c credential.helper= \
+  push "https://x-access-token:${TOK}@github.com/SongRenShuo/mybatis-plus-sql-visualizer.git" \
+  dev:dev feature/kotlin-to-java:feature/kotlin-to-java
+
+# tags
+git -c http.proxy=http://127.0.0.1:7890 -c credential.helper= \
+  push "https://x-access-token:${TOK}@github.com/SongRenShuo/mybatis-plus-sql-visualizer.git" --tags
+```
+
+`-c credential.helper=` 置空是必须的：否则 GCM 会弹 GUI 抢凭据（本轮实测卡住三次，进程 `git-credential-manager get` 常驻不退）。URL 里用 `x-access-token:<token>` 形态，GitHub 对 PAT 接受任意用户名。
+
+### 3.2 日常双推（待落地脚本）
+
+拟新增 `dev-support/push-all.ps1`：一次推 Gitee + GitHub，失败时逐端报告而不中断另一端。设计要点：
+
+- 两端各自独立 `git push`，**不用 `&&` 串联**（AGENTS.md 收口纪律：失败会伪装成「进行中」）。
+- GitHub 端复用上面的 `-c http.proxy` + `-c credential.helper=` + `x-access-token` 组合。
+- 默认推当前分支 + 当前分支的 tag；`-All` 时推 master/dev/feature 三支。
+- 令牌缺失时只推 Gitee 并提示，不报错退出。
+
+### 3.3 发版时的双仓动作
+
+发版流程（`docs/发行说明/T-ReleaseChecklist-发行检查清单.md`）**不变**，仍在 Gitee 建 Release。追加一条可选动作：GitHub 建同 tag 的 Release（不附 zip，正文用发行说明全文），让 GitHub 侧有版本叙事。是否要做由用户在每次发版时决定，不写进强制清单。
+
+## 四、仓库元信息
+
+GitHub 仓库已按以下设置创建：
+
+| 项 | 值 |
+|---|---|
+| 名称 | `mybatis-plus-sql-visualizer`（与 Gitee 同名，跨平台找仓不迷路） |
+| 可见性 | Public |
+| 描述 | 英文摘要（GitHub 以英文为主流受众；Gitee 侧保留中文长描述不动） |
+| Homepage | `https://sql-visualizer.jvtools.cn` |
+| License | 由仓库内 `LICENSE` 自动识别（Apache-2.0） |
+| Issues | 开启（见 §五） |
+| Wiki | 关闭（内容已在官网文档站，双份维护无收益） |
+| Projects | 关闭 |
+| Topics | `intellij-plugin` `mybatis` `mybatis-plus` `sql` `sql-visualizer` `jpa` `hibernate` `mcp` |
+| 默认分支 | 首次推完 master 后改为 `master`（建仓默认是 `main`） |
+
+**待用户操作**：Marketplace 作者后台把 Source code 字段填成 `https://github.com/SongRenShuo/mybatis-plus-sql-visualizer`（当前 `sourceCodeUrl` 为空，vendor 仍是 Gitee 地址）。
+
+## 五、Issue 受理口径
+
+**两个平台都开启 Issue，但都置顶一条引导，主入口仍是官网需求池。**
+
+理由：关掉 Issues 会让「想提但找不到入口」的用户直接流失，也会让 GitHub 侧显得仓库无人维护；开着但置顶引导，既不挡人也不分裂反馈。
+
+- GitHub：`README.md` 顶部加一行 GitHub 链接；置顶 Issue 正文见 §七模板。
+- Gitee：同样置顶一条（Gitee 的置顶靠 Issue 的「置顶」标记，需在网页上操作一次）。
+- 官网需求池 `https://sql-visualizer.jvtools.cn/about/feedback` 是唯一主入口（README 第 7 行已如此，plugin.xml 描述里的「需求池」链接也是它）。
+
+## 六、竞品名分级处置（详见 §八分析）
+
+沿用 20261012 已定案判据（`~/.zcode` 记忆 `project-competitor-docs-open-source-exposure`）：
+
+- **不清**：只提及竞品名（横向对比、能力矩阵、下载数、Marketplace 链接、README 致谢）。
+- **要清**：点名商业闭源插件的**实现细节**——混淆类名、EP 注册链、反编译产物路径、内部配置字段。
+- **本轮新增处置**：`docs/MEMORY.md` 第 251 行仍写着「（已移出公开仓）」，这正是 20261012 用户明令禁止的形态（占位指针本身即敏感）。属**违规残留**，须改中性标签。
+
+## 七、实施清单
+
+| # | 动作 | 文件 | 状态 |
+|---|---|---|---|
+| 1 | 去掉 ghfast 全局重写 | 本机 git config | ✅ 完成 |
+| 2 | 令牌落 `.local/github-token.json` | `.local/`（已忽略） | ✅ 完成 |
+| 3 | 建 GitHub 仓库 | GitHub | ✅ 完成 |
+| 4 | 推 master / dev / feature + 28 tag | GitHub | 进行中 |
+| 5 | 默认分支改 master | GitHub API | 待做 |
+| 6 | 新增 `.github/PULL_REQUEST_TEMPLATE.md` | 新文件 | 待做 |
+| 7 | 新增 `.github/ISSUE_TEMPLATE/bug_report.yml` + `feature_request.yml` + `config.yml` | 新文件 | 待做 |
+| 8 | `CONTRIBUTING.md` 双仓口径 | 3 处 clone/PR/Issue 段落 | 待做 |
+| 9 | `README.md` 顶部加 GitHub 链接 | 第 7 行导航行 | 待做 |
+| 10 | `docs/MEMORY.md` 第 251 行去占位措辞 | 1 行 | 待做 |
+| 11 | 清 `XmlSynHiGate.kt` 闭源指纹（进插件包发给用户） | `src/main` 注释块 | ✅ 完成 |
+| 11b | 测试夹具 `com.ccnode.fakeprobe` 改中性包名 | `src/test`（2 文件移动 + 2 处引用） | ✅ 完成 |
+| 12 | 新增 `dev-support/push-all.ps1` | 新文件 | ✅ 完成 |
+| 13 | demo 仓库同步 GitHub | 独立仓库 | ✅ 完成 |
+| 14 | 两平台置顶 Issue | 网页操作 | 待用户 |
+
+## 八、竞品名分析结论
+
+### 8.1 分级口径
+
+按 20261012 判据把仓内提及分三档。**关键区分：开源有公开仓 ≠ 闭源**。MyBatisX（`github.com/baomidou/MybatisX`）、MyBatis Log Free（`github.com/starxg/mybatis-log-plugin-free`）、Cool Request（`github.com/houxinlin/cool-request`，GPL-3.0）、MyBatis-Flex（`github.com/baomidou/mybatis-flex`）都有公开源码，读其公开源码属署名式引用，不在清理范围。真正闭源的是 **MyBatisCodeHelperPro**（`plugin/9837` + MP 付费版 `14522`）、**Mybatis Log Ultra**（`plugin/26550`）、**zMyBatis**（`plugin/30447`）、**JTracker**（`plugin/24694`）——Marketplace API 登记均无 `sourceCodeUrl`。
+
+### 8.2 逐项处置
+
+| 位置 | 性质 | 处置 |
+|---|---|---|
+| `README.md`「参考与致谢」6 项 | 名字 + Marketplace 链接，纯致谢 | **保留**。这是正当的致谢与引用，删掉反而不礼貌 |
+| `src/main/kotlin/.../XmlSynHiGate.kt` 第 34-42 行 | **闭源实现细节**：`plugin.xml:484` 可选依赖链、`plugin_database.xml` 的 `ultimateVersionChecker`、混淆方法名 `i.b.c()`、版本号 `MCH-Pro 3.6.7` | **必须清**。这段注释会随插件 jar 分发到每个用户机器上，是「逆向闭源插件」最直接的物证。技术结论（「竞品的社区轨注入器被自身平台让位门挡住」）保留，手段与指纹改为中性表述 |
+| `src/main/resources/META-INF/plugin.xml` 第 26、366 行 | 仅名字（「参考件 X 同形」「交互参考 X 面板」） | **保留**。属名字级提及，且「参考」是事实陈述 |
+| `src/main/kotlin/.../PluginSettings.kt` 第 270 行、`PluginSettingsPanel.kt` 第 560 行、`SqlLogEntryBuffer.kt` 第 10 行、`SqlLogManager.kt` 第 89 行 | 仅名字（「参考 X 的 Y 设置项」） | **保留**，同上 |
+| `docs/MEMORY.md` 第 251 行 | 「（已移出公开仓）」占位指针 | **改中性标签**，去掉文件名与「已移出」字样 |
+| `docs/MEMORY.md` 第 324 行 | 「MBCHP-Pro 反编译对照」——缩写 + 反编译字样 | **改为中性表述**（「商业闭源插件能力对照」） |
+| `docs/memory-archive/bug-fixes/reference-competitor-plugin-links.md` | 竞品链接总表，含闭源插件 Marketplace id | **保留**。id 与下载数是 Marketplace 公开信息，不含实现细节 |
+| `docs/memory-archive/bug-fixes/project-competitive-round7.md` | 标题含「zMyBatis 深度解剖」，正文含类级结论 | **评估后保留正文、改标题措辞**。zMyBatis 闭源，但正文是能力级结论；「深度解剖」字样在公开仓显得像逆向宣告，改中性标题 |
+| `docs/调研报告/竞品横向对比-第N轮`（26 份） | 多为 Marketplace API 数据 + 能力矩阵；个别含 `plugin.xml` 关键词扫描、包体条目数 diff | **保留**。这是「功能对比」而非「实现逆向」；`plugin.xml 关键词扫描`（mcp/preview/explain 命中数）属公开包的可见信息，不涉反编译。个别轮次若含类名级细节，按 §8.3 复核 |
+| `docs/内容营销/老版本承接-*.md` | 竞品兼容区间与下载数 | **保留**。纯市场数据 |
+| `docs/变更记录/*`、`docs/发行说明/*` | 历史记录里的名字级提及 | **保留**。已发布内容，改动会与已发布版本叙述冲突 |
+
+### 8.3 复核方法（实施时执行）
+
+```bash
+# 闭源实现细节指纹（20261012 基线应 0 命中）
+git grep -n -iE "MBCHP|com\.ccnode\.codegenerator|i\.b\.c\(|BatsLogConfig|maxPrepare|ultimateVersionChecker|paramLanguage|MybatisOgnl|fernflower.*CodeHelper" -- . | grep -v "^docs/内部"
+```
+
+命中即处置。注意 `fernflower` 单独出现不算（本仓既定方法论是反编译 **IDEA 平台 jar**，对象不是竞品）。
+
+### 8.4 关于「移到内部仓」
+
+本轮**不做大批量迁移**。理由：
+
+1. 20261012 已把真正的实现细节（19 组 40KB）迁完并存档，当前公开仓没有成规模的逆向材料。
+2. 把 26 份竞品横向对比报告全迁内部，等于让公开仓的「为什么这么设计」失去依据——这些报告是功能决策的论证链，不是逆向产物。
+3. 真正需要动的是**两处**：`XmlSynHiGate.kt` 的闭源指纹（会进插件包）和 `MEMORY.md` 的占位残留（违反既有定案）。改动量小、风险低。
+
+## 九、待验证前提
+
+| # | 前提 | 验证方式 | 结论 |
+|---|---|---|---|
+| P-1 | GitHub 建仓默认分支是 `main` | 建仓 API 返回 `default_branch: main` | ✅ 成立，需手动切 master |
+| P-2 | GCM 存的 GitHub 凭据可直接用 | `/user` 返回 `login: SongRenShuo` | ✅ 成立 |
+| P-3 | 去掉 ghfast 重写后 push 能直连 | master 推送成功 | ✅ 成立 |
+| P-4 | `-c credential.helper=` 能阻止 GCM 弹窗 | 三次弹窗后加该参数即成功 | ✅ 成立 |
+| P-5 | 仓库体积可接受 | 跟踪文件 45.9MB，`.git` 83MB | ✅ 首推约 2 分钟 |
+| P-6 | `docs/内部/` 从未入库 | `git log --all --diff-filter=A -- docs/内部` 空 | ✅ 成立，不会随镜像泄露 |
+| P-7 | 历史无 token 泄露 | `git log --all -S"gitee_personal_access_token"` 仅命中计划文档说明文字 | ✅ 成立 |
+
+## 十、风险
+
+1. **搜索引擎收录带来的可见度跃升**：GitHub 被搜录强度高于 Gitee，仓内竞品对比内容的曝光会变大。按 §八处置后，留下的是名字级提及与能力矩阵，属行业常规做法。
+2. **双仓漂移**：若某次只推了 Gitee，GitHub 会落后。缓解=`push-all.ps1` 作为默认动作，且发版清单追加一条「GitHub 镜像是否同步」核对。
+3. **令牌是账号级 PAT（`gho_` 前缀 + `repo` scope）**：权限比只推单仓所需的大。它只存在于本机 `.local/`，不入库。若日后要在多机使用，建议换成 fine-grained token 限定到该仓库。
+
+## 十一、实施记录
+
+（实施时回填）
