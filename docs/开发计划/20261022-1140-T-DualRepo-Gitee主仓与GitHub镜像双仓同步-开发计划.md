@@ -223,3 +223,33 @@ git grep -n -iE "MBCHP|com\.ccnode\.codegenerator|i\.b\.c\(|BatsLogConfig|maxPre
 - **Marketplace Source code 字段**待用户在有权限的后台改为 GitHub 地址。
 - `dev-support/push-all.ps1` 未接 GitHub demo 仓（demo 是独立仓，脚本只处理当前仓库）。若日后频繁改 demo，可复制一份到 demo 仓或加 `-Repo` 参数。
 
+### 11.5 官网文档站同步（2026-10-22 追加）
+
+用户追问「文档站是不是也要调整，例如仓库图标新增 GitHub 一类的」。查证后确认仓库只有一个 Gitee 入口，改动落在四处，另加一个图标资源。
+
+| 位置 | 改动 |
+|---|---|
+| `public/github-icon.png` | **新增**。与 `gitee-icon.png` 同规格：64×64 实心圆 + 白色字形，字形占直径 0.625（与 Gitee 图标白色字形实测 40/64 一致），用官方 Octocat path 经 `@resvg/resvg-js` 渲染 |
+| `.vitepress/theme/components/home/NavHeader.vue` | 首页导航栏在 Gitee 图标旁并列 GitHub 图标；`.nav-gitee + .nav-gitee { margin-left: -0.625rem }` 把两个图标收成一簇 |
+| `.vitepress/theme/components/NavBarGitee.vue` | 文档页导航改为 Gitee + GitHub 两个图标。**顺带修一处既有不一致**：该组件原本用外链 `https://gitee.com/favicon.ico`，首页用的是本地 `/gitee-icon.png`，现统一为本地 |
+| `.vitepress/theme/components/home/WelfareCard.vue` | 开源区两个仓库卡并排（96px/60px 图标，原 120px 竖排会把右列撑高一倍） |
+| `about/index.md` + `en/about/index.md` | 联系方式表格拆为「源码仓库（主）/（镜像）」两行，中英双语 |
+| `.vitepress/theme/data/homeContent.js` | 补 `nav.githubTitle` 与 `welfare.githubCaption` 的 zh/en 文案；welfare caption 由「前往 Gitee 仓库」改「前往源码仓库」 |
+| `README.md` | 相关链接补 GitHub 镜像 |
+
+**未改（有意保留）**：所有 `/releases` 链接（Hero「下载离线包」、changelog 的 more-link、guide 的离线安装、`update-changelog.mjs`）。原因＝GitHub 侧不回填 Release，自更新清单 `downloadUrl` 与离线包只在 Gitee 发布，指向 GitHub 会是死链。
+
+**验证**：`npm run build` 通过（46 页索引、exit 0，产物含 `/github-icon.png` 且首页同时含两个仓库 URL）；`vitepress preview` 实机核对了首页中英双语导航栏与开源区、`/about/` 联系方式表格，DOM snapshot 与截图均符合预期；生成的图标与 Gitee 图标做过 128px 并排像素对照。
+
+### 11.6 官网仓镜像（2026-10-22 追加）
+
+| 项 | 结果 |
+|---|---|
+| GitHub 文档站仓 | `SongRenShuo/mybatis-plus-sql-visualizer-docs`，Public，默认分支 `master`，5 topics |
+| 同步 | master `2365ce7` 三端一致 |
+| 安全性核查 | `.cf-token` / `.secrets` / `.wrangler` / `.workbuddy-ai` / `.playwright-mcp` **跟踪文件数均为 0**；`guide/faq.md` 提及竞品名属「共存行为」说明（名字级，非实现细节），按 §8.1 保留 |
+| 部署口径 | Cloudflare Pages **只从 Gitee 主仓触发**，GitHub 镜像仅作代码可见性备份（已写进该仓 README） |
+
+三仓合计：插件仓、demo 仓、文档站仓，均 Gitee 主 + GitHub 镜像。
+
+
