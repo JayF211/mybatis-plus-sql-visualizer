@@ -1193,11 +1193,42 @@ internal fun SqlPreviewPanel.submitExplainDirect(
             is PreviewSideQuery.Result.Table ->
                 showExplainRawResultDialog(MpSqlVisualizerBundle.message("panel.explain"), result.raw)
 
+            // T-ExplainPwdPrompt：分型出口同结构化通道——认证失败附补存密码指引；取消轻通知不弹红字框
             is PreviewSideQuery.Result.Blocked -> showExplainErrorDialog(result.message, openConsole)
-            is PreviewSideQuery.Result.Failed -> showExplainErrorDialog(result.message, openConsole)
+            is PreviewSideQuery.Result.Failed -> when (
+                cn.song.mybatisplus.visualizer.execute.classifyExplainFailure(result.message)
+            ) {
+                cn.song.mybatisplus.visualizer.execute.ExplainFailureKind.AUTH ->
+                    showExplainErrorDialog(
+                        result.message + "　" +
+                            MpSqlVisualizerBundle.message("panel.explain.authFailureHint"),
+                        openConsole,
+                    )
+                cn.song.mybatisplus.visualizer.execute.ExplainFailureKind.CANCELLED ->
+                    notifyExplainCancelled(proj)
+                cn.song.mybatisplus.visualizer.execute.ExplainFailureKind.OTHER ->
+                    showExplainErrorDialog(result.message, openConsole)
+            }
             is PreviewSideQuery.Result.Scalar ->
                 showExplainErrorDialog("unexpected scalar result from EXPLAIN", openConsole)
         }
+    }
+}
+
+/**
+ * T-ExplainPwdPrompt（2026-10-24）：用户取消（原生密码框 Esc 等）——轻通知收口，不弹红字
+ * 模态框（取消是用户自己的决定，模态报错等于打断两次），也**绝不自动重试**（重试会再弹一次
+ * 密码框）。单测模式不弹（弹窗/通知克制红线，notifySchemaIssues 同款守卫）。
+ */
+private fun SqlPreviewPanel.notifyExplainCancelled(proj: Project) {
+    if (ApplicationManager.getApplication().isUnitTestMode && schemaNotificationForTest == null) return
+    runCatching {
+        Notification(
+            NOTIFICATION_GROUP_ID,
+            MpSqlVisualizerBundle.message("panel.explain"),
+            MpSqlVisualizerBundle.message("panel.explain.cancelled"),
+            NotificationType.INFORMATION,
+        ).notify(proj)
     }
 }
 
@@ -1403,8 +1434,27 @@ internal fun SqlPreviewPanel.submitExplainOrStructured(
                     if (com.intellij.openapi.util.Disposer.isDisposed(this) || generation != explainStructuredGeneration) {
                         return@executeStructured
                     }
-                    notifyExplainStructuredFallback(proj, null, detail = errorText)
-                    submitExplainDirect(proj, explainSql, dialectGateRequest)
+                    // T-ExplainPwdPrompt（2026-10-24）：失败分型出口——认证失败不再回退直送
+                    // （直送同通道必同样失败，徒增一次红字对话框），改就地呈现 + 补存密码指引；
+                    // 用户取消（原生密码框 Esc）轻通知收口，绝不自动重试（重试会再弹一次框）。
+                    when (cn.song.mybatisplus.visualizer.execute.classifyExplainFailure(errorText)) {
+                        cn.song.mybatisplus.visualizer.execute.ExplainFailureKind.AUTH -> {
+                            resultPanel.showIdle()
+                            showExplainErrorDialog(
+                                errorText + "　" +
+                                    MpSqlVisualizerBundle.message("panel.explain.authFailureHint"),
+                                onOpenConsole = { submitExplainDirectConsole(proj, explainSql, dialectGateRequest) },
+                            )
+                        }
+                        cn.song.mybatisplus.visualizer.execute.ExplainFailureKind.CANCELLED -> {
+                            resultPanel.showIdle()
+                            notifyExplainCancelled(proj)
+                        }
+                        cn.song.mybatisplus.visualizer.execute.ExplainFailureKind.OTHER -> {
+                            notifyExplainStructuredFallback(proj, null, detail = errorText)
+                            submitExplainDirect(proj, explainSql, dialectGateRequest)
+                        }
+                    }
                 },
             )
         }
