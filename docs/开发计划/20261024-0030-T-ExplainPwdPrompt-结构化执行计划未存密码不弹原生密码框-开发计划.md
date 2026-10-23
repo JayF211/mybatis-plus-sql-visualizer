@@ -5,7 +5,7 @@
 弹出的「执行计划」对话框里红字 `Access denied for user 'root'@'localhost' (using password: NO)`，
 **没有**弹出 IDE 原生的输入密码框（原生控制台链在这种场景会弹）。
 **基线**：`master@f9e1650f`（分析时 tip，已含 T-PreviewChainNoise）
-**状态**：仅计划（本篇未改任何生产代码）
+**状态**：已实施（`4bccd331`，2026-10-24；实施记录见 §九）
 **编号**：未占 O/R/D/V（缺陷级修复）
 **门禁**：定向测试 + 反向验证 + 沙盒手工验收；全量 `testShards` 按用户既有口径默认不跑
 
@@ -199,3 +199,54 @@ Database 工具窗口中打开该数据源补存密码」，`DataSourceSelector.
    函数签名对齐要同批改，防漏编。
 3. 弹框出现在池线程 + `runProcess` 包装内，若与既有超时护栏（driver `setQueryTimeout`）或
    MCP 取消语义叠加，取消传播路径需在 W2 一并对账。
+
+---
+
+## 九、实施记录（2026-10-24，已实施）
+
+**生产改动**（提交 `4bccd331`，9 文件 +296/−6）：
+
+1. **W1**（`mcp/McpDbExecutor.kt`）：`executeQuery`/`executeQueryInternal` 增必填
+   `askPassword: Boolean`（无默认值）透传 `setAskPassword`；KDoc 记录两通道语义与缺陷编号。
+2. **W1-c**：三调用点显式表态——`ExplainPanelChannel.executeStructured` 与 `PreviewSideQuery`
+   传 `askPassword = true`，`SqlVisualizerExplainTool` 传 `false`（MCP 零弹窗红线原样）。
+3. **W2**（`execute/ExplainPanelChannel.kt` 顶层 + `ui/SqlPreviewPanelExecution.kt` +
+   `ui/PreviewSideQuery.kt` + 双语 bundle 键）：
+   - 分型纯函数 `classifyExplainFailure`（AUTH/CANCELLED/OTHER）+ `isAuthFailureText`
+     （五签名：access denied / password authentication failed / invalid username/password /
+     ora-01017 / login failed for user）；
+   - 结构化 onFailed：AUTH 就地呈现红字 + 补存密码指引（**不再回退直送**——同通道必同样失败）；
+     CANCELLED 轻通知（`notifyExplainCancelled`，单测模式不弹，notifySchemaIssues 同款守卫）；
+     OTHER 维持既有回退；
+   - 直送链 `Result.Failed` 同款三分型出口；`PreviewSideQuery.failureMessage` 对认证失败
+     附同一指引（预估行数内联区与对话框同文案）；
+   - 取消词根用 `"cancell"`（覆盖 cancelled/cancellation——首跑实证只写 `"canceled"`
+     漏平台 `CancellationException`）；超时消息（常含 cancelled）排除在取消外。
+4. **W3**：`convention/ExplainAskPasswordChannelGuardTest` 通道表态源码守卫
+   （`BannedApiScanSupport` 剥注释快照上对账三文件）。
+
+**测试**：新增 `ExplainFailureClassifierTest`（8 例，零平台引用＝testFast 快桶成员；bundle 键
+在场性走文件读取不触发平台 ResourceBundle）+ `ExplainAskPasswordChannelGuardTest`（3 例）。
+
+**读数**：
+
+| 项 | 读数 |
+| --- | --- |
+| 定向 3 类（XML 判例数已核） | **21/0/0/0**（Classifier 8 + Guard 3 + 既有 PreviewSideQueryTest 10） |
+| 反向①（ExplainPanelChannel 表态改 false） | **恰 1 红**（`面板执行计划结构化通道必须允许询问密码`） |
+| 反向②（SqlVisualizerExplainTool 改 true） | **恰 1 红**（`MCP工具通道必须保持零弹窗`） |
+| 反向③（摘 "access denied" 签名） | **恰 1 红**（`mysqlAccessDeniedIsAuth`） |
+| 还原后复跑 | 3 类全绿（21/0/0/0），探针残留 grep = 0 |
+
+**诚实边界**：
+
+- **前提 1（承重墙）未证**：`setAskPassword(true)` 在本插件的裸建连形态（无 requestor /
+  ConsoleRunConfiguration，跑在 `executeOnPooledThread` + `withDbBlockingContext` 包装内）
+  下平台是否真弹原生密码框，**留沙盒手工验收**（§四.3）。若证伪，W1 的价值降级为「分型
+  指引更快更干净」，主路径转 W2 的 openDatabase 引导（代码两案都已就位，只需把 AUTH 分支
+  的指引换成 openDatabase 出口）。
+- 前提 2（取消异常形态）未实测——当前取消分型按**失败文本**判定（PCE/CancellationException
+  的类名即含 cancell），异常驱动形态实测后如需精确分型再收紧。
+- 前提 3（「已存但密码错」是否二次弹框）未实测，随沙盒验收一并观察。
+- `PreviewSideQueryIntegrationTest`（DB 桶）与 `McpDbSignatureCrossVersionTest`（外部桶）
+  未随本轮复跑——本批不触其覆盖面（反射签名面零变化，仅调用点参数），全量按用户口径不跑。
