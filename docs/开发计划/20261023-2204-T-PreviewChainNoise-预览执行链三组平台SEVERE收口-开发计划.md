@@ -224,7 +224,10 @@ override fun dispose() {
 ## 五、待验证前提（实施者先证伪再动手）
 
 1. `FileDocumentManager.isDocumentUnsaved(doc)` 在 243 可用且是廉价内存判据（本仓 `DataSourceSelector.kt:1457`、`:1474` 已在用，`Document.isModified` 于 262 已移除，这是唯一查询口径，见 `:1677-1678`）。
-2. `MemoryDiskConflictResolver` 的弹窗条件确为「document 已加载且已修改」——这决定「EDT + 无文档 → 不读盘」是否安全。若条件更宽（例如「VFS 与磁盘不一致」也算），W1 需改走快照比对。
+2. ~~`MemoryDiskConflictResolver` 的弹窗条件确为「document 已加载且已修改」~~ → **已证**（实施时
+   243 sources `MemoryDiskConflictResolver.java:41-46` 核对：`beforeContentChange` 首行
+   `document == null || !isDocumentUnsaved(document) → return`——无缓存 document 即无冲突收集，
+   「EDT + 无文档 → 不读盘」的收窄安全）。
 3. headless 下 `SlowOperations` 断言能否被构造出来（见 §4.2 末尾）。这条决定 W1 反向验证用哪种 oracle。
 4. `ProgressManager.getInstance().progressIndicator` 在裸池线程上返回 null、在 `runProcess` 块内非 null（`PreviewSideQuery` 已在真机/headless 走过同款，应成立；但需本仓自证）。
 5. `DatabaseConnectionManager$Builder.createBlocking` 是**唯一**需要该上下文的入口（`McpDbExecutor.kt:255` 是仓内唯一调用点，grep 已核）。若后续新增反射入口，需复用同一包装。
@@ -314,6 +317,6 @@ override fun dispose() {
 - §4.2 末尾担心的「headless 下 SlowOperations 断言不可构造」成立与否**未走对照实验**——反向①
   实际用的判据是纯判定函数与入口行为（确定性 oracle），不依赖平台断言在测试里触发；
   headless 触发形态留作真机复核的附属观察项（前提 3 保持开放）。
-- 前提 2（MemoryDiskConflictResolver 弹窗条件）未做平台源码级核对，按「冲突需已加载且已修改的
-  文档」收窄；真机若再现「EDT 无文档但 refresh 弹冲突」，回填快照判据（§六末条）。
+- 前提 2 已在实施时以 243 sources 源码级闭环（`MemoryDiskConflictResolver.java:41-46`：
+  无缓存 document 即直接 return，冲突收集不可能发生）——「EDT + 无文档 → 不读盘」收窄安全。
 - 全量 `testShards` 按用户 2026-10-23 口径未跑；真机日志零 SEVERE 复核（§4.3）留用户侧。
