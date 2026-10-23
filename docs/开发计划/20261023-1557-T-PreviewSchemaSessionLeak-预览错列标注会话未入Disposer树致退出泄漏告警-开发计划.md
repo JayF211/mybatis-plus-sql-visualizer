@@ -141,3 +141,12 @@ dispose），但**不作为"已验证"项**登记；如需把它纳入验证，�
 
 本缺陷**与实体解析无关**：日志同时暴露的「HQL 预览降级」是另一条链（已由 `1b61964f` 修好），
 两条线索只是被同一次「核实日志」一并发现。本计划独立立项、独立提交。
+## 九、回归回填（2026-10-23，T-PreviewChainNoise W3）
+
+本计划的树感知销毁改动引入了一处收尾瑕疵：`Session.dispose` 里的手动摘监听与两参重载注册
+生成的子 disposable 撞车（ObjectTree 后序销毁子先父后），真机日志出现
+「Can't remove document listener」+ EditorImpl「Assertion failed」各一条（每次面板关闭）。
+修法＝删掉 dispose 里两行手动摘除（摘除职责只归注册时的 parentDisposable，T-RA-02 定例），
+随 T-PreviewChainNoise（`9809a5b7`）实施；护栏 `PreviewSchemaSessionLifecycleTest` 补
+「uninstall 零平台 ERROR」用例，反向（回填手动摘除）恰 1 红。详见
+`20261023-2204-T-PreviewChainNoise-预览执行链三组平台SEVERE收口-开发计划.md` §2.3/§十。
