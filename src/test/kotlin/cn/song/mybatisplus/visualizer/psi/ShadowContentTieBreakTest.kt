@@ -14,7 +14,7 @@ import java.nio.file.Files
 import java.util.concurrent.TimeUnit
 
 /**
- * W5b 判据级护栏：`narrowByContentAndForm` 的**两步收窄串联**。
+ * W5b 判据级护栏：`narrowAmbiguous` 的**内容步 + 源码形态步**。
  *
  * 用户 20261023 现场读数：歧义提示里两个候选都是 `[工程]`——
  *
@@ -102,7 +102,7 @@ class ShadowContentTieBreakTest : HeavyPlatformTestCase() {
      */
     fun testBothContentThenSourceFormWins() {
         val (javaOne, classOne) = sourceAndBinary()
-        val picked = EntityClassResolver.narrowByContentAndForm(listOf(classOne, javaOne)) { true }
+        val picked = EntityClassResolver.narrowAmbiguous(listOf(classOne, javaOne), isContent = { true })
         assertEquals("两份都是内容时，应由源码形态收窄", 1, picked.size)
         assertEquals("java", picked.single().containingFile.virtualFile.extension)
     }
@@ -110,9 +110,9 @@ class ShadowContentTieBreakTest : HeavyPlatformTestCase() {
     /** 常规形态：jar 判为非内容 ⇒ 第一步就收窄（源码份胜出）。 */
     fun testContentStepAloneSufficesWhenJarIsLibrary() {
         val (javaOne, classOne) = sourceAndBinary()
-        val picked = EntityClassResolver.narrowByContentAndForm(listOf(classOne, javaOne)) {
+        val picked = EntityClassResolver.narrowAmbiguous(listOf(classOne, javaOne), isContent = {
             it.containingFile.virtualFile.extension == "java"
-        }
+        })
         assertEquals(1, picked.size)
         assertEquals("java", picked.single().containingFile.virtualFile.extension)
     }
@@ -120,20 +120,20 @@ class ShadowContentTieBreakTest : HeavyPlatformTestCase() {
     /** 两份都是源码（跨模块同名）⇒ 两步都不收窄，保持歧义。 */
     fun testTwoSourcesStayAmbiguous() {
         val (javaOne, _) = sourceAndBinary()
-        val picked = EntityClassResolver.narrowByContentAndForm(listOf(javaOne, javaOne)) { true }
+        val picked = EntityClassResolver.narrowAmbiguous(listOf(javaOne, javaOne), isContent = { true })
         assertEquals("两份源码不得挑一个", 2, picked.size)
     }
 
     /** 两份都是二进制（两个 jar）⇒ 两步都不收窄，保持歧义。 */
     fun testTwoBinariesStayAmbiguous() {
         val (_, classOne) = sourceAndBinary()
-        val picked = EntityClassResolver.narrowByContentAndForm(listOf(classOne, classOne)) { true }
+        val picked = EntityClassResolver.narrowAmbiguous(listOf(classOne, classOne), isContent = { true })
         assertEquals("两份二进制不得挑一个", 2, picked.size)
     }
 
     /** 单份原样返回。 */
     fun testSingleUnchanged() {
         val (javaOne, _) = sourceAndBinary()
-        assertEquals(1, EntityClassResolver.narrowByContentAndForm(listOf(javaOne)) { true }.size)
+        assertEquals(1, EntityClassResolver.narrowAmbiguous(listOf(javaOne), isContent = { true }).size)
     }
 }

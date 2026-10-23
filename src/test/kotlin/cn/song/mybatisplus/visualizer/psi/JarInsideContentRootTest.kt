@@ -27,7 +27,7 @@ import java.util.concurrent.TimeUnit
  * 本类用 `JarFileSystem` 把**真实 jar**挂成库根（先经探针验证 jar 内 class 能进短名索引），
  * 且 jar 物理路径位于 source root 之下，复刻用户 `src/main/resources/lib/` 的布局。
  *
- * 解析口径由 `narrowByContentAndForm` 两步收窄保证（内容步 + 源码形态步），本类从端到端
+ * 解析口径由 `narrowAmbiguous` 三步收窄保证（内容 → 模块依赖方向 → 源码形态），本类从端到端
  * 验证整链：locator 认领 → 实体解析 → 表名/列清单 → 不降级。
  */
 class JarInsideContentRootTest : HeavyPlatformTestCase() {

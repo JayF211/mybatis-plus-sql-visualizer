@@ -6,6 +6,7 @@ import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.module.Module
+import com.intellij.openapi.module.ModuleUtilCore
 import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.roots.ProjectFileIndex
@@ -64,24 +65,22 @@ object EntityClassResolver {
             clazz.isValid && clazz.containingFile?.virtualFile?.let(scope::contains) == true
         }.distinctBy { it.qualifiedName to it.containingFile?.virtualFile?.url }
 
-        // Resolve duplicate source/binary definitions with the platform's actual classpath order.
-        // Without a module there is no meaningful classpath winner across unrelated modules.
+        // Resolve duplicate source/binary definitions by classpath semantics.
         // T-ShadowEntityResolve P0a：同一 FQN 的多份定义里，**工程内容优先于依赖库**。
-        // 库内宿主拿不到模块上下文（库文件 getModuleForFile 恒 null），上面按平台 classpath 序消解的
-        // 分支整段跳过；而 allScope 的 compare 对跨 order-entry 的组合返 0，两份都留 → 假歧义 → 降级。
+        // 库内宿主拿不到模块上下文（库文件 getModuleForFile 恒 null），allScope 下两份都留 → 假歧义。
         // 运行期任何标准布局都是工程输出先于依赖 jar，故工程里那份才是实际生效的版本。
         // **必须逐 FQN 组内判断**：跨 FQN 的同短名是 Hibernate 真正的重名冲突，不能借此收窄。
+        //
+        // T-ShadowEntityResolve W6：不再以「模块上下文存在」为前提仲裁。用户真机日志显示，宿主在 jar 里时
+        // 两个候选是**两个模块各一份 `.java`**（jar 内那份已被平台同 FQN 去重淘汰），内容/形态两步都失效；
+        // 但两个候选的**模块身份**是确定可得的，而模块依赖方向就是运行期 classpath 序——依赖方自己的类先命中。
+        // 该步只看「分属两模块且一方依赖另一方」，无关模块（compare 无从判定）仍不收窄，保持 fail-closed。
         val canonical = visible.groupBy { it.qualifiedName }.flatMap { (fqn, definitions) ->
-            val byClasspath = if (module == null || fqn == null || definitions.size == 1) definitions
-            else {
-                val resolved = facade.findClass(fqn, scope)
-                definitions.filter { candidate ->
-                    candidate == resolved || candidate.containingFile?.virtualFile == resolved?.containingFile?.virtualFile
-                }
-            }
-            // 门控 context != null 同 P0b：无宿主＝无从判断这份同 FQN 定义是不是这条查询该用的那份，
+            val byModuleOrder = if (fqn == null || definitions.size == 1) definitions
+            else preferDependentModule(project, definitions)
+            // 门控 context != null：无宿主＝无从判断这份同 FQN 定义是不是这条查询该用的那份，
             // 保持既有 fail-closed 契约（同文件 testContextlessDuplicateFqnIsNotArbitrarilyDeduplicated）。
-            if (context == null) byClasspath else preferProjectContent(project, byClasspath)
+            if (context == null) byModuleOrder else preferProjectContent(project, byModuleOrder)
         }
         val candidates = canonical.filter { clazz ->
             ProgressManager.checkCanceled()
@@ -154,29 +153,95 @@ object EntityClassResolver {
     private fun preferProjectContent(project: Project, definitions: List<PsiClass>): List<PsiClass> {
         if (definitions.size <= 1) return definitions
         val fileIndex = ProjectFileIndex.getInstance(project)
-        return narrowByContentAndForm(definitions) { clazz ->
-            clazz.containingFile?.virtualFile?.let { fileIndex.isInContent(it) } == true
-        }
+        val depsCache = HashMap<Module, Set<Module>>()
+        return narrowAmbiguous(
+            definitions,
+            isContent = { clazz ->
+                clazz.containingFile?.virtualFile?.let { fileIndex.isInContent(it) } == true
+            },
+            moduleKey = { clazz -> clazz.containingFile?.virtualFile?.let { fileIndex.getModuleForFile(it) } },
+            dependsOn = { a, b ->
+                val dep = a as? Module
+                val target = b as? Module
+                dep != null && target != null && depsCache
+                    .getOrPut(dep) { HashSet<Module>().also { ModuleUtilCore.getDependencies(dep, it) } }
+                    .contains(target)
+            },
+        )
     }
 
     /**
-     * 收窄决策的**纯逻辑**（与 PSI 挂载解耦，便于用假数据钉住）：
-     *  1. 先按「是否工程内容」收窄——组内既有内容定义又有非内容定义时取内容；
-     *     全内容或全非内容时此步不收窄；
-     *  2. 再按「源码形态」收窄——`.java` 对上 `.class` 时取 `.java`；
-     *     全源码或全二进制时此步不收窄。
-     * 两步都只在**能明确分出胜负**时收窄，否则原样返回交由调用方按歧义 fail closed。
+     * 同一 FQN 多份定义的收窄决策**纯逻辑**（与 PSI 挂载解耦，可用假数据稳定钉住）。三步依次执行，
+     * **每一步只在能明确分出胜负时收窄**，否则进入下一步；全部不奏效则原样返回，交回调用方按歧义
+     * fail closed（不伪造胜者）：
+     *
+     *  1. **工程内容优先**——组内既有内容定义又有库定义时取内容；全内容/全非内容时不收窄。
+     *  2. **模块依赖方向**——恰好分属两个模块且一方（传递）依赖另一方时取**依赖方**；依赖方向
+     *     即运行期 classpath 序（本模块输出先于其依赖），也是「新增同名类覆盖依赖方」的生效规则。
+     *     无关模块、互为依赖、或组内含无可归属定义（库内）时此步不收窄。
+     *  3. **源码形态优先**——`.java` 对上 `.class` 时取源码；全源码/全二进制时不收窄。
+     *
+     * 顺序有意为之：先按内容剔除库定义，模块方向才可能落在「恰好两个模块」上（含库定义时模块不可
+     * 归属，方向无从判定）。
      */
-    internal fun narrowByContentAndForm(
+    internal fun narrowAmbiguous(
         definitions: List<PsiClass>,
         isContent: (PsiClass) -> Boolean,
+        moduleKey: (PsiClass) -> Any? = { null },
+        dependsOn: (Any, Any) -> Boolean = { _, _ -> false },
     ): List<PsiClass> {
         if (definitions.size <= 1) return definitions
+
+        // 1) 工程内容优先
         val content = definitions.filter(isContent)
-        val byContent = if (content.isEmpty() || content.size == definitions.size) definitions else content
-        if (byContent.size <= 1) return byContent
-        val sourceForm = byContent.filter { it.containingFile?.virtualFile?.extension == "java" }
-        return if (sourceForm.isEmpty() || sourceForm.size == byContent.size) byContent else sourceForm
+        var current = if (content.isEmpty() || content.size == definitions.size) definitions else content
+        if (current.size <= 1) return current
+
+        // 2) 模块依赖方向（依赖方生效）
+        val byModule = current.groupBy(moduleKey)
+        if (byModule.size == 2 && !byModule.containsKey(null)) {
+            val first = byModule.keys.elementAt(0)
+            val second = byModule.keys.elementAt(1)
+            val firstDependsOnSecond = dependsOn(first!!, second!!)
+            val secondDependsOnFirst = dependsOn(second, first)
+            if (firstDependsOnSecond != secondDependsOnFirst) {
+                current = byModule[if (firstDependsOnSecond) first else second].orEmpty()
+                if (current.size <= 1) return current
+            }
+        }
+
+        // 3) 源码形态优先
+        val sourceForm = current.filter { it.containingFile?.virtualFile?.extension == "java" }
+        return if (sourceForm.isEmpty() || sourceForm.size == current.size) current else sourceForm
+    }
+
+    /**
+     * T-ShadowEntityResolve W6：同 FQN 的多份定义**分属两个模块**时，优先保留**依赖方**那份。
+     *
+     * 依据是运行期 classpath 序：本模块的输出先于它所依赖的模块 ⇒ 依赖方自己的同名类先命中。
+     * 这正是「在工程里新增一份同包同名类去覆盖依赖模块/jar 里的类」在运行期生效的规则。
+     *
+     * 只在能明确判定方向（一方（传递）依赖另一方，且反向不成立）时收窄；其余情形（无关模块、
+     * 互为依赖、牵扯库定义导致模块不可知）原样返回，交回调用方按歧义 fail closed，不伪造胜者。
+     */
+    private fun preferDependentModule(project: Project, definitions: List<PsiClass>): List<PsiClass> {
+        if (definitions.size <= 1) return definitions
+        val fileIndex = ProjectFileIndex.getInstance(project)
+        val byModule = definitions.groupBy { clazz ->
+            clazz.containingFile?.virtualFile?.let { fileIndex.getModuleForFile(it) }
+        }
+        // 必须恰好两个模块且都可知；有库定义（module == null）时无法比方向
+        if (byModule.size != 2 || byModule.containsKey(null)) return definitions
+        val (moduleA, moduleB) = byModule.keys.filterNotNull()
+        val depsOfA = HashSet<Module>().also { ModuleUtilCore.getDependencies(moduleA, it) }
+        val depsOfB = HashSet<Module>().also { ModuleUtilCore.getDependencies(moduleB, it) }
+        val aDependsOnB = depsOfA.contains(moduleB)
+        val bDependsOnA = depsOfB.contains(moduleA)
+        return when {
+            aDependsOnB == bDependsOnA -> definitions  // 互不依赖（或互为依赖）⇒ 不猜
+            aDependsOnB -> byModule[moduleA].orEmpty()  // A 依赖 B ⇒ A 是依赖方，A 的那份生效
+            else -> byModule[moduleB].orEmpty()
+        }
     }
 
     /** Shared scope for direct, alias and metadata lookup; never broadens a known module. */
