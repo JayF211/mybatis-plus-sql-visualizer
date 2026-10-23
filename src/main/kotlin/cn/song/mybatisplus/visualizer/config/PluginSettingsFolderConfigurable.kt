@@ -612,6 +612,9 @@ class PluginSettingsFolderConfigurable : Configurable {
             fields.add(SearchableField(b.message("settings.log.crudColor.style"), b.message("settings.log.crudColor.style.tip"), "settings.section.sqlLog", l))
             fields.add(SearchableField(b.message("settings.enhancedCapture"), b.message("settings.enhancedCapture.status"), "settings.section.sqlLog", l))
             fields.add(SearchableField(b.message("settings.enhancedCapture.desensitize"), "", "settings.section.sqlLog", l))
+            // R60 展示/导出链脱敏（T-SettingsSearchB 补登记）：与面板控件 displayMaskCheck 同文案键，
+            // 搜「脱敏/展示/导出/打码」必须能翻到该开关；完整性由 SettingsPanelSearchableGuardTest 守卫
+            fields.add(SearchableField(b.message("settings.display.mask"), b.message("settings.display.mask.tip"), "settings.section.sqlLog", l))
             fields.add(SearchableField(b.message("settings.sourceFrameSkipPrefixes"), b.message("settings.sourceFrameSkipPrefixes.tip"), "settings.section.sqlLog", l))
             fields.add(SearchableField(b.message("settings.sourceFrameBizJarPrefixes"), b.message("settings.sourceFrameBizJarPrefixes.tip"), "settings.section.sqlLog", l))
 
@@ -665,5 +668,16 @@ class PluginSettingsFolderConfigurable : Configurable {
         internal fun registeredTargetsForTest(): List<Pair<String, Class<out Configurable>>> =
             (SUB_PAGES.map { it.ref.id to it.ref.cls } + ALL_SEARCHABLE_FIELDS.map { it.ref.id to it.ref.cls })
                 .distinct()
+
+        /**
+         * 测试缝：登记的全部可搜索 label（T-SettingsSearchB 守卫用）。
+         *
+         * 「面板上有控件」与「搜索索引里有条目」两件事只靠本清单的维护纪律绑定——
+         * SettingsPanelSearchableGuardTest 拿真实面板的每个输入型文本逐条到本结果里配对，
+         * 漏登记即红。只比对 label 文本（搜索命中判定同源：label 或 tooltip 命中即可，
+         * 本清单 tooltip 全部与控件 tooltip 同键，配对在 label 层已足够判漏）。
+         */
+        internal fun registeredSearchLabelsForTest(): List<String> =
+            ALL_SEARCHABLE_FIELDS.map { it.searchLabel }
     }
 }

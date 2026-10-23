@@ -63,4 +63,43 @@ fields.add(SearchableField(
 
 ## 八、实施记录
 
-（待回填）
+2026-10-23 本会话实施完毕，已提交（见 §八.5）。
+
+### 8.1 改动清单
+
+- **生产**（`PluginSettingsFolderConfigurable.kt`，两处）：
+  1. `buildSearchableFields()` SQL 日志段 `settings.enhancedCapture.desensitize` 之后补登记 `settings.display.mask`（label+tip 同键，`pageLabelKey=settings.section.sqlLog`、ref 复用同段 `l`，与 §三 修法一致）；
+  2. companion 新增测试缝 `registeredSearchLabelsForTest()`（返回全部已登记 label，守卫配对用；紧邻既有 `registeredTargetsForTest()`）。
+- **测试**（新增 `SettingsPanelSearchableGuardTest.kt`，4 用例）：
+  1. `test面板输入型文本均能在搜索索引命中或列白名单`（守卫主体）：zh/en 两轮拿**真实** `PluginSettingsPanel(settings).getRoot()` 全量面板扫描 JToggleButton/JLabel 文本，剥 HTML+反转义后经**盘上双语 bundle** 反解回 key（语言无关，见 8.4-②），断言 `key ∈ 索引 ∪ 白名单 ∪ 组件豁免`；
+  2. `test展示与导出脱敏四关键词可搜索命中`：真实搜索框设词触发 DocumentListener → rebuildList → 渲染器首行判等，「脱敏/展示/导出/打码」四词全命中；
+  3. `test展示与导出脱敏hint在SQL日志页真实面板可定位`：zh/en 双语 hint 经 `findHighlightTargetForTest` 在 `SqlLogConfigurable` 真实面板定位到复选框本体；
+  4. `test英文文案关键词数据层可命中`：`messageEn` 下 mask/display/export/sensitive 四词在 label/tip 可命中。
+
+### 8.2 待验证前提逐一实证（§五）
+
+1. **focusTarget 定位**：✅ 已实测成立（非仅读码推断）。断言三 zh/en 双语下 hint（=bundle 文案）都定位到 `JToggleButton` 本体，即用户双击条目后「跳转+高亮」链路可命中。
+2. **pageLabelKey 一致性**：✅ 与 `:613-614` 同参 `settings.section.sqlLog`；断言二经渲染器断言次行显示页名成立。
+3. **白名单边界**：按 §五.3 要求先实扫再定案。首轮实扫红 1 例（11 行违规），其中四类是预先没料到的：`settings.log.tab.sourceCapture` 分组标题漏枚举、R62 两条兜底外链（404 态才可见）、`settings.explain.retention.disclosure` 值含 `<br>` 剥标签后无法反解回键（改按组件身份豁免）、构建号行在无 MPV-Build 时的回退值「—」（纯占位符字形豁免）。定案五类豁免面见 8.3。
+
+### 8.3 白名单定案（守卫测试内，逐条留痕）
+
+- **① 分组标题**（12 键）：TitledSeparator 内嵌 label，纯视觉分节；
+- **② 说明/披露/链接行**（9 键）：帧前缀指向说明、存储三说明+边界、EXPLAIN 隐私披露改走组件豁免（`<br>` 反解不通）、更新区 changelog 标题 + Gitee/需求池链接 + 404 态两条兜底外链；
+- **③ 组合控件行标签**（10 键）：行内主控件或组已在索引（色板四行、快捷键后三行、执行超时、栈帧数、导入导出行、空参数填充组行标签等），标签不重复登记；
+- **④ 既有未索引开关台账**（21 键）：首轮实扫坐实的存量缺口——paginationSim/paginationCount、explain.structured/retention、libraryEntitySweep、log.showDuration/dataSourceBadgeDetail/shardingsphere.enabled/autoInjectInterceptor、gutterGroup 六组、xmlSynHi、onboardingAnchorTip、update.autoCheck、emptyParamFill 三档与 timestampSource 两档单选选项。**登记与否另立任务；注释已写死「后续新增开关不得落此处，必须进 buildSearchableFields()」**；
+- **⑤ 动态状态行**（11 个组件身份）：缓存信息/增强捕获状态/导入导出反馈/存储动作反馈/模式预览/推断状态/校验结果行/披露行/版本行/更新状态行/已安装行——文本运行期生成，无静态键可反解。
+
+### 8.4 读数（正反双向 + 防回归，全部本会话实测）
+
+- **正向**：`SettingsPanelSearchableGuardTest` 4/4 绿；同轮相邻类 `PluginSettingsFolderConfigurableTest` 11/11（含 `registeredTargetsForTest` 计数=8 断言——新条目 ref 与 SQL 日志段既有条目相同，distinct 后不加项，§三 预判成立）、`SettingsRealityGuardTest` 4/4（断言四幽灵键不受影响）。
+- **反向 A**（§四 指定口径：删任意一条登记）：临时注释掉 `settings.enhancedCapture.desensitize` 登记 → **4 跑恰 1 红**，失败消息精确指向该条目的 zh/en 两条面板文本（`"增强捕获脱敏（对疑似敏感形态打码）"` / `"Enhanced capture desensitization…"`），其余 3 用例不受影响。
+- **反向 B**（删本任务目标条目）：临时注释掉 `settings.display.mask` 登记 → **4 跑恰 2 红**：配对守卫精确报出 `"展示与导出脱敏（敏感字面量打码）"`/`"Mask sensitive literals in display & export"` 两条 + `test展示与导出脱敏四关键词可搜索命中` 在「脱敏」一词即红——两层防线都拦得住。
+- **恢复**：还原登记后三类 19/19 全绿，`git diff` 确认生产文件探针零残留（仅剩正式改动）。
+- §六 的真机手动验收（沙盒四关键词点跳）未做；headless 已覆盖同一代码链路（真实 DocumentListener→rebuildList→渲染器、真实组件树定位），真机走查与 §六 双语手动项留待验收批次。
+
+### 8.5 相邻发现（未动生产，留档）
+
+1. **④类 21 项既有未索引开关是真实缺口**：用户若搜「分页」「ShardingSphere」「gutter 分组」等同样翻不到。本计划范围只修 `display.mask`，台账已写入守卫测试 ④，另立任务时逐条搬进索引即可顺带删白名单。
+2. **索引清单语言冻结**：`ALL_SEARCHABLE_FIELDS` 是 companion 一次性求值（类首触达时按当刻语言固化），而子页面条目（PageItem）在 `rebuildList` 里是活解析——用户切语言后 FieldItem 搜索结果停留旧语言直到重启。守卫测试因此改按盘上 bundle 做「文本→键」反解（语言无关）；产品侧是否把清单改成按查询时求值，另立任务。
+3. **工作树遗留探针**：`src/test/.../psi/JarInResourcesLibProbeTest.kt`（前会话 W5 scratch，未跟踪）KDoc 里 `resources/lib/**` 的 `/**` 触发 Kotlin 嵌套注释语义 →「Unclosed comment」→ **整个测试源码集编译失败**，本任务首跑即被拦。已做最小修复（`lib/**（` → `lib 目录（`），文件保持未跟踪归还原会话处置；旁证 `JarMountProbeTest.kt` 亦未跟踪，未动。
