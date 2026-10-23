@@ -145,14 +145,38 @@ object EntityClassResolver {
      * 两份都在工程里（跨模块同名）或两份都在库里时原样返回，仍由调用方按歧义 fail closed
      * （与 T-EntityNameScope 的既有契约一致：排序只用于展示，不伪造确定性）。
      * 理由是 classpath 语义而非偏好：工程输出恒排在依赖 jar 之前。
+     *
+     * **W5b**：`isInContent` 不足以区分——当 jar 文件物理放在 `src/main/resources/lib/` 时，IDE 会把
+     * jar 内 class 也判成内容（用户现场两个候选都是 `[工程]`），于是 `inContent.size == size` ⇒ 不收窄
+     * ⇒ 歧义 ⇒ 降级。故内容判据之外再叠一层**源码形态优先**：`.java` 对上 `.class` 时取源码——这正是
+     * 「工程里新增一份同包同名类」的本质形态，且与挂载方式无关。
      */
     private fun preferProjectContent(project: Project, definitions: List<PsiClass>): List<PsiClass> {
         if (definitions.size <= 1) return definitions
         val fileIndex = ProjectFileIndex.getInstance(project)
-        val inContent = definitions.filter { clazz ->
+        return narrowByContentAndForm(definitions) { clazz ->
             clazz.containingFile?.virtualFile?.let { fileIndex.isInContent(it) } == true
         }
-        return if (inContent.isEmpty() || inContent.size == definitions.size) definitions else inContent
+    }
+
+    /**
+     * 收窄决策的**纯逻辑**（与 PSI 挂载解耦，便于用假数据钉住）：
+     *  1. 先按「是否工程内容」收窄——组内既有内容定义又有非内容定义时取内容；
+     *     全内容或全非内容时此步不收窄；
+     *  2. 再按「源码形态」收窄——`.java` 对上 `.class` 时取 `.java`；
+     *     全源码或全二进制时此步不收窄。
+     * 两步都只在**能明确分出胜负**时收窄，否则原样返回交由调用方按歧义 fail closed。
+     */
+    internal fun narrowByContentAndForm(
+        definitions: List<PsiClass>,
+        isContent: (PsiClass) -> Boolean,
+    ): List<PsiClass> {
+        if (definitions.size <= 1) return definitions
+        val content = definitions.filter(isContent)
+        val byContent = if (content.isEmpty() || content.size == definitions.size) definitions else content
+        if (byContent.size <= 1) return byContent
+        val sourceForm = byContent.filter { it.containingFile?.virtualFile?.extension == "java" }
+        return if (sourceForm.isEmpty() || sourceForm.size == byContent.size) byContent else sourceForm
     }
 
     /** Shared scope for direct, alias and metadata lookup; never broadens a known module. */
@@ -188,6 +212,22 @@ object EntityClassResolver {
                 if (inContent) "preview.entityNameAmbiguity.originProject" else "preview.entityNameAmbiguity.originLibrary",
             )
             "$fqn [$origin]"
+        }
+        // T-ShadowEntityResolve 诊断：歧义时把每个候选的判定依据写进 IDE 日志（Help → Show Log in Explorer）。
+        // 用户现场出现过「两个候选都是 [工程]」的读数，需要区分 isInContent / isInLibraryClasses / 形态，
+        // 否则只能靠猜工程配置。日志只在此路径输出，不影响正常解析。
+        runCatching {
+            pool.forEachIndexed { i, clazz ->
+                val vf = clazz.containingFile?.virtualFile
+                LOG.info(
+                    "entity-ambiguity[$i] ${clazz.qualifiedName} ext=${vf?.extension} " +
+                        "inContent=${vf?.let { fileIndex.isInContent(it) }} " +
+                        "inLibClasses=${vf?.let { fileIndex.isInLibraryClasses(it) }} " +
+                        "inLibSource=${vf?.let { fileIndex.isInLibrarySource(it) }} " +
+                        "module=${vf?.let { fileIndex.getModuleForFile(it) }?.name} " +
+                        "url=${vf?.url}",
+                )
+            }
         }
         val key = NoticeKey(module, entityName, pool.map { it.containingFile?.virtualFile?.url.orEmpty() })
         // F102（T-PerfSweep26）：去重集改有界 LRU——此前按 (module, entity, urls) 元组在项目
