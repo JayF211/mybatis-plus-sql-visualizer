@@ -20,23 +20,28 @@ import java.util.concurrent.TimeUnit
  * 互斥定例；但探到真冲突必须硬失败，不做静默共写。
  *
  * 实现注记：PowerShell 5.1 下引号/反斜杠转义面大（Git Bash CJK 与转义坑在案），用 base64
- * -EncodedCommand 下发（UTF-16LE），零转义歧义。
+ * -EncodedCommand 下发（UTF-16LE），零转义歧义；且必须**单行**——多行 script block 里跨行 `-and`
+ * 在 5.1 实测静默不匹配（Where-Object 恒空、无报错），单行同进程同条件立刻命中（反向验证实录）。
  */
 fun assertNoForeignVerifier(home: File, logger: Logger) {
     home.mkdirs()
-    val ps = """
-        ${'$'}found = Get-CimInstance Win32_Process -Filter "Name='java.exe' OR Name='javaw.exe'" |
-            Where-Object { ${'$'}null -ne ${'$'}_.CommandLine -and
-                ${'$'}_.CommandLine.Contains('PluginVerifierMain') -and
-                ${'$'}_.CommandLine.Contains('$home') } |
-            ForEach-Object { 'FOREIGN ' + ${'$'}_.ProcessId }
-        if (-not ${'$'}found) { 'CLEAR' }
-    """.trimIndent()
+    val ps = (
+        "\$found = Get-CimInstance Win32_Process -Filter \"Name='java.exe' OR Name='javaw.exe'\" | " +
+            "Where-Object { \$null -ne \$_.CommandLine -and " +
+            "\$_.CommandLine.Contains('PluginVerifierMain') -and " +
+            "\$_.CommandLine.Contains('$home') } | " +
+            "ForEach-Object { 'FOREIGN ' + \$_.ProcessId }; " +
+            "if (-not \$found) { 'CLEAR' } else { \$found }"
+        )
     val encoded = Base64.getEncoder().encodeToString(ps.toByteArray(Charsets.UTF_16LE))
     val proc = ProcessBuilder("powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded)
         .redirectErrorStream(true).start()
     val finished = proc.waitFor(45, TimeUnit.SECONDS)
-    val out = if (finished) proc.inputStream.readBytes().decodeToString() else ""
+    // CLIXML 清洗：stdout 重定向时 PowerShell 5.1 把进度序列化成 #< CLIXML + <Obj ...> XML 噪声，
+    // 混进错误信息不可读；判定与展示都基于清洗后的文本。
+    val out = if (finished) proc.inputStream.readBytes().decodeToString()
+        .lineSequence().filter { it != "#< CLIXML" && !it.startsWith("<Obj ") && it.isNotBlank() }
+        .joinToString("\n") else ""
     if (!finished) {
         logger.warn(
             "verifier home 并发锁探测超时（45s）——按纵深防御降级放行，主防线=全量门禁互斥定例；" +
