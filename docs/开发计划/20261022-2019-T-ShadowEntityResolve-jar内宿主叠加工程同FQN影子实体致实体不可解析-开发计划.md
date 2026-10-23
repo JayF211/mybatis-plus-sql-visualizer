@@ -366,6 +366,39 @@ local 那份），防护语义保留、新契约由 workspace 用例单独钉住
 README 的「卸载 lib 用真 jar」两种加载方式此后都应解析到 `wms_task_project`。另：lib 注释源码后若想恢复
 「jar 双份」形态，需 `mvn install` 重建（`target/classes` 里的旧 class 与旧 jar 仍是注释前产物）。
 
+### 10.9 追加轮二（20261023 晚）：**第四种形态**——两份候选都被判「工程内容」
+
+用户把 jar 放进 `src/main/resources/lib/` 后仍降级，且歧义提示里**两个候选都标 `[工程]`**：
+
+```
+候选：com.example.shadow.model.WmsTask [工程], com.example.shadow.model.WmsTask [工程]
+```
+
+**根因**：`preferProjectContent` 第一步按 `isInContent` 收窄，而该环境下 jar 内 class 也被判为内容
+（`inContent.size == definitions.size`）⇒ 分不出胜负 ⇒ 不收窄 ⇒ 歧义 ⇒ 降级。
+
+**取证**：三种挂法（模块外 jar / 内容根下 jar / 双挂）实测 jar 内 class **均 `isInContent=false`**，
+与用户环境不一致——差异在工程配置而非代码。故修复**不依赖 `isInContent`**。
+
+**修法（W5）**：把收窄决策抽成 `narrowByContentAndForm`（两步串联，纯逻辑可测）：
+1. 按「是否工程内容」收窄（原逻辑，全内容/全非内容时不收窄）；
+2. 再按「**源码形态**」收窄：`.java` 对上 `.class` 时取 `.java`——这正是「工程里新增一份同包同名类」
+   的本质形态，与挂载方式无关。
+
+两步都只在能明确分出胜负时收窄，否则原样返回交由歧义 fail closed（不伪造胜者）。
+
+**另加诊断**：歧义时把每个候选的 `ext / inContent / inLibClasses / inLibSource / module / url` 写进
+IDE 日志（搜 `entity-ambiguity`），便于现场定位工程配置差异。
+
+**读数**：红基线 `ShadowContentTieBreakTest` 5 例**恰 1 红**（`testBothContentThenSourceFormWins`：
+两份都判内容时未收窄）→ 修复后定向 **42/0/0/0**（ShadowContentTieBreak 5 + ShadowEntityResolve 7 +
+EntityClassResolverHeavy 13 + SqlPreviewEntityScopeHeavy 17）。
+
+**同时修掉一个假绿用例**：W4 的 `JarInsideContentRootTest` 用**解包目录**代替 jar，jar 那份根本没进候选
+⇒ 测不到用户形态。已改用 `JarFileSystem` 挂**真实 jar** 成库根（jar 物理路径位于 source root 下），
+从反编译 PSI 取调用点做端到端断言（2/0/0/0）。**教训：夹具与被测形态的「身份」必须一致——解包目录
+不等于 jar。**
+
 ## 十一、附：本轮未做的事
 
 未改任何生产代码；未跑 gradle（未做并行登记）；未提交、未推送；未在用户原始工程复现；未做真机走查；未预占 O/R/D/V 编号（缺陷级修复，按 T-JRebelPremainCrash 先例不占号）。
