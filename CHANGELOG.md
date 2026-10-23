@@ -4,6 +4,17 @@
 
 ## [Unreleased]
 
+## [2026.10.23-beta.3] - 2026-10-23
+
+### Added
+- **插件设置接入 IDE 自带设置搜索（T-SettingsSearchA）**：运行期注册 `search.optionContributor` EP，把插件设置项喂进 IDE 的设置搜索索引——在 `Settings` 搜索框里搜「脱敏」「预设」「FieldFill」等关键词可直接定位到对应设置项，不再只能靠逐页翻。索引与页内搜索共用同一份 `ALL_SEARCHABLE_FIELDS` 数据源，两套搜索天然同步；9 个既有设置类一行未改（平台 `ConfigurableWrapper` 本身实现 `SearchableConfigurable` 且 `getId()` 优先返回 EP id）。当前索引按插件语言生成，英文词条不命中中文界面。
+- **页内搜索补登记「展示与导出脱敏」（T-SettingsSearchB）**：此前在设置页内搜索「脱敏 / 展示 / 导出 / 打码」都翻不到该开关，已补进索引，并立面板-索引配对守卫（白名单逐条留痕，含既有 21 项未索引开关台账）。
+
+### Fixed
+- **预览错列标注会话未注册进 Disposer 树致 IDE 退出内存泄漏告警（ebfaf73f）**：关闭 IDE 时报 24 条 `Memory leak detected`，全部指向 `PreviewSchemaHighlighter$Session`——Session（Disposable）从未注册进 Disposer 树，其内部 Alarm 以它为 parentDisposable，平台把这条孤儿分支挂到 ROOT_DISPOSABLE 下、退出时不 dispose。现 install 以 `editor.project` 为属主 `Disposer.tryRegister`（项目关闭即兜底回收），Session 自带可判定的 disposed 标志（243 的 `Disposable` 无 `isDisposed` 不能 override），uninstall 改走树感知 `Disposer.dispose`。
+- **jar 内宿主叠加工程同 FQN 影子实体导致实体不可解析（T-ShadowEntityResolve）**：用户方法、HQL、实体类都在 jar 里，工程下又新增一个同包名同类名的类（字段有差异）时，预览降级为 `task.*` 并提示「实体名有多个同名候选」。现按模块依赖方向与源码形态仲裁：同 FQN 两份都判为工程内容时按源码形态收窄（jar 位于 `resources/lib` 等），跨模块同名按依赖方向选宿主模块，jar 内宿主仍可正常判定；workspace 形态下宿主作用域零候选时不再直接判不可解析。jar 以 sources jar 附带与反编译视图两种形态都覆盖。
+- **结构化执行计划的基线下拉被拉伸到整屏宽（d068a5ef）**：EXPLAIN 结果视图里基线下拉在纵向 BoxLayout 下被拉到容器最大宽度，现按内容定宽。
+
 ## [2026.10.23-beta.2] - 2026-10-23
 
 ### Fixed
