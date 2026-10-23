@@ -161,6 +161,8 @@ internal object PreviewSchemaHighlighter {
         }
 
         init {
+            // T-PreviewChainNoise W3：两参重载=注册+把「摘除」挂成本会话的子 disposable（所有权
+            // 一次性交出去）——dispose 里**禁止**再手动 remove（后序销毁下必成二次摘除，见 dispose 注释）
             editor.document.addDocumentListener(documentListener, this)
             editor.addEditorMouseMotionListener(mouseListener, this)
             // 首拍：控制台 preparedEditor 在本编辑器就绪回调返回后才赋值，故延迟一拍；
@@ -261,9 +263,16 @@ internal object PreviewSchemaHighlighter {
         override fun dispose() {
             if (disposed) return   // T-PreviewSchemaSessionLeak：幂等（兜底回收与 uninstall 可能先后到达）
             disposed = true
+            // Alarm 是本会话的子 disposable（构造参数 this），Disposer 后序销毁时已先 cancel——
+            // 这里是防御性重复调用（cancelAllRequests 幂等，列表已空）
             alarm.cancelAllRequests()
-            runCatching { editor.document.removeDocumentListener(documentListener) }
-            runCatching { editor.removeEditorMouseMotionListener(mouseListener) }
+            // T-PreviewChainNoise W3：监听摘除职责**只归注册时的 parentDisposable**——init 用两参
+            // 重载（addDocumentListener / addEditorMouseMotionListener）注册时，平台已在 Disposer 树
+            // 里给本会话挂了摘除子对象，且 ObjectTree 按后序（子先父后）销毁：跑到本方法时监听必已
+            // 被摘，再手动 removeDocumentListener / removeEditorMouseMotionListener 即二次摘除 →
+            // 平台打 "Can't remove document listener" 与 EditorImpl 的 "Assertion failed"
+            // （2026-10-23 用户真机日志，ebfaf73f 改树感知销毁后暴露）。仓内同款定例见
+            // SqlPreviewPanelEditorLifecycle（T-RA-02）。
             for (highlighter in highlighters) {
                 runCatching { editor.markupModel.removeHighlighter(highlighter) }
             }

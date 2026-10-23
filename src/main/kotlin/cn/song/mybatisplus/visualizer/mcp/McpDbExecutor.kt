@@ -44,6 +44,34 @@ internal fun drainWarnings(vararg surfaces: Pair<() -> List<*>?, () -> Unit>): L
 internal fun channelRowBudget(requested: Int): Int = McpExplainFormatter.clampMaxRows(requested)
 
 /**
+ * T-PreviewChainNoise W2：Database 反射链的**阻塞上下文兜底**（顶层函数，非 object 成员
+ * ——与 [drainWarnings] 同款理由：测试加载本文件门面不必触发 [McpDbExecutor] 的 Logger 初始化）。
+ *
+ * 平台事实（243 sources `progress/coroutines.kt:138-143`）：`DatabaseConnectionManager$Builder
+ * .createBlocking` 内部走 `runBlockingCancellable`，当前线程既无全局 ProgressIndicator 又无
+ * Job（`executeOnPooledThread` 起的裸池线程即此形态）时打
+ * `IllegalStateException: There is no ProgressIndicator or Job in this thread`。同一坑
+ * `PreviewSideQuery` 已修（T-PreviewSideQuery），2026-10-23 用户真机日志证明
+ * `ExplainPanelChannel.executeStructured` 是漏网第二处——故兜底下沉到唯一入口 [McpDbExecutor]，
+ * 未来任何新调用点不再依赖各自记得包一层。
+ *
+ * **已有指示器时不得替换**：`runProcess(EmptyProgressIndicator)` 会顶掉线程上真实指示器，
+ * 外层取消（MCP 工具跑在协程里带 Job）随之失效——所以只在缺上下文时补空指示器
+ * （查询本身不读取消状态：只读短查询，超时由驱动级 `setQueryTimeout` 护栏负责）。
+ */
+internal fun <T> withDbBlockingContext(block: () -> T): T {
+    val pm = com.intellij.openapi.progress.ProgressManager.getInstance()
+    return if (pm.progressIndicator != null) {
+        block()
+    } else {
+        pm.runProcess(
+            com.intellij.openapi.util.Computable { block() },
+            com.intellij.openapi.progress.EmptyProgressIndicator(),
+        )
+    }
+}
+
+/**
  * T-McpToolset headless 执行通道（sqlv_explain 专用，反射隔离 DatabaseTools）。
  *
  * 为什么不复用 [cn.song.mybatisplus.visualizer.execute.SqlExecutor]：既有执行链是 UI 控制台
@@ -252,7 +280,13 @@ object McpDbExecutor {
             .invoke(manager, project, dataSource)
         Class.forName(BUILDER).getMethod("setAskPassword", Boolean::class.javaPrimitiveType)
             .invoke(builder, false)
-        val ref = Class.forName(BUILDER).getMethod("createBlocking").invoke(builder)
+        // T-PreviewChainNoise W2：建连前补齐阻塞上下文（见 withDbBlockingContext KDoc）——
+        // 裸池线程（ExplainPanelChannel.executeStructured 的 executeOnPooledThread）上
+        // createBlocking 内部 runBlockingCancellable 缺 Job 即打
+        // "There is no ProgressIndicator or Job in this thread" SEVERE（真机 2026-10-23 实证）。
+        val ref = withDbBlockingContext {
+            Class.forName(BUILDER).getMethod("createBlocking").invoke(builder)
+        }
         try {
             val connection = Class.forName(GUARDED_REF).getMethod("get").invoke(ref)
             val remoteConnection = findInterfaceMethod(connection, CONNECTION_CORE, CONNECTION, "getRemoteConnection")

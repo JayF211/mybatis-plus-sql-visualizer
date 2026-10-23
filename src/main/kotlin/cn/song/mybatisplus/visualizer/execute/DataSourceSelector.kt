@@ -1543,19 +1543,52 @@ object DataSourceSelector {
      * T-EC-04：VFS 缺条目裸写路径的防御性收口——raw write 后由调用方 refresh 得到 vf，
      * 此处探测 document（getCachedDocument，不主动创建）或 VFS 内容与 sql 的分叉，
      * 命中则经 [dispatchDocWriteOnEdt] 补一次 document 驱动同步（T-EC-01 同款落盘收口，
-     * BGT 调用安全——写侧统一派 EDT）。正常流程恒为 no-op（磁盘刚写入 == sql）；防御
-     * VFS 陈旧条目/裸写与 refresh 之间的外部改写残留。探测包 ReadAction（BGT 无隐式读）。
+     * 写侧统一派 EDT）。正常流程恒为 no-op（磁盘刚写入 == sql）；防御 VFS 陈旧条目/
+     * 裸写与 refresh 之间的外部改写残留。
+     *
+     * T-PreviewChainNoise W1：分叉探测**按线程分流**（T-DevAcceptFix2 ④ 同款定例）。
+     * 此前无条件 `vf.inputStream.readBytes()` 读盘，经 `createTempPsiFile` 的 EDT 冷路径
+     * （点执行计划 → prepareConsole → 本链）每次都命中平台「Slow operations are prohibited
+     * on EDT」断言（2026-10-23 用户真机日志 ×2 实证；同文件 `execFileContentMatches` 早在
+     * T-DevAcceptFix2 ④ 就为同一调用链删过同款读盘，本函数漏回填）。分流判据：
+     *  - 有 document：只看内存态（`execFileContentMatches` 同口径——文档是权威视图），
+     *    额外认「内容已相等但未保存」为分叉（F4 收敛形态：doc=新 SQL、磁盘=旧 SQL）；
+     *  - 无 document + EDT：直接判不分叉（无 document 即不存在 File Cache Conflict 条件
+     *    ——冲突需「已加载且已修改」的文档；且 EDT 冷路径刚由本线程写完文件，无外部改写窗口）；
+     *  - 无 document + BGT：读盘比较，保留原防御面（SlowOperations 断言仅 EDT 生效）。
      *
      * @return true = 执行了修复同步（正常流程 false）
      */
     internal fun syncExecVfContentIfNeeded(project: Project, vf: com.intellij.openapi.vfs.VirtualFile, sql: String): Boolean {
-        val diverged = ReadAction.compute<Boolean, Throwable> {
-            val doc = com.intellij.openapi.fileEditor.FileDocumentManager.getInstance().getCachedDocument(vf)
-            (doc != null && doc.text != sql) ||
-                vf.inputStream.readBytes().toString(Charsets.UTF_8) != sql
-        }
-        if (!diverged) return false
+        val allowDiskRead = !ApplicationManager.getApplication().isDispatchThread
+        if (!probeExecVfDivergence(vf, sql, allowDiskRead)) return false
         return dispatchDocWriteOnEdt(project, vf, sql)
+    }
+
+    /**
+     * T-PreviewChainNoise W1：exec 文件分叉探测纯判定（[syncExecVfContentIfNeeded] 的探测段
+     * 抽出，internal 供表驱动测试）。三态见 [syncExecVfContentIfNeeded] KDoc；`allowDiskRead`
+     * 由调用方按「当前是否 EDT」给出（生产= `!isDispatchThread`，测试可显式注入）。
+     *
+     * document 读取包 ReadAction（BGT 无隐式读；EDT 直调合法）。**有 document 分支绝不读盘**
+     * ——这正是本抽取的可测不变式（见 ExecVfDivergenceProbeTest「文档在场时盘上再变也不读」用例）。
+     */
+    internal fun probeExecVfDivergence(
+        vf: com.intellij.openapi.vfs.VirtualFile,
+        sql: String,
+        allowDiskRead: Boolean,
+    ): Boolean {
+        val fdm = com.intellij.openapi.fileEditor.FileDocumentManager.getInstance()
+        val doc = ReadAction.compute<com.intellij.openapi.editor.Document?, Throwable> {
+            fdm.getCachedDocument(vf)
+        }
+        return when {
+            doc != null -> doc.text != sql || fdm.isDocumentUnsaved(doc)
+            allowDiskRead -> ReadAction.compute<Boolean, Throwable> {
+                vf.inputStream.readBytes().toString(Charsets.UTF_8) != sql
+            }
+            else -> false
+        }
     }
 
     // ------------------------------------------------------------------

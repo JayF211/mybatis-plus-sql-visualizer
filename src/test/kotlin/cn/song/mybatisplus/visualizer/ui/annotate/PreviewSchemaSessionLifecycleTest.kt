@@ -2,6 +2,7 @@ package cn.song.mybatisplus.visualizer.ui.annotate
 
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.util.Disposer
+import com.intellij.testFramework.LoggedErrorProcessor
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 
 /**
@@ -96,5 +97,47 @@ class PreviewSchemaSessionLifecycleTest : BasePlatformTestCase() {
 
         PreviewSchemaHighlighter.uninstall(editor)
         assertFalse("无属主分支也要能被 uninstall 销毁", PreviewSchemaHighlighter.hasLiveSessionForTest(editor))
+    }
+
+    /**
+     * T-PreviewChainNoise W3：uninstall（树感知销毁）全程不得产生平台 ERROR。
+     *
+     * Session 的两个监听经两参重载注册（摘除所有权=注册时的 parentDisposable），且 ObjectTree
+     * 按后序（子先父后）销毁——若 `Session.dispose` 里再手动 remove 即二次摘除，平台打
+     * 「Can't remove document listener」与 EditorImpl 的「Assertion failed」（2026-10-23 用户
+     * 真机日志；`ebfaf73f` 改树感知销毁后暴露，此前直接调 `session.dispose()` 不走树，
+     * 手动摘除是唯一路径所以无此噪音）。反向：把两行手动摘除加回 dispose → 本用例必红。
+     */
+    fun testUninstallLogsNoPlatformErrors() {
+        val editor = configureEditor()
+        PreviewSchemaHighlighter.install(editor)
+        val rec = RecordingProcessor()
+        LoggedErrorProcessor.executeWith(rec, com.intellij.util.ThrowableRunnable {
+            PreviewSchemaHighlighter.uninstall(editor)
+        })
+        val hits = rec.seen.filter {
+            it.contains("Can't remove document listener") || it.contains("Assertion failed")
+        }
+        assertTrue("dispose 全程不应产生平台 ERROR（二次摘监听即命中）：$hits", hits.isEmpty())
+    }
+}
+
+/**
+ * 记录平台 ERROR 级日志的处理器（SqlPreviewPanelPrewarmWriteSafeTest 同款口径）。
+ * 一律返回 `Action.NONE`（不 dump、不抛）——判据由显式断言给出，可读且不掩盖被测链的
+ * runCatching 行为。两个参数都收（logger 名 + 消息体），避免漏掉真正含特征串的那侧。
+ */
+private class RecordingProcessor : LoggedErrorProcessor() {
+    val seen = mutableListOf<String>()
+
+    override fun processError(
+        message: String,
+        details: String,
+        trace: Array<String>,
+        throwable: Throwable?,
+    ): MutableSet<LoggedErrorProcessor.Action> {
+        seen += message
+        seen += details
+        return LoggedErrorProcessor.Action.NONE
     }
 }

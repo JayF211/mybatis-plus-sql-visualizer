@@ -97,6 +97,10 @@ internal object PreviewSideQuery {
                 // （headless 实测：no ProgressIndicator or Job, the current job is not cancellable）。
                 // 真机 IDE 的池线程恰好有上下文，测试/纯后台调用没有——给一次空指示器让只读查询
                 // 在任意后台上下文可执行；查询本身不读取消状态（只读短查询，超时由驱动护栏负责）。
+                // T-PreviewChainNoise W2（2026-10-23 订正）：上文「真机 IDE 的池线程恰好有上下文」
+                // 已被用户真机日志推翻——ExplainPanelChannel 同款裸调在真机也命中该 SEVERE。
+                // 兜底已下沉到 McpDbExecutor.withDbBlockingContext（缺上下文才补空指示器），
+                // 本处包装保留为无害冗余（少改一处少一份回归面）。
                 ProgressManager.getInstance().runProcess(
                     Computable {
                         McpDbExecutor.executeQuery(
