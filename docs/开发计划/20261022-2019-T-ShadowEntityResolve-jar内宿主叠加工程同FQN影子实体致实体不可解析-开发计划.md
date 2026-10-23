@@ -399,6 +399,48 @@ EntityClassResolverHeavy 13 + SqlPreviewEntityScopeHeavy 17）。
 从反编译 PSI 取调用点做端到端断言（2/0/0/0）。**教训：夹具与被测形态的「身份」必须一致——解包目录
 不等于 jar。**
 
+### 10.10 追加轮三（20261023 晚）：**第五种形态**——跨模块同 FQN 源码，靠模块依赖方向仲裁
+
+用户装上含 W5 的沙盒后复测：**sources jar 形态已正常**，**反编译（class jar）形态仍降级**；
+并说明触发点是 `shadow-entity-demo/src/main/resources/lib/shadow-entity-lib-1.0.0.jar` 里那行
+`commonDao.findByQuery(...)`。诊断日志（W5 加的）给出决定性读数：
+
+```
+entity-ambiguity[0] com.example.shadow.model.WmsTask ext=java inContent=true
+  inLibClasses=false inLibSource=false module=shadow-entity-demo url=.../shadow-entity-demo/.../WmsTask.java
+entity-ambiguity[1] ... ext=java inContent=true module=shadow-entity-lib url=.../shadow-entity-lib/.../WmsTask.java
+```
+
+**两个候选都是 `.java`**，分属 demo 与 lib 两个模块——jar 内那份 class 已被平台自身的同 FQN 去重淘汰
+（内容优先于库）。于是 W5 的两步（内容、源码形态）**都失效**（两边都是内容、都是源码）⇒ 歧义 ⇒ 降级。
+与 W5 的形态正交，故 W5 修不了它。
+
+**修法（W6）**：收窄改为三步 `narrowAmbiguous`（纯逻辑，可注入谓词）：
+1. 工程内容优先（原步）；
+2. **模块依赖方向**——恰分属两模块且一方（传递）依赖另一方时取**依赖方**那份。依据＝运行期
+   classpath 序（本模块输出先于其依赖），也正是「工程里新增同名类覆盖依赖模块」的生效规则；
+   无关模块／互为依赖／组内含无可归属定义（库内）时此步不收窄；
+3. 源码形态优先（原步）。
+
+顺序有意：**先剔库定义，模块方向才可能落在「恰好两个模块」上**（首次实现把模块步放在内容步之前，
+组内还含 jar 那份无模块定义 → 三个模块键 → 直接放弃，实测仍 2 候选）。
+
+同时删掉原先「`module == null` 就整段跳过平台仲裁」的分支——它丢掉了本可用的模块身份信息。
+
+**读数**：红基线 `ShadowModuleOrderTest#testDependentModuleSourceWins` 失败（candidates=2）→ 修复后
+`ShadowModuleOrderTest` + `ShadowContentTieBreakTest` **7/0/0/0**；回归 4 类（ShadowEntityResolve 7 +
+JarInsideContentRoot 2 + EntityClassResolverHeavy 13 + SqlPreviewEntityScopeHeavy 17）**39/0/0/0**，
+XML 落盘条数已校验（非空绿）。反向契约 `testUnrelatedModulesStayAmbiguous`（两模块无依赖）保持歧义。
+
+**本轮新踩的坑**：① 组合多个 `--tests` 模式时出现「No tests found for given includes」而单类可跑，
+同一批改用 4 类一次跑通过——**判据是 XML 落盘条数，不是退出码**；② `BUILD SUCCESSFUL` 但零 XML 的
+空绿再现（配置缓存），凡读断言必先数 XML。
+
+**沙盒目录确认**（用户问）：`.intellijPlatform/sandbox/.../IU-2024.3.7.1/`＝`runIde` 默认态；
+`build/MPSV-GifFresh/.../IU-2026.2.1/`＝`-PgifRecord=true` 录制态。用户实际跑的是前者（其日志写在
+`log_runIdeHotSwap/idea.log`）。**插件必须装进用户实际使用的那个 `plugins*` 目录**，否则复测仍在跑旧代码
+（本轮已装 `plugins/` 与 `plugins_runIdeHotSwap/` 两处并核验字节码）。
+
 ## 十一、附：本轮未做的事
 
 未改任何生产代码；未跑 gradle（未做并行登记）；未提交、未推送；未在用户原始工程复现；未做真机走查；未预占 O/R/D/V 编号（缺陷级修复，按 T-JRebelPremainCrash 先例不占号）。
