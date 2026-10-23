@@ -110,4 +110,45 @@ Contributor 的条目数据源直接复用插件设置页那份清单——`Plug
 
 ## 九、实施记录
 
-（待回填）
+2026-10-23 本会话实施完毕，已提交（见 §9.5）。**结论：计划 §五 的四条待验证前提全部被字节码取证推翻/改写，实际改动比计划预估小得多——9 个 Configurable 一行都没改。**
+
+### 9.1 前提证伪结果（243 平台 `ideaIU-2024.3.7.1-win` 反编译，`app-client.jar`）
+
+取证方式：Gradle 缓存里项目实际编译依赖的 243 平台（`transforms/.../ideaIU-2024.3.7.1-win`）解出 class，用 JDK17 `javap -p -c -l -v` 读字节码与 `LocalVariableTable`/`RuntimeInvisibleParameterAnnotations`。
+
+| 计划前提 | 结论 | 证据 |
+| --- | --- | --- |
+| §五.2 平台看到裸类还是 `ConfigurableWrapper` | **包装层已满足门二，9 个类不用改** | `ConfigurableWrapper` 声明 `implements SearchableConfigurable, Weighted, HierarchicalConfigurable, ...`；`getId()` 字节码首个分支即 `myEp.id != null ? myEp.id : cast(...)` |
+| §五.3 `addOptions` 参数语义 | **顺序正确，`path` 可 null** | `LocalVariableTable` 形参名逐字为 `text / path / hit / configurableId / configurableDisplayName / applyStemming`；注解 `NotNull, Nullable, Nullable, NotNull, Nullable`；平台自带 `PluginSearchableOptionContributor` 就是 `addOptions(name, null, name, "preferences.pluginManager", 显示名, false)` |
+| §五.4 新 UI 是否读同一索引 | **是，同一套** | `com.intellij.openapi.options.newEditor.SettingsFilter` 持有 `SearchableOptionsRegistrar` 与 `ConfigurableHit`，`update()` 调 `registrar.getConfigurables(...)`，读 `nameHits`/`nameFullHits`/`contentHits` |
+| §五.1 按名命中为何失效 | **按名路径代码确实存在**（`getDisplayName().contains(option)`），失效原因未在本项内定位 | 见 §9.4 待办 |
+
+另外两处**计划里的坐标写错**，实施时按实测纠正：
+- EP 接口包名是 `com.intellij.ide.ui.search.SearchableOptionContributor`，**不是**计划写的 `com.intellij.search`；
+- 计划说的 `SearchUtil.java`（`com.intellij.openapi.options.ex`）在 243 里是 `com.intellij.ide.ui.search.SearchUtil`（Kotlin 类），门二真正的实现点是 `SearchableOptionsRegistrarImplKt.filterById`。
+
+### 9.2 改动清单（3 文件）
+
+- **新增** `config/PluginSettingsSearchableOptionContributor.kt`：`processOptions` 遍历共享数据源，逐条 `addOptions(label, null, tooltip, EP id, 页显示名, false)`。
+- **`PluginSettingsFolderConfigurable.kt`**：companion 增 `ideSearchEntries(): List<IdeSearchEntry>`（label/tooltip/页显示名/EP id 四元组，与 `ALL_SEARCHABLE_FIELDS` 同源）与 `IdeSearchEntry` 数据类。**只读内存映射，无 IO/PSI**（Contributor 在设置对话框初始化路径上执行，计划 §八 的要求）。
+- **`plugin.xml`**：`<search.optionContributor implementation="...PluginSettingsSearchableOptionContributor"/>` 一条注册。
+
+**没有动的**：`SectionConfigurable` 构造器、6 个子类构造调用、`McpConfigurable`、`ProjectPluginSettingsConfigurable`、`build.gradle.kts`（一行没碰，故无中文 locale 构建风险）。
+
+### 9.3 读数（正反双向，本会话实测）
+
+- **正向**：`SettingsIdeSearchContributorTest` 8/8 绿 + 相邻 `SettingsPanelSearchableGuardTest` 4/4、`PluginSettingsFolderConfigurableTest` 11/11、`PluginXmlExtensionPointResolutionTest` 2/2（后者自动校验新 EP 名 `search.optionContributor` 在平台 EP 全集内可解析）= **25/25 全绿**。
+- **反向 A**（计划 §七 指定：摘 EP 注册）：注释掉注册 → **恰 1 红**（`testPluginXml注册了searchOptionContributor`），其余 7 绿。
+  - ⚠️ **首版这里是假绿**：断言写成「原文包含 `<search.optionContributor`」，注释掉后注释里仍留着那串字 → 照旧绿。已改为**剥 XML 注释后**再匹配，并加 `test剥注释判定能识别被注释掉的注册` 作正对照（把「注释态」钉成必红，防守卫退化成空绿）。
+- **反向 B**（摘一条索引条目）：临时让 `ideSearchEntries()` 跳过 `display.mask` → **恰 2 红**：`两套搜索必须读同一份清单（条目数相等）expected:<78> but was:<77>` 与 `IDE 搜索索引里应有「展示与导出脱敏」`。恢复后回到 25/25 全绿，`git diff` 确认探针零残留。
+
+### 9.4 未完成 / 待办
+
+1. **§五.1「按名命中为何失效」未定位**：代码里 `getDisplayName().contains(option)` 的按名路径确实存在，用户环境为何搜不到根节点名仍未查明（猜测与设置对话框的树过滤/`nameFullHits` 需整词命中有关）。本项通过补索引已让**设置项正文**可搜，按名路径单独失效不影响验收口径，但根因仍未落地，建议另立调查项。
+2. **真机端到端未验**（计划 §七 主要验收）：`Settings` 搜索框输入「脱敏」「方言」「参数前缀」→ 命中 + 点击跳转到对应子页，需 runIde 沙盒。headless 下 `SearchableOptionsRegistrar` 的初始化依赖平台索引装配，本类只覆盖「喂进去的东西对不对」这一层（参数形态、id 指向真实 EP、条目与页内搜索同源）。
+3. **中文界面语言下的索引文本**：`ideSearchEntries()` 取的是 `MpSqlVisualizerBundle.message(...)`，即**索引在插件语言设置下生成**（默认 zh）。用户在英文 IDE 里但插件语言为中文时，搜英文词不会命中插件条目（平台自身的索引是构建期按 IDE locale 生成的，本项是运行时按插件语言生成）。若要双语都可搜，需在 Contributor 里对每条同时喂 `message` 与 `messageEn` 两份——本项未做，留作增强项（会翻倍索引条目）。
+4. **同源纪律**：`ideSearchEntries()` 与页内搜索共用 `ALL_SEARCHABLE_FIELDS`，B 的守卫（`SettingsPanelSearchableGuardTest`）因此**同时保护了两套搜索**；新增设置项只需在那一处登记。
+
+### 9.5 并行冲突留痕
+
+实施期间并行会话 `baseline-combo-fix` 正在改 `ExplainPlanResultViewUiTest.kt`，中途一度缺 `JBLabel` import 导致**整个测试源码集编译失败**，本项反向 B 的首轮读数因此是编译期失败而非断言失败（已识别并等待其补上 import 后重跑）。本项未修改该文件。

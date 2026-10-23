@@ -679,5 +679,34 @@ class PluginSettingsFolderConfigurable : Configurable {
          */
         internal fun registeredSearchLabelsForTest(): List<String> =
             ALL_SEARCHABLE_FIELDS.map { it.searchLabel }
+
+        /**
+         * T-SettingsSearchA：页内搜索与 IDE 设置搜索**共用的索引条目**（单一数据源）。
+         *
+         * 两套搜索读同一份清单，避免「面板加了控件、某一边索引忘了登记」的漂移在 IDE 搜索侧
+         * 重演（B 那类缺陷的根因）。返回 (label, tooltip, 页显示名, EP id) 四元组：
+         *  - label/tooltip 喂 [com.intellij.ide.ui.search.SearchableOptionProcessor.addOptions]
+         *    的 text/hit；
+         *  - 页显示名喂 configurableDisplayName（搜索结果分组显示）；
+         *  - EP id 喂 configurableId（平台按 id 把命中映射回设置树节点，见 `filterById`）。
+         *
+         * 只做内存映射，无 IO/PSI——Contributor 在设置对话框初始化路径上执行（计划 §八）。
+         */
+        internal fun ideSearchEntries(): List<IdeSearchEntry> = ALL_SEARCHABLE_FIELDS.map {
+            IdeSearchEntry(
+                label = it.searchLabel,
+                tooltip = it.searchTooltip,
+                pageDisplayName = MpSqlVisualizerBundle.message(it.pageLabelKey),
+                configurableId = it.ref.id,
+            )
+        }
+
+        /** IDE 设置搜索条目（[ideSearchEntries] 的元素；四元组语义见该函数 KDoc）。 */
+        internal data class IdeSearchEntry(
+            val label: String,
+            val tooltip: String,
+            val pageDisplayName: String,
+            val configurableId: String,
+        )
     }
 }
