@@ -1,11 +1,10 @@
 package cn.song.mybatisplus.visualizer.psi
 
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewService
-import com.intellij.openapi.module.Module
 import com.intellij.openapi.roots.ModuleRootModificationUtil
 import com.intellij.openapi.roots.ProjectFileIndex
+import com.intellij.openapi.vfs.JarFileSystem
 import com.intellij.openapi.vfs.LocalFileSystem
-import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.psi.JavaPsiFacade
 import com.intellij.psi.PsiClass
 import com.intellij.psi.PsiCompiledFile
@@ -19,26 +18,21 @@ import com.intellij.testFramework.PsiTestUtil
 import java.io.File
 import java.nio.file.Files
 import java.util.concurrent.TimeUnit
-import java.util.zip.ZipFile
 
 /**
- * T-ShadowEntityResolve W4 护栏：**jar 放在模块内容根内**（`src/main/resources/lib/`，system scope 引用）。
+ * T-ShadowEntityResolve W5 端到端护栏：**真 jar 放在模块内容根下的 `resources/lib/`**，
+ * jar 内实体与工程源码影子同 FQN，预览必须解析到**工程源码那份**且不降级。
  *
- * 用户 20261023 把 jar 放进 `shadow-entity-demo/src/main/resources/lib/` 后仍见降级——需要确认这是不是
- * 第四种未覆盖形态。取证读数（本类断言的就是这些）：
+ * 为什么用真 jar：本用例的前身（W4）用「解包目录」代替 jar，jar 那份根本没进候选 ⇒ 假绿。
+ * 本类用 `JarFileSystem` 把**真实 jar**挂成库根（先经探针验证 jar 内 class 能进短名索引），
+ * 且 jar 物理路径位于 source root 之下，复刻用户 `src/main/resources/lib/` 的布局。
  *
- *  - 该 jar 的类**同时**满足 `isInContent == true` 与 `isInLibraryClasses == true`（内容根与库根身份叠加）；
- *  - 宿主元素因此**拿得到模块上下文**（不像纯库文件那样恒 null）；
- *  - 解析结果仍是**工程源码那份**（候选 1、非歧义）——P0a「工程内容优先」按 FQN 组内收窄，不因 jar 也在
- *    内容根内而误判成「两份都是工程内容」；
- *  - 端到端：从**反编译 PSI**（桩 PSI 无方法体）取调用点，预览产出 `wms_task_project` 且**不降级**。
- *
- * 即该形态已被现有修复覆盖，无需额外改动；本类的作用是防止将来回归。
+ * 解析口径由 `narrowByContentAndForm` 两步收窄保证（内容步 + 源码形态步），本类从端到端
+ * 验证整链：locator 认领 → 实体解析 → 表名/列清单 → 不降级。
  */
 class JarInsideContentRootTest : HeavyPlatformTestCase() {
 
     private val dirs = mutableListOf<File>()
-    private val roots = mutableMapOf<Module, VirtualFile>()
 
     override fun setUp() {
         super.setUp()
@@ -49,7 +43,6 @@ class JarInsideContentRootTest : HeavyPlatformTestCase() {
         try {
             EntityClassResolver.ambiguitySinkForTest = null
             EntityClassResolver.clearAmbiguityNotifiedForTest(project)
-            roots.clear()
         } finally {
             dirs.forEach { it.deleteRecursively() }
             super.tearDown()
@@ -58,35 +51,40 @@ class JarInsideContentRootTest : HeavyPlatformTestCase() {
 
     private fun tempDir(): File = Files.createTempDirectory("jar-in-content-").toFile().also(dirs::add)
 
-    private fun externalJavac(): File {
+    private fun javac(): File {
         val exe = if (System.getProperty("os.name").startsWith("Windows")) "javac.exe" else "javac"
-        return listOfNotNull(
-            System.getProperty("mpv.entityResolver.javacHome"), System.getenv("JAVA_HOME"),
-            System.getProperty("java.home"), "D:/HuanJing/Java/jdk1.8.0_181",
-        ).map { File(it, "bin/$exe") }.firstOrNull(File::isFile) ?: error("需要真实外部 JDK")
+        return listOfNotNull(System.getenv("JAVA_HOME"), System.getProperty("java.home"), "D:/HuanJing/Java/jdk1.8.0_181")
+            .map { File(it, "bin/$exe") }.firstOrNull(File::isFile) ?: error("需要真实外部 JDK")
     }
 
-    /** 造 jar（实体 + DAO + 带 HQL 的 service），解包到模块内容根下的 `resources/lib/classes` 并挂为库根。 */
-    private fun jarInsideContentRoot(): PsiClass {
-        val work = tempDir()
-        val src = File(work, "src").apply { mkdirs() }
-        val classes = File(work, "classes").apply { mkdirs() }
+    private fun jpaStubs(dir: File) {
         listOf(
             "Entity" to "public @interface Entity { String name() default \"\"; }",
             "Table" to "public @interface Table { String name(); }",
             "Column" to "public @interface Column { String name(); }",
             "Id" to "public @interface Id { }",
-        ).forEach { (name, body) ->
-            File(src, "javax/persistence/$name.java").apply {
+        ).forEach { (n, b) ->
+            File(dir, "javax/persistence/$n.java").apply {
                 parentFile.mkdirs()
-                writeText("package javax.persistence; @java.lang.annotation.Retention(java.lang.annotation.RetentionPolicy.RUNTIME) $body")
+                writeText("package javax.persistence; @java.lang.annotation.Retention(java.lang.annotation.RetentionPolicy.RUNTIME) $b")
             }
         }
-        File(src, "com/acme/WmsTask.java").apply {
+    }
+
+    /**
+     * 造**真 jar**（jar 内实体表 `wms_task_jar` + DAO + 带 HQL 的 service），放进 source root 下的
+     * `src/main/resources/lib/`，并以库根挂载。返回 jar 里的 service 类（桩 PSI）。
+     */
+    private fun jarInResourcesLib(): PsiClass {
+        val work = tempDir()
+        val src = File(work, "src").apply { mkdirs() }
+        val out = File(work, "out").apply { mkdirs() }
+        jpaStubs(src)
+        File(src, "com/example/shadow/model/WmsTask.java").apply {
             parentFile.mkdirs()
             writeText(
                 """
-                package com.acme;
+                package com.example.shadow.model;
                 @javax.persistence.Entity
                 @javax.persistence.Table(name="wms_task_jar")
                 public class WmsTask {
@@ -97,97 +95,91 @@ class JarInsideContentRootTest : HeavyPlatformTestCase() {
                 """.trimIndent(),
             )
         }
-        File(src, "com/acme/CommonDao.java").apply {
+        File(src, "com/example/shadow/dao/CommonDao.java").apply {
             parentFile.mkdirs()
             writeText(
                 """
-                package com.acme;
+                package com.example.shadow.dao;
                 import java.util.List;
                 import java.util.Collections;
                 public class CommonDao {
-                    public List<?> findByQuery(String hql, String[] paramNames, Object[] values) {
+                    public List<?> findByQuery(String hql, String[] names, Object[] values) {
                         return Collections.emptyList();
                     }
                 }
                 """.trimIndent(),
             )
         }
-        File(src, "com/acme/WmsTaskJarService.java").apply {
+        File(src, "com/example/shadow/service/WmsTaskJarService.java").apply {
             parentFile.mkdirs()
             writeText(
                 """
-                package com.acme;
+                package com.example.shadow.service;
                 import java.util.List;
+                import com.example.shadow.dao.CommonDao;
                 public class WmsTaskJarService {
                     private final CommonDao commonDao = new CommonDao();
                     public List<?> beAllocateSuccess() {
                         String hql = "FROM WmsTask task WHERE task.status = :status AND task.type = :type";
-                        return this.commonDao.findByQuery(hql, new String[]{"status", "type"}, new Object[]{"OP", "PU"});
+                        return this.commonDao.findByQuery(hql, new String[]{"status","type"}, new Object[]{"OP","PU"});
                     }
                 }
                 """.trimIndent(),
             )
         }
-        val javac = externalJavac()
+        val jc = javac()
         val stubs = listOf("Entity", "Table", "Column", "Id").map { File(src, "javax/persistence/$it.java").absolutePath }
         val log = File(work, "javac.log")
         val p = ProcessBuilder(
-            listOf(javac.absolutePath, "-source", "8", "-target", "8", "-d", classes.absolutePath) + stubs +
-                File(src, "com/acme/WmsTask.java").absolutePath +
-                File(src, "com/acme/CommonDao.java").absolutePath +
-                File(src, "com/acme/WmsTaskJarService.java").absolutePath,
+            listOf(jc.absolutePath, "-source", "8", "-target", "8", "-d", out.absolutePath) + stubs +
+                File(src, "com/example/shadow/model/WmsTask.java").absolutePath +
+                File(src, "com/example/shadow/dao/CommonDao.java").absolutePath +
+                File(src, "com/example/shadow/service/WmsTaskJarService.java").absolutePath,
         ).redirectErrorStream(true).redirectOutput(log).start()
         assertTrue(log.readText(), p.waitFor(30, TimeUnit.SECONDS))
         assertEquals(log.readText(), 0, p.exitValue())
 
-        // 打成 jar（JarOutputStream：不依赖外部 jar 命令）
         val jarFile = File(work, "shadow-entity-lib-1.0.0.jar")
-        val classFiles = classes.walkTopDown().filter { it.isFile && it.extension == "class" }.toList()
+        val classFiles = out.walkTopDown().filter { it.isFile && it.extension == "class" }.toList()
         assertTrue("javac 应产出 class 文件", classFiles.isNotEmpty())
         java.util.jar.JarOutputStream(jarFile.outputStream()).use { jar ->
             jar.putNextEntry(java.util.zip.ZipEntry("META-INF/MANIFEST.MF"))
-            jar.write("Manifest-Version: 1.0\r\n\r\n".toByteArray())
-            jar.closeEntry()
-            for (cf in classFiles) {
-                jar.putNextEntry(java.util.zip.ZipEntry(cf.relativeTo(classes).path.replace('\\', '/')))
-                jar.write(cf.readBytes())
-                jar.closeEntry()
+            jar.write("Manifest-Version: 1.0\r\n\r\n".toByteArray()); jar.closeEntry()
+            classFiles.forEach { cf ->
+                jar.putNextEntry(java.util.zip.ZipEntry(cf.relativeTo(out).path.replace('\\', '/')))
+                jar.write(cf.readBytes()); jar.closeEntry()
             }
         }
 
-        // 放进模块**内容根**下的 resources/lib/，解包后挂为库根（复刻 system scope jar 的双重身份）
-        val contentRoot = roots.getOrPut(myModule) {
-            val dir = tempDir()
-            LocalFileSystem.getInstance().refreshAndFindFileByIoFile(dir)!!.also { PsiTestUtil.addSourceRoot(myModule, it) }
-        }
-        val libDir = File(contentRoot.path, "resources/lib").apply { mkdirs() }
-        val unpacked = File(libDir, "classes").apply { mkdirs() }
-        ZipFile(jarFile).use { zip ->
-            zip.entries().asSequence().filter { !it.isDirectory }.forEach { e ->
-                File(unpacked, e.name).apply { parentFile?.mkdirs() }.outputStream().use { out ->
-                    zip.getInputStream(e).use { it.copyTo(out) }
-                }
-            }
-        }
-        val libVf = LocalFileSystem.getInstance().refreshAndFindFileByIoFile(unpacked)!!
-        libVf.refresh(false, true)
-        ModuleRootModificationUtil.addModuleLibrary(myModule, "shadow-entity-lib", listOf(libVf.url), emptyList())
+        // jar 落到模块 source root 下的 src/main/resources/lib/（复刻用户布局）
+        val root = tempDir()
+        val rootVf = LocalFileSystem.getInstance().refreshAndFindFileByIoFile(root)!!
+        PsiTestUtil.addSourceRoot(myModule, rootVf)
+        val libDir = File(root, "src/main/resources/lib").apply { mkdirs() }
+        val staged = File(libDir, "shadow-entity-lib-1.0.0.jar")
+        jarFile.copyTo(staged, overwrite = true)
+        LocalFileSystem.getInstance().refreshAndFindFileByIoFile(staged)?.refresh(false, true)
+
+        val jarRoot = JarFileSystem.getInstance()
+            .refreshAndFindFileByPath(staged.absolutePath.replace('\\', '/') + "!/")
+            ?: error("jar 未打开：$staged")
+        ModuleRootModificationUtil.addModuleLibrary(myModule, "shadow-entity-lib", listOf(jarRoot.url), emptyList())
         IndexingTestUtil.waitUntilIndexesAreReady(project)
 
         return JavaPsiFacade.getInstance(project)
-            .findClass("com.acme.WmsTaskJarService", GlobalSearchScope.allScope(project))
+            .findClass("com.example.shadow.service.WmsTaskJarService", GlobalSearchScope.allScope(project))
             ?: error("jar 里的 WmsTaskJarService 解析不到")
     }
 
+    /** 工程源码影子（同 FQN，表 `wms_task_project`，列多一个 remark）。 */
     private fun projectShadow() {
-        val root = roots.getOrPut(myModule) {
-            val dir = tempDir()
-            LocalFileSystem.getInstance().refreshAndFindFileByIoFile(dir)!!.also { PsiTestUtil.addSourceRoot(myModule, it) }
-        }
-        File(root.path, "src/com/acme").apply { mkdirs() }
-        File(root.path, "src/com/acme/WmsTask.java").writeText(
+        val root = tempDir()
+        val rootVf = LocalFileSystem.getInstance().refreshAndFindFileByIoFile(root)!!
+        PsiTestUtil.addSourceRoot(myModule, rootVf)
+        File(root, "src/main/java/com/example/shadow/model").apply { mkdirs() }
+        File(root, "src/main/java/com/example/shadow/model/WmsTask.java").writeText(
             """
-            package com.acme;
+            package com.example.shadow.model;
             @javax.persistence.Entity
             @javax.persistence.Table(name="wms_task_project")
             public class WmsTask {
@@ -198,38 +190,29 @@ class JarInsideContentRootTest : HeavyPlatformTestCase() {
             }
             """.trimIndent(),
         )
-        LocalFileSystem.getInstance().refreshAndFindFileByIoFile(File(root.path, "src/com/acme/WmsTask.java"))
+        LocalFileSystem.getInstance().refreshAndFindFileByIoFile(
+            File(root, "src/main/java/com/example/shadow/model/WmsTask.java"),
+        )
         IndexingTestUtil.waitUntilIndexesAreReady(project)
     }
 
     /**
-     * jar 在内容根内时：解析到工程影子、不歧义；端到端（走反编译 PSI）产出 `wms_task_project` 且不降级。
+     * 端到端：jar 内宿主的 HQL 预览解析到**工程源码影子**（`wms_task_project`），不降级。
+     * 走反编译 PSI（桩 PSI 无方法体），与 IDE 里点图标时 daemon 的取数方式一致。
      */
-    fun testJarInsideContentRootResolvesProjectShadow() {
-        val serviceClass = jarInsideContentRoot()
+    fun testJarInResourcesLibPreviewUsesProjectShadow() {
+        val serviceClass = jarInResourcesLib()
         projectShadow()
 
-        val fileIndex = ProjectFileIndex.getInstance(project)
-        // jar 内实体类文件（注意：此时同 FQN 的工程影子已存在，findClass 会返回影子——必须按路径直接取 jar 那份）
-        val jarClassVf = LocalFileSystem.getInstance().refreshAndFindFileByIoFile(
-            File(roots.getValue(myModule).path, "resources/lib/classes/com/acme/WmsTask.class"),
-        )!!
-        // 双重身份：既在内容根之下、又是库类（这正是本形态的特征）
-        assertTrue("jar 类应位于内容根之下", fileIndex.isInContent(jarClassVf))
-        assertTrue("jar 类同时应被当作库类", fileIndex.isInLibraryClasses(jarClassVf))
-
         val stubMethod = serviceClass.findMethodsByName("beAllocateSuccess", false).single()
-        val resolution = EntityClassResolver.resolveByName(project, "WmsTask", stubMethod)
-        assertEquals("应唯一解析到工程影子（jar 版不参与歧义）", 1, resolution.candidates.size)
-        assertFalse(resolution.ambiguous)
-        assertEquals("com.acme.WmsTask", resolution.candidates.single().qualifiedName)
-        assertTrue(
-            "应取工程源码那份：${resolution.candidates.single().containingFile.virtualFile.path}",
-            resolution.candidates.single().containingFile.virtualFile.extension == "java",
-        )
-
-        // 桩 PSI 无方法体 ⇒ IDE 点图标时走反编译 PSI，预览必须在这条链上正确
         assertNull("桩 PSI 不应有方法体", stubMethod.body)
+
+        // 候选里应同时有 jar 内二进制与工程源码两份（同 FQN）
+        val resolution = EntityClassResolver.resolveByName(project, "WmsTask", stubMethod)
+        assertEquals("应唯一收窄到工程源码那份", 1, resolution.candidates.size)
+        assertFalse(resolution.ambiguous)
+        assertEquals("java", resolution.candidates.single().containingFile.virtualFile.extension)
+
         val mirror = (stubMethod.containingFile as PsiCompiledFile).getDecompiledPsiFile()
         val mirrorMethod = (mirror as PsiJavaFile).classes.single()
             .findMethodsByName("beAllocateSuccess", false).single()
@@ -242,7 +225,19 @@ class JarInsideContentRootTest : HeavyPlatformTestCase() {
         assertEquals("wms_task_project", preview.tableName)
         assertTrue(preview.sql, preview.sql.contains("task_type"))
         assertTrue(preview.sql, preview.sql.contains("remark"))
-        assertFalse("jar 在内容根内不应降级：${preview.sql}", preview.sql.contains("实体不可解析"))
+        assertFalse("jar 在内容根下不应降级：${preview.sql}", preview.sql.contains("实体不可解析"))
         assertFalse(preview.sql, preview.sql.contains("unknown_table"))
+    }
+
+    /** jar 内 class 的真实身份读数：库类（内容与否由 IDE 决定，本用例不假设）。 */
+    fun testJarClassIsRecognizedAsLibraryClass() {
+        jarInResourcesLib()
+        val fileIndex = ProjectFileIndex.getInstance(project)
+        val jarClass = JavaPsiFacade.getInstance(project)
+            .findClass("com.example.shadow.model.WmsTask", GlobalSearchScope.allScope(project))
+        assertNotNull("jar 内实体应可解析", jarClass)
+        val vf = jarClass!!.containingFile.virtualFile
+        assertEquals("应读到 jar 内 class 而非解包目录", "class", vf.extension)
+        assertTrue("jar 内 class 应被识别为库类：${vf.path}", fileIndex.isInLibraryClasses(vf))
     }
 }
