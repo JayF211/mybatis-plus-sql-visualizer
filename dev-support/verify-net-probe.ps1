@@ -1,11 +1,12 @@
-# T-ReleasePerf8 S1 helper: verifier home 下 loaded-plugins 目录快照与轮间 diff。
-# 背景：marketplace 在线门禁的下载税取证需要回答两个问题——
-#   ① 一轮之后哪些文件是新的（mtime/build 号推进了多少）→ snapshot 模式轮前轮后各跑一次 + diff 模式比对；
-#   ② 两轮之间 build 号集合的复用率 → diff 模式输出「新增/消失/共用」三段计数与字节量。
-# 用法：
-#   snapshot: powershell -File verify-net-probe.ps1 snapshot -Dir <loaded-plugins 目录> -Out <清单文件>
-#   diff:     powershell -File verify-net-probe.ps1 diff -Before <旧清单> -After <新清单>
-# 清单格式：制表符分隔 name<TAB>bytes<TAB>mtimeTicks，只列文件不递归（loaded-plugins 是平目录）。
+# T-ReleasePerf8 S1 helper: snapshot + diff for the verifier's loaded-plugins dir.
+# Purpose (ASCII-only on purpose: PS 5.1 reads UTF-8-no-BOM as ANSI and Chinese strings
+# break the parser, same class as the Git Bash CJK pitfall):
+#   1) which files are new after a verification round (mtime/build-number advance);
+#   2) reuse rate of build numbers between two rounds (added/removed/kept counts+bytes).
+# Usage:
+#   snapshot: powershell -File verify-net-probe.ps1 snapshot -Dir <loaded-plugins dir> -Out <manifest>
+#   diff:     powershell -File verify-net-probe.ps1 diff -Before <old manifest> -After <new manifest>
+# Manifest format: name<TAB>bytes<TAB>mtimeTicks, files only (loaded-plugins is flat).
 param(
     [Parameter(Mandatory = $true, Position = 0)][string]$Mode,
     [string]$Dir,
@@ -14,19 +15,19 @@ param(
     [string]$After
 )
 if ($Mode -eq "snapshot") {
-    if (-not $Dir -or -not $Out) { throw "snapshot 需要 -Dir 与 -Out" }
+    if (-not $Dir -or -not $Out) { throw "snapshot needs -Dir and -Out" }
     $dirInfo = Get-Item -LiteralPath $Dir -ErrorAction SilentlyContinue
     if ($null -eq $dirInfo) {
-        "EMPTY" | Out-File -FilePath $Out -Encoding utf8
+        "EMPTY" | Out-File -FilePath $Out -Encoding ascii
         exit 0
     }
     Get-ChildItem -LiteralPath $Dir -File | ForEach-Object {
         "$($_.Name)`t$($_.Length)`t$($_.LastWriteTimeUtc.Ticks)"
-    } | Out-File -FilePath $Out -Encoding utf8
+    } | Out-File -FilePath $Out -Encoding ascii
     exit 0
 }
 if ($Mode -eq "diff") {
-    if (-not $Before -or -not $After) { throw "diff 需要 -Before 与 -After" }
+    if (-not $Before -or -not $After) { throw "diff needs -Before and -After" }
     function Read-Manifest($path) {
         $m = @{}
         if (Test-Path -LiteralPath $path) {
@@ -50,4 +51,4 @@ if ($Mode -eq "diff") {
     $removed | Sort-Object | ForEach-Object { "DEL  $_" }
     exit 0
 }
-throw "未知模式 $Mode（snapshot | diff）"
+throw "unknown mode $Mode (snapshot | diff)"
