@@ -250,3 +250,31 @@ Database 工具窗口中打开该数据源补存密码」，`DataSourceSelector.
 - 前提 3（「已存但密码错」是否二次弹框）未实测，随沙盒验收一并观察。
 - `PreviewSideQueryIntegrationTest`（DB 桶）与 `McpDbSignatureCrossVersionTest`（外部桶）
   未随本轮复跑——本批不触其覆盖面（反射签名面零变化，仅调用点参数），全量按用户口径不跑。
+
+---
+
+## 十、沙盒验收记录（2026-10-24，GUI 未闭环——环境阻塞，非产品缺陷）
+
+**环境**：master@9a0c1ba2 独立沙盒 MPSV-ExplainPwd-UI3（243.28141.41 + robot-server 8580 + demo 工程）；
+在役包核验通过（javap 沙盒内插件 jar：`executeQuery(...,boolean,...)` 含 askPassword、
+`ExplainPanelChannelKt.classifyExplainFailure/isAuthFailureText` 在役，jar mtime 晚于 4bccd331）。
+
+**GUI 走查达到的最深点**：预览面板「执行计划」→ 通知动作「启用结构化并重试」点击生效（开关启用 +
+重试链运行，日志与红字证实）→ 绑定链 `chooseAndPrepare` 走到 **runner 枚举 = 0**（`registered=7`，
+方言路由无匹配——数据源从未连接/学习过方言）→ 绑定失败，**结构化通道（McpDbExecutor）未被执行到**，
+askPassword 行为无法在此形态下被检验。
+
+**阻塞点（均为沙盒环境装配，非产品缺陷）**：
+1. 沙盒 MySQL 驱动未生效：拷入 `config/jdbc-drivers/MySQL ConnectorJ` + 重启后，展开/Refresh
+   数据源仍不触发连接（日志零驱动活动）；Data Sources 对话框显示「Download missing driver files」。
+2. 方言路由空：数据源无 Dialects 映射且从未连接（runner=0），绑定链必败于方言闸红字
+   （「没有与该 SQL 方言（MySQL）匹配的已配置数据源」——O-145 既有闸门行为）。
+3. 探针损耗若干：前台锁（Chrome 抢前台，Alt+AttachThreadInput 解）、信任框、通知动作点击容差、
+   Go to File 列表索引期重排（Enter 三次开错文件——改鼠标点击路线）。
+
+**状态**：V1（承重墙）/V2/V3/V4 **未验**；V5（MCP 零弹窗）已由守卫测试静态面收口
+（ExplainAskPasswordChannelGuardTest 3 例）。产品侧零缺陷登记。
+
+**闭环路径（真机一次点击）**：用户日常 IDE（驱动/数据源/方言齐备）装含 4bccd331 的构建后——
+①数据源不存密码 → 预览 → 执行计划 → **原生密码框**（V1）；②Esc → 轻通知（V2）；③输错密码 →
+红字+补存密码指引（V3）；④预估行数 → 弹框（V4）。或下次沙盒战役先把驱动/方言前置装配好再验。
