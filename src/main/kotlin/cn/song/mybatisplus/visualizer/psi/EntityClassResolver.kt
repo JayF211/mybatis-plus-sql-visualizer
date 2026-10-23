@@ -103,8 +103,39 @@ object EntityClassResolver {
             if (matched.size <= 1 || context == null) matched
             else matched.filter { JpaMetadataReader.isLikelyMappedEntityClass(it) }.ifEmpty { matched }
         }.sortedWith(compareBy({ it.qualifiedName ?: it.name.orEmpty() }, { it.containingFile?.virtualFile?.url.orEmpty() }))
-        if (candidates.size > 1) notifyAmbiguityOnce(project, entityName, module, candidates)
-        return Resolution(candidates.singleOrNull(), candidates)
+        if (candidates.isNotEmpty() || context == null || scope == GlobalSearchScope.allScope(project)) {
+            if (candidates.size > 1) notifyAmbiguityOnce(project, entityName, module, candidates)
+            return Resolution(candidates.singleOrNull(), candidates)
+        }
+        // T-ShadowEntityResolve W3：**零候选拓宽**。workspace 形态（Maven 多模块同载）下，宿主 DAO 在
+        // 提供方模块源码里＝模块内容，`contextModule` 是提供方模块；实体却可能只存在于**下游**业务
+        // 模块（依赖方向 demo→lib，lib 看不见 demo）——用户注释掉 lib 内实体后宿主作用域内零候选，
+        // 预览降级为 `task.*`（20261023 真机复现）。宿主作用域「看不见」不等于「不存在」：放宽到
+        // allScope 再查一次，**全项目唯一命中且确为映射实体**才采用；多命中维持 fail closed
+        // （T-EntityNameScope 防「挑错实体」的核心保护不放松）。
+        val wideScope = GlobalSearchScope.allScope(project)
+        val wideDirect = if (qualified) facade.findClasses(entityName, wideScope).toList()
+        else PsiShortNamesCache.getInstance(project).getClassesByName(entityName, wideScope).toList()
+        val wideVisible = wideDirect.filter { clazz ->
+            ProgressManager.checkCanceled()
+            clazz.isValid && clazz.containingFile?.virtualFile?.let(wideScope::contains) == true
+        }.distinctBy { it.qualifiedName to it.containingFile?.virtualFile?.url }
+        val wideCandidates = wideVisible.filter { clazz ->
+            ProgressManager.checkCanceled()
+            if (qualified) clazz.qualifiedName == entityName
+            else {
+                val explicitName = JpaMetadataReader.entityNameOf(clazz)?.takeIf { it.isNotEmpty() }
+                (explicitName ?: clazz.name) == entityName
+            }
+        }.filter { JpaMetadataReader.isLikelyMappedEntityClass(it) }
+        return if (wideCandidates.size == 1) {
+            Resolution(wideCandidates.single(), wideCandidates)
+        } else {
+            // 零个或多个宽候选：多命中属**全项目真歧义**——按既有纪律走「歧义终态」（不挑一个 +
+            // 提示一次，LRU 去重），让用户看到候选清单而不是无声降级。
+            if (wideCandidates.size > 1) notifyAmbiguityOnce(project, entityName, module, wideCandidates)
+            Resolution(null, wideCandidates)
+        }
     }
 
     /**

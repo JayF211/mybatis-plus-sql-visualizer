@@ -328,7 +328,43 @@ sources 形态一致（表名列名、不降级、无 fallback 表）。
 - `EntityClassFinder`（表名→实体反查）、`NamedQueryLocator` 等 §7 同族站点仍按原计划登记未动。
 - 全量 `testShards` 已跑两次：第一次 **8162/0/0/9**（含取证期临时探针类），W2 换成正式护栏类后复跑
   **8122/0/0/9**（分片 1904+1560+1453+1504+1670 + external 31），两次零失败。**8122 为权威读数**
-  （生产代码在两次之间未变，仅测试类替换）。
+  （生产代码在两次之间未变，仅测试类替换）。W3 追加轮的门禁读数见 §10.8。
+
+### 10.8 追加轮（20261023）：用户真机复现失败 → **第三种形态**（workspace 零候选）
+
+**用户复现读数**：demo 仓按 `WmsTaskJarService#beAllocateSuccess` 预览仍出 `SELECT task.* /* 实体不可解析…*/`，
+且用户把 lib 里的 `WmsTask.java` **整个注释掉**后，demo 的影子实体仍不被识别。
+
+**取证**（demo 仓现场）：lib 源码已注释（类消失），但 `target/classes` 留有 21:04 旧 class、jar 21:06 打包
+（注释在构建之后）。**决定性形态是 IDEA 的 Maven workspace 解析**：`shadow-entity-lib` 与 `shadow-entity-demo`
+**都作为模块加载**，宿主 `WmsTaskJarService.java` 属于 lib 模块**内容**（非库文件）→ `contextModule` = lib 模块；
+demo 的影子实体在**下游**模块（依赖方向 demo→lib，lib 不可见 demo）→ 宿主作用域内 `WmsTask` **零候选** →
+降级。前两轮修复（P0a 同 FQN 收窄、P0b 非实体过滤）都治「多候选」，治不了「零候选」——该形态在新旧插件下
+同样降级，与前两轮正交。子智能体在 README 里预警过的「workspace 假绿」在这里以**反向**形式应验：
+workspace 不是让缺陷消失，而是把缺陷换成了另一种（零候选）。
+
+**修法（W3 零候选拓宽）**：`EntityClassResolver.resolveWithAliasCandidates` 在宿主作用域**零候选**且
+`context != null`（且 scope 尚非 allScope）时，放宽到 allScope 再查一次；**全项目唯一命中且为映射实体**
+才采用；多命中按既有纪律走「歧义终态」（`ambiguous=true` + 提示一次）。首版曾把多命中写成静默空候选，
+被自家反向用例逼回歧义终态——「让用户看到候选清单」优于无声降级。
+
+**契约变更（有意识的一处）**：`SqlPreviewEntityScopeHeavyTest#testExplicitInvisibleClassCannotBypassHostScope`
+原钉「显式不可见类不得旁路＝resolveHqlTable 为 null」；拓宽后窄域零候选会解析出全项目唯一实体，原断言翻转。
+改造为**在窄域有候选的形态下钉同一防护**（宿主可见 `local.Inventory` + 不可见 `wrong.Inventory` → 断言解析到
+local 那份），防护语义保留、新契约由 workspace 用例单独钉住。T-EntityNameScope 防「挑错实体」的核心
+（多候选不猜）未放松：窄域多候选照旧 fail closed，拓宽多命中也 fail closed。
+
+**新增用例**（`ShadowEntityResolveTest`）：`testEntityOnlyInDownstreamModuleResolvesFromWorkspaceHost`
+（workspace 零候选 → 解析到下游实体、表名/列正确、不降级）、`testDownstreamWideningStaysFailClosedWhenNotUnique`
+（下游双命中 → 仍 fail closed）。
+
+**读数**：红基线 7 例**恰 2 红**（两条 workspace 用例）；修复后定向 **37/0/0/0**
+（ShadowEntityResolve 7 + EntityClassResolverHeavy 13 + SqlPreviewEntityScopeHeavy 17）；反向摘拓宽
+**恰 2 红**、还原回绿。
+
+**给用户的复现提示**：装**本次修复之后**构建的插件（zip 或 runIde 产物）再走查；workspace（两模块同载）与
+README 的「卸载 lib 用真 jar」两种加载方式此后都应解析到 `wms_task_project`。另：lib 注释源码后若想恢复
+「jar 双份」形态，需 `mvn install` 重建（`target/classes` 里的旧 class 与旧 jar 仍是注释前产物）。
 
 ## 十一、附：本轮未做的事
 
