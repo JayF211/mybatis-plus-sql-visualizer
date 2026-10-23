@@ -55,13 +55,21 @@ intellijPlatform {
     }
 }
 
-// Plugin Verifier 是独立子进程，systemProp 代理不自动透传——显式注入（Clash 7890）
+// Plugin Verifier 是独立子进程，systemProp 代理不自动透传——显式注入。
+// T-CiRelease（20261023）：注入值改从 daemon 系统属性读取（本机 gradle.properties 的
+// systemProp.* 会设入 daemon JVM）——本机与原硬编码 127.0.0.1:7890 等价；GitHub Actions
+// 发行流水线会剥掉 gradle.properties 的代理行，此时列表为空 → verifier 直连网络，
+// 不再撞死 runner 上不存在的本地代理。
+val verifierProxyJvmArgs = listOfNotNull(
+    System.getProperty("http.proxyHost")?.let { "-Dhttp.proxyHost=$it" },
+    System.getProperty("http.proxyPort")?.let { "-Dhttp.proxyPort=$it" },
+    System.getProperty("https.proxyHost")?.let { "-Dhttps.proxyHost=$it" },
+    System.getProperty("https.proxyPort")?.let { "-Dhttps.proxyPort=$it" },
+)
+
 tasks.named<VerifyPluginTask>("verifyPlugin") {
+    jvmArgs(verifierProxyJvmArgs)
     jvmArgs(
-        "-Dhttp.proxyHost=127.0.0.1",
-        "-Dhttp.proxyPort=7890",
-        "-Dhttps.proxyHost=127.0.0.1",
-        "-Dhttps.proxyPort=7890",
         // T-VerifierHomeIso（2026-09-17 master c591c7e，本拆分合流时回植至本 convention）：
         // verifier-cli 1.410 在缺省 home（~/.pluginVerifier）下提取插件 zip 恒败（2×2 矩阵实证：
         // 1.410×默认home 恒败、1.410×隔离home 与 1.409×任一 home 全绿；verifyGate 走 walkTopDown
@@ -218,12 +226,10 @@ val verifyMarketplace = tasks.register<JavaExec>("verifyMarketplace") {
     val verifyHome = layout.buildDirectory.dir("verify-home-marketplace").get().asFile
     jvmArgs(
         "-Dplugin.verifier.home.dir=${verifyHome.absolutePath}",
-        // 在线模式必须联网：verifier 是独立子进程，systemProp 代理不自动透传，显式注入（Clash 7890）
-        "-Dhttp.proxyHost=127.0.0.1",
-        "-Dhttp.proxyPort=7890",
-        "-Dhttps.proxyHost=127.0.0.1",
-        "-Dhttps.proxyPort=7890",
     )
+    // 在线模式必须联网：代理注入同 verifyPlugin——daemon 配了代理（systemProp.*）才注入，
+    // CI 直连（原硬编码 127.0.0.1:7890 会让无代理环境的联网解析全部失败）
+    jvmArgs(verifierProxyJvmArgs)
     val pluginVersion = providers.gradleProperty("version").get()
     val reportsDir = layout.buildDirectory.dir("reports/pluginVerifierMarketplace").get().asFile
     val zipFile = layout.buildDirectory.file("distributions/mybatis-plus-sql-visualizer-$pluginVersion.zip").get().asFile
