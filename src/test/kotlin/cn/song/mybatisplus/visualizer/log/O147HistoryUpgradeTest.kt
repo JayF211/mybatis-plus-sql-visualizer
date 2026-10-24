@@ -424,7 +424,11 @@ class O147HistoryUpgradeTest {
 /** Runs the production String parser in one owned JVM; no platform stubs or weakened budget. */
 object O147LargeStringProbe {
     @JvmStatic fun main(args: Array<String>) {
-        val entries = SqlLogFileReader.parseContent(Files.readString(File(args[0]).toPath()))
+        // T-CiRelease（20261024）：与父进程同口径读文件（JVM 默认字符集）——父侧 saver/readLines/
+        // bufferedWriter/生产读取器整条链走默认字符集（本机 UTF-8、EN-US runner 为 Cp1252，单机内自洽），
+        // 此处原 Files.readString 强制 UTF-8，在默认字符集非 UTF-8 的机器上把文件头的 em dash
+        //（time: —）解码成替换符 → 指纹不匹配 → 子进程退出 1（CI 5/5 确定性失败实证）。
+        val entries = SqlLogFileReader.parseContent(File(args[0]).readText())
         check(fingerprint(entries) == args[1]) { "String parser differs from parent sequence/file results" }
         println("O147_STRING_OK count=${entries.size} reader=${SqlLogFileReader::class.java.protectionDomain.codeSource.location}")
     }
