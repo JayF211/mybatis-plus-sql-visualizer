@@ -67,3 +67,32 @@ mp_demo 但预览文本仍是 PG 旧渲染——点「执行计划」被闸门�
 EXPLAIN 专用闸门回调（重渲染成功自动重提交一次）；`onExecutionDialectGate` 通用行为不变。
 守卫：`ExplainAskPasswordChannelGuardTest` 加「EXPLAIN 重渲染后自动重提交」例（源码形）。
 读数与反向验证见提交信息。
+
+---
+
+## 六、实施记录续（2026-10-24，W8~W12，用户沙盒五轮实测驱动）
+
+用户逐轮实测暴露五个同族形态，逐条修（每轮均定向测试 + 反向探针）：
+
+| 轮 | 提交 | 形态（用户实测） | 修法 |
+|---|---|---|---|
+| W8 | `ab97d69e` | 开关关闭形态直送链取源只认控制台绑定 → 弹「未绑定数据源」红字（面板明明有 last-used） | 直送链取源接 last-used 回落 |
+| W9 | `427484a8` | jar-model demo 模块（无学习条目）表被 last-used 硬套 → `mp_demo.wms_inventory_jar_demo doesn't exist` | 取源统一 `explainFallbackDataSource`：模块学习优先；学习与 last-used 冲突不猜（引导选择） |
+| W10 | `e813042a` | join-demo（学习=last-used 一致但都陈旧）→ `mp_demo.order_entity doesn't exist` | **表归属路由**：`DatabaseSchemaResolver.cachedOwnerIndexes` 证明哪条源持有预览的表；候选不持有而唯一其他源持有 → 自动路由；多源 → 冲突引导选择 |
+| W11 | `f2050329` | 点「执行 SQL」永久「执行中…」 | `PrepareSingleFlightGate.expirePendingExecute`：排队意图自有 15s 结算（门与 owner 不动）；闸门三分支补 INFO 打点（此前零打点=排障盲区） |
+| W12 | `f2050329` + `540125bb` | W10 零命中仍错源执行 | 缓存热度判定 `cacheHasAnyTable`：缓存热且无源持有表 → 引导选择（确证不在）；缓存全冷才保持候选（诚实降级） |
+
+**读数**：定向 5 类 **38/0/0/0**（Guard 11 + PrepareGatePendingTimeout 3 + Classifier 8 +
+Fallback 6 + PreviewSideQuery 10，XML 判例数已核）；反向逐条：W8 摘回落恰 1 红、W9 摘冲突
+分支恰 1 红、W10 真删 `cachedOwnerIndexes` 恰 1 红、W11 删 `expirePendingExecute` → 生产编译
+失败（调用点直接红，强于测试红）。探针残留 0。
+
+**教训（入档）**：
+1. **提交必须核对 `git status` 残留**：W11/W12 首笔 `f2050329` 漏 add `DatabaseSchemaResolver.kt`
+   （W12 定义所在），提交态编译不过，靠 `540125bb` 补提交——「每完成可提交的就立即提交」须
+   配「提交后 `git status` 复核 + 提交态编译」。
+2. **源码形守卫的文件归属先 grep 再写**：本轮三次守卫指错文件（Timer 在 Results 而非 Execution、
+   `cachedOwnerIndexes` 在 Selector 而非 Execution），全是「凭记忆写路径」所致。
+3. **同一族缺陷会逐轮变形**：last-used 错源 → 学习错源 → 双证据一致但陈旧 → 缓存冷/热分野，
+   每轮修完都有下一个形态。根治靠「更强的事实源」（表归属）而非继续给弱证据打补丁；这也是
+   P2「渲染方言残留自动重渲染」仍未做的原因——那条要动生命周期编排，须单独立项。
