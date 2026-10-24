@@ -1167,6 +1167,16 @@ internal fun SqlPreviewPanel.submitExplainDirect(
     val target = explainTargetForTest?.invoke() ?: runCatching {
         cn.song.mybatisplus.visualizer.execute.DataSourceSelector.boundConsoleDataSource()
     }.getOrNull()
+        // T-DialectInferPollution W8（2026-10-24 用户真机报障）：直送链（PreviewSideQuery 旁路
+        // 查询）取源接 last-used 回落——开关关闭形态下点「执行计划」走到这里，控制台无绑定但
+        // 面板有「数据源（上次使用）」记忆（如 mp_demo@localhost），此前直接弹「未绑定数据源」
+        // 红字框（用户明明绑过）。旁路查询与结构化通道同为 McpDbExecutor 直连，last-used 对象
+        // 完全可用；歧义即弃，方言不符由 PreviewSideQuery 内既有方言闸拦。
+        ?: runCatching {
+            cn.song.mybatisplus.visualizer.execute.DataSourceSelector.explainFallbackDataSource(
+                proj, sourceModuleKey, explainSql,
+            )
+        }.getOrNull()
     if (target == null) {
         // 无绑定数据源：按钮直达 Database 工具窗口（按提示去选源），不再空跑一次必然失败的执行；
         // 文案用执行计划专用键（旧实现复用了 DML 影响面的「无法试算」，语境不符）。
@@ -1193,11 +1203,124 @@ internal fun SqlPreviewPanel.submitExplainDirect(
             is PreviewSideQuery.Result.Table ->
                 showExplainRawResultDialog(MpSqlVisualizerBundle.message("panel.explain"), result.raw)
 
+            // T-ExplainPwdPrompt：分型出口同结构化通道——AUTH/CANCELLED 轻通知收口（平台
+            // 凭据对话框已呈现失败与出口，红字模态框是二次打断，W6），不自动重试
             is PreviewSideQuery.Result.Blocked -> showExplainErrorDialog(result.message, openConsole)
-            is PreviewSideQuery.Result.Failed -> showExplainErrorDialog(result.message, openConsole)
+            is PreviewSideQuery.Result.Failed -> when (
+                cn.song.mybatisplus.visualizer.execute.classifyExplainFailure(result.message)
+            ) {
+                cn.song.mybatisplus.visualizer.execute.ExplainFailureKind.AUTH ->
+                    notifyExplainAuthFailure(proj)
+                cn.song.mybatisplus.visualizer.execute.ExplainFailureKind.CANCELLED ->
+                    notifyExplainCancelled(proj)
+                // T-ExplainFailUx W1：选错源**不弹模态**——就地横幅 + 「切换数据源」动作
+                //（用户实测诉求：直接引导换源，而不是先关弹窗再点「在控制台打开」）
+                cn.song.mybatisplus.visualizer.execute.ExplainFailureKind.WRONG_TARGET ->
+                    showExplainWrongTarget(proj, result.message, explainSql, dialectGateRequest, openConsole)
+                cn.song.mybatisplus.visualizer.execute.ExplainFailureKind.OTHER ->
+                    showExplainErrorDialog(result.message, openConsole)
+            }
             is PreviewSideQuery.Result.Scalar ->
                 showExplainErrorDialog("unexpected scalar result from EXPLAIN", openConsole)
         }
+    }
+}
+
+/**
+ * T-ExplainFailUx W1+W3（2026-10-24 用户沙盒实测）：**选错数据源**失败的就地引导。
+ *
+ * 为什么不用模态：`Table 'mp_demo.x' doesn't exist` 是最典型的「该换源」信号，模态框会先遮住
+ * 预览、还要求用户先关掉再点「在控制台打开」两步才见到换源入口（用户原话：「这种情况就不应该
+ * 弹窗了吧」）。改为结果区就地横幅（[SqlResultPanel.showErrorWithActions] 双动作槽）：
+ *  - 主动作「切换数据源」→ 重开既有数据源选择器（forceChoose 跳过 last-used 静默），
+ *    选中后**自动重试当前执行计划一次**（W3，防循环）；
+ *  - 次动作「在控制台打开」→ 既有直送控制台出口（用户可手改源后执行）。
+ */
+private fun SqlPreviewPanel.showExplainWrongTarget(
+    proj: Project,
+    message: String,
+    explainSql: String,
+    dialectGateRequest: cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Request,
+    openConsole: () -> Unit,
+) {
+    resultPanel.showIdle()
+    val hint = MpSqlVisualizerBundle.message("panel.explain.wrongTargetHint")
+    resultPanel.showErrorWithActions(
+        message + "　" + hint,
+        fixLabel = MpSqlVisualizerBundle.message("panel.explain.action.switchDataSource"),
+        fixTooltip = MpSqlVisualizerBundle.message("panel.explain.action.switchDataSource.tip"),
+        fix = { switchDataSourceAndRetryExplain(proj, explainSql, dialectGateRequest) },
+        settingsLabel = MpSqlVisualizerBundle.message("panel.explain.openConsole"),
+        settingsTooltip = null,
+        settings = openConsole,
+    )
+}
+
+/**
+ * T-ExplainFailUx W3：换源后自动重试执行计划一次。
+ *
+ * 换源走既有 [DataSourceSelector.prepareConsole]（forceChoose=true：跳过共享控制台复用与
+ * last-used 静默命中，必须让用户显式选）；绑定落地后重提交一次执行计划（`allowDataSourcePrompt=false`
+ * 防选择器循环、`rerendered=true` 复用 W7 的一次性防重入位，避免与方言闸重提交叠加成两次执行）。
+ */
+private fun SqlPreviewPanel.switchDataSourceAndRetryExplain(
+    proj: Project,
+    explainSql: String,
+    dialectGateRequest: cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Request,
+) {
+    if (com.intellij.openapi.util.Disposer.isDisposed(this) || proj.isDisposed) return
+    val sql = nativeEditorDoc?.text?.takeIf { it.isNotBlank() }
+        ?: editor?.document?.text?.takeIf { it.isNotBlank() }
+        ?: explainSql
+    cn.song.mybatisplus.visualizer.execute.DataSourceSelector.prepareConsole(
+        proj, sql,
+        onError = { msg -> resultPanel.showError(msg) },
+        forceChoose = true,
+    )
+    // 复用 T-UI030 既有「等绑定落地后重试」链（同一 generation 快照防过期回调；
+    // allowDataSourcePrompt=false 防选择器循环）
+    awaitDataSourceBoundThenRetry(
+        proj,
+        current?.effectiveDialect ?: cn.song.mybatisplus.visualizer.sql.MySqlDialect,
+        explainSql,
+        dialectGateRequest,
+        java.util.concurrent.atomic.AtomicBoolean(false),
+        explainStructuredGeneration,
+    )
+}
+
+/**
+ * T-ExplainPwdPrompt W6（2026-10-24）：认证失败轻通知——平台凭据链（askPassword=true 的
+ * 「Change Credentials / Abort」对话框）已完成失败呈现与两个出口，本通知只做 Abort 后的
+ * 收口反馈（含补存密码指引），绝不弹红字模态框二次打断。单测模式不弹（notifySchemaIssues
+ * 同款守卫）。
+ */
+private fun SqlPreviewPanel.notifyExplainAuthFailure(proj: Project) {
+    if (ApplicationManager.getApplication().isUnitTestMode && schemaNotificationForTest == null) return
+    runCatching {
+        Notification(
+            NOTIFICATION_GROUP_ID,
+            MpSqlVisualizerBundle.message("panel.explain"),
+            MpSqlVisualizerBundle.message("panel.explain.authFailureHint"),
+            NotificationType.WARNING,
+        ).notify(proj)
+    }
+}
+
+/**
+ * T-ExplainPwdPrompt（2026-10-24）：用户取消（原生密码框 Esc 等）——轻通知收口，不弹红字
+ * 模态框（取消是用户自己的决定，模态报错等于打断两次），也**绝不自动重试**（重试会再弹一次
+ * 密码框）。单测模式不弹（弹窗/通知克制红线，notifySchemaIssues 同款守卫）。
+ */
+private fun SqlPreviewPanel.notifyExplainCancelled(proj: Project) {
+    if (ApplicationManager.getApplication().isUnitTestMode && schemaNotificationForTest == null) return
+    runCatching {
+        Notification(
+            NOTIFICATION_GROUP_ID,
+            MpSqlVisualizerBundle.message("panel.explain"),
+            MpSqlVisualizerBundle.message("panel.explain.cancelled"),
+            NotificationType.INFORMATION,
+        ).notify(proj)
     }
 }
 
@@ -1276,17 +1399,45 @@ internal fun SqlPreviewPanel.submitExplainOrStructured(
     dialectGateRequest: cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Request,
     /** T-UI030：重试路径禁止再弹数据源选择器（防「取消 → 再弹 → 再取消」循环）。 */
     allowDataSourcePrompt: Boolean = true,
+    /** T-DialectInferPollution W7：本链已自动重渲染过一次（防闸门重提交循环）。 */
+    rerendered: Boolean = false,
 ) {
     val settings = PluginSettings.getInstance().state
     val boundDs = explainBoundDsForTest?.invoke() ?: runCatching {
         cn.song.mybatisplus.visualizer.execute.DataSourceSelector.boundConsoleDataSource()
     }.getOrNull()
+        // T-ExplainPwdPrompt W4（2026-10-24）：真绑定缺失且绑定链 runner 枚举被方言路由卡死
+        // （数据源无 Dialects 映射时平台返回空，沙盒实测 Database 视图已连接仍 runners=0）时，
+        // 回落到面板「数据源（上次使用）」记忆取源——结构化通道（askPassword=true）不依赖
+        // 绑定链即可到达；歧义即弃，方言不符由既有 allowDialectGate 闸拦。
+        ?: runCatching {
+            cn.song.mybatisplus.visualizer.execute.DataSourceSelector.explainFallbackDataSource(
+                proj, sourceModuleKey, explainSql,
+            )
+        }.getOrNull()
     // O-145 W7：结构化 EXPLAIN 不经过 SqlExecutor，必须在 JDBC 直连前用同一实际数据源闸门。
     if (boundDs != null && !cn.song.mybatisplus.visualizer.execute.DataSourceSelector.allowDialectGate(
             proj,
             dialectGateRequest,
             cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.fromDataSource(boundDs),
-            { verdict -> onExecutionDialectGate(verdict) },
+            { verdict ->
+                // T-DialectInferPollution W7（2026-10-24 用户真机报障）：渲染方言与目标数据源
+                // 不一致（如 last-used 在竞品测试后残留 dbx_test/PG，MySQL 预览被按 PG 渲染）时
+                // 闸门 AUTO_RERENDER_REQUIRED 重渲染成功——**自动重提交一次**，不再让用户重按
+                // 「执行计划」；重渲染失败或已重渲染过（防循环）回落既有红条提示。
+                if (verdict.status == cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Status.AUTO_RERENDER_REQUIRED &&
+                    !rerendered &&
+                    verdict.targetDialectName != null &&
+                    rerenderForExecutionTarget(verdict.targetDialectName!!)
+                ) {
+                    submitExplainOrStructured(
+                        proj, dialect, explainSql, dialectGateRequest,
+                        allowDataSourcePrompt = false, rerendered = true,
+                    )
+                } else {
+                    onExecutionDialectGate(verdict)
+                }
+            },
             { message -> resultPanel.showError(message) },
         )) return
     val format = cn.song.mybatisplus.visualizer.sql.ExplainSupport.formatFor(dialect.name)
@@ -1331,6 +1482,14 @@ internal fun SqlPreviewPanel.submitExplainOrStructured(
                     // 重试仍未绑定：只给现有回退说明，不再触发直送链（直送链会再次弹选择器）。
                     notifyExplainStructuredFallback(proj, verdict.reason, detail = null)
                 }
+            } else if (verdict.reason ==
+                cn.song.mybatisplus.visualizer.execute.ExplainPanelChannel.FallbackReason.UNFILLED_PARAMS
+            ) {
+                // T-ExplainPwdPrompt W5（2026-10-24 用户沙盒实测 bug）：参数未回填**不回退直送**。
+                // 回退直送在无绑定形态下必然失败且再弹一个误导性「未绑定数据源」红字框（用户明明
+                // 有 last-used 数据源）；有绑定形态把字面 `?` 送 JDBC 同样是语法错（R33 同款结论）。
+                // 通知已含原因与动作（填参数后重试），就地收口即可。
+                notifyExplainStructuredFallback(proj, verdict.reason, detail = null)
             } else {
                 notifyExplainStructuredFallback(proj, verdict.reason, detail = null)
                 submitExplainDirect(proj, explainSql, dialectGateRequest)
@@ -1403,8 +1562,37 @@ internal fun SqlPreviewPanel.submitExplainOrStructured(
                     if (com.intellij.openapi.util.Disposer.isDisposed(this) || generation != explainStructuredGeneration) {
                         return@executeStructured
                     }
-                    notifyExplainStructuredFallback(proj, null, detail = errorText)
-                    submitExplainDirect(proj, explainSql, dialectGateRequest)
+                    // T-ExplainPwdPrompt（2026-10-24）：失败分型出口——认证失败不再回退直送
+                    // （直送同通道必同样失败，徒增一次红字对话框）。
+                    // T-ExplainPwdPrompt W6（用户沙盒实测 bug）：AUTH **也不弹红字模态框**——
+                    // askPassword=true 后平台凭据链已弹原生「Connecting to ... + Change
+                    // Credentials / Abort」对话框（失败与两个出口都在那里），用户点 Abort 后
+                    // 异常以 SQLException: Access denied 形态冒泡回来，再弹红字框是二次打断
+                    // （用户报障原话：「点终止还是出现执行计划的弹框」）。AUTH 改轻通知收口，
+                    // 补存密码指引随通知走。
+                    when (cn.song.mybatisplus.visualizer.execute.classifyExplainFailure(errorText)) {
+                        cn.song.mybatisplus.visualizer.execute.ExplainFailureKind.AUTH -> {
+                            resultPanel.showIdle()
+                            notifyExplainAuthFailure(proj)
+                        }
+                        // T-ExplainFailUx W1：选错源不弹模态、不回退直送（同通道必同样失败）——
+                        // 就地横幅 + 「切换数据源」动作（换源后自动重试，W3）
+                        cn.song.mybatisplus.visualizer.execute.ExplainFailureKind.WRONG_TARGET -> {
+                            resultPanel.showIdle()
+                            showExplainWrongTarget(
+                                proj, errorText, explainSql, dialectGateRequest,
+                                openConsole = { submitExplainDirectConsole(proj, explainSql, dialectGateRequest) },
+                            )
+                        }
+                        cn.song.mybatisplus.visualizer.execute.ExplainFailureKind.CANCELLED -> {
+                            resultPanel.showIdle()
+                            notifyExplainCancelled(proj)
+                        }
+                        cn.song.mybatisplus.visualizer.execute.ExplainFailureKind.OTHER -> {
+                            notifyExplainStructuredFallback(proj, null, detail = errorText)
+                            submitExplainDirect(proj, explainSql, dialectGateRequest)
+                        }
+                    }
                 },
             )
         }

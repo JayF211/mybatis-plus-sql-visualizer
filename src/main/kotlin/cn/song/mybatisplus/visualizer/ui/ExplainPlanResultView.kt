@@ -11,6 +11,8 @@ import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.table.JBTable
 import com.intellij.util.ui.JBUI
 import java.awt.BorderLayout
+import java.awt.Dimension
+import java.awt.FlowLayout
 import javax.swing.JButton
 import javax.swing.JComponent
 import javax.swing.JTree
@@ -151,8 +153,24 @@ class ExplainPlanResultView(
             layout = javax.swing.BoxLayout(this, javax.swing.BoxLayout.Y_AXIS)
             add(north)
             if (baselines.isNotEmpty()) {
-                add(JBLabel(MpSqlVisualizerBundle.message("panel.explain.history.baseline")))
-                add(baselineSelector)
+                // 基线选择行：标签与下拉横向并排，整行左对齐且宽度受限于弹窗；
+                // 下拉自身固定首选宽度——BoxLayout(Y_AXIS) 下 JComboBox 会被撑到容器
+                // 最大宽度，弹窗内容够宽时弹出层会横跨整屏（20261023 实测）。
+                baselineSelector.preferredSize = Dimension(
+                    JBUI.scale(220), baselineSelector.preferredSize.height,
+                )
+                // 关键：maximumSize 也要钉住。FlowLayout 本身不会拉伸子组件，但控件若被
+                // 放进纵向 BoxLayout 的祖先里，BoxLayout 读的是 maximumSize——只设
+                // preferredSize 仍会被撑满（20261023 反向验证实证：仅设 preferred 时
+                // 「宽度有界」断言可通过，实际渲染仍横跨整屏）。
+                baselineSelector.maximumSize = Dimension(JBUI.scale(240), baselineSelector.preferredSize.height)
+                val baselineRow = JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, JBUI.scale(4), JBUI.scale(2))).apply {
+                    isOpaque = false
+                    add(JBLabel(MpSqlVisualizerBundle.message("panel.explain.history.baseline")))
+                    add(baselineSelector)
+                }
+                baselineRow.maximumSize = Dimension(Int.MAX_VALUE, baselineRow.preferredSize.height)
+                add(baselineRow)
             }
             add(historyStatusLabel)
             compareLabel?.let { add(it) }

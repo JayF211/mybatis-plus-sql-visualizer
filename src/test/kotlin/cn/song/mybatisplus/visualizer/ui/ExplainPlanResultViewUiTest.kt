@@ -10,6 +10,7 @@ import cn.song.mybatisplus.visualizer.mcp.McpExplainFormatter
 import cn.song.mybatisplus.visualizer.sql.ExplainOutputFormat
 import cn.song.mybatisplus.visualizer.util.ExplainIndexAdvisor
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
+import com.intellij.ui.components.JBLabel
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -325,5 +326,42 @@ class ExplainPlanResultViewUiTest : BasePlatformTestCase() {
         val text = view.compareTextForTest()
         assertNotNull("等价 diff 也应有对比条（显式无变化）", text)
         assertTrue(text!!.contains("unchanged") || text.contains("无变化"))
+    }
+
+    // ==== 布局守卫：基线下拉不得被 BoxLayout 拉伸到整屏宽（20261023 实测缺陷） ====
+
+    private fun viewWithOneBaseline(): ExplainPlanResultView = ExplainPlanResultView(
+        dialectName = "MySQL",
+        dataSourceName = null,
+        elapsedMs = 1L,
+        raw = McpExplainFormatter.RawResult(mysqlHeaders, listOf(mysqlRows.first())),
+        format = ExplainOutputFormat.TABLE,
+        baselines = listOf(
+            cn.song.mybatisplus.visualizer.history.ExplainPlanHistorySession.Baseline(
+                "100", McpExplainFormatter.RawResult(mysqlHeaders, listOf(mysqlRows.first())),
+            ),
+        ),
+    )
+
+    fun testBaselineSelectorHasBoundedWidth() {
+        val selector = viewWithOneBaseline().baselineSelectorForTest()
+        assertTrue("有基线时下拉应可见", selector.isVisible)
+        // 判据必须是 maximumSize：纵向 BoxLayout 拉伸子组件读的是 maximumSize，
+        // 只设 preferredSize 时该断言会通过但实际渲染仍横跨整屏（20261023 反向验证实证）。
+        assertTrue(
+            "基线下拉最大宽度应有界（实际 ${selector.maximumSize.width}）",
+            selector.maximumSize.width in 1..600,
+        )
+    }
+
+    fun testBaselineSelectorSitsInHorizontalRowWithLabel() {
+        val selector = viewWithOneBaseline().baselineSelectorForTest()
+        // 下拉的父容器必须是横向布局，且同一行里还有一个标签（「选择历史基线对比…」）。
+        // 旧实现把标签与下拉分别纵向堆叠，且下拉被撑满容器宽度。
+        val parent = selector.parent
+        assertNotNull("下拉必须有父容器", parent)
+        assertTrue("下拉应放在横向布局容器里", parent.layout is java.awt.FlowLayout)
+        val labels = parent.components.filterIsInstance<JBLabel>().map { it.text }
+        assertTrue("同一行应有基线说明标签", labels.any { it.isNotBlank() })
     }
 }

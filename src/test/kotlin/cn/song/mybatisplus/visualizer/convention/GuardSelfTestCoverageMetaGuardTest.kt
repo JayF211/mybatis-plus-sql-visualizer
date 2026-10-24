@@ -691,6 +691,15 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "灵敏度=反向三组各恰 1 红（恢复 confirmed 闸门 / 恢复 requestReauthorization 符号 / " +
                     "摘 loadState 归一）已实测。",
             ),
+            GuardEntry(
+                "convention/ExplainAskPasswordChannelGuardTest.kt",
+                emptyList(),
+                "结构化执行计划三通道 askPassword 表态守卫（T-ExplainPwdPrompt）：判定内核内联于三个用例——" +
+                    "扫 ExplainDialog/预估行数与 EXPLAIN 旁路/MCP 工具三处源码，断言 askPassword 按" +
+                    "通道强制表态（UI 两通道 true、MCP 通道 false），漏表态即红。无独立「返回违规点集合」" +
+                    "的具名判定函数，故 decisionFns 留空。master 侧 4bccd331 加守卫时漏登（该侧元守卫" +
+                    "潜伏红灯），合并轮补登。",
+            ),
             // ---- 判定内核类（有可注入合成样本的判定函数） ----
             GuardEntry(
                 "convention/BannedApiScanSupport.kt",
@@ -797,6 +806,22 @@ class GuardSelfTestCoverageMetaGuardTest {
                 ),
                 "按钮手工铺底色形态守卫（UI-043）：判定内核 scan 返回命中集合，自证用例 test_扫描器灵敏度与豁免自证 " +
                     "喂合成源码（isOpaque/自选色必红、命名色与渲染器必走豁免）。",
+            ),
+            GuardEntry(
+                "config/SettingsPanelSearchableGuardTest.kt",
+                listOf(
+                    DecisionFn(
+                        "isDescendantOf",
+                        FnKind.HELPER,
+                        "组件归属谓词（Boolean 形态），服务于断言一的动态豁免组件过滤；" +
+                            "本类用例名与上方注释均无「自证」关键词、不构成自证语料，故按豁免+via 登记" +
+                            "（HELPER 类可写调用它的用例名）",
+                        via = listOf("test面板输入型文本均能在搜索索引命中或列白名单"),
+                    ),
+                ),
+                "设置页内搜索面板-索引配对守卫（T-SettingsSearchB）：判定内核内联于四个用例（真实面板文本经 " +
+                    "双语 bundle 反解回键逐条配对索引、四关键词真实搜索链路命中），无独立判定函数；" +
+                    "decisionFns 仅登记 Boolean 形态谓词（判据 7）。",
             ),
             GuardEntry(
                 "convention/EnumReachabilityGuardTest.kt",

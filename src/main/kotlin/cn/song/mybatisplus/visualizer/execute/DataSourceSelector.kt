@@ -391,6 +391,103 @@ object DataSourceSelector {
             .index?.let { registeredNames.getOrNull(it) }
 
     /**
+     * T-ExplainPwdPrompt W4（2026-10-24）：结构化 EXPLAIN 的 **last-used 取源回落**——
+     * 真绑定（[boundConsoleDataSource]）为 null 且绑定链 runner 枚举为 0（数据源无方言
+     * 映射时平台 `DatabaseRunners.getAttachDataSourceRunners` 返回空；243 沙盒实测：
+     * Database 视图已连接仍为 0）时，回落到面板「数据源（上次使用）」记忆取源，让结构化
+     * 通道（`McpDbExecutor` askPassword=true）不依赖绑定链也能走到。
+     *
+     * 防错源纪律：按名解析**歧义即弃**（同名多源不猜）；方言不符由既有 allowDialectGate
+     * 闸拦（EXPLAIN 同为执行旁路，同门控）。
+     *
+     * @return 在籍数据源对象（唯一命中）；名字缺失/歧义/枚举失败一律 null
+     */
+    /**
+     * T-DialectInferPollution W9（2026-10-24）：EXPLAIN 链统一取源回落（结构化 W4 + 直送 W8
+     * 合并重构）。原「无脑回落 last-used」有跨模块错源副作用：jar-model demo 模块（无学习条目）
+     * 的表被 last-used（mp_demo）硬套 → `mp_demo.wms_inventory_jar_demo doesn't exist`（用户
+     * 沙盒实测截图）。修正语义：
+     *
+     *  1. 预览模块有学习绑定 → 用学习源（模块归属强于全局记忆；UUID 解析在籍对象，比按名稳）；
+     *  2. 学习源与 last-used **同时存在且不同** → 证据冲突不猜，返回 null（下游 NO_DATA_SOURCE
+     *     引导弹数据源选择器，用户选一次即自愈更新学习与记忆）；
+     *  3. 学习缺失 → last-used 唯一命中可用（兜底旧场景）——注意这是兜底不是归属，模块学习会
+     *     随执行自愈。
+     *
+     * @param moduleKey 预览 SQL 所属模块键（面板 [cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel.sourceModuleKey]）
+     * @param sql 预览 SQL 原文（T-DialectInferPollution W10 表归属路由用；null/无表 = 跳过路由验证）
+     */
+    fun explainFallbackDataSource(project: Project, moduleKey: String?, sql: String?): Any? {
+        val learned = moduleKey?.takeIf { it.isNotBlank() }?.let {
+            runCatching {
+                cn.song.mybatisplus.visualizer.sql.ModuleDataSourceBindingStore.getInstance(project)
+                    .learnedCandidate(project, it)
+            }.getOrNull()
+        }
+        val lastName = runCatching { rememberedDataSourceName(project) }.getOrNull()?.takeIf { it.isNotBlank() }
+        val lastDs = lastName?.let { name ->
+            runCatching {
+                DataSourceSettings.getAllDataSources(project)
+                    .filter { DataSourceSettings.getName(it) == name }
+                    .singleOrNull()
+            }.getOrNull()
+        }
+        val learnedId = learned?.id
+        val lastId = lastDs?.let { runCatching { DataSourceSettings.getUniqueId(it) }.getOrNull() }
+        var candidate: Any? = when (resolveExplainFallbackChoice(learnedId, lastId)) {
+            null -> return null                    // 双证据冲突：学习源与 last-used 不同源，交用户选择
+            learnedId -> runCatching {
+                cn.song.mybatisplus.visualizer.execute.DataSourceSettings.getDataSourceById(project, learnedId!!)
+            }.getOrNull()
+            else -> lastDs
+        }
+        candidate ?: return null
+        // T-DialectInferPollution W10：**表归属路由**——学习/last-used 证据可能陈旧或跨模块错配
+        //（用户实测 `mp_demo.wms_inventory_jar_demo doesn't exist`），而「表在哪个库」是更强的
+        // 归属事实：结构缓存（Database 视图展开/预览预热即就位，只读零内省）能证明哪条源持有
+        // 预览引用的全部表。候选源不持有而**唯一**其他源持有 → 路由到它；多源持有 → 冲突交选择
+        // 器；零源持有（缓存未热/表不存在）→ 保持候选（诚实降级，不阻断）。
+        val tables = runCatching { cn.song.mybatisplus.visualizer.sql.schema.SchemaValidator.tableNames(sql ?: "") }
+            .getOrNull().orEmpty().take(8)
+        if (tables.isNotEmpty()) {
+            val ownerIndexes = runCatching {
+                cn.song.mybatisplus.visualizer.ui.highlight.DatabaseSchemaResolver.cachedOwnerIndexes(project, tables)
+            }.getOrNull().orEmpty()
+            if (ownerIndexes.isNotEmpty()) {
+                val all = runCatching { DataSourceSettings.getAllDataSources(project) }.getOrNull().orEmpty()
+                val candidateName = runCatching { DataSourceSettings.getName(candidate) }.getOrNull()
+                val ownerObjects = ownerIndexes.mapNotNull { all.getOrNull(it) }
+                    .filter { runCatching { DataSourceSettings.getName(it) }.getOrNull() != candidateName }
+                when {
+                    ownerObjects.isEmpty() -> Unit                 // 候选源即持有者 → 可信，照旧
+                    ownerObjects.size == 1 -> candidate = ownerObjects.single()  // 唯一持有 → 路由
+                    else -> return null                            // 多源都持有 → 冲突，交用户选择
+                }
+            } else if (runCatching {
+                    cn.song.mybatisplus.visualizer.ui.highlight.DatabaseSchemaResolver.cacheHasAnyTable(project)
+                }.getOrDefault(false)
+            ) {
+                // T-DialectInferPollution W12：缓存热（有源已内省出表）但没有任何源持有预览的表
+                // → 表不存在于任何已连库，错源执行必败——引导选择数据源（返回 null 走 NO_DATA_SOURCE）。
+                return null
+            }
+            // 缓存全冷：无法证明归属，保持候选（诚实降级，Database 视图展开一次后自愈）
+        }
+        return candidate
+    }
+
+    /**
+     * T-DialectInferPollution W9 纯判定核心（headless 直测）：回落证据选择。
+     * 学习源与 last-used 同时存在且不同 → null（冲突不猜，下游引导选择数据源）；
+     * 学习源优先；学习缺失时兜底 last-used。
+     */
+    internal fun resolveExplainFallbackChoice(learnedId: String?, lastId: String?): String? = when {
+        learnedId != null && lastId != null && learnedId != lastId -> null
+        learnedId != null -> learnedId
+        else -> lastId
+    }
+
+    /**
      * F68a（T-PerfSweep20）：在籍数据源名单按 project 弱缓存——指示行取名链每次刷新
      * 不再现场建表（原每次 getAllDataSources 反射枚举+逐名 getName 反射）。
      * WeakHashMap 弱键随 project 关闭释放；名单陈旧窗口＝数据源增删后到下次进程内
@@ -1485,6 +1582,14 @@ object DataSourceSelector {
     /** BGT 派 EDT document 写的有界等待预算（毫秒）——DialectPreMapping 同款取值；EDT 病态冻结时超时放行走守卫降级。 */
     internal const val EDT_EXEC_DOC_SYNC_WAIT_MS = 2000L
 
+    /** T-DialectInferPollution W11：排队执行意图的**自有结算**超时（毫秒）——占门链 60s 逃生太长，
+     *  排队者 15s 即 BLOCKED 解除加载态（门不动，owner 链照常），用户重试即可。 */
+    internal const val PENDING_EXECUTE_TIMEOUT_MS = 15_000L
+
+    /** T-DialectInferPollution W11：排队意图超时文案（沿用准备超时键，语义一致：未提交 SQL）。 */
+    internal val PENDING_EXECUTE_TIMEOUT_MESSAGE: String
+        get() = MpSqlVisualizerBundle.message("execute.prepare.timeout")
+
     /**
      * T-EC-01/T-EC-03 编排：document 写统一派发 EDT——EDT 调用方同步直执行；BGT 两段式
      * invokeLater + 有界 latch 等待（DialectPreMapping.ensureMapped 同款：BGT 等 EDT，
@@ -1543,19 +1648,52 @@ object DataSourceSelector {
      * T-EC-04：VFS 缺条目裸写路径的防御性收口——raw write 后由调用方 refresh 得到 vf，
      * 此处探测 document（getCachedDocument，不主动创建）或 VFS 内容与 sql 的分叉，
      * 命中则经 [dispatchDocWriteOnEdt] 补一次 document 驱动同步（T-EC-01 同款落盘收口，
-     * BGT 调用安全——写侧统一派 EDT）。正常流程恒为 no-op（磁盘刚写入 == sql）；防御
-     * VFS 陈旧条目/裸写与 refresh 之间的外部改写残留。探测包 ReadAction（BGT 无隐式读）。
+     * 写侧统一派 EDT）。正常流程恒为 no-op（磁盘刚写入 == sql）；防御 VFS 陈旧条目/
+     * 裸写与 refresh 之间的外部改写残留。
+     *
+     * T-PreviewChainNoise W1：分叉探测**按线程分流**（T-DevAcceptFix2 ④ 同款定例）。
+     * 此前无条件 `vf.inputStream.readBytes()` 读盘，经 `createTempPsiFile` 的 EDT 冷路径
+     * （点执行计划 → prepareConsole → 本链）每次都命中平台「Slow operations are prohibited
+     * on EDT」断言（2026-10-23 用户真机日志 ×2 实证；同文件 `execFileContentMatches` 早在
+     * T-DevAcceptFix2 ④ 就为同一调用链删过同款读盘，本函数漏回填）。分流判据：
+     *  - 有 document：只看内存态（`execFileContentMatches` 同口径——文档是权威视图），
+     *    额外认「内容已相等但未保存」为分叉（F4 收敛形态：doc=新 SQL、磁盘=旧 SQL）；
+     *  - 无 document + EDT：直接判不分叉（无 document 即不存在 File Cache Conflict 条件
+     *    ——冲突需「已加载且已修改」的文档；且 EDT 冷路径刚由本线程写完文件，无外部改写窗口）；
+     *  - 无 document + BGT：读盘比较，保留原防御面（SlowOperations 断言仅 EDT 生效）。
      *
      * @return true = 执行了修复同步（正常流程 false）
      */
     internal fun syncExecVfContentIfNeeded(project: Project, vf: com.intellij.openapi.vfs.VirtualFile, sql: String): Boolean {
-        val diverged = ReadAction.compute<Boolean, Throwable> {
-            val doc = com.intellij.openapi.fileEditor.FileDocumentManager.getInstance().getCachedDocument(vf)
-            (doc != null && doc.text != sql) ||
-                vf.inputStream.readBytes().toString(Charsets.UTF_8) != sql
-        }
-        if (!diverged) return false
+        val allowDiskRead = !ApplicationManager.getApplication().isDispatchThread
+        if (!probeExecVfDivergence(vf, sql, allowDiskRead)) return false
         return dispatchDocWriteOnEdt(project, vf, sql)
+    }
+
+    /**
+     * T-PreviewChainNoise W1：exec 文件分叉探测纯判定（[syncExecVfContentIfNeeded] 的探测段
+     * 抽出，internal 供表驱动测试）。三态见 [syncExecVfContentIfNeeded] KDoc；`allowDiskRead`
+     * 由调用方按「当前是否 EDT」给出（生产= `!isDispatchThread`，测试可显式注入）。
+     *
+     * document 读取包 ReadAction（BGT 无隐式读；EDT 直调合法）。**有 document 分支绝不读盘**
+     * ——这正是本抽取的可测不变式（见 ExecVfDivergenceProbeTest「文档在场时盘上再变也不读」用例）。
+     */
+    internal fun probeExecVfDivergence(
+        vf: com.intellij.openapi.vfs.VirtualFile,
+        sql: String,
+        allowDiskRead: Boolean,
+    ): Boolean {
+        val fdm = com.intellij.openapi.fileEditor.FileDocumentManager.getInstance()
+        val doc = ReadAction.compute<com.intellij.openapi.editor.Document?, Throwable> {
+            fdm.getCachedDocument(vf)
+        }
+        return when {
+            doc != null -> doc.text != sql || fdm.isDocumentUnsaved(doc)
+            allowDiskRead -> ReadAction.compute<Boolean, Throwable> {
+                vf.inputStream.readBytes().toString(Charsets.UTF_8) != sql
+            }
+            else -> false
+        }
     }
 
     // ------------------------------------------------------------------

@@ -49,6 +49,7 @@ import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel.Companion.presetSection
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel.Companion.SCHEME_ROW_NAME
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel.Companion.BIND_STATE_ROW_NAME
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel.Companion.BIND_STATE_LABEL_NAME
+import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel.Companion.BIND_STATE_COMBO_NAME
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel.Companion.SNAPSHOT_CHK
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel.Companion.SNAPSHOT_FNULL
 import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel.Companion.SNAPSHOT_FEV
@@ -443,17 +444,90 @@ internal fun SqlPreviewPanel.bindStateText(): String {
  * 不再挂在参数区预设行之下；init 一次构建，刷新仍走 [refreshBindStateRow] 单点收口。
  */
 
+/**
+ * T-ExplainFailUx W2（2026-10-24 用户诉求：「sql 窗口的原生工具栏能不能默认就显示，这样用户知道
+ * 接下来要用的数据源是哪个，减少误解」）：指示行升级为**数据源工具栏**。
+ *
+ * 形态（插件可用）：`[数据源：] [下拉：在籍数据源…]` —— 下拉当前项 = 绑定/记忆/未绑定三态之一，
+ * 用户在任何预览里都能看到「接下来用哪条源」，并可直接切换（走既有 prepareConsole(forceChoose)）。
+ *
+ * **插件不可用必须降级（硬约束）**：社区版无 Database 插件时 `ExecuteSqlSupport.isAvailable()==false`
+ * → 退化为原有纯文本灰字一行（[bindStateText]），**不渲染下拉、不报错、不弹提示**，预览本体不受影响。
+ *
+ * 布局纪律：FlowLayout 横排 + 下拉固定首选宽（`pitfall-combobox-stretches-in-boxlayout` 定例——
+ * BoxLayout(Y_AXIS) 里裸放 JComboBox 会被拉到整屏宽，已立守卫）。
+ */
 internal fun SqlPreviewPanel.buildBindStateRow(): JComponent {
-    val label = JBLabel(bindStateText()).apply {
+    val available = runCatching {
+        cn.song.mybatisplus.visualizer.execute.ExecuteSqlSupport.isAvailable()
+    }.getOrDefault(false)
+    if (!available) {
+        // 降级：纯文本灰字一行（与既有形态逐字一致）
+        val label = JBLabel(bindStateText()).apply {
+            name = BIND_STATE_LABEL_NAME
+            foreground = UIUtil.getContextHelpForeground()
+        }
+        bindStateLabel = label
+        bindStateCombo = null
+        return JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.RIGHT, 8, 2)).apply {
+            name = BIND_STATE_ROW_NAME
+            add(label)
+            border = JBUI.Borders.empty(0, 8, 2, 8)
+        }
+    }
+    val label = JBLabel(MpSqlVisualizerBundle.message("panel.bindstate.label")).apply {
         name = BIND_STATE_LABEL_NAME
         foreground = UIUtil.getContextHelpForeground()
     }
     bindStateLabel = label
+    val combo = buildDataSourceCombo()
+    bindStateCombo = combo
     return JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.RIGHT, 8, 2)).apply {
         name = BIND_STATE_ROW_NAME
         add(label)
+        add(combo)
         border = JBUI.Borders.empty(0, 8, 2, 8)
     }
+}
+
+/**
+ * T-ExplainFailUx W2：数据源下拉（在籍源清单 + 当前项）。切换即走既有
+ * [cn.song.mybatisplus.visualizer.execute.DataSourceSelector.prepareConsole]（forceChoose=true，
+ * 用户显式选择优先于 last-used 静默）；未绑定/不可知时首项为占位文案（不可选为源）。
+ */
+private fun SqlPreviewPanel.buildDataSourceCombo(): JComboBox<String> {
+    val proj = project
+    val names: List<String> = runCatching {
+        if (proj == null) emptyList()
+        else cn.song.mybatisplus.visualizer.execute.DataSourceSettings.getAllDataSources(proj)
+            .map { cn.song.mybatisplus.visualizer.execute.DataSourceSettings.getName(it) }
+            .filter { it.isNotBlank() && it != "Unknown" }
+    }.getOrDefault(emptyList())
+    val current = boundDataSourceNameForDisplay() ?: rememberedDataSourceNameForDisplay()
+    val placeholder = MpSqlVisualizerBundle.message("panel.bindstate.unbound")
+    val items = (if (current != null && names.contains(current)) names
+        else listOfNotNull(current?.takeIf { names.isEmpty() }) + names).distinct()
+    val displayItems = if (items.isEmpty()) listOf(placeholder) else items
+    val combo = JComboBox<String>(displayItems.toTypedArray()).apply {
+        name = BIND_STATE_COMBO_NAME
+        // 定宽：FlowLayout 下不被拉满（既有守卫断言首选宽 1..400）
+        preferredSize = java.awt.Dimension(180, preferredSize.height)
+        maximumSize = java.awt.Dimension(180, preferredSize.height)
+        toolTipText = MpSqlVisualizerBundle.message("panel.bindstate.combo.tip")
+        selectedItem = current ?: displayItems.first()
+        isEnabled = displayItems.size > 1 || current != null
+        addActionListener {
+            val picked = selectedItem as? String ?: return@addActionListener
+            if (picked == placeholder || picked == current) return@addActionListener
+            val p = project ?: return@addActionListener
+            val sql = currentEditorSql()?.takeIf { it.isNotBlank() } ?: return@addActionListener
+            // 换源：显式选择优先（forceChoose 跳过 last-used 静默与共享复用）
+            cn.song.mybatisplus.visualizer.execute.DataSourceSelector.prepareConsole(
+                p, sql, forceChoose = true,
+            )
+        }
+    }
+    return combo
 }
 
 /**
@@ -464,7 +538,19 @@ internal fun SqlPreviewPanel.buildBindStateRow(): JComponent {
 
 internal fun SqlPreviewPanel.refreshBindStateRow() {
     val label = bindStateLabel ?: return
-    label.text = bindStateText()
+    val combo = bindStateCombo
+    if (combo == null) {
+        // 降级形态（插件不可用）：纯文本一行
+        label.text = bindStateText()
+        return
+    }
+    // T-ExplainFailUx W2：工具栏形态——标签固定为「数据源：」，当前源体现在下拉选中项
+    label.text = MpSqlVisualizerBundle.message("panel.bindstate.label")
+    val current = boundDataSourceNameForDisplay() ?: rememberedDataSourceNameForDisplay()
+    val items = (0 until combo.itemCount).mapNotNull { combo.getItemAt(it) }
+    if (current != null && items.contains(current)) {
+        if (combo.selectedItem != current) combo.selectedItem = current
+    }
 }
 
 /**
