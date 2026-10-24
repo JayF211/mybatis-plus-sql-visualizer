@@ -278,3 +278,29 @@ askPassword 行为无法在此形态下被检验。
 **闭环路径（真机一次点击）**：用户日常 IDE（驱动/数据源/方言齐备）装含 4bccd331 的构建后——
 ①数据源不存密码 → 预览 → 执行计划 → **原生密码框**（V1）；②Esc → 轻通知（V2）；③输错密码 →
 红字+补存密码指引（V3）；④预估行数 → 弹框（V4）。或下次沙盒战役先把驱动/方言前置装配好再验。
+
+---
+
+## 十一、用户实测验收记录（2026-10-24，V1 通过 + 两轮修复 W5/W6）
+
+**V1 实测通过**（用户操作）：填参数（#id=1）后点「执行计划」→ askPassword=true 生效，平台
+243 凭据链弹原生「Connecting to 'mp_demo@localhost'... Access denied + Change Credentials /
+Abort」对话框（**非预弹密码框**——平台对未存密码的形态是「连接失败后给凭据入口」）；
+Change Credentials 输入密码后**结构化 EXPLAIN 计划渲染成功**（mp_demo@localhost · 7929ms，
+表格含 id/select_type/table/type/possible_keys）。Change Credentials/Abort 即 V3（补密码）
+与 V2（取消）的原生出口。
+
+**W5（`1bed57bc`）**：填参数前点击，结构化通道正确拒绝（通知说明「? 占位符未回填」）但随后
+回退直送，又弹误导性「未绑定数据源」红字框（用户明明有 last-used 数据源 mp_demo@localhost）。
+修＝UNFILLED_PARAMS 不回退直送，通知就地收口。
+
+**W6（`bd9ac4f0`）**：用户点 Abort 后插件又弹认证失败红字模态框（平台把终止以
+SQLException: Access denied 冒泡，分型判 AUTH 走了红字）。修＝AUTH 分支（结构化+直送两处）
+改 notifyExplainAuthFailure 轻通知——平台凭据对话框已呈现失败与出口，红字框是二次打断。
+
+**守卫两轮迭代教训（入档）**：AUTH 不弹红字框的守卫，v1 indexOf 近邻检查被直送链调用点干扰
+（反向探针不红=假绿）；v2 只匹配带花括号分支漏掉直送无花括号形态；v3 按分支起点切片覆盖两
+形态，反向恰 1 红。**探针不红的守卫不算验证过。**
+
+**W4 诊断缝**：`lastUsedExplainDataSource` 每次取源打 INFO 日志（remembered/roster/resolved
+三段），本轮定位「取源成功、断在下一环」全靠它；守卫收口后保留（量级=每次执行计划一行）。
