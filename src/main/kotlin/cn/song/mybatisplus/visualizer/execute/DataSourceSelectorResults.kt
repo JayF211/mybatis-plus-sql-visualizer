@@ -351,7 +351,8 @@ internal fun DataSourceSelector.chooseAndPrepare(
     //（旧实现 firstOrNull 静默取首条，选错数据源时用户无从察觉）。
     // T-DialectGateExit：forceChoose（用户点「切换数据源」）同样跳过——否则点了等于没点。
     if (allowsSilentLastUsed(executeAfterPrepare, forceChoose)) {
-        val memory = lastUsedRunner(project)
+        // T-ModuleScopedLastUsed W2：静默复用也按模块读——模块 A 上次用的源不该被模块 B 复用。
+        val memory = lastUsedRunner(project, dialectGateRequest?.moduleKey)
         val resolution = resolveLastUsedRunnerIndex(memory, runners.map { getRunnerName(it) }) { id ->
             runCatching {
                 DataSourceSettings.getDataSourceById(project, id)?.let { DataSourceSettings.getName(it) }
@@ -368,7 +369,8 @@ internal fun DataSourceSelector.chooseAndPrepare(
         }
         if (resolution.ambiguous) {
             LOG.info("[M36] last-used memory ambiguous (id=${memory.dataSourceId}, name=${memory.displayName}) - drop memory, show popup")
-            forgetLastRunner(project)
+            // 只清该模块那一层：其它模块的记忆与项目级兜底不该被一处的歧义连坐。
+            forgetLastRunner(project, dialectGateRequest?.moduleKey)
         }
     }
 
@@ -379,7 +381,7 @@ internal fun DataSourceSelector.chooseAndPrepare(
             val picked = runners.first { getRunnerName(it) == preferredRunnerName }
             LOG.info("[M36] preferred runner by name: $preferredRunnerName (skip platform chooser)")
             chosenRunnerName = preferredRunnerName
-            if (!executeAfterPrepare) rememberRunnerName(project, preferredRunnerName)
+            if (!executeAfterPrepare) rememberRunnerName(project, preferredRunnerName, dialectGateRequest?.moduleKey)
             runRunner(project, picked, silent = !executeAfterPrepare, runnerError)
             callback?.invoke(true)
         }
@@ -425,7 +427,7 @@ internal fun DataSourceSelector.chooseAndPrepare(
                 LOG.info("[M36] popup selected: ${runner?.let { getRunnerName(it) }}")
                 // M36.5：记住选择（prepareConsole 路径下次静默复用；控制台创建时也会统一记忆）
                 if (!executeAfterPrepare && runner != null) {
-                    rememberRunnerName(project, getRunnerName(runner))
+                    rememberRunnerName(project, getRunnerName(runner), dialectGateRequest?.moduleKey)
                 }
                 if (runner != null) chosenRunnerName = getRunnerName(runner)
                 callback?.invoke(runner != null)

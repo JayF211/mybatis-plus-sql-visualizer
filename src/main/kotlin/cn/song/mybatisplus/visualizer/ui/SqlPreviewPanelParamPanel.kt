@@ -413,8 +413,28 @@ internal fun SqlPreviewPanel.boundDataSourceNameForDisplay(): String? =
 internal fun SqlPreviewPanel.rememberedDataSourceNameForDisplay(): String? {
     val proj = project ?: return null
     return runCatching {
-        cn.song.mybatisplus.visualizer.execute.DataSourceSelector.rememberedDataSourceName(proj)
+        cn.song.mybatisplus.visualizer.execute.DataSourceSelector
+            .rememberedDataSourceName(proj, sourceModuleKey)
     }.getOrNull()
+}
+
+/**
+ * T-ModuleScopedLastUsed W3：本次显示的记忆名来自**模块级**还是**项目级兜底**。
+ *
+ * 判据（只读、零副作用）：分层读取（模块键优先，未命中回落项目级）与纯项目级读取**都命中且
+ * 相同** → 命中的就是模块级那条；只有项目级命中 → 兜底。依据：写模块级时同时写项目级
+ * （[cn.song.mybatisplus.visualizer.execute.DataSourceSelector.rememberRunner]），故模块级命中
+ * 必然与项目级一致；若模块级为空则只有项目级有值。仅用于文案限定词，不参与取源决策。
+ */
+internal fun SqlPreviewPanel.rememberedIsModuleScoped(): Boolean {
+    val proj = project ?: return false
+    val moduleKey = sourceModuleKey?.takeIf { it.isNotBlank() } ?: return false
+    return runCatching {
+        val selector = cn.song.mybatisplus.visualizer.execute.DataSourceSelector
+        val scoped = selector.rememberedDataSourceName(proj, moduleKey)
+        val projectLevel = selector.rememberedDataSourceName(proj, null)
+        scoped != null && scoped == projectLevel
+    }.getOrDefault(false)
 }
 
 /**
@@ -430,7 +450,16 @@ internal fun SqlPreviewPanel.bindStateText(): String {
     val name = boundDataSourceNameForDisplay()
     if (name != null) return MpSqlVisualizerBundle.message("panel.bindstate.bound", name)
     val remembered = rememberedDataSourceNameForDisplay()
-    if (remembered != null) return MpSqlVisualizerBundle.message("panel.bindstate.associated", remembered)
+    if (remembered != null) {
+        // T-ModuleScopedLastUsed W3：模块级命中与项目级兜底文案区分（只改括号内限定词，
+        // 不新增控件——W12 定案自研换源 UI 已全部退役）。
+        val key = if (rememberedIsModuleScoped()) {
+            "panel.bindstate.associatedModule"
+        } else {
+            "panel.bindstate.associated"
+        }
+        return MpSqlVisualizerBundle.message(key, remembered)
+    }
     return MpSqlVisualizerBundle.message("panel.bindstate.unbound")
 }
 
