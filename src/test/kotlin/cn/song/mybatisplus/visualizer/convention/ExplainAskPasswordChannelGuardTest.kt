@@ -263,4 +263,29 @@ class ExplainAskPasswordChannelGuardTest : BannedApiScanSupport() {
         assertTrue("换源须 forceChoose=true（显式选择优先于 last-used 静默）", body.contains("forceChoose = true"))
         assertTrue("换源后须复用 awaitDataSourceBoundThenRetry 重试（W3）", body.contains("awaitDataSourceBoundThenRetry"))
     }
+
+    @Test
+    fun `数据源下拉选定后不得再弹平台选择器`() {
+        val panel = sourceOf("ui/SqlPreviewPanelParamPanel.kt")
+        val selector = sourceOf("execute/DataSourceSelectorResults.kt")
+        // T-ExplainFailUx W4（用户实测「为什么我需要选两次数据源」）：预览下拉里选定源名后，
+        // 必须按名直选建链（preferredRunnerName），**不得**再用 forceChoose=true（其语义恰是
+        // 强制弹平台选择器 → 双选）。「切换数据源」按钮仍可走平台原生选择器（用户诉求
+        // 「我希望选的优先是 idea 原生的」）。
+        val comboIdx = panel.indexOf("buildDataSourceCombo")
+        val body = panel.substring(comboIdx, (comboIdx + 2400).coerceAtMost(panel.length))
+        assertTrue(
+            "下拉切换须传 preferredRunnerName（按名直选，W4）",
+            body.contains("preferredRunnerName = picked"),
+        )
+        assertTrue(
+            "下拉切换不得传 forceChoose=true（那会强制再弹平台选择器，W4）",
+            !body.contains("forceChoose = true"),
+        )
+        assertTrue(
+            "chooseAndPrepare 须支持 preferredRunnerName 直选分支（W4）",
+            selector.contains("preferredRunnerName") &&
+                selector.contains("skip platform chooser"),
+        )
+    }
 }

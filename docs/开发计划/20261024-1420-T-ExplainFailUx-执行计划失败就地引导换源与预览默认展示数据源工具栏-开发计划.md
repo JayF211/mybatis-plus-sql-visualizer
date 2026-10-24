@@ -195,3 +195,27 @@ PreviewSideQuery 10，XML 判例数已核）。反向三条各恰 1 红：W1 直
   `awaitDataSourceBoundThenRetry` 内部 `submitExplainOrStructured(allowDataSourcePrompt=false)`
   未传 `rerendered=true`，理论上闸门重渲染仍可能再触发一次重提交；沙盒复验时若观察到
   「一次点击执行两次」须补该位。
+
+---
+
+## 九、W4 追加（2026-10-24，用户实测「为什么我需要选两次数据源」，`29f3e4b2`）
+
+**现象**：W2 工具栏上线后，在预览的数据源下拉里选一次，平台又弹原生「选择数据源」让选第二次。
+
+**根因**：W2 的下拉切换调 `prepareConsole(forceChoose=true)`——而 `forceChoose` 的语义恰是
+「跳过静默、强制弹平台选择器」（T-DialectGateExit 定义，用于「点了切换就等于要弹窗」的场景）。
+用户在自己的下拉里已经显式选定，反被要求再选一次。
+
+**修法**：`chooseAndPrepare`/`prepareConsole` 增 `preferredRunnerName`——在 runner 枚举里**按名
+唯一命中就直接建链**（记忆 + `runRunner`），不再弹选择器；名字未命中/同名歧义回落既有弹窗（不猜）。
+只跳过「选择」一步，方言闸在 `sessionConsumer` 内照旧执行。
+
+**分工（对应用户「我希望选的优先是 idea 原生的」）**：
+- 预览下拉 = 快速通道，一次选择直接绑定；
+- 结果区横幅「切换数据源」按钮 = 仍走平台原生选择器（`forceChoose=true` 保留，W3 自动重试不变）。
+
+**读数**：定向 5 类 **46/0/0/0**（Guard 15 含新例「数据源下拉选定后不得再弹平台选择器」）；
+反向把下拉改回 `forceChoose=true` 恰 1 红，还原后全绿，探针残留 0。
+
+**诚实边界**：下拉选定后「按名直选」依赖 runner 枚举里存在该名（方言匹配集里没有该源时仍会
+回落弹窗）——这属平台行为，未在 GUI 验证；沙盒复验时应确认「选一次即绑定」在 jar demo 场景成立。
