@@ -122,3 +122,43 @@
 | W7 | 执行目标单一事实源＝原生控制台（换源后重建控制台，工具栏同步） | `execute/DataSourceSelector*.kt` |
 | test | 三条守卫 + 反向 | `convention/ExplainAskPasswordChannelGuardTest.kt` |
 | doc | 修订 T-ExplainFailUx W2/W3 决策记录 | 本文件 + 原计划 §九 |
+
+---
+
+## 七、实施记录（2026-10-24，W5~W7 全部落地，`54f7d784`）
+
+**P-1 结论（方案 A 可行）**：`ChooseDataSourceAction` 反编译显示其 `getContext` 需要
+`PsiFile` + `VirtualFile`，且 `contextMenuInvokedInsideSelection/OnResultSet` 为真时直接返回
+null。我们的预览编辑器有 PsiFile（exec 文件），故**不必**构造 DataContext 硬调 ActionGroup；
+改用**方案 B**——`prepareConsole(forceChoosePopup=true)` 触发我们既有的
+`showRunnerPopup`（平台 `PersistenceConsoleProvider.Runner` 对象 + 平台 `ListPopup`），
+视觉与图三同族且无需平台内部 DataContext 依赖。这比硬调 ActionGroup 更稳（不赌平台内部契约）。
+
+**W5**：自研下拉整体退役——`buildDataSourceCombo`/`bindStateCombo`/`BIND_STATE_COMBO_NAME`
+全删；指示行回到纯文本三级文案 + 「切换数据源」链接入口（`BIND_STATE_SWITCH_NAME`，
+`JBUI.CurrentTheme.Link.Foreground`）；社区版 `ExecuteSqlSupport.isAvailable()` 判据保留，
+按钮不渲染（零报错零弹窗）。
+
+**W6**：换源统一 `switchDataSourceViaNativeChooser`（横幅动作与指示行链接共用）——
+`prepareConsole(forceChoose=true, forceChoosePopup=true)`；`chooseAndPrepare` 的
+`shouldBeChosenIfAlone` 直选分支加 `!forceChoosePopup` 抑制（问题一根治）。
+**取消自动重试**（问题一另一半）：`switchDataSourceAndRetryExplain` 整体删除，
+`awaitDataSourceBoundThenRetry` 调用不再出现；文案去掉「切换后自动重试」。
+
+**W7**：换源前 `dropSharedConsole() + clearPrepared()`——避免 `reuseSharedConsole` 命中旧源
+控制台（其 attach 源不跟随新选择），使「原生控制台工具栏数据源」成为唯一事实源（问题二根治）。
+
+**读数**：定向 5 类 **44/0/0/0**（Guard 13 + Classifier 12 + Fallback 6 + Timeout 3 +
+PreviewSideQuery 10）。反向：真删 `!forceChoosePopup` 与 `dropSharedConsole/clearPrepared`
+→ 守卫「换源必须弹原生选择器且不自动重试」恰 1 红；还原后全绿，探针残留 0。
+
+**🆕探针教训（入档）**：首轮把探针写成注释留在原位（`// REVERSE-PROBE ...`），源码形守卫
+仍能匹配到关键字 → **假绿**；必须**真删符号**才见红（与 W5 那条「false && 骗不过源码形守卫」
+同族，本轮再犯一次）。
+
+**诚实边界（未验）**：
+- GUI 未走查（用户自行启动沙盒）：`showRunnerPopup` 弹层与图三的实际视觉差异、
+  「换源后原生控制台工具栏数据源是否真的跟着变」（W7 只保证丢弃旧控制台，平台重建行为未实测）、
+  社区版按钮不渲染的布局。
+- 计划 §五 P-3（`forceChoosePopup` 既有消费方是否都期望必弹）未逐一复核：本轮只在
+  「切换数据源」入口置 true，`executeSql`/快照查询等既有路径保持原语义。
