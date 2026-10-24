@@ -150,3 +150,49 @@ pc.setValue("mpsql.visualizer.last.runner.id", uuid)   // LAST_RUNNER_ID_KEY
 - **沙盒 GUI 未走查**：需真机确认「jpa_demo 模块选源后，mp_demo 模块的灰字显示自己那条（或回落项目级）」。headless 只能证分层逻辑，证不了指示行在真实面板的刷新时序（`refreshBindStateRow` 的触达点未变）。
 - 旧 jar 里已有的项目级记忆不受影响（键未改名），模块级桶从 0 开始积累。
 
+---
+
+## 九、沙盒 243 验收结果（2026-10-24 23:20 jar）
+
+### 通过的项
+
+灰字正确显示「数据源（**本模块**上次使用）：jpa_demo@localhost」——模块级文案生效。
+执行计划选源弹出 **5 个源**（`jpa_demo` / `mp_demo`×2 / `kotlin_demo` / `selfdev_demo`），
+不再恒 1 个，证明「选中即关联」短路问题在本路径上不存在。
+
+### 验收抓出的缺陷：`rememberedIsModuleScoped` 误判（已修）
+
+**症状**：真机 workspace.xml 里**只有**项目级键
+`mpsql.visualizer.last.runner = jpa_demo@localhost`，**没有任何** `...runner.<moduleKey>` 键，
+灰字却显示「数据源（本模块上次使用）」——把项目级兜底冒称成了模块级命中。
+
+**根因**：首版判据是
+`rememberedDataSourceName(proj, moduleKey) == rememberedDataSourceName(proj, null)`。
+而前者在模块级为空时会**回落项目级**，于是两边恒相等 ⇒ 纯兜底被误判成模块级。
+
+**修法**：改为**直接读模块级键本身是否有值**
+（`pc.getValue(LastUsedKeys.dataSourceIdKey(moduleKey))` / `displayNameKey` 任一非空即为模块级）。
+
+**护栏**：新增两条用例 `test仅有项目级记忆时不得冒称本模块` /
+`test有模块级记忆时显示本模块文案`。反向验证：把判据还原成缺陷版 → **恰 1 红**（已实测）。
+
+### 验收抓出的缺陷：last-used 清理不彻底（已修）
+
+**症状**（测试暴露）：`SqlPreviewPanelBindStateTest` 的 `setUp/tearDown` 只清项目级双键，
+上一条用例写入的**模块级键串到下一条**，导致「本条只有项目级记忆却 `isModule=true`」。
+
+**根因**：`forgetLastRunner(project)` 不传 `moduleKey` 时只清项目级；`runRunner` 内部的两处
+失败清理调用压根没有 moduleKey 可用。
+
+**修法**：
+1. `runRunner` 增加 `moduleKey` 可选参数，四处调用点（静默复用 / preferredRunner / 唯一 runner /
+   弹窗选择）全部从 `dialectGateRequest?.moduleKey` 透传；静默失败清理改 `forgetLastRunner(project, moduleKey)`。
+2. 复用身份被拒（`identity?.dsInFacade == false`）处同样带 moduleKey。
+3. 测试 `setUp/tearDown` 改用 `forgetAllLastUsed`（进态也清一次，防上次运行残留）。
+
+### 读数
+
+- 定向 **10 类 102 / 0 / 0 / 0**（本项 9 例 + `SqlPreviewPanelBindStateTest` 11 例 + 回归 8 类）。
+- 反向探针：模块隔离退化恰 3 红、模块级误判缺陷版恰 1 红。
+
+

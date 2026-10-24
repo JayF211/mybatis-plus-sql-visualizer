@@ -166,3 +166,29 @@ otherwise                                     → EDT
 - `currentSortLabel` 去分配的实际收益未能独立测量（P-4 原打算 W3 单独落地后复测告警减少量），
   因两项改动同批提交。若后续想分离验证，可临时把 BGT 改回 EDT 单独跑一次对照。
 
+---
+
+## 八、沙盒 243 验收结果（2026-10-24 22:48 会话 / W5 兑现）
+
+**W5 通过。** 本次会话（`idea.log` 启动行 42964 之后）统计：
+
+```
+expandGroup@cn.song.mybatisplus.visualizer.log.toolbar  →  0 条
+```
+
+改前每次会话稳定出现 2 条 `ActionUpdater ... 3981 ms / 3174 ms total to grab EDT 10 times
+to expand ...log.toolbar ... Use ActionUpdateThread.BGT`；改后 **0 条**。
+
+本次会话剩余的 `ActionUpdater` 告警全部是平台自身组件
+（`CWMUserCirclesGroup` / `ToolWindowHeader` / `DockToolWindowAction`），与本插件无关。
+
+三态文案（P-3 的 BGT 副作用风险点）在同会话内也随操作正常刷新：预览打开后排序按钮、
+慢查询徽章、捕捉按钮的图标与文案均按预期显示，无滞后或占位圆圈。
+
+### 顺带发现（不属于本项，另行修复）
+
+同一次验收中另抓到执行计划的 EDT 慢操作（9 条 SEVERE，`createTempPsiFile` 冷路径），
+归因插件。那不是本项引入的（本项只动 presentation 计算线程），已在
+T-ExplainConsoleFirst W8 修复并在第二次沙盒会话复验为 **0 条**。
+
+
