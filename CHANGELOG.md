@@ -4,24 +4,7 @@
 
 ## [Unreleased]
 
-## [2026.10.23-beta.3] - 2026-10-23
-
-### Added
-- **插件设置接入 IDE 自带设置搜索（T-SettingsSearchA）**：运行期注册 `search.optionContributor` EP，把插件设置项喂进 IDE 的设置搜索索引——在 `Settings` 搜索框里搜「脱敏」「预设」「FieldFill」等关键词可直接定位到对应设置项，不再只能靠逐页翻。索引与页内搜索共用同一份 `ALL_SEARCHABLE_FIELDS` 数据源，两套搜索天然同步；9 个既有设置类一行未改（平台 `ConfigurableWrapper` 本身实现 `SearchableConfigurable` 且 `getId()` 优先返回 EP id）。当前索引按插件语言生成，英文词条不命中中文界面。
-- **页内搜索补登记「展示与导出脱敏」（T-SettingsSearchB）**：此前在设置页内搜索「脱敏 / 展示 / 导出 / 打码」都翻不到该开关，已补进索引，并立面板-索引配对守卫（白名单逐条留痕，含既有 21 项未索引开关台账）。
-
-### Fixed
-- **预览错列标注会话未注册进 Disposer 树致 IDE 退出内存泄漏告警（ebfaf73f）**：关闭 IDE 时报 24 条 `Memory leak detected`，全部指向 `PreviewSchemaHighlighter$Session`——Session（Disposable）从未注册进 Disposer 树，其内部 Alarm 以它为 parentDisposable，平台把这条孤儿分支挂到 ROOT_DISPOSABLE 下、退出时不 dispose。现 install 以 `editor.project` 为属主 `Disposer.tryRegister`（项目关闭即兜底回收），Session 自带可判定的 disposed 标志（243 的 `Disposable` 无 `isDisposed` 不能 override），uninstall 改走树感知 `Disposer.dispose`。
-- **jar 内宿主叠加工程同 FQN 影子实体导致实体不可解析（T-ShadowEntityResolve）**：用户方法、HQL、实体类都在 jar 里，工程下又新增一个同包名同类名的类（字段有差异）时，预览降级为 `task.*` 并提示「实体名有多个同名候选」。现按模块依赖方向与源码形态仲裁：同 FQN 两份都判为工程内容时按源码形态收窄（jar 位于 `resources/lib` 等），跨模块同名按依赖方向选宿主模块，jar 内宿主仍可正常判定；workspace 形态下宿主作用域零候选时不再直接判不可解析。jar 以 sources jar 附带与反编译视图两种形态都覆盖。
-- **结构化执行计划的基线下拉被拉伸到整屏宽（d068a5ef）**：EXPLAIN 结果视图里基线下拉在纵向 BoxLayout 下被拉到容器最大宽度，现按内容定宽。
-
-## [2026.10.23-beta.2] - 2026-10-23
-
-### Fixed
-- **增强捕获与第三方 agent 共存导致目标 JVM 无法启动（T-JRebelPremainCrash）**：用户同时开启增强捕获与 JRebel 启动器后，目标应用以 `FATAL ERROR in native method: processing of -javaagent failed, processJavaStart failed` 直接起不来——`retransformLoadedDrivers` 的名单谓词位于 try 之外，第三方 agent 接管 premain 类加载后重定位 ASM 不可见，谓词触发织入器类初始化时抛 `NoClassDefFoundError`（另一种加载器形态为 `ClassCircularityError`），异常穿出 `premain` 即终止宿主启动。现在 premain/agentmain 双入口统一做失败兜底（捕 `Throwable`，含 `Error`），降级后不写在线标记以便运行期 attach 仍可重试，并在 stderr 留一行降级说明；名单判定与 ASM 解耦（登记表上提为独立类），使「查名字」不再要求 ASM 可解析，异常场景下增强能力不丢。插件侧新增 premain 未按时回连的降级感知与一次性提示，回落运行期挂载。已在 Corretto 21.0.12.1 上用真实 agent 产物验证修复前后对照（修复前同形态必然致命，修复后进程正常启动、逐类失败被计数拦下）；未复刻用户 JRebel 的具体转发路径，未在真实 IDE 工程端到端验收。
-- **设置页能力矩阵的 MCP 工具数停留十工具**：实际为十一个，落地页文案已修正。
-
-## [2026.10.23-beta.1] - 2026-10-23
+## [2026.10.23] - 2026-10-23
 
 ### Added
 - **DatabaseTools 非 UI 实际链修复（V178）**：纠正 DM 方言扩展的 DBMS 注册与单例实例契约、真实数据源配置的反射类包名。DM语言仍为Generic兼容能力，不宣称原生达梦parser。实际无连接平台fixture验证映射、SqlFile、UUID与session/console；显式scope无法证明缩窄时诚实降级，真实连接与GUI流程另验。
@@ -54,6 +37,8 @@
 - **历史列表直达末条**：工具栏新增动作，一次跳到当前过滤结果的最后一条，长列表不再靠滚。
 - **FieldFill 安全模拟面板**：CRUD/MP 批量参数区展示填充元信息与逐列模拟值，`[fill=…]` 角标与字段名同行，模拟值优先于普通输入框（普通框置灰），模拟值行只在勾选安全模拟时出现。
 - **复制 SQL 并关闭（UI-042/UI-043/UI-044）**：预览面板底部新增蓝色主行动按钮，一次复制当前 SQL 并关闭面板；按钮按平台 LAF 绘制，复制后的通知不再附带「关闭 SQL 面板」动作。
+- **插件设置接入 IDE 自带设置搜索（T-SettingsSearchA）**：运行期注册 `search.optionContributor` EP，把插件设置项喂进 IDE 的设置搜索索引——在 `Settings` 搜索框里搜「脱敏」「预设」「FieldFill」等关键词可直接定位到对应设置项，不再只能靠逐页翻。索引与页内搜索共用同一份 `ALL_SEARCHABLE_FIELDS` 数据源，两套搜索天然同步；9 个既有设置类一行未改（平台 `ConfigurableWrapper` 本身实现 `SearchableConfigurable` 且 `getId()` 优先返回 EP id）。当前索引按插件语言生成，英文词条不命中中文界面。
+- **页内搜索补登记「展示与导出脱敏」（T-SettingsSearchB）**：此前在设置页内搜索「脱敏 / 展示 / 导出 / 打码」都翻不到该开关，已补进索引，并立面板-索引配对守卫（白名单逐条留痕，含既有 21 项未索引开关台账）。
 
 ### Changed
 - **增强捕获暂停按钮临时隐藏（T-AgentPauseVisibility，方案 B）**：增强捕获已默认开启，暂停/恢复按钮在应用未运行时没有可暂停对象，并与捕捉按钮形成播放/暂停误读；先整体隐藏，动作对象保留在工具栏组内（能力代码不删）。暂停 agent 通道的 UI 入口暂时不可达，关闭总开关仍回落控制台；恢复路径为方案 A（agent 挂载或暂停态才显示）或状态栏/右键菜单入口。
@@ -83,8 +68,17 @@
 - **模块身份解析改用公开 API**：`ModuleIdentityResolver` 不再调用 `Module.getModuleFilePath`（`@Internal`），改走公开的 `ModuleUtilCore.getModuleDirPath`，「目录 + 模块名」作模块身份键（`ModuleKeySource.MODULE_DIR`）；插件校验报告的 internal API 用法由 1 项归零
 - **SQL 转 Java 条件组与逻辑删除（T-ReverseGroupLogicDelete）**：`or()` 不再被后续 `and(...)` 静默吞掉，嵌套条件组保留 `NOT`，逻辑删除列不再重复生成 `AND deleted = 0`（此前 MP 注入的默认条件被当成手写条件重复输出）
 - **SQL 转 Java 类选择字段（UI-045）**：类名输入框描边与圆角改用平台口径（2px 描边 + 贝塞尔圆角），消除与原生输入框的观感差异
-
-
+- **增强捕获与第三方 agent 共存导致目标 JVM 无法启动（T-JRebelPremainCrash）**：用户同时开启增强捕获与 JRebel 启动器后，目标应用以 `FATAL ERROR in native method: processing of -javaagent failed, processJavaStart failed` 直接起不来——`retransformLoadedDrivers` 的名单谓词位于 try 之外，第三方 agent 接管 premain 类加载后重定位 ASM 不可见，谓词触发织入器类初始化时抛 `NoClassDefFoundError`（另一种加载器形态为 `ClassCircularityError`），异常穿出 `premain` 即终止宿主启动。现在 premain/agentmain 双入口统一做失败兜底（捕 `Throwable`，含 `Error`），降级后不写在线标记以便运行期 attach 仍可重试，并在 stderr 留一行降级说明；名单判定与 ASM 解耦（登记表上提为独立类），使「查名字」不再要求 ASM 可解析，异常场景下增强能力不丢。插件侧新增 premain 未按时回连的降级感知与一次性提示，回落运行期挂载。已在 Corretto 21.0.12.1 上用真实 agent 产物验证修复前后对照（修复前同形态必然致命，修复后进程正常启动、逐类失败被计数拦下）；未复刻用户 JRebel 的具体转发路径，未在真实 IDE 工程端到端验收。
+- **设置页能力矩阵的 MCP 工具数停留十工具**：实际为十一个，落地页文案已修正。
+- **预览错列标注会话未注册进 Disposer 树致 IDE 退出内存泄漏告警（ebfaf73f）**：关闭 IDE 时报 24 条 `Memory leak detected`，全部指向 `PreviewSchemaHighlighter$Session`——Session（Disposable）从未注册进 Disposer 树，其内部 Alarm 以它为 parentDisposable，平台把这条孤儿分支挂到 ROOT_DISPOSABLE 下、退出时不 dispose。现 install 以 `editor.project` 为属主 `Disposer.tryRegister`（项目关闭即兜底回收），Session 自带可判定的 disposed 标志（243 的 `Disposable` 无 `isDisposed` 不能 override），uninstall 改走树感知 `Disposer.dispose`。
+- **jar 内宿主叠加工程同 FQN 影子实体导致实体不可解析（T-ShadowEntityResolve）**：用户方法、HQL、实体类都在 jar 里，工程下又新增一个同包名同类名的类（字段有差异）时，预览降级为 `task.*` 并提示「实体名有多个同名候选」。现按模块依赖方向与源码形态仲裁：同 FQN 两份都判为工程内容时按源码形态收窄（jar 位于 `resources/lib` 等），跨模块同名按依赖方向选宿主模块，jar 内宿主仍可正常判定；workspace 形态下宿主作用域零候选时不再直接判不可解析。jar 以 sources jar 附带与反编译视图两种形态都覆盖。
+- **结构化执行计划的基线下拉被拉伸到整屏宽（d068a5ef）**：EXPLAIN 结果视图里基线下拉在纵向 BoxLayout 下被拉到容器最大宽度，现按内容定宽。
+- **结构化执行计划未存密码时交平台原生密码框（T-ExplainPwdPrompt）**：数据源未存密码时点「执行计划」只出红字 `Access denied (using password: NO)`、不弹 IDE 原生密码框——根因是 `McpDbExecutor` 建连硬编码 `setAskPassword(false)`（MCP 零弹窗红线），面板 EXPLAIN 与预估行数旁路切到该通道时被连坐。现 `askPassword` 改为**必填**参数，编译期强迫每个调用点按通道表态：面板执行计划与只读旁路传 `true`（弹原生框），MCP 工具仍 `false`（零弹窗红线原样）。失败按 AUTH / CANCELLED / OTHER 分型：认证失败附「补存密码」指引且不再回退直送，密码框 Esc 取消只轻通知绝不自动重试，其他维持既有回退。
+- **EXPLAIN 真绑定缺失时回落上次使用数据源（d72d6f2a）**：结构化执行计划在真绑定缺失时被方言路由的空 Runner 阻断，现回落上次使用的数据源取源。
+- **参数未回填不再回退直送（1bed57bc）**：消掉误导性的「未绑定数据源」红字框。
+- **认证失败改轻通知（bd9ac4f0）**：Abort 后不再弹红字模态框二次打断。
+- **premain 暂停恢复无界 join 挂死（48049395）**：accept 循环改代际让位 + resume 加有界预算兜底，消除 75 分钟挂死。
+- **预览执行链三组平台内部告警收口（9809a5b7）**：EDT 读盘慢操作断言、裸池线程缺进度上下文、Disposer 二次摘监听三组 SEVERE 归因修复；用户侧表现为执行计划→选源→关面板的会话不再刷内部错误。
 
 ## [2026.10.16] - 2026-10-16
 
