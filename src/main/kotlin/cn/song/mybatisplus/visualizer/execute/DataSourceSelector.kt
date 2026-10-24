@@ -568,11 +568,13 @@ object DataSourceSelector {
         dialectGateRequest: ExecutionDialectGate.Request? = null,
         onDialectGate: ((ExecutionDialectGate.Verdict) -> Unit)? = null,
         forceChoose: Boolean = false,
+        /** T-ExplainFailUx W4：用户已显式指定源名 → 按名直选建链，不再弹平台选择器。 */
+        preferredRunnerName: String? = null,
     ) {
         chooseAndPrepare(project, sql, executeAfterPrepare = false,
             onConsole = onConsole, onEditor = onEditor, onError = onError, callback = callback,
             dialectGateRequest = dialectGateRequest, onDialectGate = onDialectGate,
-            forceChoose = forceChoose)
+            forceChoose = forceChoose, preferredRunnerName = preferredRunnerName)
     }
 
     /**

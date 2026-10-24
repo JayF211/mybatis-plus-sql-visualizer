@@ -521,9 +521,11 @@ private fun SqlPreviewPanel.buildDataSourceCombo(): JComboBox<String> {
             if (picked == placeholder || picked == current) return@addActionListener
             val p = project ?: return@addActionListener
             val sql = currentEditorSql()?.takeIf { it.isNotBlank() } ?: return@addActionListener
-            // 换源：显式选择优先（forceChoose 跳过 last-used 静默与共享复用）
+            // T-ExplainFailUx W4：用户已在下拉里选定源名 → 按名直选建链，**不再弹平台选择器**
+            //（用户实测「为什么我需要选两次数据源」：此前传 forceChoose=true 恰好强制弹窗）。
+            // 名字未命中/同名歧义时 chooseAndPrepare 内部回落既有弹窗（不猜）。
             cn.song.mybatisplus.visualizer.execute.DataSourceSelector.prepareConsole(
-                p, sql, forceChoose = true,
+                p, sql, preferredRunnerName = picked,
             )
         }
     }
