@@ -1,6 +1,7 @@
 package cn.song.mybatisplus.visualizer.execute
 
 import cn.song.mybatisplus.visualizer.execute.DataSourceSelector.FillTargetLayout
+import cn.song.mybatisplus.visualizer.ui.highlight.DatabaseSchemaResolver
 import cn.song.mybatisplus.visualizer.util.FatalErrors
 import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.openapi.application.ApplicationManager
@@ -46,7 +47,7 @@ internal fun DataSourceSelector.startResultTabRetry(
             //（result==null）分支，第一次执行结果 Tab 出现（复用）时走 if 分支不检查，
             // 错误要等第二次执行（result=null 走 else）才报——用户"执行两次才出现错误"。
             // extractConsoleError 用 ERROR_SIGNATURES+isSqlLine 精确匹配，不误判正常 SQL。
-            extractConsoleError(sharedConsole ?: preparedConsole, LOG)
+            extractConsoleError(sharedConsole ?: preparedConsole, LOG, sqlText, project)
                 ?.takeIf { it != lastReportedError }?.let { err ->
                     timer.stop()
                     runPostExecutionInvalidate(sqlText, LOG)
@@ -118,7 +119,7 @@ internal fun DataSourceSelector.startResultTabRetry(
                     // ModalityState.any() 保证模态弹窗（如密码框）期间提示照常落地。
                     // M36.5.48：优先取 console 真实错误文本（DBN 查询失败写入 history）；
                     // 读不到才 fallback 笼统 hint（超时/索引）。
-                    val realError = extractConsoleError(sharedConsole ?: preparedConsole, LOG)
+                    val realError = extractConsoleError(sharedConsole ?: preparedConsole, LOG, sqlText, project)
                     // T-CEC-03：判据认不出的失败也要有下文——控制台确有新增输出（去掉本次 SQL
                     // 回显后的残余）时如实呈现，而不是把语法错归因成密码/驱动（真机 P15 实证）。
                     val residue = if (realError == null) {
@@ -1145,7 +1146,9 @@ internal fun DataSourceSelector.refreshResultsComponent(ui: Any, LOG: com.intell
             // 首次执行结果 Tab 复用后 startResultTabRetry 找到 result 即停，但 DBN 把错误
             // 写入 history 可能晚于其时点 → 首次执行漏检（用户"执行两次才出现错误"）。
             // 本 Timer 在此阶段仍运转，每拍检查本次执行新增的错误并上报。
-            extractConsoleError(shared ?: preparedConsole, LOG)
+            // T-ExplainConsoleFirst W7：本函数没有 project 参数（结果区刷新的通用组件），
+            // 故不传升格所需的工程上下文——跨源列证据在另两处（早检 / 超时兜底）生效。
+            extractConsoleError(shared ?: preparedConsole, LOG, sqlText)
                 ?.takeIf { it != lastReportedError }?.let { err ->
                     timer.stop()
                     lastReportedError = err
@@ -1859,7 +1862,14 @@ internal fun DataSourceSelector.realignDividerOnce(sp: javax.swing.JSplitPane, f
  * 布局管理器随每次 validate 重跑，无"被下一布局周期压回"的失效模式；逐层自证日志（教训 11）。
  */
 
-internal fun DataSourceSelector.extractConsoleError(console: Any?, LOG: com.intellij.openapi.diagnostic.Logger): String? {
+internal fun DataSourceSelector.extractConsoleError(
+    console: Any?,
+    LOG: com.intellij.openapi.diagnostic.Logger,
+    /** T-ExplainConsoleFirst W7：被执行 SQL——用于 `Unknown column` 的跨源升格判定（null = 不判定）。 */
+    sqlText: String? = null,
+    /** T-ExplainConsoleFirst W7：升格判定要枚举在籍数据源（null = 不判定）。 */
+    project: Project? = null,
+): String? {
     if (console == null) return null
     return runCatching {
         val text = newConsoleText(console) ?: return null
@@ -1884,7 +1894,33 @@ internal fun DataSourceSelector.extractConsoleError(console: Any?, LOG: com.inte
         // 没问题，是执行落在了错的库（mpj_demo 的 user 表没有 username → 1054），而裸 MySQL 报文
         // 看不出这一层；带上上下文后一眼可归因
         val ctxLine = ExecConsoleContext.describeContext(console)
-        val enriched = if (ctxLine != null) "$excerpt\n$ctxLine" else excerpt
+        // T-ExplainConsoleFirst W7（2026-10-24 用户实测 `Unknown column 'first_name' in 'field list'`
+        // ＋上下文三处全是 mp_demo）：源没选错、错的是「SQL 与库」这一对——`first_name` 属 jpa_demo
+        // 的同名 user 表，而 mp_demo 的 user 没有该列。既有分类把 `Unknown column` 一律排除在
+        // WRONG_TARGET 外（「列级问题换源解决不了」），对拼错列名成立，对「同名表不同列集」漏判。
+        // 这里按证据升格：当前源确证无此列 ∧ 另一在籍源的同名表带此列 → 明说「换个源能解决」。
+        // 纯加法：判据不成立（缓存未热/任何源都没有/当前源其实有）一律不附加，报错原文不变。
+        val crossSourceHint = runCatching {
+            val sqlForEvidence = sqlText?.takeIf { it.isNotBlank() } ?: return@runCatching null
+            val dataSources = DatabaseSchemaResolver.allDataSourcesForEvidence(project) ?: return@runCatching null
+            // 反射取控制台数据源（`JdbcConsole.getDataSource()`，与 consoleDataSourceId 同口径）——
+            // 本文件在 Community 下也会加载，不得直接引用 DBN 类。
+            val current = runCatching {
+                console.javaClass.getMethod("getDataSource").invoke(console)
+            }.getOrNull() ?: return@runCatching null
+            val currentIdx = dataSources.indexOfFirst { it === current }
+            if (currentIdx < 0) return@runCatching null
+            val sources = DatabaseSchemaResolver.columnNameSourcesCached(dataSources)
+            val evidence = CrossSourceColumnEvidence.assess(
+                errorText = excerpt,
+                sql = sqlForEvidence,
+                currentSourceColumns = sources[currentIdx],
+                otherSourcesColumns = sources.filterIndexed { i, _ -> i != currentIdx },
+            ) ?: return@runCatching null
+            LOG.info("[W7] cross-source column evidence hit: table=${evidence.table}, column=${evidence.column}")
+            MpSqlVisualizerBundle.message("execute.error.crossSourceColumn", evidence.column, evidence.table)
+        }.getOrNull()
+        val enriched = listOfNotNull(excerpt, ctxLine, crossSourceHint).joinToString("\n")
         LOG.info("[M36] extracted console error: ${enriched.take(200)}")
         enriched
     }.getOrNull()
