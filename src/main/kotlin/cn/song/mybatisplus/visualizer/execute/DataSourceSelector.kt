@@ -570,11 +570,18 @@ object DataSourceSelector {
         forceChoose: Boolean = false,
         /** T-ExplainFailUx W4：用户已显式指定源名 → 按名直选建链，不再弹平台选择器。 */
         preferredRunnerName: String? = null,
+        /**
+         * T-ExplainSwitchNative W6（2026-10-24 用户实测「点切换数据源却重试执行了」）：**必须弹
+         * 选择器**——即便 runner 枚举只剩一条（旧行为 `shouldBeChosenIfAlone` 会直选执行，用户
+         * 看不到列表）。仅「切换数据源」入口置 true；预览默认准备与显式执行不受影响。
+         */
+        forceChoosePopup: Boolean = false,
     ) {
         chooseAndPrepare(project, sql, executeAfterPrepare = false,
             onConsole = onConsole, onEditor = onEditor, onError = onError, callback = callback,
             dialectGateRequest = dialectGateRequest, onDialectGate = onDialectGate,
-            forceChoose = forceChoose, preferredRunnerName = preferredRunnerName)
+            forceChoose = forceChoose, preferredRunnerName = preferredRunnerName,
+            forceChoosePopup = forceChoosePopup)
     }
 
     /**

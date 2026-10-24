@@ -231,61 +231,57 @@ class ExplainAskPasswordChannelGuardTest : BannedApiScanSupport() {
             offenders == 0,
         )
         assertTrue(
-            "WRONG_TARGET 就地引导出口 showExplainWrongTarget 必须存在且含切换数据源动作（W1+W3）",
-            code.contains("showExplainWrongTarget") && code.contains("switchDataSourceAndRetryExplain"),
+            "WRONG_TARGET 就地引导出口 showExplainWrongTarget 必须存在且接原生换源入口（W1+W5/W6）",
+            code.contains("showExplainWrongTarget") && code.contains("switchDataSourceViaNativeChooser"),
         )
     }
 
     @Test
-    fun `数据源工具栏必须在插件不可用时降级为纯文本`() {
-        val code = sourceOf("ui/SqlPreviewPanelParamPanel.kt")
-        // T-ExplainFailUx W2（用户诉求：工具栏默认显示；「注意当数据源插件不可用时要降级的」）：
-        // 构建指示行前必须判 ExecuteSqlSupport.isAvailable()，不可用分支只放纯文本标签、不建下拉、
-        // 不报错（社区版零打扰）。
-        val availIdx = code.indexOf("ExecuteSqlSupport.isAvailable()")
-        val comboIdx = code.indexOf("buildDataSourceCombo()")
-        assertTrue("指示行构建须先判插件可用性（W2 降级前提）", availIdx >= 0)
-        assertTrue("下拉构建须在可用性判定之后（不可用时不得渲染下拉）", comboIdx > availIdx)
-        assertTrue(
-            "降级分支须仍设纯文本标签（bindStateLabel）",
-            code.substring(availIdx, comboIdx.coerceAtLeast(availIdx)).contains("bindStateLabel = label"),
-        )
-    }
-
-    @Test
-    fun `换源后必须自动重试执行计划`() {
-        val code = sourceOf("ui/SqlPreviewPanelExecution.kt")
-        // T-ExplainFailUx W3：换源动作（switchDataSourceAndRetryExplain）须 forceChoose 显式选择
-        // + 复用 awaitDataSourceBoundThenRetry 重试一次（allowDataSourcePrompt=false 防选择器循环）。
-        val idx = code.indexOf("fun SqlPreviewPanel.switchDataSourceAndRetryExplain")
-        assertTrue("须有换源并重试入口（W3）", idx >= 0)
-        val body = code.substring(idx, (idx + 1600).coerceAtMost(code.length))
-        assertTrue("换源须 forceChoose=true（显式选择优先于 last-used 静默）", body.contains("forceChoose = true"))
-        assertTrue("换源后须复用 awaitDataSourceBoundThenRetry 重试（W3）", body.contains("awaitDataSourceBoundThenRetry"))
-    }
-
-    @Test
-    fun `数据源下拉选定后不得再弹平台选择器`() {
+    fun `换源必须弹原生选择器且不自动重试`() {
+        val chain = sourceOf("ui/SqlPreviewPanelExecution.kt")
+        val results = sourceOf("execute/DataSourceSelectorResults.kt")
         val panel = sourceOf("ui/SqlPreviewPanelParamPanel.kt")
-        val selector = sourceOf("execute/DataSourceSelectorResults.kt")
-        // T-ExplainFailUx W4（用户实测「为什么我需要选两次数据源」）：预览下拉里选定源名后，
-        // 必须按名直选建链（preferredRunnerName），**不得**再用 forceChoose=true（其语义恰是
-        // 强制弹平台选择器 → 双选）。「切换数据源」按钮仍可走平台原生选择器（用户诉求
-        // 「我希望选的优先是 idea 原生的」）。
-        val comboIdx = panel.indexOf("buildDataSourceCombo")
-        val body = panel.substring(comboIdx, (comboIdx + 2400).coerceAtMost(panel.length))
+        // T-ExplainSwitchNative W5/W6（用户实测三问题）：①点「切换数据源」没弹列表却直接重试
+        // ——根因 forceChoose 只跳过 last-used 静默，runner 唯一时仍直选；②自研下拉只改显示、
+        // 执行仍用原生控制台源；③理想形态是 IDE 原生 Data Sources 弹窗。
+        // 纪律：换源统一走 switchDataSourceViaNativeChooser（forceChoosePopup=true 必弹），
+        // **不自动重试**；自研下拉整体退役。
         assertTrue(
-            "下拉切换须传 preferredRunnerName（按名直选，W4）",
-            body.contains("preferredRunnerName = picked"),
+            "换源入口须存在且走 forceChoosePopup 必弹选择器（W6）",
+            chain.contains("fun SqlPreviewPanel.switchDataSourceViaNativeChooser") &&
+                chain.contains("forceChoosePopup = true"),
         )
         assertTrue(
-            "下拉切换不得传 forceChoose=true（那会强制再弹平台选择器，W4）",
-            !body.contains("forceChoose = true"),
+            "换源入口不得再自动重试执行计划（旧 W3 的 awaitDataSourceBoundThenRetry 调用须移除）",
+            !chain.substring(
+                chain.indexOf("fun SqlPreviewPanel.switchDataSourceViaNativeChooser"),
+                (chain.indexOf("fun SqlPreviewPanel.switchDataSourceViaNativeChooser") + 1200)
+                    .coerceAtMost(chain.length),
+            ).contains("awaitDataSourceBoundThenRetry"),
         )
         assertTrue(
-            "chooseAndPrepare 须支持 preferredRunnerName 直选分支（W4）",
-            selector.contains("preferredRunnerName") &&
-                selector.contains("skip platform chooser"),
+            "chooseAndPrepare 的直选分支须受 forceChoosePopup 抑制（W6）",
+            results.contains("shouldBeChosenIfAlone(runners.first()) && !forceChoosePopup"),
+        )
+        assertTrue(
+            "自研数据源下拉必须整体退役（不得再有 buildDataSourceCombo / bindStateCombo）",
+            !panel.contains("buildDataSourceCombo") && !panel.contains("bindStateCombo") &&
+                !panel.contains("BIND_STATE_COMBO_NAME"),
+        )
+        assertTrue(
+            "指示行换源入口须在插件不可用时降级为不渲染（W2 纪律沿用）",
+            panel.contains("ExecuteSqlSupport.isAvailable()"),
+        )
+        // W7：执行目标单一事实源＝原生控制台——换源前必须丢弃旧共享控制台/已备会话，
+        // 否则 reuseSharedConsole 命中旧源控制台（attach 源不跟随新选择）→ 图二错位。
+        val swBody = chain.substring(
+            chain.indexOf("fun SqlPreviewPanel.switchDataSourceViaNativeChooser"),
+            (chain.indexOf("fun SqlPreviewPanel.switchDataSourceViaNativeChooser") + 2000)
+                .coerceAtMost(chain.length),
+        )
+        assertTrue(
+            "换源前须 dropSharedConsole + clearPrepared（W7 单一事实源）",
+            swBody.contains("dropSharedConsole()") && swBody.contains("clearPrepared()"),
         )
     }
 }
