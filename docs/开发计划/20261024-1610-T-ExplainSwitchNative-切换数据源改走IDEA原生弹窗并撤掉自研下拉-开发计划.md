@@ -162,3 +162,26 @@ PreviewSideQuery 10）。反向：真删 `!forceChoosePopup` 与 `dropSharedCons
   社区版按钮不渲染的布局。
 - 计划 §五 P-3（`forceChoosePopup` 既有消费方是否都期望必弹）未逐一复核：本轮只在
   「切换数据源」入口置 true，`executeSql`/快照查询等既有路径保持原语义。
+
+---
+
+## 八、W8~W10 追加（2026-10-24 第二轮用户实测，`7e88ade4`）
+
+| 项 | 用户现象 | 根因（实证） | 修法 |
+|---|---|---|---|
+| W10 | 「为什么 sql 无法执行」：红条「当前 SQL 按 **未知** 渲染，所选数据源是 MySQL」 | `executionDialectGateRequest` 传 `result?.effectiveDialect?.name`；JPA/日志还原等载体 `renderedDialect` 未赋值 → null → 闸门判 `RENDER_UNKNOWN_BLOCK` | 请求侧按渲染器既有口径回落 `MySqlDialect.name`（`Dialect.kt:908-909` `byName(null)` 即回落 MySQL，实际渲染方言从不是「未知」） |
+| W9 | 「点击下方的切换数据源依然有问题，点击没有反应」 | 红条按钮接 `executeSql(forceChoose=true)`——**执行链**，会先过同一方言闸门再被同一原因阻断 | 改走 `switchDataSourceViaNativeChooser`（只换源、不执行） |
+| W8 | 「点击切换数据源只有一个数据源？当前可是配置了很多」 | 平台 attach 版枚举 → `getAppropriateDataSourcesForExec` → `.filter(CAN_CONNECT_TO)`，滤掉当前不可连接的源（日志 09:53 `runners=5` 而现在 1 个，体现可连接性波动） | 用户主动切换改调平台切换专用入口 `getSwitchDataSourceRunners`（`allDataSources=forceChoosePopup`） |
+
+**W8 的诚实边界（重要）**：平台**未公开**「按指定源建 Runner」的 API——`runInDataSource` 是
+直接建会话、不产 Runner；`createDataSourceRunner` 是私有。因此「不可连接的源」**仍然不会**
+出现在弹层里，插件无法凭空造出合法平台 Runner。已加 `registeredDataSourceCount` 归因缝
+（在籍源计数），供后续 UI 在「可选源 < 在籍源」时给出可行动说明（打开 Database 工具窗口连一次
+即可恢复可选）。若用户要求「必须列出全部源」，需要另立任务研究平台私有 API 的可行性/风险。
+
+**读数**：定向 5 类 **47/0/0/0**（Guard 16 + Classifier 12 + Fallback 6 + Timeout 3 +
+PreviewSideQuery 10）。反向三条真删符号各恰 1 红（渲染回落 / 红条入口 / 切换枚举），还原后
+全绿，探针残留 0。
+
+**未验**：GUI 未走查（用户自行启动沙盒）——W10 是否真的让执行放行、W9 红条按钮是否真的弹出
+列表、W8 弹层里源数量是否随「连过一次」而增加，均需沙盒/真机确认。
