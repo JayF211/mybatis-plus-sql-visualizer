@@ -1431,10 +1431,16 @@ internal fun SqlPreviewPanel.submitExplainOrStructured(
             // T-UI030：开关关闭时不再只是「静默直送」——该方言确有结构化面且 Database 插件
             // 在场时给一条带「启用结构化并重试」动作的通知；TEXT/XML/Community 不提示（开启
             // 也没用，只会变成噪音）。不点动作时行为与改前逐字一致（仍直送原生控制台）。
+            //
+            // T-ExplainConsoleFirst W6（2026-10-24 用户实测「为什么我点击执行计划还是弹窗了」）：
+            // 该推荐**只提示一次**。此前每次点执行计划都弹，用户顺手点过一次「启用结构化」后
+            // 开关被永久写成 true，界面上再无任何「现在是实验形态」的提示——下次看到弹窗时
+            // 完全无从归因。沙盒实测该配置确为 true、而代码默认是 false，差异只可能来自这里。
             if (cn.song.mybatisplus.visualizer.execute.ExplainFallbackGuidance.shouldOfferStructuredEnable(
                     settings.explainStructuredRender, format, databaseAvailable,
-                )
+                ) && !settings.explainStructuredOfferedShown
             ) {
+                settings.explainStructuredOfferedShown = true
                 notifyStructuredExplainDisabled(proj) {
                     enableStructuredExplainAndRetry(proj, dialect, explainSql, dialectGateRequest)
                 }
