@@ -326,11 +326,14 @@ internal fun DataSourceSelector.chooseAndPrepare(
         )
     }
 
-    // T-ExplainSwitchNative W8：用户主动「切换数据源」时用平台的切换专用入口
-    // （getSwitchDataSourceRunners，语义正确）；普通预览准备/执行仍用 attach 版。
-    val enumerated = getAttachDataSourceRunners(
-        psiFile, submitSql, sessionConsumer, allDataSources = forceChoosePopup,
-    )
+    // T-ExplainSwitchNative W8-hotfix（2026-10-24 用户实测「点击切换数据源就报错」）：
+    // 首版把切换入口改成反射 `getSwitchDataSourceRunners`，但该方法的真实签名是
+    // **(PsiFile, String, DatabaseSession, Consumer) 四参**（javap 实证），而准备链此刻
+    // **尚无已 attach 会话**（切换的常态）→ NoSuchMethodException 被 runCatching 吞成空列表
+    // → runners=0 → 用户看到「没有与该 SQL 方言匹配的已配置数据源」红条。
+    // 现退回 attach 版（这正是此前一直正常、能弹原生列表的形态）；切换专用入口只在
+    // 已有会话时才有意义，本链不持有会话，故不启用。
+    val enumerated = getAttachDataSourceRunners(psiFile, submitSql, sessionConsumer)
     // O-136 T-PreviewExecDsDialect：组 Runner 展开——平台在「方言匹配集 ≠ 全部数据源」时返回
     // "All" 组 Runner（getSubRunners 携带全部数据源的 Runner，组项自身 runnable 为空操作），
     // 插件弹窗不展开子级 → 方言不匹配的数据源（DM 等）藏在死项里不可选。展开后按显示名去重，

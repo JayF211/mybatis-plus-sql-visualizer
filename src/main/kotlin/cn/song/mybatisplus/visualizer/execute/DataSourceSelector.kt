@@ -1327,38 +1327,59 @@ object DataSourceSelector {
      * [sessionConsumer] 在选中 runner 执行后收到 DatabaseSession。
      *
      * T-ExplainSwitchNative W8（2026-10-24 用户实测「点击切换数据源只有一个数据源？当前可是
-     * 配置了很多」）：**用户主动切换**时改调 `getSwitchDataSourceRunners`，并补一层
-     * 「全部在籍源」兜底。原因（平台反编译实证）：attach 版最终走
-     * `DbImplUtil.getAppropriateDataSourcesForExec(psiFile)` → `DbSqlUtilCore.getAppropriateDataSources`
-     * → `.filter(CAN_CONNECT_TO)`——**把「当前不可连接」的源全部滤掉**（未连过/驱动未就绪），
-     * 于是 7 个在籍源只剩 1 个可选项。切换是用户主动挑源的动作，「能不能连」恰恰是用户想解决的
-     * 问题（连不上才要切），不该由平台预筛。
+     * 配置了很多」）：**用户主动切换**时优先调平台切换专用入口 `getSwitchDataSourceRunners`，
+     * 失败（含签名/无会话）则回退 attach 版。
      *
-     * @param allDataSources 为 true 时用平台 `getAllDataSourcesForExec`（不过滤可连接性）补齐
-     *   枚举结果——仅在用户点「切换数据源」时置位；普通预览准备/执行保持既有方言匹配语义
-     *   （避免默认把不兼容方言的源塞进弹层）。
+     * ⚠️ W8-hotfix（同日）：`getSwitchDataSourceRunners` 的签名是
+     * **`(PsiFile, String, DatabaseSession, Consumer)` 四参**（javap 实证），比 attach 版多一个
+     * 「当前会话」——首版按三参反射调用必然 `NoSuchMethodException`，被 runCatching 吞成空列表
+     * → `runners=0` → 用户看到「没有与该 SQL 方言匹配的已配置数据源」红条（切换数据源点了就报错）。
+     * 现按真实签名调用；[currentSession] 为 null（预览尚未建会话，切换入口的常态）时**直接用
+     * attach 版**——这正是切换入口此前一直正常工作的形态。
+     *
+     * @param allDataSources 用户主动切换时为 true（尝试切换专用入口）
+     * @param currentSession 当前已 attach 的会话（无则走 attach 版）
      */
     internal fun getAttachDataSourceRunners(
         psiFile: PsiFile,
         sql: String,
         sessionConsumer: com.intellij.util.Consumer<Any>,
         allDataSources: Boolean = false,
+        currentSession: Any? = null,
     ): List<Any> {
         val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
-        val entryPoint = if (allDataSources) "getSwitchDataSourceRunners" else "getAttachDataSourceRunners"
-        return runCatching {
+        val attach: () -> List<Any> = {
+            runCatching {
+                val clazz = Class.forName(RUNNERS_CLASS)
+                val method = clazz.getMethod(
+                    "getAttachDataSourceRunners",
+                    PsiFile::class.java,
+                    String::class.java,
+                    com.intellij.util.Consumer::class.java,
+                )
+                val result = method.invoke(null, psiFile, sql, sessionConsumer)
+                (result as? List<*>)?.filterNotNull() ?: emptyList()
+            }.onFailure { e ->
+                LOG.warn("[M36] getAttachDataSourceRunners reflection FAILED: $e", e)
+            }.getOrDefault(emptyList())
+        }
+        if (!allDataSources || currentSession == null) return attach()
+        // 切换专用入口：四参（多 currentSession）；任何失败都回退 attach 版，绝不返回空。
+        val switched = runCatching {
             val clazz = Class.forName(RUNNERS_CLASS)
             val method = clazz.getMethod(
-                entryPoint,
+                "getSwitchDataSourceRunners",
                 PsiFile::class.java,
                 String::class.java,
+                Class.forName(SESSION_CLASS),
                 com.intellij.util.Consumer::class.java,
             )
-            val result = method.invoke(null, psiFile, sql, sessionConsumer)
+            val result = method.invoke(null, psiFile, sql, currentSession, sessionConsumer)
             (result as? List<*>)?.filterNotNull() ?: emptyList()
         }.onFailure { e ->
-            LOG.warn("[M36] $entryPoint reflection FAILED: $e", e)
+            LOG.warn("[M36] getSwitchDataSourceRunners reflection FAILED (fallback to attach): $e", e)
         }.getOrDefault(emptyList())
+        return switched.ifEmpty { attach() }
     }
 
     /**
