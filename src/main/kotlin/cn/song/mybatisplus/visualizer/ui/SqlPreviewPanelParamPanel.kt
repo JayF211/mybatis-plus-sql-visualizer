@@ -413,8 +413,33 @@ internal fun SqlPreviewPanel.boundDataSourceNameForDisplay(): String? =
 internal fun SqlPreviewPanel.rememberedDataSourceNameForDisplay(): String? {
     val proj = project ?: return null
     return runCatching {
-        cn.song.mybatisplus.visualizer.execute.DataSourceSelector.rememberedDataSourceName(proj)
+        cn.song.mybatisplus.visualizer.execute.DataSourceSelector
+            .rememberedDataSourceName(proj, sourceModuleKey)
     }.getOrNull()
+}
+
+/**
+ * T-ModuleScopedLastUsed W3：本次显示的记忆名来自**模块级**还是**项目级兜底**。
+ *
+ * **判据必须是「模块级键本身有没有值」**，不能比较两个解析结果——沙盒验收实测到的缺陷：
+ * `lastUsedRunner(proj, moduleKey)` 在模块级为空时会**回落项目级**，于是
+ * `scoped == projectLevel` 恒成立，只有项目级记忆时也被误判成「本模块上次使用」
+ * （真机实际状态：workspace.xml 只有 `mpsql.visualizer.last.runner`，无模块级键，
+ * 灰字却显示「数据源（本模块上次使用）」）。
+ *
+ * 正确做法：直接读模块级那一层的原始键（[DataSourceSelector.LastUsedKeys]），有值才算模块级。
+ * 只读、零副作用；仅用于文案限定词，不参与取源决策。
+ */
+internal fun SqlPreviewPanel.rememberedIsModuleScoped(): Boolean {
+    val proj = project ?: return false
+    val moduleKey = sourceModuleKey?.takeIf { it.isNotBlank() } ?: return false
+    return runCatching {
+        val pc = com.intellij.ide.util.PropertiesComponent.getInstance(proj)
+        val keys = cn.song.mybatisplus.visualizer.execute.DataSourceSelector.LastUsedKeys
+        val id = pc.getValue(keys.dataSourceIdKey(moduleKey))
+        val name = pc.getValue(keys.displayNameKey(moduleKey))
+        !id.isNullOrBlank() || !name.isNullOrBlank()
+    }.getOrDefault(false)
 }
 
 /**
@@ -430,7 +455,16 @@ internal fun SqlPreviewPanel.bindStateText(): String {
     val name = boundDataSourceNameForDisplay()
     if (name != null) return MpSqlVisualizerBundle.message("panel.bindstate.bound", name)
     val remembered = rememberedDataSourceNameForDisplay()
-    if (remembered != null) return MpSqlVisualizerBundle.message("panel.bindstate.associated", remembered)
+    if (remembered != null) {
+        // T-ModuleScopedLastUsed W3：模块级命中与项目级兜底文案区分（只改括号内限定词，
+        // 不新增控件——W12 定案自研换源 UI 已全部退役）。
+        val key = if (rememberedIsModuleScoped()) {
+            "panel.bindstate.associatedModule"
+        } else {
+            "panel.bindstate.associated"
+        }
+        return MpSqlVisualizerBundle.message(key, remembered)
+    }
     return MpSqlVisualizerBundle.message("panel.bindstate.unbound")
 }
 

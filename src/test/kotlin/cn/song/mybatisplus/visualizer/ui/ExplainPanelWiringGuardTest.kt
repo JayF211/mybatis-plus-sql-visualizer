@@ -326,6 +326,42 @@ class ExplainPanelWiringGuardTest {
         )
     }
 
+    /**
+     * T-ExplainConsoleFirst W8（2026-10-24 沙盒验收实测）：`submitExplainDirectConsole` 进执行链前
+     * **必须先预热 exec 临时文件**。
+     *
+     * 实测症状：点「执行计划」刷 9 条 `SEVERE - SlowOperations ... Plugin to blame: SQL Visualizer`，
+     * 栈为 `explainSql → submitExplainDirectConsole → SqlExecutor.execute → chooseAndPrepare →
+     * createTempPsiFile → PsiManagerImpl.findFile`——`createTempPsiFile` 的冷路径（VFS refresh +
+     * `PsiManager.findFile`）在 EDT 上跑。`1a1cf724` 后 EXPLAIN 走旁路查询不经控制台链，故从未暴露；
+     * W1 把 EXPLAIN 切回控制台后它重新进入热路径。
+     *
+     * 反向验证：删掉预热调用 → 必须红。
+     */
+    @Test
+    fun `W8_执行计划进链前必须预热exec文件`() {
+        val source = sqlPreviewPanelSource()
+        val body = functionBody(source, "internal fun SqlPreviewPanel.submitExplainDirectConsole(")
+        assertTrue(
+            "submitExplainDirectConsole 必须在 SqlExecutor.execute 之前调 prewarmExecTempFile（否则 createTempPsiFile 冷路径落 EDT）",
+            body.contains("prewarmExecTempFile("),
+        )
+        val prewarmIdx = body.indexOf("prewarmExecTempFile(")
+        val executeIdx = body.indexOf("SqlExecutor.execute(")
+        assertTrue(
+            "预热必须排在执行之前（实际 prewarm=$prewarmIdx, execute=$executeIdx）",
+            prewarmIdx in 0 until executeIdx,
+        )
+        assertTrue(
+            "预热必须投在池线程（EDT 上 call 会被 prewarmExecTempFile 自身拒绝，等于没修）",
+            body.contains("executeOnPooledThread") || body.contains("AppExecutorUtil"),
+        )
+        assertTrue(
+            "等待预算必须是有界常量（不得无限等）",
+            body.contains("EXPLAIN_EXEC_PREWARM_BUDGET_MS") && source.contains("EXPLAIN_EXEC_PREWARM_BUDGET_MS = "),
+        )
+    }
+
     /** 截取从 [marker] 开始到下一个顶层函数声明之前的源码段。 */
     private fun functionBody(source: String, marker: String): String {
         val start = source.indexOf(marker)

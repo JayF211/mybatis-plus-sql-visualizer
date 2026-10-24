@@ -351,7 +351,8 @@ internal fun DataSourceSelector.chooseAndPrepare(
     //（旧实现 firstOrNull 静默取首条，选错数据源时用户无从察觉）。
     // T-DialectGateExit：forceChoose（用户点「切换数据源」）同样跳过——否则点了等于没点。
     if (allowsSilentLastUsed(executeAfterPrepare, forceChoose)) {
-        val memory = lastUsedRunner(project)
+        // T-ModuleScopedLastUsed W2：静默复用也按模块读——模块 A 上次用的源不该被模块 B 复用。
+        val memory = lastUsedRunner(project, dialectGateRequest?.moduleKey)
         val resolution = resolveLastUsedRunnerIndex(memory, runners.map { getRunnerName(it) }) { id ->
             runCatching {
                 DataSourceSettings.getDataSourceById(project, id)?.let { DataSourceSettings.getName(it) }
@@ -362,13 +363,14 @@ internal fun DataSourceSelector.chooseAndPrepare(
             val matchedName = getRunnerName(matched)
             LOG.info("[M36] silent reuse last runner: $matchedName (memory id=${memory.dataSourceId})")
             chosenRunnerName = matchedName
-            runRunner(project, matched, silent = true, runnerError)
+            runRunner(project, matched, silent = true, onError = runnerError, moduleKey = dialectGateRequest?.moduleKey)
             callback?.invoke(true)
             return
         }
         if (resolution.ambiguous) {
             LOG.info("[M36] last-used memory ambiguous (id=${memory.dataSourceId}, name=${memory.displayName}) - drop memory, show popup")
-            forgetLastRunner(project)
+            // 只清该模块那一层：其它模块的记忆与项目级兜底不该被一处的歧义连坐。
+            forgetLastRunner(project, dialectGateRequest?.moduleKey)
         }
     }
 
@@ -379,8 +381,8 @@ internal fun DataSourceSelector.chooseAndPrepare(
             val picked = runners.first { getRunnerName(it) == preferredRunnerName }
             LOG.info("[M36] preferred runner by name: $preferredRunnerName (skip platform chooser)")
             chosenRunnerName = preferredRunnerName
-            if (!executeAfterPrepare) rememberRunnerName(project, preferredRunnerName)
-            runRunner(project, picked, silent = !executeAfterPrepare, runnerError)
+            if (!executeAfterPrepare) rememberRunnerName(project, preferredRunnerName, dialectGateRequest?.moduleKey)
+            runRunner(project, picked, silent = !executeAfterPrepare, onError = runnerError, moduleKey = dialectGateRequest?.moduleKey)
             callback?.invoke(true)
         }
         runners.isEmpty() -> {
@@ -413,7 +415,7 @@ internal fun DataSourceSelector.chooseAndPrepare(
         runners.size == 1 && shouldBeChosenIfAlone(runners.first()) && !forceChoosePopup -> {
             LOG.info("[M36] single runner, run directly")
             chosenRunnerName = getRunnerName(runners.first())
-            runRunner(project, runners.first(), silent = !executeAfterPrepare, runnerError)
+            runRunner(project, runners.first(), silent = !executeAfterPrepare, onError = runnerError, moduleKey = dialectGateRequest?.moduleKey)
             callback?.invoke(true)
         }
         else -> {
@@ -425,7 +427,7 @@ internal fun DataSourceSelector.chooseAndPrepare(
                 LOG.info("[M36] popup selected: ${runner?.let { getRunnerName(it) }}")
                 // M36.5：记住选择（prepareConsole 路径下次静默复用；控制台创建时也会统一记忆）
                 if (!executeAfterPrepare && runner != null) {
-                    rememberRunnerName(project, getRunnerName(runner))
+                    rememberRunnerName(project, getRunnerName(runner), dialectGateRequest?.moduleKey)
                 }
                 if (runner != null) chosenRunnerName = getRunnerName(runner)
                 callback?.invoke(runner != null)
@@ -435,7 +437,7 @@ internal fun DataSourceSelector.chooseAndPrepare(
                     onSubmission(ExecutionSubmission.CANCELLED)
                 }
                 // 弹窗中用户刚做了主动选择，失败仍需模态引导（silent=false）
-                if (runner != null) runRunner(project, runner, onError = runnerError)
+                if (runner != null) runRunner(project, runner, onError = runnerError, moduleKey = dialectGateRequest?.moduleKey)
             }
         }
     }
@@ -484,7 +486,7 @@ internal fun DataSourceSelector.reuseSharedConsole(
     if (!valid || !reuseIdentityAccepted(identity)) {
         LOG.warn("[M36] shared console identity rejected (ds=$dsName, isValid=$valid, $identity), drop session")
         dropSharedConsole()
-        if (identity?.dsInFacade == false) forgetLastRunner(project)
+        if (identity?.dsInFacade == false) forgetLastRunner(project, dialectGateRequest?.moduleKey)
         return false
     }
     runCatching {
@@ -1938,7 +1940,14 @@ internal fun DataSourceSelector.extractConsoleError(
  * DBN 状态行（Connected / completed in … 等）。全部被剔完返 null（调用方落回既有提示）。
  */
 
-internal fun DataSourceSelector.runRunner(project: Project, runner: Any, silent: Boolean = false, onError: ((String) -> Unit)? = null) {
+internal fun DataSourceSelector.runRunner(
+    project: Project,
+    runner: Any,
+    silent: Boolean = false,
+    onError: ((String) -> Unit)? = null,
+    /** T-ModuleScopedLastUsed：失败清理只清该模块那一层（不传＝既有项目级行为）。 */
+    moduleKey: String? = null,
+) {
     val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
     // 空操作 Runner（平台组项的 EmptyRunnable）不能执行：run() 立即返回且永不回调 session，
     // 只会把准备门拖到 60s 超时。立即结算错误，让面板红字给出可行动原因。
@@ -1963,7 +1972,8 @@ internal fun DataSourceSelector.runRunner(project: Project, runner: Any, silent:
         onError?.invoke(failMsg)
         if (silent) {
             // T-SI-02：两个键一起清（只清旧键会留下指认另一个数据源的 UUID 身份）
-            forgetLastRunner(project)
+            // T-ModuleScopedLastUsed：带上模块键，只清该模块层（项目级兜底不动）
+            forgetLastRunner(project, moduleKey)
             return
         }
         // 驱动缺失/连接失败等：提示用户到数据源设置解决（原生 Download Driver 弹窗由 Database 插件触发）

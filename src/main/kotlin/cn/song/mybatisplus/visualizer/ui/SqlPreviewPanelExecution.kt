@@ -773,6 +773,15 @@ internal fun SqlPreviewPanel.showDialectGateError(
 /** 方言设置页的 Configurable EP id（Database 插件注册，见 SqlPlugin.xml）。 */
 internal const val SQL_DIALECTS_SETTING_ID = "SQL Dialects"
 
+/**
+ * T-ExplainConsoleFirst W8：EXPLAIN 进执行链前的 exec 文件预热等待预算（毫秒）。
+ *
+ * 取 8s：正常冷启预热实测 0.3~3s（`[M36] prewarm done in 286ms/1447ms/1651ms` 三档），
+ * 8s 覆盖慢盘并给出明确上限；超时即放弃预热（回落既有冷路径），不把按钮点击挂住。
+ * 不用 `EXEC_PREWARM_BUDGET_MS`（30s）——那是后台预热链自己的上限，不该成为 UI 交互的等待窗。
+ */
+private const val EXPLAIN_EXEC_PREWARM_BUDGET_MS = 8_000L
+
 /** T-DialectGateUx：打开「设置 → 语言与框架 → SQL 方言」页并选中该页。 */
 internal fun openSqlDialectSettings(proj: Project) {
     // 平台自带的「按 id 打开并选中」入口：它在**同一个** ConfigurableGroup 实例里查找目标
@@ -1156,6 +1165,22 @@ internal fun SqlPreviewPanel.explainSql() {
 /**
  * T-PreviewSideQuery P2：显式「在控制台打开」路径（保留原有 SqlExecutor.execute 行为）。
  * 仅由用户在结果对话框里明确选择时调用；默认 EXPLAIN/回退不再走这里。
+ *
+ * T-ExplainConsoleFirst W8（2026-10-24 沙盒验收实测）：**进执行链前先预热 exec 临时文件**。
+ *
+ * 实测症状：点「执行计划」刷 9 条 `SEVERE - SlowOperations ... Plugin to blame: SQL Visualizer`，
+ * 栈为 `explainSql → submitExplainDirectConsole → SqlExecutor.execute → chooseAndPrepare →
+ * createTempPsiFile → PsiManagerImpl.findFile`——即 `createTempPsiFile` 的**冷路径**
+ * （VFS refresh + `PsiManager.findFile`）在 EDT 上跑。
+ *
+ * 为什么现在才暴露：`1a1cf724` 之后 EXPLAIN 默认走旁路查询（`PreviewSideQuery`），不经过
+ * 控制台链；本轮 W1 把它切回控制台后，这条既有冷路径重新进入热路径。既有预热
+ * （`prewarmExecTempFile`）只服务「预览 SQL」，且仅在方言重渲染路径触发，EXPLAIN 文本从未预热过。
+ *
+ * 修法：执行前把**本条 EXPLAIN 文本**交给后台预热（`prewarmExecTempFile` 自带 EDT 拒绝、
+ * 预算等待、并发去重），命中缓存后 `createTempPsiFile` 走热路径，不再在 EDT 上做 VFS/PSI 慢操作。
+ * 预热写的是 EXPLAIN 文本本身，与随后执行的内容一致，不会污染（执行前仍有
+ * `syncExecVfContentIfNeeded` 兜底同步）。预热失败只是回落到既有冷路径，不阻断执行。
  */
 internal fun SqlPreviewPanel.submitExplainDirectConsole(
     proj: Project,
@@ -1169,6 +1194,20 @@ internal fun SqlPreviewPanel.submitExplainDirectConsole(
 
             else -> Unit
         }
+    // W8：后台预热 exec 文件（内部自带预算等待与 EDT 拒绝），避免 createTempPsiFile 冷路径落 EDT。
+    // 预热在**池线程**发起并等待有界预算——本函数仍在 EDT，等待窗口取预热自带预算的同一量级，
+    // 超时即放弃（回落冷路径，不阻断执行）。
+    runCatching {
+        val prewarmFuture = com.intellij.util.concurrency.AppExecutorUtil.getAppExecutorService().submit {
+            cn.song.mybatisplus.visualizer.execute.DataSourceSelector.prewarmExecTempFile(
+                proj, explainSql, dialectGateRequest.renderedDialectName,
+            )
+        }
+        prewarmFuture.get(EXPLAIN_EXEC_PREWARM_BUDGET_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
+    }.onFailure { e ->
+        com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+            .info("[W8] exec prewarm before explain skipped: ${e.javaClass.simpleName}: ${e.message}")
+    }
     resultPanel.showLoading()
     SqlExecutor.execute(
         proj, explainSql, null, true,
