@@ -160,3 +160,38 @@ onError = null,   // 「默认准备失败（无数据源等）静默——不�
 | W3 | 切换数据源 → 自动重试当前动作（一次，防循环） | `ui/SqlPreviewPanelExecution.kt` |
 | test | 签名表 + 两守卫 + 反向 | `execute/ExplainFailureClassifierTest.kt`、`convention/ExplainAskPasswordChannelGuardTest.kt` |
 | doc | 索引登记 | `docs/索引/开发计划.md` |
+
+---
+
+## 八、实施记录（2026-10-24，W1~W3 全部落地，`020bfc39`）
+
+**W1（就地引导）**：`ExplainFailureKind` 新增 `WRONG_TARGET`；签名表
+`EXPLAIN_WRONG_TARGET_SIGNATURES`（doesn't exist / does not exist / unknown table /
+invalid object name / ora-00942 / no such table）+ `isWrongTargetText`。分型顺序
+AUTH > WRONG_TARGET > CANCELLED > OTHER（认证误判代价更高；`Unknown column` 明确不算——
+换源解决不了列级问题，已在测试里钉死）。两处出口（结构化 `onFailed` + 直送 `Result.Failed`）
+改走 `showExplainWrongTarget`：结果区就地横幅（`showErrorWithActions` 双动作槽）+
+「切换数据源」主动作 +「在控制台打开」次动作；**不弹模态、不回退直送**。
+
+**W2（工具栏默认展示）**：`buildBindStateRow` 分支化——`ExecuteSqlSupport.isAvailable()` 为真时
+渲染「数据源：」+ 数据源下拉（`BIND_STATE_COMBO_NAME` 锚点，在籍源清单，当前项=绑定/记忆/
+未绑定）；为假时**逐字保持**原纯文本灰字形态（社区版零打扰）。`refreshBindStateRow` 同步分支
+（工具栏形态只更新选中项，降级形态更新文本）。布局按仓内定例 FlowLayout + 定宽 180（防
+`BoxLayout(Y_AXIS)` 横跨整屏的既有坑）。下拉切换走 `prepareConsole(forceChoose=true)`。
+
+**W3（换源后自动重试）**：`switchDataSourceAndRetryExplain` 复用 T-UI030 既有
+`awaitDataSourceBoundThenRetry`（同 generation 快照、`allowDataSourcePrompt=false` 防循环）。
+
+**读数**：定向 5 类 **45/0/0/0**（Guard 14 + Classifier 12 + Fallback 6 + Timeout 3 +
+PreviewSideQuery 10，XML 判例数已核）。反向三条各恰 1 红：W1 直送分支改回模态、W2 摘掉
+可用性判定、W3 `forceChoose` 改 false；还原后全绿，探针残留 0。
+
+**诚实边界（未验项）**：
+- **GUI 未走查**（用户已明确沙盒自行启动）：横幅视觉、下拉在顶栏的实际布局、换源后自动重试的
+  真实时序，均需沙盒/真机确认。本轮的绿只覆盖分型逻辑与源码形接线。
+- W2 的下拉**只在插件可用时**出现；`isAvailable()` 在社区版的判定本仓已有既有用例，但
+  「指示行降级后参数区高度是否跳动」未验（计划 §五 P-4 仍开放）。
+- 计划 §五 P-5（结构化与直送两通道重试叠加成两次执行）未实测——W3 复用的
+  `awaitDataSourceBoundThenRetry` 内部 `submitExplainOrStructured(allowDataSourcePrompt=false)`
+  未传 `rerendered=true`，理论上闸门重渲染仍可能再触发一次重提交；沙盒复验时若观察到
+  「一次点击执行两次」须补该位。
