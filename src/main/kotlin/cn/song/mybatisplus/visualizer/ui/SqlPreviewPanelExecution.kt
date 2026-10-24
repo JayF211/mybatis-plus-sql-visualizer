@@ -1369,6 +1369,14 @@ internal fun SqlPreviewPanel.submitExplainOrStructured(
                     // 重试仍未绑定：只给现有回退说明，不再触发直送链（直送链会再次弹选择器）。
                     notifyExplainStructuredFallback(proj, verdict.reason, detail = null)
                 }
+            } else if (verdict.reason ==
+                cn.song.mybatisplus.visualizer.execute.ExplainPanelChannel.FallbackReason.UNFILLED_PARAMS
+            ) {
+                // T-ExplainPwdPrompt W5（2026-10-24 用户沙盒实测 bug）：参数未回填**不回退直送**。
+                // 回退直送在无绑定形态下必然失败且再弹一个误导性「未绑定数据源」红字框（用户明明
+                // 有 last-used 数据源）；有绑定形态把字面 `?` 送 JDBC 同样是语法错（R33 同款结论）。
+                // 通知已含原因与动作（填参数后重试），就地收口即可。
+                notifyExplainStructuredFallback(proj, verdict.reason, detail = null)
             } else {
                 notifyExplainStructuredFallback(proj, verdict.reason, detail = null)
                 submitExplainDirect(proj, explainSql, dialectGateRequest)

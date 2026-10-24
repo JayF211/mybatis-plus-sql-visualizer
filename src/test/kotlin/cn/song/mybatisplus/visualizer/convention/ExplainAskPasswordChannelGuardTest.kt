@@ -57,4 +57,21 @@ class ExplainAskPasswordChannelGuardTest : BannedApiScanSupport() {
             code.contains("lastUsedExplainDataSource"),
         )
     }
+
+    @Test
+    fun `参数未回填不得回退直送`() {
+        val code = sourceOf("ui/SqlPreviewPanelExecution.kt")
+        // DirectFallback(UNFILLED_PARAMS) 分支必须先于「其余回退直送」的 else 被单独拦下：
+        // 回退直送在无绑定形态必失败且弹误导性「未绑定数据源」红字（沙盒实测 2026-10-24）。
+        val unfilledIdx = code.indexOf("FallbackReason.UNFILLED_PARAMS")
+        val elseIdx = code.indexOf("notifyExplainStructuredFallback(proj, verdict.reason, detail = null)\n                submitExplainDirect")
+        assertTrue(
+            "submitExplainOrStructured 须有 UNFILLED_PARAMS 专用分支（不回退直送，T-ExplainPwdPrompt W5）",
+            unfilledIdx >= 0,
+        )
+        assertTrue(
+            "UNFILLED_PARAMS 分支必须出现在回退直送的 else 之前（否则未回填参数仍会弹误导红字）",
+            elseIdx < 0 || unfilledIdx in 0 until elseIdx,
+        )
+    }
 }

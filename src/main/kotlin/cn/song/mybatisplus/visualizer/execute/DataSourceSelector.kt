@@ -404,17 +404,25 @@ object DataSourceSelector {
      */
     fun lastUsedExplainDataSource(project: Project): Any? {
         val name = runCatching { rememberedDataSourceName(project) }.getOrNull()?.takeIf { it.isNotBlank() }
-            ?: return null
         val candidates = runCatching {
             DataSourceSettings.getAllDataSources(project).map { DataSourceSettings.getName(it) to it }
-        }.getOrNull() ?: return null
-        return resolveLastUsedExplainFallback(name, candidates)
+        }.getOrNull()
+        val resolved = resolveLastUsedExplainFallback(name, candidates)
+        com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java).info(
+            "[M37.2] lastUsedExplainDataSource: remembered=" + (name ?: "null") +
+                ", roster=" + (candidates?.map { it.first } ?: "null") +
+                ", resolved=" + (resolved?.let { runCatching { DataSourceSettings.getName(it) }.getOrNull() } ?: "null"),
+        )
+        return resolved
     }
 
     /** 纯判定核心（headless 直测）：按名唯一命中取对象；名字缺失/同名歧义一律弃（不猜）。 */
-    internal fun resolveLastUsedExplainFallback(rememberedName: String?, candidates: List<Pair<String, Any?>>): Any? =
+    internal fun resolveLastUsedExplainFallback(
+        rememberedName: String?,
+        candidates: List<Pair<String, Any?>>?,
+    ): Any? =
         rememberedName?.takeIf { it.isNotBlank() }?.let { n ->
-            candidates.filter { it.first == n }.singleOrNull()?.second
+            candidates?.filter { it.first == n }?.singleOrNull()?.second
         }
 
     /**
