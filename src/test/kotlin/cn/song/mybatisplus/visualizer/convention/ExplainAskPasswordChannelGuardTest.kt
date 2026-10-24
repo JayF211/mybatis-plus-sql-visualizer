@@ -49,12 +49,13 @@ class ExplainAskPasswordChannelGuardTest : BannedApiScanSupport() {
     }
 
     @Test
-    fun `提交链必须带lastused取源回落`() {
+    fun `提交链必须带模块学习回落取源`() {
         val code = sourceOf("ui/SqlPreviewPanelExecution.kt")
         assertTrue(
-            "submitExplainOrStructured 必须接 lastUsedExplainDataSource 回落" +
-                "（绑定链 runner 枚举被方言路由卡死时，结构化通道靠 last-used 记忆取源到达，T-ExplainPwdPrompt W4）",
-            code.contains("lastUsedExplainDataSource"),
+            "submitExplainOrStructured 必须接 explainFallbackDataSource(proj, sourceModuleKey) 回落" +
+                "（绑定链 runner 枚举被方言路由卡死时，结构化通道靠模块学习/last-used 记忆取源到达，" +
+                "T-ExplainPwdPrompt W4 + T-DialectInferPollution W9 模块归属修正）",
+            code.contains("explainFallbackDataSource(\n                proj, sourceModuleKey,"),
         )
     }
 
@@ -128,16 +129,16 @@ class ExplainAskPasswordChannelGuardTest : BannedApiScanSupport() {
     }
 
     @Test
-    fun `直送链取源必须接lastused回落`() {
+    fun `直送链取源必须接模块学习回落`() {
         val code = sourceOf("ui/SqlPreviewPanelExecution.kt")
-        // T-DialectInferPollution W8（用户真机报障）：开关关闭形态下直送链（PreviewSideQuery
-        // 旁路查询）取源须接 last-used 回落——否则控制台无绑定即弹「未绑定数据源」红字框，
-        // 而用户面板明明有「数据源（上次使用）」记忆。
+        // T-DialectInferPollution W9（用户沙盒实测：jar-model demo 表被 last-used mp_demo 硬套
+        // → mp_demo.wms_inventory_jar_demo doesn't exist）：直送链与结构化链取源统一走
+        // explainFallbackDataSource——模块学习优先、冲突不猜、last-used 兜底。
         val directIdx = code.indexOf("val target = explainTargetForTest?.invoke()")
-        val fallbackIdx = code.indexOf("lastUsedExplainDataSource(proj)", directIdx)
+        val fallbackIdx = code.indexOf("explainFallbackDataSource(\n                proj, sourceModuleKey,", directIdx)
         val noDsIdx = code.indexOf("panel.explain.noDataSource", directIdx)
         assertTrue(
-            "submitExplainDirect 的取源须接 lastUsedExplainDataSource 回落（W8）",
+            "submitExplainDirect 的取源须接 explainFallbackDataSource(proj, sourceModuleKey) 模块学习回落（W9）",
             directIdx >= 0 && fallbackIdx > directIdx,
         )
         assertTrue(

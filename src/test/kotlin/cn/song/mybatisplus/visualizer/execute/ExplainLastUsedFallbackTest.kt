@@ -5,54 +5,45 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 
 /**
- * T-ExplainPwdPrompt W4 护栏：结构化 EXPLAIN 的 last-used 取源回落判定
- * （[DataSourceSelector.resolveLastUsedExplainFallback]）纯逻辑表。
+ * T-DialectInferPollution W9 护栏：EXPLAIN 链回落证据选择
+ * （[DataSourceSelector.resolveExplainFallbackChoice]）纯逻辑表。
  *
- * 缺陷形态（2026-10-24 沙盒实测）：数据源无 Dialects 映射时平台
- * `DatabaseRunners.getAttachDataSourceRunners` 返回空（Database 视图已连接仍 runners=0），
- * 绑定链在选择器弹出前就失败，结构化通道（askPassword=true 的原生密码框）永远走不到。
- * 回落＝真绑定缺失时按面板「数据源（上次使用）」记忆取源；防错源纪律＝**歧义即弃**。
+ * 缺陷形态（2026-10-24 用户沙盒实测）：W4/W8 的「无脑回落 last-used」把 mp_demo 硬套给
+ * jpa-jar-model-demo 模块（表在 jpa_demo）→ `mp_demo.wms_inventory_jar_demo doesn't exist`。
+ * 修正语义：
+ *  - 预览模块有学习绑定 → 用学习源（模块归属强于全局记忆，UUID 解析）；
+ *  - 学习源与 last-used 同时存在且不同 → **冲突不猜**，返回 null（下游 NO_DATA_SOURCE 引导
+ *    弹数据源选择器，用户选一次即自愈更新学习与记忆）；
+ *  - 学习缺失 → last-used 兜底（demo 主模块等既有场景）。
  *
  * 本类零平台引用（testFast 快桶成员）。
  */
 class ExplainLastUsedFallbackTest {
 
-    private val candidates = listOf(
-        "mp_demo@localhost" to "DS-MP",
-        "mpj_demo@localhost" to "DS-MPJ",
-        "jpa_demo@localhost" to "DS-JPA",
-    )
-
     @Test
-    fun uniqueNameHitResolvesDataSource() {
+    fun learnedEqualsLastIsConsistent() {
         assertEquals(
-            "按名唯一命中应取该数据源对象",
-            "DS-MPJ",
-            DataSourceSelector.resolveLastUsedExplainFallback("mpj_demo@localhost", candidates),
+            "学习源与 last-used 同源 → 一致，取该源",
+            "same-uuid",
+            DataSourceSelector.resolveExplainFallbackChoice("same-uuid", "same-uuid"),
         )
     }
 
     @Test
-    fun ambiguousNameIsAbandoned() {
-        val dup = candidates + ("mp_demo@localhost" to "DS-MP-2")
+    fun conflictBetweenLearnedAndLastIsAbandoned() {
         assertNull(
-            "同名多源必须弃（不猜）——回落错源比不回落更糟",
-            DataSourceSelector.resolveLastUsedExplainFallback("mp_demo@localhost", dup),
+            "学习源与 last-used 不同源 → 冲突不猜（错源执行比引导选择更糟，W9 核心语义）",
+            DataSourceSelector.resolveExplainFallbackChoice("dbx-test-pg", "mp-demo-mysql"),
         )
     }
 
     @Test
-    fun missingNameYieldsNull() {
-        assertNull(
-            "记忆名不在在籍名单（已删除/改名）→ 弃",
-            DataSourceSelector.resolveLastUsedExplainFallback("gone_demo@localhost", candidates),
+    fun lastUsedFallsBackWhenNoLearning() {
+        assertEquals(
+            "模块无学习 → last-used 兜底（W4/W8 既有场景）",
+            "last-uuid",
+            DataSourceSelector.resolveExplainFallbackChoice(null, "last-uuid"),
         )
-    }
-
-    @Test
-    fun blankOrNullNameYieldsNull() {
-        assertNull("空名弃", DataSourceSelector.resolveLastUsedExplainFallback("", candidates))
-        assertNull("null 名弃", DataSourceSelector.resolveLastUsedExplainFallback(null, candidates))
-        assertNull("空名单弃", DataSourceSelector.resolveLastUsedExplainFallback("mp_demo@localhost", emptyList()))
+        assertNull("两者皆无 → null（下游 NO_DATA_SOURCE 引导）", DataSourceSelector.resolveExplainFallbackChoice(null, null))
     }
 }

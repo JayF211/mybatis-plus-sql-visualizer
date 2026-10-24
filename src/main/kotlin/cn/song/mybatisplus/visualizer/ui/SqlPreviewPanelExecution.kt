@@ -1173,7 +1173,9 @@ internal fun SqlPreviewPanel.submitExplainDirect(
         // 红字框（用户明明绑过）。旁路查询与结构化通道同为 McpDbExecutor 直连，last-used 对象
         // 完全可用；歧义即弃，方言不符由 PreviewSideQuery 内既有方言闸拦。
         ?: runCatching {
-            cn.song.mybatisplus.visualizer.execute.DataSourceSelector.lastUsedExplainDataSource(proj)
+            cn.song.mybatisplus.visualizer.execute.DataSourceSelector.explainFallbackDataSource(
+                proj, sourceModuleKey,
+            )
         }.getOrNull()
     if (target == null) {
         // 无绑定数据源：按钮直达 Database 工具窗口（按提示去选源），不再空跑一次必然失败的执行；
@@ -1342,7 +1344,9 @@ internal fun SqlPreviewPanel.submitExplainOrStructured(
         // 回落到面板「数据源（上次使用）」记忆取源——结构化通道（askPassword=true）不依赖
         // 绑定链即可到达；歧义即弃，方言不符由既有 allowDialectGate 闸拦。
         ?: runCatching {
-            cn.song.mybatisplus.visualizer.execute.DataSourceSelector.lastUsedExplainDataSource(proj)
+            cn.song.mybatisplus.visualizer.execute.DataSourceSelector.explainFallbackDataSource(
+                proj, sourceModuleKey,
+            )
         }.getOrNull()
     // O-145 W7：结构化 EXPLAIN 不经过 SqlExecutor，必须在 JDBC 直连前用同一实际数据源闸门。
     if (boundDs != null && !cn.song.mybatisplus.visualizer.execute.DataSourceSelector.allowDialectGate(

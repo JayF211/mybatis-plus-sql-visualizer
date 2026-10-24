@@ -402,23 +402,56 @@ object DataSourceSelector {
      *
      * @return 在籍数据源对象（唯一命中）；名字缺失/歧义/枚举失败一律 null
      */
-    fun lastUsedExplainDataSource(project: Project): Any? {
-        val name = runCatching { rememberedDataSourceName(project) }.getOrNull()?.takeIf { it.isNotBlank() }
-            ?: return null
-        val candidates = runCatching {
-            DataSourceSettings.getAllDataSources(project).map { DataSourceSettings.getName(it) to it }
-        }.getOrNull() ?: return null
-        return resolveLastUsedExplainFallback(name, candidates)
+    /**
+     * T-DialectInferPollution W9（2026-10-24）：EXPLAIN 链统一取源回落（结构化 W4 + 直送 W8
+     * 合并重构）。原「无脑回落 last-used」有跨模块错源副作用：jar-model demo 模块（无学习条目）
+     * 的表被 last-used（mp_demo）硬套 → `mp_demo.wms_inventory_jar_demo doesn't exist`（用户
+     * 沙盒实测截图）。修正语义：
+     *
+     *  1. 预览模块有学习绑定 → 用学习源（模块归属强于全局记忆；UUID 解析在籍对象，比按名稳）；
+     *  2. 学习源与 last-used **同时存在且不同** → 证据冲突不猜，返回 null（下游 NO_DATA_SOURCE
+     *     引导弹数据源选择器，用户选一次即自愈更新学习与记忆）；
+     *  3. 学习缺失 → last-used 唯一命中可用（兜底旧场景）——注意这是兜底不是归属，模块学习会
+     *     随执行自愈。
+     *
+     * @param moduleKey 预览 SQL 所属模块键（面板 [cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel.sourceModuleKey]）
+     */
+    fun explainFallbackDataSource(project: Project, moduleKey: String?): Any? {
+        val learned = moduleKey?.takeIf { it.isNotBlank() }?.let {
+            runCatching {
+                cn.song.mybatisplus.visualizer.sql.ModuleDataSourceBindingStore.getInstance(project)
+                    .learnedCandidate(project, it)
+            }.getOrNull()
+        }
+        val lastName = runCatching { rememberedDataSourceName(project) }.getOrNull()?.takeIf { it.isNotBlank() }
+        val lastDs = lastName?.let { name ->
+            runCatching {
+                DataSourceSettings.getAllDataSources(project)
+                    .filter { DataSourceSettings.getName(it) == name }
+                    .singleOrNull()
+            }.getOrNull()
+        }
+        val learnedId = learned?.id
+        val lastId = lastDs?.let { runCatching { DataSourceSettings.getUniqueId(it) }.getOrNull() }
+        when (resolveExplainFallbackChoice(learnedId, lastId)) {
+            null -> return null                    // 双证据冲突：学习源与 last-used 不同源，交用户选择
+            learnedId -> return runCatching {
+                cn.song.mybatisplus.visualizer.execute.DataSourceSettings.getDataSourceById(project, learnedId!!)
+            }.getOrNull()
+            else -> return lastDs
+        }
     }
 
-    /** 纯判定核心（headless 直测）：按名唯一命中取对象；名字缺失/同名歧义一律弃（不猜）。 */
-    internal fun resolveLastUsedExplainFallback(
-        rememberedName: String?,
-        candidates: List<Pair<String, Any?>>?,
-    ): Any? =
-        rememberedName?.takeIf { it.isNotBlank() }?.let { n ->
-            candidates?.filter { it.first == n }?.singleOrNull()?.second
-        }
+    /**
+     * T-DialectInferPollution W9 纯判定核心（headless 直测）：回落证据选择。
+     * 学习源与 last-used 同时存在且不同 → null（冲突不猜，下游引导选择数据源）；
+     * 学习源优先；学习缺失时兜底 last-used。
+     */
+    internal fun resolveExplainFallbackChoice(learnedId: String?, lastId: String?): String? = when {
+        learnedId != null && lastId != null && learnedId != lastId -> null
+        learnedId != null -> learnedId
+        else -> lastId
+    }
 
     /**
      * F68a（T-PerfSweep20）：在籍数据源名单按 project 弱缓存——指示行取名链每次刷新
