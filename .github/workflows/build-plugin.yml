@@ -75,8 +75,16 @@ jobs:
       - name: Marketplace 同口径门禁（verifyMarketplace，在线 + 无豁免）
         run: ./gradlew.bat :verifyMarketplace -PgifRecord=false --no-daemon --console=plain
 
-      - name: 全量分片测试（testShards，含 agent 子项目与外部护栏桶）
-        run: ./gradlew.bat :testShards -PgifRecord=false --no-daemon --console=plain
+      - name: 全量分片测试（testShards，真机类剔除）
+        # 三类真机依赖用例在 CI 剔除（与 testDatabase / e2eFakeIde 同口径，本地发版前照跑）：
+        #   AttachPoolWarmGateTest——child JVM 起 Hikari 真池直连本机 MySQL；
+        #   DataSourceJdbcSmokeTest——demo 数据源 JDBC 直连 127.0.0.1:3306；
+        #   O147RealAgentAcceptanceTest——需要本机 JDK8（sqlvis.jdk8home 默认硬编码本机路径）。
+        # root 侧用既有 -PtestShardExcludeClasses 隔离口，agent 侧用 -PagentTestExclude（同语义）。
+        run: >-
+          ./gradlew.bat :testShards -PgifRecord=false --no-daemon --console=plain
+          "-PtestShardExcludeClasses=cn.song.mybatisplus.visualizer.execute.DataSourceJdbcSmokeTest,cn.song.mybatisplus.visualizer.log.O147RealAgentAcceptanceTest"
+          "-PagentTestExclude=cn.song.mybatisplus.sqlvis.agent.AttachPoolWarmGateTest"
 
       - name: 上传插件 ZIP
         uses: actions/upload-artifact@v4
