@@ -353,8 +353,19 @@ class O147HistoryUpgradeTest {
         val process = ProcessBuilder(args).redirectErrorStream(true).redirectOutput(output).start()
         try {
             check(process.waitFor(90, java.util.concurrent.TimeUnit.SECONDS)) { "String child timeout: $output" }
-            assertEquals(output.readText(), 0, process.exitValue())
-            assertTrue(output.readText().contains("O147_STRING_OK"))
+            val childOutput = output.readText()
+            if (process.exitValue() != 0) {
+                // T-CiRelease（20261024 诊断自曝）：子进程在 CI 上退出码非 0（本机全绿；字符集对齐
+                // 修复后仍复现——em dash/字符集假设被证伪或不充分）。CI 控制台是唯一无需下载工件
+                // 即可见的通道：失败时原样打印子进程输出与完整命令行，终结盲猜。
+                println("=== O147 string-child FAILED exit=${process.exitValue()} ===")
+                println(childOutput)
+                println("=== command ===")
+                println(File(file.parentFile, "string-child-command.txt").readText())
+                println("=== end O147 string-child diag ===")
+            }
+            assertEquals(childOutput, 0, process.exitValue())
+            assertTrue(childOutput.contains("O147_STRING_OK"))
         } finally { if (process.isAlive) process.destroyForcibly() }
     }
 

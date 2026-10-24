@@ -136,3 +136,17 @@ jobs:
             if ($version -match '-') { $releaseArgs += '--prerelease' }
             gh @releaseArgs
           }
+
+      - name: 失败时上传测试报告（诊断通道）
+        # 任务失败时把测试报告与结果 XML 打成工件——CI 控制台的精简格式不显示断言消息
+        # （expected/actual、子进程日志都只在报告里），下载工件即可定位，终结盲猜轮次。
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports-${{ github.run_number }}
+          path: |
+            build/reports/tests/
+            build/test-results/
+            sub-projects/sql-visualizer-agent/build/test-results/
+          if-no-files-found: ignore
+          retention-days: 14
