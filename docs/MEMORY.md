@@ -75,10 +75,11 @@ update-rule: 新增/归档文档时同步更新本索引，与 docs/ 目录保�
 ## 经验总结（docs/经验总结/）
 
 > 跨任务可复用的工程实践沉淀（脚本管线、平台踩坑、录制/迁移等一次性但可复制的经验）。**本节是唯一权威索引**（2026-09-22 合并去重：原文件里另有一条同名索引节，只登记 3 篇且滞后 6 篇）。
-> 目录内共 26 篇（2026-10-23 `ls` 实测），时间倒序。
+> 目录内共 29 篇（2026-10-24 `ls` 实测，新增十二轮拉锯一篇），时间倒序。
 
 | 文档 | 用途 |
 |---|---|
+| [20261024-1914-执行计划取源换源十二轮拉锯与平台关联副作用-经验总结.md](./经验总结/20261024-1914-执行计划取源换源十二轮拉锯与平台关联副作用-经验总结.md) | **执行计划取源/换源十二轮拉锯**：根因是平台「选中即关联」（`getForcedDataSourceForExec` 命中即 `singletonList` 短路枚举、无公开清除 API、`ChooseDataSourceAction` 依赖内部类）→ 插件自建换源 UI 必然失败（用户三次否决），W12 定案**交还原生 `Data Sources` 菜单**。硬纪律=①反射改接入点先 `javap` 核**完整签名**（attach 三参 / switch 四参；三参调用 → `NoSuchMethodException` 被 `runCatching` 吞成 `runners=0` → 伪装成「方言不匹配」）②`runCatching` 会把实现失败伪装成业务空结果，下游要呈现的返回值禁用 `getOrDefault(空)` ③反向探针必须**真删符号**（注释 / `false &&` 骗不过源码形守卫）④提交后 `git status` 复核 + 提交态编译（漏 `git add` 致提交态编译不过）⑤沙盒合成输入对 `JTextField` 不可靠，门禁证据落**日志增量**（`[M37.2] explainSql` 打点）⑥失败呈现先分型再选打扰方式，且两通道共用同一分类器 |
 | [20261023-0910-ACP-agent认证模式致会话永久Preparing-经验总结.md](./经验总结/20261023-0910-ACP-agent认证模式致会话永久Preparing-经验总结.md) | **ACP agent 认证模式**：沙盒里 Codex/Claude 永久卡 `Preparing`＋反复要求选认证，根因=`options/acpAgents.xml` 的 `agent_auth=EXPLICIT_SELECTION`（配 `--hide-claude-auth` 裁掉「agent 自管」选项 → 选择永完不成 → `session/new` 从不发给 adapter，adapter 进程活着但无 claude.exe 子进程）；改 `MANAGED_EXTERNALLY` 即走 `~/.claude/settings.json` 的第三方端点。**设置页无此开关**（唯一写入口是面板认证选择器）、**必须先关 IDE 再改文件**。口诀：日常能用沙盒不能 → 先 diff 两边 `config/options/*.xml` |
 | [20261023-1810-录制沙盒许可失效反复踩坑与根治-经验总结.md](./经验总结/20261023-1810-录制沙盒许可失效反复踩坑与根治-经验总结.md) | **录制沙盒许可失效**：许可靠 `-javaagent:...qwdn-afb.jar` 维持（在沙盒 `config/idea64.exe.vmoptions`），**只能用 `gradle runIde` 启动**（它 merge 进 bin 并传 JVM）。四条禁令=①禁点 Refresh license list（崩 IDE exit 7）②禁 fallback 脚本直启 exe（`IDEA_VM_OPTIONS` 只被 `idea.bat` 识别，会退化成日常配置混合态）③禁运行时改 bin vmoptions（gradle 重写）④禁只凭标题栏判断。开录前必验进程 `CommandLine -match qwdn` 得 `HAS qwdn`。附抢前台递进处置（Alt 按放+SetForegroundWindow 最可靠）与七项 checklist |
 | [20261007-0530-发版门禁墙钟压缩第二期-错峰转正与两销案-经验总结.md](./经验总结/20261007-0530-发版门禁墙钟压缩第二期-错峰转正与两销案-经验总结.md) | **T-ReleasePerf7**：verifyMarketplace 前段解析/后段等待窗错峰（market 争用系数 +86~165s→≈+77s），N1 错峰转正 −10.8%、N2/N3 双销案；releaseGate 754s→672.5s |
