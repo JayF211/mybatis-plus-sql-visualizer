@@ -1193,17 +1193,14 @@ internal fun SqlPreviewPanel.submitExplainDirect(
             is PreviewSideQuery.Result.Table ->
                 showExplainRawResultDialog(MpSqlVisualizerBundle.message("panel.explain"), result.raw)
 
-            // T-ExplainPwdPrompt：分型出口同结构化通道——认证失败附补存密码指引；取消轻通知不弹红字框
+            // T-ExplainPwdPrompt：分型出口同结构化通道——AUTH/CANCELLED 轻通知收口（平台
+            // 凭据对话框已呈现失败与出口，红字模态框是二次打断，W6），不自动重试
             is PreviewSideQuery.Result.Blocked -> showExplainErrorDialog(result.message, openConsole)
             is PreviewSideQuery.Result.Failed -> when (
                 cn.song.mybatisplus.visualizer.execute.classifyExplainFailure(result.message)
             ) {
                 cn.song.mybatisplus.visualizer.execute.ExplainFailureKind.AUTH ->
-                    showExplainErrorDialog(
-                        result.message + "　" +
-                            MpSqlVisualizerBundle.message("panel.explain.authFailureHint"),
-                        openConsole,
-                    )
+                    notifyExplainAuthFailure(proj)
                 cn.song.mybatisplus.visualizer.execute.ExplainFailureKind.CANCELLED ->
                     notifyExplainCancelled(proj)
                 cn.song.mybatisplus.visualizer.execute.ExplainFailureKind.OTHER ->
@@ -1212,6 +1209,24 @@ internal fun SqlPreviewPanel.submitExplainDirect(
             is PreviewSideQuery.Result.Scalar ->
                 showExplainErrorDialog("unexpected scalar result from EXPLAIN", openConsole)
         }
+    }
+}
+
+/**
+ * T-ExplainPwdPrompt W6（2026-10-24）：认证失败轻通知——平台凭据链（askPassword=true 的
+ * 「Change Credentials / Abort」对话框）已完成失败呈现与两个出口，本通知只做 Abort 后的
+ * 收口反馈（含补存密码指引），绝不弹红字模态框二次打断。单测模式不弹（notifySchemaIssues
+ * 同款守卫）。
+ */
+private fun SqlPreviewPanel.notifyExplainAuthFailure(proj: Project) {
+    if (ApplicationManager.getApplication().isUnitTestMode && schemaNotificationForTest == null) return
+    runCatching {
+        Notification(
+            NOTIFICATION_GROUP_ID,
+            MpSqlVisualizerBundle.message("panel.explain"),
+            MpSqlVisualizerBundle.message("panel.explain.authFailureHint"),
+            NotificationType.WARNING,
+        ).notify(proj)
     }
 }
 
@@ -1450,16 +1465,17 @@ internal fun SqlPreviewPanel.submitExplainOrStructured(
                         return@executeStructured
                     }
                     // T-ExplainPwdPrompt（2026-10-24）：失败分型出口——认证失败不再回退直送
-                    // （直送同通道必同样失败，徒增一次红字对话框），改就地呈现 + 补存密码指引；
-                    // 用户取消（原生密码框 Esc）轻通知收口，绝不自动重试（重试会再弹一次框）。
+                    // （直送同通道必同样失败，徒增一次红字对话框）。
+                    // T-ExplainPwdPrompt W6（用户沙盒实测 bug）：AUTH **也不弹红字模态框**——
+                    // askPassword=true 后平台凭据链已弹原生「Connecting to ... + Change
+                    // Credentials / Abort」对话框（失败与两个出口都在那里），用户点 Abort 后
+                    // 异常以 SQLException: Access denied 形态冒泡回来，再弹红字框是二次打断
+                    // （用户报障原话：「点终止还是出现执行计划的弹框」）。AUTH 改轻通知收口，
+                    // 补存密码指引随通知走。
                     when (cn.song.mybatisplus.visualizer.execute.classifyExplainFailure(errorText)) {
                         cn.song.mybatisplus.visualizer.execute.ExplainFailureKind.AUTH -> {
                             resultPanel.showIdle()
-                            showExplainErrorDialog(
-                                errorText + "　" +
-                                    MpSqlVisualizerBundle.message("panel.explain.authFailureHint"),
-                                onOpenConsole = { submitExplainDirectConsole(proj, explainSql, dialectGateRequest) },
-                            )
+                            notifyExplainAuthFailure(proj)
                         }
                         cn.song.mybatisplus.visualizer.execute.ExplainFailureKind.CANCELLED -> {
                             resultPanel.showIdle()

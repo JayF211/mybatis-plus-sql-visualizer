@@ -74,4 +74,34 @@ class ExplainAskPasswordChannelGuardTest : BannedApiScanSupport() {
             elseIdx < 0 || unfilledIdx in 0 until elseIdx,
         )
     }
+
+    @Test
+    fun `认证失败不得弹红字模态框`() {
+        val code = sourceOf("ui/SqlPreviewPanelExecution.kt")
+        // AUTH 出口走轻通知（notifyExplainAuthFailure）——平台凭据对话框已呈现失败与出口，
+        // Abort 后再弹红字框是二次打断（用户报障 2026-10-24：「点终止还是出现执行计划的弹框」）。
+        // 提取全部 AUTH 分支体（结构化 onFailed 带花括号、直送 Failed 无花括号两种形态）：
+        // 按分支起点切片到下一个 when 分支起点，逐一断言切片内不得出现 showExplainErrorDialog。
+        // （首版 indexOf 近邻检查被直送链调用点干扰假绿、反向探针不红；第二版只匹配带花括号
+        // 形态漏掉直送分支——探针必须让守卫真红才算验证过。）
+        val starts = Regex("ExplainFailureKind\\.AUTH ->").findAll(code).map { it.range.first }.toList()
+        assertTrue(
+            "应存在 AUTH 分支（结构化 onFailed 与直送 Failed 两处）",
+            starts.size >= 2,
+        )
+        val branchEnds = Regex("ExplainFailureKind\\.(CANCELLED|OTHER) ->|is PreviewSideQuery\\.Result\\.Scalar")
+            .findAll(code).map { it.range.first }.toList()
+        val offenders = starts.count { s ->
+            val end = branchEnds.firstOrNull { it > s } ?: code.length
+            code.substring(s, end).contains("showExplainErrorDialog")
+        }
+        assertTrue(
+            "AUTH 分支内不得调 showExplainErrorDialog（红字模态框=二次打断，须走轻通知）：命中 $offenders 处",
+            offenders == 0,
+        )
+        assertTrue(
+            "AUTH 轻通知出口 notifyExplainAuthFailure 必须存在",
+            code.contains("notifyExplainAuthFailure(proj)"),
+        )
+    }
 }
