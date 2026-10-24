@@ -161,6 +161,19 @@ object DatabaseSchemaResolver {
         return sources.indices.filter { i -> names.all { sources[i](it)?.isNotEmpty() == true } }
     }
 
+    /**
+     * T-DialectInferPollution W12：结构缓存是否有**任何**内容（区分「缓存冷 = 无法证明」与
+     * 「缓存热但表不在 = 确证不在」）——前者调用方保持候选（诚实降级），后者调用方引导选择。
+     * 只读 metaCache，零内省零连接。
+     */
+    internal fun cacheHasAnyTable(project: Project?): Boolean {
+        if (project == null || !isDatabaseAvailable()) return false
+        val dataSources = dataSources(project) ?: return false
+        synchronized(metaCache) {
+            return dataSources.any { ds -> metaCache[ds]?.isNotEmpty() == true }
+        }
+    }
+
     /** UI023：只读精确对象与库的既有缓存；不遍历、不跨源回退、不取未知库条目。 */
     internal fun columnNamesCachedForTarget(
         dataSource: Any,
