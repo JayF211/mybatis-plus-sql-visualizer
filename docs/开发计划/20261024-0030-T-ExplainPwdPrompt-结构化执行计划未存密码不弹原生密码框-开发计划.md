@@ -302,5 +302,7 @@ SQLException: Access denied 冒泡，分型判 AUTH 走了红字）。修＝AUTH
 （反向探针不红=假绿）；v2 只匹配带花括号分支漏掉直送无花括号形态；v3 按分支起点切片覆盖两
 形态，反向恰 1 红。**探针不红的守卫不算验证过。**
 
-**W4 诊断缝**：`lastUsedExplainDataSource` 每次取源打 INFO 日志（remembered/roster/resolved
-三段），本轮定位「取源成功、断在下一环」全靠它；守卫收口后保留（量级=每次执行计划一行）。
+**W4 诊断缝**：`lastUsedExplainDataSource` 曾在取源时打 INFO 日志（remembered/roster/resolved
+三段），本轮定位「取源成功、断在下一环」全靠它；问题闭环并经用户复验后**已摘除**（用户拍板：
+推荐去除即去除——每次执行计划一行属常态噪音，回归风险由 ExplainLastUsedFallbackTest 与通道
+守卫兜底，不需要日志；需要时 git 历史可查）。
