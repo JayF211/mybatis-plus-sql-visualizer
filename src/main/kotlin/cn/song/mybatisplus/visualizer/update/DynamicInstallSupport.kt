@@ -21,7 +21,9 @@ import javax.swing.JComponent
  * 平台 API 全走反射探测（F0 javap 243 + 反编译 262 双端实证，签名与语义一致）：
  * - `PluginDescriptorLoader.loadDescriptorFromArtifact(Path, BuildNumber)`：从发行 zip 读新版描述（两平台 public）；
  * - `DynamicPlugins.allowLoadUnloadWithoutRestart(descriptor)`：卸载可行性预检——EP dynamic 属性
- *   （本插件 9/9 合规）、`ide.dynamicPluginVetoer`、依赖插件图（两平台 public）；
+ *   （本插件注册的 EP 全部落在平台声明 `dynamic="true"` 的点位上，当前 57 个注册 0 违规；
+ *   由 `DynamicEpComplianceGuardTest` 守卫，新增 EP 若落在非 dynamic 点位即红）、
+ *   `ide.dynamicPluginVetoer`、依赖插件图（两平台 public）；
  * - `DynamicPlugins.unloadPlugin(descriptor)`：运行期卸载旧版（两平台 public，内部走 EDT write action）；
  * - `PluginInstaller.installAndLoadDynamicPlugin(Path, JComponent?, descriptor)`：解包 + 动态装载新版
  *   （两平台 public；双端反编译实证 descriptor 参数仅用于进度标题/日志/fireState，解包布局由 zip
@@ -76,7 +78,8 @@ object DynamicInstallSupport {
             return fallbackToRestartScript(zip, "current plugin descriptor not found")
         }
 
-        // 5. 卸载可行性预检：本插件 EP 已全 dynamic（9/9 实证），此处主要防 vetoer/依赖图否决
+        // 5. 卸载可行性预检：本插件注册的 EP 全部落在平台 dynamic 点位（DynamicEpComplianceGuardTest 守卫），
+        //    此处主要防 vetoer/依赖图否决
         if (!api.allowLoadUnload(current)) {
             return fallbackToRestartScript(zip, "dynamic unload rejected by platform (vetoer/EP/dependency)")
         }

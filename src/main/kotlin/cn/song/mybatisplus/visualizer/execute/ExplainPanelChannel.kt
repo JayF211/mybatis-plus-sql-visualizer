@@ -144,6 +144,9 @@ object ExplainPanelChannel {
                 val raw = McpDbExecutor.executeQuery(
                     project, dataSource, explainSql, McpExplainFormatter.DEFAULT_MAX_ROWS,
                     timeoutSeconds = timeoutSeconds,
+                    // T-ExplainPwdPrompt：面板 UI 上下文——数据源未存密码时交平台原生密码框
+                    // （此前硬编码 false 连坐自 MCP 通道，沙盒实测只出 Access denied 红字）
+                    askPassword = true,
                     onExecuted = { outcome ->
                         // 审计钩子同步回读（成功/失败两路径都回调一次；取数失败不影响主链）
                         elapsedMs = outcome.elapsedMs
@@ -167,4 +170,49 @@ object ExplainPanelChannel {
         // write-safe：回调只做 Swing 组装/换入（无文档写），ModalityState.any() 同 embedConsole 口径
         ApplicationManager.getApplication().invokeLater(block, ModalityState.any())
     }
+}
+
+/** T-ExplainPwdPrompt：执行计划失败分型（呈现层据此选出口，纯逻辑 headless 直测）。 */
+internal enum class ExplainFailureKind {
+    /** 认证失败（数据源密码未存/错误）——附「补存密码」指引，不再无谓回退直送（同通道必同样失败）。 */
+    AUTH,
+
+    /** 用户取消（原生密码框 Esc 等）——轻通知，绝不自动重试（重试会再弹一次框）。 */
+    CANCELLED,
+
+    /** 其余——维持既有回退直送链。 */
+    OTHER,
+}
+
+/** 认证失败签名（小写 contains；覆盖 MySQL/PostgreSQL/Oracle/SQL Server 常见形态）。 */
+private val EXPLAIN_AUTH_SIGNATURES = listOf(
+    "access denied",                   // MySQL / 通用
+    "password authentication failed",  // PostgreSQL
+    "invalid username/password",       // Oracle 文本形态
+    "ora-01017",                       // Oracle 数字形态
+    "login failed for user",           // SQL Server
+)
+
+/** 文本是否认证失败形态（[classifyExplainFailure] 与 [cn.song.mybatisplus.visualizer.ui.PreviewSideQuery] 共用）。 */
+internal fun isAuthFailureText(text: String): Boolean {
+    val lower = text.lowercase()
+    return EXPLAIN_AUTH_SIGNATURES.any { lower.contains(it) }
+}
+
+/**
+ * T-ExplainPwdPrompt W2（2026-10-24）：执行计划失败分型。
+ *
+ * 取消判定排除超时——驱动超时消息常含 "cancelled"（MySQL "Statement cancelled due to
+ * timeout"），超时是执行错误不是用户取消（[cn.song.mybatisplus.visualizer.execute.ExecutionTimeoutGuard]
+ * 已转 `timed out` 标记），误判取消会把真失败吞成轻通知。
+ */
+internal fun classifyExplainFailure(text: String): ExplainFailureKind {
+    if (isAuthFailureText(text)) return ExplainFailureKind.AUTH
+    val lower = text.lowercase()
+    // "cancell" 词根同时覆盖 cancelled / cancellation（CancellationException 是双 L，
+    // 只写 "canceled" 漏掉平台取消形态——ExplainFailureClassifierTest 首跑实证）
+    val cancelLike = lower.contains("canceled") || lower.contains("cancell")
+    val timeoutLike = lower.contains("timeout") || lower.contains("timed out")
+    if (cancelLike && !timeoutLike) return ExplainFailureKind.CANCELLED
+    return ExplainFailureKind.OTHER
 }

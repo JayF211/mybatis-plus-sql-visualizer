@@ -612,6 +612,9 @@ class PluginSettingsFolderConfigurable : Configurable {
             fields.add(SearchableField(b.message("settings.log.crudColor.style"), b.message("settings.log.crudColor.style.tip"), "settings.section.sqlLog", l))
             fields.add(SearchableField(b.message("settings.enhancedCapture"), b.message("settings.enhancedCapture.status"), "settings.section.sqlLog", l))
             fields.add(SearchableField(b.message("settings.enhancedCapture.desensitize"), "", "settings.section.sqlLog", l))
+            // R60 展示/导出链脱敏（T-SettingsSearchB 补登记）：与面板控件 displayMaskCheck 同文案键，
+            // 搜「脱敏/展示/导出/打码」必须能翻到该开关；完整性由 SettingsPanelSearchableGuardTest 守卫
+            fields.add(SearchableField(b.message("settings.display.mask"), b.message("settings.display.mask.tip"), "settings.section.sqlLog", l))
             fields.add(SearchableField(b.message("settings.sourceFrameSkipPrefixes"), b.message("settings.sourceFrameSkipPrefixes.tip"), "settings.section.sqlLog", l))
             fields.add(SearchableField(b.message("settings.sourceFrameBizJarPrefixes"), b.message("settings.sourceFrameBizJarPrefixes.tip"), "settings.section.sqlLog", l))
 
@@ -665,5 +668,45 @@ class PluginSettingsFolderConfigurable : Configurable {
         internal fun registeredTargetsForTest(): List<Pair<String, Class<out Configurable>>> =
             (SUB_PAGES.map { it.ref.id to it.ref.cls } + ALL_SEARCHABLE_FIELDS.map { it.ref.id to it.ref.cls })
                 .distinct()
+
+        /**
+         * 测试缝：登记的全部可搜索 label（T-SettingsSearchB 守卫用）。
+         *
+         * 「面板上有控件」与「搜索索引里有条目」两件事只靠本清单的维护纪律绑定——
+         * SettingsPanelSearchableGuardTest 拿真实面板的每个输入型文本逐条到本结果里配对，
+         * 漏登记即红。只比对 label 文本（搜索命中判定同源：label 或 tooltip 命中即可，
+         * 本清单 tooltip 全部与控件 tooltip 同键，配对在 label 层已足够判漏）。
+         */
+        internal fun registeredSearchLabelsForTest(): List<String> =
+            ALL_SEARCHABLE_FIELDS.map { it.searchLabel }
+
+        /**
+         * T-SettingsSearchA：页内搜索与 IDE 设置搜索**共用的索引条目**（单一数据源）。
+         *
+         * 两套搜索读同一份清单，避免「面板加了控件、某一边索引忘了登记」的漂移在 IDE 搜索侧
+         * 重演（B 那类缺陷的根因）。返回 (label, tooltip, 页显示名, EP id) 四元组：
+         *  - label/tooltip 喂 [com.intellij.ide.ui.search.SearchableOptionProcessor.addOptions]
+         *    的 text/hit；
+         *  - 页显示名喂 configurableDisplayName（搜索结果分组显示）；
+         *  - EP id 喂 configurableId（平台按 id 把命中映射回设置树节点，见 `filterById`）。
+         *
+         * 只做内存映射，无 IO/PSI——Contributor 在设置对话框初始化路径上执行（计划 §八）。
+         */
+        internal fun ideSearchEntries(): List<IdeSearchEntry> = ALL_SEARCHABLE_FIELDS.map {
+            IdeSearchEntry(
+                label = it.searchLabel,
+                tooltip = it.searchTooltip,
+                pageDisplayName = MpSqlVisualizerBundle.message(it.pageLabelKey),
+                configurableId = it.ref.id,
+            )
+        }
+
+        /** IDE 设置搜索条目（[ideSearchEntries] 的元素；四元组语义见该函数 KDoc）。 */
+        internal data class IdeSearchEntry(
+            val label: String,
+            val tooltip: String,
+            val pageDisplayName: String,
+            val configurableId: String,
+        )
     }
 }

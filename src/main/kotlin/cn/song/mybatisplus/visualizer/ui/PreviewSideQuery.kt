@@ -6,6 +6,7 @@ import cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate
 import cn.song.mybatisplus.visualizer.mcp.McpDbExecutor
 import cn.song.mybatisplus.visualizer.mcp.McpExplainFormatter
 import cn.song.mybatisplus.visualizer.mcp.McpSelectGuard
+import cn.song.mybatisplus.visualizer.util.MpSqlVisualizerBundle
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.progress.EmptyProgressIndicator
@@ -97,6 +98,10 @@ internal object PreviewSideQuery {
                 // （headless 实测：no ProgressIndicator or Job, the current job is not cancellable）。
                 // 真机 IDE 的池线程恰好有上下文，测试/纯后台调用没有——给一次空指示器让只读查询
                 // 在任意后台上下文可执行；查询本身不读取消状态（只读短查询，超时由驱动护栏负责）。
+                // T-PreviewChainNoise W2（2026-10-23 订正）：上文「真机 IDE 的池线程恰好有上下文」
+                // 已被用户真机日志推翻——ExplainPanelChannel 同款裸调在真机也命中该 SEVERE。
+                // 兜底已下沉到 McpDbExecutor.withDbBlockingContext（缺上下文才补空指示器），
+                // 本处包装保留为无害冗余（少改一处少一份回归面）。
                 ProgressManager.getInstance().runProcess(
                     Computable {
                         McpDbExecutor.executeQuery(
@@ -105,6 +110,8 @@ internal object PreviewSideQuery {
                             sql,
                             if (scalar) 1 else McpExplainFormatter.DEFAULT_MAX_ROWS,
                             timeoutSeconds = timeoutSeconds,
+                            // T-ExplainPwdPrompt：面板 UI 上下文——数据源未存密码时交平台原生密码框
+                            askPassword = true,
                             channelNote = channelNote,
                         )
                     },
@@ -136,6 +143,13 @@ internal object PreviewSideQuery {
      */
     internal fun failureMessage(t: Throwable): String {
         val cause = (t as? java.lang.reflect.InvocationTargetException)?.targetException ?: t
-        return cause.message ?: cause.javaClass.simpleName
+        val text = cause.message ?: cause.javaClass.simpleName
+        // T-ExplainPwdPrompt（2026-10-24）：认证失败附「补存密码」指引——预估行数内联区与
+        // EXPLAIN 错误对话框共用本出口，指引随文案走（其余失败形态零变化）
+        return if (cn.song.mybatisplus.visualizer.execute.isAuthFailureText(text)) {
+            text + "　" + MpSqlVisualizerBundle.message("panel.explain.authFailureHint")
+        } else {
+            text
+        }
     }
 }
