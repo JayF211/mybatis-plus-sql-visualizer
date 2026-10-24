@@ -219,4 +219,57 @@ W1~W5 改的是 `Decision.DirectSilent` / `DirectFallback` 那条链（`submitEx
 - **用户当前沙盒状态未修**：沙盒 IDE 当时在运行（PID 37808），此时改配置文件会在退出时被回写覆盖，故未直接改盘。需用户在设置页（`设置 → 工具 → MyBatis-Plus SQL Visualizer → SQL 预览` 组）取消勾选「预览面板内结构化渲染 EXPLAIN」后 Apply，或在关闭 IDE 后改该 xml。
 - 沙盒 GUI 未走查（同 §六）。
 
+---
+
+## 八、追加：W7 `Unknown column` 跨源升格（同日，用户报障触发）
+
+### 8.1 用户报障
+
+> 数据源选错了这个报错信息是正常情况吗
+> `[42S22][1054] Unknown column 'first_name' in 'field list'`
+> `[当前库=mp_demo，数据源=mp_demo@localhost，数据源默认库=mp_demo]`
+
+### 8.2 归因：报错正常，但「选错源」这个判断此前插件给不出来
+
+三段拼装来源已核实：
+- `[42S22][1054] Unknown column ...` = MySQL 驱动原文（连接通、权限够、库切对了才会走到列级）；
+- `[当前库=…]` = 插件诊断后缀（`ExecConsoleContext.describeContext`，`DataSourceSelectorResults.kt:1886` 调用）。
+
+**三处读数全是 `mp_demo`，说明源没选错**——错的是「SQL 与库」这一对：`first_name` 属
+`jpa_demo` 库的 `UserEntity`（`jpa-hibernate-demo/src/main/java/cn/song/jpademo/entity/UserEntity.java`），
+而 `mp_demo` 的 `user` 表列是 `username`。
+
+既有 `classifyExplainFailure` 把 `Unknown column` **明确排除**在 WRONG_TARGET 外
+（`ExplainPanelChannel.kt:209`：「列级问题，同一张表在，换源解决不了」）。这个排除对
+「列名拼错 / 前缀写错」成立，但对**同名表不同列集**漏判——那是源选错，换源正是解。
+
+### 8.3 W7 实施：按证据升格，不一刀切
+
+新增 `CrossSourceColumnEvidence`（纯函数，零 IDE 依赖／零连接／零内省，EDT 可直调）。
+三条**同时**成立才升格：
+
+1. 错误文本能解析出具体列名（`Unknown column '<col>'`，剥别名前缀取末段）；
+2. 当前源的同名表**确证没有**该列（缓存未热 = 无从证明 → 不升格，诚实降级）；
+3. **存在另一条在籍源**，其同名表**带这一列**（换个源真能解决）。
+
+第 3 条是关键：它把「拼错列名」（任何源都没有 → 不升格，照旧只报错）与「源选错」
+（另一源确实有 → 提示换源）分开。**宁可漏判不可误判**——误判会把拼错列名的用户引导去
+换源，比不给引导更迷惑。
+
+接线：`extractConsoleError` 在既有上下文行之后追加一句提示
+（`execute.error.crossSourceColumn`，中英双语已加）。**纯加法**：判据不成立时输出与改前
+逐字一致。控制台数据源经反射 `getDataSource` 取（该文件 Community 下也加载，不得引 DBN 类）。
+`DatabaseSchemaResolver` 补 `allDataSourcesForEvidence`（只读枚举）与 `columnNameSourcesCached`
+（跨源连读加同一把锁，防「读源 A 与读源 B 之间缓存被清」的不一致视图）。
+
+### 8.4 读数与遗留
+
+- 定向 5 类 **43 / 0 / 0 / 0**（`CrossSourceColumnEvidenceTest` 9、`ExplainFailureClassifierTest` 12、
+  两个既有守卫类 18、`PreviewReadonlySnapshotTest` 4）。
+- 反向探针：删掉第 3 条必要条件 → 恰 **2 红**，其中「列名拼错任何源都没有_不升格」正是本次
+  要防的误判形态（证明护栏有效，不是空绿）。
+- **遗留**：`refreshResultsComponent` 没有 `project` 参数，该调用点不参与升格（另两处
+  ——每拍早检、40 拍超时兜底——生效）。沙盒 GUI 未走查。
+
+
 
