@@ -138,12 +138,37 @@ class ExplainAskPasswordChannelGuardTest : BannedApiScanSupport() {
         val fallbackIdx = code.indexOf("explainFallbackDataSource(\n                proj, sourceModuleKey,", directIdx)
         val noDsIdx = code.indexOf("panel.explain.noDataSource", directIdx)
         assertTrue(
-            "submitExplainDirect 的取源须接 explainFallbackDataSource(proj, sourceModuleKey) 模块学习回落（W9）",
+            "submitExplainDirect 的取源须接 explainFallbackDataSource(proj, sourceModuleKey, sql) 模块学习回落（W9）",
             directIdx >= 0 && fallbackIdx > directIdx,
         )
         assertTrue(
             "回落必须先于「未绑定数据源」红字分支（否则回落不生效）",
             noDsIdx < 0 || fallbackIdx in 0 until noDsIdx,
+        )
+    }
+
+    @Test
+    fun `回落取源必须做表归属路由`() {
+        val resolver = sourceOf("ui/highlight/DatabaseSchemaResolver.kt")
+        val selector = sourceOf("execute/DataSourceSelector.kt")
+        val chain = sourceOf("ui/SqlPreviewPanelExecution.kt")
+        // T-DialectInferPollution W10（用户沙盒实测两连错源：wms_inventory_jar_demo/order_entity
+        // 被 last-used/学习源硬套）：模块学习与 last-used 证据都可能陈旧，而「表在哪个库」是更强
+        // 的归属事实。resolver 须提供只读缓存的表归属路由入口；取源函数（DataSourceSelector 侧）
+        // 须接线（候选源不持有表而唯一其他源持有时自动路由；多源/零源不猜）；两条 EXPLAIN 链须
+        // 传预览 SQL。
+        assertTrue(
+            "DatabaseSchemaResolver 须有 cachedOwnerIndexes/ownerIndexesForSources 表归属路由入口（W10）",
+            resolver.contains("cachedOwnerIndexes") && resolver.contains("ownerIndexesForSources"),
+        )
+        assertTrue(
+            "explainFallbackDataSource 须接线表归属路由（cachedOwnerIndexes，W10）",
+            selector.contains("cachedOwnerIndexes"),
+        )
+        assertTrue(
+            "表归属路由须传预览 SQL（否则无表可验证）",
+            Regex("explainFallbackDataSource\\(\\s*proj,\\s*sourceModuleKey,\\s*(sql|explainSql)").containsMatchIn(chain) &&
+                Regex("SchemaValidator\\.tableNames\\(").containsMatchIn(selector),
         )
     }
 }

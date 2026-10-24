@@ -415,8 +415,9 @@ object DataSourceSelector {
      *     随执行自愈。
      *
      * @param moduleKey 预览 SQL 所属模块键（面板 [cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel.sourceModuleKey]）
+     * @param sql 预览 SQL 原文（T-DialectInferPollution W10 表归属路由用；null/无表 = 跳过路由验证）
      */
-    fun explainFallbackDataSource(project: Project, moduleKey: String?): Any? {
+    fun explainFallbackDataSource(project: Project, moduleKey: String?, sql: String?): Any? {
         val learned = moduleKey?.takeIf { it.isNotBlank() }?.let {
             runCatching {
                 cn.song.mybatisplus.visualizer.sql.ModuleDataSourceBindingStore.getInstance(project)
@@ -433,13 +434,38 @@ object DataSourceSelector {
         }
         val learnedId = learned?.id
         val lastId = lastDs?.let { runCatching { DataSourceSettings.getUniqueId(it) }.getOrNull() }
-        when (resolveExplainFallbackChoice(learnedId, lastId)) {
+        var candidate: Any? = when (resolveExplainFallbackChoice(learnedId, lastId)) {
             null -> return null                    // 双证据冲突：学习源与 last-used 不同源，交用户选择
-            learnedId -> return runCatching {
+            learnedId -> runCatching {
                 cn.song.mybatisplus.visualizer.execute.DataSourceSettings.getDataSourceById(project, learnedId!!)
             }.getOrNull()
-            else -> return lastDs
+            else -> lastDs
         }
+        candidate ?: return null
+        // T-DialectInferPollution W10：**表归属路由**——学习/last-used 证据可能陈旧或跨模块错配
+        //（用户实测 `mp_demo.wms_inventory_jar_demo doesn't exist`），而「表在哪个库」是更强的
+        // 归属事实：结构缓存（Database 视图展开/预览预热即就位，只读零内省）能证明哪条源持有
+        // 预览引用的全部表。候选源不持有而**唯一**其他源持有 → 路由到它；多源持有 → 冲突交选择
+        // 器；零源持有（缓存未热/表不存在）→ 保持候选（诚实降级，不阻断）。
+        val tables = runCatching { cn.song.mybatisplus.visualizer.sql.schema.SchemaValidator.tableNames(sql ?: "") }
+            .getOrNull().orEmpty().take(8)
+        if (tables.isNotEmpty()) {
+            val ownerIndexes = runCatching {
+                cn.song.mybatisplus.visualizer.ui.highlight.DatabaseSchemaResolver.cachedOwnerIndexes(project, tables)
+            }.getOrNull().orEmpty()
+            if (ownerIndexes.isNotEmpty()) {
+                val all = runCatching { DataSourceSettings.getAllDataSources(project) }.getOrNull().orEmpty()
+                val candidateName = runCatching { DataSourceSettings.getName(candidate) }.getOrNull()
+                val ownerObjects = ownerIndexes.mapNotNull { all.getOrNull(it) }
+                    .filter { runCatching { DataSourceSettings.getName(it) }.getOrNull() != candidateName }
+                when {
+                    ownerObjects.isEmpty() -> Unit                 // 候选源即持有者 → 可信，照旧
+                    ownerObjects.size == 1 -> candidate = ownerObjects.single()  // 唯一持有 → 路由
+                    else -> return null                            // 多源都持有 → 冲突，交用户选择
+                }
+            }
+        }
+        return candidate
     }
 
     /**

@@ -1174,7 +1174,7 @@ internal fun SqlPreviewPanel.submitExplainDirect(
         // 完全可用；歧义即弃，方言不符由 PreviewSideQuery 内既有方言闸拦。
         ?: runCatching {
             cn.song.mybatisplus.visualizer.execute.DataSourceSelector.explainFallbackDataSource(
-                proj, sourceModuleKey,
+                proj, sourceModuleKey, explainSql,
             )
         }.getOrNull()
     if (target == null) {
@@ -1345,7 +1345,7 @@ internal fun SqlPreviewPanel.submitExplainOrStructured(
         // 绑定链即可到达；歧义即弃，方言不符由既有 allowDialectGate 闸拦。
         ?: runCatching {
             cn.song.mybatisplus.visualizer.execute.DataSourceSelector.explainFallbackDataSource(
-                proj, sourceModuleKey,
+                proj, sourceModuleKey, explainSql,
             )
         }.getOrNull()
     // O-145 W7：结构化 EXPLAIN 不经过 SqlExecutor，必须在 JDBC 直连前用同一实际数据源闸门。
