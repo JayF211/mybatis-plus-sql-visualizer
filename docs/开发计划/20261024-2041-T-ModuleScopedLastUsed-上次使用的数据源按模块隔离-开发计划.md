@@ -113,4 +113,40 @@ pc.setValue("mpsql.visualizer.last.runner.id", uuid)   // LAST_RUNNER_ID_KEY
 
 ## 八、实施记录
 
-（实施后回填）
+**2026-10-24 已实施，提交 `12755669`（未推送）。五个工作项全部落地。**
+
+### 前提核验结果
+
+| # | 结论 | 依据 |
+|---|---|---|
+| P-1 | **成立** | `setSourceContext` 在 `SqlPreviewDialog:59` 构造面板时调用，早于任何渲染/取源；`sourceModuleKey` 在 `SqlPreviewPanel.kt:1077` 赋值 |
+| P-2 | **成立且无需新开参数** | `moduleKey` 已随 `ExecutionDialectGate.Request`（`:28` 字段）贯穿执行链；`DataSourceSelectorConsole.kt:536` 的模块学习写入点本来就从 `dialectGateRequest.moduleKey` 取 |
+| P-3 | **成立** | `canonicalModuleKey` 来自 `ModuleIdentityResolution.Unique.identity.canonicalKey`（模块身份键，非路径） |
+| P-4 | **成立** | moduleKey 为 null/blank 时 `LastUsedKeys` 返回原键，行为逐字不变；`testNoModuleKeyKeepsLegacyBehavior` 钉住 |
+
+### 实施细节与两处计划外发现
+
+1. **`PropertiesComponent` 没有「列举全部键」的 API**（`javap` 实证：只有 `unsetValue/getValue/setValue/getValues/setValues`）。计划里原打算用前缀扫描清全部模块桶，实际不可行 ⇒ 改由插件**自己登记模块键清单**（`mpsql.visualizer.last.runner.modules`，逗号分隔，写入时去重登记），`forgetAllLastUsed` 按清单精确 `unsetValue`。
+
+2. **`bindStateText` 的「是否模块级」判定不能只靠读取返回值**：模块级写入时同时写项目级，两者值相同，光看名字分不出层级。故新增 `rememberedIsModuleScoped()`——比较「分层读取结果」与「纯项目级读取结果」，两者都命中且相同即判为模块级。只用于文案限定词，不参与任何取源决策。
+
+### 工作项落地
+
+| # | 状态 | 落点 |
+|---|---|---|
+| W1 | 完成 | `DataSourceSelector.LastUsedKeys`（`key/displayNameKey/dataSourceIdKey`，纯函数） |
+| W2 | 完成 | `lastUsedRunner` / `rememberRunner` / `forgetLastRunner` / `lastRunnerName` / `rememberRunnerName` 全部加 `moduleKey` 参数；新增 `forgetAllLastUsed` / `registeredLastUsedModuleKeys`；读写调用点接线（`DataSourceSelectorConsole:420`、`DataSourceSelectorResults` 的静默复用/歧义清理/preferredRunner/popup 选择四处） |
+| W3 | 完成 | `bindStateText` 分流 + `panel.bindstate.associatedModule` 中英双语 |
+| W4 | 完成 | `ProjectPluginSettingsConfigurable.clearModuleBindings` 连带 `forgetAllLastUsed` |
+| W5 | 完成 | `ModuleScopedLastUsedTest` 9 例（键构造/模块隔离/项目级兜底/模块优先/分层清理/全清/清单登记/取名入口/无模块键兼容） |
+
+### 读数
+
+- 与另一项合并跑定向 **6 类 65 / 0 / 0 / 0**（本项 9 例 + 既有 `SqlPreviewPanelBindStateTest` 9 例 + 回归 4 类）。
+- 反向探针：把 `lastUsedRunner` 的分层读取退化成「只读项目级」→ **恰 3 红**（模块隔离、取名入口、分层清理三条）。已恢复。
+
+### 遗留
+
+- **沙盒 GUI 未走查**：需真机确认「jpa_demo 模块选源后，mp_demo 模块的灰字显示自己那条（或回落项目级）」。headless 只能证分层逻辑，证不了指示行在真实面板的刷新时序（`refreshBindStateRow` 的触达点未变）。
+- 旧 jar 里已有的项目级记忆不受影响（键未改名），模块级桶从 0 开始积累。
+

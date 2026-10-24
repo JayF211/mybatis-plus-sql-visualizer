@@ -106,4 +106,63 @@ override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.BG
 
 ## 七、实施记录
 
-（实施后回填）
+**2026-10-24 已实施，提交 `12755669`（未推送）。**
+
+### P-1 前提核验：结论比计划里写的更精确
+
+计划里写「未覆写 `getActionUpdateThread()` 时默认是 EDT」——**只对了一半**。243 平台字节码实证
+（`AnAction.getActionUpdateThread()`）：
+
+```
+UpdateInBackground && isUpdateInBackground()  → BGT
+ActionClassMetaData.isDefaultUpdate(this)     → BGT
+otherwise                                     → EDT
+```
+
+而 `isDefaultUpdate` 判定的是 `ReflectionUtil.getMethodDeclaringClass(clazz, "update", [AnActionEvent])`
+**是否等于 `AnAction` 本身**——即「有没有覆写 `update()`」。所以：
+
+- 覆写了 `update()` 的动作 → 默认 **EDT**（我们的 11 个全在此列）；
+- 没覆写的 → 默认 BGT（本来就没事）。
+
+这条区分很重要：它不是「全组一刀切改成 BGT」，而是「**逐个**给覆写了 update 的动作补 BGT」。
+
+### W2 合规核查结果
+
+11 个动作的 `update()` 逐个读过：全部只做「读 holder 状态（`manager.capturing` / `sortMode` /
+`dockedPreview.isOpen`）+ 写 `e.presentation`」，**没有**触碰 Swing 组件、文档、EDT-only API。
+故 BGT 合规。
+
+### 工作项落地
+
+| # | 状态 | 落点 |
+|---|---|---|
+| W1 | 完成 | `toolbarGroup` 改为覆写 `getActionUpdateThread()` 的 `DefaultActionGroup` 子类；组内 10 个动作类/匿名对象（`sortModeAction`/`previewToggleAction`/`CaptureAction`/`ScrollToEndAction`/`ClearAction`/`SettingsAction`/`ManageSuppressAction`/`CommunityAction`/`HelpAction`/`ShowSearchAction`）逐个显式声明 BGT。全文件现共 12 处 BGT（1 组 + 10 动作 + 1 注释） |
+| W3 | 完成 | 新增 `sortModeLabelKey(mode)` 静态查表；`currentSortLabel()` 改用它（旧实现每次 update 新建 7 个 `SortOption` + 7 次 bundle 取值） |
+| W4 | 完成 | `SqlLogToolbarUpdateThreadGuardTest` 4 例：组 BGT / 组内逐个核（含 `members.size == 11` 防空转）/ 枚举常量仍是 BGT / 查表覆盖全部 `SortMode` 且与下拉文案一致 |
+| W5 | **未做（沙盒 GUI 未走查）** | 需真机复测日志告警消失——见下方遗留 |
+
+### 读数
+
+- 与另一项合并跑定向 **6 类 65 / 0 / 0 / 0**；`SqlLogPanelLayoutTest` 19 例全绿（单行布局未被破坏）。
+- 反向探针：删掉 `sortModeAction` 的 BGT 覆写 → **恰 1 红**。
+
+### 🆕 坑：守卫首版假绿，靠反向探针才暴露
+
+第一版守卫用 `Regex("""^\s{16}([A-Za-z][A-Za-z0-9]*)(?:Action)?..."`）解析组内成员，捕获组把
+`captureToggleAction` 截成 `captureToggle`，随后又拼 `"${name}Action"` 变 `captureToggleActionAction`
+——源码里找不到该声明，`filter` 的 `?: return@filter false` 让**每个成员都跳过**，
+`offenders` 恒空、断言恒真。反向探针（删一个 BGT）跑出 **BUILD SUCCESSFUL**，才发现是假绿。
+
+修法：正则**保留完整标识符**（不自作聪明剥后缀），并加 `assertEquals(11, members.size)`
+把「解析到几个成员」钉死——解析失败会立刻红，而不是静默空转。
+
+### 遗留
+
+- **W5 沙盒复测未做**：需在真机确认 `idea.log` 里
+  `ActionUpdater ... expandGroup@cn.song.mybatisplus.visualizer.log.toolbar` 告警消失或大幅下降，
+  并确认工具栏三态文案（捕捉/排序/慢查询）仍正确刷新（P-3 的 BGT 副作用风险点）。
+  headless 只能证「声明了 BGT」与「组内全覆盖」，证不了「平台真的在 BGT 上算且 UI 正确贴回」。
+- `currentSortLabel` 去分配的实际收益未能独立测量（P-4 原打算 W3 单独落地后复测告警减少量），
+  因两项改动同批提交。若后续想分离验证，可临时把 BGT 改回 EDT 单独跑一次对照。
+
