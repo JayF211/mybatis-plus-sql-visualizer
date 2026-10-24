@@ -1312,6 +1312,13 @@ internal fun SqlPreviewPanel.submitExplainOrStructured(
     val boundDs = explainBoundDsForTest?.invoke() ?: runCatching {
         cn.song.mybatisplus.visualizer.execute.DataSourceSelector.boundConsoleDataSource()
     }.getOrNull()
+        // T-ExplainPwdPrompt W4（2026-10-24）：真绑定缺失且绑定链 runner 枚举被方言路由卡死
+        // （数据源无 Dialects 映射时平台返回空，沙盒实测 Database 视图已连接仍 runners=0）时，
+        // 回落到面板「数据源（上次使用）」记忆取源——结构化通道（askPassword=true）不依赖
+        // 绑定链即可到达；歧义即弃，方言不符由既有 allowDialectGate 闸拦。
+        ?: runCatching {
+            cn.song.mybatisplus.visualizer.execute.DataSourceSelector.lastUsedExplainDataSource(proj)
+        }.getOrNull()
     // O-145 W7：结构化 EXPLAIN 不经过 SqlExecutor，必须在 JDBC 直连前用同一实际数据源闸门。
     if (boundDs != null && !cn.song.mybatisplus.visualizer.execute.DataSourceSelector.allowDialectGate(
             proj,
