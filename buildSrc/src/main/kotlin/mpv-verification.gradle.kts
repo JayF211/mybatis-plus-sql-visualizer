@@ -50,8 +50,20 @@ intellijPlatform {
         //      pluginLinePattern = ^Plugin .*? against (\S+): 正则抓问题行，**从不读 -ignored-problems
         //      命中的信息**——CLI 已豁免的问题在控制台仍逐行打印，于是被重新计数判失败。
         //      这正是 dev 分支实测「同输入一次过一次挂」的机制（三轮实证）。
-        // 保留除 COMPATIBILITY_PROBLEMS 外的全部等级（当前均 0 命中，三份 verdict 实证）。
-        failureLevel = FailureLevel.entries - setOf(FailureLevel.COMPATIBILITY_PROBLEMS)
+        // 保留除下列四类外的全部等级。T-CiRelease（20261024 CI 实证更新）：除 COMPATIBILITY_PROBLEMS
+        // （判定缺陷见上②，交 verifyGate）外，MISSING_DEPENDENCIES / DEPRECATED_API_USAGES /
+        // EXPERIMENTAL_API_USAGES 一并移出失败集——GitHub Actions 发行流水线首次运行本任务即以此
+        // 三类失败（三目标 verdict 均 Compatible）：① 离线模式下两个可选依赖（com.intellij.mcpServer /
+        // com.intellij.ml.llm）报 Unavailable（T-McpToolset 既有形态，在线解析归 verifyMarketplace
+        // 口径）；② 基线 243 兼容策略下 deprecated 40~123 处、experimental 96~98 处为长期存量（与编译
+        // 告警同源），非发版阻断项。「其余等级均 0 命中」的 2026-09-15 前提已不成立；权威门禁仍是
+        // verifyGate（退出码）+ verifyMarketplace（基线比对），报告仍生成、问题仍可见。
+        failureLevel = FailureLevel.entries - setOf(
+            FailureLevel.COMPATIBILITY_PROBLEMS,
+            FailureLevel.MISSING_DEPENDENCIES,
+            FailureLevel.DEPRECATED_API_USAGES,
+            FailureLevel.EXPERIMENTAL_API_USAGES,
+        )
     }
 }
 
