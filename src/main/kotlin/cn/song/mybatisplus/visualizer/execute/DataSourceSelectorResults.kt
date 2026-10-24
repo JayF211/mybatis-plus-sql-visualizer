@@ -222,10 +222,23 @@ internal fun DataSourceSelector.chooseAndPrepare(
     when (prepareGate.tryEnter(executeAfterPrepare, queuedIntent)) {
         PrepareGateDecision.QUEUE_ONLY -> {
             LOG.info("[M36][T-FirstExec F1] prepare chain in flight: execute intent queued, no second session/console chain")
+            // T-DialectInferPollution W11（2026-10-24 用户真机「点执行 SQL 卡住」）：排队意图
+            // 原本只能等 owner 的 60s 逃生被下一链接管才结算——排队者自身无触发点，UI 永远
+            // 「执行中…」。给排队意图自己的有界结算：15s 未消费即 BLOCKED 解除加载态（门不动，
+            // owner 链照常；用户重试即可）。
+            val queuedForTimeout = queuedIntent
+            javax.swing.Timer(PENDING_EXECUTE_TIMEOUT_MS.toInt()) { event ->
+                if (prepareGate.expirePendingExecute(queuedForTimeout, PENDING_EXECUTE_TIMEOUT_MESSAGE)) {
+                    (event.source as javax.swing.Timer).stop()
+                }
+            }.apply { isRepeats = false }.start()
             callback?.invoke(true)
             return
         }
-        PrepareGateDecision.PROCEED -> ownsGate = true
+        PrepareGateDecision.PROCEED -> {
+            LOG.info("[M36][T-FirstExec F1] prepare gate PROCEED: owning prepare chain (executeAfterPrepare=$executeAfterPrepare)")
+            ownsGate = true
+        }
         PrepareGateDecision.PASS_THROUGH ->
             LOG.info("[M36][T-FirstExec F1] prepare chain in flight: preview prepare passes through (no gate ownership)")
     }

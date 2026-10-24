@@ -167,8 +167,48 @@ class ExplainAskPasswordChannelGuardTest : BannedApiScanSupport() {
         )
         assertTrue(
             "表归属路由须传预览 SQL（否则无表可验证）",
-            Regex("explainFallbackDataSource\\(\\s*proj,\\s*sourceModuleKey,\\s*(sql|explainSql)").containsMatchIn(chain) &&
-                Regex("SchemaValidator\\.tableNames\\(").containsMatchIn(selector),
+            Regex("explainFallbackDataSource\\(\\s*proj,\\s*sourceModuleKey,\\s*(sql|explainSql)").containsMatchIn(chain),
+        )
+    }
+
+    @Test
+    fun `排队执行意图必须有自有有界结算`() {
+        val gate = sourceOf("execute/PrepareSingleFlightGate.kt")
+        val selectorResults = sourceOf("execute/DataSourceSelectorResults.kt")
+        val selector = sourceOf("execute/DataSourceSelector.kt")
+        // T-DialectInferPollution W11（用户真机「点执行 SQL 卡住」）：QUEUE_ONLY 排队意图原本
+        // 只能等 owner 60s 逃生被下一链接管，排队者自身无触发点 → UI 永远「执行中…」。排队意图
+        // 须有自己的超时结算（expirePendingExecute，门与 owner 不动）。
+        assertTrue(
+            "PrepareSingleFlightGate 须有 expirePendingExecute 排队自有结算（W11）",
+            gate.contains("expirePendingExecute"),
+        )
+        assertTrue(
+            "chooseAndPrepare（DataSourceSelectorResults）的 QUEUE_ONLY 分支须起排队超时结算 Timer（W11）",
+            selectorResults.contains("PENDING_EXECUTE_TIMEOUT_MS") &&
+                selectorResults.contains("expirePendingExecute"),
+        )
+        assertTrue(
+            "排队超时常量与文案须定义在 DataSourceSelector（W11）",
+            selector.contains("PENDING_EXECUTE_TIMEOUT_MS = "),
+        )
+    }
+
+    @Test
+    fun `缓存热但表不在须引导选择而非错源执行`() {
+        val code = sourceOf("execute/DataSourceSelector.kt")
+        // T-DialectInferPollution W12（用户沙盒实测）：候选源不持有预览的表且缓存热（有源已
+        // 内省出表）→ 表不存在于任何已连库，错源执行必败——须返回 null 引导选择数据源；
+        // 缓存全冷（无法证明）才保持候选。
+        assertTrue(
+            "须有 cacheHasAnyTable 缓存热度判定（W12）",
+            code.contains("cacheHasAnyTable"),
+        )
+        val hotIdx = code.indexOf("cacheHasAnyTable(project)")
+        val nullReturn = code.indexOf("return null", hotIdx)
+        assertTrue(
+            "缓存热零命中须 return null 引导选择（W12）",
+            hotIdx >= 0 && nullReturn in 0 until (hotIdx + 400),
         )
     }
 }

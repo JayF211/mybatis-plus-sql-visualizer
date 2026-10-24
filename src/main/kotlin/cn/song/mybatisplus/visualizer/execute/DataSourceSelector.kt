@@ -463,7 +463,15 @@ object DataSourceSelector {
                     ownerObjects.size == 1 -> candidate = ownerObjects.single()  // 唯一持有 → 路由
                     else -> return null                            // 多源都持有 → 冲突，交用户选择
                 }
+            } else if (runCatching {
+                    cn.song.mybatisplus.visualizer.ui.highlight.DatabaseSchemaResolver.cacheHasAnyTable(project)
+                }.getOrDefault(false)
+            ) {
+                // T-DialectInferPollution W12：缓存热（有源已内省出表）但没有任何源持有预览的表
+                // → 表不存在于任何已连库，错源执行必败——引导选择数据源（返回 null 走 NO_DATA_SOURCE）。
+                return null
             }
+            // 缓存全冷：无法证明归属，保持候选（诚实降级，Database 视图展开一次后自愈）
         }
         return candidate
     }
@@ -1573,6 +1581,14 @@ object DataSourceSelector {
 
     /** BGT 派 EDT document 写的有界等待预算（毫秒）——DialectPreMapping 同款取值；EDT 病态冻结时超时放行走守卫降级。 */
     internal const val EDT_EXEC_DOC_SYNC_WAIT_MS = 2000L
+
+    /** T-DialectInferPollution W11：排队执行意图的**自有结算**超时（毫秒）——占门链 60s 逃生太长，
+     *  排队者 15s 即 BLOCKED 解除加载态（门不动，owner 链照常），用户重试即可。 */
+    internal const val PENDING_EXECUTE_TIMEOUT_MS = 15_000L
+
+    /** T-DialectInferPollution W11：排队意图超时文案（沿用准备超时键，语义一致：未提交 SQL）。 */
+    internal val PENDING_EXECUTE_TIMEOUT_MESSAGE: String
+        get() = MpSqlVisualizerBundle.message("execute.prepare.timeout")
 
     /**
      * T-EC-01/T-EC-03 编排：document 写统一派发 EDT——EDT 调用方同步直执行；BGT 两段式
