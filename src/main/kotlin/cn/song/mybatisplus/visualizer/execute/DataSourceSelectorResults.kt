@@ -207,6 +207,8 @@ internal fun DataSourceSelector.chooseAndPrepare(
      * 名字未命中/同名歧义 → 回落既有弹窗（不猜）。
      */
     preferredRunnerName: String? = null,
+    /** T-ExplainSwitchNative W6：必须弹选择器（跳过 `shouldBeChosenIfAlone` 直选分支）。 */
+    forceChoosePopup: Boolean = false,
 ) {
     val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
     if (!ExecuteSqlSupport.isAvailable()) {
@@ -400,7 +402,7 @@ internal fun DataSourceSelector.chooseAndPrepare(
             if (ownsGate) prepareGate.abort(prepareOwner, ExecutionSubmission.BLOCKED)
             callback?.invoke(false)
         }
-        runners.size == 1 && shouldBeChosenIfAlone(runners.first()) -> {
+        runners.size == 1 && shouldBeChosenIfAlone(runners.first()) && !forceChoosePopup -> {
             LOG.info("[M36] single runner, run directly")
             chosenRunnerName = getRunnerName(runners.first())
             runRunner(project, runners.first(), silent = !executeAfterPrepare, runnerError)

@@ -1227,14 +1227,15 @@ internal fun SqlPreviewPanel.submitExplainDirect(
 }
 
 /**
- * T-ExplainFailUx W1+W3（2026-10-24 用户沙盒实测）：**选错数据源**失败的就地引导。
+ * T-ExplainFailUx W1（2026-10-24 用户沙盒实测）：**选错数据源**失败的就地引导。
  *
  * 为什么不用模态：`Table 'mp_demo.x' doesn't exist` 是最典型的「该换源」信号，模态框会先遮住
  * 预览、还要求用户先关掉再点「在控制台打开」两步才见到换源入口（用户原话：「这种情况就不应该
- * 弹窗了吧」）。改为结果区就地横幅（[SqlResultPanel.showErrorWithActions] 双动作槽）：
- *  - 主动作「切换数据源」→ 重开既有数据源选择器（forceChoose 跳过 last-used 静默），
- *    选中后**自动重试当前执行计划一次**（W3，防循环）；
- *  - 次动作「在控制台打开」→ 既有直送控制台出口（用户可手改源后执行）。
+ * 弹窗了吧」）。改为结果区就地横幅（[SqlResultPanel.showErrorWithActions] 双动作槽）。
+ *
+ * T-ExplainSwitchNative W6（同日修订）：动作语义改为「**弹平台原生选择器**」且**不自动重试**
+ * ——用户实测「点切换数据源却重试执行了」：旧实现走 `prepareConsole(forceChoose=true)`，
+ * 而该参数只跳过 last-used 静默，runner 唯一时仍会直选执行，用户看不到列表。
  */
 private fun SqlPreviewPanel.showExplainWrongTarget(
     proj: Project,
@@ -1249,7 +1250,7 @@ private fun SqlPreviewPanel.showExplainWrongTarget(
         message + "　" + hint,
         fixLabel = MpSqlVisualizerBundle.message("panel.explain.action.switchDataSource"),
         fixTooltip = MpSqlVisualizerBundle.message("panel.explain.action.switchDataSource.tip"),
-        fix = { switchDataSourceAndRetryExplain(proj, explainSql, dialectGateRequest) },
+        fix = { switchDataSourceViaNativeChooser() },
         settingsLabel = MpSqlVisualizerBundle.message("panel.explain.openConsole"),
         settingsTooltip = null,
         settings = openConsole,
@@ -1257,36 +1258,40 @@ private fun SqlPreviewPanel.showExplainWrongTarget(
 }
 
 /**
- * T-ExplainFailUx W3：换源后自动重试执行计划一次。
+ * T-ExplainSwitchNative W5+W6（2026-10-24）：**换源统一入口**——弹平台原生数据源选择器。
  *
- * 换源走既有 [DataSourceSelector.prepareConsole]（forceChoose=true：跳过共享控制台复用与
- * last-used 静默命中，必须让用户显式选）；绑定落地后重提交一次执行计划（`allowDataSourcePrompt=false`
- * 防选择器循环、`rerendered=true` 复用 W7 的一次性防重入位，避免与方言闸重提交叠加成两次执行）。
+ * 用户诉求（原话）：「我希望选的优先是 idea 原生的」「图三才是选择数据源的理想状态」。
+ * 因此：
+ *  - 不自研源列表（W2 的下拉已撤）；
+ *  - 走 `prepareConsole(forceChoosePopup = true)`——**强制弹选择器**（即便 runner 只剩一条），
+ *    弹层用的是平台 Runner 对象 + 平台 ListPopup（`showRunnerPopup`），与图三同族；
+ *  - **不自动重试**：选中源只重建控制台并刷新指示行，执行由用户自己再点（旧实现承诺
+ *    「切换后自动重试」正是「点切换却重试执行」的误导来源）。
+ *
+ * 社区版（无 Database 插件）由调用方判可用性后才显示入口；本函数内再兜一层。
  */
-private fun SqlPreviewPanel.switchDataSourceAndRetryExplain(
-    proj: Project,
-    explainSql: String,
-    dialectGateRequest: cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Request,
-) {
-    if (com.intellij.openapi.util.Disposer.isDisposed(this) || proj.isDisposed) return
-    val sql = nativeEditorDoc?.text?.takeIf { it.isNotBlank() }
-        ?: editor?.document?.text?.takeIf { it.isNotBlank() }
-        ?: explainSql
+internal fun SqlPreviewPanel.switchDataSourceViaNativeChooser() {
+    if (com.intellij.openapi.util.Disposer.isDisposed(this)) return
+    val proj = project ?: return
+    if (!runCatching { cn.song.mybatisplus.visualizer.execute.ExecuteSqlSupport.isAvailable() }.getOrDefault(false)) return
+    val sql = currentEditorSql()?.takeIf { it.isNotBlank() }
+        ?: nativeEditorDoc?.text?.takeIf { it.isNotBlank() }
+        ?: return
+    // T-ExplainSwitchNative W7（2026-10-24 用户实测「切换数据源没有用，真正执行时还是用的原生
+    // 工具栏上的数据源」）：**执行目标的单一事实源必须是原生控制台**——换源前先丢弃旧的共享
+    // 控制台与已备会话，否则 reuseSharedConsole 会命中旧源控制台（其 attach 的源不会跟随新选择），
+    // 造成「插件记了新源、平台控制台仍用旧源」的两套状态（图二错位）。
+    runCatching { cn.song.mybatisplus.visualizer.execute.DataSourceSelector.dropSharedConsole() }
+    runCatching { cn.song.mybatisplus.visualizer.execute.DataSourceSelector.clearPrepared() }
     cn.song.mybatisplus.visualizer.execute.DataSourceSelector.prepareConsole(
         proj, sql,
+        onConsole = { consoleComponent -> embedConsole(consoleComponent, embedMode = ConsoleEmbedMode.PREVIEW) },
+        onEditor = { consoleEditor -> onNativeEditorReady(consoleEditor) },
         onError = { msg -> resultPanel.showError(msg) },
-        forceChoose = true,
+        forceChoose = true,        // 跳过 last-used 静默（用户主动要选）
+        forceChoosePopup = true,   // W6：必须弹选择器（不等 runner 数量）
     )
-    // 复用 T-UI030 既有「等绑定落地后重试」链（同一 generation 快照防过期回调；
-    // allowDataSourcePrompt=false 防选择器循环）
-    awaitDataSourceBoundThenRetry(
-        proj,
-        current?.effectiveDialect ?: cn.song.mybatisplus.visualizer.sql.MySqlDialect,
-        explainSql,
-        dialectGateRequest,
-        java.util.concurrent.atomic.AtomicBoolean(false),
-        explainStructuredGeneration,
-    )
+    // 指示行在绑定落地后由既有刷新链更新（prepareAfterEditorResolved → refreshBindStateRow）
 }
 
 /**

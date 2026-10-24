@@ -684,8 +684,6 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
     internal var schemeCombo: JComboBox<String>? = null
     // O-95 S3：绑定数据源指示行标签（rebuildLeftPanel 重建；renderSql 尾部单点刷新）
     internal var bindStateLabel: JBLabel? = null
-    /** T-ExplainFailUx W2：数据源下拉（插件可用时替代纯文本指示行；不可用时为 null=降级形态）。 */
-    internal var bindStateCombo: JComboBox<String>? = null
     /** 程序化填 combo 模型时置位（抑制 addActionListener 的用户切换语义）。 */
     internal var schemeSyncingCombo = false
     /** 上次已同步到下拉的激活方案名——对话框回调时比对判定「激活方案被对话框切走」。 */
@@ -1348,8 +1346,8 @@ class SqlPreviewPanel(internal val project: Project? = null) : JBPanel<SqlPrevie
         internal const val BIND_STATE_ROW_NAME = "mpsv.bindStateRow"
         internal const val BIND_STATE_LABEL_NAME = "mpsv.bindStateLabel"
 
-        /** T-ExplainFailUx W2：数据源下拉控件锚点（插件可用时替代纯文本指示行）。 */
-        internal const val BIND_STATE_COMBO_NAME = "mpsv.bindStateCombo"
+        /** T-ExplainSwitchNative W5：指示行「切换数据源」入口锚点（触发平台原生选择器）。 */
+        internal const val BIND_STATE_SWITCH_NAME = "mpsv.bindStateSwitch"
 
         /** R22 T-02/T-03：参数历史快照特殊键前缀（勾选态/foreach null/foreach 权威值；普通参数键
          *  不以 `__` 开头——键空间约定，ParamHistoryCache 对值透明）。 */
