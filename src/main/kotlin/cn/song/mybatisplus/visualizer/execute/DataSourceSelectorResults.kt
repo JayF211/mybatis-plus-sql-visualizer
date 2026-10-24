@@ -197,6 +197,18 @@ internal fun DataSourceSelector.chooseAndPrepare(
     onSubmission: ((ExecutionSubmission) -> Unit)? = null,
     /** T-DialectGateExit：强制弹数据源选择器（跳过共享控制台复用与 last-used 静默命中）。 */
     forceChoose: Boolean = false,
+    /**
+     * T-ExplainFailUx W4（2026-10-24 用户实测「为什么我需要选两次数据源」）：**用户已显式指定
+     * 数据源名**——按名在 runner 枚举里唯一命中就直接建链，**不再弹平台选择器**（此前预览的
+     * 数据源下拉调 `prepareConsole(forceChoose=true)`，而 forceChoose 的语义恰是「强制弹窗」，
+     * 于是用户在自己的下拉里选一次、平台选择器又让他选第二次）。
+     *
+     * 语义边界：只跳过「选择」这一步，不跳过方言闸（闸门在 sessionConsumer 内照旧执行）；
+     * 名字未命中/同名歧义 → 回落既有弹窗（不猜）。
+     */
+    preferredRunnerName: String? = null,
+    /** T-ExplainSwitchNative W6：必须弹选择器（跳过 `shouldBeChosenIfAlone` 直选分支）。 */
+    forceChoosePopup: Boolean = false,
 ) {
     val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
     if (!ExecuteSqlSupport.isAvailable()) {
@@ -314,6 +326,13 @@ internal fun DataSourceSelector.chooseAndPrepare(
         )
     }
 
+    // T-ExplainSwitchNative W8-hotfix（2026-10-24 用户实测「点击切换数据源就报错」）：
+    // 首版把切换入口改成反射 `getSwitchDataSourceRunners`，但该方法的真实签名是
+    // **(PsiFile, String, DatabaseSession, Consumer) 四参**（javap 实证），而准备链此刻
+    // **尚无已 attach 会话**（切换的常态）→ NoSuchMethodException 被 runCatching 吞成空列表
+    // → runners=0 → 用户看到「没有与该 SQL 方言匹配的已配置数据源」红条。
+    // 现退回 attach 版（这正是此前一直正常、能弹原生列表的形态）；切换专用入口只在
+    // 已有会话时才有意义，本链不持有会话，故不启用。
     val enumerated = getAttachDataSourceRunners(psiFile, submitSql, sessionConsumer)
     // O-136 T-PreviewExecDsDialect：组 Runner 展开——平台在「方言匹配集 ≠ 全部数据源」时返回
     // "All" 组 Runner（getSubRunners 携带全部数据源的 Runner，组项自身 runnable 为空操作），
@@ -353,6 +372,16 @@ internal fun DataSourceSelector.chooseAndPrepare(
     }
 
     when {
+        // T-ExplainFailUx W4：用户已在下拉里显式指定源名 → 按名唯一命中直接建链，不再弹选择器
+        //（一次选择即生效；名字未命中/歧义回落弹窗，不猜）。
+        preferredRunnerName != null && runners.count { getRunnerName(it) == preferredRunnerName } == 1 -> {
+            val picked = runners.first { getRunnerName(it) == preferredRunnerName }
+            LOG.info("[M36] preferred runner by name: $preferredRunnerName (skip platform chooser)")
+            chosenRunnerName = preferredRunnerName
+            if (!executeAfterPrepare) rememberRunnerName(project, preferredRunnerName)
+            runRunner(project, picked, silent = !executeAfterPrepare, runnerError)
+            callback?.invoke(true)
+        }
         runners.isEmpty() -> {
             // O-136 T-PreviewExecDsDialect D3：空 Runner 二分归因——有在册数据源 = 方言不匹配
             //（或数据源均不可连接），给可行动文案（V3），不再让用户笼统「没数据源」或等超时；
@@ -380,7 +409,7 @@ internal fun DataSourceSelector.chooseAndPrepare(
             if (ownsGate) prepareGate.abort(prepareOwner, ExecutionSubmission.BLOCKED)
             callback?.invoke(false)
         }
-        runners.size == 1 && shouldBeChosenIfAlone(runners.first()) -> {
+        runners.size == 1 && shouldBeChosenIfAlone(runners.first()) && !forceChoosePopup -> {
             LOG.info("[M36] single runner, run directly")
             chosenRunnerName = getRunnerName(runners.first())
             runRunner(project, runners.first(), silent = !executeAfterPrepare, runnerError)

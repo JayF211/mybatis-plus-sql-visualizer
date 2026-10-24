@@ -211,4 +211,84 @@ class ExplainAskPasswordChannelGuardTest : BannedApiScanSupport() {
             hotIdx >= 0 && nullReturn in 0 until (hotIdx + 400),
         )
     }
+
+    @Test
+    fun `选错源失败不得弹红字模态框`() {
+        val code = sourceOf("ui/SqlPreviewPanelExecution.kt")
+        // T-ExplainFailUx W1（用户沙盒实测诉求：「这种情况就不应该弹窗了吧，应该直接引导用户
+        // 更换数据源」）：WRONG_TARGET 档（表不在当前源）须走就地引导 showExplainWrongTarget，
+        // 不得调 showExplainErrorDialog 弹模态。按分支起点切片断言（同 W6 AUTH 纪律）。
+        val starts = Regex("ExplainFailureKind\\.WRONG_TARGET ->").findAll(code).map { it.range.first }.toList()
+        assertTrue("应存在 WRONG_TARGET 分支（结构化 onFailed 与直送 Failed 两处）", starts.size >= 2)
+        val branchEnds = Regex("ExplainFailureKind\\.(CANCELLED|OTHER) ->|is PreviewSideQuery\\.Result\\.Scalar")
+            .findAll(code).map { it.range.first }.toList()
+        val offenders = starts.count { s ->
+            val end = branchEnds.firstOrNull { it > s } ?: code.length
+            code.substring(s, end).contains("showExplainErrorDialog")
+        }
+        assertTrue(
+            "WRONG_TARGET 分支内不得调 showExplainErrorDialog（选错源须就地引导换源，W1）：命中 $offenders 处",
+            offenders == 0,
+        )
+        assertTrue(
+            "WRONG_TARGET 就地引导出口 showExplainWrongTarget 必须存在且接原生能力（W1+W12）",
+            code.contains("showExplainWrongTarget") && code.contains("openDatabaseToolWindow"),
+        )
+    }
+
+    @Test
+    fun `换源一律走平台原生工具栏不得自建入口`() {
+        val chain = sourceOf("ui/SqlPreviewPanelExecution.kt")
+        val panel = sourceOf("ui/SqlPreviewPanelParamPanel.kt")
+        // T-ExplainSwitchNative W12（2026-10-24 用户实测三图定案）：图三证明平台原生工具栏自带
+        // `Data Sources` 菜单（Detach Data Source + 全部源）就是理想形态；且平台
+        // getForcedDataSourceForExec 的关联无公开清除 API，插件自建入口第二次起必被短路成单源
+        // （日志实证 runners 5→1）。纪律：插件**不得**自建任何换源 UI。
+        assertTrue(
+            "指示行不得再渲染自研换源控件（W12）",
+            !panel.contains("BIND_STATE_SWITCH_NAME") && !panel.contains("buildDataSourceCombo") &&
+                !panel.contains("switchDataSourceViaNativeChooser"),
+        )
+        assertTrue(
+            "自研换源函数必须整体删除（W12）",
+            !chain.contains("fun SqlPreviewPanel.switchDataSourceViaNativeChooser"),
+        )
+        assertTrue(
+            "红条换源动作须指向平台原生能力（打开 Database 工具窗口，W12）",
+            chain.contains("openDatabaseToolWindow(proj)"),
+        )
+    }
+
+    @Test
+    fun `渲染方言缺失时不得判成未知阻断执行`() {
+        val code = sourceOf("ui/SqlPreviewPanelExecution.kt")
+        // T-ExplainSwitchNative W10（用户实测「为什么 sql 无法执行」）：effectiveDialect 为 null
+        // 只发生在「渲染链没记方言」的载体，而渲染器 byName(null) 的既有语义是回落 MySQL
+        // （Dialect.kt:908-909）——闸门请求侧必须同口径回落，否则 RENDER_UNKNOWN_BLOCK 会阻断执行。
+        val idx = code.indexOf("renderedDialectName = result?.effectiveDialect?.name")
+        assertTrue("闸门请求须含 renderedDialectName 赋值（W10）", idx >= 0)
+        val slice = code.substring(idx, (idx + 260).coerceAtMost(code.length))
+        assertTrue(
+            "renderedDialectName 为 null 时须回落 MySqlDialect.name（W10）",
+            slice.contains("?: cn.song.mybatisplus.visualizer.sql.MySqlDialect.name"),
+        )
+    }
+
+    @Test
+    fun `方言闸红条的换源动作须指向原生能力`() {
+        val code = sourceOf("ui/SqlPreviewPanelExecution.kt")
+        // T-ExplainSwitchNative W9→W12：红条按钮曾接 executeSql（执行链，会被同一闸门再次阻断，
+        // 表现为「点了没反应」）；W12 定案改指向平台原生能力——打开 Database 工具窗口换源。
+        val gateIdx = code.indexOf("internal fun SqlPreviewPanel.showDialectGateError")
+        assertTrue("须有方言闸红条入口（W9）", gateIdx >= 0)
+        val body = code.substring(gateIdx, (gateIdx + 2400).coerceAtMost(code.length))
+        assertTrue(
+            "红条换源动作须走 openDatabaseToolWindow（W12）",
+            body.contains("openDatabaseToolWindow(proj)"),
+        )
+        assertTrue(
+            "红条换源动作不得走 executeSql 执行链（W9 定例）",
+            !body.contains("fix = { executeSql(forceChoose = true) }"),
+        )
+    }
 }

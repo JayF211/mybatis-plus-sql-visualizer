@@ -568,11 +568,20 @@ object DataSourceSelector {
         dialectGateRequest: ExecutionDialectGate.Request? = null,
         onDialectGate: ((ExecutionDialectGate.Verdict) -> Unit)? = null,
         forceChoose: Boolean = false,
+        /** T-ExplainFailUx W4：用户已显式指定源名 → 按名直选建链，不再弹平台选择器。 */
+        preferredRunnerName: String? = null,
+        /**
+         * T-ExplainSwitchNative W6（2026-10-24 用户实测「点切换数据源却重试执行了」）：**必须弹
+         * 选择器**——即便 runner 枚举只剩一条（旧行为 `shouldBeChosenIfAlone` 会直选执行，用户
+         * 看不到列表）。仅「切换数据源」入口置 true；预览默认准备与显式执行不受影响。
+         */
+        forceChoosePopup: Boolean = false,
     ) {
         chooseAndPrepare(project, sql, executeAfterPrepare = false,
             onConsole = onConsole, onEditor = onEditor, onError = onError, callback = callback,
             dialectGateRequest = dialectGateRequest, onDialectGate = onDialectGate,
-            forceChoose = forceChoose)
+            forceChoose = forceChoose, preferredRunnerName = preferredRunnerName,
+            forceChoosePopup = forceChoosePopup)
     }
 
     /**
@@ -1316,23 +1325,76 @@ object DataSourceSelector {
     /**
      * 反射调用 DatabaseRunners.getAttachDataSourceRunners 获取原生 Runner 列表。
      * [sessionConsumer] 在选中 runner 执行后收到 DatabaseSession。
+     *
+     * T-ExplainSwitchNative W8（2026-10-24 用户实测「点击切换数据源只有一个数据源？当前可是
+     * 配置了很多」）：**用户主动切换**时优先调平台切换专用入口 `getSwitchDataSourceRunners`，
+     * 失败（含签名/无会话）则回退 attach 版。
+     *
+     * ⚠️ W8-hotfix（同日）：`getSwitchDataSourceRunners` 的签名是
+     * **`(PsiFile, String, DatabaseSession, Consumer)` 四参**（javap 实证），比 attach 版多一个
+     * 「当前会话」——首版按三参反射调用必然 `NoSuchMethodException`，被 runCatching 吞成空列表
+     * → `runners=0` → 用户看到「没有与该 SQL 方言匹配的已配置数据源」红条（切换数据源点了就报错）。
+     * 现按真实签名调用；[currentSession] 为 null（预览尚未建会话，切换入口的常态）时**直接用
+     * attach 版**——这正是切换入口此前一直正常工作的形态。
+     *
+     * @param allDataSources 用户主动切换时为 true（尝试切换专用入口）
+     * @param currentSession 当前已 attach 的会话（无则走 attach 版）
      */
-    internal fun getAttachDataSourceRunners(psiFile: PsiFile, sql: String, sessionConsumer: com.intellij.util.Consumer<Any>): List<Any> {
+    internal fun getAttachDataSourceRunners(
+        psiFile: PsiFile,
+        sql: String,
+        sessionConsumer: com.intellij.util.Consumer<Any>,
+        allDataSources: Boolean = false,
+        currentSession: Any? = null,
+    ): List<Any> {
         val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
-        return runCatching {
+        val attach: () -> List<Any> = {
+            runCatching {
+                val clazz = Class.forName(RUNNERS_CLASS)
+                val method = clazz.getMethod(
+                    "getAttachDataSourceRunners",
+                    PsiFile::class.java,
+                    String::class.java,
+                    com.intellij.util.Consumer::class.java,
+                )
+                val result = method.invoke(null, psiFile, sql, sessionConsumer)
+                (result as? List<*>)?.filterNotNull() ?: emptyList()
+            }.onFailure { e ->
+                LOG.warn("[M36] getAttachDataSourceRunners reflection FAILED: $e", e)
+            }.getOrDefault(emptyList())
+        }
+        if (!allDataSources || currentSession == null) return attach()
+        // 切换专用入口：四参（多 currentSession）；任何失败都回退 attach 版，绝不返回空。
+        val switched = runCatching {
             val clazz = Class.forName(RUNNERS_CLASS)
             val method = clazz.getMethod(
-                "getAttachDataSourceRunners",
+                "getSwitchDataSourceRunners",
                 PsiFile::class.java,
                 String::class.java,
+                Class.forName(SESSION_CLASS),
                 com.intellij.util.Consumer::class.java,
             )
-            val result = method.invoke(null, psiFile, sql, sessionConsumer)
+            val result = method.invoke(null, psiFile, sql, currentSession, sessionConsumer)
             (result as? List<*>)?.filterNotNull() ?: emptyList()
         }.onFailure { e ->
-            LOG.warn("[M36] getAttachDataSourceRunners reflection FAILED: $e", e)
+            LOG.warn("[M36] getSwitchDataSourceRunners reflection FAILED (fallback to attach): $e", e)
         }.getOrDefault(emptyList())
+        return switched.ifEmpty { attach() }
     }
+
+    /**
+     * W8 观测缝（用户 2026-10-24「点击切换数据源只有一个数据源？当前可是配置了很多」）：
+     * 平台 Runner 枚举走 `DbImplUtil.getAppropriateDataSourcesForExec` →
+     * `DbSqlUtilCore.getAppropriateDataSources` → `.filter(CAN_CONNECT_TO)`（反编译实证），
+     * 因此**当前不可连接的源不会出现在弹层里**（未连过/驱动未就绪）。插件侧无法凭空补出
+     * 合法的平台 Runner（`runInDataSource` 是直接建会话、不产 Runner；私有
+     * `createDataSourceRunner` 不可用），故本函数只做**归因打点**，供 UI 在「可选源少于在籍源」
+     * 时给出可行动说明（打开 Database 工具窗口连一次即可恢复可选）。
+     *
+     * @return 在籍源总数（平台不可用时 0）
+     */
+    internal fun registeredDataSourceCount(project: Project): Int =
+        runCatching { DataSourceSettings.getAllDataSources(project).size }.getOrDefault(0)
 
     /** 反射获取 Runner 显示名称（数据源名，如 `jpa_demo@localhost`）。 */
     internal fun getRunnerName(runner: Any): String = runCatching {

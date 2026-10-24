@@ -661,7 +661,14 @@ internal fun SqlPreviewPanel.executionDialectGateRequest(
         (result.previewModel != null || result.batchModel != null)
     return cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Request(
         renderMode = executionDialectRenderMode,
-        renderedDialectName = result?.effectiveDialect?.name,
+        // T-ExplainSwitchNative W10（2026-10-24 用户实测「为什么 sql 无法执行」——红条：
+        // 「当前 SQL 按 **未知** 渲染，所选数据源是 MySQL」）：
+        // `effectiveDialect` 为 null 只发生在「渲染链没记方言」的载体（如 JPA/日志还原等
+        // renderedDialect 未赋值的链）。而渲染器 `DialectRegistry.byName(null)` 的既有语义是
+        // **回落 MySQL**（Dialect.kt:908-909）——即实际渲染方言从来不是「未知」。此处按同一口径
+        // 补回落，避免闸门把「渲染器自己都没当成未知」的形态判成 RENDER_UNKNOWN_BLOCK 阻断执行。
+        renderedDialectName = result?.effectiveDialect?.name
+            ?: cn.song.mybatisplus.visualizer.sql.MySqlDialect.name,
         intent = intent,
         canLosslesslyRerender = canRerender,
         userTextUntouched = untouched,
@@ -725,7 +732,11 @@ internal fun SqlPreviewPanel.showDialectGateError(
             message,
             fixLabel = MpSqlVisualizerBundle.message("execute.dialectGate.action.switchDataSource"),
             fixTooltip = MpSqlVisualizerBundle.message("execute.dialectGate.action.switchDataSource.tip"),
-            fix = { executeSql(forceChoose = true) },
+            // T-ExplainSwitchNative W12（2026-10-24 用户实测三图定案）：换源一律走**平台原生
+            // 工具栏的 Data Sources 菜单**（图三：Detach Data Source + 全部源）——插件侧自建
+            // 入口做不到与原生一致（平台 forced 关联无公开清除 API，自建列表第二次起会被短路成
+            // 单源）。此处动作改为把用户送到能换源的地方：打开 Database 工具窗口。
+            fix = { cn.song.mybatisplus.visualizer.execute.DataSourceSelector.openDatabaseToolWindow(proj) },
             settingsLabel = if (settingsAvailable) {
                 MpSqlVisualizerBundle.message("execute.dialectGate.action.openSettings")
             } else null,
@@ -1213,6 +1224,10 @@ internal fun SqlPreviewPanel.submitExplainDirect(
                     notifyExplainAuthFailure(proj)
                 cn.song.mybatisplus.visualizer.execute.ExplainFailureKind.CANCELLED ->
                     notifyExplainCancelled(proj)
+                // T-ExplainFailUx W1：选错源**不弹模态**——就地横幅 + 「切换数据源」动作
+                //（用户实测诉求：直接引导换源，而不是先关弹窗再点「在控制台打开」）
+                cn.song.mybatisplus.visualizer.execute.ExplainFailureKind.WRONG_TARGET ->
+                    showExplainWrongTarget(proj, result.message, explainSql, dialectGateRequest, openConsole)
                 cn.song.mybatisplus.visualizer.execute.ExplainFailureKind.OTHER ->
                     showExplainErrorDialog(result.message, openConsole)
             }
@@ -1220,6 +1235,38 @@ internal fun SqlPreviewPanel.submitExplainDirect(
                 showExplainErrorDialog("unexpected scalar result from EXPLAIN", openConsole)
         }
     }
+}
+
+/**
+ * T-ExplainFailUx W1（2026-10-24 用户沙盒实测）：**选错数据源**失败的就地引导。
+ *
+ * 为什么不用模态：`Table 'mp_demo.x' doesn't exist` 是最典型的「该换源」信号，模态框会先遮住
+ * 预览、还要求用户先关掉再点「在控制台打开」两步才见到换源入口（用户原话：「这种情况就不应该
+ * 弹窗了吧」）。改为结果区就地横幅（[SqlResultPanel.showErrorWithActions] 双动作槽）。
+ *
+ * T-ExplainSwitchNative W6（同日修订）：动作语义改为「**弹平台原生选择器**」且**不自动重试**
+ * ——用户实测「点切换数据源却重试执行了」：旧实现走 `prepareConsole(forceChoose=true)`，
+ * 而该参数只跳过 last-used 静默，runner 唯一时仍会直选执行，用户看不到列表。
+ */
+private fun SqlPreviewPanel.showExplainWrongTarget(
+    proj: Project,
+    message: String,
+    explainSql: String,
+    dialectGateRequest: cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Request,
+    openConsole: () -> Unit,
+) {
+    resultPanel.showIdle()
+    val hint = MpSqlVisualizerBundle.message("panel.explain.wrongTargetHint")
+    resultPanel.showErrorWithActions(
+        message + "　" + hint,
+        fixLabel = MpSqlVisualizerBundle.message("panel.explain.action.switchDataSource"),
+        fixTooltip = MpSqlVisualizerBundle.message("panel.explain.action.switchDataSource.tip"),
+        // W12：换源走平台原生工具栏 Data Sources 菜单（见上方 showDialectGateError 同款说明）
+        fix = { cn.song.mybatisplus.visualizer.execute.DataSourceSelector.openDatabaseToolWindow(proj) },
+        settingsLabel = MpSqlVisualizerBundle.message("panel.explain.openConsole"),
+        settingsTooltip = null,
+        settings = openConsole,
+    )
 }
 
 /**
@@ -1507,6 +1554,15 @@ internal fun SqlPreviewPanel.submitExplainOrStructured(
                         cn.song.mybatisplus.visualizer.execute.ExplainFailureKind.AUTH -> {
                             resultPanel.showIdle()
                             notifyExplainAuthFailure(proj)
+                        }
+                        // T-ExplainFailUx W1：选错源不弹模态、不回退直送（同通道必同样失败）——
+                        // 就地横幅 + 「切换数据源」动作（换源后自动重试，W3）
+                        cn.song.mybatisplus.visualizer.execute.ExplainFailureKind.WRONG_TARGET -> {
+                            resultPanel.showIdle()
+                            showExplainWrongTarget(
+                                proj, errorText, explainSql, dialectGateRequest,
+                                openConsole = { submitExplainDirectConsole(proj, explainSql, dialectGateRequest) },
+                            )
                         }
                         cn.song.mybatisplus.visualizer.execute.ExplainFailureKind.CANCELLED -> {
                             resultPanel.showIdle()
