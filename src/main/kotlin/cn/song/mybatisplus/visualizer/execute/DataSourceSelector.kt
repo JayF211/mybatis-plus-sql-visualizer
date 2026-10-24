@@ -391,6 +391,33 @@ object DataSourceSelector {
             .index?.let { registeredNames.getOrNull(it) }
 
     /**
+     * T-ExplainPwdPrompt W4（2026-10-24）：结构化 EXPLAIN 的 **last-used 取源回落**——
+     * 真绑定（[boundConsoleDataSource]）为 null 且绑定链 runner 枚举为 0（数据源无方言
+     * 映射时平台 `DatabaseRunners.getAttachDataSourceRunners` 返回空；243 沙盒实测：
+     * Database 视图已连接仍为 0）时，回落到面板「数据源（上次使用）」记忆取源，让结构化
+     * 通道（`McpDbExecutor` askPassword=true）不依赖绑定链也能走到。
+     *
+     * 防错源纪律：按名解析**歧义即弃**（同名多源不猜）；方言不符由既有 allowDialectGate
+     * 闸拦（EXPLAIN 同为执行旁路，同门控）。
+     *
+     * @return 在籍数据源对象（唯一命中）；名字缺失/歧义/枚举失败一律 null
+     */
+    fun lastUsedExplainDataSource(project: Project): Any? {
+        val name = runCatching { rememberedDataSourceName(project) }.getOrNull()?.takeIf { it.isNotBlank() }
+            ?: return null
+        val candidates = runCatching {
+            DataSourceSettings.getAllDataSources(project).map { DataSourceSettings.getName(it) to it }
+        }.getOrNull() ?: return null
+        return resolveLastUsedExplainFallback(name, candidates)
+    }
+
+    /** 纯判定核心（headless 直测）：按名唯一命中取对象；名字缺失/同名歧义一律弃（不猜）。 */
+    internal fun resolveLastUsedExplainFallback(rememberedName: String?, candidates: List<Pair<String, Any?>>): Any? =
+        rememberedName?.takeIf { it.isNotBlank() }?.let { n ->
+            candidates.filter { it.first == n }.singleOrNull()?.second
+        }
+
+    /**
      * F68a（T-PerfSweep20）：在籍数据源名单按 project 弱缓存——指示行取名链每次刷新
      * 不再现场建表（原每次 getAllDataSources 反射枚举+逐名 getName 反射）。
      * WeakHashMap 弱键随 project 关闭释放；名单陈旧窗口＝数据源增删后到下次进程内

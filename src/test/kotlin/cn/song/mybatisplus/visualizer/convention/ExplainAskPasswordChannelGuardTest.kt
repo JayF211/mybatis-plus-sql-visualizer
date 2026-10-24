@@ -47,4 +47,14 @@ class ExplainAskPasswordChannelGuardTest : BannedApiScanSupport() {
             code.contains("askPassword = false"),
         )
     }
+
+    @Test
+    fun `提交链必须带lastused取源回落`() {
+        val code = sourceOf("ui/SqlPreviewPanelExecution.kt")
+        assertTrue(
+            "submitExplainOrStructured 必须接 lastUsedExplainDataSource 回落" +
+                "（绑定链 runner 枚举被方言路由卡死时，结构化通道靠 last-used 记忆取源到达，T-ExplainPwdPrompt W4）",
+            code.contains("lastUsedExplainDataSource"),
+        )
+    }
 }
