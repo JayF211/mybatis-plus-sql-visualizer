@@ -191,4 +191,31 @@ to expand ...log.toolbar ... Use ActionUpdateThread.BGT`；改后 **0 条**。
 归因插件。那不是本项引入的（本项只动 presentation 计算线程），已在
 T-ExplainConsoleFirst W8 修复并在第二次沙盒会话复验为 **0 条**。
 
+---
+
+## 九、P-4 兑现：`currentSortLabel` 去分配的独立收益实测
+
+计划 §五 P-4 挂的是「37ms/次 的抓取耗时主要来自 `sortOptions()` 分配，而非平台自身」，
+当时因与 BGT 同批提交无法分离。本轮补测：新增 `SortModeLabelBenchmarkTest`，把两代实现
+放在同一进程里跑基准（20 万次调用、先预热 2000 次、三轮取最小值降噪）：
+
+```
+[W3-BENCH] n=200000 legacy=38124ms new=5775ms ratio=6.60x (new is 15% of legacy)
+```
+
+**结论：单次调用 191µs → 29µs，快 6.6 倍，新实现只花旧实现的 15%。** P-4 成立——
+耗时确实主要来自 `sortOptions()` 每次新建 7 个 `SortOption` 并调 7 次
+`MpSqlVisualizerBundle.message`（每讲走 ResourceBundle 取值），而不是平台调度开销。
+
+测试同时钉两条：
+
+1. **结构断言**：`sortModeLabelKey` 不得再引用 `sortOptions`（反向探针把它改回
+   `sortOptions().first{...}.label` → 恰 1 红）；
+2. **语义等价**：两代实现对全部 `SortMode.values()` 给出同一文案——防止把行为变更
+   伪装成性能优化。
+
+基准本身不设耗时阈值（CI 负载波动会让阈值变 flaky），只打印倍数供记录；可机械判定的
+部分（是否引用 `sortOptions`、文案是否一致）才做断言。
+
+
 

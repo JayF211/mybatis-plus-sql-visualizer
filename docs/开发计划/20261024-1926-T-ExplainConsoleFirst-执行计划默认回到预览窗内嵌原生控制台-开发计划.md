@@ -271,5 +271,79 @@ W1~W5 改的是 `Decision.DirectSilent` / `DirectFallback` 那条链（`submitEx
 - **遗留**：`refreshResultsComponent` 没有 `project` 参数，该调用点不参与升格（另两处
   ——每拍早检、40 拍超时兜底——生效）。沙盒 GUI 未走查。
 
+---
+
+## 九、追加：W8 exec 预热（沙盒验收实测触发的 EDT 慢操作修复）
+
+### 9.1 症状
+
+沙盒 243 验收时点「执行计划」，日志刷出 **9 条**
+`SEVERE - #c.i.u.SlowOperations ... Plugin to blame: SQL Visualizer`，栈为：
+
+```
+explainSql → submitExplainDirectConsole → SqlExecutor.execute → chooseAndPrepare
+  → createTempPsiFile → PsiManagerImpl.findFile
+```
+
+即 `createTempPsiFile` 的**冷路径**（VFS refresh + `PsiManager.findFile`）在 EDT 上跑。
+
+### 9.2 归因：本轮改动暴露的既有缺陷
+
+`1a1cf724`（2026-10-19）之后 EXPLAIN 默认走旁路查询（`PreviewSideQuery`），不经过控制台链，
+所以这条冷路径一直不可达；本轮 W1 把 EXPLAIN 切回内嵌控制台后它重新进入热路径。
+既有预热（`prewarmExecTempFile`）只服务「预览 SQL」，且仅在方言重渲染路径触发，
+EXPLAIN 文本从未被预热过。
+
+### 9.3 W8 修法（含一次自我修正）
+
+**首版**：池线程 `submit` 预热 + EDT 上 `future.get(8s)` 等待。沙盒预热带 1s 侥幸通过，
+但存在两个问题：
+
+1. **EDT 阻塞**——慢盘/索引期会把 UI 冻住 8s；
+2. **双层嵌套等待**——池线程里调 `prewarmExecTempFile`，而它内部又 submit 一个池线程
+   再 `get(30s)`，形成「池线程 A 等池线程 B」。
+
+**现版**：
+- `DataSourceSelector` 新增 `prewarmExecTempFileOnBackgroundThread`——调用方已在 BGT 时用，
+  **同步跑完、不自带预算等待**（EDT 调用仍拒绝）。既避免跨包访问文件级扩展函数，
+  也消除嵌套等待。
+- `submitExplainDirectConsole` 改为「池线程预热 → `invokeLater` 续接执行链」的**异步形态**，
+  EDT 上一个 `get` 都没有。预热失败照常续接（预热只是优化，不是前置条件）。
+- 删除随之失效的 `EXPLAIN_EXEC_PREWARM_BUDGET_MS` 死常量。
+
+### 9.4 读数
+
+沙盒 243 第二次会话（jar 23:20，含 W8-fix）：
+
+| 指标 | 修复前 | 修复后 |
+|---|---|---|
+| `SlowOperations` SEVERE | 9 条 | **0 条** |
+| `Plugin to blame: SQL Visualizer` | 9 条 | **0 条** |
+| 日志佐证 | — | `[M36] exec prewarm DONE (cache filled)` |
+
+执行链路同时验证完整：选源弹出 5 个源 → 建会话 → `attachConsole` → `embedConsole`
+→ 提交 → 出结果（`result/layout OK within 8s`）。
+
+### 9.5 守卫
+
+`ExplainPanelWiringGuardTest.W8_执行计划进链前必须预热exec文件` 改写：
+原「预热文本位置必须在 `SqlExecutor.execute` 之前」在异步形态下**不成立**
+（execute 在 `continueChain` 闭包里、源码位置反而在前）。改钉真正机制：
+
+- 预热调用必须在 `executeOnPooledThread` 块内；
+- `continueChain` 必须排在预热调用之后（这才是「先预热、后执行」的真实保证）；
+- 函数内不得出现 `Future.get` + `TimeUnit`（EDT 阻塞回归红线）；
+- 不得调用外层 `prewarmExecTempFile`（外层自带 submit+get，会形成嵌套等待）。
+
+反向探针：改回「EDT 阻塞等待」形态 → **恰 1 红**。
+
+### 9.6 测试契约随实现调整
+
+`ExplainSideQueryPanelTest.testExplainDirectGoesToEmbeddedNativeConsole` 增加有界等待
+（轮询 + `dispatchAllInvocationEvents`，最多 10s）——异步形态下 `submitExplainDirect`
+返回时执行链尚未跑，原「返回后立即读」的时序只对首版同步实现成立。这是契约随实现的
+正当调整，不是掩盖问题。
+
+
 
 
