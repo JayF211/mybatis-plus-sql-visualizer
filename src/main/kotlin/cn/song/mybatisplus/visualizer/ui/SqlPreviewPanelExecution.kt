@@ -40,7 +40,7 @@ import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel.Companion.DOLLAR_TOKEN
 // 以同包扩展函数形式搬出——方法体逐字符搬运，被触及的私有成员已按需放宽为 internal。
 
 internal fun SqlPreviewPanel.showRollbackSql() {
-    val sql = currentEditorSql()?.let { SqlCommentStripper.strip(it) }?.takeIf { it.isNotBlank() } ?: return
+    val sql = previewSqlForReadonly()?.let { SqlCommentStripper.strip(it) }?.takeIf { it.isNotBlank() } ?: return
     val kind = SqlTypeClassifier.getFirstKeyword(sql) ?: "SQL"
     // T-ST-03 核实：本路径是【回滚SQL】按钮的独立动作（工具栏 :687），**不在执行确认流内**——
     // 此处 generate 是该次点击的唯一一次解析（确认流的解析点在 executeSql/executeAdhocSql 的
@@ -87,7 +87,7 @@ internal fun SqlPreviewPanel.showRollbackSql() {
      * 脱敏同 R60 口径（`displayMaskEnabled`，投影级）：开启时脚本字面量打码并在注释头标 `masked`。
      */
     internal fun SqlPreviewPanel.exportReplayScript() {
-        val sql = currentEditorSql()?.takeIf { it.isNotBlank() } ?: return
+        val sql = previewSqlForReadonly()?.takeIf { it.isNotBlank() } ?: return
         val dialect = current?.effectiveDialect ?: MySqlDialect
         val options = ReplayExportDialog(project, dialect.name, dialect.transactionBegin)
         if (!options.showAndGet()) return
@@ -159,7 +159,7 @@ internal fun SqlPreviewPanel.showRollbackSql() {
      */
     internal fun SqlPreviewPanel.estimateDmlImpact(allowDataSourcePrompt: Boolean = true) {
         val proj = project ?: return
-        val sql = currentEditorSql() ?: return
+        val sql = previewSqlForReadonly() ?: return
         val dialect = current?.effectiveDialect ?: MySqlDialect
         when (val plan = cn.song.mybatisplus.visualizer.execute.DmlImpactEstimator.plan(sql, dialect)) {
             is cn.song.mybatisplus.visualizer.execute.DmlImpactEstimator.Plan.NotApplicable -> {
@@ -287,7 +287,7 @@ internal fun SqlPreviewPanel.showRollbackSql() {
 
     /** R91: only reads current editor/model and previously acquired history; never acquires a plan/schema. */
     internal fun SqlPreviewPanel.copyAsAiContext(includeIdentifiers: Boolean = false) {
-        val sql = currentEditorSql() ?: return
+        val sql = previewSqlForReadonly() ?: return
         val preview = current
         val dialect = preview?.effectiveDialect
         val target = aiContextTarget?.takeIf {
@@ -320,7 +320,7 @@ internal fun SqlPreviewPanel.showRollbackSql() {
     }
 
 internal fun SqlPreviewPanel.exportPortableSql() {
-    val sql = currentEditorSql()?.let { SqlCommentStripper.strip(it) }?.takeIf { it.isNotBlank() } ?: return
+    val sql = previewSqlForReadonly()?.let { SqlCommentStripper.strip(it) }?.takeIf { it.isNotBlank() } ?: return
     val dialect = current?.effectiveDialect ?: MySqlDialect
     val rows = cn.song.mybatisplus.visualizer.log.PortableSqlExport
         .collectRows(sql, dialect, current?.batchModel)
@@ -564,6 +564,30 @@ internal fun SqlPreviewPanel.registerRollbackSnapshotIfNeeded(
 internal fun SqlPreviewPanel.currentEditorSql(): String? =
     nativeEditorDoc?.text?.takeIf { it.isNotBlank() }
         ?: editor?.document?.text?.takeIf { it.isNotBlank() }
+
+/**
+ * T-ExplainConsoleFirst W2（2026-10-24）：**只读动作**的取词 —— 执行视图在场时读预览快照。
+ *
+ * 为什么需要：执行计划走内嵌原生控制台（形态 A）时，EXPLAIN 语句被写进 `mpsql-exec.sql` 的
+ * document，而 [nativeEditorDoc] 指向它 —— [currentEditorSql] 于是从「预览 SQL」漂移成
+ * 「EXPLAIN …」。回滚 SQL / 导出回放脚本 / 复制 AI 上下文 / 导出可移植 SQL / 预估影响行数
+ * 全都读那个函数，在执行视图里点它们会拿到 EXPLAIN 语句（`1a1cf724` 正是因此把默认通道换成
+ * 旁路查询的，commit message 原文「会让 currentEditorSql() 漂移到试算/EXPLAIN 语句」）。
+ *
+ * 判据：[lastRenderedSql] 由 [showSql] 在每次预览渲染后记录，而控制台执行链写 exec 文件
+ * **不经过 [showSql]**，故它恰好保存着「最后一次预览的 SQL」。同款判据已在
+ * [SqlPreviewPanelExecution.kt] 的 T-PrewarmLateRecover（`currentText == lastRenderedSql`）
+ * 与非 DML 影响面估算中使用。
+ *
+ * 边界：执行视图不在场（含「返回预览」之后）一律返回真实编辑器文本 —— 用户手改必须被看见。
+ * **执行链本身不用本函数**（[executeSql]/[explainSql] 执行的就是编辑器里的真实文本）。
+ */
+internal fun SqlPreviewPanel.previewSqlForReadonly(): String? {
+    if (executeViewHeader != null) {
+        lastRenderedSql?.takeIf { it.isNotBlank() }?.let { return it }
+    }
+    return currentEditorSql()
+}
 
 /**
  * T-InjectionGate T-IG-02：`${}` 原文拼接段的执行确认闸门（[executeSql]/[explainSql] 共用）。
@@ -1160,8 +1184,21 @@ internal fun SqlPreviewPanel.submitExplainDirectConsole(
 }
 
 /**
- * T-PreviewSideQuery P2：默认直送/回退路径——只读旁路查询 + 非模态结果对话框，
- * 不替换预览编辑器。旁路不可用/失败时给出原因，并保留显式「在控制台打开」入口。
+ * T-ExplainConsoleFirst W1（2026-10-24）：执行计划默认/回退**统一走内嵌原生控制台**。
+ *
+ * 形态渊源：这是初版实现（`1a1cf724` 前的 `submitExplainDirect`），`1a1cf724` 为了「不顶掉
+ * 预览编辑器」把默认改成旁路查询（形态 B）。十二轮换源拉锯（T-DialectInferPollution /
+ * T-ExplainFailUx / T-ExplainSwitchNative，合计 W1~W12）暴露出形态 B / 结构化通道的系统性代价：
+ * 它们是插件自建 JDBC 通道，于是「用哪条源、密码从哪来、方言对不对、失败怎么呈现」全落在插件
+ * 身上；而平台「选中即关联」（`getForcedDataSourceForExec` 命中即 `singletonList` 短路枚举、
+ * 无公开清除 API）让插件侧选源列表第二次起恒为单源 —— 这是那十二轮全部拉锯的根因。
+ *
+ * 形态 A 把这些**整类**交回平台：换源走内嵌控制台自带的原生 `Data Sources` 菜单（Detach +
+ * 全部源），密码走平台凭据链，方言与报错在控制台原生呈现。`1a1cf724` 当初真正的顾虑
+ * （执行视图里只读动作拿到 EXPLAIN 语句）已由 [previewSqlForReadonly] 根治（W2）。
+ *
+ * 前置只判「一条源都没有」→ 引导去 Database 工具窗口；**不在插件侧做任何选源**
+ * （不重演 W1~W12）。结构化形态（`explainStructuredRender`）不受影响，仍在设置项后。
  */
 internal fun SqlPreviewPanel.submitExplainDirect(
     proj: Project,
@@ -1175,66 +1212,20 @@ internal fun SqlPreviewPanel.submitExplainDirect(
 
         else -> Unit
     }
-    val target = explainTargetForTest?.invoke() ?: runCatching {
-        cn.song.mybatisplus.visualizer.execute.DataSourceSelector.boundConsoleDataSource()
-    }.getOrNull()
-        // T-DialectInferPollution W8（2026-10-24 用户真机报障）：直送链（PreviewSideQuery 旁路
-        // 查询）取源接 last-used 回落——开关关闭形态下点「执行计划」走到这里，控制台无绑定但
-        // 面板有「数据源（上次使用）」记忆（如 mp_demo@localhost），此前直接弹「未绑定数据源」
-        // 红字框（用户明明绑过）。旁路查询与结构化通道同为 McpDbExecutor 直连，last-used 对象
-        // 完全可用；歧义即弃，方言不符由 PreviewSideQuery 内既有方言闸拦。
-        ?: runCatching {
-            cn.song.mybatisplus.visualizer.execute.DataSourceSelector.explainFallbackDataSource(
-                proj, sourceModuleKey, explainSql,
-            )
-        }.getOrNull()
-    if (target == null) {
-        // 无绑定数据源：按钮直达 Database 工具窗口（按提示去选源），不再空跑一次必然失败的执行；
-        // 文案用执行计划专用键（旧实现复用了 DML 影响面的「无法试算」，语境不符）。
+    // 零源判定：只要有一条在籍源就交给平台（平台自己决定用哪条、按需弹选择器），
+    // 插件不枚举、不筛选、不猜。测试缝非 null 即视为「有可用源」。
+    val hasAnySource = explainTargetForTest?.let { it() != null } ?: runCatching {
+        cn.song.mybatisplus.visualizer.execute.DataSourceSelector.registeredDataSourceCount(proj) > 0
+    }.getOrDefault(true)
+    if (!hasAnySource) {
+        // 一条源都没有：按钮直达 Database 工具窗口（按提示去配置/连接），不空跑一次必然失败的执行。
         showExplainErrorDialog(
             MpSqlVisualizerBundle.message("panel.explain.noDataSource"),
             openDatabase = true,
         )
         return
     }
-    resultPanel.showLoading()
-    PreviewSideQuery.run(
-        proj,
-        target,
-        explainSql,
-        dialectGateRequest,
-        scalar = false,
-        requireSelectGuard = false,
-        channelNote = cn.song.mybatisplus.visualizer.sql.ExplainSupport
-            .entryFor(dialectGateRequest.renderedDialectName ?: "")?.postPlanQuery,
-    ) { result ->
-        resultPanel.showIdle()
-        val openConsole = { submitExplainDirectConsole(proj, explainSql, dialectGateRequest) }
-        when (result) {
-            is PreviewSideQuery.Result.Table ->
-                showExplainRawResultDialog(MpSqlVisualizerBundle.message("panel.explain"), result.raw)
-
-            // T-ExplainPwdPrompt：分型出口同结构化通道——AUTH/CANCELLED 轻通知收口（平台
-            // 凭据对话框已呈现失败与出口，红字模态框是二次打断，W6），不自动重试
-            is PreviewSideQuery.Result.Blocked -> showExplainErrorDialog(result.message, openConsole)
-            is PreviewSideQuery.Result.Failed -> when (
-                cn.song.mybatisplus.visualizer.execute.classifyExplainFailure(result.message)
-            ) {
-                cn.song.mybatisplus.visualizer.execute.ExplainFailureKind.AUTH ->
-                    notifyExplainAuthFailure(proj)
-                cn.song.mybatisplus.visualizer.execute.ExplainFailureKind.CANCELLED ->
-                    notifyExplainCancelled(proj)
-                // T-ExplainFailUx W1：选错源**不弹模态**——就地横幅 + 「切换数据源」动作
-                //（用户实测诉求：直接引导换源，而不是先关弹窗再点「在控制台打开」）
-                cn.song.mybatisplus.visualizer.execute.ExplainFailureKind.WRONG_TARGET ->
-                    showExplainWrongTarget(proj, result.message, explainSql, dialectGateRequest, openConsole)
-                cn.song.mybatisplus.visualizer.execute.ExplainFailureKind.OTHER ->
-                    showExplainErrorDialog(result.message, openConsole)
-            }
-            is PreviewSideQuery.Result.Scalar ->
-                showExplainErrorDialog("unexpected scalar result from EXPLAIN", openConsole)
-        }
-    }
+    submitExplainDirectConsole(proj, explainSql, dialectGateRequest)
 }
 
 /**

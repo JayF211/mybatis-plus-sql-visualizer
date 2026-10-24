@@ -86,9 +86,12 @@ class ExplainAskPasswordChannelGuardTest : BannedApiScanSupport() {
         // （首版 indexOf 近邻检查被直送链调用点干扰假绿、反向探针不红；第二版只匹配带花括号
         // 形态漏掉直送分支——探针必须让守卫真红才算验证过。）
         val starts = Regex("ExplainFailureKind\\.AUTH ->").findAll(code).map { it.range.first }.toList()
+        // T-ExplainConsoleFirst W1（2026-10-24）修订：直送链改回内嵌原生控制台后，AUTH 的
+        // 呈现由平台凭据链原生负责，故 AUTH 分支只剩**结构化通道**一处（原两处：结构化
+        // onFailed + 直送 Failed）。条数断言随之从 `>= 2` 收到 `>= 1`，轻通知纪律不变。
         assertTrue(
-            "应存在 AUTH 分支（结构化 onFailed 与直送 Failed 两处）",
-            starts.size >= 2,
+            "应存在 AUTH 分支（结构化 onFailed）",
+            starts.isNotEmpty(),
         )
         val branchEnds = Regex("ExplainFailureKind\\.(CANCELLED|OTHER) ->|is PreviewSideQuery\\.Result\\.Scalar")
             .findAll(code).map { it.range.first }.toList()
@@ -129,22 +132,37 @@ class ExplainAskPasswordChannelGuardTest : BannedApiScanSupport() {
     }
 
     @Test
-    fun `直送链取源必须接模块学习回落`() {
+    fun `直送链不得再做插件侧选源`() {
         val code = sourceOf("ui/SqlPreviewPanelExecution.kt")
-        // T-DialectInferPollution W9（用户沙盒实测：jar-model demo 表被 last-used mp_demo 硬套
-        // → mp_demo.wms_inventory_jar_demo doesn't exist）：直送链与结构化链取源统一走
-        // explainFallbackDataSource——模块学习优先、冲突不猜、last-used 兜底。
-        val directIdx = code.indexOf("val target = explainTargetForTest?.invoke()")
-        val fallbackIdx = code.indexOf("explainFallbackDataSource(\n                proj, sourceModuleKey,", directIdx)
-        val noDsIdx = code.indexOf("panel.explain.noDataSource", directIdx)
+        // T-ExplainConsoleFirst W1（2026-10-24）：直送链改回内嵌原生控制台（形态 A）后，
+        // 「用哪条源」交还平台——插件侧**不得**再调 explainFallbackDataSource（模块学习 /
+        // last-used / 表归属路由那一整套）。十二轮（W8~W12）的拉锯根因正是插件在自己算源：
+        // 平台「选中即关联」让 runner 枚举第二次起恒为单源，插件算得再准也改不了平台执行目标。
+        // 本守卫把「形态 B 的取源逻辑悄悄回流」钉成红。
+        val body = funBody(code, "internal fun SqlPreviewPanel.submitExplainDirect(")
+        assertTrue("submitExplainDirect 必须仍存在", body.isNotEmpty())
         assertTrue(
-            "submitExplainDirect 的取源须接 explainFallbackDataSource(proj, sourceModuleKey, sql) 模块学习回落（W9）",
-            directIdx >= 0 && fallbackIdx > directIdx,
+            "直送链不得再调 explainFallbackDataSource（插件侧选源已随形态 A 退役）",
+            !body.contains("explainFallbackDataSource"),
         )
         assertTrue(
-            "回落必须先于「未绑定数据源」红字分支（否则回落不生效）",
-            noDsIdx < 0 || fallbackIdx in 0 until noDsIdx,
+            "直送链必须转调 submitExplainDirectConsole（内嵌原生控制台＝形态 A）",
+            body.contains("submitExplainDirectConsole("),
         )
+        // 零源判定仍须在场（一条源都没有时给引导，而不是空跑）
+        assertTrue(
+            "零源判定须保留（registeredDataSourceCount 或测试缝）",
+            body.contains("registeredDataSourceCount") || body.contains("explainTargetForTest"),
+        )
+    }
+
+    /** 取扩展函数函数体（从声明行到下一个顶层 `internal fun`/`private fun` 之前）。 */
+    private fun funBody(code: String, decl: String): String {
+        val start = code.indexOf(decl)
+        if (start < 0) return ""
+        val nextDecl = Regex("\\n(internal|private) fun SqlPreviewPanel\\.")
+            .find(code, start + decl.length)?.range?.first ?: code.length
+        return code.substring(start, nextDecl)
     }
 
     @Test
@@ -218,8 +236,12 @@ class ExplainAskPasswordChannelGuardTest : BannedApiScanSupport() {
         // T-ExplainFailUx W1（用户沙盒实测诉求：「这种情况就不应该弹窗了吧，应该直接引导用户
         // 更换数据源」）：WRONG_TARGET 档（表不在当前源）须走就地引导 showExplainWrongTarget，
         // 不得调 showExplainErrorDialog 弹模态。按分支起点切片断言（同 W6 AUTH 纪律）。
+        //
+        // T-ExplainConsoleFirst W1（2026-10-24）修订：直送链改回内嵌原生控制台后，选错源的
+        // 呈现由平台控制台原生负责，故 WRONG_TARGET 分支只剩**结构化通道**一处（原两处：
+        // 结构化 onFailed + 直送 Failed）。条数断言随之从 `>= 2` 收到 `>= 1`，就地引导纪律不变。
         val starts = Regex("ExplainFailureKind\\.WRONG_TARGET ->").findAll(code).map { it.range.first }.toList()
-        assertTrue("应存在 WRONG_TARGET 分支（结构化 onFailed 与直送 Failed 两处）", starts.size >= 2)
+        assertTrue("应存在 WRONG_TARGET 分支（结构化 onFailed）", starts.isNotEmpty())
         val branchEnds = Regex("ExplainFailureKind\\.(CANCELLED|OTHER) ->|is PreviewSideQuery\\.Result\\.Scalar")
             .findAll(code).map { it.range.first }.toList()
         val offenders = starts.count { s ->

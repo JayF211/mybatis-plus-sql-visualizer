@@ -264,6 +264,68 @@ class ExplainPanelWiringGuardTest {
         }
     }
 
+    /**
+     * T-ExplainConsoleFirst W4（2026-10-24）：只读动作必须走 `previewSqlForReadonly()`，
+     * 不得再裸读 `currentEditorSql()`。
+     *
+     * 为什么：执行计划回到内嵌原生控制台后，`mpsql-exec.sql` 的 document 会被 EXPLAIN 语句
+     * 顶掉，而 `nativeEditorDoc` 指向它 ⇒ `currentEditorSql()` 漂移。只读动作（回滚 SQL /
+     * 导出回放 / 复制 AI 上下文 / 导出可移植 SQL / 预估影响行数）若裸读它，用户在执行视图里
+     * 点这些按钮会拿到 EXPLAIN 语句而不是自己的 SQL。（`1a1cf724` 当初弃用形态 A 正是这个
+     * 原因——不钉住这条，形态 A 重新上线就会回归。）
+     *
+     * 反向验证：把任一动作改回 `currentEditorSql()` 必红。
+     */
+    @Test
+    fun `W2_只读动作取词必须走预览快照`() {
+        val source = sqlPreviewPanelSource()
+        val readonlyActions = listOf(
+            "internal fun SqlPreviewPanel.showRollbackSql(",
+            "internal fun SqlPreviewPanel.exportReplayScript(",
+            "internal fun SqlPreviewPanel.copyAsAiContext(",
+            "internal fun SqlPreviewPanel.exportPortableSql(",
+            "internal fun SqlPreviewPanel.estimateDmlImpact(",
+        )
+        for (marker in readonlyActions) {
+            val body = functionBody(source, marker)
+            assertTrue(
+                "$marker 必须走 previewSqlForReadonly()（执行视图下才拿得到预览 SQL）",
+                body.contains("previewSqlForReadonly()"),
+            )
+            assertFalse(
+                "$marker 不得裸读 currentEditorSql()（执行视图下会漂移成 EXPLAIN 语句）",
+                body.contains("currentEditorSql()"),
+            )
+        }
+        // 执行链本身必须仍读真实编辑器（用户手改要生效），不得走快照
+        val execute = functionBody(source, "internal fun SqlPreviewPanel.executeSql(")
+        assertTrue(
+            "executeSql 必须执行编辑器真实文本（不得用预览快照顶替用户手改）",
+            execute.contains("nativeEditorDoc?.text") || execute.contains("editor?.document?.text"),
+        )
+    }
+
+    /**
+     * T-ExplainConsoleFirst W1（2026-10-24）：形态 B 的旁路 EXPLAIN 不得回流。
+     *
+     * `submitExplainDirect` 必须转调 `submitExplainDirectConsole`（内嵌原生控制台），
+     * 且函数体内不得出现 `PreviewSideQuery.run`——一旦回流，十二轮换源拉锯的根因
+     * （插件自建 JDBC 通道 + 平台「选中即关联」短路）就全回来。
+     */
+    @Test
+    fun `W1_执行计划直送不得回流旁路查询`() {
+        val source = sqlPreviewPanelSource()
+        val direct = functionBody(source, "internal fun SqlPreviewPanel.submitExplainDirect(")
+        assertTrue(
+            "submitExplainDirect 必须转调 submitExplainDirectConsole（形态 A）",
+            direct.contains("submitExplainDirectConsole("),
+        )
+        assertFalse(
+            "submitExplainDirect 不得再调 PreviewSideQuery.run（形态 B 已退役）",
+            direct.contains("PreviewSideQuery.run("),
+        )
+    }
+
     /** 截取从 [marker] 开始到下一个顶层函数声明之前的源码段。 */
     private fun functionBody(source: String, marker: String): String {
         val start = source.indexOf(marker)
