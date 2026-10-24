@@ -320,20 +320,23 @@ class ExplainAskPasswordChannelGuardTest : BannedApiScanSupport() {
     }
 
     @Test
-    fun `用户主动切换数据源须用平台切换专用入口`() {
+    fun `切换枚举必须回退attach且不得返回空`() {
         val results = sourceOf("execute/DataSourceSelectorResults.kt")
         val selector = sourceOf("execute/DataSourceSelector.kt")
-        // T-ExplainSwitchNative W8（用户实测「点击切换数据源只有一个数据源？当前可是配置了很多」）：
-        // 平台 attach 版枚举经 .filter(CAN_CONNECT_TO) 滤掉当前不可连接的源；用户主动切换应走
-        // 平台切换专用入口 getSwitchDataSourceRunners。
+        // T-ExplainSwitchNative W8-hotfix（用户实测「点击切换数据源就报错」）：首版把切换入口
+        // 改成反射 getSwitchDataSourceRunners，但其真实签名是四参（含 DatabaseSession），而
+        // 准备链此刻尚无已 attach 会话 → NoSuchMethodException 被吞成空列表 → runners=0 →
+        // 「没有与该 SQL 方言匹配的已配置数据源」红条。纪律：准备链枚举一律走 attach 版
+        // （此前一直正常、能弹原生列表的形态）；即便将来启用 switch 版，**失败必须回退 attach**。
         assertTrue(
-            "切换路径须以 allDataSources=forceChoosePopup 调枚举（W8）",
-            results.contains("allDataSources = forceChoosePopup"),
+            "准备链枚举须直接走 attach 版（W8-hotfix）",
+            results.contains("getAttachDataSourceRunners(psiFile, submitSql, sessionConsumer)"),
         )
         assertTrue(
-            "枚举函数须按 allDataSources 选择 getSwitchDataSourceRunners 入口（W8）",
-            selector.contains("getSwitchDataSourceRunners") &&
-                selector.contains("val entryPoint = if (allDataSources)"),
+            "枚举实现须保留 getSwitchDataSourceRunners 的真实四参签名并失败回退 attach（W8-hotfix）",
+            selector.contains("Class.forName(SESSION_CLASS)") &&
+                selector.contains("switched.ifEmpty { attach() }"),
         )
     }
+
 }
