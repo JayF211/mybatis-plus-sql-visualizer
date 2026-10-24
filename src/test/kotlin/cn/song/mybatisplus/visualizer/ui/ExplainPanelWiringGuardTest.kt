@@ -340,25 +340,49 @@ class ExplainPanelWiringGuardTest {
      */
     @Test
     fun `W8_执行计划进链前必须预热exec文件`() {
-        val source = sqlPreviewPanelSource()
-        val body = functionBody(source, "internal fun SqlPreviewPanel.submitExplainDirectConsole(")
+        val body = functionBody(sqlPreviewPanelSource(), "internal fun SqlPreviewPanel.submitExplainDirectConsole(")
         assertTrue(
-            "submitExplainDirectConsole 必须在 SqlExecutor.execute 之前调 prewarmExecTempFile（否则 createTempPsiFile 冷路径落 EDT）",
+            "submitExplainDirectConsole 必须预热 exec 文件（否则 createTempPsiFile 冷路径在 EDT 做 VFS/PSI 慢操作）",
+            body.contains("prewarmExecTempFileOnBackgroundThread("),
+        )
+        val prewarmCall = body.indexOf("prewarmExecTempFileOnBackgroundThread(")
+        // W8-fix 后结构是**异步续接**：`SqlExecutor.execute` 在 `continueChain` 闭包里（源码位置在前），
+        // 预热提交在闭包外、且池线程跑完之后才 `invokeLater(continueChain)`。
+        // 故不能按文本位置断言「预热在 execute 之前」——那是首版同步写法才成立的形态。
+        // 改钉真正的先后机制（池线程块内：先预热调用、后续接调用）：
+        val poolBlock = body.indexOf("executeOnPooledThread")
+        assertTrue(
+            "预热调用必须位于池线程块内（实际 prewarm=$prewarmCall, poolBlock=$poolBlock）",
+            prewarmCall > poolBlock,
+        )
+        val continueCall = body.indexOf("invokeLater({ continueChain() }")
+        assertTrue(
+            "预热完成后才续接执行链（continueChain 必须排在预热调用之后：prewarm=$prewarmCall, continue=$continueCall）",
+            continueCall > prewarmCall,
+        )
+        assertTrue(
+            "预热必须投在池线程（EDT 上做 VFS refresh/findFile 就是被修的那个问题）",
+            body.contains("executeOnPooledThread"),
+        )
+        // W8-fix：**EDT 上不得阻塞等预热**——首版 `future.get(8s)` 在慢盘/索引期会冻 UI，
+        // 且与既有 prewarm 的双层预算等待嵌套。改异步续接后 EDT 上一个 get 都不该有。
+        assertFalse(
+            "submitExplainDirectConsole 内不得出现 Future.get / 任何阻塞等待（EDT 会被冻住）",
+            body.contains(".get(") && body.contains("TimeUnit"),
+        )
+        assertTrue(
+            "预热完成后必须回 EDT 续接执行链（异步续接而非阻塞）",
+            body.contains("invokeLater") && body.contains("continueChain"),
+        )
+        // 直接调 inner 而不是外层 prewarmExecTempFile：后者内部会再 submit 一个池线程并 get(30s)，
+        // 从池线程调它就成了「池线程等池线程」的嵌套等待。
+        assertFalse(
+            "不得从池线程调用外层 prewarmExecTempFile（它内部再 submit + get，形成嵌套等待）",
             body.contains("prewarmExecTempFile("),
         )
-        val prewarmIdx = body.indexOf("prewarmExecTempFile(")
-        val executeIdx = body.indexOf("SqlExecutor.execute(")
         assertTrue(
-            "预热必须排在执行之前（实际 prewarm=$prewarmIdx, execute=$executeIdx）",
-            prewarmIdx in 0 until executeIdx,
-        )
-        assertTrue(
-            "预热必须投在池线程（EDT 上 call 会被 prewarmExecTempFile 自身拒绝，等于没修）",
-            body.contains("executeOnPooledThread") || body.contains("AppExecutorUtil"),
-        )
-        assertTrue(
-            "等待预算必须是有界常量（不得无限等）",
-            body.contains("EXPLAIN_EXEC_PREWARM_BUDGET_MS") && source.contains("EXPLAIN_EXEC_PREWARM_BUDGET_MS = "),
+            "必须走「调用方已在 BGT」的专用入口（同步跑完、不自带预算等待）",
+            body.contains("prewarmExecTempFileOnBackgroundThread("),
         )
     }
 

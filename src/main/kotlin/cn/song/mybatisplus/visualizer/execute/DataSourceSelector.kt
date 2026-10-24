@@ -2052,6 +2052,30 @@ object DataSourceSelector {
     internal fun cachedTempPsiFileForTest(): Boolean = cachedTempPsiFile != null
 
     /**
+     * T-ExplainConsoleFirst W8-fix（2026-10-24）：**调用方已确保自己在后台线程**时的预热入口。
+     *
+     * 与 [prewarmExecTempFile] 的区别：后者内部会再 `submit` 一个池线程并 `get(30s)` 等它——
+     * 那是给「后台预热」这种非交互场景用的**自带预算**形态。若从池线程调它，就变成
+     * 「池线程 A 等池线程 B」的嵌套等待；而本入口**同步跑完**，调用方自己掌控等待与续接。
+     *
+     * 必须传 [LOG]（调用方持有自己的 logger，便于把失败归到发起方而非本类）。
+     * EDT 上调用直接拒绝并 warn——本链含 refresh/findFile 慢操作。
+     */
+    fun prewarmExecTempFileOnBackgroundThread(
+        project: Project,
+        sql: String,
+        renderedDialectName: String? = null,
+        LOG: com.intellij.openapi.diagnostic.Logger,
+    ) {
+        if (ApplicationManager.getApplication().isDispatchThread) {
+            LOG.warn("[M36] prewarmExecTempFileOnBackgroundThread called on EDT — refused (slow ops)")
+            return
+        }
+        if (project.isDisposed || sql.isBlank()) return
+        prewarmExecTempFileInner(project, sql, LOG, renderedDialectName)
+    }
+
+    /**
      * T-ExecSlowOps F2：后台预热 exec 临时文件（写盘 → VFS refresh → 方言映射 → findFile →
      * 填 [cachedTempPsiFile]）——**只允许后台线程调用**（EDT 直调拒绝并 warn：本链含
      * refresh/findFile 慢操作，EDT 执行正是 262 真机堆栈①的 SEVERE 本体）。

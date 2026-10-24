@@ -773,15 +773,6 @@ internal fun SqlPreviewPanel.showDialectGateError(
 /** 方言设置页的 Configurable EP id（Database 插件注册，见 SqlPlugin.xml）。 */
 internal const val SQL_DIALECTS_SETTING_ID = "SQL Dialects"
 
-/**
- * T-ExplainConsoleFirst W8：EXPLAIN 进执行链前的 exec 文件预热等待预算（毫秒）。
- *
- * 取 8s：正常冷启预热实测 0.3~3s（`[M36] prewarm done in 286ms/1447ms/1651ms` 三档），
- * 8s 覆盖慢盘并给出明确上限；超时即放弃预热（回落既有冷路径），不把按钮点击挂住。
- * 不用 `EXEC_PREWARM_BUDGET_MS`（30s）——那是后台预热链自己的上限，不该成为 UI 交互的等待窗。
- */
-private const val EXPLAIN_EXEC_PREWARM_BUDGET_MS = 8_000L
-
 /** T-DialectGateUx：打开「设置 → 语言与框架 → SQL 方言」页并选中该页。 */
 internal fun openSqlDialectSettings(proj: Project) {
     // 平台自带的「按 id 打开并选中」入口：它在**同一个** ConfigurableGroup 实例里查找目标
@@ -1194,32 +1185,54 @@ internal fun SqlPreviewPanel.submitExplainDirectConsole(
 
             else -> Unit
         }
-    // W8：后台预热 exec 文件（内部自带预算等待与 EDT 拒绝），避免 createTempPsiFile 冷路径落 EDT。
-    // 预热在**池线程**发起并等待有界预算——本函数仍在 EDT，等待窗口取预热自带预算的同一量级，
-    // 超时即放弃（回落冷路径，不阻断执行）。
-    runCatching {
-        val prewarmFuture = com.intellij.util.concurrency.AppExecutorUtil.getAppExecutorService().submit {
-            cn.song.mybatisplus.visualizer.execute.DataSourceSelector.prewarmExecTempFile(
-                proj, explainSql, dialectGateRequest.renderedDialectName,
-            )
+    // W8：后台预热 exec 文件，避免 createTempPsiFile 冷路径落 EDT（`PsiManager.findFile` 慢操作）。
+    //
+    // W8-fix（同日复验修订）：**不得在 EDT 上阻塞等待预热**。首版写成
+    // `future.get(8s)` 直接在 EDT 上等——沙盒预热带 1s 侥幸通过，但慢盘/索引期会把 UI 冻住 8s，
+    // 且与「池线程内又 submit 一个池线程再 get(30s)」的既有 prewarm 形成**双层嵌套等待**。
+    //
+    // 现形态：后台线程里**直接调 inner**（不嵌套 `prewarmExecTempFile` 的预算等待，那条是给
+    // 「后台预热」这种非交互场景用的），完成后回 EDT 续接执行链。预热失败/超时都照常续接
+    // （回落既有冷路径，不阻断用户点击）。
+    val projForPrewarm = proj
+    val explainSqlForPrewarm = explainSql
+    val requestForPrewarm = dialectGateRequest
+    val prewarmDone = java.util.concurrent.atomic.AtomicBoolean(false)
+    val continueChain = {
+        if (prewarmDone.compareAndSet(false, true)) {
+            ApplicationManager.getApplication().invokeLater({
+                if (Disposer.isDisposed(this) || proj.isDisposed) return@invokeLater
+                resultPanel.showLoading()
+                SqlExecutor.execute(
+                    proj, explainSql, null, true,
+                    onConsole = { consoleComponent ->
+                        embedConsole(consoleComponent, embedMode = ConsoleEmbedMode.EXECUTE)
+                    },
+                    onEditor = { consoleEditor -> onNativeEditorReady(consoleEditor) },
+                    onError = { errorMsg -> resultPanel.showError(errorMsg) },
+                    onErrorRich = { info -> showErrorRichWithLocate(info) },
+                    dialectGateRequest = dialectGateRequest,
+                    onDialectGate = { verdict -> onExecutionDialectGate(verdict) },
+                )
+            }, com.intellij.openapi.application.ModalityState.any())
         }
-        prewarmFuture.get(EXPLAIN_EXEC_PREWARM_BUDGET_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
-    }.onFailure { e ->
-        com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
-            .info("[W8] exec prewarm before explain skipped: ${e.javaClass.simpleName}: ${e.message}")
     }
-    resultPanel.showLoading()
-    SqlExecutor.execute(
-        proj, explainSql, null, true,
-        onConsole = { consoleComponent -> embedConsole(consoleComponent, embedMode = ConsoleEmbedMode.EXECUTE) },
-        onEditor = { consoleEditor -> onNativeEditorReady(consoleEditor) },
-        onError = { errorMsg ->
-            resultPanel.showError(errorMsg)
-        },
-        onErrorRich = { info -> showErrorRichWithLocate(info) },
-        dialectGateRequest = dialectGateRequest,
-        onDialectGate = { verdict -> onExecutionDialectGate(verdict) },
-    )
+    ApplicationManager.getApplication().executeOnPooledThread {
+        runCatching {
+            cn.song.mybatisplus.visualizer.execute.DataSourceSelector.prewarmExecTempFileOnBackgroundThread(
+                projForPrewarm,
+                explainSqlForPrewarm,
+                requestForPrewarm.renderedDialectName,
+                com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java),
+            )
+        }.onFailure { e ->
+            com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+                .info("[W8] exec prewarm before explain failed (fallback to cold path): ${e.javaClass.simpleName}: ${e.message}")
+        }
+        // 预热完成（含失败）都续接——预热只是优化，不是前置条件。
+        ApplicationManager.getApplication().invokeLater({ continueChain() },
+            com.intellij.openapi.application.ModalityState.any())
+    }
 }
 
 /**

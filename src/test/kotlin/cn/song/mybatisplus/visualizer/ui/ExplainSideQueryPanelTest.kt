@@ -66,6 +66,15 @@ class ExplainSideQueryPanelTest : BasePlatformTestCase() {
         explainDialogSinkForTest = { dialogShown = true }
         try {
             p.submitExplainDirect(project, "EXPLAIN $sql", explainRequest())
+            // T-ExplainConsoleFirst W8-fix：submitExplainDirectConsole 改成「后台预热 → invokeLater
+            // 续接执行链」的异步形态（避免 EDT 阻塞等预热）。故本断言必须等异步链落地，
+            // 不能在 submitExplainDirect 返回后立刻读——那是首版同步实现才成立的时序。
+            // 有界等待：轮询 + 调度 EDT 队列，最多约 10s（预热本身毫秒级，留足余量降 flaky）。
+            val deadline = System.currentTimeMillis() + 10_000
+            while (attempted == null && System.currentTimeMillis() < deadline) {
+                UIUtil.dispatchAllInvocationEvents()
+                Thread.sleep(20)
+            }
             assertEquals(
                 "执行计划必须交给内嵌原生控制台（形态 A），实际交给执行链的文本：$attempted",
                 "EXPLAIN $sql",
