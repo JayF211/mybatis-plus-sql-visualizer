@@ -176,3 +176,47 @@ internal fun SqlPreviewPanel.previewSqlForReadonly(): String? =
 - **`showExplainWrongTarget` / `notifyExplainAuthFailure` / `notifyExplainCancelled` 仍在**：现仅由结构化通道调用，未成死代码。
 - 全量 `testShards` 与 `verifyPlugin` 未跑（本改动不动 `build.gradle.kts` / `plugin.xml` / 依赖版本，按三档分层不触发构建校验；全量留收口阶段）。
 
+---
+
+## 七、追加：W6 结构化通道「默认关」定案与推荐通知一次性（同日，用户报障触发）
+
+### 7.1 用户报障
+
+实施 W1~W5 后用户实测：**「为什么我点击执行计划还是弹窗了？」**
+
+### 7.2 归因（配置实证，非推测）
+
+查沙盒持久化配置：
+
+```
+.intellijPlatform/sandbox/.../config/options/mp-sql-visualizer.xml
+  <component name="MpSqlVisualizerSettings">
+    <option name="explainStructuredRender" value="true" />
+```
+
+而代码默认值是 `false`（`PluginSettings.kt:550`）。差异只可能来自一处：`Decision.DirectSilent` 分支里那条「启用结构化并重试」推荐通知——**它每次点执行计划都出现**（开关关着就满足推荐条件），用户顺手点过一次之后 `enableStructuredExplainAndRetry` 把开关**永久**写成 true，而界面上再没有任何「现在是实验形态」的提示。于是下次点执行计划看到 `ExplainPlanDialog` 弹窗时，用户完全无从归因，只会认为「改了半天还是在弹窗」。
+
+W1~W5 改的是 `Decision.DirectSilent` / `DirectFallback` 那条链（`submitExplainDirect` → 内嵌控制台），**结构化分支按 §2.3「明确不做」原样保留**——用户此前的点击恰好走的是结构化分支，所以改动对他不生效。这不是实现缺陷，是 §2.3 的边界没有对用户说清。
+
+### 7.3 产品决定（用户拍板）
+
+**结构化通道保留，默认关。** 不退役、不删代码、不改默认值（本来就是 false）。
+
+### 7.4 W6 实施
+
+- 新增 `PluginSettings.State.explainStructuredOfferedShown`（默认 `false`，持久化，循 `onboardingAnchorTipShown` 先例）：推荐通知**只提示一次**，之后全程静默。该标记只关掉「主动推荐」这一条噪音源，**不阻断显式入口**——用户想开仍可去设置页勾选。
+- 通知接线处加一次性判定并置位（`SqlPreviewPanelExecution.kt:1441-1443`）。
+- 新增 `ExplainStructuredDefaultOffGuardTest` 三条守卫：
+  1. `explainStructuredRender` 声明默认值必须是 `false`（产品决定固化，防被改回）；
+  2. 一次性标记必须**真置位**（防「读了个恒 false 的字段」的假一次性——只加判定不加置位，通知照样每次都弹）；
+  3. 设置页 `explainStructuredCheck` 与 bundle 键必须仍在（**「默认关」≠「拆掉通道」**，防清理时误删）。
+
+### 7.5 读数与遗留
+
+- 定向 10 类 **83 / 0 / 0 / 0**。
+- 反向探针两组，各恰 1 红：①把默认值改回 `true` → `结构化渲染默认必须关闭` 红；②删掉一次性标记的实际置位（保留条件读取，即伪一次性）→ `启用结构化推荐通知必须只提示一次` 红。
+- **构建坑（记录）**：新增 `State` 字段后增量编译留下陈旧 class，`config` 包 10 个用例报 `NoSuchMethodError: State.copy$default(...)`。`clean` 后全绿——是构建缓存问题不是产品缺陷。同类改动后若见 `copy$default` / `copy` 签名类 `NoSuchMethodError`，直接 `clean`，别去查数据类定义。
+- **用户当前沙盒状态未修**：沙盒 IDE 当时在运行（PID 37808），此时改配置文件会在退出时被回写覆盖，故未直接改盘。需用户在设置页（`设置 → 工具 → MyBatis-Plus SQL Visualizer → SQL 预览` 组）取消勾选「预览面板内结构化渲染 EXPLAIN」后 Apply，或在关闭 IDE 后改该 xml。
+- 沙盒 GUI 未走查（同 §六）。
+
+
