@@ -1325,13 +1325,31 @@ object DataSourceSelector {
     /**
      * 反射调用 DatabaseRunners.getAttachDataSourceRunners 获取原生 Runner 列表。
      * [sessionConsumer] 在选中 runner 执行后收到 DatabaseSession。
+     *
+     * T-ExplainSwitchNative W8（2026-10-24 用户实测「点击切换数据源只有一个数据源？当前可是
+     * 配置了很多」）：**用户主动切换**时改调 `getSwitchDataSourceRunners`，并补一层
+     * 「全部在籍源」兜底。原因（平台反编译实证）：attach 版最终走
+     * `DbImplUtil.getAppropriateDataSourcesForExec(psiFile)` → `DbSqlUtilCore.getAppropriateDataSources`
+     * → `.filter(CAN_CONNECT_TO)`——**把「当前不可连接」的源全部滤掉**（未连过/驱动未就绪），
+     * 于是 7 个在籍源只剩 1 个可选项。切换是用户主动挑源的动作，「能不能连」恰恰是用户想解决的
+     * 问题（连不上才要切），不该由平台预筛。
+     *
+     * @param allDataSources 为 true 时用平台 `getAllDataSourcesForExec`（不过滤可连接性）补齐
+     *   枚举结果——仅在用户点「切换数据源」时置位；普通预览准备/执行保持既有方言匹配语义
+     *   （避免默认把不兼容方言的源塞进弹层）。
      */
-    internal fun getAttachDataSourceRunners(psiFile: PsiFile, sql: String, sessionConsumer: com.intellij.util.Consumer<Any>): List<Any> {
+    internal fun getAttachDataSourceRunners(
+        psiFile: PsiFile,
+        sql: String,
+        sessionConsumer: com.intellij.util.Consumer<Any>,
+        allDataSources: Boolean = false,
+    ): List<Any> {
         val LOG = com.intellij.openapi.diagnostic.Logger.getInstance(DataSourceSelector::class.java)
+        val entryPoint = if (allDataSources) "getSwitchDataSourceRunners" else "getAttachDataSourceRunners"
         return runCatching {
             val clazz = Class.forName(RUNNERS_CLASS)
             val method = clazz.getMethod(
-                "getAttachDataSourceRunners",
+                entryPoint,
                 PsiFile::class.java,
                 String::class.java,
                 com.intellij.util.Consumer::class.java,
@@ -1339,9 +1357,23 @@ object DataSourceSelector {
             val result = method.invoke(null, psiFile, sql, sessionConsumer)
             (result as? List<*>)?.filterNotNull() ?: emptyList()
         }.onFailure { e ->
-            LOG.warn("[M36] getAttachDataSourceRunners reflection FAILED: $e", e)
+            LOG.warn("[M36] $entryPoint reflection FAILED: $e", e)
         }.getOrDefault(emptyList())
     }
+
+    /**
+     * W8 观测缝（用户 2026-10-24「点击切换数据源只有一个数据源？当前可是配置了很多」）：
+     * 平台 Runner 枚举走 `DbImplUtil.getAppropriateDataSourcesForExec` →
+     * `DbSqlUtilCore.getAppropriateDataSources` → `.filter(CAN_CONNECT_TO)`（反编译实证），
+     * 因此**当前不可连接的源不会出现在弹层里**（未连过/驱动未就绪）。插件侧无法凭空补出
+     * 合法的平台 Runner（`runInDataSource` 是直接建会话、不产 Runner；私有
+     * `createDataSourceRunner` 不可用），故本函数只做**归因打点**，供 UI 在「可选源少于在籍源」
+     * 时给出可行动说明（打开 Database 工具窗口连一次即可恢复可选）。
+     *
+     * @return 在籍源总数（平台不可用时 0）
+     */
+    internal fun registeredDataSourceCount(project: Project): Int =
+        runCatching { DataSourceSettings.getAllDataSources(project).size }.getOrDefault(0)
 
     /** 反射获取 Runner 显示名称（数据源名，如 `jpa_demo@localhost`）。 */
     internal fun getRunnerName(runner: Any): String = runCatching {

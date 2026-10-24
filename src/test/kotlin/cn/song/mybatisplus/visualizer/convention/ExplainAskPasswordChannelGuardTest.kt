@@ -284,4 +284,56 @@ class ExplainAskPasswordChannelGuardTest : BannedApiScanSupport() {
             swBody.contains("dropSharedConsole()") && swBody.contains("clearPrepared()"),
         )
     }
+
+    @Test
+    fun `渲染方言缺失时不得判成未知阻断执行`() {
+        val code = sourceOf("ui/SqlPreviewPanelExecution.kt")
+        // T-ExplainSwitchNative W10（用户实测「为什么 sql 无法执行」）：effectiveDialect 为 null
+        // 只发生在「渲染链没记方言」的载体，而渲染器 byName(null) 的既有语义是回落 MySQL
+        // （Dialect.kt:908-909）——闸门请求侧必须同口径回落，否则 RENDER_UNKNOWN_BLOCK 会阻断执行。
+        val idx = code.indexOf("renderedDialectName = result?.effectiveDialect?.name")
+        assertTrue("闸门请求须含 renderedDialectName 赋值（W10）", idx >= 0)
+        val slice = code.substring(idx, (idx + 260).coerceAtMost(code.length))
+        assertTrue(
+            "renderedDialectName 为 null 时须回落 MySqlDialect.name（W10）",
+            slice.contains("?: cn.song.mybatisplus.visualizer.sql.MySqlDialect.name"),
+        )
+    }
+
+    @Test
+    fun `方言闸红条的切换数据源不得走执行链`() {
+        val code = sourceOf("ui/SqlPreviewPanelExecution.kt")
+        // T-ExplainSwitchNative W9（用户实测「点击下方的切换数据源依然有问题，点击没有反应」）：
+        // 红条按钮此前接 executeSql(forceChoose=true)——执行链会先过同一方言闸门、再次被同一
+        // 原因阻断，表现为「点了没反应」。切换只换源，统一走原生选择器入口。
+        val gateIdx = code.indexOf("internal fun SqlPreviewPanel.showDialectGateError")
+        assertTrue("须有方言闸红条入口（W9）", gateIdx >= 0)
+        val body = code.substring(gateIdx, (gateIdx + 2000).coerceAtMost(code.length))
+        assertTrue(
+            "红条「切换数据源」须走 switchDataSourceViaNativeChooser（W9）",
+            body.contains("fix = { switchDataSourceViaNativeChooser() }"),
+        )
+        assertTrue(
+            "红条「切换数据源」不得再走 executeSql 执行链（W9）",
+            !body.contains("fix = { executeSql(forceChoose = true) }"),
+        )
+    }
+
+    @Test
+    fun `用户主动切换数据源须用平台切换专用入口`() {
+        val results = sourceOf("execute/DataSourceSelectorResults.kt")
+        val selector = sourceOf("execute/DataSourceSelector.kt")
+        // T-ExplainSwitchNative W8（用户实测「点击切换数据源只有一个数据源？当前可是配置了很多」）：
+        // 平台 attach 版枚举经 .filter(CAN_CONNECT_TO) 滤掉当前不可连接的源；用户主动切换应走
+        // 平台切换专用入口 getSwitchDataSourceRunners。
+        assertTrue(
+            "切换路径须以 allDataSources=forceChoosePopup 调枚举（W8）",
+            results.contains("allDataSources = forceChoosePopup"),
+        )
+        assertTrue(
+            "枚举函数须按 allDataSources 选择 getSwitchDataSourceRunners 入口（W8）",
+            selector.contains("getSwitchDataSourceRunners") &&
+                selector.contains("val entryPoint = if (allDataSources)"),
+        )
+    }
 }

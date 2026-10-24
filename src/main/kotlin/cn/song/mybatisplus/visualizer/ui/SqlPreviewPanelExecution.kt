@@ -661,7 +661,14 @@ internal fun SqlPreviewPanel.executionDialectGateRequest(
         (result.previewModel != null || result.batchModel != null)
     return cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Request(
         renderMode = executionDialectRenderMode,
-        renderedDialectName = result?.effectiveDialect?.name,
+        // T-ExplainSwitchNative W10（2026-10-24 用户实测「为什么 sql 无法执行」——红条：
+        // 「当前 SQL 按 **未知** 渲染，所选数据源是 MySQL」）：
+        // `effectiveDialect` 为 null 只发生在「渲染链没记方言」的载体（如 JPA/日志还原等
+        // renderedDialect 未赋值的链）。而渲染器 `DialectRegistry.byName(null)` 的既有语义是
+        // **回落 MySQL**（Dialect.kt:908-909）——即实际渲染方言从来不是「未知」。此处按同一口径
+        // 补回落，避免闸门把「渲染器自己都没当成未知」的形态判成 RENDER_UNKNOWN_BLOCK 阻断执行。
+        renderedDialectName = result?.effectiveDialect?.name
+            ?: cn.song.mybatisplus.visualizer.sql.MySqlDialect.name,
         intent = intent,
         canLosslesslyRerender = canRerender,
         userTextUntouched = untouched,
@@ -725,7 +732,11 @@ internal fun SqlPreviewPanel.showDialectGateError(
             message,
             fixLabel = MpSqlVisualizerBundle.message("execute.dialectGate.action.switchDataSource"),
             fixTooltip = MpSqlVisualizerBundle.message("execute.dialectGate.action.switchDataSource.tip"),
-            fix = { executeSql(forceChoose = true) },
+            // T-ExplainSwitchNative W9（2026-10-24 用户实测「点击下方的切换数据源依然有问题，
+            // 点击没有反应」）：此前接 executeSql(forceChoose=true)——那是**执行链**，会先过同一
+            // 方言闸门、再次被同一原因阻断，用户看到的就是「点了没反应」。切换数据源只应换源，
+            // 不该顺带执行；统一走平台原生选择器入口。
+            fix = { switchDataSourceViaNativeChooser() },
             settingsLabel = if (settingsAvailable) {
                 MpSqlVisualizerBundle.message("execute.dialectGate.action.openSettings")
             } else null,
