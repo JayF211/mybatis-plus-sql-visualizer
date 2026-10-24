@@ -93,6 +93,12 @@ tasks.withType<Test>().configureEach {
     // daemon 活着时真容器方言验证的 pull/run 耗时也不可控。只有显式 -PmpvDockerTests=true
     // 才启用；DialectDockerVerificationTest 读该系统属性做 Assume 前置判定。
     systemProperty("mpvs.docker.tests.enabled", providers.gradleProperty("mpvDockerTests").getOrElse("false"))
+    // T-CiRelease（20261024）：测试 JVM 时区钉死 Asia/Shanghai——时间类断言按 CST 写死
+    //（SqlLogSearchRowTimeTest：1705285845123 → 2024-01-15 10:30:45 Asia/Shanghai），
+    // GitHub runner 为 UTC 会整体差 8 小时成片假失败。钉在 JVM 级而非逐测试的原因：
+    // formatTimestampFragment 的 SimpleDateFormat 走 ThreadLocal 缓存、构造时固化默认时区，
+    // 测试内 setDefault 管不到已缓存实例。本机即 CST，此参数为无操作。
+    jvmArgs("-Duser.timezone=Asia/Shanghai")
 }
 
 // 并行分片测试（2026-08-15 提速；2026-09-14 T-TestPerf-04 自动分区；2026-09-15 T-TestPerf2

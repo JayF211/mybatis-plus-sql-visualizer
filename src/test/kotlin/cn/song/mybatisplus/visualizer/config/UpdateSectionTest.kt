@@ -202,7 +202,13 @@ class UpdateSectionTest : BasePlatformTestCase() {
         section.installRunner = { _, _ -> calls++; InstallResult.InstalledRestartRequired }
         section.renderCheck(CheckResult.Available(UpdateManifest("2026.8.15", "https://example.com/p.zip", null, null, null)))
         section.installButton.doClick()
-        assertEquals(UpdateSection.State.Downloading, section.state)
+        // 瞬态观测存在调度竞态：EDT 线程可能在本断言前已派发 invokeLater 的 renderInstall
+        //（CI 20261024 实测偶发，本机测试线程几乎总赢）。Downloading/Installed 均为「点击已
+        // 进入安装流程」的合法观测；流程正确性由下方 calls==1 + waitForState(Installed) 严格把关。
+        assertTrue(
+            "点击后应立即进入安装流程（Downloading 或已完成 Installed），实际 ${section.state}",
+            section.state == UpdateSection.State.Downloading || section.state == UpdateSection.State.Installed,
+        )
         waitForState(UpdateSection.State.Installed)
         assertEquals(1, calls)
         assertTrue("安装完成应显示重启按钮", section.restartButton.isVisible)
