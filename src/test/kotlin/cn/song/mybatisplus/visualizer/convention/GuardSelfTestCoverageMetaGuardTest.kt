@@ -691,6 +691,15 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "灵敏度=反向三组各恰 1 红（恢复 confirmed 闸门 / 恢复 requestReauthorization 符号 / " +
                     "摘 loadState 归一）已实测。",
             ),
+            GuardEntry(
+                "convention/ExplainAskPasswordChannelGuardTest.kt",
+                emptyList(),
+                "结构化执行计划三通道 askPassword 表态守卫（T-ExplainPwdPrompt）：判定内核内联于三个用例——" +
+                    "扫 ExplainDialog/预估行数与 EXPLAIN 旁路/MCP 工具三处源码，断言 askPassword 按" +
+                    "通道强制表态（UI 两通道 true、MCP 通道 false），漏表态即红。无独立「返回违规点集合」" +
+                    "的具名判定函数，故 decisionFns 留空。master 侧 4bccd331 加守卫时漏登（该侧元守卫" +
+                    "潜伏红灯），合并轮补登。",
+            ),
             // ---- 判定内核类（有可注入合成样本的判定函数） ----
             GuardEntry(
                 "convention/BannedApiScanSupport.kt",
