@@ -104,4 +104,45 @@ class ExplainAskPasswordChannelGuardTest : BannedApiScanSupport() {
             code.contains("notifyExplainAuthFailure(proj)"),
         )
     }
+
+    @Test
+    fun `EXPLAIN闸门重渲染后必须自动重提交一次`() {
+        val code = sourceOf("ui/SqlPreviewPanelExecution.kt")
+        // T-DialectInferPollution W7（用户真机报障 2026-10-24）：渲染方言与目标数据源不一致
+        // （last-used 被竞品测试数据源 dbx_test/PG 残留占据，MySQL 预览按 PG 渲染）时，闸门
+        // AUTO_RERENDER_REQUIRED 重渲染成功后若断链让用户重按「执行计划」，第二次点击在开关
+        // 关闭形态还会落进直送链弹「未绑定数据源」红字——重渲染成功必须自动重提交一次
+        // （rerendered 参数防循环），重渲染失败/已重渲染过才回落红条。
+        val gateIdx = code.indexOf("Status.AUTO_RERENDER_REQUIRED &&")
+        val notRerendered = code.contains("!rerendered &&")
+        val recursion = code.contains("allowDataSourcePrompt = false, rerendered = true")
+        val param = code.contains("rerendered: Boolean = false")
+        assertTrue(
+            "submitExplainOrStructured 的闸门回调须有 AUTO_RERENDER_REQUIRED 自动重提交分支（W7）",
+            gateIdx >= 0 && notRerendered,
+        )
+        assertTrue(
+            "submitExplainOrStructured 须带 rerendered 参数且自动重提交时置位（防闸门循环）",
+            param && recursion,
+        )
+    }
+
+    @Test
+    fun `直送链取源必须接lastused回落`() {
+        val code = sourceOf("ui/SqlPreviewPanelExecution.kt")
+        // T-DialectInferPollution W8（用户真机报障）：开关关闭形态下直送链（PreviewSideQuery
+        // 旁路查询）取源须接 last-used 回落——否则控制台无绑定即弹「未绑定数据源」红字框，
+        // 而用户面板明明有「数据源（上次使用）」记忆。
+        val directIdx = code.indexOf("val target = explainTargetForTest?.invoke()")
+        val fallbackIdx = code.indexOf("lastUsedExplainDataSource(proj)", directIdx)
+        val noDsIdx = code.indexOf("panel.explain.noDataSource", directIdx)
+        assertTrue(
+            "submitExplainDirect 的取源须接 lastUsedExplainDataSource 回落（W8）",
+            directIdx >= 0 && fallbackIdx > directIdx,
+        )
+        assertTrue(
+            "回落必须先于「未绑定数据源」红字分支（否则回落不生效）",
+            noDsIdx < 0 || fallbackIdx in 0 until noDsIdx,
+        )
+    }
 }

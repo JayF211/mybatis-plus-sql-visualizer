@@ -1167,6 +1167,14 @@ internal fun SqlPreviewPanel.submitExplainDirect(
     val target = explainTargetForTest?.invoke() ?: runCatching {
         cn.song.mybatisplus.visualizer.execute.DataSourceSelector.boundConsoleDataSource()
     }.getOrNull()
+        // T-DialectInferPollution W8（2026-10-24 用户真机报障）：直送链（PreviewSideQuery 旁路
+        // 查询）取源接 last-used 回落——开关关闭形态下点「执行计划」走到这里，控制台无绑定但
+        // 面板有「数据源（上次使用）」记忆（如 mp_demo@localhost），此前直接弹「未绑定数据源」
+        // 红字框（用户明明绑过）。旁路查询与结构化通道同为 McpDbExecutor 直连，last-used 对象
+        // 完全可用；歧义即弃，方言不符由 PreviewSideQuery 内既有方言闸拦。
+        ?: runCatching {
+            cn.song.mybatisplus.visualizer.execute.DataSourceSelector.lastUsedExplainDataSource(proj)
+        }.getOrNull()
     if (target == null) {
         // 无绑定数据源：按钮直达 Database 工具窗口（按提示去选源），不再空跑一次必然失败的执行；
         // 文案用执行计划专用键（旧实现复用了 DML 影响面的「无法试算」，语境不符）。
@@ -1322,6 +1330,8 @@ internal fun SqlPreviewPanel.submitExplainOrStructured(
     dialectGateRequest: cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Request,
     /** T-UI030：重试路径禁止再弹数据源选择器（防「取消 → 再弹 → 再取消」循环）。 */
     allowDataSourcePrompt: Boolean = true,
+    /** T-DialectInferPollution W7：本链已自动重渲染过一次（防闸门重提交循环）。 */
+    rerendered: Boolean = false,
 ) {
     val settings = PluginSettings.getInstance().state
     val boundDs = explainBoundDsForTest?.invoke() ?: runCatching {
@@ -1339,7 +1349,24 @@ internal fun SqlPreviewPanel.submitExplainOrStructured(
             proj,
             dialectGateRequest,
             cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.fromDataSource(boundDs),
-            { verdict -> onExecutionDialectGate(verdict) },
+            { verdict ->
+                // T-DialectInferPollution W7（2026-10-24 用户真机报障）：渲染方言与目标数据源
+                // 不一致（如 last-used 在竞品测试后残留 dbx_test/PG，MySQL 预览被按 PG 渲染）时
+                // 闸门 AUTO_RERENDER_REQUIRED 重渲染成功——**自动重提交一次**，不再让用户重按
+                // 「执行计划」；重渲染失败或已重渲染过（防循环）回落既有红条提示。
+                if (verdict.status == cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Status.AUTO_RERENDER_REQUIRED &&
+                    !rerendered &&
+                    verdict.targetDialectName != null &&
+                    rerenderForExecutionTarget(verdict.targetDialectName!!)
+                ) {
+                    submitExplainOrStructured(
+                        proj, dialect, explainSql, dialectGateRequest,
+                        allowDataSourcePrompt = false, rerendered = true,
+                    )
+                } else {
+                    onExecutionDialectGate(verdict)
+                }
+            },
             { message -> resultPanel.showError(message) },
         )) return
     val format = cn.song.mybatisplus.visualizer.sql.ExplainSupport.formatFor(dialect.name)
