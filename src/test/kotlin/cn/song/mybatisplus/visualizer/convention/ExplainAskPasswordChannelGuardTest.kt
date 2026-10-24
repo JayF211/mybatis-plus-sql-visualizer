@@ -211,4 +211,56 @@ class ExplainAskPasswordChannelGuardTest : BannedApiScanSupport() {
             hotIdx >= 0 && nullReturn in 0 until (hotIdx + 400),
         )
     }
+
+    @Test
+    fun `选错源失败不得弹红字模态框`() {
+        val code = sourceOf("ui/SqlPreviewPanelExecution.kt")
+        // T-ExplainFailUx W1（用户沙盒实测诉求：「这种情况就不应该弹窗了吧，应该直接引导用户
+        // 更换数据源」）：WRONG_TARGET 档（表不在当前源）须走就地引导 showExplainWrongTarget，
+        // 不得调 showExplainErrorDialog 弹模态。按分支起点切片断言（同 W6 AUTH 纪律）。
+        val starts = Regex("ExplainFailureKind\\.WRONG_TARGET ->").findAll(code).map { it.range.first }.toList()
+        assertTrue("应存在 WRONG_TARGET 分支（结构化 onFailed 与直送 Failed 两处）", starts.size >= 2)
+        val branchEnds = Regex("ExplainFailureKind\\.(CANCELLED|OTHER) ->|is PreviewSideQuery\\.Result\\.Scalar")
+            .findAll(code).map { it.range.first }.toList()
+        val offenders = starts.count { s ->
+            val end = branchEnds.firstOrNull { it > s } ?: code.length
+            code.substring(s, end).contains("showExplainErrorDialog")
+        }
+        assertTrue(
+            "WRONG_TARGET 分支内不得调 showExplainErrorDialog（选错源须就地引导换源，W1）：命中 $offenders 处",
+            offenders == 0,
+        )
+        assertTrue(
+            "WRONG_TARGET 就地引导出口 showExplainWrongTarget 必须存在且含切换数据源动作（W1+W3）",
+            code.contains("showExplainWrongTarget") && code.contains("switchDataSourceAndRetryExplain"),
+        )
+    }
+
+    @Test
+    fun `数据源工具栏必须在插件不可用时降级为纯文本`() {
+        val code = sourceOf("ui/SqlPreviewPanelParamPanel.kt")
+        // T-ExplainFailUx W2（用户诉求：工具栏默认显示；「注意当数据源插件不可用时要降级的」）：
+        // 构建指示行前必须判 ExecuteSqlSupport.isAvailable()，不可用分支只放纯文本标签、不建下拉、
+        // 不报错（社区版零打扰）。
+        val availIdx = code.indexOf("ExecuteSqlSupport.isAvailable()")
+        val comboIdx = code.indexOf("buildDataSourceCombo()")
+        assertTrue("指示行构建须先判插件可用性（W2 降级前提）", availIdx >= 0)
+        assertTrue("下拉构建须在可用性判定之后（不可用时不得渲染下拉）", comboIdx > availIdx)
+        assertTrue(
+            "降级分支须仍设纯文本标签（bindStateLabel）",
+            code.substring(availIdx, comboIdx.coerceAtLeast(availIdx)).contains("bindStateLabel = label"),
+        )
+    }
+
+    @Test
+    fun `换源后必须自动重试执行计划`() {
+        val code = sourceOf("ui/SqlPreviewPanelExecution.kt")
+        // T-ExplainFailUx W3：换源动作（switchDataSourceAndRetryExplain）须 forceChoose 显式选择
+        // + 复用 awaitDataSourceBoundThenRetry 重试一次（allowDataSourcePrompt=false 防选择器循环）。
+        val idx = code.indexOf("fun SqlPreviewPanel.switchDataSourceAndRetryExplain")
+        assertTrue("须有换源并重试入口（W3）", idx >= 0)
+        val body = code.substring(idx, (idx + 1600).coerceAtMost(code.length))
+        assertTrue("换源须 forceChoose=true（显式选择优先于 last-used 静默）", body.contains("forceChoose = true"))
+        assertTrue("换源后须复用 awaitDataSourceBoundThenRetry 重试（W3）", body.contains("awaitDataSourceBoundThenRetry"))
+    }
 }

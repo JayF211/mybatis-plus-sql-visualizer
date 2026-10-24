@@ -1213,6 +1213,10 @@ internal fun SqlPreviewPanel.submitExplainDirect(
                     notifyExplainAuthFailure(proj)
                 cn.song.mybatisplus.visualizer.execute.ExplainFailureKind.CANCELLED ->
                     notifyExplainCancelled(proj)
+                // T-ExplainFailUx W1：选错源**不弹模态**——就地横幅 + 「切换数据源」动作
+                //（用户实测诉求：直接引导换源，而不是先关弹窗再点「在控制台打开」）
+                cn.song.mybatisplus.visualizer.execute.ExplainFailureKind.WRONG_TARGET ->
+                    showExplainWrongTarget(proj, result.message, explainSql, dialectGateRequest, openConsole)
                 cn.song.mybatisplus.visualizer.execute.ExplainFailureKind.OTHER ->
                     showExplainErrorDialog(result.message, openConsole)
             }
@@ -1220,6 +1224,69 @@ internal fun SqlPreviewPanel.submitExplainDirect(
                 showExplainErrorDialog("unexpected scalar result from EXPLAIN", openConsole)
         }
     }
+}
+
+/**
+ * T-ExplainFailUx W1+W3（2026-10-24 用户沙盒实测）：**选错数据源**失败的就地引导。
+ *
+ * 为什么不用模态：`Table 'mp_demo.x' doesn't exist` 是最典型的「该换源」信号，模态框会先遮住
+ * 预览、还要求用户先关掉再点「在控制台打开」两步才见到换源入口（用户原话：「这种情况就不应该
+ * 弹窗了吧」）。改为结果区就地横幅（[SqlResultPanel.showErrorWithActions] 双动作槽）：
+ *  - 主动作「切换数据源」→ 重开既有数据源选择器（forceChoose 跳过 last-used 静默），
+ *    选中后**自动重试当前执行计划一次**（W3，防循环）；
+ *  - 次动作「在控制台打开」→ 既有直送控制台出口（用户可手改源后执行）。
+ */
+private fun SqlPreviewPanel.showExplainWrongTarget(
+    proj: Project,
+    message: String,
+    explainSql: String,
+    dialectGateRequest: cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Request,
+    openConsole: () -> Unit,
+) {
+    resultPanel.showIdle()
+    val hint = MpSqlVisualizerBundle.message("panel.explain.wrongTargetHint")
+    resultPanel.showErrorWithActions(
+        message + "　" + hint,
+        fixLabel = MpSqlVisualizerBundle.message("panel.explain.action.switchDataSource"),
+        fixTooltip = MpSqlVisualizerBundle.message("panel.explain.action.switchDataSource.tip"),
+        fix = { switchDataSourceAndRetryExplain(proj, explainSql, dialectGateRequest) },
+        settingsLabel = MpSqlVisualizerBundle.message("panel.explain.openConsole"),
+        settingsTooltip = null,
+        settings = openConsole,
+    )
+}
+
+/**
+ * T-ExplainFailUx W3：换源后自动重试执行计划一次。
+ *
+ * 换源走既有 [DataSourceSelector.prepareConsole]（forceChoose=true：跳过共享控制台复用与
+ * last-used 静默命中，必须让用户显式选）；绑定落地后重提交一次执行计划（`allowDataSourcePrompt=false`
+ * 防选择器循环、`rerendered=true` 复用 W7 的一次性防重入位，避免与方言闸重提交叠加成两次执行）。
+ */
+private fun SqlPreviewPanel.switchDataSourceAndRetryExplain(
+    proj: Project,
+    explainSql: String,
+    dialectGateRequest: cn.song.mybatisplus.visualizer.execute.ExecutionDialectGate.Request,
+) {
+    if (com.intellij.openapi.util.Disposer.isDisposed(this) || proj.isDisposed) return
+    val sql = nativeEditorDoc?.text?.takeIf { it.isNotBlank() }
+        ?: editor?.document?.text?.takeIf { it.isNotBlank() }
+        ?: explainSql
+    cn.song.mybatisplus.visualizer.execute.DataSourceSelector.prepareConsole(
+        proj, sql,
+        onError = { msg -> resultPanel.showError(msg) },
+        forceChoose = true,
+    )
+    // 复用 T-UI030 既有「等绑定落地后重试」链（同一 generation 快照防过期回调；
+    // allowDataSourcePrompt=false 防选择器循环）
+    awaitDataSourceBoundThenRetry(
+        proj,
+        current?.effectiveDialect ?: cn.song.mybatisplus.visualizer.sql.MySqlDialect,
+        explainSql,
+        dialectGateRequest,
+        java.util.concurrent.atomic.AtomicBoolean(false),
+        explainStructuredGeneration,
+    )
 }
 
 /**
@@ -1507,6 +1574,15 @@ internal fun SqlPreviewPanel.submitExplainOrStructured(
                         cn.song.mybatisplus.visualizer.execute.ExplainFailureKind.AUTH -> {
                             resultPanel.showIdle()
                             notifyExplainAuthFailure(proj)
+                        }
+                        // T-ExplainFailUx W1：选错源不弹模态、不回退直送（同通道必同样失败）——
+                        // 就地横幅 + 「切换数据源」动作（换源后自动重试，W3）
+                        cn.song.mybatisplus.visualizer.execute.ExplainFailureKind.WRONG_TARGET -> {
+                            resultPanel.showIdle()
+                            showExplainWrongTarget(
+                                proj, errorText, explainSql, dialectGateRequest,
+                                openConsole = { submitExplainDirectConsole(proj, explainSql, dialectGateRequest) },
+                            )
                         }
                         cn.song.mybatisplus.visualizer.execute.ExplainFailureKind.CANCELLED -> {
                             resultPanel.showIdle()

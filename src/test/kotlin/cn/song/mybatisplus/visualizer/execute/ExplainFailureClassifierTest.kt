@@ -83,6 +83,54 @@ class ExplainFailureClassifierTest {
         )
     }
 
+    // ======================== T-ExplainFailUx W1：选错源档（表不在当前源） ========================
+
+    @Test
+    fun mysqlTableNotFoundIsWrongTarget() {
+        // 用户沙盒实测原文（含 [42S02][1146] 前缀与库名限定的表）
+        assertEquals(
+            ExplainFailureKind.WRONG_TARGET,
+            classifyExplainFailure("[42S02][1146] Table 'mp_demo.wms_inventory_jar_demo' doesn't exist"),
+        )
+        assertEquals(
+            ExplainFailureKind.WRONG_TARGET,
+            classifyExplainFailure("Table 'mp_demo.order_entity' doesn't exist"),
+        )
+    }
+
+    @Test
+    fun postgresSqlServerOracleTableNotFoundAreWrongTarget() {
+        assertEquals(
+            ExplainFailureKind.WRONG_TARGET,
+            classifyExplainFailure("ERROR: relation \"wms_inventory_jar_demo\" does not exist"),
+        )
+        assertEquals(
+            ExplainFailureKind.WRONG_TARGET,
+            classifyExplainFailure("Invalid object name 'order_entity'."),
+        )
+        assertEquals(
+            ExplainFailureKind.WRONG_TARGET,
+            classifyExplainFailure("ORA-00942: table or view does not exist"),
+        )
+    }
+
+    @Test
+    fun unknownColumnIsNotWrongTarget() {
+        // 列级问题换源解决不了——不得归入选错源档（否则会误导用户去换源）
+        assertEquals(
+            ExplainFailureKind.OTHER,
+            classifyExplainFailure("Unknown column 'nocol' in 'field list'"),
+        )
+    }
+
+    @Test
+    fun authTakesPrecedenceOverWrongTarget() {
+        assertEquals(
+            ExplainFailureKind.AUTH,
+            classifyExplainFailure("Access denied for user 'root'@'localhost' (using password: NO)"),
+        )
+    }
+
     @Test
     fun authHintAndCancelledBundleKeysExistInBothLanguages() {
         for (bundle in listOf(
