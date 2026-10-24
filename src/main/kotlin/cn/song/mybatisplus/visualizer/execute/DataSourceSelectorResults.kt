@@ -326,7 +326,11 @@ internal fun DataSourceSelector.chooseAndPrepare(
         )
     }
 
-    val enumerated = getAttachDataSourceRunners(psiFile, submitSql, sessionConsumer)
+    // T-ExplainSwitchNative W8：用户主动「切换数据源」时用平台的切换专用入口
+    // （getSwitchDataSourceRunners，语义正确）；普通预览准备/执行仍用 attach 版。
+    val enumerated = getAttachDataSourceRunners(
+        psiFile, submitSql, sessionConsumer, allDataSources = forceChoosePopup,
+    )
     // O-136 T-PreviewExecDsDialect：组 Runner 展开——平台在「方言匹配集 ≠ 全部数据源」时返回
     // "All" 组 Runner（getSubRunners 携带全部数据源的 Runner，组项自身 runnable 为空操作），
     // 插件弹窗不展开子级 → 方言不匹配的数据源（DM 等）藏在死项里不可选。展开后按显示名去重，
