@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.ui.insight
 
+import com.intellij.ui.components.JBScrollPane
 import cn.song.mybatisplus.visualizer.log.insight.SqlExecutionObservation
 import java.awt.*
 import javax.swing.*
@@ -28,7 +29,7 @@ internal class RuntimeEvidencePanel(private val text: (String) -> String) : JPan
         add(JTabbedPane().apply {
             addTab(text("runtime.tags"), tags)
             addTab(text("runtime.repeated"), alerts)
-            addTab(text("runtime.timeline"), JPanel(BorderLayout()).apply { add(JPanel().apply { add(run); add(request) }, BorderLayout.NORTH); add(JScrollPane(timeline), BorderLayout.CENTER) })
+            addTab(text("runtime.timeline"), JPanel(BorderLayout()).apply { add(JPanel().apply { add(run); add(request) }, BorderLayout.NORTH); add(JBScrollPane(timeline), BorderLayout.CENTER) })
         }, BorderLayout.CENTER)
     }
     fun present(value: RuntimeInsightSnapshot) {

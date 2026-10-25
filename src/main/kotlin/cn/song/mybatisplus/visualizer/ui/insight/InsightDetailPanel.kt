@@ -1,5 +1,7 @@
 package cn.song.mybatisplus.visualizer.ui.insight
 
+import com.intellij.ui.OnePixelSplitter
+import com.intellij.ui.components.JBScrollPane
 import java.awt.BorderLayout
 import java.awt.FlowLayout
 import javax.swing.*
@@ -22,7 +24,13 @@ internal class InsightDetailPanel(headers: List<String>, notice: String) : JPane
     private val headers = headers.toTypedArray()
     private var rows = emptyList<InsightDetailRow>()
     init {
-        val split = JSplitPane(JSplitPane.VERTICAL_SPLIT, JScrollPane(table), JScrollPane(detail)).apply { resizeWeight = 0.45 }
+        // T-InsightDarkThemeFix：分隔条/滚动条必须用平台组件——原生 JSplitPane 的 Windows LAF
+        // 分隔条与 JScrollPane 滚动条不跟随 Darcula，深色主题下在明细表底部呈现为一条浅色白条
+        //（2026-10-25 沙盒实测）。OnePixelSplitter 的 1px 分隔条取主题色，JBScrollPane 同理。
+        val split = OnePixelSplitter(true, 0.45f).apply {
+            firstComponent = JBScrollPane(table)
+            secondComponent = JBScrollPane(detail)
+        }
         add(JPanel(BorderLayout()).apply { add(actions, BorderLayout.NORTH); add(status, BorderLayout.CENTER) }, BorderLayout.NORTH)
         add(split, BorderLayout.CENTER)
         table.selectionModel.addListSelectionListener {

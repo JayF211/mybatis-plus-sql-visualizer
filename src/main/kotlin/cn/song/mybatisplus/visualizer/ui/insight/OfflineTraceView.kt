@@ -1,5 +1,7 @@
 package cn.song.mybatisplus.visualizer.ui.insight
 
+import com.intellij.ui.OnePixelSplitter
+import com.intellij.ui.components.JBScrollPane
 import cn.song.mybatisplus.visualizer.share.OfflineTraceImport
 import cn.song.mybatisplus.visualizer.share.OfflineTraceSnapshot
 import java.awt.BorderLayout
@@ -42,7 +44,7 @@ internal class OfflineTraceView(
             val uri = span?.let { OfflineTraceImport.traceLink(template.text, it.traceId) }
             if (uri != null) openLink(uri) else results.status.text = text("import.invalidLink")
         }
-        panel.add(JSplitPane(JSplitPane.VERTICAL_SPLIT, JScrollPane(input), results).apply { resizeWeight = 0.25 }, BorderLayout.CENTER)
+        panel.add(OnePixelSplitter(true, 0.25f).apply { firstComponent = JBScrollPane(input); secondComponent = results }, BorderLayout.CENTER)
     }
     fun clear(message: String) { snapshot = null; results.showRows(emptyList()); results.status.text = message }
     fun present(result: OfflineTraceImport.Result) {

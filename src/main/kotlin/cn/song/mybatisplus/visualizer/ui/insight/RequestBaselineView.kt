@@ -1,5 +1,7 @@
 package cn.song.mybatisplus.visualizer.ui.insight
 
+import com.intellij.ui.OnePixelSplitter
+import com.intellij.ui.components.JBScrollPane
 import cn.song.mybatisplus.visualizer.log.insight.*
 import java.awt.BorderLayout
 import javax.swing.*
@@ -47,7 +49,7 @@ internal class RequestBaselineView(
         }
         button("baseline.copy") { if (json.text.startsWith("{")) copy(json.text) }
         add(actions, BorderLayout.NORTH)
-        add(JSplitPane(JSplitPane.VERTICAL_SPLIT, JScrollPane(json), JScrollPane(output)).apply { resizeWeight = 0.5 }, BorderLayout.CENTER)
+        add(OnePixelSplitter(true, 0.5f).apply { firstComponent = JBScrollPane(json); secondComponent = JBScrollPane(output) }, BorderLayout.CENTER)
         output.text = text("baseline.notice")
         InsightInputVersion({ version++ }, environment.document, context.document, json.document)
     }

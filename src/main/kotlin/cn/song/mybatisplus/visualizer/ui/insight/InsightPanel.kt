@@ -1,5 +1,6 @@
 package cn.song.mybatisplus.visualizer.ui.insight
 
+import com.intellij.ui.components.JBScrollPane
 import cn.song.mybatisplus.visualizer.sql.insight.SqlSourceRange
 import java.awt.*
 import java.awt.event.MouseAdapter
@@ -40,8 +41,8 @@ internal class InsightPanel(
     }
     internal val graph = InsightGraph(navigate)
     private val content = JTabbedPane().apply {
-        addTab(text("tree"), JScrollPane(tree))
-        addTab(text("graph"), JScrollPane(graph))
+        addTab(text("tree"), JBScrollPane(tree))
+        addTab(text("graph"), JBScrollPane(graph))
     }
     init {
         val toolbar = JPanel(FlowLayout(FlowLayout.LEADING)).apply {
