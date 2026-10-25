@@ -80,6 +80,11 @@ jobs:
         run: ./gradlew.bat :verifyMarketplace -PgifRecord=false --console=plain
 
       - name: 全量分片测试（testShards，真机类剔除）
+        # 步骤级超时：历史耗时约 10 分钟（O147 子进程另加约 2 分钟），25 分钟 = 2 倍余量。
+        # 20261025 已两次实测分片 JVM 在 runner 上偶发挂起（步骤内挂死只能烧满 job 的 240 分钟），
+        # 超时把挂起转化为快速失败——if: failure() 的诊断/上传步骤得以执行，工件里能看到哪个
+        # 分片没有结果 XML（= 挂起元凶），下次挂起即可定位。
+        timeout-minutes: 25
         # 三类真机依赖用例在 CI 剔除（与 testDatabase / e2eFakeIde 同口径，本地发版前照跑）：
         #   AttachPoolWarmGateTest——child JVM 起 Hikari 真池直连本机 MySQL；
         #   DataSourceJdbcSmokeTest——demo 数据源 JDBC 直连 127.0.0.1:3306；
