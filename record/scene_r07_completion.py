@@ -28,7 +28,7 @@ import win32gui  # noqa: E402
 from gifkit import Recorder, goto_line, move, pyautogui  # noqa: E402
 from nav import force_en_us  # noqa: E402
 
-REGION = (277, 25, 1370, 984)
+REGION = (285, 26, 1354, 974)
 OUT = "perf/r07_completion.mp4"
 
 BLOCKING_KEYWORDS = ("回滚", "Rollback", "Rollback SQL")
