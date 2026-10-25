@@ -40,7 +40,7 @@ import cn.song.mybatisplus.visualizer.ui.SqlPreviewPanel.Companion.DOLLAR_TOKEN
 // 以同包扩展函数形式搬出——方法体逐字符搬运，被触及的私有成员已按需放宽为 internal。
 
 internal fun SqlPreviewPanel.showRollbackSql() {
-    val sql = currentEditorSql()?.let { SqlCommentStripper.strip(it) }?.takeIf { it.isNotBlank() } ?: return
+    val sql = previewSqlForReadonly()?.let { SqlCommentStripper.strip(it) }?.takeIf { it.isNotBlank() } ?: return
     val kind = SqlTypeClassifier.getFirstKeyword(sql) ?: "SQL"
     // T-ST-03 核实：本路径是【回滚SQL】按钮的独立动作（工具栏 :687），**不在执行确认流内**——
     // 此处 generate 是该次点击的唯一一次解析（确认流的解析点在 executeSql/executeAdhocSql 的
@@ -87,7 +87,7 @@ internal fun SqlPreviewPanel.showRollbackSql() {
      * 脱敏同 R60 口径（`displayMaskEnabled`，投影级）：开启时脚本字面量打码并在注释头标 `masked`。
      */
     internal fun SqlPreviewPanel.exportReplayScript() {
-        val sql = currentEditorSql()?.takeIf { it.isNotBlank() } ?: return
+        val sql = previewSqlForReadonly()?.takeIf { it.isNotBlank() } ?: return
         val dialect = current?.effectiveDialect ?: MySqlDialect
         val options = ReplayExportDialog(project, dialect.name, dialect.transactionBegin)
         if (!options.showAndGet()) return
@@ -159,7 +159,7 @@ internal fun SqlPreviewPanel.showRollbackSql() {
      */
     internal fun SqlPreviewPanel.estimateDmlImpact(allowDataSourcePrompt: Boolean = true) {
         val proj = project ?: return
-        val sql = currentEditorSql() ?: return
+        val sql = previewSqlForReadonly() ?: return
         val dialect = current?.effectiveDialect ?: MySqlDialect
         when (val plan = cn.song.mybatisplus.visualizer.execute.DmlImpactEstimator.plan(sql, dialect)) {
             is cn.song.mybatisplus.visualizer.execute.DmlImpactEstimator.Plan.NotApplicable -> {
@@ -287,7 +287,7 @@ internal fun SqlPreviewPanel.showRollbackSql() {
 
     /** R91: only reads current editor/model and previously acquired history; never acquires a plan/schema. */
     internal fun SqlPreviewPanel.copyAsAiContext(includeIdentifiers: Boolean = false) {
-        val sql = currentEditorSql() ?: return
+        val sql = previewSqlForReadonly() ?: return
         val preview = current
         val dialect = preview?.effectiveDialect
         val target = aiContextTarget?.takeIf {
@@ -320,7 +320,7 @@ internal fun SqlPreviewPanel.showRollbackSql() {
     }
 
 internal fun SqlPreviewPanel.exportPortableSql() {
-    val sql = currentEditorSql()?.let { SqlCommentStripper.strip(it) }?.takeIf { it.isNotBlank() } ?: return
+    val sql = previewSqlForReadonly()?.let { SqlCommentStripper.strip(it) }?.takeIf { it.isNotBlank() } ?: return
     val dialect = current?.effectiveDialect ?: MySqlDialect
     val rows = cn.song.mybatisplus.visualizer.log.PortableSqlExport
         .collectRows(sql, dialect, current?.batchModel)
@@ -566,6 +566,30 @@ internal fun SqlPreviewPanel.currentEditorSql(): String? =
         ?: editor?.document?.text?.takeIf { it.isNotBlank() }
 
 /**
+ * T-ExplainConsoleFirst W2（2026-10-24）：**只读动作**的取词 —— 执行视图在场时读预览快照。
+ *
+ * 为什么需要：执行计划走内嵌原生控制台（形态 A）时，EXPLAIN 语句被写进 `mpsql-exec.sql` 的
+ * document，而 [nativeEditorDoc] 指向它 —— [currentEditorSql] 于是从「预览 SQL」漂移成
+ * 「EXPLAIN …」。回滚 SQL / 导出回放脚本 / 复制 AI 上下文 / 导出可移植 SQL / 预估影响行数
+ * 全都读那个函数，在执行视图里点它们会拿到 EXPLAIN 语句（`1a1cf724` 正是因此把默认通道换成
+ * 旁路查询的，commit message 原文「会让 currentEditorSql() 漂移到试算/EXPLAIN 语句」）。
+ *
+ * 判据：[lastRenderedSql] 由 [showSql] 在每次预览渲染后记录，而控制台执行链写 exec 文件
+ * **不经过 [showSql]**，故它恰好保存着「最后一次预览的 SQL」。同款判据已在
+ * [SqlPreviewPanelExecution.kt] 的 T-PrewarmLateRecover（`currentText == lastRenderedSql`）
+ * 与非 DML 影响面估算中使用。
+ *
+ * 边界：执行视图不在场（含「返回预览」之后）一律返回真实编辑器文本 —— 用户手改必须被看见。
+ * **执行链本身不用本函数**（[executeSql]/[explainSql] 执行的就是编辑器里的真实文本）。
+ */
+internal fun SqlPreviewPanel.previewSqlForReadonly(): String? {
+    if (executeViewHeader != null) {
+        lastRenderedSql?.takeIf { it.isNotBlank() }?.let { return it }
+    }
+    return currentEditorSql()
+}
+
+/**
  * T-InjectionGate T-IG-02：`${}` 原文拼接段的执行确认闸门（[executeSql]/[explainSql] 共用）。
  *
  * 判定信号取自 [PreviewResult.hasDollarRawSegments]（解析期 `${` token 收集的渲染期事实，
@@ -732,11 +756,11 @@ internal fun SqlPreviewPanel.showDialectGateError(
             message,
             fixLabel = MpSqlVisualizerBundle.message("execute.dialectGate.action.switchDataSource"),
             fixTooltip = MpSqlVisualizerBundle.message("execute.dialectGate.action.switchDataSource.tip"),
-            // T-ExplainSwitchNative W9（2026-10-24 用户实测「点击下方的切换数据源依然有问题，
-            // 点击没有反应」）：此前接 executeSql(forceChoose=true)——那是**执行链**，会先过同一
-            // 方言闸门、再次被同一原因阻断，用户看到的就是「点了没反应」。切换数据源只应换源，
-            // 不该顺带执行；统一走平台原生选择器入口。
-            fix = { switchDataSourceViaNativeChooser() },
+            // T-ExplainSwitchNative W12（2026-10-24 用户实测三图定案）：换源一律走**平台原生
+            // 工具栏的 Data Sources 菜单**（图三：Detach Data Source + 全部源）——插件侧自建
+            // 入口做不到与原生一致（平台 forced 关联无公开清除 API，自建列表第二次起会被短路成
+            // 单源）。此处动作改为把用户送到能换源的地方：打开 Database 工具窗口。
+            fix = { cn.song.mybatisplus.visualizer.execute.DataSourceSelector.openDatabaseToolWindow(proj) },
             settingsLabel = if (settingsAvailable) {
                 MpSqlVisualizerBundle.message("execute.dialectGate.action.openSettings")
             } else null,
@@ -1132,6 +1156,22 @@ internal fun SqlPreviewPanel.explainSql() {
 /**
  * T-PreviewSideQuery P2：显式「在控制台打开」路径（保留原有 SqlExecutor.execute 行为）。
  * 仅由用户在结果对话框里明确选择时调用；默认 EXPLAIN/回退不再走这里。
+ *
+ * T-ExplainConsoleFirst W8（2026-10-24 沙盒验收实测）：**进执行链前先预热 exec 临时文件**。
+ *
+ * 实测症状：点「执行计划」刷 9 条 `SEVERE - SlowOperations ... Plugin to blame: SQL Visualizer`，
+ * 栈为 `explainSql → submitExplainDirectConsole → SqlExecutor.execute → chooseAndPrepare →
+ * createTempPsiFile → PsiManagerImpl.findFile`——即 `createTempPsiFile` 的**冷路径**
+ * （VFS refresh + `PsiManager.findFile`）在 EDT 上跑。
+ *
+ * 为什么现在才暴露：`1a1cf724` 之后 EXPLAIN 默认走旁路查询（`PreviewSideQuery`），不经过
+ * 控制台链；本轮 W1 把它切回控制台后，这条既有冷路径重新进入热路径。既有预热
+ * （`prewarmExecTempFile`）只服务「预览 SQL」，且仅在方言重渲染路径触发，EXPLAIN 文本从未预热过。
+ *
+ * 修法：执行前把**本条 EXPLAIN 文本**交给后台预热（`prewarmExecTempFile` 自带 EDT 拒绝、
+ * 预算等待、并发去重），命中缓存后 `createTempPsiFile` 走热路径，不再在 EDT 上做 VFS/PSI 慢操作。
+ * 预热写的是 EXPLAIN 文本本身，与随后执行的内容一致，不会污染（执行前仍有
+ * `syncExecVfContentIfNeeded` 兜底同步）。预热失败只是回落到既有冷路径，不阻断执行。
  */
 internal fun SqlPreviewPanel.submitExplainDirectConsole(
     proj: Project,
@@ -1145,23 +1185,72 @@ internal fun SqlPreviewPanel.submitExplainDirectConsole(
 
             else -> Unit
         }
-    resultPanel.showLoading()
-    SqlExecutor.execute(
-        proj, explainSql, null, true,
-        onConsole = { consoleComponent -> embedConsole(consoleComponent, embedMode = ConsoleEmbedMode.EXECUTE) },
-        onEditor = { consoleEditor -> onNativeEditorReady(consoleEditor) },
-        onError = { errorMsg ->
-            resultPanel.showError(errorMsg)
-        },
-        onErrorRich = { info -> showErrorRichWithLocate(info) },
-        dialectGateRequest = dialectGateRequest,
-        onDialectGate = { verdict -> onExecutionDialectGate(verdict) },
-    )
+    // W8：后台预热 exec 文件，避免 createTempPsiFile 冷路径落 EDT（`PsiManager.findFile` 慢操作）。
+    //
+    // W8-fix（同日复验修订）：**不得在 EDT 上阻塞等待预热**。首版写成
+    // `future.get(8s)` 直接在 EDT 上等——沙盒预热带 1s 侥幸通过，但慢盘/索引期会把 UI 冻住 8s，
+    // 且与「池线程内又 submit 一个池线程再 get(30s)」的既有 prewarm 形成**双层嵌套等待**。
+    //
+    // 现形态：后台线程里**直接调 inner**（不嵌套 `prewarmExecTempFile` 的预算等待，那条是给
+    // 「后台预热」这种非交互场景用的），完成后回 EDT 续接执行链。预热失败/超时都照常续接
+    // （回落既有冷路径，不阻断用户点击）。
+    val projForPrewarm = proj
+    val explainSqlForPrewarm = explainSql
+    val requestForPrewarm = dialectGateRequest
+    val prewarmDone = java.util.concurrent.atomic.AtomicBoolean(false)
+    val continueChain = {
+        if (prewarmDone.compareAndSet(false, true)) {
+            ApplicationManager.getApplication().invokeLater({
+                if (Disposer.isDisposed(this) || proj.isDisposed) return@invokeLater
+                resultPanel.showLoading()
+                SqlExecutor.execute(
+                    proj, explainSql, null, true,
+                    onConsole = { consoleComponent ->
+                        embedConsole(consoleComponent, embedMode = ConsoleEmbedMode.EXECUTE)
+                    },
+                    onEditor = { consoleEditor -> onNativeEditorReady(consoleEditor) },
+                    onError = { errorMsg -> resultPanel.showError(errorMsg) },
+                    onErrorRich = { info -> showErrorRichWithLocate(info) },
+                    dialectGateRequest = dialectGateRequest,
+                    onDialectGate = { verdict -> onExecutionDialectGate(verdict) },
+                )
+            }, com.intellij.openapi.application.ModalityState.any())
+        }
+    }
+    ApplicationManager.getApplication().executeOnPooledThread {
+        runCatching {
+            cn.song.mybatisplus.visualizer.execute.DataSourceSelector.prewarmExecTempFileOnBackgroundThread(
+                projForPrewarm,
+                explainSqlForPrewarm,
+                requestForPrewarm.renderedDialectName,
+                com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java),
+            )
+        }.onFailure { e ->
+            com.intellij.openapi.diagnostic.Logger.getInstance(SqlPreviewPanel::class.java)
+                .info("[W8] exec prewarm before explain failed (fallback to cold path): ${e.javaClass.simpleName}: ${e.message}")
+        }
+        // 预热完成（含失败）都续接——预热只是优化，不是前置条件。
+        ApplicationManager.getApplication().invokeLater({ continueChain() },
+            com.intellij.openapi.application.ModalityState.any())
+    }
 }
 
 /**
- * T-PreviewSideQuery P2：默认直送/回退路径——只读旁路查询 + 非模态结果对话框，
- * 不替换预览编辑器。旁路不可用/失败时给出原因，并保留显式「在控制台打开」入口。
+ * T-ExplainConsoleFirst W1（2026-10-24）：执行计划默认/回退**统一走内嵌原生控制台**。
+ *
+ * 形态渊源：这是初版实现（`1a1cf724` 前的 `submitExplainDirect`），`1a1cf724` 为了「不顶掉
+ * 预览编辑器」把默认改成旁路查询（形态 B）。十二轮换源拉锯（T-DialectInferPollution /
+ * T-ExplainFailUx / T-ExplainSwitchNative，合计 W1~W12）暴露出形态 B / 结构化通道的系统性代价：
+ * 它们是插件自建 JDBC 通道，于是「用哪条源、密码从哪来、方言对不对、失败怎么呈现」全落在插件
+ * 身上；而平台「选中即关联」（`getForcedDataSourceForExec` 命中即 `singletonList` 短路枚举、
+ * 无公开清除 API）让插件侧选源列表第二次起恒为单源 —— 这是那十二轮全部拉锯的根因。
+ *
+ * 形态 A 把这些**整类**交回平台：换源走内嵌控制台自带的原生 `Data Sources` 菜单（Detach +
+ * 全部源），密码走平台凭据链，方言与报错在控制台原生呈现。`1a1cf724` 当初真正的顾虑
+ * （执行视图里只读动作拿到 EXPLAIN 语句）已由 [previewSqlForReadonly] 根治（W2）。
+ *
+ * 前置只判「一条源都没有」→ 引导去 Database 工具窗口；**不在插件侧做任何选源**
+ * （不重演 W1~W12）。结构化形态（`explainStructuredRender`）不受影响，仍在设置项后。
  */
 internal fun SqlPreviewPanel.submitExplainDirect(
     proj: Project,
@@ -1175,66 +1264,20 @@ internal fun SqlPreviewPanel.submitExplainDirect(
 
         else -> Unit
     }
-    val target = explainTargetForTest?.invoke() ?: runCatching {
-        cn.song.mybatisplus.visualizer.execute.DataSourceSelector.boundConsoleDataSource()
-    }.getOrNull()
-        // T-DialectInferPollution W8（2026-10-24 用户真机报障）：直送链（PreviewSideQuery 旁路
-        // 查询）取源接 last-used 回落——开关关闭形态下点「执行计划」走到这里，控制台无绑定但
-        // 面板有「数据源（上次使用）」记忆（如 mp_demo@localhost），此前直接弹「未绑定数据源」
-        // 红字框（用户明明绑过）。旁路查询与结构化通道同为 McpDbExecutor 直连，last-used 对象
-        // 完全可用；歧义即弃，方言不符由 PreviewSideQuery 内既有方言闸拦。
-        ?: runCatching {
-            cn.song.mybatisplus.visualizer.execute.DataSourceSelector.explainFallbackDataSource(
-                proj, sourceModuleKey, explainSql,
-            )
-        }.getOrNull()
-    if (target == null) {
-        // 无绑定数据源：按钮直达 Database 工具窗口（按提示去选源），不再空跑一次必然失败的执行；
-        // 文案用执行计划专用键（旧实现复用了 DML 影响面的「无法试算」，语境不符）。
+    // 零源判定：只要有一条在籍源就交给平台（平台自己决定用哪条、按需弹选择器），
+    // 插件不枚举、不筛选、不猜。测试缝非 null 即视为「有可用源」。
+    val hasAnySource = explainTargetForTest?.let { it() != null } ?: runCatching {
+        cn.song.mybatisplus.visualizer.execute.DataSourceSelector.registeredDataSourceCount(proj) > 0
+    }.getOrDefault(true)
+    if (!hasAnySource) {
+        // 一条源都没有：按钮直达 Database 工具窗口（按提示去配置/连接），不空跑一次必然失败的执行。
         showExplainErrorDialog(
             MpSqlVisualizerBundle.message("panel.explain.noDataSource"),
             openDatabase = true,
         )
         return
     }
-    resultPanel.showLoading()
-    PreviewSideQuery.run(
-        proj,
-        target,
-        explainSql,
-        dialectGateRequest,
-        scalar = false,
-        requireSelectGuard = false,
-        channelNote = cn.song.mybatisplus.visualizer.sql.ExplainSupport
-            .entryFor(dialectGateRequest.renderedDialectName ?: "")?.postPlanQuery,
-    ) { result ->
-        resultPanel.showIdle()
-        val openConsole = { submitExplainDirectConsole(proj, explainSql, dialectGateRequest) }
-        when (result) {
-            is PreviewSideQuery.Result.Table ->
-                showExplainRawResultDialog(MpSqlVisualizerBundle.message("panel.explain"), result.raw)
-
-            // T-ExplainPwdPrompt：分型出口同结构化通道——AUTH/CANCELLED 轻通知收口（平台
-            // 凭据对话框已呈现失败与出口，红字模态框是二次打断，W6），不自动重试
-            is PreviewSideQuery.Result.Blocked -> showExplainErrorDialog(result.message, openConsole)
-            is PreviewSideQuery.Result.Failed -> when (
-                cn.song.mybatisplus.visualizer.execute.classifyExplainFailure(result.message)
-            ) {
-                cn.song.mybatisplus.visualizer.execute.ExplainFailureKind.AUTH ->
-                    notifyExplainAuthFailure(proj)
-                cn.song.mybatisplus.visualizer.execute.ExplainFailureKind.CANCELLED ->
-                    notifyExplainCancelled(proj)
-                // T-ExplainFailUx W1：选错源**不弹模态**——就地横幅 + 「切换数据源」动作
-                //（用户实测诉求：直接引导换源，而不是先关弹窗再点「在控制台打开」）
-                cn.song.mybatisplus.visualizer.execute.ExplainFailureKind.WRONG_TARGET ->
-                    showExplainWrongTarget(proj, result.message, explainSql, dialectGateRequest, openConsole)
-                cn.song.mybatisplus.visualizer.execute.ExplainFailureKind.OTHER ->
-                    showExplainErrorDialog(result.message, openConsole)
-            }
-            is PreviewSideQuery.Result.Scalar ->
-                showExplainErrorDialog("unexpected scalar result from EXPLAIN", openConsole)
-        }
-    }
+    submitExplainDirectConsole(proj, explainSql, dialectGateRequest)
 }
 
 /**
@@ -1261,49 +1304,14 @@ private fun SqlPreviewPanel.showExplainWrongTarget(
         message + "　" + hint,
         fixLabel = MpSqlVisualizerBundle.message("panel.explain.action.switchDataSource"),
         fixTooltip = MpSqlVisualizerBundle.message("panel.explain.action.switchDataSource.tip"),
-        fix = { switchDataSourceViaNativeChooser() },
+        // W12：换源走平台原生工具栏 Data Sources 菜单（见上方 showDialectGateError 同款说明）
+        fix = { cn.song.mybatisplus.visualizer.execute.DataSourceSelector.openDatabaseToolWindow(proj) },
         settingsLabel = MpSqlVisualizerBundle.message("panel.explain.openConsole"),
         settingsTooltip = null,
         settings = openConsole,
     )
 }
 
-/**
- * T-ExplainSwitchNative W5+W6（2026-10-24）：**换源统一入口**——弹平台原生数据源选择器。
- *
- * 用户诉求（原话）：「我希望选的优先是 idea 原生的」「图三才是选择数据源的理想状态」。
- * 因此：
- *  - 不自研源列表（W2 的下拉已撤）；
- *  - 走 `prepareConsole(forceChoosePopup = true)`——**强制弹选择器**（即便 runner 只剩一条），
- *    弹层用的是平台 Runner 对象 + 平台 ListPopup（`showRunnerPopup`），与图三同族；
- *  - **不自动重试**：选中源只重建控制台并刷新指示行，执行由用户自己再点（旧实现承诺
- *    「切换后自动重试」正是「点切换却重试执行」的误导来源）。
- *
- * 社区版（无 Database 插件）由调用方判可用性后才显示入口；本函数内再兜一层。
- */
-internal fun SqlPreviewPanel.switchDataSourceViaNativeChooser() {
-    if (com.intellij.openapi.util.Disposer.isDisposed(this)) return
-    val proj = project ?: return
-    if (!runCatching { cn.song.mybatisplus.visualizer.execute.ExecuteSqlSupport.isAvailable() }.getOrDefault(false)) return
-    val sql = currentEditorSql()?.takeIf { it.isNotBlank() }
-        ?: nativeEditorDoc?.text?.takeIf { it.isNotBlank() }
-        ?: return
-    // T-ExplainSwitchNative W7（2026-10-24 用户实测「切换数据源没有用，真正执行时还是用的原生
-    // 工具栏上的数据源」）：**执行目标的单一事实源必须是原生控制台**——换源前先丢弃旧的共享
-    // 控制台与已备会话，否则 reuseSharedConsole 会命中旧源控制台（其 attach 的源不会跟随新选择），
-    // 造成「插件记了新源、平台控制台仍用旧源」的两套状态（图二错位）。
-    runCatching { cn.song.mybatisplus.visualizer.execute.DataSourceSelector.dropSharedConsole() }
-    runCatching { cn.song.mybatisplus.visualizer.execute.DataSourceSelector.clearPrepared() }
-    cn.song.mybatisplus.visualizer.execute.DataSourceSelector.prepareConsole(
-        proj, sql,
-        onConsole = { consoleComponent -> embedConsole(consoleComponent, embedMode = ConsoleEmbedMode.PREVIEW) },
-        onEditor = { consoleEditor -> onNativeEditorReady(consoleEditor) },
-        onError = { msg -> resultPanel.showError(msg) },
-        forceChoose = true,        // 跳过 last-used 静默（用户主动要选）
-        forceChoosePopup = true,   // W6：必须弹选择器（不等 runner 数量）
-    )
-    // 指示行在绑定落地后由既有刷新链更新（prepareAfterEditorResolved → refreshBindStateRow）
-}
 
 /**
  * T-ExplainPwdPrompt W6（2026-10-24）：认证失败轻通知——平台凭据链（askPassword=true 的
@@ -1476,10 +1484,16 @@ internal fun SqlPreviewPanel.submitExplainOrStructured(
             // T-UI030：开关关闭时不再只是「静默直送」——该方言确有结构化面且 Database 插件
             // 在场时给一条带「启用结构化并重试」动作的通知；TEXT/XML/Community 不提示（开启
             // 也没用，只会变成噪音）。不点动作时行为与改前逐字一致（仍直送原生控制台）。
+            //
+            // T-ExplainConsoleFirst W6（2026-10-24 用户实测「为什么我点击执行计划还是弹窗了」）：
+            // 该推荐**只提示一次**。此前每次点执行计划都弹，用户顺手点过一次「启用结构化」后
+            // 开关被永久写成 true，界面上再无任何「现在是实验形态」的提示——下次看到弹窗时
+            // 完全无从归因。沙盒实测该配置确为 true、而代码默认是 false，差异只可能来自这里。
             if (cn.song.mybatisplus.visualizer.execute.ExplainFallbackGuidance.shouldOfferStructuredEnable(
                     settings.explainStructuredRender, format, databaseAvailable,
-                )
+                ) && !settings.explainStructuredOfferedShown
             ) {
+                settings.explainStructuredOfferedShown = true
                 notifyStructuredExplainDisabled(proj) {
                     enableStructuredExplainAndRetry(proj, dialect, explainSql, dialectGateRequest)
                 }

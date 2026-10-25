@@ -9,6 +9,12 @@
 5. 取消保存框回预览，停 0.8s
 
 前置（prep）：mpjdemo UserServiceImpl.java 打开、goto(40)、无弹窗。
+
+**2026-10-25 状态：坐标已按新构图重标，但本张未录成，分镜仍缺「打开 .sql 看注释头」。**
+坐标值（MORE / ITEM_REPLAY / WRAP_CHECK / OK_BTN）已用实拍核对过导出对话框，
+可直接用；缺的是最后一步——导出的保存框是 IDE 自绘 FileChooser，实测范围
+`(758,327)-(1718,867)`，**右边界超出录制区 79px**，`MoveWindow` 移走后再置前
+会被主窗盖住，「更多」菜单又是 hover 才展开。要补齐需先解决这三个约束。
 """
 import os
 import sys
@@ -22,15 +28,15 @@ from gifkit import (Recorder, click, find_gutter_icons, goto_line, shot,
                     wait_stable)
 from robot import find_components
 
-REGION = (277, 25, 1370, 984)
+REGION = (285, 26, 1354, 974)
 BASE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(BASE, "perf", "n05_replay.mp4")
 
 OX, OY = REGION[0], REGION[1]
-MORE = (1223, 208)
-ITEM_REPLAY = (1233, 364)
-WRAP_CHECK = (430, 458)      # 事务包裹复选框（导出对话框内，实测）
-OK_BTN = (842, 558)          # 对话框 OK（实测）
+MORE = (1238, 206)
+ITEM_REPLAY = (1210, 357)
+WRAP_CHECK = (458, 435)      # 事务包裹复选框（导出对话框内，2026-10-25 实测）
+OK_BTN = (836, 564)          # 对话框 OK（2026-10-25 实测）
 
 
 def abs_pt(p):

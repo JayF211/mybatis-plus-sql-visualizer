@@ -205,6 +205,26 @@ object DatabaseSchemaResolver {
         }
 
     /**
+     * T-ExplainConsoleFirst W7（2026-10-24）：`Unknown column` 跨源升格的证据入口。
+     *
+     * 与 [cachedOwnerIndexes] 同口径的只读枚举（零内省零连接），返回**在籍数据源清单**供调用方
+     * 按身份比对「当前控制台用的那条源」并排除它。Database 插件不在场或枚举失败一律 null
+     * （调用方据此不升格——诚实降级，不猜）。
+     */
+    internal fun allDataSourcesForEvidence(project: Project?): List<Any>? {
+        if (project == null) return null
+        if (!isDatabaseAvailable()) return null
+        return dataSources(project)?.takeIf { it.isNotEmpty() }
+    }
+
+    /**
+     * T-ExplainConsoleFirst W7：加锁版的 [columnNameSources]——升格判定要跨多条源连续读同一份
+     * `metaCache`，逐条各自加锁会让「读源 A 与读源 B 之间缓存被清」的窗口混入不一致视图。
+     */
+    internal fun columnNameSourcesCached(dataSources: List<Any>): List<(String) -> Set<String>?> =
+        synchronized(metaCache) { columnNameSources(dataSources) }
+
+    /**
      * P7：「首个持有者」合并（口径与 [mergeCachedColumns] 逐条一致）——每个表名只认首个持有它的
      * 数据源，避免跨库同名表互相污染；不同表名之间各取各的。
      */

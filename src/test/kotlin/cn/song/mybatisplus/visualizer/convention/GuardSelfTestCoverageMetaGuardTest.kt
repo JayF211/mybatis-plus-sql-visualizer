@@ -808,6 +808,23 @@ class GuardSelfTestCoverageMetaGuardTest {
                     "喂合成源码（isOpaque/自选色必红、命名色与渲染器必走豁免）。",
             ),
             GuardEntry(
+                "log/SqlLogToolbarUpdateThreadGuardTest.kt",
+                emptyList(),
+                "SQL 日志工具栏 BGT 声明守卫（T-SqlLogToolbarEdt W4）：判定内核内联于四个用例——" +
+                    "扫 SqlLogPanel 源码断言组与组内每个覆写 update 的动作都声明 BGT、BGT 常量类型为 BGT、" +
+                    "排序文案查表覆盖全部模式。offenders 在用例内累积，无独立「返回违规点集合」的具名判定函数，" +
+                    "故 decisionFns 留空；灵敏度=删一个动作的 BGT 声明恰 1 红已实测（并修掉首版正则剥 Action " +
+                    "后缀致 filter 全程跳过的假绿）。",
+            ),
+            GuardEntry(
+                "ui/ExplainStructuredDefaultOffGuardTest.kt",
+                emptyList(),
+                "结构化执行计划默认关守卫（T-ExplainConsoleFirst W6）：判定内核内联于三个用例——" +
+                    "断言 explainStructuredRender 默认值为 false、「启用结构化并重试」推荐只提示一次、" +
+                    "设置页仍保留显式开关。断言直接内联，无独立「返回违规点集合」的具名判定函数，故 decisionFns 留空；" +
+                    "灵敏度=把默认值改回 true 或去掉一次性标记必红。",
+            ),
+            GuardEntry(
                 "config/SettingsPanelSearchableGuardTest.kt",
                 listOf(
                     DecisionFn(

@@ -86,9 +86,12 @@ class ExplainAskPasswordChannelGuardTest : BannedApiScanSupport() {
         // （首版 indexOf 近邻检查被直送链调用点干扰假绿、反向探针不红；第二版只匹配带花括号
         // 形态漏掉直送分支——探针必须让守卫真红才算验证过。）
         val starts = Regex("ExplainFailureKind\\.AUTH ->").findAll(code).map { it.range.first }.toList()
+        // T-ExplainConsoleFirst W1（2026-10-24）修订：直送链改回内嵌原生控制台后，AUTH 的
+        // 呈现由平台凭据链原生负责，故 AUTH 分支只剩**结构化通道**一处（原两处：结构化
+        // onFailed + 直送 Failed）。条数断言随之从 `>= 2` 收到 `>= 1`，轻通知纪律不变。
         assertTrue(
-            "应存在 AUTH 分支（结构化 onFailed 与直送 Failed 两处）",
-            starts.size >= 2,
+            "应存在 AUTH 分支（结构化 onFailed）",
+            starts.isNotEmpty(),
         )
         val branchEnds = Regex("ExplainFailureKind\\.(CANCELLED|OTHER) ->|is PreviewSideQuery\\.Result\\.Scalar")
             .findAll(code).map { it.range.first }.toList()
@@ -129,22 +132,37 @@ class ExplainAskPasswordChannelGuardTest : BannedApiScanSupport() {
     }
 
     @Test
-    fun `直送链取源必须接模块学习回落`() {
+    fun `直送链不得再做插件侧选源`() {
         val code = sourceOf("ui/SqlPreviewPanelExecution.kt")
-        // T-DialectInferPollution W9（用户沙盒实测：jar-model demo 表被 last-used mp_demo 硬套
-        // → mp_demo.wms_inventory_jar_demo doesn't exist）：直送链与结构化链取源统一走
-        // explainFallbackDataSource——模块学习优先、冲突不猜、last-used 兜底。
-        val directIdx = code.indexOf("val target = explainTargetForTest?.invoke()")
-        val fallbackIdx = code.indexOf("explainFallbackDataSource(\n                proj, sourceModuleKey,", directIdx)
-        val noDsIdx = code.indexOf("panel.explain.noDataSource", directIdx)
+        // T-ExplainConsoleFirst W1（2026-10-24）：直送链改回内嵌原生控制台（形态 A）后，
+        // 「用哪条源」交还平台——插件侧**不得**再调 explainFallbackDataSource（模块学习 /
+        // last-used / 表归属路由那一整套）。十二轮（W8~W12）的拉锯根因正是插件在自己算源：
+        // 平台「选中即关联」让 runner 枚举第二次起恒为单源，插件算得再准也改不了平台执行目标。
+        // 本守卫把「形态 B 的取源逻辑悄悄回流」钉成红。
+        val body = funBody(code, "internal fun SqlPreviewPanel.submitExplainDirect(")
+        assertTrue("submitExplainDirect 必须仍存在", body.isNotEmpty())
         assertTrue(
-            "submitExplainDirect 的取源须接 explainFallbackDataSource(proj, sourceModuleKey, sql) 模块学习回落（W9）",
-            directIdx >= 0 && fallbackIdx > directIdx,
+            "直送链不得再调 explainFallbackDataSource（插件侧选源已随形态 A 退役）",
+            !body.contains("explainFallbackDataSource"),
         )
         assertTrue(
-            "回落必须先于「未绑定数据源」红字分支（否则回落不生效）",
-            noDsIdx < 0 || fallbackIdx in 0 until noDsIdx,
+            "直送链必须转调 submitExplainDirectConsole（内嵌原生控制台＝形态 A）",
+            body.contains("submitExplainDirectConsole("),
         )
+        // 零源判定仍须在场（一条源都没有时给引导，而不是空跑）
+        assertTrue(
+            "零源判定须保留（registeredDataSourceCount 或测试缝）",
+            body.contains("registeredDataSourceCount") || body.contains("explainTargetForTest"),
+        )
+    }
+
+    /** 取扩展函数函数体（从声明行到下一个顶层 `internal fun`/`private fun` 之前）。 */
+    private fun funBody(code: String, decl: String): String {
+        val start = code.indexOf(decl)
+        if (start < 0) return ""
+        val nextDecl = Regex("\\n(internal|private) fun SqlPreviewPanel\\.")
+            .find(code, start + decl.length)?.range?.first ?: code.length
+        return code.substring(start, nextDecl)
     }
 
     @Test
@@ -218,8 +236,12 @@ class ExplainAskPasswordChannelGuardTest : BannedApiScanSupport() {
         // T-ExplainFailUx W1（用户沙盒实测诉求：「这种情况就不应该弹窗了吧，应该直接引导用户
         // 更换数据源」）：WRONG_TARGET 档（表不在当前源）须走就地引导 showExplainWrongTarget，
         // 不得调 showExplainErrorDialog 弹模态。按分支起点切片断言（同 W6 AUTH 纪律）。
+        //
+        // T-ExplainConsoleFirst W1（2026-10-24）修订：直送链改回内嵌原生控制台后，选错源的
+        // 呈现由平台控制台原生负责，故 WRONG_TARGET 分支只剩**结构化通道**一处（原两处：
+        // 结构化 onFailed + 直送 Failed）。条数断言随之从 `>= 2` 收到 `>= 1`，就地引导纪律不变。
         val starts = Regex("ExplainFailureKind\\.WRONG_TARGET ->").findAll(code).map { it.range.first }.toList()
-        assertTrue("应存在 WRONG_TARGET 分支（结构化 onFailed 与直送 Failed 两处）", starts.size >= 2)
+        assertTrue("应存在 WRONG_TARGET 分支（结构化 onFailed）", starts.isNotEmpty())
         val branchEnds = Regex("ExplainFailureKind\\.(CANCELLED|OTHER) ->|is PreviewSideQuery\\.Result\\.Scalar")
             .findAll(code).map { it.range.first }.toList()
         val offenders = starts.count { s ->
@@ -231,57 +253,31 @@ class ExplainAskPasswordChannelGuardTest : BannedApiScanSupport() {
             offenders == 0,
         )
         assertTrue(
-            "WRONG_TARGET 就地引导出口 showExplainWrongTarget 必须存在且接原生换源入口（W1+W5/W6）",
-            code.contains("showExplainWrongTarget") && code.contains("switchDataSourceViaNativeChooser"),
+            "WRONG_TARGET 就地引导出口 showExplainWrongTarget 必须存在且接原生能力（W1+W12）",
+            code.contains("showExplainWrongTarget") && code.contains("openDatabaseToolWindow"),
         )
     }
 
     @Test
-    fun `换源必须弹原生选择器且不自动重试`() {
+    fun `换源一律走平台原生工具栏不得自建入口`() {
         val chain = sourceOf("ui/SqlPreviewPanelExecution.kt")
-        val results = sourceOf("execute/DataSourceSelectorResults.kt")
         val panel = sourceOf("ui/SqlPreviewPanelParamPanel.kt")
-        // T-ExplainSwitchNative W5/W6（用户实测三问题）：①点「切换数据源」没弹列表却直接重试
-        // ——根因 forceChoose 只跳过 last-used 静默，runner 唯一时仍直选；②自研下拉只改显示、
-        // 执行仍用原生控制台源；③理想形态是 IDE 原生 Data Sources 弹窗。
-        // 纪律：换源统一走 switchDataSourceViaNativeChooser（forceChoosePopup=true 必弹），
-        // **不自动重试**；自研下拉整体退役。
+        // T-ExplainSwitchNative W12（2026-10-24 用户实测三图定案）：图三证明平台原生工具栏自带
+        // `Data Sources` 菜单（Detach Data Source + 全部源）就是理想形态；且平台
+        // getForcedDataSourceForExec 的关联无公开清除 API，插件自建入口第二次起必被短路成单源
+        // （日志实证 runners 5→1）。纪律：插件**不得**自建任何换源 UI。
         assertTrue(
-            "换源入口须存在且走 forceChoosePopup 必弹选择器（W6）",
-            chain.contains("fun SqlPreviewPanel.switchDataSourceViaNativeChooser") &&
-                chain.contains("forceChoosePopup = true"),
+            "指示行不得再渲染自研换源控件（W12）",
+            !panel.contains("BIND_STATE_SWITCH_NAME") && !panel.contains("buildDataSourceCombo") &&
+                !panel.contains("switchDataSourceViaNativeChooser"),
         )
         assertTrue(
-            "换源入口不得再自动重试执行计划（旧 W3 的 awaitDataSourceBoundThenRetry 调用须移除）",
-            !chain.substring(
-                chain.indexOf("fun SqlPreviewPanel.switchDataSourceViaNativeChooser"),
-                (chain.indexOf("fun SqlPreviewPanel.switchDataSourceViaNativeChooser") + 1200)
-                    .coerceAtMost(chain.length),
-            ).contains("awaitDataSourceBoundThenRetry"),
+            "自研换源函数必须整体删除（W12）",
+            !chain.contains("fun SqlPreviewPanel.switchDataSourceViaNativeChooser"),
         )
         assertTrue(
-            "chooseAndPrepare 的直选分支须受 forceChoosePopup 抑制（W6）",
-            results.contains("shouldBeChosenIfAlone(runners.first()) && !forceChoosePopup"),
-        )
-        assertTrue(
-            "自研数据源下拉必须整体退役（不得再有 buildDataSourceCombo / bindStateCombo）",
-            !panel.contains("buildDataSourceCombo") && !panel.contains("bindStateCombo") &&
-                !panel.contains("BIND_STATE_COMBO_NAME"),
-        )
-        assertTrue(
-            "指示行换源入口须在插件不可用时降级为不渲染（W2 纪律沿用）",
-            panel.contains("ExecuteSqlSupport.isAvailable()"),
-        )
-        // W7：执行目标单一事实源＝原生控制台——换源前必须丢弃旧共享控制台/已备会话，
-        // 否则 reuseSharedConsole 命中旧源控制台（attach 源不跟随新选择）→ 图二错位。
-        val swBody = chain.substring(
-            chain.indexOf("fun SqlPreviewPanel.switchDataSourceViaNativeChooser"),
-            (chain.indexOf("fun SqlPreviewPanel.switchDataSourceViaNativeChooser") + 2000)
-                .coerceAtMost(chain.length),
-        )
-        assertTrue(
-            "换源前须 dropSharedConsole + clearPrepared（W7 单一事实源）",
-            swBody.contains("dropSharedConsole()") && swBody.contains("clearPrepared()"),
+            "红条换源动作须指向平台原生能力（打开 Database 工具窗口，W12）",
+            chain.contains("openDatabaseToolWindow(proj)"),
         )
     }
 
@@ -301,20 +297,19 @@ class ExplainAskPasswordChannelGuardTest : BannedApiScanSupport() {
     }
 
     @Test
-    fun `方言闸红条的切换数据源不得走执行链`() {
+    fun `方言闸红条的换源动作须指向原生能力`() {
         val code = sourceOf("ui/SqlPreviewPanelExecution.kt")
-        // T-ExplainSwitchNative W9（用户实测「点击下方的切换数据源依然有问题，点击没有反应」）：
-        // 红条按钮此前接 executeSql(forceChoose=true)——执行链会先过同一方言闸门、再次被同一
-        // 原因阻断，表现为「点了没反应」。切换只换源，统一走原生选择器入口。
+        // T-ExplainSwitchNative W9→W12：红条按钮曾接 executeSql（执行链，会被同一闸门再次阻断，
+        // 表现为「点了没反应」）；W12 定案改指向平台原生能力——打开 Database 工具窗口换源。
         val gateIdx = code.indexOf("internal fun SqlPreviewPanel.showDialectGateError")
         assertTrue("须有方言闸红条入口（W9）", gateIdx >= 0)
-        val body = code.substring(gateIdx, (gateIdx + 2000).coerceAtMost(code.length))
+        val body = code.substring(gateIdx, (gateIdx + 2400).coerceAtMost(code.length))
         assertTrue(
-            "红条「切换数据源」须走 switchDataSourceViaNativeChooser（W9）",
-            body.contains("fix = { switchDataSourceViaNativeChooser() }"),
+            "红条换源动作须走 openDatabaseToolWindow（W12）",
+            body.contains("openDatabaseToolWindow(proj)"),
         )
         assertTrue(
-            "红条「切换数据源」不得再走 executeSql 执行链（W9）",
+            "红条换源动作不得走 executeSql 执行链（W9 定例）",
             !body.contains("fix = { executeSql(forceChoose = true) }"),
         )
     }

@@ -215,3 +215,37 @@ W8 按**三参**反射调用 → `NoSuchMethodException` → 被 `runCatching` �
 **回归说明**：本 hotfix 后，「切换数据源」恢复到此前的行为——弹平台原生 Runner 列表
 （受 `CAN_CONNECT_TO` 过滤，可连接源才在列）。W8 想要的「列出全部在籍源」**未实现**
 （平台无公开 API，见 §八 诚实边界），用户若仍需要，须另立任务研究私有 API 风险。
+
+---
+
+## 十、W11（2026-10-24 第四轮用户实测，`c2e77950`）：「第二次点击只剩一个源」根治
+
+**用户现象**（沙盒日志精确复现）：
+```
+16:34:10  runners=5 → show popup with 5 runners   ← 第一次：5 个 ✓
+16:34:14  popup selected: mp_demo@localhost       ← 选中
+16:34:17  runners=1 → show popup with 1 runners   ← 第二次起永远 1 个 ✗
+```
+
+**根因（双重实证）**：
+- 日志：选中后枚举数从 5 掉到 1 并保持。
+- 字节码（`DatabaseRunners.getDataSourceRunners` 偏移 34/63）：首跳
+  `DbImplUtil.getForcedDataSourceForExec(psiFile)`，命中即 `Collections.singletonList(该源)`
+  **短路返回**，不进正常枚举。平台把 exec 文件「关联」到选中源后即进入该形态；而清除关联
+  无公开 API（`VirtualFileDataSourceProvider` 仅 `findDataSource`/`getDataSource`，
+  `getForcedDataSource` 私有）。
+
+**修法**：切换路径（`forceChoosePopup=true`）在 attach 枚举之上**合并全部在籍源 Runner**——
+用公开的 `DatabaseRunners.createDataSourceConsolesRunner(DbDataSource, Consumer)` 逐源建
+（`DbPsiFacade.findDataSource(uniqueId)` 取 `DbDataSource`），`mergeRunnersByName` 按显示名
+去重（平台结果优先）。普通预览准备/执行不启用，保持既有方言匹配语义。
+
+**读数**：定向 5 类 **47/0/0/0**；反向真删合并调用恰 1 红。
+
+**未验**：GUI——第二次及以后点击是否真列出全部在籍源；选中「当前不可连接」源时平台失败路径
+的表现。均需沙盒确认。
+
+**累积教训（本任务三轮）**：①反射换入口必须先 javap 核**完整签名**（W8 漏参数个数致
+`runners=0` 假「方言不匹配」）；②`runCatching` 吞反射异常会把「实现失败」伪装成「业务空结果」，
+关键路径上必须区分「空」与「失败」；③平台「选中即关联」类隐式状态会让第二次行为与第一次不同，
+排障必须拿**连续多次操作**的日志而非单次。

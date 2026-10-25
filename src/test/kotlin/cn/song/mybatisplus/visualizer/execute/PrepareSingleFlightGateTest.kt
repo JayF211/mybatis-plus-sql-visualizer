@@ -466,11 +466,10 @@ class PrepareSingleFlightGateTest {
             2,
             panel.split("embedConsole(fullConsole, embedMode = ConsoleEmbedMode.EXECUTE)").size - 1,
         )
-        // 预览准备链两处入口：prepareDefaultConsole 的 onConsole + T-ExplainSwitchNative W5~W7
-        // 的 switchDataSourceViaNativeChooser（换源重建控制台，同样以 PREVIEW 模式嵌入）。
-        // 后者由 master 54f7d784 新增，期望值随之由 1 改 2。
+        // 预览准备链唯一入口（prepareDefaultConsole onConsole）——T-ExplainSwitchNative W12 撤掉
+        // switchDataSourceViaNativeChooser 后不再有第二个 PREVIEW 嵌入点。
         assertEquals(
-            2,
+            1,
             panel.split("embedConsole(consoleComponent, embedMode = ConsoleEmbedMode.PREVIEW)").size - 1,
         )
         // 旧布尔签名彻底退役（注释除外——源码形态扫描只认实参写法）
