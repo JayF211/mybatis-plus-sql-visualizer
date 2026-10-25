@@ -63,17 +63,21 @@ jobs:
         run: pwsh -NoProfile -ExecutionPolicy Bypass -File dev-support/test-demo/setup-test-env.ps1 -SkipDb
 
       - name: 打包插件 + 官方兼容验证
+        # T-CiRelease（20261025）：各 gradle 步骤不再用 --no-daemon——单次 daemon JVM 在构建
+        # 结束后须整进程退出，任何测试泄漏的非 daemon 线程都会把退出卡死（20261025 run
+        # 40150222557 实证：五片 01:47 全部结束后静默 69 分钟直至取消）。常驻 daemon 下客户端
+        # 在构建完成即返回，泄漏线程随 runner 回收；daemon 跨步骤复用顺带提速。
         # 发版链前半（对应本地 releaseGate）：verifyPlugin 在线报告口径为「离线 + 豁免清单」，
         # 同时为后续 verifyGate/verifyMarketplace 预热 verifier-cli 与 253/262 发行版缓存
         #（二者直驱 CLI，要求 jar 与 IDE 目录已在 Gradle 缓存中）。
-        run: ./gradlew.bat :buildPlugin :verifyPlugin -PgifRecord=false --no-daemon --console=plain
+        run: ./gradlew.bat :buildPlugin :verifyPlugin -PgifRecord=false --console=plain
 
       - name: 权威兼容门禁（verifyGate，三目标 243/253/262）
         # -PverifyOnly=true：复用上一步的发行包，不重打包（Jar 带 MPV-Build 时间戳恒重跑）
-        run: ./gradlew.bat :verifyGate -PverifyOnly=true -PgifRecord=false --no-daemon --console=plain
+        run: ./gradlew.bat :verifyGate -PverifyOnly=true -PgifRecord=false --console=plain
 
       - name: Marketplace 同口径门禁（verifyMarketplace，在线 + 无豁免）
-        run: ./gradlew.bat :verifyMarketplace -PgifRecord=false --no-daemon --console=plain
+        run: ./gradlew.bat :verifyMarketplace -PgifRecord=false --console=plain
 
       - name: 全量分片测试（testShards，真机类剔除）
         # 三类真机依赖用例在 CI 剔除（与 testDatabase / e2eFakeIde 同口径，本地发版前照跑）：
@@ -82,7 +86,7 @@ jobs:
         #   O147RealAgentAcceptanceTest——需要本机 JDK8（sqlvis.jdk8home 默认硬编码本机路径）。
         # root 侧用既有 -PtestShardExcludeClasses 隔离口，agent 侧用 -PagentTestExclude（同语义）。
         run: >-
-          ./gradlew.bat :testShards -PgifRecord=false --no-daemon --console=plain
+          ./gradlew.bat :testShards -PgifRecord=false --console=plain
           "-PtestShardExcludeClasses=cn.song.mybatisplus.visualizer.execute.DataSourceJdbcSmokeTest,cn.song.mybatisplus.visualizer.log.O147RealAgentAcceptanceTest"
           "-PagentTestExclude=cn.song.mybatisplus.sqlvis.agent.AttachPoolWarmGateTest"
 
@@ -165,6 +169,7 @@ jobs:
           path: |
             build/reports/tests/
             build/test-results/
+            build/o147-diag/
             sub-projects/sql-visualizer-agent/build/test-results/
           if-no-files-found: ignore
           retention-days: 14

@@ -362,6 +362,16 @@ class O147HistoryUpgradeTest {
                 println(childOutput)
                 println("=== command ===")
                 println(File(file.parentFile, "string-child-command.txt").readText())
+                println("O147_EXPECTED_PREIMAGE=" + expected)
+                // T-CiRelease（20261025）：把 CI 上的原始 test.sql 与命令行拷进 build/o147-diag——
+                // 失败工件上传后可拿到 runner 上的真实文件字节，供本地逐字节 diff（本机所有
+                // 时区/字符集组合均无法复现分歧，唯余实物对比）。
+                runCatching {
+                    val diagDir = File(root, "build/o147-diag")
+                    diagDir.mkdirs()
+                    file.copyTo(File(diagDir, file.name), overwrite = true)
+                    File(file.parentFile, "string-child-command.txt").copyTo(File(diagDir, "string-child-command.txt"), overwrite = true)
+                }.onFailure { println("o147-diag copy failed: $it") }
                 println("=== end O147 string-child diag ===")
             }
             assertEquals(childOutput, 0, process.exitValue())
@@ -439,7 +449,14 @@ object O147LargeStringProbe {
         // bufferedWriter/生产读取器整条链走默认字符集（本机 UTF-8、EN-US runner 为 Cp1252，单机内自洽），
         // 此处原 Files.readString 强制 UTF-8，在默认字符集非 UTF-8 的机器上把文件头的 em dash
         //（time: —）解码成替换符 → 指纹不匹配 → 子进程退出 1（CI 5/5 确定性失败实证）。
+        // T-CiRelease（20261025）：字符集/时区组合本地全试尽仍无法复现指纹分歧——失败时把哈希
+        // 原像（entries.toString()，count=1 体量很小）完整打出，供与父侧期望原像逐字段对比。
         val entries = SqlLogFileReader.parseContent(File(args[0]).readText())
+        if (fingerprint(entries) != args[1]) {
+            println("O147_CHILD_PREIMAGE=" + entries)
+            println("O147_CHILD_HASH=" + fingerprint(entries))
+            println("O147_EXPECTED_HASH=" + args[1])
+        }
         check(fingerprint(entries) == args[1]) { "String parser differs from parent sequence/file results" }
         println("O147_STRING_OK count=${entries.size} reader=${SqlLogFileReader::class.java.protectionDomain.codeSource.location}")
     }
