@@ -24,6 +24,31 @@ class RuntimeInsightViewTest {
             assertEquals(listOf(true, false), changes)
         }
     }
+    @Test fun `toggling analysis keeps user choice until agent confirms and then reflects state`() {
+        SwingUtilities.invokeAndWait {
+            var sessionEnabled = false
+            val source = object : RuntimeInsightSource {
+                override fun enable(enabled: Boolean) { sessionEnabled = enabled }
+                override fun snapshot() =
+                    RuntimeInsightSnapshot(listOf(AnalysisSessionSnapshot(1, sessionEnabled, emptyList(), emptyList(), setOf("coverage_not_proven"), 0)), emptyList(), emptyList())
+            }
+            val view = RuntimeInsightView({ it }, source, {}, {}, {})
+            view.present(source.snapshot())
+            val box = view.workload.actions.components.filterIsInstance<JCheckBox>().single()
+            assertFalse(box.isSelected)                      // 打开时按实际状态（未启用）
+            // 勾选后，agent 尚未确认的滞后快照不得把勾选态弹回（T-RuntimeEnableLatency）
+            sessionEnabled = false                            // 模拟 agent 未确认（快照 enabled=false）
+            box.doClick()
+            assertTrue(box.isSelected)                       // 勾选态保留
+            view.present(source.snapshot())                  // 滞后快照再 present 一次也不弹回
+            assertTrue(box.isSelected)
+            // 状态落地（agent 确认）后，下次 present 不再覆盖用户选择，但状态栏反映实际
+            sessionEnabled = true
+            view.present(source.snapshot())
+            assertTrue(box.isSelected)
+            view.dispose()
+        }
+    }
     @Test fun `request without terminal or cross thread proof remains inconclusive`() {
         val evidence = SqlRequestEvidence("request", "run", true, false, null, null, null, null, false, true, emptyList())
         val request = ObservedRequest("request", null, null, null, evidence, 0L, emptyList())

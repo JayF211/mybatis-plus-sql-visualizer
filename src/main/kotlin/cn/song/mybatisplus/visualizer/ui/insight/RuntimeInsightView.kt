@@ -59,8 +59,34 @@ internal class RuntimeInsightView(
     private var baseline: SqlWorkloadBaseline? = null
     private var last: RuntimeInsightSnapshot? = null
     private var closed = false
+    private var syncCheckboxOnce = true
+    private var pendingEnableTimer: javax.swing.Timer? = null
     init {
-        enabled.addActionListener { source.enable(enabled.isSelected); refresh() }
+        enabled.addActionListener {
+            val wanted = enabled.isSelected
+            source.enable(wanted)
+            refresh()
+            // T-RuntimeEnableLatency（2026-10-25 沙盒实测「勾选后要点刷新快照才生效」）：
+            // agent 侧 analysis 开关是**异步确认**的——enable 只把 requested 置位，要等
+            // sendConfig 下发、agent 回带新 controlToken 的 AgentCaptureState 并建好 boundary
+            // 后 store.enabled 才为 true。立即刷新只会拿到未确认快照（enabled=false）。
+            // 这里按 400ms 间隔补刷直到会话状态与勾选意图一致（或超时），用户无需再手动
+            // 点「刷新快照」；期间 [present] 不再用滞后快照反向覆盖勾选态。
+            pendingEnableTimer?.stop()
+            val timer = javax.swing.Timer(400, null)
+            var attempts = 0
+            timer.addActionListener {
+                refresh()
+                attempts++
+                val settled = last?.sessions?.any { it.enabled == wanted } == true
+                // 状态落地即停；最多补刷 8 次（约 3.2s）兜底——会话未激活等场景状态永不到达，
+                // 不能留一个无限 Timer 泄漏（headless 测试同样依赖此收敛）。
+                if (settled || attempts >= 8) timer.stop()
+            }
+            timer.isRepeats = true
+            pendingEnableTimer = timer
+            timer.start()
+        }
         workload.actions.add(enabled)
         workload.button(text("runtime.refresh"), refresh)
         workload.button(text("runtime.candidates"), candidates)
@@ -86,7 +112,13 @@ internal class RuntimeInsightView(
     fun present(snapshot: RuntimeInsightSnapshot) {
         if (closed) return
         last = snapshot
-        enabled.isSelected = snapshot.sessions.any { it.enabled }
+        // 勾选态只在首次 present 时同步为当前实际状态（打开页面的初始显示）；之后只由用户
+        // 操作驱动——滞后快照（agent 异步确认前 enabled=false）不得反向覆盖刚勾上的勾选态，
+        // 否则表现为「勾选后被弹回 / 要点刷新才生效」（T-RuntimeEnableLatency）。
+        if (syncCheckboxOnce) {
+            enabled.isSelected = snapshot.sessions.any { it.enabled }
+            syncCheckboxOnce = false
+        }
         workload.showRows(RuntimeInsightPresentation.workload(snapshot, text))
         workload.status.text = text("runtime.notice") + "\n" + text("runtime.consistency") + snapshot.consistency.joinToString() + "\n" + snapshot.sessions.mapIndexed { index, s -> "${index + 1}: enabled=${s.enabled}; quality=${s.qualityIssues}; bytes=${s.retainedBytes}" }.joinToString("\n")
         requests.showRows(RuntimeInsightPresentation.requests(snapshot, SqlRequestBudget((count.value as Number).toInt(), (millis.value as Number).toLong() * 1_000_000)))
@@ -97,6 +129,7 @@ internal class RuntimeInsightView(
     fun dispose() {
         if (closed) return
         closed = true; last = null; baseline = null
+        pendingEnableTimer?.stop(); pendingEnableTimer = null
         source.enable(false) // Global analysis switch for all attached sessions, explicitly described in the notice.
     }
 }
