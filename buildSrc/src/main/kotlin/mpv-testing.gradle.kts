@@ -732,6 +732,13 @@ intellijPlatformTesting {
                     // IPGP 只给默认 test 任务自动配置 sourceSets 输出，分片任务需补齐
                     testClassesDirs = sourceSets["test"].output.classesDirs
                     classpath = classpath + sourceSets["test"].output
+                    // T-CiRelease（20261025）：失败用例全格式输出（消息+完整栈）——Gradle 精简格式
+                    // 只打「AssertionError at xx:NN」不含断言消息，CI 上 O147 子进程日志等关键证据
+                    // 落不进控制台（agent 子项目侧同款配置，其失败日志一直带消息即此机制）。
+                    testLogging {
+                        events(org.gradle.api.tasks.testing.logging.TestLogEvent.FAILED)
+                        exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+                    }
                     // T-McpToolset2：分片同样需要 mcpStub 桩产物（工具级门控测试实例化 Tool 类，
                     // 超类型 McpToolset 来自桩源集；root 侧 test 任务已挂，分片默认不含——
                     // 漏挂致 NoClassDefFoundError 成片）。mcpStub 源集由根脚本在 convention
