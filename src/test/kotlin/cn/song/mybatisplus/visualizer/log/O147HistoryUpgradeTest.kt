@@ -347,7 +347,14 @@ class O147HistoryUpgradeTest {
         val javaBin = File(System.getProperty("java.home"), "bin/java.exe")
         check(javaBin.isFile)
         val output = File(file.parentFile, "string-child.log")
-        val args = listOf(javaBin.path, "-Xmx768m", "-cp", (listOf(main, tests) + dependencies).joinToString(File.pathSeparator),
+        val args = listOf(javaBin.path, "-Xmx768m",
+            // T-CiRelease（20261025 破案）：子进程必须继承父进程时区——头部时间字符串由父进程
+            // 按其默认时区（mpv-testing 钉死 Asia/Shanghai）格式化落盘，子进程按 runner 原生 UTC
+            // 解析回毫秒会整体 +8h（原像实证：timestamp=1724596690000 vs 夹具 1724567890000，
+            // 差恰 28,800,000ms），timestamp 字段不同 → 指纹必不匹配。透传 user.timezone 后
+            // 父子同区，任何机器构造性一致。
+            "-Duser.timezone=" + System.getProperty("user.timezone"),
+            "-cp", (listOf(main, tests) + dependencies).joinToString(File.pathSeparator),
             O147LargeStringProbe::class.java.name, file.path, O147LargeStringProbe.fingerprint(expected))
         File(file.parentFile, "string-child-command.txt").writeText(args.joinToString("\n"))
         val process = ProcessBuilder(args).redirectErrorStream(true).redirectOutput(output).start()
