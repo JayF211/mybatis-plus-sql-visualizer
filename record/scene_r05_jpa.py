@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from gifkit import (Recorder, click, find_gutter_icons, goto_line, shot,
                     wait_stable)
 
-REGION = (277, 25, 1370, 984)
+REGION = (285, 26, 1354, 974)
 BASE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(BASE, "perf", "r05_jpa.mp4")
 
@@ -36,14 +36,14 @@ def locate_gutter():
     shot(REGION, path)
     # 条带必须覆盖图标本体：目录树收起后插件图标落在 region 相对 x≈70~82
     # （2026-10-25 实测；旧的 95..130 只框到灯泡/折叠箭头，检测为空）
-    icons = find_gutter_icons(path, strip_x=(58, 95), y_range=(100, 860), gap=12)
+    icons = find_gutter_icons(path, strip_x=(85, 115), y_range=(100, 860), gap=12)
     if not icons:
         raise RuntimeError("gutter icon not found")
     # 必须选**离光标行最近**的图标，不能选「离画面中心最近」——后者会点到别的语句
     # （2026-10-25 实测：中心法选中第 58 行 findByAgeGreaterThan，画面成了 WHERE age > ?）。
     # 光标行由 goto_line(53) 决定。当前布局（目录树收起、编辑器占满）实测第 53 行
     # 的 gutter 图标落在 region 相对 y≈386。
-    caret_y = 386
+    caret_y = 396
     y, x = min(icons, key=lambda p: abs(p[0] - caret_y))
     print("icons:", icons, f"caret_y≈{caret_y} -> picked", (y, x))
     return x + OX, y + OY

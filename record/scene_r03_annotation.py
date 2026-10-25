@@ -27,7 +27,7 @@ from gifkit import (Recorder, click, find_gutter_icons, goto_line, pyautogui,
 from nav import force_en_us
 from robot import click_component, find_components
 
-REGION = (277, 25, 1370, 984)
+REGION = (285, 26, 1354, 974)
 BASE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(BASE, "perf", "r03_annotation.mp4")
 
@@ -48,7 +48,7 @@ def locate_gutter(y_range=(100, 860)):
     shot(REGION, path)
     # 条带必须覆盖插件图标本体：目录树收起后它落在 region 相对 x≈70~82
     # （2026-10-25 实测；默认 strip_x=(95,130) 只框到灯泡/折叠箭头，检测恒为空）
-    icons = find_gutter_icons(path, strip_x=(58, 95), y_range=y_range, gap=12)
+    icons = find_gutter_icons(path, strip_x=(85, 115), y_range=y_range, gap=12)
     if not icons:
         raise RuntimeError("gutter icon not found")
     center = (y_range[0] + y_range[1]) / 2

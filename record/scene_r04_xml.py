@@ -27,7 +27,7 @@ import pyautogui
 from gifkit import Recorder, click, goto_line
 from nav import force_en_us
 
-REGION = (277, 25, 1370, 984)
+REGION = (285, 26, 1354, 974)
 BASE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(BASE, "perf", "r04_xml.mp4")
 
@@ -56,9 +56,9 @@ def main():
     goto_line(74)
     time.sleep(0.4)
     # 首帧必须与尾帧同态：光标停在第 74 行（当前行有高亮底色）、gutter 图标已渲染。
-    # goto_line 之后编辑器可能没有焦点（force_en_us 的 PostMessage 会切走），
-    # 补一次行内点击把焦点和光标都钉在这一行。
-    click(*abs_pt((700, 383)), move_dur=0.25)
+    # 这里**不能点编辑器**——点一次就把光标挪到点击所在行（新构图下 (700,383) 落在
+    # 第 73 行注释上，尾帧与首帧差 12.96%）。Esc 只关 goto 框，不动光标。
+    pyautogui.press("esc")
     time.sleep(1.8)
 
     rec = Recorder(REGION, OUT)
@@ -89,9 +89,10 @@ def main():
         #    Ctrl+Shift+Backspace / 右方向键 / Esc 都清不掉，只有重新点一次编辑器行才复位。
         goto_line(74)
         time.sleep(0.5)
+        # 关 goto 框；**不要点编辑器**（点击会把光标挪走）。Esc 两次清掉可能残留的选择态。
         pyautogui.press("esc")
         time.sleep(0.3)
-        click(*abs_pt((700, 383)), move_dur=0.25)
+        pyautogui.press("esc")
         time.sleep(1.2)
     finally:
         rec.stop()
