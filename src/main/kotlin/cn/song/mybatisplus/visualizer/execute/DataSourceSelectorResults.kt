@@ -395,10 +395,20 @@ internal fun DataSourceSelector.chooseAndPrepare(
             if (registered.isEmpty()) {
                 onError?.invoke(MpSqlVisualizerBundle.message("execute.datasource.empty"))
             } else {
-                val targetDs = ExecDialectRouting.resolveTargetDataSource(project)
-                val targetLanguage = ExecDialectRouting.resolveTargetLanguage(project, targetDs)
-                val dialectDisplay = (targetLanguage as? com.intellij.lang.Language)?.id
-                    ?: ExecDialectRouting.MYSQL_LANGUAGE_ID
+                // runners 为空的原因是「**SQL 渲染方言**在在册数据源里找不到匹配」，所以文案里的
+                // 方言必须报渲染方言。此前只从目标数据源反推（resolveTargetLanguage），而目标源是
+                // 上次使用的 MySQL 源 → 推出 MySQL → 用户看到「没有与该 SQL 方言（MySQL）匹配的
+                // 数据源」，可他眼前预览里明明写着 `方言: PostgreSQL（手动指定）`、SQL 也是 PG 语法，
+                // 文案自相矛盾（2026-10-25 实测）。O-145 W7 已让 mapDialectBeforePsi 跟随渲染方言，
+                // 这里同步跟上：有渲染事实优先用它，没有才回退旧的按源推断。
+                val renderedName = dialectGateRequest?.renderedDialectName?.takeIf { it.isNotBlank() }
+                val dialectDisplay = renderedName
+                    ?: run {
+                        val targetDs = ExecDialectRouting.resolveTargetDataSource(project)
+                        val targetLanguage = ExecDialectRouting.resolveTargetLanguage(project, targetDs)
+                        (targetLanguage as? com.intellij.lang.Language)?.id
+                            ?: ExecDialectRouting.MYSQL_LANGUAGE_ID
+                    }
                 val names = registered.joinToString(", ") { DataSourceSettings.getName(it) }
                 onError?.invoke(
                     MpSqlVisualizerBundle.message("execute.datasource.dialectMismatch", dialectDisplay, names),
